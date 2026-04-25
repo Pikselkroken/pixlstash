@@ -87,7 +87,9 @@ def test_fetch_work_includes_empty_embedding_blob(tmp_path):
 def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
     """Pictures with valid embeddings but missing aesthetic score should be selected."""
     # Create actual files so MissingFilePurgeTask doesn't delete these records
-    shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "needs_aesthetic.jpg")
+    shutil.copy(
+        os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "needs_aesthetic.jpg"
+    )
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "complete.jpg")
     with Vault(image_root=str(tmp_path)) as vault:
         now = datetime.now()

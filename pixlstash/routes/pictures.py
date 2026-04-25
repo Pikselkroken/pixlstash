@@ -4386,6 +4386,20 @@ def create_router(server) -> APIRouter:
             } or None
 
         character_id_raw = request.query_params.get("character_id")
+        character_ids_raw = request.query_params.getlist("character_ids")
+        character_id_list: list[int] = []
+        for _v in character_ids_raw:
+            try:
+                _cid = int(_v)
+                if _cid > 0:
+                    character_id_list.append(_cid)
+            except (TypeError, ValueError):
+                continue
+        character_id_list = sorted(set(character_id_list))
+        character_mode_raw = request.query_params.get("character_mode", "union")
+        character_mode = (character_mode_raw or "union").strip().lower()
+        if character_mode not in {"union", "intersection", "difference", "xor"}:
+            character_mode = "union"
         set_id_raw = request.query_params.get("set_id")
         set_ids_raw = request.query_params.getlist("set_ids")
         set_mode_raw = request.query_params.get("set_mode", "union")
@@ -4398,6 +4412,7 @@ def create_router(server) -> APIRouter:
         smart_score_bucket = request.query_params.get("smart_score_bucket") or None
         resolution_bucket = request.query_params.get("resolution_bucket") or None
         file_path_prefix = request.query_params.get("file_path_prefix") or None
+        import_source_folder = request.query_params.get("import_source_folder") or None
         face_filter = request.query_params.get("face_filter") or None
         confidence_tag = request.query_params.get("confidence_tag") or None
         confidence_above = request.query_params.getlist("tag_confidence_above") or []
@@ -4459,6 +4474,56 @@ def create_router(server) -> APIRouter:
                     set_mode=set_mode,
                     deleted_only=only_deleted,
                 )
+                if not candidate_ids:
+                    return _empty()
+                pic_q = pic_q.where(Picture.id.in_(candidate_ids))
+            elif character_id_list:
+                rows = session.exec(
+                    select(Face.character_id, Face.picture_id).where(
+                        Face.character_id.in_(character_id_list)
+                    )
+                ).all()
+                members_by_char: dict[int, set[int]] = {
+                    cid: set() for cid in character_id_list
+                }
+                for cid, pid in rows:
+                    members_by_char.setdefault(int(cid), set()).add(int(pid))
+
+                candidate_ids: set[int]
+                if character_mode == "intersection":
+                    intersection: set[int] | None = None
+                    for cid in character_id_list:
+                        current = members_by_char.get(cid, set())
+                        intersection = (
+                            set(current)
+                            if intersection is None
+                            else intersection & current
+                        )
+                    candidate_ids = intersection or set()
+                elif character_mode == "difference":
+                    first = members_by_char.get(character_id_list[0], set())
+                    rest: set[int] = set()
+                    for cid in character_id_list[1:]:
+                        rest |= members_by_char.get(cid, set())
+                    candidate_ids = first - rest
+                elif character_mode == "xor":
+                    xor_union: set[int] = set()
+                    for cid in character_id_list:
+                        xor_union |= members_by_char.get(cid, set())
+                    xor_intersection: set[int] | None = None
+                    for cid in character_id_list:
+                        current = members_by_char.get(cid, set())
+                        xor_intersection = (
+                            set(current)
+                            if xor_intersection is None
+                            else xor_intersection & current
+                        )
+                    candidate_ids = xor_union - (xor_intersection or set())
+                else:
+                    candidate_ids = set()
+                    for cid in character_id_list:
+                        candidate_ids |= members_by_char.get(cid, set())
+
                 if not candidate_ids:
                     return _empty()
                 pic_q = pic_q.where(Picture.id.in_(candidate_ids))
@@ -4556,6 +4621,10 @@ def create_router(server) -> APIRouter:
 
             if file_path_prefix:
                 pic_q = pic_q.where(Picture.file_path.startswith(file_path_prefix))
+            if import_source_folder:
+                pic_q = pic_q.where(
+                    Picture.import_source_folder == import_source_folder
+                )
             for tag in tags_filter:
                 pic_q = pic_q.where(
                     exists(

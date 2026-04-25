@@ -16,6 +16,7 @@ import TaskManager from "./TaskManager.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import FolderTreeNode from "./FolderTreeNode.vue";
 import ReferenceFolderEditor from "./ReferenceFolderEditor.vue";
+import ImportFolderEditor from "./ImportFolderEditor.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import { apiClient } from "../utils/apiClient";
 import { extractSupportedImportFilesFromDataTransfer } from "../utils/media.js";
@@ -187,6 +188,8 @@ const sidebarCtxX = ref(0);
 const sidebarCtxY = ref(0);
 const sidebarCtxCharacter = ref(null); // { id, name } or null
 const sidebarCtxSet = ref(null); // { id, name } or null
+const sidebarCtxFolder = ref(null); // reference folder object or null
+const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 
 function openCharacterMoveMenu() {
@@ -224,15 +227,34 @@ const taskManagerOpen = ref(false);
 const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
 const referenceFolders = ref([]);
 const referenceFoldersLoading = ref(false);
+const importFolders = ref([]);
+const importFoldersLoading = ref(false);
 const inDocker = ref(false);
 const referenceFoldersImageRoot = ref(null);
 const expandedFolderIds = ref(new Set());
 const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
-const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | null
+const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
+const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
 
 // Reference folder editor state
 const referenceFolderEditorOpen = ref(false);
 const referenceFolderEditorFolder = ref(null); // null = create, object = edit
+const importFolderEditorOpen = ref(false);
+const importFolderEditorFolder = ref(null); // null = create, object = edit
+const addFolderTypeDialogOpen = ref(false);
+
+function openAddFolderTypeDialog() {
+  addFolderTypeDialogOpen.value = true;
+}
+
+function chooseFolderType(type) {
+  addFolderTypeDialogOpen.value = false;
+  if (type === "import") {
+    openImportFolderEditor();
+    return;
+  }
+  openReferenceFolderEditor();
+}
 
 function openReferenceFolderEditor(rf = null) {
   referenceFolderEditorFolder.value = rf ?? null;
@@ -242,6 +264,16 @@ function openReferenceFolderEditor(rf = null) {
 function closeReferenceFolderEditor() {
   referenceFolderEditorOpen.value = false;
   referenceFolderEditorFolder.value = null;
+}
+
+function openImportFolderEditor(folder = null) {
+  importFolderEditorFolder.value = folder ?? null;
+  importFolderEditorOpen.value = true;
+}
+
+function closeImportFolderEditor() {
+  importFolderEditorOpen.value = false;
+  importFolderEditorFolder.value = null;
 }
 
 async function referenceFolderSaved() {
@@ -255,19 +287,77 @@ async function referenceFolderDeleted() {
   closeReferenceFolderEditor();
   // If we were browsing this folder, clear the selection
   selectedFolderKey.value = null;
+  selectedFolderReferenceId.value = null;
   emit("select-folder", null);
+  emit("update:folder-scanning", false);
   await fetchReferenceFolders();
+}
+
+async function importFolderSaved() {
+  closeImportFolderEditor();
+  await fetchImportFolders();
+  if (!selectedFolderKey.value?.startsWith("if-")) return;
+  const selectedId = Number(selectedFolderKey.value.slice(3));
+  if (!Number.isFinite(selectedId)) return;
+  const selectedImportFolder = importFolders.value.find(
+    (entry) => Number(entry.id) === selectedId,
+  );
+  if (!selectedImportFolder) {
+    selectedFolderKey.value = null;
+    selectedFolderReferenceId.value = null;
+    emit("select-folder", null);
+    emit("update:folder-scanning", false);
+    return;
+  }
+  emit("select-folder", {
+    importSourceFolder: selectedImportFolder.folder,
+    label: selectedImportFolder.label || selectedImportFolder.folder,
+  });
+}
+
+async function importFolderDeleted() {
+  const deletedId = Number(importFolderEditorFolder.value?.id);
+  closeImportFolderEditor();
+  if (
+    Number.isFinite(deletedId) &&
+    selectedFolderKey.value === `if-${deletedId}`
+  ) {
+    selectedFolderKey.value = null;
+    selectedFolderReferenceId.value = null;
+    emit("select-folder", null);
+    emit("update:folder-scanning", false);
+  }
+  await fetchImportFolders();
 }
 
 const registeredFolderPaths = computed(() =>
   referenceFolders.value.map((rf) => rf.folder.replace(/\/$/, "")),
 );
 
+const registeredImportFolderPaths = computed(() =>
+  importFolders.value.map((entry) => entry.folder.replace(/\/$/, "")),
+);
+
+const selectedReferenceFolderForHeader = computed(() => {
+  const id = Number(selectedFolderReferenceId.value);
+  if (!Number.isFinite(id)) return null;
+  return (
+    referenceFolders.value.find((folder) => Number(folder.id) === id) || null
+  );
+});
+
+const selectedImportFolderForHeader = computed(() => {
+  if (!selectedFolderKey.value?.startsWith("if-")) return null;
+  const id = Number(selectedFolderKey.value.slice(3));
+  if (!Number.isFinite(id)) return null;
+  return importFolders.value.find((entry) => Number(entry.id) === id) || null;
+});
+
 // Whether the currently selected reference folder is actively being scanned
 // for the first time (active but never completed a pass).
 const selectedFolderScanning = computed(() => {
-  if (!selectedFolderKey.value?.startsWith("rf-")) return false;
-  const id = parseInt(selectedFolderKey.value.slice(3), 10);
+  const id = Number(selectedFolderReferenceId.value);
+  if (!Number.isFinite(id)) return false;
   const rf = referenceFolders.value.find((f) => f.id === id);
   return Boolean(rf && rf.status === "active" && rf.last_scanned == null);
 });
@@ -294,6 +384,18 @@ async function fetchReferenceFolders() {
     console.error("Failed to fetch reference folders:", e);
   } finally {
     referenceFoldersLoading.value = false;
+  }
+}
+
+async function fetchImportFolders() {
+  importFoldersLoading.value = true;
+  try {
+    const res = await apiClient.get("/import-folders");
+    importFolders.value = res.data?.folders ?? [];
+  } catch (e) {
+    console.error("Failed to fetch import folders:", e);
+  } finally {
+    importFoldersLoading.value = false;
   }
 }
 
@@ -351,19 +453,18 @@ async function browseFolderPath(path, prefetchChildren = false) {
 
 function handleFolderNodeSelect(key, payload) {
   selectedFolderKey.value = key;
-  emit("select-folder", payload);
-  // Emit initial scanning state immediately on selection so ImageGrid
-  // shows the scanning empty state before the first poll fires.
-  const id = key?.startsWith("rf-") ? parseInt(key.slice(3), 10) : null;
-  if (id != null) {
-    const rf = referenceFolders.value.find((f) => f.id === id);
-    emit(
-      "update:folder-scanning",
-      Boolean(rf && rf.status === "active" && rf.last_scanned == null),
-    );
+  const payloadId = Number(payload?.referenceFolderId);
+  if (Number.isFinite(payloadId)) {
+    selectedFolderReferenceId.value = payloadId;
+  } else if (key?.startsWith("rf-")) {
+    const parsed = parseInt(key.slice(3), 10);
+    selectedFolderReferenceId.value = Number.isFinite(parsed) ? parsed : null;
   } else {
-    emit("update:folder-scanning", false);
+    selectedFolderReferenceId.value = null;
   }
+  emit("select-folder", payload);
+  // Emit immediately on selection so ImageGrid updates before next poll tick.
+  emit("update:folder-scanning", selectedFolderScanning.value);
 }
 
 async function handleFolderNodeToggle(path) {
@@ -383,6 +484,7 @@ async function handleFolderNodeToggle(path) {
 watch(sidebarPrimaryTab, (tab) => {
   if (tab === "folders") {
     fetchReferenceFolders();
+    fetchImportFolders();
     _startFolderStatusPoll();
   } else {
     _stopFolderStatusPoll();
@@ -477,7 +579,9 @@ function selectLibraryTab(mode) {
     projectViewMode.value = "global";
   }
   // Clear the folder filter so the library view is not restricted to a folder.
+  selectedFolderReferenceId.value = null;
   emit("select-folder", null);
+  emit("update:folder-scanning", false);
 }
 function updateLabelOverflow(key, el = null) {
   const element = el || labelRefs.get(key);
@@ -1027,10 +1131,6 @@ function selectSet(setId, label = null, event = null) {
   });
 }
 
-function toggleSetMultiSelect(setId, label = null) {
-  selectSet(setId, label, { ctrlKey: true });
-}
-
 async function deleteCharacter() {
   if (!props.selectedCharacter) return;
   if (!window.confirm("Delete this character?")) return;
@@ -1101,10 +1201,79 @@ async function deleteSetById(id) {
   }
 }
 
+async function deleteSetsByIds(ids) {
+  if (!ids?.length) return;
+
+  const normalizedIds = Array.from(
+    new Set(ids.map((id) => Number(id)).filter((id) => Number.isFinite(id))),
+  );
+  if (!normalizedIds.length) return;
+
+  const single = normalizedIds.length === 1;
+  const setName = single
+    ? pictureSets.value.find((s) => Number(s.id) === normalizedIds[0])?.name
+    : null;
+  const msg = single
+    ? `Delete picture set "${setName}"? This will unassign all their images.`
+    : `Delete ${normalizedIds.length} picture sets? This will unassign all their images.`;
+  if (!window.confirm(msg)) return;
+
+  try {
+    await Promise.all(
+      normalizedIds.map((id) =>
+        apiClient.delete(`${props.backendUrl}/picture_sets/${id}`),
+      ),
+    );
+    emit("select-set", null);
+    await fetchPictureSets();
+    await fetchSidebarData();
+  } catch (e) {
+    alert("Failed to delete picture set(s): " + (e.message || e));
+  }
+}
+
+async function deleteReferenceFolderById(id) {
+  const folder = referenceFolders.value.find((rf) => rf.id === id);
+  if (!folder) return;
+  const folderLabel = folder.label || folder.folder;
+  if (!window.confirm(`Remove reference folder "${folderLabel}"?`)) return;
+  try {
+    await apiClient.delete(`/reference-folders/${id}`);
+    if (selectedFolderKey.value === `rf-${id}`) {
+      selectedFolderKey.value = null;
+      emit("select-folder", null);
+    }
+    await fetchReferenceFolders();
+  } catch (e) {
+    alert("Failed to remove reference folder: " + (e.message || e));
+  }
+}
+
+async function deleteImportFolderById(id) {
+  const folder = importFolders.value.find((entry) => entry.id === id);
+  if (!folder) return;
+  const folderLabel = folder.label || folder.folder;
+  if (!window.confirm(`Remove import folder "${folderLabel}"?`)) return;
+  try {
+    await apiClient.delete(`/import-folders/${id}`);
+    if (selectedFolderKey.value === `if-${id}`) {
+      selectedFolderKey.value = null;
+      selectedFolderReferenceId.value = null;
+      emit("select-folder", null);
+      emit("update:folder-scanning", false);
+    }
+    await fetchImportFolders();
+  } catch (e) {
+    alert("Failed to remove import folder: " + (e.message || e));
+  }
+}
+
 function openSidebarCtxMenu(type, item, event) {
   if (type === "character") {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
+    sidebarCtxFolder.value = null;
+    sidebarCtxImportFolder.value = null;
     const numId = Number(item.id);
     // If the right-clicked char is part of a multi-selection, offer bulk delete
     if (
@@ -1116,9 +1285,23 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxDeleteIds.value = [numId];
     }
   } else {
-    sidebarCtxCharacter.value = null;
-    sidebarCtxSet.value = item;
     sidebarCtxDeleteIds.value = [];
+    if (type === "set") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = item;
+      sidebarCtxFolder.value = null;
+      sidebarCtxImportFolder.value = null;
+    } else if (type === "folder") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = null;
+      sidebarCtxFolder.value = item;
+      sidebarCtxImportFolder.value = null;
+    } else if (type === "import-folder") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = null;
+      sidebarCtxFolder.value = null;
+      sidebarCtxImportFolder.value = item;
+    }
   }
   sidebarCtxX.value = event.clientX;
   sidebarCtxY.value = event.clientY;
@@ -1634,28 +1817,9 @@ function handleSetThumbnailError(setId) {
 }
 
 async function handleDeleteSet() {
-  if (!hasSingleSelectedSet.value || !props.selectedSet) return;
-
-  const setToDelete = pictureSets.value.find((s) => s.id === props.selectedSet);
-  if (!setToDelete) return;
-
-  if (
-    !window.confirm(
-      `Delete picture set "${setToDelete.name}"? This will unassign all their images.`,
-    )
-  )
-    return;
-
-  try {
-    const res = await apiClient.delete(
-      `${props.backendUrl}/picture_sets/${props.selectedSet}`,
-    );
-    emit("select-set", null);
-    await fetchPictureSets();
-    await fetchSidebarData();
-  } catch (e) {
-    alert("Failed to delete set: " + (e.message || e));
-  }
+  const ids = Array.from(selectedSetIdSet.value);
+  if (!ids.length) return;
+  await deleteSetsByIds(ids);
 }
 
 async function handleDropOnSet(setId, event) {
@@ -2247,8 +2411,55 @@ defineExpose({
     @saved="referenceFolderSaved"
     @deleted="referenceFolderDeleted"
   />
+  <ImportFolderEditor
+    :open="importFolderEditorOpen"
+    :folder="importFolderEditorFolder"
+    :in-docker="inDocker"
+    :registered-paths="registeredImportFolderPaths"
+    :image-root="referenceFoldersImageRoot"
+    @close="closeImportFolderEditor"
+    @saved="importFolderSaved"
+    @deleted="importFolderDeleted"
+  />
 
-  <v-dialog v-model="taskManagerOpen" width="980">
+  <v-dialog v-model="addFolderTypeDialogOpen" max-width="420">
+    <v-card class="folder-type-card">
+      <v-card-title class="folder-type-title">Add Folder</v-card-title>
+      <v-card-text class="folder-type-body">
+        <p class="folder-type-subtitle">Choose folder type</p>
+        <div class="folder-type-options">
+          <button
+            class="folder-type-option"
+            @click="chooseFolderType('reference')"
+          >
+            <v-icon size="18">mdi-folder-network-outline</v-icon>
+            <span class="folder-type-option-text">
+              <strong>Reference folder</strong>
+              <small>Browse and filter existing files in place.</small>
+            </span>
+          </button>
+          <button
+            class="folder-type-option"
+            @click="chooseFolderType('import')"
+          >
+            <v-icon size="18">mdi-folder-download-outline</v-icon>
+            <span class="folder-type-option-text">
+              <strong>Import folder</strong>
+              <small>Watch for new files and import them automatically.</small>
+            </span>
+          </button>
+        </div>
+      </v-card-text>
+      <v-card-actions class="folder-type-actions">
+        <v-spacer />
+        <v-btn variant="text" @click="addFolderTypeDialogOpen = false"
+          >Cancel</v-btn
+        >
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="taskManagerOpen" width="min(96vw, 1700px)">
     <TaskManager :active="taskManagerOpen" @close="taskManagerOpen = false" />
   </v-dialog>
 
@@ -2506,38 +2717,58 @@ defineExpose({
             <span class="sidebar-header-spacer"></span>
             <v-icon
               class="add-character-inline"
-              title="Add reference folder"
-              @click.stop="openReferenceFolderEditor()"
+              title="Add folder"
+              @click.stop="openAddFolderTypeDialog()"
             >
               mdi-plus
             </v-icon>
           </div>
 
-          <div v-if="referenceFoldersLoading" class="sidebar-folders-loading">
+          <div
+            v-if="referenceFoldersLoading || importFoldersLoading"
+            class="sidebar-folders-loading"
+          >
             <v-progress-circular indeterminate size="24" />
           </div>
           <div
-            v-else-if="referenceFolders.length === 0"
+            v-else-if="
+              referenceFolders.length === 0 && importFolders.length === 0
+            "
             class="sidebar-no-projects-empty"
           >
             <v-icon size="52" class="sidebar-no-projects-icon"
               >mdi-folder-network-outline</v-icon
             >
-            <p class="sidebar-no-projects-text">
-              No reference folders configured.
-            </p>
+            <p class="sidebar-no-projects-text">No folders configured.</p>
             <v-btn
               color="primary"
               size="small"
               prepend-icon="mdi-plus"
               rounded="lg"
-              class="sidebar-no-projects-btn"
-              @click="openReferenceFolderEditor()"
+              class="sidebar-no-projects-btn sidebar-no-projects-btn--folders"
+              @click="openAddFolderTypeDialog()"
             >
-              Add reference folder
+              Add folder
             </v-btn>
           </div>
           <div v-else class="sidebar-folders-list">
+            <div
+              v-if="referenceFolders.length"
+              class="sidebar-folder-section-header"
+            >
+              <div class="sidebar-folder-section-title">Reference folders</div>
+              <v-icon
+                v-if="selectedReferenceFolderForHeader"
+                size="13"
+                class="sidebar-folder-section-edit-btn"
+                title="Edit selected reference folder"
+                @click.stop="
+                  openReferenceFolderEditor(selectedReferenceFolderForHeader)
+                "
+              >
+                mdi-pencil-outline
+              </v-icon>
+            </div>
             <div
               v-for="rf in referenceFolders"
               :key="rf.id"
@@ -2547,6 +2778,7 @@ defineExpose({
                 class="sidebar-folder-row sidebar-folder-root-row"
                 :class="{ active: selectedFolderKey === 'rf-' + rf.id }"
                 :title="rf.folder"
+                @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
                 @click="
                   if (!expandedFolderIds.has(rf.id))
                     toggleFolderExpanded(rf.id);
@@ -2629,15 +2861,6 @@ defineExpose({
                       : (folderBrowseCache[rf.folder]?.image_count ?? 0)
                   }}
                 </span>
-                <!-- Edit button (appears on hover via CSS) -->
-                <v-icon
-                  size="13"
-                  class="sidebar-folder-action-btn"
-                  title="Edit folder"
-                  @click.stop="openReferenceFolderEditor(rf)"
-                >
-                  mdi-pencil-outline
-                </v-icon>
               </div>
               <div
                 v-if="expandedFolderIds.has(rf.id)"
@@ -2673,6 +2896,73 @@ defineExpose({
                     browse (Docker mode or permission error)
                   </div>
                 </template>
+              </div>
+            </div>
+
+            <div
+              v-if="importFolders.length"
+              class="sidebar-folder-section-header"
+            >
+              <div class="sidebar-folder-section-title">Import folders</div>
+              <v-icon
+                v-if="selectedImportFolderForHeader"
+                size="13"
+                class="sidebar-folder-section-edit-btn"
+                title="Edit selected import folder"
+                @click.stop="
+                  openImportFolderEditor(selectedImportFolderForHeader)
+                "
+              >
+                mdi-pencil-outline
+              </v-icon>
+            </div>
+            <div
+              v-for="importFolder in importFolders"
+              :key="importFolder.id"
+              class="sidebar-folder-root"
+            >
+              <div
+                class="sidebar-folder-row sidebar-folder-root-row"
+                :class="{
+                  active: selectedFolderKey === 'if-' + importFolder.id,
+                }"
+                :title="importFolder.folder"
+                @contextmenu.prevent="
+                  openSidebarCtxMenu('import-folder', importFolder, $event)
+                "
+                @click="
+                  handleFolderNodeSelect('if-' + importFolder.id, {
+                    importSourceFolder: importFolder.folder,
+                    label: importFolder.label || importFolder.folder,
+                  })
+                "
+              >
+                <v-icon
+                  size="16"
+                  class="sidebar-folder-chevron"
+                  style="visibility: hidden"
+                >
+                  mdi-chevron-right
+                </v-icon>
+                <v-icon size="16" class="sidebar-folder-icon"
+                  >mdi-folder-download-outline</v-icon
+                >
+                <span class="sidebar-folder-label">
+                  {{ importFolder.label || importFolder.folder }}
+                </span>
+                <span
+                  v-if="importFolder.delete_after_import"
+                  class="sidebar-folder-status-badge sidebar-folder-status--pending_mount"
+                  title="Delete source file after successful import"
+                >
+                  <v-icon size="12">mdi-delete-outline</v-icon>
+                </span>
+                <span
+                  class="sidebar-folder-count-badge"
+                  title="Imported pictures from folder"
+                >
+                  {{ importFolder.picture_count ?? 0 }}
+                </span>
               </div>
             </div>
           </div>
@@ -3009,6 +3299,7 @@ defineExpose({
                       },
                     ]"
                     :ref="(el) => registerCharacterRef(char.id, el)"
+                    :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                     @click="
                       selectCharacter(char.id, char.name || 'Character', $event)
                     "
@@ -3112,11 +3403,15 @@ defineExpose({
                     mdi-pencil
                   </v-icon>
                   <v-icon
-                    v-if="selectedSet && hasSingleSelectedSet"
+                    v-if="selectedSetIdSet.size > 0"
                     class="delete-character-inline"
                     color="white"
                     @click.stop="handleDeleteSet"
-                    title="Delete selected set"
+                    :title="
+                      selectedSetIdSet.size > 1
+                        ? `Delete ${selectedSetIdSet.size} selected sets`
+                        : 'Delete selected set'
+                    "
                   >
                     mdi-trash-can-outline
                   </v-icon>
@@ -3264,29 +3559,6 @@ defineExpose({
                         <span>{{ pset.name }}</span>
                       </v-tooltip>
                     </span>
-                    <span
-                      class="sidebar-set-select-indicator"
-                      :class="{
-                        'sidebar-set-select-indicator--selected':
-                          selectedSetIdSet.has(pset.id),
-                      }"
-                      role="button"
-                      tabindex="0"
-                      :aria-label="`Toggle multi-select for set ${pset.name || pset.id}`"
-                      @click.stop="toggleSetMultiSelect(pset.id, pset.name)"
-                      @keydown.enter.prevent.stop="
-                        toggleSetMultiSelect(pset.id, pset.name)
-                      "
-                      @keydown.space.prevent.stop="
-                        toggleSetMultiSelect(pset.id, pset.name)
-                      "
-                    >
-                      <v-icon size="16">{{
-                        selectedSetIdSet.has(pset.id)
-                          ? "mdi-checkbox-marked"
-                          : "mdi-checkbox-blank-outline"
-                      }}</v-icon>
-                    </span>
                     <span class="sidebar-list-count">
                       {{ pset.picture_count ?? 0 }}
                     </span>
@@ -3426,6 +3698,54 @@ defineExpose({
             >mdi-trash-can-outline</v-icon
           >
           Delete
+        </button>
+      </template>
+      <template v-if="sidebarCtxFolder">
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            openReferenceFolderEditor(sidebarCtxFolder);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-pencil</v-icon>
+          Edit
+        </button>
+        <button
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="
+            deleteReferenceFolderById(sidebarCtxFolder.id);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-trash-can-outline</v-icon
+          >
+          Remove
+        </button>
+      </template>
+      <template v-if="sidebarCtxImportFolder">
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            openImportFolderEditor(sidebarCtxImportFolder);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-pencil</v-icon>
+          Edit
+        </button>
+        <button
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="
+            deleteImportFolderById(sidebarCtxImportFolder.id);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-trash-can-outline</v-icon
+          >
+          Remove
         </button>
       </template>
     </div>
@@ -3602,6 +3922,15 @@ defineExpose({
 .sidebar-no-projects-btn :deep(.v-btn__content) {
   font-size: 0.82rem;
   padding: 2px 4px 2px 4px;
+}
+
+.sidebar-no-projects-btn--folders {
+  min-width: 190px;
+}
+
+.sidebar-no-projects-btn--folders :deep(.v-btn__content) {
+  white-space: nowrap;
+  font-size: 0.8rem;
 }
 
 .sidebar-collapsed-project-wrap {
@@ -4520,26 +4849,6 @@ defineExpose({
   justify-content: flex-end;
 }
 
-.sidebar-set-select-indicator {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  margin-right: 8px;
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
-  opacity: 0.95;
-  flex-shrink: 0;
-}
-
-.sidebar-set-select-indicator--selected,
-.sidebar-list-item.active .sidebar-set-select-indicator {
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-list-item:hover .sidebar-set-select-indicator {
-  color: rgba(var(--v-theme-sidebar-text), 0.86);
-}
-
 .sidebar-new-tag {
   display: inline-flex;
   align-items: center;
@@ -4583,7 +4892,7 @@ defineExpose({
 
 .add-character-inline {
   color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: 1.4rem;
+  font-size: 1.1rem;
   cursor: pointer;
   background: transparent;
   border-radius: 8px;
@@ -4877,6 +5186,39 @@ defineExpose({
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
 }
 
+.sidebar-folder-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 4px 12px;
+}
+
+.sidebar-folder-section-title {
+  flex: 1 1 auto;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-sidebar-text), 0.45);
+}
+
+.sidebar-folder-section-edit-btn {
+  width: 22px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  opacity: 0.66;
+  cursor: pointer;
+  color: rgba(var(--v-theme-sidebar-text), 0.66);
+  transition:
+    opacity 0.15s,
+    color 0.15s;
+}
+
+.sidebar-folder-section-edit-btn:hover {
+  opacity: 1;
+  color: rgb(var(--v-theme-primary));
+}
+
 .sidebar-folder-root {
   display: flex;
   flex-direction: column;
@@ -5046,30 +5388,68 @@ defineExpose({
   padding: 2px;
 }
 
-.sidebar-folder-action-btn {
-  flex-shrink: 0;
-  opacity: 0;
+.folder-type-card {
+  border-radius: 14px;
+}
+
+.folder-type-title {
+  font-size: 1.04rem;
+  font-weight: 700;
+  padding: 16px 18px 8px;
+}
+
+.folder-type-body {
+  padding: 8px 18px 0;
+}
+
+.folder-type-subtitle {
+  margin: 0 0 10px;
+  font-size: 0.83rem;
+  color: rgba(var(--v-theme-on-surface), 0.62);
+}
+
+.folder-type-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folder-type-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid rgba(var(--v-theme-border), 0.35);
+  border-radius: 10px;
+  background: rgba(var(--v-theme-surface), 0.4);
+  padding: 10px 12px;
+  text-align: left;
   cursor: pointer;
-  transition: opacity 0.15s;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
-  padding: 2px;
+  color: rgb(var(--v-theme-on-surface));
 }
 
-.sidebar-folder-row:hover .sidebar-folder-action-btn {
-  opacity: 0.6;
+.folder-type-option:hover {
+  border-color: rgba(var(--v-theme-primary), 0.6);
+  background: rgba(var(--v-theme-primary), 0.08);
 }
 
-.sidebar-folder-row:hover .sidebar-folder-action-btn:hover {
-  opacity: 1;
-  color: rgb(var(--v-theme-primary));
+.folder-type-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.sidebar-folder-row.active .sidebar-folder-action-btn {
-  color: rgba(var(--v-theme-on-primary), 0.7);
+.folder-type-option-text strong {
+  font-size: 0.88rem;
+  font-weight: 700;
 }
 
-.sidebar-folder-row.active .sidebar-folder-action-btn:hover {
-  color: rgb(var(--v-theme-on-primary));
-  opacity: 1;
+.folder-type-option-text small {
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), 0.62);
+}
+
+.folder-type-actions {
+  padding: 10px 16px 14px;
 }
 </style>

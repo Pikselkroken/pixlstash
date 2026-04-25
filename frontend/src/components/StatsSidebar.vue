@@ -22,6 +22,7 @@ const props = defineProps({
   smartScoreBucketFilter: { type: [String, null], default: null },
   resolutionBucketFilter: { type: [String, null], default: null },
   filePathPrefixFilter: { type: String, default: null },
+  importSourceFolderFilter: { type: String, default: null },
   allPicturesId: { type: [String, Number], default: null },
   unassignedPicturesId: { type: [String, Number], default: null },
   scrapheapPicturesId: { type: [String, Number], default: null },
@@ -141,6 +142,12 @@ function buildQueryParams() {
     !isSetOverlap && props.selectedSet != null && props.selectedSet !== ""
       ? Number(props.selectedSet)
       : null;
+  const normalizedCharIds = Array.isArray(props.selectedCharacterIds)
+    ? props.selectedCharacterIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  const isMultiCharacterView = normalizedCharIds.length > 1;
 
   if (hasSetSelection) {
     if (isSetOverlap) {
@@ -160,20 +167,24 @@ function buildQueryParams() {
           : "UNASSIGNED",
       );
     }
+  } else if (isMultiCharacterView) {
+    for (const id of normalizedCharIds)
+      params.append("character_ids", String(id));
+    params.append("character_mode", props.characterMode || "union");
+    if (props.projectViewMode === "project") {
+      params.append(
+        "project_id",
+        props.selectedProjectId != null
+          ? props.selectedProjectId
+          : "UNASSIGNED",
+      );
+    }
   } else if (
     props.selectedCharacter != null &&
     props.selectedCharacter !== "" &&
     props.selectedCharacter !== props.allPicturesId
   ) {
-    const normalizedCharIds = Array.isArray(props.selectedCharacterIds)
-      ? props.selectedCharacterIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
-      : [];
-    if (normalizedCharIds.length > 1) {
-      for (const id of normalizedCharIds) params.append("character_ids", String(id));
-      params.append("character_mode", props.characterMode || "union");
-    } else {
-      params.append("character_id", props.selectedCharacter);
-    }
+    params.append("character_id", props.selectedCharacter);
     if (props.projectViewMode === "project") {
       params.append(
         "project_id",
@@ -210,6 +221,8 @@ function buildQueryParams() {
     params.append("resolution_bucket", props.resolutionBucketFilter);
   if (props.filePathPrefixFilter != null)
     params.append("file_path_prefix", props.filePathPrefixFilter);
+  if (props.importSourceFolderFilter != null)
+    params.append("import_source_folder", props.importSourceFolderFilter);
   (props.tagFilter || []).forEach((t) => params.append("tag", t));
   (props.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
@@ -302,6 +315,7 @@ watch(
     () => props.smartScoreBucketFilter,
     () => props.resolutionBucketFilter,
     () => props.filePathPrefixFilter,
+    () => props.importSourceFolderFilter,
     () => props.faceBboxFilter,
     () => props.tagConfidenceAboveFilter,
     () => props.tagConfidenceBelowFilter,

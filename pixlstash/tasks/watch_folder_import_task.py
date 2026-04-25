@@ -2,10 +2,12 @@ import json
 import os
 import threading
 from datetime import datetime
+from typing import Optional
 
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
+from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
@@ -73,10 +75,11 @@ class WatchFolderImportTask(BaseTask):
     def __init__(
         self,
         database,
-        config_path: str,
         candidate_files: list[dict],
-        updated_watch_folders: list[dict],
         total_candidates: int,
+        last_checked_updates: Optional[dict[int, float]] = None,
+        config_path: Optional[str] = None,
+        updated_watch_folders: Optional[list[dict]] = None,
     ):
         super().__init__(
             task_type="WatchFolderImportTask",
@@ -89,6 +92,10 @@ class WatchFolderImportTask(BaseTask):
         self._config_path = config_path
         self._candidate_files = candidate_files or []
         self._updated_watch_folders = updated_watch_folders or []
+        self._last_checked_updates = {
+            int(folder_id): float(last_checked)
+            for folder_id, last_checked in (last_checked_updates or {}).items()
+        }
         self._total_candidates = int(total_candidates or 0)
         self._stop_event = threading.Event()
 
@@ -134,6 +141,9 @@ class WatchFolderImportTask(BaseTask):
                     pixel_sha=pixel_sha,
                 )
                 pic.imported_at = datetime.now()
+                import_source_folder = candidate.get("import_source_folder")
+                if isinstance(import_source_folder, str) and import_source_folder:
+                    pic.import_source_folder = import_source_folder
                 new_pictures.append(pic)
 
                 stack_id, source_id = parse_stack_tags_from_filename(file_path)
@@ -206,7 +216,29 @@ class WatchFolderImportTask(BaseTask):
                             exc,
                         )
 
-        if self._updated_watch_folders:
+        if self._last_checked_updates:
+
+            def update_last_checked(session: Session, updates: dict[int, float]):
+                folders = session.exec(
+                    select(ImportFolder).where(
+                        ImportFolder.id.in_(list(updates.keys()))
+                    )
+                ).all()
+                for folder in folders:
+                    next_ts = updates.get(int(folder.id))
+                    if next_ts is None:
+                        continue
+                    folder.last_checked = float(next_ts)
+                    session.add(folder)
+                session.commit()
+
+            self._db.run_task(
+                update_last_checked,
+                self._last_checked_updates,
+                priority=DBPriority.IMMEDIATE,
+            )
+
+        if self._updated_watch_folders and self._config_path:
             persist_watch_folders(self._config_path, self._updated_watch_folders)
 
         return {

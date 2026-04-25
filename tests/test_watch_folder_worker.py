@@ -69,6 +69,27 @@ def test_watch_folder():
                 assert len(pictures) == expected_count, (
                     f"Expected {expected_count} pictures, got {len(pictures)}"
                 )
+                assert all(pic.import_source_folder == pictures_dir for pic in pictures)
+
+                filtered = client.get(
+                    f"{API_PREFIX}/pictures",
+                    params={
+                        "fields": "grid",
+                        "import_source_folder": pictures_dir,
+                    },
+                )
+                assert filtered.status_code == 200
+                assert len(filtered.json()) == expected_count
+
+                empty_filtered = client.get(
+                    f"{API_PREFIX}/pictures",
+                    params={
+                        "fields": "grid",
+                        "import_source_folder": os.path.join(pictures_dir, "_missing"),
+                    },
+                )
+                assert empty_filtered.status_code == 200
+                assert empty_filtered.json() == []
 
 
 def test_watch_folder_delete_after_import():
@@ -137,6 +158,7 @@ def test_watch_folder_delete_after_import():
                 assert len(pictures) == expected_count, (
                     f"Expected {expected_count} pictures, got {len(pictures)}"
                 )
+                assert all(pic.import_source_folder == watch_dir for pic in pictures)
                 remaining_files = [
                     os.path.join(dp, f)
                     for dp, _, fnames in os.walk(watch_dir)
