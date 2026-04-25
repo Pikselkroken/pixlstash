@@ -55,6 +55,9 @@ from pixlstash.routes.tag_predictions import (
 from pixlstash.routes.reference_folders import (
     create_router as create_reference_folders_router,
 )
+from pixlstash.routes.import_folders import (
+    create_router as create_import_folders_router,
+)
 from pixlstash.routes.filesystem import create_router as create_filesystem_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
@@ -973,6 +976,11 @@ class Server:
         )
         self.api.include_router(
             create_reference_folders_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["config"],
+        )
+        self.api.include_router(
+            create_import_folders_router(self),
             prefix=API_V1_PREFIX,
             tags=["config"],
         )

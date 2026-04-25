@@ -39,7 +39,9 @@ const selectedSetIds = ref([]);
 function loadMultiMode(key, fallback) {
   try {
     const v = window.sessionStorage?.getItem(key);
-    return ["union", "intersection", "difference", "xor"].includes(v) ? v : fallback;
+    return ["union", "intersection", "difference", "xor"].includes(v)
+      ? v
+      : fallback;
   } catch {
     return fallback;
   }
@@ -68,13 +70,17 @@ function saveBaseId(key, val) {
     // ignore
   }
 }
-const characterMultiMode = ref(loadMultiMode("pixlstash:characterMultiMode", "union"));
-const setMultiMode = ref(loadMultiMode("pixlstash:setMultiMode", "intersection"));
+const characterMultiMode = ref(
+  loadMultiMode("pixlstash:characterMultiMode", "union"),
+);
+const setMultiMode = ref(
+  loadMultiMode("pixlstash:setMultiMode", "intersection"),
+);
 const setDifferenceBaseId = ref(loadBaseId("pixlstash:setDifferenceBaseId"));
 const selectedSetNames = ref({});
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = unassigned in project mode
-const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, label }
+const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, importSourceFolder, label }
 const folderScanning = ref(false);
 const selectedSort = ref("");
 const selectedDescending = ref(true);
@@ -117,14 +123,20 @@ const activeCategoryLabel = computed(() => {
     return selectedFolderFilter.value.label || "Folder";
   }
   if (selectedSetIds.value.length > 1) {
-    const modeLabel = { union: "Union", intersection: "Overlap", difference: "Difference" }[setMultiMode.value] || "Multi";
+    const modeLabel =
+      { union: "Union", intersection: "Overlap", difference: "Difference" }[
+        setMultiMode.value
+      ] || "Multi";
     return `Sets – ${modeLabel} (${selectedSetIds.value.length})`;
   }
   if (selectedSet.value) {
     return lastSelectedSetLabel.value || "Picture Set";
   }
   if (selectedCharacterIds.value.length > 1) {
-    const modeLabel = { union: "Union", intersection: "Overlap", difference: "Difference" }[characterMultiMode.value] || "Multi";
+    const modeLabel =
+      { union: "Union", intersection: "Overlap", difference: "Difference" }[
+        characterMultiMode.value
+      ] || "Multi";
     return `People – ${modeLabel} (${selectedCharacterIds.value.length})`;
   }
   if (selectedCharacter.value === ALL_PICTURES_ID) return "All Pictures";
@@ -592,7 +604,10 @@ async function handleSelectCharacter(payload) {
   }
   selectedCharacter.value = charId;
   selectedCharacterIds.value = ids.length ? ids : [];
-  if (ids.length <= 1) { characterMultiMode.value = "union"; saveMultiMode("pixlstash:characterMultiMode", "union"); }
+  if (ids.length <= 1) {
+    characterMultiMode.value = "union";
+    saveMultiMode("pixlstash:characterMultiMode", "union");
+  }
   if (charId === ALL_PICTURES_ID) {
     refreshGridVersion();
   }
@@ -635,11 +650,19 @@ async function handleSelectSet(payload) {
   selectedCharacter.value = null; // Clear character selection
   selectedCharacterIds.value = [];
   selectedSetNames.value = names;
-  if (setDifferenceBaseId.value !== null && !nextIds.includes(setDifferenceBaseId.value)) {
+  if (
+    setDifferenceBaseId.value !== null &&
+    !nextIds.includes(setDifferenceBaseId.value)
+  ) {
     setDifferenceBaseId.value = null;
     saveBaseId("pixlstash:setDifferenceBaseId", null);
   }
-  if (nextIds.length === 1) { setMultiMode.value = "intersection"; saveMultiMode("pixlstash:setMultiMode", "intersection"); setDifferenceBaseId.value = null; saveBaseId("pixlstash:setDifferenceBaseId", null); }
+  if (nextIds.length === 1) {
+    setMultiMode.value = "intersection";
+    saveMultiMode("pixlstash:setMultiMode", "intersection");
+    setDifferenceBaseId.value = null;
+    saveBaseId("pixlstash:setDifferenceBaseId", null);
+  }
   closeSidebarIfMobile();
 }
 
@@ -1637,6 +1660,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                   selectedFolderFilter?.referenceFolderId ?? null
                 "
                 :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+                :importSourceFolderFilter="
+                  selectedFolderFilter?.importSourceFolder ?? null
+                "
                 :folderScanning="folderScanning"
                 :columns="columns"
                 @clear-search="handleClearSearch"
@@ -1645,10 +1671,32 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 @refresh-sidebar="refreshSidebar"
                 @reset-to-all="handleResetToAll"
                 @update:stack-stats="handleStackStatsUpdate"
-                @clear-multi-selection="() => { selectedCharacterIds.length > 1 ? (selectedCharacter = ALL_PICTURES_ID, selectedCharacterIds = []) : (selectedSet = null, selectedSetIds = []) }"
-                @update:character-multi-mode="(v) => { characterMultiMode = v; saveMultiMode('pixlstash:characterMultiMode', v); }"
-                @update:set-multi-mode="(v) => { setMultiMode = v; saveMultiMode('pixlstash:setMultiMode', v); }"
-                @update:set-difference-base-id="(v) => { setDifferenceBaseId = v; saveBaseId('pixlstash:setDifferenceBaseId', v); }"
+                @clear-multi-selection="
+                  () => {
+                    selectedCharacterIds.length > 1
+                      ? ((selectedCharacter = ALL_PICTURES_ID),
+                        (selectedCharacterIds = []))
+                      : ((selectedSet = null), (selectedSetIds = []));
+                  }
+                "
+                @update:character-multi-mode="
+                  (v) => {
+                    characterMultiMode = v;
+                    saveMultiMode('pixlstash:characterMultiMode', v);
+                  }
+                "
+                @update:set-multi-mode="
+                  (v) => {
+                    setMultiMode = v;
+                    saveMultiMode('pixlstash:setMultiMode', v);
+                  }
+                "
+                @update:set-difference-base-id="
+                  (v) => {
+                    setDifferenceBaseId = v;
+                    saveBaseId('pixlstash:setDifferenceBaseId', v);
+                  }
+                "
                 @import-started="isUploadInProgress = true"
                 @import-ended="isUploadInProgress = false"
               />
@@ -1674,6 +1722,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :resolutionBucketFilter="resolutionBucketFilter"
               :faceBboxFilter="faceBboxFilter"
               :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+              :importSourceFolderFilter="
+                selectedFolderFilter?.importSourceFolder ?? null
+              "
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"

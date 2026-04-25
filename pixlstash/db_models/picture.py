@@ -245,6 +245,18 @@ class Picture(SQLModel, table=True):
     reference_folder_id: Optional[int] = Field(
         default=None, foreign_key="reference_folder.id", index=True
     )
+    # Absolute path to the import-folder root that produced this picture.
+    # NULL for pictures imported through other workflows.
+    import_source_folder: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            "import_source_folder",
+            String,
+            default=None,
+            nullable=True,
+            index=True,
+        ),
+    )
     # Absolute path to the sidecar caption file (.txt or .caption) that was
     # present when this reference-folder picture was first indexed.  NULL when
     # no sidecar existed at scan time or for non-reference-folder pictures.

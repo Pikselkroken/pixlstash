@@ -777,6 +777,7 @@ const props = defineProps({
   selectedProjectId: { type: Number, default: null },
   referenceFolderIdFilter: { type: Number, default: null },
   filePathPrefixFilter: { type: String, default: null },
+  importSourceFolderFilter: { type: String, default: null },
   folderScanning: { type: Boolean, default: false },
   selectedCharacterIds: { type: Array, default: () => [] },
   characterMultiMode: { type: String, default: "union" },
@@ -4455,6 +4456,7 @@ function buildGridFetchKey() {
     comfyuiLoraFilter: props.comfyuiLoraFilter ?? [],
     referenceFolderIdFilter: props.referenceFolderIdFilter ?? null,
     filePathPrefixFilter: props.filePathPrefixFilter ?? null,
+    importSourceFolderFilter: props.importSourceFolderFilter ?? null,
   });
 }
 
@@ -4595,6 +4597,9 @@ function buildPictureIdsQueryParams() {
   }
   if (props.filePathPrefixFilter != null) {
     params.append("file_path_prefix", props.filePathPrefixFilter);
+  }
+  if (props.importSourceFolderFilter != null) {
+    params.append("import_source_folder", props.importSourceFolderFilter);
   }
   if (props.faceBboxFilter != null) {
     params.append("face_filter", props.faceBboxFilter);

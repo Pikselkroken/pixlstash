@@ -67,10 +67,7 @@
         </v-icon>
         <span class="add-to-set-item-name">{{ set.name }}</span>
         <span class="add-to-set-item-meta">
-          <span
-            v-if="set.picture_count != null"
-            class="add-to-set-item-count"
-          >
+          <span v-if="set.picture_count != null" class="add-to-set-item-count">
             {{ set.picture_count }}
           </span>
           <span

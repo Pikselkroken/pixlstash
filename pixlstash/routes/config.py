@@ -18,10 +18,10 @@ except Exception:  # pragma: no cover - optional dependency
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import update
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, User
+from pixlstash.db_models import ImportFolder, Picture, User
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.config_utils import (
     apply_user_config_patch,
@@ -166,6 +166,22 @@ def create_router(server) -> APIRouter:
 
     def _load_watch_folders():
         config_path = getattr(server, "_server_config_path", None)
+        try:
+            db_watch_folders = server.vault.db.run_immediate_read_task(
+                lambda session: session.exec(
+                    select(ImportFolder).order_by(ImportFolder.id)
+                ).all()
+            )
+            if db_watch_folders:
+                folders = [
+                    folder.folder
+                    for folder in db_watch_folders
+                    if getattr(folder, "folder", None)
+                ]
+                return config_path, folders
+        except Exception as exc:
+            logger.debug("Failed to read import folders from DB: %s", exc)
+
         if not config_path or not os.path.exists(config_path):
             return config_path, []
         try:

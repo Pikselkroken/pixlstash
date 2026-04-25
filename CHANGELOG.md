@@ -1,3 +1,9 @@
+# [1.1.0rc1]
+- Support multi-select and boolean set operations on characters and picture sets
+  * Union, Overlap, Difference or Unique
+- Include Import Folders in the UI together with reference folders
+- Add context menus to the ImageGrid and the sidebar
+
 # [1.1.0b1]
 - Support reference folders: add folders to include in app but not import into database folder
 - Add statistics sidebar in Image Grid
