@@ -370,6 +370,14 @@ const selectedImportFolderForHeader = computed(() => {
 // Whether the currently selected reference folder is actively being scanned
 // for the first time (active but never completed a pass).
 const selectedFolderScanning = computed(() => {
+  if (selectedFolderKey.value?.startsWith("if-")) {
+    const id = Number(selectedFolderKey.value.slice(3));
+    if (!Number.isFinite(id)) return false;
+    const importFolder = importFolders.value.find(
+      (entry) => Number(entry.id) === id,
+    );
+    return Boolean(importFolder && importFolder.last_checked == null);
+  }
   const id = Number(selectedFolderReferenceId.value);
   if (!Number.isFinite(id)) return false;
   const rf = referenceFolders.value.find((f) => f.id === id);
@@ -406,6 +414,9 @@ async function fetchImportFolders() {
   try {
     const res = await apiClient.get("/import-folders");
     importFolders.value = res.data?.folders ?? [];
+    if (sidebarPrimaryTab.value === "folders") {
+      _startFolderStatusPoll();
+    }
   } catch (e) {
     console.error("Failed to fetch import folders:", e);
   } finally {
@@ -505,23 +516,31 @@ watch(sidebarPrimaryTab, (tab) => {
   }
 });
 
-// Poll for reference folder status updates while the Folders tab is open.
-// Keeps polling while any folder is pending_mount OR active-but-unscanned
-// (last_scanned === null indicates first scan hasn't finished yet).
+// Poll for folder status updates while the Folders tab is open.
+// Keeps polling while any reference folder is transitioning OR any import
+// folder has not completed its first scan yet (last_checked === null).
 let _folderStatusPollTimer = null;
 
-function _anyFolderNeedsPolling(folders) {
-  return folders.some(
+function _anyFolderNeedsPolling() {
+  const referenceNeedsPolling = referenceFolders.value.some(
     (rf) =>
       rf.status === "pending_mount" ||
       (rf.status === "active" && rf.last_scanned == null),
   );
+  const importNeedsPolling = importFolders.value.some(
+    (entry) => entry.last_checked == null,
+  );
+  return referenceNeedsPolling || importNeedsPolling;
 }
 
 async function _pollFolderStatus() {
   try {
-    const res = await apiClient.get("/reference-folders");
-    const folders = res.data?.folders ?? [];
+    const [referenceRes, importRes] = await Promise.all([
+      apiClient.get("/reference-folders"),
+      apiClient.get("/import-folders"),
+    ]);
+    const folders = referenceRes.data?.folders ?? [];
+    const updatedImportFolders = importRes.data?.folders ?? [];
     // Detect folders whose first scan just completed so we can refresh
     // the browse cache (image counts were zero before).
     const justScanned = referenceFolders.value.filter((rf) => {
@@ -550,8 +569,12 @@ async function _pollFolderStatus() {
       folderBrowseCache.value = next;
       browseFolderPath(rf.folder, true);
     }
+
+    // Refresh import-folder counts and first-scan state.
+    importFolders.value = updatedImportFolders;
+
     // Stop polling when nothing is still transitioning.
-    if (!_anyFolderNeedsPolling(referenceFolders.value)) {
+    if (!_anyFolderNeedsPolling()) {
       _stopFolderStatusPoll();
     }
   } catch {
@@ -561,7 +584,7 @@ async function _pollFolderStatus() {
 
 function _startFolderStatusPoll() {
   _stopFolderStatusPoll();
-  if (!_anyFolderNeedsPolling(referenceFolders.value)) return;
+  if (!_anyFolderNeedsPolling()) return;
   _folderStatusPollTimer = setInterval(_pollFolderStatus, 3000);
 }
 
