@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -17,10 +16,11 @@ except Exception:  # pragma: no cover - optional dependency
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlalchemy import update
+from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import User
+from pixlstash.db_models import ImportFolder, Picture, User
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.config_utils import (
     apply_user_config_patch,
@@ -164,28 +164,21 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
 
     def _load_watch_folders():
-        config_path = getattr(server, "_server_config_path", None)
-        if not config_path or not os.path.exists(config_path):
-            return config_path, []
         try:
-            with open(config_path, "r") as handle:
-                config = json.load(handle)
-            raw_folders = config.get("watch_folders", []) or []
+            db_watch_folders = server.vault.db.run_immediate_read_task(
+                lambda session: session.exec(
+                    select(ImportFolder).order_by(ImportFolder.id)
+                ).all()
+            )
+            folders = [
+                folder.folder
+                for folder in (db_watch_folders or [])
+                if getattr(folder, "folder", None)
+            ]
+            return folders
         except Exception as exc:
-            logger.warning("Failed to read watch_folders: %s", exc)
-            return config_path, []
-
-        folders = []
-        for entry in raw_folders:
-            if isinstance(entry, str):
-                folder = entry
-            elif isinstance(entry, dict):
-                folder = entry.get("folder")
-            else:
-                folder = None
-            if folder:
-                folders.append(folder)
-        return config_path, folders
+            logger.debug("Failed to read import folders from DB: %s", exc)
+        return []
 
     def _open_in_os(path: str) -> bool:
         if not path or not os.path.exists(path):
@@ -381,6 +374,7 @@ def create_router(server) -> APIRouter:
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
 
+            old_penalised_tags = user.smart_score_penalised_tags
             try:
                 updated = apply_user_config_patch(user, patch_data)
             except ValueError as exc:
@@ -390,11 +384,22 @@ def create_router(server) -> APIRouter:
                 session.add(user)
                 session.commit()
                 session.refresh(user)
-            return user, updated
+            penalised_tags_changed = (
+                user.smart_score_penalised_tags != old_penalised_tags
+            )
+            return user, updated, penalised_tags_changed
 
-        user, updated = server.vault.db.run_task(
+        user, updated, penalised_tags_changed = server.vault.db.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        if penalised_tags_changed:
+
+            def _reset_smart_scores(session: Session) -> None:
+                session.exec(update(Picture).values(smart_score=None))
+                session.commit()
+
+            server.vault.db.run_task(_reset_smart_scores, priority=DBPriority.LOW)
+            server.vault.wake()
         if "keep_models_in_memory" in patch_data:
             server.vault.set_keep_models_in_memory(
                 getattr(user, "keep_models_in_memory", True)
@@ -484,17 +489,35 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/server-config/watch-folders",
         summary="List watch folders",
-        description="Returns watch-folder paths from server configuration.",
+        description="Returns watch-folder paths from import-folder records in the database.",
     )
     def get_watch_folders(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
-        config_path, folders = _load_watch_folders()
+        folders = _load_watch_folders()
         return {
             "status": "success",
-            "config_path": config_path,
             "watch_folders": folders,
         }
+
+    @router.get(
+        "/server-config/filesystem-roots",
+        summary="List filesystem browser roots",
+        description=(
+            "Returns the configured filesystem browser root paths. "
+            "When non-empty, the filesystem browser is restricted to these directories. "
+            "An empty list means the browser is unrestricted."
+        ),
+    )
+    def get_filesystem_roots(request: Request):
+        _ensure_secure_when_required(request)
+        server.auth.require_user_id(request)
+        roots = [
+            r
+            for r in (server._server_config.get("filesystem_roots") or [])
+            if isinstance(r, str) and r
+        ]
+        return {"status": "success", "filesystem_roots": roots}
 
     @router.post(
         "/server-config/open",

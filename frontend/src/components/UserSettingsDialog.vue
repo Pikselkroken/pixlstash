@@ -2680,7 +2680,7 @@ const workflowImportCaptionPreview = computed(() => {
 
 .settings-stepper-label {
   font-size: 0.8em;
-  color: rgba(0, 0, 0, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.68);
   white-space: nowrap;
   line-height: 1;
 }
@@ -2688,7 +2688,7 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-stepper-controls {
   display: flex;
   align-items: center;
-  border: 1px solid rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
   border-radius: 4px;
   overflow: hidden;
   height: 26px;
@@ -2701,7 +2701,7 @@ const workflowImportCaptionPreview = computed(() => {
   border-radius: 0;
   appearance: none;
   -webkit-appearance: none;
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   cursor: pointer;
   font-size: 1em;
   line-height: 1;
@@ -2716,7 +2716,7 @@ const workflowImportCaptionPreview = computed(() => {
 }
 
 .settings-stepper-btn:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.12);
+  background: rgba(var(--v-theme-on-surface), 0.14);
 }
 
 .settings-stepper-btn:disabled {
@@ -2729,8 +2729,8 @@ const workflowImportCaptionPreview = computed(() => {
   text-align: center;
   font-size: 0.88em;
   line-height: 1;
-  border-left: 1px solid rgba(0, 0, 0, 0.15);
-  border-right: 1px solid rgba(0, 0, 0, 0.15);
+  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.2);
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.2);
   height: 100%;
   display: flex;
   align-items: center;
@@ -2752,7 +2752,7 @@ const workflowImportCaptionPreview = computed(() => {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border: 1px solid rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
   border-radius: 4px;
   background: transparent;
   cursor: pointer;
@@ -2760,7 +2760,7 @@ const workflowImportCaptionPreview = computed(() => {
   -webkit-appearance: none;
   outline: none;
   padding: 0;
-  color: rgba(0, 0, 0, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.68);
   flex-shrink: 0;
   transition:
     background 0.15s,
@@ -2768,8 +2768,8 @@ const workflowImportCaptionPreview = computed(() => {
 }
 
 .settings-threshold-preview-btn:hover {
-  background: rgba(0, 0, 0, 0.07);
-  color: rgba(0, 0, 0, 0.8);
+  background: rgba(var(--v-theme-on-surface), 0.1);
+  color: rgba(var(--v-theme-on-surface), 0.92);
 }
 
 /* Label thresholds dialog */

@@ -48,6 +48,101 @@ SEED_FIELDS = {"noise_seed", "seed"}
 SEED_NODE_CLASSES = {"RandomNoise", "KSampler", "KSamplerAdvanced"}
 
 
+def _extract_history_entry(history_payload: dict, prompt_id: str) -> dict:
+    if not isinstance(history_payload, dict):
+        return {}
+    if prompt_id in history_payload and isinstance(history_payload[prompt_id], dict):
+        return history_payload[prompt_id]
+    if "status" in history_payload or "outputs" in history_payload:
+        return history_payload
+    return {}
+
+
+def _extract_text_from_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        for item in value:
+            text = _extract_text_from_value(item)
+            if text:
+                return text
+        return ""
+    if isinstance(value, dict):
+        for key in (
+            "exception_message",
+            "error",
+            "message",
+            "details",
+            "detail",
+            "exception",
+            "reason",
+            "node_errors",
+        ):
+            if key in value:
+                text = _extract_text_from_value(value.get(key))
+                if text:
+                    return text
+        try:
+            return json.dumps(value, ensure_ascii=True)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _extract_history_status_and_error(
+    history_payload: dict, prompt_id: str
+) -> tuple[str | None, str | None]:
+    entry = _extract_history_entry(history_payload, prompt_id)
+    status = entry.get("status") or {}
+    status_str = None
+    if isinstance(status, dict):
+        raw_status = status.get("status_str") or status.get("status")
+        if raw_status is not None:
+            status_str = str(raw_status).strip().lower() or None
+
+    error_text = ""
+    message_items = status.get("messages") if isinstance(status, dict) else None
+    if isinstance(message_items, list):
+        for item in reversed(message_items):
+            event_name = ""
+            event_payload = None
+            if isinstance(item, (list, tuple)) and item:
+                event_name = str(item[0] or "").strip().lower()
+                event_payload = item[1] if len(item) > 1 else None
+            elif isinstance(item, dict):
+                event_name = str(item.get("type") or "").strip().lower()
+                event_payload = item
+            if event_name in {
+                "execution_error",
+                "execution_failed",
+                "error",
+                "execution_interrupted",
+            }:
+                if status_str is None:
+                    status_str = "error"
+                error_text = _extract_text_from_value(event_payload)
+                if error_text:
+                    break
+
+    if not error_text:
+        for candidate in (
+            entry.get("error"),
+            entry.get("exception_message"),
+            status.get("error") if isinstance(status, dict) else None,
+            status.get("message") if isinstance(status, dict) else None,
+            status.get("details") if isinstance(status, dict) else None,
+        ):
+            error_text = _extract_text_from_value(candidate)
+            if error_text:
+                break
+
+    return status_str, (error_text or None)
+
+
 def _workflow_builtin_dir() -> str:
     return os.path.abspath(
         os.path.join(
@@ -419,11 +514,36 @@ def _wait_for_comfyui_outputs(
         images = _extract_comfyui_output_images(
             history_payload, prompt_id, output_node_ids
         )
+        status_str, error_text = _extract_history_status_and_error(
+            history_payload, prompt_id
+        )
         if images:
             return images
+        if status_str in {"error", "failed", "failure", "interrupted", "cancelled"}:
+            raise RuntimeError(error_text or f"ComfyUI status={status_str}")
+        if error_text and status_str != "success":
+            raise RuntimeError(error_text)
         last_images = images
         time.sleep(poll_s)
     return last_images
+
+
+def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
+    try:
+        server.vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "plugin": "ComfyUI",
+                "status": "failed",
+                "run_id": f"comfyui-{prompt_id}",
+                "message": str(message or "ComfyUI failed"),
+                "current": 0,
+                "total": 0,
+                "progress": 0,
+            },
+        )
+    except Exception as exc:
+        logger.debug("Failed to emit ComfyUI failure progress event: %s", exc)
 
 
 def _download_comfyui_image(base_url: str, entry: dict) -> tuple[bytes, str]:
@@ -462,9 +582,22 @@ def _download_comfyui_image(base_url: str, entry: dict) -> tuple[bytes, str]:
     return response.content, ext
 
 
+def _unique_edit_filename(output_dir: str, stem: str, ext: str) -> str:
+    """Return ``{stem}_edit{n}{ext}`` with the first n >= 1 that is unused in output_dir."""
+    n = 1
+    while True:
+        candidate = f"{stem}_edit{n}{ext}"
+        if not os.path.exists(os.path.join(output_dir, candidate)):
+            return candidate
+        n += 1
+
+
 def _import_comfyui_outputs(
     server,
     image_entries: list[tuple[bytes, str]],
+    output_dir: str | None = None,
+    reference_folder_id: int | None = None,
+    source_file_stem: str | None = None,
 ) -> tuple[list[int], list[int]]:
     if not image_entries:
         return [], []
@@ -487,13 +620,18 @@ def _import_comfyui_outputs(
 
     new_pictures = []
     for (img_bytes, ext), sha in new_entries:
-        pic_uuid = f"{uuid.uuid4()}{ext}"
+        if output_dir and source_file_stem:
+            pic_uuid = _unique_edit_filename(output_dir, source_file_stem, ext)
+        else:
+            pic_uuid = f"{uuid.uuid4()}{ext}"
         new_pictures.append(
             ImageUtils.create_picture_from_bytes(
                 image_root_path=server.vault.image_root,
                 image_bytes=img_bytes,
                 picture_uuid=pic_uuid,
                 pixel_sha=sha,
+                output_dir=output_dir,
+                reference_folder_id=reference_folder_id,
             )
         )
 
@@ -798,6 +936,11 @@ def _process_comfyui_outputs(
         images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
         if not images:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
+            _emit_comfyui_failure_progress(
+                server,
+                prompt_id,
+                "ComfyUI finished without outputs.",
+            )
             return
         entries = []
         for entry in images:
@@ -805,7 +948,31 @@ def _process_comfyui_outputs(
             if img_bytes:
                 entries.append((img_bytes, ext))
 
-        new_ids, duplicate_ids = _import_comfyui_outputs(server, entries)
+        output_dir: str | None = None
+        ref_folder_id: int | None = None
+        source_file_stem: str | None = None
+        if source_picture_id is not None:
+            src_pic = server.vault.db.run_immediate_read_task(
+                lambda session: session.get(Picture, source_picture_id)
+            )
+            if (
+                src_pic is not None
+                and src_pic.reference_folder_id is not None
+                and src_pic.file_path
+                and os.path.isabs(src_pic.file_path)
+            ):
+                output_dir = os.path.dirname(src_pic.file_path)
+                ref_folder_id = src_pic.reference_folder_id
+                raw = src_pic.original_file_name or os.path.basename(src_pic.file_path)
+                source_file_stem = os.path.splitext(raw)[0] if raw else None
+
+        new_ids, duplicate_ids = _import_comfyui_outputs(
+            server,
+            entries,
+            output_dir=output_dir,
+            reference_folder_id=ref_folder_id,
+            source_file_stem=source_file_stem,
+        )
         all_ids = [pid for pid in new_ids + duplicate_ids if pid is not None]
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)
@@ -830,8 +997,12 @@ def _process_comfyui_outputs(
             server.vault.notify(EventType.PICTURE_IMPORTED, new_ids)
         if all_ids:
             server.vault.notify(EventType.CHANGED_PICTURES, all_ids)
+    except RuntimeError as exc:
+        logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
+        _emit_comfyui_failure_progress(server, prompt_id, str(exc))
     except Exception as exc:
         logger.warning("Failed to import ComfyUI outputs: %s", exc)
+        _emit_comfyui_failure_progress(server, prompt_id, str(exc))
 
 
 def _comfyui_abort(base_url: str) -> dict:
@@ -902,9 +1073,16 @@ def create_router(server) -> APIRouter:
         async def forward_upstream(upstream):
             try:
                 async for message in upstream:
-                    await websocket.send_text(message)
+                    if isinstance(message, (bytes, bytearray)):
+                        await websocket.send_bytes(bytes(message))
+                    else:
+                        await websocket.send_text(message)
             except asyncio.CancelledError:
                 raise
+            except WebSocketDisconnect:
+                logger.debug(
+                    "ComfyUI WebSocket client disconnected while forwarding upstream."
+                )
             except Exception as exc:
                 logger.debug("ComfyUI WebSocket upstream forward failed: %s", exc)
 
@@ -925,10 +1103,19 @@ def create_router(server) -> APIRouter:
             async with websockets.connect(
                 ws_url, ping_interval=None, close_timeout=2
             ) as upstream:
-                await asyncio.gather(
-                    forward_upstream(upstream),
-                    forward_downstream(upstream),
+                upstream_task = asyncio.create_task(forward_upstream(upstream))
+                downstream_task = asyncio.create_task(forward_downstream(upstream))
+                done, pending = await asyncio.wait(
+                    {upstream_task, downstream_task},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                for task in done:
+                    exc = task.exception()
+                    if exc:
+                        raise exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:

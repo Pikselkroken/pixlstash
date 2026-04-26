@@ -2,6 +2,7 @@ from sqlmodel import Session, select, delete
 import os
 import threading
 import time
+from sqlalchemy.exc import IntegrityError
 
 from PIL import Image as PILImage
 
@@ -51,6 +52,7 @@ class TagTask(BaseTask):
         self._preloaded_images: dict[str, PILImage.Image] = {}
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
+        self._preload_cancel = threading.Event()
         self._preload_started_at: float | None = None
         self._preload_finished_at: float | None = None
         self._cpu_spillover_enabled = False
@@ -58,6 +60,7 @@ class TagTask(BaseTask):
     def on_queued(self) -> None:
         if self._preload_thread is not None and self._preload_thread.is_alive():
             return
+        self._preload_cancel.clear()
         self._preload_started_at = time.perf_counter()
         self._preload_finished_at = None
         self._preload_thread = threading.Thread(
@@ -67,10 +70,23 @@ class TagTask(BaseTask):
         )
         self._preload_thread.start()
 
+    def on_cancel(self) -> None:
+        self._preload_cancel.set()
+        if self._preload_thread is None:
+            return
+        self._preload_thread.join(timeout=10)
+        if self._preload_thread.is_alive():
+            logger.warning(
+                "TagTask preload thread did not stop in time for task %s",
+                self.id,
+            )
+
     def _preload_images(self) -> None:
         preloaded = {}
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
         for pic in self._pictures:
+            if self._preload_cancel.is_set():
+                break
             try:
                 file_path = ImageUtils.resolve_picture_path(
                     self._db.image_root, pic.file_path
@@ -181,9 +197,25 @@ class TagTask(BaseTask):
     @staticmethod
     def _add_tags_bulk(session: Session, updates: list[dict]):
         updated_ids = []
+        candidate_ids = {
+            int(update.get("pic_id"))
+            for update in (updates or [])
+            if update.get("pic_id") is not None
+        }
+        existing_picture_ids = set()
+        if candidate_ids:
+            existing_picture_ids = set(
+                session.exec(
+                    select(Picture.id).where(Picture.id.in_(list(candidate_ids)))
+                ).all()
+            )
+
         for update in updates:
             pic_id = update.get("pic_id")
             if pic_id is None:
+                continue
+            if pic_id not in existing_picture_ids:
+                logger.debug("Skipping tag update for missing picture_id=%s", pic_id)
                 continue
             tags = update.get("tags") or []
 
@@ -202,14 +234,22 @@ class TagTask(BaseTask):
             if effective_tags == existing_tag_set:
                 continue
 
-            session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+            try:
+                session.exec(delete(Tag).where(Tag.picture_id == pic_id))
 
-            for tag_value in effective_tags:
-                session.add(Tag(picture_id=pic_id, tag=tag_value))
+                for tag_value in effective_tags:
+                    session.add(Tag(picture_id=pic_id, tag=tag_value))
 
-            updated_ids.append(pic_id)
+                session.commit()
+                updated_ids.append(pic_id)
+            except IntegrityError as exc:
+                session.rollback()
+                logger.warning(
+                    "Skipping tag update for picture_id=%s due to concurrent delete or FK constraint: %s",
+                    pic_id,
+                    exc,
+                )
 
-        session.commit()
         return updated_ids
 
     @staticmethod

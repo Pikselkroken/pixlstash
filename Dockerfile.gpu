@@ -80,8 +80,11 @@ RUN pip install --no-cache-dir \
     "bcrypt<4.0.0" \
     nvidia-ml-py \
     piexif \
+    watchdog \
     psutil \
+    dotenv \
     python-dotenv \
+    click \
     accelerate
 
 # Download spaCy English model

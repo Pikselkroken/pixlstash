@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 
 from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
@@ -38,6 +39,10 @@ class ComfyUIExtractionTask(BaseTask):
         self._db = database
         self._image_root = image_root
         self._pictures = pictures or []
+        self._stop_event = threading.Event()
+
+    def on_cancel(self) -> None:
+        self._stop_event.set()
 
     @property
     def priority(self) -> TaskPriority:
@@ -70,6 +75,12 @@ class ComfyUIExtractionTask(BaseTask):
         found_comfyui = 0
 
         for pic in fresh_pictures:
+            if self._stop_event.is_set():
+                logger.debug(
+                    "ComfyUIExtractionTask cancelled, stopping early at task %s",
+                    self.id,
+                )
+                break
             resolved = ImageUtils.resolve_picture_path(self._image_root, pic.file_path)
 
             if not resolved or not os.path.exists(resolved):

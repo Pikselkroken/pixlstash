@@ -7,6 +7,11 @@ on:
     branches:
       - docker-support
   workflow_dispatch:
+    inputs:
+      overwrite:
+        description: "Overwrite existing tags if already present"
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -16,6 +21,9 @@ jobs:
   build-cpu:
     name: Build CPU image
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     permissions:
       contents: read
       packages: write
@@ -34,26 +42,73 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Classify release tag (CPU)
+        id: release-kind
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "release_tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_stable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_stable=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract Docker metadata (CPU)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            docker.io/lindkvis/pixlstash
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ steps.release-kind.outputs.release_tag }},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable != 'true' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' }}
             type=edge,branch=${{ github.event.repository.default_branch }}
             type=sha,format=short
 
+      - name: Compute tags to push (CPU)
+        id: push-tags-cpu
+        env:
+          ALL_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" || "${{ inputs.overwrite }}" == "true" ]]; then
+            { echo "tags<<EOF"; echo "$ALL_TAGS"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TAGS_TO_PUSH=""
+          while IFS= read -r TAG; do
+            [[ -z "$TAG" ]] && continue
+            if ! docker manifest inspect "$TAG" > /dev/null 2>&1; then
+              echo "Will push: $TAG"
+              TAGS_TO_PUSH+="${TAG}"$'\n'
+            else
+              echo "Skipping (already exists): $TAG"
+            fi
+          done <<< "$ALL_TAGS"
+          { echo "tags<<EOF"; printf '%s' "$TAGS_TO_PUSH"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
       - name: Build and push CPU image
+        if: steps.push-tags-cpu.outputs.tags != ''
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.push-tags-cpu.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cpu
           cache-to: type=gha,scope=cpu,mode=max
@@ -61,6 +116,9 @@ jobs:
   build-gpu:
     name: Build GPU image (NVIDIA CUDA)
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     permissions:
       contents: read
       packages: write
@@ -79,25 +137,72 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Classify release tag (GPU)
+        id: release-kind
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "release_tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_stable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_stable=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract Docker metadata (GPU)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            docker.io/lindkvis/pixlstash
           tags: |
             type=semver,pattern={{version}}-gpu
             type=semver,pattern={{major}}.{{minor}}-gpu
-            type=raw,value=latest-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ steps.release-kind.outputs.release_tag }}-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable != 'true' }}
+            type=raw,value=latest-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' }}
             type=raw,value=edge-gpu,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short,suffix=-gpu
 
+      - name: Compute tags to push (GPU)
+        id: push-tags-gpu
+        env:
+          ALL_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" || "${{ inputs.overwrite }}" == "true" ]]; then
+            { echo "tags<<EOF"; echo "$ALL_TAGS"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TAGS_TO_PUSH=""
+          while IFS= read -r TAG; do
+            [[ -z "$TAG" ]] && continue
+            if ! docker manifest inspect "$TAG" > /dev/null 2>&1; then
+              echo "Will push: $TAG"
+              TAGS_TO_PUSH+="${TAG}"$'\n'
+            else
+              echo "Skipping (already exists): $TAG"
+            fi
+          done <<< "$ALL_TAGS"
+          { echo "tags<<EOF"; printf '%s' "$TAGS_TO_PUSH"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
       - name: Build and push GPU image
+        if: steps.push-tags-gpu.outputs.tags != ''
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.gpu
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.push-tags-gpu.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=gpu
           cache-to: type=gha,scope=gpu,mode=max

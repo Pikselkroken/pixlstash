@@ -130,7 +130,22 @@ class ImageUtils:
     def get_thumbnail_path(
         image_root: Optional[str], file_path: Optional[str]
     ) -> Optional[str]:
-        """Return the expected thumbnail file path for a given picture path."""
+        """Return the expected thumbnail file path for a given picture path.
+
+        For reference-folder pictures (absolute ``file_path``), thumbnails are
+        stored under ``image_root/.ref_thumbs/`` so they don't pollute the
+        source directory and get re-indexed on the next scan.
+        """
+        if not file_path:
+            return None
+        if os.path.isabs(file_path) and image_root:
+            # Reference-folder picture — redirect thumbnail into image_root.
+            path_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+            stem = os.path.splitext(os.path.basename(file_path))[0]
+            thumb_dir = os.path.join(image_root, ".ref_thumbs")
+            return os.path.join(
+                thumb_dir, f"{stem}_{path_hash}_thumb{THUMBNAIL_EXTENSION}"
+            )
         resolved = ImageUtils.resolve_picture_path(image_root, file_path)
         if not resolved:
             return None
@@ -405,6 +420,7 @@ class ImageUtils:
         try:
             if isinstance(img, Image.Image):
                 pil_img = img.copy()
+                pil_img = ImageOps.exif_transpose(pil_img)
             else:
                 pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             if pil_img.mode not in ("RGB", "L"):
@@ -533,8 +549,26 @@ class ImageUtils:
         pixel_sha: Optional[str] = None,
         created_at: Optional[str] = None,
         original_file_name: Optional[str] = None,
+        output_dir: Optional[str] = None,
+        reference_folder_id: Optional[int] = None,
     ) -> Picture:
-        """Create a Picture from raw bytes, deriving metadata and saving the file."""
+        """Create a Picture from raw bytes, deriving metadata and saving the file.
+
+        Args:
+            image_root_path: The vault's image root directory. Always used for
+                thumbnail storage even when ``output_dir`` is set.
+            image_bytes: Raw image data to save.
+            picture_uuid: Optional filename (with extension) for the saved file.
+            pixel_sha: Pre-computed pixel hash; computed from bytes if omitted.
+            created_at: Optional creation timestamp.
+            original_file_name: Original filename to store on the Picture record.
+            output_dir: When set, save the image file into this directory instead
+                of ``image_root_path``.  The Picture's ``file_path`` is stored as
+                the full absolute path so that reference-folder thumbnails are
+                correctly routed to ``image_root/.ref_thumbs/``.
+            reference_folder_id: When set, assigned to the Picture so that the
+                reference-folder scan recognises the record as already indexed.
+        """
         if not pixel_sha:
             pixel_sha = ImageUtils.calculate_hash_from_bytes(image_bytes)
 
@@ -599,18 +633,26 @@ class ImageUtils:
             picture_uuid = str(uuid.uuid4()) + f".{img_format.lower()}"
 
         file_name = os.path.basename(picture_uuid)
-        full_path = os.path.join(image_root_path, file_name)
+        if output_dir:
+            # Save into the caller-specified directory (e.g. a reference folder).
+            # Store the absolute path so thumbnail routing treats this as a
+            # reference-folder picture and writes the thumb to .ref_thumbs/.
+            full_path = os.path.join(output_dir, file_name)
+            picture_file_path: str = full_path
+        else:
+            full_path = os.path.join(image_root_path, file_name)
+            picture_file_path = file_name
         if os.path.exists(full_path):
             size_bytes = os.path.getsize(full_path)
         else:
-            os.makedirs(image_root_path, exist_ok=True)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "wb") as f:
                 f.write(image_bytes)
             size_bytes = len(image_bytes)
 
         if thumbnail_bytes:
             saved_thumb = ImageUtils.write_thumbnail_bytes(
-                image_root_path, file_name, thumbnail_bytes
+                image_root_path, picture_file_path, thumbnail_bytes
             )
             if not saved_thumb:
                 logger.warning("Failed to persist thumbnail for %s", file_name)
@@ -648,7 +690,7 @@ class ImageUtils:
             comfyui_loras_json = json.dumps(loras)
 
         return Picture(
-            file_path=file_name,
+            file_path=picture_file_path,
             format=img_format,
             width=width,
             height=height,
@@ -656,6 +698,7 @@ class ImageUtils:
             created_at=created_at,
             pixel_sha=pixel_sha,
             original_file_name=original_file_name,
+            reference_folder_id=reference_folder_id,
             comfyui_positive_prompt=comfyui_positive_prompt,
             comfyui_models=comfyui_models_json,
             comfyui_loras=comfyui_loras_json,

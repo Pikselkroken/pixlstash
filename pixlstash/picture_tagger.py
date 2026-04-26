@@ -3,6 +3,7 @@
 # Under the Apache 2.0 License                                  #
 # https://github.com/kohya-ss/sd-scripts/blob/main/LICENSE.md   #
 #################################################################
+from contextlib import contextmanager
 from typing import Optional
 import open_clip
 import csv
@@ -20,11 +21,16 @@ from torchvision import transforms
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 
+try:
+    from transformers import logging as transformers_logging
+except Exception:  # pragma: no cover - optional dependency behaviour
+    transformers_logging = None
+
 from platformdirs import user_data_dir
 
 from .pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
-from pixlstash.utils.caption_utils import sanitise_tag
+from pixlstash.utils.service.caption_utils import sanitise_tag
 from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
@@ -75,6 +81,31 @@ def _from_pretrained_local_first(cls, model_name, **kwargs):
         return cls.from_pretrained(model_name, **kwargs)
 
 
+@contextmanager
+def _quiet_transformers_load_report():
+    """Temporarily suppress non-critical Transformers load-report warnings.
+
+    Some HF model loads (notably all-MiniLM-L6-v2) can emit a benign
+    "UNEXPECTED embeddings.position_ids" load report. Keep hard errors while
+    muting that warning noise during model initialization.
+    """
+    if transformers_logging is None:
+        yield
+        return
+
+    previous = transformers_logging.get_verbosity()
+    try:
+        transformers_logging.set_verbosity_error()
+        yield
+    finally:
+        transformers_logging.set_verbosity(previous)
+
+
+def _load_sentence_transformer(*args, **kwargs):
+    with _quiet_transformers_load_report():
+        return SentenceTransformer(*args, **kwargs)
+
+
 def _clean_asset_name(filename: str) -> str:
     """Strip file extension and replace underscores/hyphens with spaces.
 
@@ -111,7 +142,7 @@ CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta
 # Pin a specific HuggingFace git commit SHA for the custom tagger repo so that the
 # model is re-downloaded whenever this value is updated, even if the local file
 # already exists.  Set to "main" to always use the latest commit on the default branch.
-CUSTOM_TAGGER_REVISION = "c5a3690a433b20c342bc9c778a80fc98f6578793"
+CUSTOM_TAGGER_REVISION = "2739fb48a62930bc692b302038692dee600fc23c"
 CUSTOM_TAGGER_REV_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.revision")
 CUSTOM_TAGGER_DEFAULT_THRESHOLD = 0.50
 # Threshold offset applied on top of each label's own threshold at inference time.
@@ -2350,7 +2381,7 @@ class PictureTagger:
         sbert_model = getattr(self, "_sbert_model", None)
         if sbert_model is None:
             try:
-                sbert_model = SentenceTransformer(
+                sbert_model = _load_sentence_transformer(
                     SENTENCE_TRANSFORMER_MODEL_NAME,
                     device=self._device,
                     local_files_only=True,
@@ -2361,7 +2392,7 @@ class PictureTagger:
                     "Downloading %s for the first time...",
                     SENTENCE_TRANSFORMER_MODEL_NAME,
                 )
-                sbert_model = SentenceTransformer(
+                sbert_model = _load_sentence_transformer(
                     SENTENCE_TRANSFORMER_MODEL_NAME,
                     device=self._device,
                     revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
@@ -2383,14 +2414,14 @@ class PictureTagger:
                     f"SBERT embedding failed on CUDA: {e}. Falling back to CPU."
                 )
                 try:
-                    sbert_model = SentenceTransformer(
+                    sbert_model = _load_sentence_transformer(
                         SENTENCE_TRANSFORMER_MODEL_NAME,
                         device="cpu",
                         local_files_only=True,
                         revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
                     )
                 except OSError:
-                    sbert_model = SentenceTransformer(
+                    sbert_model = _load_sentence_transformer(
                         SENTENCE_TRANSFORMER_MODEL_NAME,
                         device="cpu",
                         revision=SENTENCE_TRANSFORMER_MODEL_REVISION,

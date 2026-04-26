@@ -11,6 +11,8 @@ from sqlmodel import select
 from pixlstash.server import Server
 from pixlstash.db_models import Picture, Face, Character
 from pixlstash.database import DBPriority
+from pixlstash.tasks.smart_score_task import SmartScoreTask
+from tests.utils import poll_until_zero
 
 API_PREFIX = "/api/v1"
 
@@ -95,6 +97,12 @@ def test_smart_score_consistency():
         for pid, emb in emb_rows:
             assert emb is not None, f"image_embedding missing for picture id={pid}"
             assert len(emb) > 0, f"image_embedding empty for picture id={pid}"
+
+        # Wait for the background SmartScoreTask to compute and store scores
+        # before querying (smart_score is now a pre-computed DB column).
+        poll_until_zero(
+            server, SmartScoreTask.count_remaining, "smart scores", timeout_s=60
+        )
 
         # Helper to get score for a pic from response
         def get_score(resp_json, pid):

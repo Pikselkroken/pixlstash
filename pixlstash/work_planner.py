@@ -15,7 +15,10 @@ class WorkPlanner:
 
     @staticmethod
     def work_finders(
-        database, picture_tagger_getter, config_path=None, image_root=None
+        database,
+        picture_tagger_getter,
+        image_root=None,
+        path_mapper=None,
     ):
         from pixlstash.tasks import TaskType
         from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
@@ -47,6 +50,15 @@ class WorkPlanner:
         from pixlstash.tasks.missing_source_face_likeness_finder import (
             MissingSourceFaceLikenessCharacterFinder,
         )
+        from pixlstash.tasks.missing_file_purge_finder import MissingFilePurgeFinder
+        from pixlstash.tasks.reference_folder_scan_finder import (
+            ReferenceFolderScanFinder,
+        )
+        from pixlstash.tasks.missing_smart_score_finder import MissingSmartScoreFinder
+
+        from pixlstash.utils.path_mapper import PathMapper
+
+        effective_path_mapper = path_mapper if path_mapper is not None else PathMapper()
 
         return {
             TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
@@ -83,7 +95,6 @@ class WorkPlanner:
             ),
             TaskType.WATCH_FOLDERS: MissingWatchFolderImportFinder(
                 database=database,
-                config_path=config_path,
             ),
             TaskType.COMFYUI_EXTRACTION: MissingComfyUIExtractionFinder(
                 database=database,
@@ -94,6 +105,16 @@ class WorkPlanner:
                 picture_tagger_getter=picture_tagger_getter,
             ),
             TaskType.SOURCE_FACE_LIKENESS: MissingSourceFaceLikenessCharacterFinder(
+                database=database,
+            ),
+            TaskType.MISSING_FILE_PURGE: MissingFilePurgeFinder(
+                database=database,
+            ),
+            TaskType.REFERENCE_FOLDER_SCAN: ReferenceFolderScanFinder(
+                database=database,
+                path_mapper=effective_path_mapper,
+            ),
+            TaskType.SMART_SCORE: MissingSmartScoreFinder(
                 database=database,
             ),
         }

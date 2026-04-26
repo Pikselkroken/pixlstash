@@ -23,7 +23,6 @@ def _build_server_config(config_path: str, image_root: str) -> None:
         "min_free_disk_gb": 0.0,
         "min_free_vram_mb": 0.0,
         "cors_origins": [],
-        "watch_folders": [],
         "max_attachment_size_mb": 50,
         "generate_thumbnails_on_startup": False,
     }

@@ -72,6 +72,7 @@ class FaceExtractionTask(BaseTask):
         self._pictures = pictures or []
         self._insightface_app = None
         self._cpu_spillover_enabled = False
+        self._stop_event = threading.Event()
 
     @property
     def priority(self) -> TaskPriority:
@@ -82,6 +83,9 @@ class FaceExtractionTask(BaseTask):
 
     def enable_cpu_spillover(self) -> None:
         self._cpu_spillover_enabled = True
+
+    def on_cancel(self) -> None:
+        self._stop_event.set()
 
     def _run_task(self):
         if not self._pictures:
@@ -250,6 +254,12 @@ class FaceExtractionTask(BaseTask):
         detected_faces_total = 0
 
         for pic in pics:
+            if self._stop_event.is_set():
+                logger.debug(
+                    "FaceExtractionTask: stop requested, aborting after %d pictures.",
+                    processed_images,
+                )
+                break
             pic_start = time.time()
             if pic.id is None:
                 logger.warning(

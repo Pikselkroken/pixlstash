@@ -24,12 +24,10 @@ const activeTab = ref("local");
 const localInputRef = ref(null);
 const localFiles = ref([]);
 const dragActive = ref(false);
-const watchFolders = ref([]);
-const watchFoldersPath = ref("");
-const watchFoldersLoading = ref(false);
-const watchFoldersError = ref("");
-const watchFoldersLoaded = ref(false);
-const watchFoldersOpening = ref(false);
+const importFolders = ref([]);
+const importFoldersLoading = ref(false);
+const importFoldersError = ref("");
+const importFoldersLoaded = ref(false);
 
 const projects = ref([]);
 const selectedProjectId = ref(null);
@@ -157,35 +155,20 @@ async function handleLocalDrop(event) {
 }
 
 async function fetchWatchFolders({ force = false } = {}) {
-  if (watchFoldersLoading.value) return;
-  if (watchFoldersLoaded.value && !force) return;
-  watchFoldersLoading.value = true;
-  watchFoldersError.value = "";
+  if (importFoldersLoading.value) return;
+  if (importFoldersLoaded.value && !force) return;
+  importFoldersLoading.value = true;
+  importFoldersError.value = "";
   try {
-    const response = await apiClient.get("/server-config/watch-folders");
-    watchFolders.value = response?.data?.watch_folders || [];
-    watchFoldersPath.value = response?.data?.config_path || "";
-    watchFoldersLoaded.value = true;
+    const response = await apiClient.get("/import-folders");
+    importFolders.value = response?.data?.folders || [];
+    importFoldersLoaded.value = true;
   } catch (error) {
-    watchFoldersError.value =
+    importFoldersError.value =
       "Unable to load monitored folders. Check server connection.";
-    watchFolders.value = [];
-    watchFoldersPath.value = "";
+    importFolders.value = [];
   } finally {
-    watchFoldersLoading.value = false;
-  }
-}
-
-async function openServerConfigInOS() {
-  if (watchFoldersOpening.value) return;
-  watchFoldersOpening.value = true;
-  watchFoldersError.value = "";
-  try {
-    await apiClient.post("/server-config/open");
-  } catch (error) {
-    watchFoldersError.value = "Unable to open the server-config.json file.";
-  } finally {
-    watchFoldersOpening.value = false;
+    importFoldersLoading.value = false;
   }
 }
 
@@ -193,7 +176,7 @@ watch(
   [dialogOpen, activeTab],
   ([isOpen, tab]) => {
     if (isOpen && tab === "monitoring") {
-      fetchWatchFolders({ force: !watchFoldersLoaded.value });
+      fetchWatchFolders({ force: !importFoldersLoaded.value });
     }
   },
   { immediate: false },
@@ -201,7 +184,7 @@ watch(
 
 watch(dialogOpen, (isOpen) => {
   if (isOpen) {
-    watchFoldersLoaded.value = false;
+    importFoldersLoaded.value = false;
     fetchProjects();
   }
 });
@@ -290,63 +273,19 @@ watch(dialogOpen, (isOpen) => {
                   Automatic Folder Monitoring
                 </div>
                 <p class="google-photos-note">
-                  Add folders to the server-config.json file under
-                  <strong>watch_folders</strong> to auto-import new files.
+                  Import folders are managed directly in PixlStash.
                 </p>
                 <ol>
-                  <li>Open the server-config.json file on the server.</li>
+                  <li>Open the sidebar <strong>Folders</strong> tab.</li>
                   <li>
-                    Add an entry to <strong>watch_folders</strong> with the
-                    folder path and optional flags.
+                    Click <strong>Add folder</strong> and choose
+                    <strong>Import folder</strong>.
                   </li>
-                  <li>Restart the server to apply changes.</li>
+                  <li>
+                    Set <strong>Delete source files after import</strong> if you
+                    want one-way ingest behavior.
+                  </li>
                 </ol>
-                <div class="watch-folder-snippet">
-                  <pre>
-{
-  "watch_folders": [
-    { "folder": "/path/to/photos", "delete_after_import": false }
-  ]
-}</pre
-                  >
-                </div>
-                <p class="google-photos-note">
-                  Server config file (full path):
-                  <span v-if="watchFoldersPath" class="watch-folder-path">
-                    {{ watchFoldersPath }}
-                  </span>
-                  <v-btn
-                    v-if="watchFoldersPath"
-                    size="x-small"
-                    color="primary"
-                    variant="elevated"
-                    class="watch-folder-open-btn"
-                    :disabled="watchFoldersOpening"
-                    @click="openServerConfigInOS"
-                  >
-                    Open with...
-                  </v-btn>
-                  <span v-else class="watch-folder-path">(unavailable)</span>
-                </p>
-                <div class="watch-folder-section">
-                  <div class="google-photos-section-title">
-                    Currently monitored folders
-                  </div>
-                  <div v-if="watchFoldersLoading" class="google-photos-note">
-                    Loading monitored folders...
-                  </div>
-                  <div v-else-if="watchFoldersError" class="google-photos-note">
-                    {{ watchFoldersError }}
-                  </div>
-                  <ul v-else-if="watchFolders.length" class="watch-folder-list">
-                    <li v-for="folder in watchFolders" :key="folder">
-                      {{ folder }}
-                    </li>
-                  </ul>
-                  <div v-else class="google-photos-note">
-                    No monitored folders yet.
-                  </div>
-                </div>
               </div>
             </v-window-item>
             <v-window-item value="google">
@@ -590,33 +529,6 @@ watch(dialogOpen, (isOpen) => {
   color: rgba(var(--v-theme-on-surface), 0.8);
 }
 
-.watch-folder-snippet {
-  background: rgba(var(--v-theme-on-surface), 0.04);
-  border-radius: 10px;
-  border: 1px solid rgba(var(--v-theme-border), 0.35);
-  padding: 10px 12px;
-  font-size: 0.86rem;
-  color: rgba(var(--v-theme-on-surface), 0.8);
-}
-
-.watch-folder-snippet pre {
-  margin: 0;
-  font-family:
-    "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
-  white-space: pre-wrap;
-}
-
-.watch-folder-path {
-  font-family:
-    "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
-  font-size: 0.9rem;
-}
-
-.watch-folder-open-btn {
-  margin-left: 8px;
-  text-transform: none;
-}
-
 .watch-folder-section {
   display: flex;
   flex-direction: column;
@@ -627,8 +539,37 @@ watch(dialogOpen, (isOpen) => {
   margin: 0;
   padding-left: 18px;
   display: grid;
-  gap: 4px;
+  gap: 8px;
   color: rgba(var(--v-theme-on-surface), 0.8);
   font-size: 0.92rem;
+}
+
+.watch-folder-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.watch-folder-list-label {
+  font-weight: 600;
+}
+
+.watch-folder-list-path {
+  font-family:
+    "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
+  font-size: 0.84rem;
+  color: rgba(var(--v-theme-on-surface), 0.66);
+}
+
+.watch-folder-list-badge {
+  display: inline-block;
+  width: fit-content;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: rgba(var(--v-theme-warning), 0.16);
+  color: rgb(var(--v-theme-warning));
 }
 </style>

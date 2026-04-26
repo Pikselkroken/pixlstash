@@ -12,7 +12,8 @@ from pixlstash.picture_tagger import (
     CUSTOM_TAGGER_DEFAULT_THRESHOLD,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.caption_utils import sanitise_tag
+from pixlstash.utils.service.caption_utils import sanitise_tag
+from pixlstash.utils.service.caption_utils import sync_picture_sidecar
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -146,6 +147,7 @@ def create_router(server) -> APIRouter:
             EventType.CHANGED_PICTURES,
             {"picture_ids": [pic_id]},
         )
+        sync_picture_sidecar(server, pic_id)
         return {"status": "confirmed", "tag": tag}
 
     @router.post(

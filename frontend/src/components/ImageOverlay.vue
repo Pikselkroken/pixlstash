@@ -222,6 +222,7 @@
           </div>
           <AddToSetControl
             v-if="image"
+            ref="addToSetControlRef"
             :key="addToSetControlKey"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
@@ -247,6 +248,7 @@
           />
           <v-menu
             v-if="image && isMobile"
+            v-model="starMenuOpen"
             location="bottom end"
             origin="top end"
             transition="scale-transition"
@@ -507,6 +509,7 @@
             class="overlay-nav overlay-nav-left"
             :class="{ hidden: chromeHidden }"
             @click.stop="showPrevImage"
+            @dblclick.stop
             aria-label="Previous (←)"
             title="Previous (←)"
           >
@@ -516,6 +519,7 @@
             class="overlay-nav overlay-nav-right"
             :class="{ hidden: chromeHidden }"
             @click.stop="showNextImage"
+            @dblclick.stop
             aria-label="Next (→)"
             title="Next (→)"
           >
@@ -1005,7 +1009,15 @@
                     <div
                       v-for="entry in pictureInfoEntries"
                       :key="entry.label"
-                      class="metadata-info-item"
+                      :class="[
+                        'metadata-info-item',
+                        entry.fullWidth && 'metadata-info-item--full-width',
+                        entry.clickable && 'metadata-info-item--clickable',
+                      ]"
+                      :title="entry.fullWidth ? entry.value : undefined"
+                      @click="
+                        entry.clickable ? openSourceFileLocation() : undefined
+                      "
                     >
                       <div class="metadata-info-label">{{ entry.label }}</div>
                       <div class="metadata-info-value">{{ entry.value }}</div>
@@ -1222,6 +1234,7 @@ const {
 } = toRefs(props);
 
 const image = ref(null);
+const addToSetControlRef = ref(null);
 const isTagsRefreshing = ref(false);
 const userVisibleHiddenTagKeys = ref(new Set());
 const sidebarOpen = ref(true);
@@ -1400,6 +1413,8 @@ const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
+const starMenuOpen = ref(false);
+let menuWasOpenOnPointerDown = false;
 const comfyuiWorkflows = ref([]);
 const comfyuiWorkflowLoading = ref(false);
 const comfyuiWorkflowError = ref("");
@@ -2677,6 +2692,11 @@ function handleKeydown(e) {
     }
   } else if (e.key === "s" || e.key === "S") {
     toggleSidebar();
+  } else if (e.key === "a" || e.key === "A") {
+    if (addToSetControlRef.value?.lastUsedSet?.id) {
+      e.preventDefault();
+      addToSetControlRef.value.addToLastSet();
+    }
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     e.preventDefault();
     beginAddTag();
@@ -2787,6 +2807,14 @@ function handleWheelActivity() {
   handleUserActivity();
 }
 
+function handleOverlayPointerDown() {
+  menuWasOpenOnPointerDown = !!(
+    document.querySelector(".v-overlay--active") ||
+    document.querySelector(".add-to-set.open") ||
+    document.querySelector(".add-to-project.open")
+  );
+}
+
 function handleOverlayClick(event) {
   if (touchTapConsumed) {
     touchTapConsumed = false;
@@ -2805,6 +2833,10 @@ function handleOverlayClick(event) {
     console.log(
       "Aborting overlay click handling to avoid immediate re-hiding of chrome",
     );
+    return;
+  }
+  if (menuWasOpenOnPointerDown) {
+    menuWasOpenOnPointerDown = false;
     return;
   }
   const interactiveSelector =
@@ -2837,7 +2869,11 @@ function openSidebarFromTeaser() {
   startEditDescription();
 }
 
-function toggleZoom() {
+function toggleZoom(event = null) {
+  const target = event?.target;
+  if (target instanceof HTMLElement && target.closest(".overlay-nav")) {
+    return;
+  }
   const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
   const nextIndex = (currentIndex + 1) % zoomSteps.length;
   zoomMode.value = zoomSteps[nextIndex];
@@ -3338,6 +3374,7 @@ onMounted(() => {
   updateViewportMetrics();
   window.addEventListener("resize", updateViewportMetrics);
   window.addEventListener("keydown", handleKeydown);
+  window.addEventListener("pointerdown", handleOverlayPointerDown, true);
   fetchPenalisedTags();
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
@@ -3355,6 +3392,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("resize", updateViewportMetrics);
   window.removeEventListener("keydown", handleKeydown);
+  window.removeEventListener("pointerdown", handleOverlayPointerDown, true);
   if (overlayResizeObserver) {
     overlayResizeObserver.disconnect();
     overlayResizeObserver = null;
@@ -4020,6 +4058,11 @@ function preloadAdjacentImages() {
 }
 
 const comfyMetadata = ref(null);
+const metadataTab = ref("info");
+const metadataCollapsed = ref(false);
+const descriptionCollapsed = ref(false);
+const facesCollapsed = ref(false);
+const tagsCollapsed = ref(false);
 
 watch(
   () => image.value?.id,
@@ -4363,14 +4406,28 @@ const pictureInfoEntries = computed(() => {
     }
   }
 
+  if (image.value.reference_folder_id && image.value.file_path) {
+    entries.push({
+      label: "Source file",
+      value: image.value.file_path,
+      fullWidth: true,
+      clickable: true,
+    });
+  }
+
   return entries;
 });
 
-const metadataTab = ref("info");
-const metadataCollapsed = ref(false);
-const descriptionCollapsed = ref(false);
-const facesCollapsed = ref(false);
-const tagsCollapsed = ref(false);
+async function openSourceFileLocation() {
+  if (!image.value?.id) return;
+  try {
+    await apiClient.post(
+      `${backendUrl.value}/pictures/${image.value.id}/open-location`,
+    );
+  } catch {
+    // silently ignore
+  }
+}
 
 watch(
   [() => !!comfyMetadata.value, () => !!pictureInfoEntries.value?.length],
@@ -6141,6 +6198,18 @@ function downloadComfyWorkflow(workflow) {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.metadata-info-item--full-width {
+  grid-column: 1 / -1;
+}
+
+.metadata-info-item--clickable {
+  cursor: pointer;
+}
+
+.metadata-info-item--clickable:hover .metadata-info-value {
+  text-decoration: underline;
 }
 
 .metadata-info-label {

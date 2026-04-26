@@ -1,6 +1,6 @@
 [project]
 name = "pixlstash"
-version = "1.0.4"
+version = "1.1.0rc10"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
@@ -69,6 +69,8 @@ dependencies = [
     "bcrypt>=3.2.2,<4.0.0",
     "nvidia-ml-py>=13.590.48",
     "piexif>=1.1.3",
+    "watchdog>=4.0.0",
+    "click~=8.1.8",
 ]
 
 [project.urls]

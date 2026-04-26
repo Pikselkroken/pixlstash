@@ -44,12 +44,23 @@ from pixlstash.routes.picture_sets import create_router as create_picture_sets_r
 from pixlstash.routes.projects import create_router as create_projects_router
 from pixlstash.routes.tags import create_router as create_tags_router
 from pixlstash.routes.stacks import create_router as create_stacks_router
-from pixlstash.routes.pictures import create_router as create_pictures_router
+from pixlstash.routes.pictures import (
+    create_router as create_pictures_router,
+    clear_stats_cache,
+)
 from pixlstash.routes.comfyui import create_router as create_comfyui_router
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
 )
+from pixlstash.routes.reference_folders import (
+    create_router as create_reference_folders_router,
+)
+from pixlstash.routes.import_folders import (
+    create_router as create_import_folders_router,
+)
+from pixlstash.routes.filesystem import create_router as create_filesystem_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 
 
@@ -138,21 +149,31 @@ class Server:
     DEFAULT_PORT: int | None = None
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
 
+    @staticmethod
+    def running_in_docker() -> bool:
+        """Return True when the server is running inside a Docker container."""
+        return os.environ.get("PIXLSTASH_IN_DOCKER", "") == "1"
+
     def __init__(
         self,
         server_config_path,
+        path_map: dict[str, str] | None = None,
     ):
         """
         Initialize the Server instance.
 
         Args:
             server_config_path (str): Path to the server-only config file.
+            path_map: Optional dict mapping host path prefixes to their
+                container equivalents. Set by the ``--path-map`` CLI arg.
         """
         # Ensure garbage collection before starting server to free up memory.
         # This is mainly to ensure repeated runs within the testing framework do not accumulate memory usage.
         gc.collect()
 
         self._server_config_path = server_config_path
+
+        self.path_mapper = PathMapper(path_map)
 
         self._server_config = self._init_server_config(server_config_path)
         self._startup_check_report = StartupChecks(
@@ -181,6 +202,7 @@ class Server:
             image_root=self._server_config["image_root"],
             description=User().description,
             server_config_path=self._server_config_path,
+            path_mapper=self.path_mapper,
         )
 
         self._ws_clients = []
@@ -265,6 +287,8 @@ class Server:
         gc.collect()
 
     def _handle_vault_event(self, event_type: EventType, data=None):
+        if event_type in (EventType.CHANGED_TAGS, EventType.CLEARED_TAGS):
+            clear_stats_cache()
         if not self._ws_loop:
             return
         coro = self._broadcast_ws_event(event_type, data)
@@ -578,8 +602,8 @@ class Server:
                 "min_free_disk_gb": 1.0,
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
-                "watch_folders": [],
                 "max_attachment_size_mb": 50,
+                "filesystem_roots": [],
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -616,12 +640,12 @@ class Server:
                     server_config["min_free_vram_mb"] = 1024.0
                 if "cors_origins" not in server_config:
                     server_config["cors_origins"] = []
-                if "watch_folders" not in server_config:
-                    server_config["watch_folders"] = []
                 if "max_attachment_size_mb" not in server_config:
                     server_config["max_attachment_size_mb"] = 50
                 if "generate_thumbnails_on_startup" not in server_config:
                     server_config["generate_thumbnails_on_startup"] = True
+                if "filesystem_roots" not in server_config:
+                    server_config["filesystem_roots"] = []
 
         # Resolve SSL paths that are relative: interpret them relative to the
         # config file's directory, not the process's CWD, so that the certs
@@ -845,7 +869,12 @@ class Server:
         @self.api.get("/version")
         async def read_version():
             version = self._get_version()
-            return {"message": "PixlStash REST API", "version": version}
+            install_type = "docker" if Server.running_in_docker() else "pip"
+            return {
+                "message": "PixlStash REST API",
+                "version": version,
+                "install_type": install_type,
+            }
 
         @self.api.get("/favicon.ico")
         def favicon():
@@ -853,11 +882,13 @@ class Server:
             if index_path:
                 favicon_path = os.path.join(os.path.dirname(index_path), "favicon.ico")
                 if os.path.isfile(favicon_path):
-                    return FileResponse(favicon_path)
+                    return FileResponse(
+                        favicon_path, media_type="image/vnd.microsoft.icon"
+                    )
             favicon_path = os.path.join(
                 os.path.dirname(__file__), "..", "frontend", "public", "favicon.ico"
             )
-            return FileResponse(favicon_path)
+            return FileResponse(favicon_path, media_type="image/vnd.microsoft.icon")
 
         @self.api.websocket(f"{API_V1_PREFIX}/ws/updates")
         async def websocket_updates(websocket: WebSocket):
@@ -939,6 +970,21 @@ class Server:
             create_comfyui_router(self),
             prefix=API_V1_PREFIX,
             tags=["comfyui"],
+        )
+        self.api.include_router(
+            create_reference_folders_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["config"],
+        )
+        self.api.include_router(
+            create_import_folders_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["config"],
+        )
+        self.api.include_router(
+            create_filesystem_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["config"],
         )
 
         @self.api.middleware("http")

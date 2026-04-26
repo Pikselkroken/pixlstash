@@ -109,10 +109,10 @@ class FaceUtils:
             max_x = max(b[2] for b in clamped)
             max_y = max(b[3] for b in clamped)
 
-            total_area = sum(b[4] for b in clamped)
-            if total_area > 0:
-                cx = sum(b[4] * b[5] for b in clamped) / total_area
-                cy = sum(b[4] * b[6] for b in clamped) / total_area
+            total_weight = sum(b[4] ** 0.5 for b in clamped)
+            if total_weight > 0:
+                cx = sum(b[4] ** 0.5 * b[5] for b in clamped) / total_weight
+                cy = sum(b[4] ** 0.5 * b[6] for b in clamped) / total_weight
             else:
                 cx = (min_x + max_x) / 2.0
                 cy = (min_y + max_y) / 2.0
