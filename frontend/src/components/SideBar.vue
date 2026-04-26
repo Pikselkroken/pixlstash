@@ -276,11 +276,21 @@ function closeImportFolderEditor() {
   importFolderEditorFolder.value = null;
 }
 
+function showDockerRestartPrompt() {
+  window.alert(
+    "Docker mode: restart the PixlStash container with the new folder mount, then open PixlStash again.",
+  );
+}
+
 async function referenceFolderSaved() {
+  const createdNewFolder = !referenceFolderEditorFolder.value?.id;
   closeReferenceFolderEditor();
   await fetchReferenceFolders();
   // A newly added folder may be active-but-unscanned, so ensure polling runs.
   _startFolderStatusPoll();
+  if (inDocker.value && createdNewFolder) {
+    showDockerRestartPrompt();
+  }
 }
 
 async function referenceFolderDeleted() {
@@ -294,8 +304,12 @@ async function referenceFolderDeleted() {
 }
 
 async function importFolderSaved() {
+  const createdNewFolder = !importFolderEditorFolder.value?.id;
   closeImportFolderEditor();
   await fetchImportFolders();
+  if (inDocker.value && createdNewFolder) {
+    showDockerRestartPrompt();
+  }
   if (!selectedFolderKey.value?.startsWith("if-")) return;
   const selectedId = Number(selectedFolderKey.value.slice(3));
   if (!Number.isFinite(selectedId)) return;
