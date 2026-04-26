@@ -3,6 +3,7 @@
 # Under the Apache 2.0 License                                  #
 # https://github.com/kohya-ss/sd-scripts/blob/main/LICENSE.md   #
 #################################################################
+from contextlib import contextmanager
 from typing import Optional
 import open_clip
 import csv
@@ -19,6 +20,11 @@ from torchvision import transforms
 
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
+
+try:
+    from transformers import logging as transformers_logging
+except Exception:  # pragma: no cover - optional dependency behaviour
+    transformers_logging = None
 
 from platformdirs import user_data_dir
 
@@ -73,6 +79,31 @@ def _from_pretrained_local_first(cls, model_name, **kwargs):
     except OSError:
         logger.info("Downloading %s for the first time...", model_name)
         return cls.from_pretrained(model_name, **kwargs)
+
+
+@contextmanager
+def _quiet_transformers_load_report():
+    """Temporarily suppress non-critical Transformers load-report warnings.
+
+    Some HF model loads (notably all-MiniLM-L6-v2) can emit a benign
+    "UNEXPECTED embeddings.position_ids" load report. Keep hard errors while
+    muting that warning noise during model initialization.
+    """
+    if transformers_logging is None:
+        yield
+        return
+
+    previous = transformers_logging.get_verbosity()
+    try:
+        transformers_logging.set_verbosity_error()
+        yield
+    finally:
+        transformers_logging.set_verbosity(previous)
+
+
+def _load_sentence_transformer(*args, **kwargs):
+    with _quiet_transformers_load_report():
+        return SentenceTransformer(*args, **kwargs)
 
 
 def _clean_asset_name(filename: str) -> str:
@@ -2350,7 +2381,7 @@ class PictureTagger:
         sbert_model = getattr(self, "_sbert_model", None)
         if sbert_model is None:
             try:
-                sbert_model = SentenceTransformer(
+                sbert_model = _load_sentence_transformer(
                     SENTENCE_TRANSFORMER_MODEL_NAME,
                     device=self._device,
                     local_files_only=True,
@@ -2361,7 +2392,7 @@ class PictureTagger:
                     "Downloading %s for the first time...",
                     SENTENCE_TRANSFORMER_MODEL_NAME,
                 )
-                sbert_model = SentenceTransformer(
+                sbert_model = _load_sentence_transformer(
                     SENTENCE_TRANSFORMER_MODEL_NAME,
                     device=self._device,
                     revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
@@ -2383,14 +2414,14 @@ class PictureTagger:
                     f"SBERT embedding failed on CUDA: {e}. Falling back to CPU."
                 )
                 try:
-                    sbert_model = SentenceTransformer(
+                    sbert_model = _load_sentence_transformer(
                         SENTENCE_TRANSFORMER_MODEL_NAME,
                         device="cpu",
                         local_files_only=True,
                         revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
                     )
                 except OSError:
-                    sbert_model = SentenceTransformer(
+                    sbert_model = _load_sentence_transformer(
                         SENTENCE_TRANSFORMER_MODEL_NAME,
                         device="cpu",
                         revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
