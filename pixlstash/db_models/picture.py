@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import sys
 import numpy as np
 
@@ -811,11 +812,11 @@ class Picture(SQLModel, table=True):
         if file_path_prefix is not None:
             # Normalise to always end with a path separator so that a prefix
             # like "/ref/photos" does not accidentally match "/ref/photos2/a.jpg".
-            prefix = (
-                file_path_prefix
-                if file_path_prefix.endswith("/")
-                else file_path_prefix + "/"
-            )
+            # Support both Unix ("/") and Windows ("\") separators.
+            if file_path_prefix.endswith("/") or file_path_prefix.endswith("\\"):
+                prefix = file_path_prefix
+            else:
+                prefix = file_path_prefix + os.sep
             # Escape LIKE special characters in the literal prefix.
             escaped = (
                 prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -823,7 +824,9 @@ class Picture(SQLModel, table=True):
             query = query.where(cls.file_path.like(escaped + "%", escape="\\"))
             # Only show direct children — exclude files that have another path
             # separator after the prefix (i.e. files in sub-directories).
+            # Check for both "/" (Unix) and "\" (Windows) to handle all platforms.
             query = query.where(~cls.file_path.like(escaped + "%/%", escape="\\"))
+            query = query.where(~cls.file_path.like(escaped + "%\\\\%", escape="\\"))
 
         if format:
             query = query.where(cls.format.in_(format))
