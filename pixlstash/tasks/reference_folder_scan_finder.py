@@ -18,6 +18,9 @@ logger = get_logger(__name__)
 
 # Re-scan active folders at most this often (seconds).
 _RESCAN_INTERVAL_S: float = 300.0
+# Retry mount_error folders quickly so transient bind/access glitches clear
+# from UI without waiting for a full active re-scan interval.
+_MOUNT_ERROR_RETRY_INTERVAL_S: float = 15.0
 
 
 class ReferenceFolderScanFinder(BaseTaskFinder):
@@ -29,8 +32,8 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
     - ``pending_mount`` — has never been scanned since being added; or
     - ``active`` — was last scanned more than ``_RESCAN_INTERVAL_S`` seconds ago.
 
-    Folders with ``mount_error`` status are re-attempted at the same interval
-    so that a previously missing mount can be picked up after a fix without
+    Folders with ``mount_error`` status are re-attempted on a shorter interval
+    so that a previously missing mount can be picked up quickly without
     requiring a restart.
 
     Path-map resolution is applied to translate stored host paths to container
@@ -56,6 +59,13 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
     def find_task(self):
         now = time.time()
 
+        def _sort_key(rf: ReferenceFolder) -> tuple[int, float]:
+            # Prioritize non-active folders (pending/mount_error) so new or
+            # recovered mounts are scanned before routine active re-scans.
+            priority = 0 if rf.status != ReferenceFolderStatus.ACTIVE else 1
+            last_scanned = float(rf.last_scanned) if rf.last_scanned else 0.0
+            return (priority, last_scanned)
+
         def fetch_folders(session):
             return list(session.exec(select(ReferenceFolder)).all())
 
@@ -63,12 +73,20 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         if not folders:
             return None
 
-        for rf in folders:
-            needs_scan = (
-                rf.status == ReferenceFolderStatus.PENDING_MOUNT
-                or rf.last_scanned is None
-                or (now - float(rf.last_scanned)) >= _RESCAN_INTERVAL_S
-            )
+        for rf in sorted(folders, key=_sort_key):
+            last_scanned = float(rf.last_scanned) if rf.last_scanned else 0.0
+            if rf.status == ReferenceFolderStatus.PENDING_MOUNT:
+                needs_scan = True
+            elif rf.status == ReferenceFolderStatus.MOUNT_ERROR:
+                needs_scan = (
+                    rf.last_scanned is None
+                    or (now - last_scanned) >= _MOUNT_ERROR_RETRY_INTERVAL_S
+                )
+            else:
+                needs_scan = (
+                    rf.last_scanned is None
+                    or (now - last_scanned) >= _RESCAN_INTERVAL_S
+                )
             if not needs_scan:
                 continue
 
@@ -97,6 +115,11 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
                 self._mark_mount_error(rf.id)
                 continue
 
+            # If a folder previously failed mount/access checks, reflect that
+            # recovery immediately in UI while it waits for the scan task.
+            if rf.status == ReferenceFolderStatus.MOUNT_ERROR:
+                self._mark_pending_mount(rf.id)
+
             return ReferenceFolderScanTask(
                 database=self._db,
                 folder_id=rf.id,
@@ -118,6 +141,18 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
                 return
             rf.status = ReferenceFolderStatus.MOUNT_ERROR
             rf.last_scanned = time.time()
+            session.add(rf)
+            session.commit()
+
+        self._db.run_task(update, priority=DBPriority.MEDIUM)
+
+    def _mark_pending_mount(self, folder_id: int) -> None:
+        def update(session: Session) -> None:
+            rf = session.get(ReferenceFolder, folder_id)
+            if rf is None:
+                return
+            rf.status = ReferenceFolderStatus.PENDING_MOUNT
+            rf.last_scanned = None
             session.add(rf)
             session.commit()
 

@@ -18,6 +18,9 @@ class ReferenceFolder(SQLModel, table=True):
     Attributes:
         id: Primary key.
         folder: Absolute host-side path to the folder root.
+        host_path: Host-side bind source for Docker helpers.
+            For Docker installs this should be the real host folder that is
+            mounted to ``folder`` inside the container.
         label: User-visible name; defaults to the last path component.
         allow_delete_file: When True, deleting a picture via the UI also
             removes the source file from disk.
@@ -29,6 +32,7 @@ class ReferenceFolder(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     folder: str = Field(index=True)
+    host_path: Optional[str] = Field(default=None)
     label: str = Field(default="")
     allow_delete_file: bool = Field(default=False)
     # When True, tag changes made in PixlStash are written back to the picture's

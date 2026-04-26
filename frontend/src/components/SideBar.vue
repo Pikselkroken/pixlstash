@@ -395,9 +395,11 @@ async function fetchReferenceFolders() {
     referenceFolders.value = res.data?.folders ?? [];
     inDocker.value = Boolean(res.data?.in_docker);
     referenceFoldersImageRoot.value = res.data?.image_root ?? null;
-    // Eagerly browse all root folders so we know which have subdirectories
-    // (controls whether the expand chevron is shown)
-    referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder, true));
+    // In non-Docker mode we eagerly browse roots so we know which have
+    // subdirectories (controls whether the expand chevron is shown).
+    if (!inDocker.value) {
+      referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder, true));
+    }
     // If any folder is still pending, start polling for status updates.
     if (sidebarPrimaryTab.value === "folders") {
       _startFolderStatusPoll();
@@ -435,6 +437,10 @@ function toggleFolderExpanded(folderId) {
 }
 
 async function browseFolderPath(path, prefetchChildren = false) {
+  if (inDocker.value) {
+    // Filesystem browse is intentionally disabled in Docker mode.
+    return;
+  }
   const cached = folderBrowseCache.value[path];
   if (cached) {
     if (prefetchChildren && !cached.loading && !cached.error) {
@@ -493,6 +499,9 @@ function handleFolderNodeSelect(key, payload) {
 }
 
 async function handleFolderNodeToggle(path) {
+  if (inDocker.value) {
+    return;
+  }
   if (expandedFolderIds.value.has(path)) {
     toggleFolderExpanded(path);
     return;
@@ -517,14 +526,16 @@ watch(sidebarPrimaryTab, (tab) => {
 });
 
 // Poll for folder status updates while the Folders tab is open.
-// Keeps polling while any reference folder is transitioning OR any import
-// folder has not completed its first scan yet (last_checked === null).
+// Keeps polling while any reference folder is transitioning/retrying
+// (pending, mount_error, or first active scan) OR any import folder has not
+// completed its first scan yet (last_checked === null).
 let _folderStatusPollTimer = null;
 
 function _anyFolderNeedsPolling() {
   const referenceNeedsPolling = referenceFolders.value.some(
     (rf) =>
       rf.status === "pending_mount" ||
+      rf.status === "mount_error" ||
       (rf.status === "active" && rf.last_scanned == null),
   );
   const importNeedsPolling = importFolders.value.some(
@@ -558,16 +569,20 @@ async function _pollFolderStatus() {
     for (const f of folders) {
       if (!referenceFolders.value.find((rf) => rf.id === f.id)) {
         referenceFolders.value = [...referenceFolders.value, f];
-        browseFolderPath(f.folder, true);
+        if (!inDocker.value) {
+          browseFolderPath(f.folder, true);
+        }
       }
     }
     // Refresh browse cache for folders whose initial scan just finished.
-    for (const rf of justScanned) {
-      // Evict stale cache entry so browseFolderPath re-fetches.
-      const next = { ...folderBrowseCache.value };
-      delete next[rf.folder];
-      folderBrowseCache.value = next;
-      browseFolderPath(rf.folder, true);
+    if (!inDocker.value) {
+      for (const rf of justScanned) {
+        // Evict stale cache entry so browseFolderPath re-fetches.
+        const next = { ...folderBrowseCache.value };
+        delete next[rf.folder];
+        folderBrowseCache.value = next;
+        browseFolderPath(rf.folder, true);
+      }
     }
 
     // Refresh import-folder counts and first-scan state.
@@ -585,6 +600,7 @@ async function _pollFolderStatus() {
 function _startFolderStatusPoll() {
   _stopFolderStatusPoll();
   if (!_anyFolderNeedsPolling()) return;
+  void _pollFolderStatus();
   _folderStatusPollTimer = setInterval(_pollFolderStatus, 3000);
 }
 
@@ -2443,6 +2459,7 @@ defineExpose({
     :folder="referenceFolderEditorFolder"
     :in-docker="inDocker"
     :registered-paths="registeredFolderPaths"
+    :registered-folders="referenceFolders"
     :image-root="referenceFoldersImageRoot"
     @close="closeReferenceFolderEditor"
     @saved="referenceFolderSaved"
@@ -2817,9 +2834,11 @@ defineExpose({
                 :title="rf.folder"
                 @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
                 @click="
-                  if (!expandedFolderIds.has(rf.id))
-                    toggleFolderExpanded(rf.id);
-                  browseFolderPath(rf.folder, true);
+                  if (!inDocker) {
+                    if (!expandedFolderIds.has(rf.id))
+                      toggleFolderExpanded(rf.id);
+                    browseFolderPath(rf.folder, true);
+                  }
                   handleFolderNodeSelect('rf-' + rf.id, {
                     referenceFolderId: rf.id,
                     pathPrefix: rf.folder,
@@ -2832,15 +2851,19 @@ defineExpose({
                   class="sidebar-folder-chevron"
                   :style="{
                     visibility:
-                      !folderBrowseCache[rf.folder] ||
-                      folderBrowseCache[rf.folder].loading ||
-                      (folderBrowseCache[rf.folder]?.entries?.length ?? 0) > 0
+                      !inDocker &&
+                      (!folderBrowseCache[rf.folder] ||
+                        folderBrowseCache[rf.folder].loading ||
+                        (folderBrowseCache[rf.folder]?.entries?.length ?? 0) >
+                          0)
                         ? 'visible'
                         : 'hidden',
                   }"
                   @click.stop="
-                    toggleFolderExpanded(rf.id);
-                    browseFolderPath(rf.folder, true);
+                    if (!inDocker) {
+                      toggleFolderExpanded(rf.id);
+                      browseFolderPath(rf.folder, true);
+                    }
                   "
                 >
                   {{
@@ -2900,7 +2923,7 @@ defineExpose({
                 </span>
               </div>
               <div
-                v-if="expandedFolderIds.has(rf.id)"
+                v-if="!inDocker && expandedFolderIds.has(rf.id)"
                 class="sidebar-folder-children"
               >
                 <div

@@ -26,12 +26,14 @@ logger = get_logger(__name__)
 class ReferenceFolderCreateRequest(BaseModel):
     folder: str
     label: Optional[str] = None
+    host_path: Optional[str] = None
 
 
 class ReferenceFolderUpdateRequest(BaseModel):
     label: Optional[str] = None
     allow_delete_file: Optional[bool] = None
     sync_captions: Optional[bool] = None
+    host_path: Optional[str] = None
 
 
 class ReferenceFolderResponse(BaseModel):
@@ -39,6 +41,7 @@ class ReferenceFolderResponse(BaseModel):
 
     id: int
     folder: str
+    host_path: Optional[str]
     label: str
     allow_delete_file: bool
     sync_captions: bool
@@ -68,10 +71,25 @@ def create_router(server) -> APIRouter:
     # Helper
     # -------------------------------------------------------------------------
 
+    def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        host_path = str(value).strip()
+        if not host_path:
+            return None
+        normalized = os.path.normpath(host_path)
+        if not os.path.isabs(normalized):
+            raise HTTPException(
+                status_code=400,
+                detail="Host path must be an absolute path.",
+            )
+        return normalized
+
     def _to_response(rf: ReferenceFolder) -> ReferenceFolderResponse:
         return ReferenceFolderResponse(
             id=rf.id,
             folder=rf.folder,
+            host_path=rf.host_path,
             label=rf.label,
             allow_delete_file=rf.allow_delete_file,
             sync_captions=rf.sync_captions,
@@ -129,6 +147,7 @@ def create_router(server) -> APIRouter:
         server.auth.require_user_id(request)
 
         folder = os.path.normpath(payload.folder)
+        host_path = _normalize_optional_host_path(payload.host_path)
         error = validate_reference_folder_path(folder)
         if error:
             raise HTTPException(status_code=400, detail=error)
@@ -138,6 +157,11 @@ def create_router(server) -> APIRouter:
         # Outside Docker we can check accessibility right now; inside Docker the
         # volume may not be mounted yet so we defer to the next server restart.
         in_docker = server.running_in_docker()
+        if in_docker and host_path is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Host path is required in Docker mode.",
+            )
         if not in_docker:
             access_error = validate_reference_folder_accessible(folder)
             initial_status = (
@@ -183,6 +207,7 @@ def create_router(server) -> APIRouter:
                     )
             rf = ReferenceFolder(
                 folder=folder,
+                host_path=host_path,
                 label=label,
                 allow_delete_file=False,
                 status=initial_status,
@@ -211,7 +236,7 @@ def create_router(server) -> APIRouter:
     @router.patch(
         "/reference-folders/{folder_id}",
         summary="Update a reference folder",
-        description="Updates the label and/or allow_delete_file flag for a reference folder.",
+        description="Updates editable fields for a reference folder.",
         response_model=ReferenceFolderResponse,
         tags=["config"],
     )
@@ -234,6 +259,8 @@ def create_router(server) -> APIRouter:
                 rf.allow_delete_file = payload.allow_delete_file
             if payload.sync_captions is not None:
                 rf.sync_captions = payload.sync_captions
+            if "host_path" in payload.model_fields_set:
+                rf.host_path = _normalize_optional_host_path(payload.host_path)
             session.add(rf)
             session.commit()
             session.refresh(rf)
