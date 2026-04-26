@@ -10,13 +10,13 @@
         </v-card-title>
         <v-card-text class="editor-body">
           <!-- Path (create mode only) -->
-          <div v-if="!folder" class="editor-path-row">
+          <div v-if="!folder && !props.inDocker" class="editor-path-row">
             <v-text-field
               ref="pathInputRef"
               v-model="localPath"
               label="Folder path *"
               :placeholder="
-                props.inDocker ? '/host/path/to/folder' : '/path/to/folder'
+                props.inDocker ? '/data/ref/pictures' : '/path/to/folder'
               "
               density="comfortable"
               variant="filled"
@@ -34,6 +34,135 @@
             >
               <v-icon size="18">mdi-folder-open-outline</v-icon>
             </v-btn>
+          </div>
+
+          <!-- Docker helper (create mode only) -->
+          <div
+            v-else-if="!folder && props.inDocker"
+            class="editor-docker-helper"
+          >
+            <v-text-field
+              ref="pathInputRef"
+              v-model="localMountName"
+              label="Folder name *"
+              placeholder="pictures"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+            <v-text-field
+              v-model="localHostPath"
+              label="Local folder (host path)"
+              placeholder="/home/you/Pictures"
+              density="comfortable"
+              variant="filled"
+              hide-details
+            />
+            <div class="editor-docker-path-row">
+              <div class="editor-docker-path-label">Container path</div>
+              <div
+                class="editor-docker-path-value"
+                :title="dockerSuggestedPath"
+              >
+                {{ dockerSuggestedPath }}
+              </div>
+              <v-btn
+                variant="outlined"
+                size="small"
+                icon
+                class="editor-copy-btn"
+                title="Copy container path"
+                @click="
+                  copyToClipboard(dockerSuggestedPath, 'Container path copied.')
+                "
+              >
+                <v-icon size="16">mdi-content-copy</v-icon>
+              </v-btn>
+            </div>
+            <div class="editor-docker-instructions">
+              <div class="editor-docker-title">Docker setup</div>
+              <ol>
+                <li>Add a mount to your docker run command:</li>
+              </ol>
+              <div class="editor-docker-snippet-wrap">
+                <code class="editor-docker-snippet">{{
+                  dockerMountSnippet
+                }}</code>
+                <v-btn
+                  variant="outlined"
+                  size="small"
+                  icon
+                  class="editor-copy-btn"
+                  title="Copy mount snippet"
+                  @click="
+                    copyToClipboard(dockerMountSnippet, 'Mount snippet copied.')
+                  "
+                >
+                  <v-icon size="16">mdi-content-copy</v-icon>
+                </v-btn>
+              </div>
+              <div class="editor-docker-note">
+                If restart fails because the container name already exists,
+                remove the old container first:
+              </div>
+              <div class="editor-docker-note editor-docker-note--muted">
+                Replace <code>pixlstash-gpu</code> below if your container uses
+                a different name.
+              </div>
+              <div class="editor-docker-snippet-wrap">
+                <code class="editor-docker-snippet">{{
+                  dockerRemoveContainerSnippet
+                }}</code>
+                <v-btn
+                  variant="outlined"
+                  size="small"
+                  icon
+                  class="editor-copy-btn"
+                  title="Copy remove-container command"
+                  @click="
+                    copyToClipboard(
+                      dockerRemoveContainerSnippet,
+                      'Remove-container command copied.',
+                    )
+                  "
+                >
+                  <v-icon size="16">mdi-content-copy</v-icon>
+                </v-btn>
+              </div>
+              <div class="editor-docker-note">
+                Full restart command (uses your local folder mapping):
+              </div>
+              <div class="editor-docker-snippet-wrap">
+                <code class="editor-docker-snippet">{{
+                  dockerRestartCommandSnippet
+                }}</code>
+                <v-btn
+                  variant="outlined"
+                  size="small"
+                  icon
+                  class="editor-copy-btn"
+                  title="Copy full restart command"
+                  @click="
+                    copyToClipboard(
+                      dockerRestartCommandSnippet,
+                      'Restart command copied.',
+                    )
+                  "
+                >
+                  <v-icon size="16">mdi-content-copy</v-icon>
+                </v-btn>
+              </div>
+              <ol start="2">
+                <li>Restart the container.</li>
+                <li>
+                  Add this folder in PixlStash using the container path above.
+                </li>
+              </ol>
+            </div>
+            <div v-if="copyStatus" class="editor-copy-status">
+              {{ copyStatus }}
+            </div>
           </div>
 
           <!-- Path display (edit mode) -->
@@ -259,17 +388,74 @@ const emit = defineEmits(["close", "saved", "deleted"]);
 // --- Form state ---
 const localPath = ref("");
 const localLabel = ref("");
+const localMountName = ref("pictures");
+const localHostPath = ref("");
 const localSyncCaptions = ref(false);
 const localAllowDelete = ref(false);
 const saveError = ref("");
 const saveLoading = ref(false);
 const deleteLoading = ref(false);
 const confirmingDelete = ref(false);
+const copyStatus = ref("");
+let copyStatusTimer = null;
 const pathInputRef = ref(null);
 
 const isValid = computed(() => {
   if (props.folder) return true; // edit mode always valid
+  if (props.inDocker) {
+    return localMountName.value.trim().length > 0;
+  }
   return localPath.value.trim().length > 0;
+});
+
+const normalizedRegisteredPaths = computed(() => {
+  return new Set(
+    (props.registeredPaths || []).map((path) =>
+      String(path || "").replace(/\/+$/, ""),
+    ),
+  );
+});
+
+const dockerSuggestedPath = computed(() => {
+  const raw = String(localMountName.value || "")
+    .trim()
+    .toLowerCase();
+  const slug =
+    raw
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+/, "")
+      .replace(/-+$/, "") || "folder";
+  const base = `/data/ref/${slug}`;
+  if (!normalizedRegisteredPaths.value.has(base)) return base;
+  let index = 2;
+  while (normalizedRegisteredPaths.value.has(`${base}-${index}`)) {
+    index += 1;
+  }
+  return `${base}-${index}`;
+});
+
+const dockerMountSnippet = computed(() => {
+  const hostPath =
+    String(localHostPath.value || "").trim() || "/absolute/host/path";
+  return `-v ${hostPath}:${dockerSuggestedPath.value}`;
+});
+
+const dockerRemoveContainerSnippet = "docker rm -f pixlstash-gpu";
+
+const dockerRestartCommandSnippet = computed(() => {
+  return [
+    "docker rm -f pixlstash-gpu 2>/dev/null || true &&",
+    "docker run -d --runtime nvidia --user $(id -u):$(id -g)",
+    "-e HOME=/home/pixlstash",
+    "-e NVIDIA_VISIBLE_DEVICES=all",
+    "-e NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+    "-e PIXLSTASH_HOST=0.0.0.0",
+    "-p 9537:9537",
+    "-v ~/Pictures/pixlstash:/home/pixlstash",
+    dockerMountSnippet.value,
+    "--name pixlstash-gpu",
+    "ghcr.io/pikselkroken/pixlstash:1.1.0rc5-gpu",
+  ].join(" ");
 });
 
 // Sync from props when dialog opens or folder changes
@@ -284,15 +470,27 @@ watch(
         localSyncCaptions.value = Boolean(props.folder.sync_captions);
         localAllowDelete.value = Boolean(props.folder.allow_delete_file);
       } else {
-        localPath.value = "";
+        localPath.value = props.inDocker ? dockerSuggestedPath.value : "";
         localLabel.value = "";
+        localMountName.value = "pictures";
+        localHostPath.value = "";
         localSyncCaptions.value = false;
         localAllowDelete.value = false;
+        copyStatus.value = "";
         nextTick(() => {
           pathInputRef.value?.$el?.querySelector("input")?.focus();
         });
       }
     }
+  },
+  { immediate: true },
+);
+
+watch(
+  [() => props.open, () => props.inDocker, dockerSuggestedPath],
+  ([isOpen, inDocker]) => {
+    if (!isOpen || props.folder || !inDocker) return;
+    localPath.value = dockerSuggestedPath.value;
   },
   { immediate: true },
 );
@@ -323,8 +521,11 @@ async function save() {
       });
     } else {
       // Create mode
+      const pathToSave = props.inDocker
+        ? dockerSuggestedPath.value
+        : localPath.value.trim();
       await apiClient.post("/reference-folders", {
-        folder: localPath.value.trim(),
+        folder: pathToSave,
         label: localLabel.value.trim() || undefined,
       });
     }
@@ -335,6 +536,24 @@ async function save() {
   } finally {
     saveLoading.value = false;
   }
+}
+
+async function copyToClipboard(value, successMessage) {
+  const text = String(value || "").trim();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    copyStatus.value = successMessage;
+  } catch {
+    copyStatus.value = "Copy failed. Please select and copy manually.";
+  }
+  if (copyStatusTimer) {
+    clearTimeout(copyStatusTimer);
+  }
+  copyStatusTimer = setTimeout(() => {
+    copyStatus.value = "";
+    copyStatusTimer = null;
+  }, 1800);
 }
 
 async function doDelete() {
@@ -431,6 +650,18 @@ function selectBrowsedPath() {
   localPath.value = browsePath.value;
   browseOpen.value = false;
 }
+
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen) return;
+    if (copyStatusTimer) {
+      clearTimeout(copyStatusTimer);
+      copyStatusTimer = null;
+    }
+    copyStatus.value = "";
+  },
+);
 </script>
 
 <style scoped>
@@ -484,6 +715,94 @@ function selectBrowsedPath() {
 .editor-browse-btn {
   margin-top: 4px;
   flex-shrink: 0;
+}
+
+.editor-docker-helper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editor-docker-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface-variant), 0.35);
+}
+
+.editor-docker-path-label {
+  font-size: 0.74rem;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.editor-docker-path-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+
+.editor-copy-btn {
+  flex-shrink: 0;
+}
+
+.editor-docker-instructions {
+  border: 1px solid rgba(var(--v-theme-primary), 0.22);
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.editor-docker-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.editor-docker-note {
+  margin-top: 2px;
+}
+
+.editor-docker-note--muted {
+  opacity: 0.78;
+}
+
+.editor-docker-instructions ol {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.editor-docker-snippet-wrap {
+  margin: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-docker-snippet {
+  flex: 1;
+  display: block;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-dark-surface), 0.55);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: auto hidden;
+}
+
+.editor-copy-status {
+  font-size: 0.76rem;
+  color: rgb(var(--v-theme-accent));
 }
 
 .editor-path-display {
