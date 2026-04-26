@@ -20,11 +20,13 @@ logger = get_logger(__name__)
 class ImportFolderCreateRequest(BaseModel):
     folder: str
     label: Optional[str] = None
+    host_path: Optional[str] = None
     delete_after_import: bool = False
 
 
 class ImportFolderUpdateRequest(BaseModel):
     label: Optional[str] = None
+    host_path: Optional[str] = None
     delete_after_import: Optional[bool] = None
 
 
@@ -33,6 +35,7 @@ class ImportFolderResponse(BaseModel):
 
     id: int
     folder: str
+    host_path: Optional[str]
     label: str
     delete_after_import: bool
     last_checked: Optional[float]
@@ -55,12 +58,27 @@ def create_router(server) -> APIRouter:
 
     router = APIRouter()
 
+    def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        host_path = str(value).strip()
+        if not host_path:
+            return None
+        normalized = os.path.normpath(host_path)
+        if not os.path.isabs(normalized):
+            raise HTTPException(
+                status_code=400,
+                detail="Host path must be an absolute path.",
+            )
+        return normalized
+
     def _to_response(
         folder: ImportFolder, picture_count: int = 0
     ) -> ImportFolderResponse:
         return ImportFolderResponse(
             id=folder.id,
             folder=folder.folder,
+            host_path=folder.host_path,
             label=folder.label,
             delete_after_import=folder.delete_after_import,
             last_checked=folder.last_checked,
@@ -122,9 +140,16 @@ def create_router(server) -> APIRouter:
         server.auth.require_user_id(request)
 
         folder = os.path.normpath(payload.folder)
+        host_path = _normalize_optional_host_path(payload.host_path)
         error = validate_reference_folder_path(folder)
         if error:
             raise HTTPException(status_code=400, detail=error)
+
+        if server.running_in_docker() and host_path is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Host path is required in Docker mode.",
+            )
 
         label = payload.label if payload.label is not None else os.path.basename(folder)
 
@@ -151,6 +176,7 @@ def create_router(server) -> APIRouter:
 
             import_folder = ImportFolder(
                 folder=folder,
+                host_path=host_path,
                 label=label,
                 delete_after_import=bool(payload.delete_after_import),
             )
@@ -186,6 +212,8 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Import folder not found.")
             if payload.label is not None:
                 folder.label = payload.label
+            if "host_path" in payload.model_fields_set:
+                folder.host_path = _normalize_optional_host_path(payload.host_path)
             if payload.delete_after_import is not None:
                 folder.delete_after_import = payload.delete_after_import
             session.add(folder)

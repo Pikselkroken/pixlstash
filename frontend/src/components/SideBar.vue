@@ -2470,6 +2470,8 @@ defineExpose({
     :folder="importFolderEditorFolder"
     :in-docker="inDocker"
     :registered-paths="registeredImportFolderPaths"
+    :registered-folders="importFolders"
+    :registered-reference-folders="referenceFolders"
     :image-root="referenceFoldersImageRoot"
     @close="closeImportFolderEditor"
     @saved="importFolderSaved"
