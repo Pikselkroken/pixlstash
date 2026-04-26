@@ -57,131 +57,6 @@ def _parse_yes_no(value, default: bool) -> bool:
     return default
 
 
-def _normalize_watch_folder_entries(raw_entries) -> list[dict]:
-    entries = []
-    for entry in raw_entries or []:
-        if isinstance(entry, dict):
-            folder = entry.get("folder")
-            if not folder:
-                continue
-            normalized = {
-                "folder": str(folder),
-                "delete_after_import": bool(entry.get("delete_after_import", False)),
-            }
-            if "last_checked" in entry:
-                normalized["last_checked"] = entry.get("last_checked")
-            entries.append(normalized)
-            continue
-        if isinstance(entry, str) and entry.strip():
-            entries.append(
-                {
-                    "folder": entry.strip(),
-                    "delete_after_import": False,
-                }
-            )
-    return entries
-
-
-def _print_watch_folders(entries: list[dict]) -> None:
-    if not entries:
-        print("Current watch folders: (none)")
-        return
-    print("Current watch folders:")
-    for index, entry in enumerate(entries, start=1):
-        folder = str(entry.get("folder") or "")
-        delete_after_import = bool(entry.get("delete_after_import", False))
-        delete_label = "yes" if delete_after_import else "no"
-        print(f"  {index}. {folder}  (delete_after_import: {delete_label})")
-
-
-def _edit_watch_folders(entries: list[dict]) -> list[dict]:
-    if not entries:
-        print("No existing watch folders to edit.")
-        return entries
-
-    updated_entries = [dict(entry) for entry in entries]
-    print(
-        "Edit mode: enter folder number to change delete_after_import. Enter to finish."
-    )
-    while True:
-        _print_watch_folders(updated_entries)
-        selection = input("Folder number to edit: ").strip()
-        if not selection:
-            break
-        try:
-            index = int(selection)
-        except Exception:
-            print("Please enter a valid number.")
-            continue
-        if index < 1 or index > len(updated_entries):
-            print("Selection out of range.")
-            continue
-
-        entry = updated_entries[index - 1]
-        folder = str(entry.get("folder") or "")
-        default_delete = bool(entry.get("delete_after_import", False))
-        delete_hint = "Y/n" if default_delete else "y/N"
-        delete_input = input(f"Delete after import for '{folder}'? [{delete_hint}]: ")
-        entry["delete_after_import"] = _parse_yes_no(delete_input, default_delete)
-        updated_entries[index - 1] = entry
-
-    return updated_entries
-
-
-def _prompt_watch_folders(raw_existing_entries) -> list[dict]:
-    entries = _normalize_watch_folder_entries(raw_existing_entries)
-    _print_watch_folders(entries)
-
-    action = (
-        input("Watch folders: Enter keep, A add/update, E edit existing, N clear: ")
-        .strip()
-        .lower()
-    )
-    if not action:
-        return entries
-    if action in {"n", "none", "clear", "-"}:
-        return []
-    if action == "e":
-        return _edit_watch_folders(entries)
-    if action != "a":
-        return entries
-
-    existing_by_folder = {}
-    for entry in entries:
-        folder = str(entry.get("folder") or "")
-        if folder:
-            existing_by_folder[folder] = dict(entry)
-
-    print("Add folders one at a time. Leave blank to finish.")
-    while True:
-        folder_input = input("Folder path: ").strip()
-        if not folder_input:
-            break
-
-        folder = os.path.abspath(os.path.expanduser(folder_input))
-        existing_entry = existing_by_folder.get(folder)
-        default_delete = bool(
-            existing_entry.get("delete_after_import", False)
-            if existing_entry
-            else False
-        )
-        delete_hint = "Y/n" if default_delete else "y/N"
-        delete_input = input(f"Delete after import for '{folder}'? [{delete_hint}]: ")
-        delete_after_import = _parse_yes_no(delete_input, default_delete)
-
-        updated_entry = {
-            "folder": folder,
-            "delete_after_import": delete_after_import,
-        }
-        if existing_entry and "last_checked" in existing_entry:
-            updated_entry["last_checked"] = existing_entry.get("last_checked")
-        existing_by_folder[folder] = updated_entry
-
-    updated_entries = list(existing_by_folder.values())
-    _print_watch_folders(updated_entries)
-    return updated_entries
-
-
 def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
     if force:
         return True
@@ -236,14 +111,10 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bo
     ssl_input = input(f"Use HTTPS? [{ssl_hint}]: ").strip()
     require_ssl = _parse_yes_no(ssl_input, ssl_default)
 
-    existing_watch_entries = list(config.get("watch_folders") or [])
-    watch_folders = _prompt_watch_folders(existing_watch_entries)
-
     config["image_root"] = image_root
     config["port"] = port
     config["require_ssl"] = require_ssl
     config["cookie_secure"] = require_ssl
-    config["watch_folders"] = watch_folders
 
     with open(server_config_path, "w") as handle:
         json.dump(config, handle, indent=2)
@@ -331,9 +202,7 @@ def main():
     parser.add_argument(
         "--bootstrap",
         action="store_true",
-        help=(
-            "Run interactive first-run setup for storage path, port, HTTPS, and watch folders."
-        ),
+        help=("Run interactive first-run setup for storage path, port, and HTTPS."),
     )
     parser.add_argument(
         "--cleanup-missing-pictures",

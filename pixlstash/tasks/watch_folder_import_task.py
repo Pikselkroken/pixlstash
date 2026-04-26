@@ -1,4 +1,3 @@
-import json
 import os
 import threading
 from datetime import datetime
@@ -21,53 +20,6 @@ from pixlstash.tasks.base_task import BaseTask
 
 logger = get_logger(__name__)
 
-_CONFIG_LOCK = threading.Lock()
-
-
-def load_watch_folders(config_path: str) -> list[dict]:
-    """Load the watch_folders list from the server config file.
-
-    Each entry in the returned list is a dict with the following fields:
-
-        folder (str): Absolute path to the directory to monitor recursively.
-        delete_after_import (bool): When True, source files are deleted from
-            the watch folder after a successful import. Defaults to False.
-        last_checked (float): Unix timestamp of the last scan. Managed
-            internally by the finder; there is no need to set this manually.
-
-    Args:
-        config_path: Path to the server-config.json file.
-
-    Returns:
-        List of watch folder entry dicts, or an empty list on error.
-    """
-    if not config_path or not os.path.exists(config_path):
-        return []
-    with _CONFIG_LOCK:
-        try:
-            with open(config_path, "r") as handle:
-                config = json.load(handle)
-            return list(config.get("watch_folders", []) or [])
-        except Exception as exc:
-            logger.error("Failed to read watch_folders: %s", exc)
-            return []
-
-
-def persist_watch_folders(config_path: str, watch_folders: list[dict]):
-    if not config_path:
-        return
-    with _CONFIG_LOCK:
-        try:
-            config = {}
-            if os.path.exists(config_path):
-                with open(config_path, "r") as handle:
-                    config = json.load(handle)
-            config["watch_folders"] = watch_folders
-            with open(config_path, "w") as handle:
-                json.dump(config, handle, indent=2)
-        except Exception as exc:
-            logger.error("Failed to persist watch_folders: %s", exc)
-
 
 class WatchFolderImportTask(BaseTask):
     """Task that imports discovered files from watch folders."""
@@ -78,8 +30,6 @@ class WatchFolderImportTask(BaseTask):
         candidate_files: list[dict],
         total_candidates: int,
         last_checked_updates: Optional[dict[int, float]] = None,
-        config_path: Optional[str] = None,
-        updated_watch_folders: Optional[list[dict]] = None,
     ):
         super().__init__(
             task_type="WatchFolderImportTask",
@@ -89,9 +39,7 @@ class WatchFolderImportTask(BaseTask):
             },
         )
         self._db = database
-        self._config_path = config_path
         self._candidate_files = candidate_files or []
-        self._updated_watch_folders = updated_watch_folders or []
         self._last_checked_updates = {
             int(folder_id): float(last_checked)
             for folder_id, last_checked in (last_checked_updates or {}).items()
@@ -237,9 +185,6 @@ class WatchFolderImportTask(BaseTask):
                 self._last_checked_updates,
                 priority=DBPriority.IMMEDIATE,
             )
-
-        if self._updated_watch_folders and self._config_path:
-            persist_watch_folders(self._config_path, self._updated_watch_folders)
 
         return {
             "changed_count": len(changed),

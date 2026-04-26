@@ -602,7 +602,6 @@ class Server:
                 "min_free_disk_gb": 1.0,
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
-                "watch_folders": [],
                 "max_attachment_size_mb": 50,
                 "filesystem_roots": [],
             }
@@ -641,8 +640,6 @@ class Server:
                     server_config["min_free_vram_mb"] = 1024.0
                 if "cors_origins" not in server_config:
                     server_config["cors_origins"] = []
-                if "watch_folders" not in server_config:
-                    server_config["watch_folders"] = []
                 if "max_attachment_size_mb" not in server_config:
                     server_config["max_attachment_size_mb"] = 50
                 if "generate_thumbnails_on_startup" not in server_config:

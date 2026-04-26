@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -165,44 +164,21 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
 
     def _load_watch_folders():
-        config_path = getattr(server, "_server_config_path", None)
         try:
             db_watch_folders = server.vault.db.run_immediate_read_task(
                 lambda session: session.exec(
                     select(ImportFolder).order_by(ImportFolder.id)
                 ).all()
             )
-            if db_watch_folders:
-                folders = [
-                    folder.folder
-                    for folder in db_watch_folders
-                    if getattr(folder, "folder", None)
-                ]
-                return config_path, folders
+            folders = [
+                folder.folder
+                for folder in (db_watch_folders or [])
+                if getattr(folder, "folder", None)
+            ]
+            return folders
         except Exception as exc:
             logger.debug("Failed to read import folders from DB: %s", exc)
-
-        if not config_path or not os.path.exists(config_path):
-            return config_path, []
-        try:
-            with open(config_path, "r") as handle:
-                config = json.load(handle)
-            raw_folders = config.get("watch_folders", []) or []
-        except Exception as exc:
-            logger.warning("Failed to read watch_folders: %s", exc)
-            return config_path, []
-
-        folders = []
-        for entry in raw_folders:
-            if isinstance(entry, str):
-                folder = entry
-            elif isinstance(entry, dict):
-                folder = entry.get("folder")
-            else:
-                folder = None
-            if folder:
-                folders.append(folder)
-        return config_path, folders
+        return []
 
     def _open_in_os(path: str) -> bool:
         if not path or not os.path.exists(path):
@@ -513,15 +489,14 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/server-config/watch-folders",
         summary="List watch folders",
-        description="Returns watch-folder paths from server configuration.",
+        description="Returns watch-folder paths from import-folder records in the database.",
     )
     def get_watch_folders(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
-        config_path, folders = _load_watch_folders()
+        folders = _load_watch_folders()
         return {
             "status": "success",
-            "config_path": config_path,
             "watch_folders": folders,
         }
 

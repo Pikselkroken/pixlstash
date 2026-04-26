@@ -17,7 +17,6 @@ class WorkPlanner:
     def work_finders(
         database,
         picture_tagger_getter,
-        config_path=None,
         image_root=None,
         path_mapper=None,
     ):
@@ -96,7 +95,6 @@ class WorkPlanner:
             ),
             TaskType.WATCH_FOLDERS: MissingWatchFolderImportFinder(
                 database=database,
-                config_path=config_path,
             ),
             TaskType.COMFYUI_EXTRACTION: MissingComfyUIExtractionFinder(
                 database=database,

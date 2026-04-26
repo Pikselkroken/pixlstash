@@ -1,7 +1,6 @@
 """Import folder CRUD API for automatic watch-folder imports."""
 
 import os
-import json
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -68,77 +67,6 @@ def create_router(server) -> APIRouter:
             picture_count=picture_count,
         )
 
-    def _read_legacy_watch_folders() -> list[dict]:
-        config_path = getattr(server, "_server_config_path", None)
-        if not config_path or not os.path.exists(config_path):
-            return []
-        try:
-            with open(config_path, "r") as handle:
-                config = json.load(handle)
-            raw = config.get("watch_folders", []) or []
-        except Exception:
-            return []
-
-        legacy_folders = []
-        for entry in raw:
-            if isinstance(entry, str):
-                folder = entry
-                delete_after_import = False
-                last_checked = None
-            elif isinstance(entry, dict):
-                folder = entry.get("folder")
-                delete_after_import = bool(entry.get("delete_after_import", False))
-                raw_checked = entry.get("last_checked")
-                try:
-                    last_checked = (
-                        float(raw_checked) if raw_checked is not None else None
-                    )
-                except (TypeError, ValueError):
-                    last_checked = None
-            else:
-                folder = None
-                delete_after_import = False
-                last_checked = None
-
-            if not folder:
-                continue
-            normalized = os.path.normpath(folder)
-            label = os.path.basename(normalized)
-            legacy_folders.append(
-                {
-                    "folder": normalized,
-                    "label": label,
-                    "delete_after_import": delete_after_import,
-                    "last_checked": last_checked,
-                }
-            )
-        return legacy_folders
-
-    def _seed_from_legacy_config_if_needed(session: Session) -> None:
-        has_any = session.exec(select(ImportFolder.id).limit(1)).first()
-        if has_any is not None:
-            return
-
-        legacy_folders = _read_legacy_watch_folders()
-        if not legacy_folders:
-            return
-
-        seen = set()
-        for entry in legacy_folders:
-            folder = entry["folder"]
-            if folder in seen:
-                continue
-            seen.add(folder)
-            session.add(
-                ImportFolder(
-                    folder=folder,
-                    label=entry["label"],
-                    delete_after_import=entry["delete_after_import"],
-                    last_checked=entry["last_checked"],
-                )
-            )
-        session.commit()
-
     @router.get(
         "/import-folders",
         summary="List import folders",
@@ -150,7 +78,6 @@ def create_router(server) -> APIRouter:
         server.auth.require_user_id(request)
 
         def fetch(session: Session):
-            _seed_from_legacy_config_if_needed(session)
             folders = session.exec(select(ImportFolder).order_by(ImportFolder.id)).all()
             count_rows = session.exec(
                 select(

@@ -65,7 +65,6 @@ class StartupChecks:
         self._check_free_disk_space(outcome)
         self._check_port_bindable(outcome)
         self._check_migration_assets(outcome)
-        self._check_watch_folders(outcome)
         self._check_optional_dependencies(outcome)
         self._check_device_and_vram(outcome)
 
@@ -223,21 +222,6 @@ class StartupChecks:
             for candidate_ini, candidate_migrations in candidate_locations
         )
         outcome.hard_failures.append(f"Alembic assets not found. Expected {expected}.")
-
-    def _check_watch_folders(self, outcome: StartupCheckOutcome) -> None:
-        watch_folders = self._server_config.get("watch_folders") or []
-        if not isinstance(watch_folders, list):
-            outcome.hard_failures.append("watch_folders must be a list.")
-            return
-
-        for entry in watch_folders:
-            folder = entry
-            if isinstance(entry, dict):
-                folder = entry.get("folder")
-            if not folder:
-                continue
-            if not os.path.exists(folder):
-                outcome.warnings.append(f"Watch folder does not exist: {folder}")
 
     def _check_optional_dependencies(self, outcome: StartupCheckOutcome) -> None:
         if self._server_config.get("require_ssl", False):

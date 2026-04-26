@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 import tempfile
@@ -41,19 +40,14 @@ def test_watch_folder():
                     == "Username and password set successfully."
                 )
 
-                with open(server_config_path, "r") as f:
-                    server_config = json.load(f)
-                existing_watch_folders = list(server_config.get("watch_folders") or [])
-                if not any(
-                    entry.get("folder") == pictures_dir
-                    for entry in existing_watch_folders
-                ):
-                    existing_watch_folders.append(
-                        {"folder": pictures_dir, "last_checked": 0}
-                    )
-                server_config["watch_folders"] = existing_watch_folders
-                with open(server_config_path, "w") as f:
-                    json.dump(server_config, f, indent=2)
+                create_folder = client.post(
+                    f"{API_PREFIX}/import-folders",
+                    json={
+                        "folder": pictures_dir,
+                        "delete_after_import": False,
+                    },
+                )
+                assert create_folder.status_code == 200
 
                 start = time.monotonic()
                 pictures = []
@@ -124,19 +118,14 @@ def test_watch_folder_delete_after_import():
                 )
                 assert response.status_code == 200
 
-                with open(server_config_path, "r") as f:
-                    server_config = json.load(f)
-                existing_watch_folders = list(server_config.get("watch_folders") or [])
-                existing_watch_folders.append(
-                    {
+                create_folder = client.post(
+                    f"{API_PREFIX}/import-folders",
+                    json={
                         "folder": watch_dir,
-                        "last_checked": 0,
                         "delete_after_import": True,
-                    }
+                    },
                 )
-                server_config["watch_folders"] = existing_watch_folders
-                with open(server_config_path, "w") as f:
-                    json.dump(server_config, f, indent=2)
+                assert create_folder.status_code == 200
 
                 expected_count = len(image_files)
                 start = time.monotonic()

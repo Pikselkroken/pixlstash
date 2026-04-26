@@ -114,7 +114,6 @@ class Vault:
         self._planner_work_finders = WorkPlanner.work_finders(
             database=self.db,
             picture_tagger_getter=lambda: self._picture_tagger,
-            config_path=self._server_config_path,
             image_root=self.image_root,
             path_mapper=path_mapper,
         )
@@ -448,6 +447,10 @@ class Vault:
             return
 
         if task.type == "ReferenceFolderScanTask":
+            imported_ids = result.get("imported_picture_ids") or []
+            if imported_ids:
+                self.notify(EventType.CHANGED_PICTURES, imported_ids)
+                self.notify(EventType.PICTURE_IMPORTED, imported_ids)
             picture_ids = result.get("caption_updated_picture_ids") or []
             if picture_ids:
                 self._queue_changed_tags_notification(picture_ids)

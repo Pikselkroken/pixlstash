@@ -1,5 +1,6 @@
 """Task that scans a reference folder and indexes new image files in place."""
 
+import concurrent.futures
 import io
 import os
 import time
@@ -36,6 +37,9 @@ _SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
         ".avif",
     }
 )
+
+_BUILD_CHUNK_SIZE = 128
+_MAX_BUILD_WORKERS = 8
 
 
 def _is_supported_file(file_path: str) -> bool:
@@ -211,54 +215,21 @@ class ReferenceFolderScanTask(BaseTask):
                 )
 
         # --- Handle new files ---
-        new_pictures: list[Picture] = []
-        for file_path in new_paths:
-            try:
-                pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
-            except Exception as exc:
-                logger.warning(
-                    "Reference folder scan: failed to hash %s: %s", file_path, exc
-                )
-                continue
+        imported_picture_ids: list[int] = []
+        if new_paths:
+            pending_paths = sorted(new_paths)
+            for i in range(0, len(pending_paths), _BUILD_CHUNK_SIZE):
+                chunk_paths = pending_paths[i : i + _BUILD_CHUNK_SIZE]
+                chunk_pictures = self._build_picture_chunk(chunk_paths, folder_id)
+                if not chunk_pictures:
+                    continue
+                imported_picture_ids.extend(self._insert_pictures(chunk_pictures))
 
-            try:
-                pic = self._build_picture(file_path, pixel_sha, folder_id)
-                new_pictures.append(pic)
-            except Exception as exc:
-                logger.warning(
-                    "Reference folder scan: failed to build picture for %s: %s",
-                    file_path,
-                    exc,
-                )
-
-        if new_pictures:
-
-            def insert_pictures(
-                session: Session, pictures: list[Picture]
-            ) -> list[Picture]:
-                session.add_all(pictures)
-                session.commit()
-                for pic in pictures:
-                    session.refresh(pic)
-                # Persist sidecar tags collected during _build_picture.
-                sidecar_tags_to_add = []
-                for pic in pictures:
-                    sidecar_tags = getattr(pic, "_sidecar_tags", None)
-                    if sidecar_tags and pic.id is not None:
-                        for tag_str in sidecar_tags:
-                            sidecar_tags_to_add.append(
-                                Tag(picture_id=pic.id, tag=tag_str)
-                            )
-                if sidecar_tags_to_add:
-                    session.add_all(sidecar_tags_to_add)
-                    session.commit()
-                return list(pictures)
-
-            self._db.run_task(insert_pictures, new_pictures, priority=DBPriority.LOW)
+        if imported_picture_ids:
             logger.info(
                 "Reference folder %s: indexed %d new pictures.",
                 self._folder_path,
-                len(new_pictures),
+                len(imported_picture_ids),
             )
 
         # --- Handle caption file changes for existing pictures ---
@@ -337,11 +308,78 @@ class ReferenceFolderScanTask(BaseTask):
         return {
             "status": "active",
             "folder_id": folder_id,
-            "new_count": len(new_pictures),
+            "new_count": len(imported_picture_ids),
             "removed_count": len(removed_paths),
             "caption_updated_count": len(caption_updates),
             "caption_updated_picture_ids": caption_updated_picture_ids,
+            "imported_picture_ids": imported_picture_ids,
         }
+
+    def _build_picture_chunk(
+        self,
+        file_paths: list[str],
+        folder_id: int,
+    ) -> list[Picture]:
+        def _build(file_path: str) -> Picture | None:
+            try:
+                pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
+            except Exception as exc:
+                logger.warning(
+                    "Reference folder scan: failed to hash %s: %s", file_path, exc
+                )
+                return None
+
+            try:
+                return self._build_picture(file_path, pixel_sha, folder_id)
+            except Exception as exc:
+                logger.warning(
+                    "Reference folder scan: failed to build picture for %s: %s",
+                    file_path,
+                    exc,
+                )
+                return None
+
+        if not file_paths:
+            return []
+
+        max_workers = min(
+            _MAX_BUILD_WORKERS,
+            max(1, len(file_paths)),
+            max(1, os.cpu_count() or 1),
+        )
+        if max_workers <= 1:
+            return [
+                pic for pic in (_build(path) for path in file_paths) if pic is not None
+            ]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return [pic for pic in executor.map(_build, file_paths) if pic is not None]
+
+    def _insert_pictures(self, pictures: list[Picture]) -> list[int]:
+        def insert_pictures(
+            session: Session, pictures_batch: list[Picture]
+        ) -> list[int]:
+            session.add_all(pictures_batch)
+            session.commit()
+            for pic in pictures_batch:
+                session.refresh(pic)
+
+            sidecar_tags_to_add = []
+            imported_ids: list[int] = []
+            for pic in pictures_batch:
+                if pic.id is not None:
+                    imported_ids.append(int(pic.id))
+                sidecar_tags = getattr(pic, "_sidecar_tags", None)
+                if sidecar_tags and pic.id is not None:
+                    for tag_str in sidecar_tags:
+                        sidecar_tags_to_add.append(Tag(picture_id=pic.id, tag=tag_str))
+
+            if sidecar_tags_to_add:
+                session.add_all(sidecar_tags_to_add)
+                session.commit()
+            return imported_ids
+
+        return self._db.run_task(insert_pictures, pictures, priority=DBPriority.MEDIUM)
 
     def _build_picture(self, file_path: str, pixel_sha: str, folder_id: int) -> Picture:
         """Read image metadata and build a Picture for a reference folder file.
