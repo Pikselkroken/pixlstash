@@ -1,6 +1,6 @@
 [project]
 name = "pixlstash"
-version = "1.1.0rc10"
+version = "1.1.0"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
