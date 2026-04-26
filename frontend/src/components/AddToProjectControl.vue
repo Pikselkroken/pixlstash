@@ -2,7 +2,7 @@
   <div
     ref="rootRef"
     class="add-to-project"
-    :class="{ open: menuOpen, disabled }"
+    :class="{ open: menuOpen, disabled, 'add-to-project--flyout': placement === 'right' }"
   >
     <button
       class="add-to-project-btn"
@@ -16,7 +16,7 @@
     >
       <v-icon size="18">mdi-briefcase-edit-outline</v-icon>
       <span class="add-to-project-label">{{ label }}</span>
-      <v-icon size="16">mdi-chevron-down</v-icon>
+      <v-icon size="16" class="add-to-project-chevron">{{ placement === 'right' ? 'mdi-chevron-right' : 'mdi-chevron-down' }}</v-icon>
     </button>
 
     <div class="add-to-project-menu" role="menu">
@@ -86,6 +86,7 @@ const props = defineProps({
   label: { type: String, default: "Project" },
   includeDeletedMembers: { type: Boolean, default: false },
   expandStacks: { type: Boolean, default: true },
+  placement: { type: String, default: "bottom" },
 });
 
 const emit = defineEmits(["selected"]);
@@ -477,5 +478,40 @@ watch(
   font-size: 0.75rem;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   padding: 6px 2px;
+}
+
+/* ── Flyout (right-placement) mode ──────────────────────────── */
+.add-to-project--flyout {
+  width: 100%;
+  display: flex;
+}
+
+.add-to-project--flyout .add-to-project-btn {
+  width: 100%;
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  padding: 7px 14px;
+  border-radius: 0;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.add-to-project--flyout .add-to-project-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.add-to-project--flyout .add-to-project-chevron {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.add-to-project--flyout .add-to-project-menu {
+  top: 0;
+  left: calc(100% + 4px);
+  transform: translateX(-6px);
+}
+
+.add-to-project--flyout.open .add-to-project-menu {
+  transform: translateX(0);
 }
 </style>

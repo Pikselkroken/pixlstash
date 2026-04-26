@@ -1485,7 +1485,7 @@ def test_stack_query_respects_project_filter():
     log_resources("END test_stack_query_respects_project_filter")
 
 
-def test_smart_score_query_respects_project_filter(monkeypatch):
+def test_smart_score_query_respects_project_filter():
     """SMART_SCORE queries should honor project_id filters when selecting candidates."""
 
     log_resources("START test_smart_score_query_respects_project_filter")
@@ -1523,27 +1523,6 @@ def test_smart_score_query_respects_project_filter(monkeypatch):
                 json={"picture_ids": [pic_a], "project_id": project_id},
             )
             assert set_resp.status_code == 200
-
-            def fake_find_pictures_by_smart_score(
-                _server,
-                _format,
-                _offset,
-                _limit,
-                _descending,
-                candidate_ids=None,
-                penalised_tags=None,
-                only_deleted=False,
-                progress_reporter=None,
-                **_kwargs,
-            ):
-                ids = sorted(set(candidate_ids or []))
-                return [{"id": pid, "score": 0.0, "smartScore": 0.0} for pid in ids]
-
-            monkeypatch.setattr(
-                pictures_routes,
-                "find_pictures_by_smart_score",
-                fake_find_pictures_by_smart_score,
-            )
 
             scoped_resp = client.get(
                 "/pictures",
@@ -2300,10 +2279,10 @@ def test_read_version():
             response = client.get("/version")
             assert response.status_code == 200
             expected_version = get_project_version()
-            assert response.json() == {
-                "message": "PixlStash REST API",
-                "version": expected_version,
-            }
+            data = response.json()
+            assert data["message"] == "PixlStash REST API"
+            assert data["version"] == expected_version
+            assert "install_type" in data
     gc.collect()
     log_resources("END test_read_version")
 

@@ -8,6 +8,8 @@ CONFIG_PATH="${PIXLSTASH_CONFIG:-${HOME}/.config/pixlstash/server-config.json}"
 HOST="${PIXLSTASH_HOST:-0.0.0.0}"
 PORT="${PIXLSTASH_PORT:-9537}"
 
+export PIXLSTASH_IN_DOCKER=1
+
 mkdir -p "$(dirname "$CONFIG_PATH")"
 
 # Write a default config on first run with Docker-appropriate settings

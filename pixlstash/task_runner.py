@@ -66,6 +66,8 @@ class TaskRunner:
         self._threads: list[threading.Thread] = []
         self._lock = threading.Lock()
         self._vram_gate_lock = threading.Lock()
+        self._active_task_lock = threading.Lock()
+        self._active_tasks: dict[int, BaseTask] = {}  # thread ident -> running task
         self._vram_reserved_mb: int = 0
         self._closed = False
         self._on_task_complete_callbacks: list[
@@ -422,6 +424,20 @@ class TaskRunner:
             queued_task.status = TaskStatus.CANCELLED
             queued_task.completed_at = datetime.now(UTC)
 
+        # Cancel tasks that are currently executing so their loops can exit early.
+        with self._active_task_lock:
+            active = list(self._active_tasks.values())
+        for active_task in active:
+            try:
+                active_task.on_cancel()
+            except Exception as exc:
+                logger.warning(
+                    "Task %s (%s) cancel hook failed (active): %s",
+                    active_task.id,
+                    active_task.type,
+                    exc,
+                )
+
         # Unblock every worker with a dedicated stop sentinel.
         for _ in range(self._num_workers):
             self._queue.put((TaskPriority.HIGH, next(self._queue_seq), _StopTask()))
@@ -503,6 +519,9 @@ class TaskRunner:
                 task.type,
             )
             error: Optional[BaseException] = None
+            thread_ident = threading.current_thread().ident
+            with self._active_task_lock:
+                self._active_tasks[thread_ident] = task
             try:
                 task.run()
             except Exception as exc:
@@ -523,6 +542,8 @@ class TaskRunner:
                 else:
                     logger.warning("Task %s (%s) failed: %s", task.id, task.type, exc)
             finally:
+                with self._active_task_lock:
+                    self._active_tasks.pop(thread_ident, None)
                 if vram_reserved_mb > 0:
                     with self._vram_gate_lock:
                         self._vram_reserved_mb = max(

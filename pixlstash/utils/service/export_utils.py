@@ -16,9 +16,6 @@ from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import CaptionUtils
 from sqlmodel import select
 
-from pixlstash.routes.pictures import (
-    _select_pictures_for_listing,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +249,8 @@ class ExportUtils:
                 pics = server.vault.db.run_task(find_by_text, query)
             else:
                 logger.debug("Exporting pictures using list filters")
+                from pixlstash.routes.pictures import _select_pictures_for_listing
+
                 ordered_ids = _select_pictures_for_listing(
                     server=server,
                     request=request,

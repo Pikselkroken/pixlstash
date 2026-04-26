@@ -1,11 +1,12 @@
-import json
 import os
 import threading
 from datetime import datetime
+from typing import Optional
 
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
+from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
@@ -19,53 +20,6 @@ from pixlstash.tasks.base_task import BaseTask
 
 logger = get_logger(__name__)
 
-_CONFIG_LOCK = threading.Lock()
-
-
-def load_watch_folders(config_path: str) -> list[dict]:
-    """Load the watch_folders list from the server config file.
-
-    Each entry in the returned list is a dict with the following fields:
-
-        folder (str): Absolute path to the directory to monitor recursively.
-        delete_after_import (bool): When True, source files are deleted from
-            the watch folder after a successful import. Defaults to False.
-        last_checked (float): Unix timestamp of the last scan. Managed
-            internally by the finder; there is no need to set this manually.
-
-    Args:
-        config_path: Path to the server-config.json file.
-
-    Returns:
-        List of watch folder entry dicts, or an empty list on error.
-    """
-    if not config_path or not os.path.exists(config_path):
-        return []
-    with _CONFIG_LOCK:
-        try:
-            with open(config_path, "r") as handle:
-                config = json.load(handle)
-            return list(config.get("watch_folders", []) or [])
-        except Exception as exc:
-            logger.error("Failed to read watch_folders: %s", exc)
-            return []
-
-
-def persist_watch_folders(config_path: str, watch_folders: list[dict]):
-    if not config_path:
-        return
-    with _CONFIG_LOCK:
-        try:
-            config = {}
-            if os.path.exists(config_path):
-                with open(config_path, "r") as handle:
-                    config = json.load(handle)
-            config["watch_folders"] = watch_folders
-            with open(config_path, "w") as handle:
-                json.dump(config, handle, indent=2)
-        except Exception as exc:
-            logger.error("Failed to persist watch_folders: %s", exc)
-
 
 class WatchFolderImportTask(BaseTask):
     """Task that imports discovered files from watch folders."""
@@ -73,10 +27,9 @@ class WatchFolderImportTask(BaseTask):
     def __init__(
         self,
         database,
-        config_path: str,
         candidate_files: list[dict],
-        updated_watch_folders: list[dict],
         total_candidates: int,
+        last_checked_updates: Optional[dict[int, float]] = None,
     ):
         super().__init__(
             task_type="WatchFolderImportTask",
@@ -86,10 +39,16 @@ class WatchFolderImportTask(BaseTask):
             },
         )
         self._db = database
-        self._config_path = config_path
         self._candidate_files = candidate_files or []
-        self._updated_watch_folders = updated_watch_folders or []
+        self._last_checked_updates = {
+            int(folder_id): float(last_checked)
+            for folder_id, last_checked in (last_checked_updates or {}).items()
+        }
         self._total_candidates = int(total_candidates or 0)
+        self._stop_event = threading.Event()
+
+    def on_cancel(self) -> None:
+        self._stop_event.set()
 
     def _run_task(self):
         new_pictures = []
@@ -97,6 +56,12 @@ class WatchFolderImportTask(BaseTask):
         delete_paths = []
 
         for candidate in self._candidate_files:
+            if self._stop_event.is_set():
+                logger.debug(
+                    "WatchFolderImportTask cancelled, stopping early at task %s",
+                    self.id,
+                )
+                break
             file_path = candidate.get("file_path")
             if not file_path:
                 continue
@@ -124,6 +89,9 @@ class WatchFolderImportTask(BaseTask):
                     pixel_sha=pixel_sha,
                 )
                 pic.imported_at = datetime.now()
+                import_source_folder = candidate.get("import_source_folder")
+                if isinstance(import_source_folder, str) and import_source_folder:
+                    pic.import_source_folder = import_source_folder
                 new_pictures.append(pic)
 
                 stack_id, source_id = parse_stack_tags_from_filename(file_path)
@@ -196,8 +164,27 @@ class WatchFolderImportTask(BaseTask):
                             exc,
                         )
 
-        if self._updated_watch_folders:
-            persist_watch_folders(self._config_path, self._updated_watch_folders)
+        if self._last_checked_updates:
+
+            def update_last_checked(session: Session, updates: dict[int, float]):
+                folders = session.exec(
+                    select(ImportFolder).where(
+                        ImportFolder.id.in_(list(updates.keys()))
+                    )
+                ).all()
+                for folder in folders:
+                    next_ts = updates.get(int(folder.id))
+                    if next_ts is None:
+                        continue
+                    folder.last_checked = float(next_ts)
+                    session.add(folder)
+                session.commit()
+
+            self._db.run_task(
+                update_last_checked,
+                self._last_checked_updates,
+                priority=DBPriority.IMMEDIATE,
+            )
 
         return {
             "changed_count": len(changed),

@@ -323,6 +323,59 @@ def create_router(server) -> APIRouter:
         return {"status": "success", "picture_set": set_dict}
 
     @router.get(
+        "/picture_sets/membership",
+        summary="Batch set membership lookup",
+        description=(
+            "Given a list of picture IDs, returns a map of set_id → [picture_ids] "
+            "for every set that contains at least one of the requested pictures. "
+            "Also expands stack siblings so all stack members are considered. "
+            "Used by the AddToSet menu to load membership in a single request."
+        ),
+    )
+    def get_batch_membership(
+        picture_id: list[int] = Query(default=[]),
+        include_deleted: bool = Query(False),
+    ):
+        if not picture_id:
+            return {}
+
+        def fetch_membership(session, ids: list[int], include_deleted: bool):
+            # Expand stacks: include all stack siblings of requested pictures.
+            id_stack_rows = session.exec(
+                select(Picture.id, Picture.stack_id).where(
+                    Picture.id.in_(ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+            stack_ids = [int(sid) for _pid, sid in id_stack_rows if sid is not None]
+            expanded_ids = set(ids)
+            if stack_ids:
+                extra_q = select(Picture.id).where(Picture.stack_id.in_(stack_ids))
+                if not include_deleted:
+                    extra_q = extra_q.where(Picture.deleted.is_(False))
+                extra = session.exec(extra_q).all()
+                expanded_ids |= {e for e in extra if e is not None}
+
+            # Find all set memberships for the expanded id set.
+            filters = [PictureSetMember.picture_id.in_(expanded_ids)]
+            if not include_deleted:
+                filters.append(Picture.deleted.is_(False))
+            rows = session.exec(
+                select(PictureSetMember.set_id, PictureSetMember.picture_id)
+                .join(Picture, Picture.id == PictureSetMember.picture_id)
+                .where(*filters)
+            ).all()
+
+            result: dict[int, list[int]] = {}
+            for set_id, pid in rows:
+                result.setdefault(int(set_id), []).append(int(pid))
+            return result
+
+        return server.vault.db.run_immediate_read_task(
+            fetch_membership, picture_id, include_deleted
+        )
+
+    @router.get(
         "/picture_sets/{id}/thumbnail",
         summary="Get picture set thumbnail",
         description="Returns or generates a cached composite thumbnail representing top-scoring pictures in a set.",
@@ -566,6 +619,9 @@ def create_router(server) -> APIRouter:
         project_id: str | None = Query(None),
         fields: str = Query(None),
         min_score: int | None = Query(None),
+        max_score: int | None = Query(None),
+        smart_score_bucket: str | None = Query(None),
+        resolution_bucket: str | None = Query(None),
         expand_stacks: bool = Query(False),
     ):
         tags_filter = request.query_params.getlist("tag") or None
@@ -733,6 +789,9 @@ def create_router(server) -> APIRouter:
                 include_unimported=True,
                 stack_leaders_only=deduplicate_stacks,
                 min_score=min_score,
+                max_score=max_score,
+                smart_score_bucket=smart_score_bucket,
+                resolution_bucket=resolution_bucket,
                 tags_filter=tags_filter,
                 tags_rejected_filter=tags_rejected_filter,
                 tags_confidence_above_filter=tags_confidence_above_filter,

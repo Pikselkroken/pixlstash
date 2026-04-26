@@ -1,5 +1,13 @@
 <template>
-  <div ref="rootRef" class="add-to-set" :class="{ open: menuOpen, disabled }">
+  <div
+    ref="rootRef"
+    class="add-to-set"
+    :class="{
+      open: menuOpen,
+      disabled,
+      'add-to-set--flyout': placement === 'right',
+    }"
+  >
     <button
       class="add-to-set-btn"
       type="button"
@@ -12,7 +20,9 @@
     >
       <v-icon size="18">mdi-folder-plus</v-icon>
       <span class="add-to-set-label">{{ label }}</span>
-      <v-icon size="16">mdi-chevron-down</v-icon>
+      <v-icon size="16" class="add-to-set-chevron">{{
+        placement === "right" ? "mdi-chevron-right" : "mdi-chevron-down"
+      }}</v-icon>
     </button>
 
     <div class="add-to-set-menu" role="menu">
@@ -56,14 +66,31 @@
           }}
         </v-icon>
         <span class="add-to-set-item-name">{{ set.name }}</span>
-        <span v-if="set.picture_count != null" class="add-to-set-item-count">
-          {{ set.picture_count }}
+        <span class="add-to-set-item-meta">
+          <span v-if="set.picture_count != null" class="add-to-set-item-count">
+            {{ set.picture_count }}
+          </span>
+          <span
+            v-if="isLastUsedSet(set)"
+            class="add-to-set-item-shortcut"
+            title="Press A to add to this set"
+            >A</span
+          >
         </span>
       </button>
 
       <div v-if="statusMessage" class="add-to-set-status">
         {{ statusMessage }}
       </div>
+    </div>
+
+    <div
+      v-if="statusMessage && !menuOpen"
+      class="add-to-set-shortcut-status"
+      role="status"
+      aria-live="polite"
+    >
+      {{ statusMessage }}
     </div>
   </div>
 </template>
@@ -72,12 +99,17 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { apiClient } from "../utils/apiClient";
 
+// Persists the last set the user added a picture to, shared across all
+// AddToSetControl instances for the lifetime of the page.
+const lastUsedSet = ref(null); // { id, name }
+
 const props = defineProps({
   backendUrl: { type: String, required: true },
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
   label: { type: String, default: "Set" },
   includeDeletedMembers: { type: Boolean, default: false },
+  placement: { type: String, default: "bottom" },
 });
 
 const emit = defineEmits(["added"]);
@@ -134,6 +166,10 @@ function getSetState(set) {
   if (matched === 0) return "unchecked";
   if (matched === ids.length) return "checked";
   return "partial";
+}
+
+function isLastUsedSet(set) {
+  return Boolean(lastUsedSet.value && set?.id === lastUsedSet.value.id);
 }
 
 function toggleMenu() {
@@ -196,33 +232,31 @@ async function fetchSetMembers(list) {
     setMembersById.value = {};
     return;
   }
-  const entries = await Promise.all(
-    list.map(async (set) => {
-      try {
-        const params = new URLSearchParams({ expand_stacks: "true" });
-        if (props.includeDeletedMembers) {
-          params.set("include_deleted", "true");
-        }
-        const res = await apiClient.get(
-          resolveUrl(`/picture_sets/${set.id}/members?${params}`),
-        );
-        const data = await res.data;
-        const pictureIds = Array.isArray(data?.picture_ids)
-          ? data.picture_ids
-          : Array.isArray(data)
-            ? data
-            : [];
-        return [set.id, new Set(pictureIds.map((id) => String(id)))];
-      } catch (e) {
-        return [set.id, new Set()];
-      }
-    }),
-  );
-  const next = {};
-  entries.forEach(([setId, members]) => {
-    next[setId] = members;
-  });
-  setMembersById.value = next;
+  try {
+    const params = new URLSearchParams();
+    ids.forEach((id) => params.append("picture_id", id));
+    if (props.includeDeletedMembers) {
+      params.set("include_deleted", "true");
+    }
+    const res = await apiClient.get(
+      resolveUrl(`/picture_sets/membership?${params}`),
+    );
+    const data = res.data ?? {};
+    // data is { set_id: [picture_id, ...] }
+    const next = {};
+    // Initialise every known set to an empty Set so isSetDisabled works.
+    list.forEach((set) => {
+      next[set.id] = new Set();
+    });
+    Object.entries(data).forEach(([setId, memberIds]) => {
+      next[Number(setId)] = new Set(
+        (Array.isArray(memberIds) ? memberIds : []).map((id) => String(id)),
+      );
+    });
+    setMembersById.value = next;
+  } catch (e) {
+    setMembersById.value = {};
+  }
 }
 
 async function toggleSetMembership(set) {
@@ -281,6 +315,7 @@ async function toggleSetMembership(set) {
         pictureIds: idsToAdd,
         action: "added",
       });
+      lastUsedSet.value = { id: set.id, name: set.name };
       if (members) {
         idsToAdd.forEach((id) => members.add(String(id)));
       }
@@ -303,6 +338,47 @@ async function toggleSetMembership(set) {
   }, 2000);
 }
 
+// Adds the current picture(s) directly to the last used set without opening
+// the menu. Returns { success, setName } or { error }.
+async function addToLastSet() {
+  if (!lastUsedSet.value) return { error: "no-last-set" };
+  const ids = normalisedPictureIds.value;
+  if (!ids.length) return { error: "no-pictures" };
+  const set = lastUsedSet.value;
+  statusMessage.value = `Adding to ${set.name}...`;
+  try {
+    await Promise.all(
+      ids.map((id) =>
+        apiClient.post(resolveUrl(`/picture_sets/${set.id}/members/${id}`)),
+      ),
+    );
+    statusMessage.value = `Added to ${set.name}`;
+    // Update local membership cache if loaded.
+    const members = setMembersById.value?.[set.id];
+    if (members) ids.forEach((id) => members.add(String(id)));
+    const cachedSet = sets.value.find((s) => s.id === set.id);
+    if (cachedSet?.picture_count != null) cachedSet.picture_count += ids.length;
+    emit("added", { setId: set.id, pictureIds: ids, action: "added" });
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = window.setTimeout(() => {
+      statusMessage.value = "";
+    }, 2000);
+    return { success: true, setName: set.name };
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    if (String(detail).includes("already in set")) {
+      statusMessage.value = `Already in ${set.name}`;
+    } else {
+      statusMessage.value = "Failed to add";
+    }
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = window.setTimeout(() => {
+      statusMessage.value = "";
+    }, 2000);
+    return { error: detail };
+  }
+}
+
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("pointerdown", handleOutsideClick, true);
@@ -318,6 +394,8 @@ watch(
     }
   },
 );
+
+defineExpose({ addToLastSet, lastUsedSet });
 </script>
 
 <style scoped>
@@ -419,8 +497,21 @@ watch(
   text-align: left;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   cursor: pointer;
+}
+
+.add-to-set-item-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-to-set-item-meta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .add-to-set-item:hover {
@@ -438,6 +529,16 @@ watch(
   color: rgba(255, 255, 255, 0.6);
 }
 
+.add-to-set-item-shortcut {
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.68rem;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .add-to-set-empty {
   padding: 6px 8px;
   font-size: 0.75rem;
@@ -449,5 +550,56 @@ watch(
   padding: 6px 8px;
   font-size: 0.72rem;
   color: rgba(255, 255, 255, 0.7);
+}
+
+.add-to-set-shortcut-status {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-dark-surface), 0.92);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  font-size: 0.74rem;
+  line-height: 1.2;
+  z-index: 12;
+  pointer-events: none;
+}
+
+/* ── Flyout (right-placement) mode ──────────────────────────── */
+.add-to-set--flyout {
+  width: 100%;
+  display: flex;
+}
+
+.add-to-set--flyout .add-to-set-btn {
+  width: 100%;
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  padding: 7px 14px;
+  border-radius: 0;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.add-to-set--flyout .add-to-set-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.add-to-set--flyout .add-to-set-chevron {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.add-to-set--flyout .add-to-set-menu {
+  top: 0;
+  left: calc(100% + 4px);
+  transform: translateX(-6px);
+}
+
+.add-to-set--flyout.open .add-to-set-menu {
+  transform: translateX(0);
 }
 </style>

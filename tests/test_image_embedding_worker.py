@@ -1,3 +1,5 @@
+import os
+import shutil
 from datetime import datetime
 
 import numpy as np
@@ -8,15 +10,21 @@ from pixlstash.db_models import Picture
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.vault import Vault
 
+PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
+
 
 def test_fetch_work_includes_empty_embedding_blob(tmp_path):
     """Empty embedding blobs should be treated as missing and reprocessed."""
+    # Copy real images so MissingFilePurgeTask doesn't delete these records
+    shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "missing.jpg")
+    shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "empty.jpg")
+    shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "done.jpg")
     with Vault(image_root=str(tmp_path)) as vault:
         now = datetime.now()
 
         def seed(session: Session):
             missing = Picture(
-                file_path="/tmp/missing.jpg",
+                file_path=str(tmp_path / "missing.jpg"),
                 format="jpg",
                 width=64,
                 height=64,
@@ -27,7 +35,7 @@ def test_fetch_work_includes_empty_embedding_blob(tmp_path):
                 created_at=now,
             )
             empty = Picture(
-                file_path="/tmp/empty.jpg",
+                file_path=str(tmp_path / "empty.jpg"),
                 format="jpg",
                 width=64,
                 height=64,
@@ -38,7 +46,7 @@ def test_fetch_work_includes_empty_embedding_blob(tmp_path):
                 created_at=now,
             )
             done = Picture(
-                file_path="/tmp/done.jpg",
+                file_path=str(tmp_path / "done.jpg"),
                 format="jpg",
                 width=64,
                 height=64,
@@ -78,12 +86,17 @@ def test_fetch_work_includes_empty_embedding_blob(tmp_path):
 
 def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
     """Pictures with valid embeddings but missing aesthetic score should be selected."""
+    # Create actual files so MissingFilePurgeTask doesn't delete these records
+    shutil.copy(
+        os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "needs_aesthetic.jpg"
+    )
+    shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "complete.jpg")
     with Vault(image_root=str(tmp_path)) as vault:
         now = datetime.now()
 
         def seed(session: Session):
             needs_aesthetic = Picture(
-                file_path="/tmp/needs_aesthetic.jpg",
+                file_path=str(tmp_path / "needs_aesthetic.jpg"),
                 format="jpg",
                 width=64,
                 height=64,
@@ -94,7 +107,7 @@ def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
                 created_at=now,
             )
             complete = Picture(
-                file_path="/tmp/complete.jpg",
+                file_path=str(tmp_path / "complete.jpg"),
                 format="jpg",
                 width=64,
                 height=64,

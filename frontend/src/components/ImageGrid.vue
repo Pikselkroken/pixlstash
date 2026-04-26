@@ -70,6 +70,7 @@
       @delete-selected="deleteSelected"
       @set-project="handleSetProjectForSelected"
       @add-to-character="handleAddToCharacter"
+      @remove-from-character="handleRemoveFromCharacter"
       @create-stack="createStackFromSelection"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
@@ -77,6 +78,39 @@
       @run-plugin="handlePluginRunRequest"
       @comfyui-run="handleComfyuiRun"
       @tags-applied="fetchAllGridImages({ force: true, showProgress: true })"
+    />
+    <ImageGridContextMenu
+      :visible="contextMenuVisible"
+      :x="contextMenuX"
+      :y="contextMenuY"
+      :selected-image-ids="selectedImageIds"
+      :selected-media-support="selectedMediaSupport"
+      :selected-character="String(props.selectedCharacter)"
+      :selected-set="String(props.selectedSet)"
+      :selected-group-name="selectedGroupName"
+      :selected-sort="props.selectedSort"
+      :all-pictures-id="String(props.allPicturesId)"
+      :unassigned-pictures-id="String(props.unassignedPicturesId)"
+      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :backend-url="props.backendUrl"
+      :comfyui-configured="props.comfyuiConfigured"
+      :show-remove-from-stack="showRemoveFromStack"
+      :selected-multiple-stack-ids="selectedMultipleStackIds"
+      :available-plugins="availablePlugins"
+      @close="contextMenuVisible = false"
+      @added-to-set="handleOverlayAddedToSet"
+      @add-to-character="handleAddToCharacter"
+      @remove-from-character="handleRemoveFromCharacter"
+      @set-project="handleSetProjectForSelected"
+      @remove-from-stack="removeSelectedFromStack"
+      @dissolve-stacks="dissolveSelectedStacks"
+      @create-stack="createStackFromSelection"
+      @create-stacks-from-groups="createStacksFromSelectedGroups"
+      @remove-from-group="removeFromGroup"
+      @delete-selected="deleteSelected"
+      @open-tag-panel="handleContextMenuOpenTagPanel"
+      @open-plugin-panel="handleContextMenuOpenPluginPanel"
+      @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
     />
     <EmptyScrapHeap
       v-if="showScrapheapBar"
@@ -86,16 +120,64 @@
       @empty-scrapheap="confirmEmptyScrapheap"
       @restore-scrapheap="confirmRestoreScrapheap"
     />
-    <div v-if="isSetOverlapView" class="set-overlap-status-bar">
-      <div class="set-overlap-status-bar__main">
-        <v-icon size="20" class="set-overlap-status-bar__icon"
-          >mdi-set-center</v-icon
+    <div
+      v-if="isMultiCharacterView || isSetOverlapView"
+      class="multi-select-toolbar"
+    >
+      <select
+        class="multi-select-toolbar__mode"
+        :value="
+          isMultiCharacterView ? props.characterMultiMode : props.setMultiMode
+        "
+        @change="
+          (e) =>
+            isMultiCharacterView
+              ? emit('update:character-multi-mode', e.target.value)
+              : emit('update:set-multi-mode', e.target.value)
+        "
+      >
+        <option value="union">Union</option>
+        <option value="intersection">Overlap</option>
+        <option value="difference">Difference</option>
+        <option value="xor">Unique (XOR)</option>
+      </select>
+      <template
+        v-if="!isMultiCharacterView && props.setMultiMode === 'difference'"
+      >
+        <span class="multi-select-toolbar__separator">|</span>
+        <label class="multi-select-toolbar__base-label">Base:</label>
+        <select
+          class="multi-select-toolbar__base"
+          :value="props.setDifferenceBaseId ?? normalizedSelectedSetIds[0]"
+          @change="
+            (e) => emit('update:set-difference-base-id', Number(e.target.value))
+          "
         >
-        <span class="set-overlap-status-bar__text">
-          Overlap mode: {{ normalizedSelectedSetIds.length }} sets selected.
-          Overlap can be cleared with the Set menu once you've selected images.
-        </span>
-      </div>
+          <option
+            v-for="sid in normalizedSelectedSetIds"
+            :key="sid"
+            :value="sid"
+          >
+            {{ props.selectedSetNames[sid] || `Set ${sid}` }}
+          </option>
+        </select>
+      </template>
+      <span class="multi-select-toolbar__label">
+        {{
+          isMultiCharacterView
+            ? `${normalizedSelectedCharacterIds.length} people selected`
+            : `${normalizedSelectedSetIds.length} sets selected`
+        }}
+      </span>
+      <span class="multi-select-toolbar__spacer"></span>
+      <button
+        class="multi-select-toolbar__clear"
+        title="Clear selection"
+        @click="emit('clear-multi-selection')"
+      >
+        <v-icon size="16">mdi-selection-off</v-icon>
+        Clear
+      </button>
     </div>
     <ProgressOverlay
       :visible="exportProgress.visible"
@@ -115,6 +197,7 @@
     <ComfyUiRunner
       ref="comfyuiRunner"
       :backendUrl="props.backendUrl"
+      :wsPluginProgress="props.wsPluginProgress"
       :overlayOpen="overlayOpen"
       :overlayImageId="overlayImageId"
       :allGridImages="allGridImages"
@@ -168,6 +251,20 @@
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
+      </div>
+      <div v-if="showFolderScanningState" class="empty-state">
+        <div class="empty-state-card">
+          <div class="empty-state-illustration" aria-hidden="true">
+            <img
+              src="/Empty.png"
+              alt="Scanning"
+              :style="emptyStateImageStyle"
+              style="width: 90%"
+            />
+          </div>
+          <div class="empty-state-title">PixlStash is scanning your folder</div>
+          <div class="empty-state-subtitle">Reticulating splines…</div>
+        </div>
       </div>
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
@@ -240,6 +337,7 @@
           @click="handleImageCardClick(img, img.idx, $event)"
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
+          @contextmenu.prevent="handleImageContextMenu(img, $event)"
         >
           <div
             :class="[
@@ -432,19 +530,31 @@
                 </template>
                 <div
                   v-if="
-                    props.showFormat &&
-                    img.format &&
-                    img.format !== 'unknown' &&
                     isThumbnailReady(img.id) &&
-                    img.thumbnail
+                    img.thumbnail &&
+                    ((props.showFormat &&
+                      img.format &&
+                      img.format !== 'unknown') ||
+                      img.reference_folder_id)
                   "
-                  :class="[
-                    'thumbnail-id-overlay',
-                    'thumbnail-badge',
-                    'thumbnail-badge--bottom-left',
-                  ]"
+                  class="thumbnail-bottom-left-badges"
                 >
-                  {{ img.format.toUpperCase() }}
+                  <div
+                    v-if="
+                      props.showFormat && img.format && img.format !== 'unknown'
+                    "
+                    class="thumbnail-id-overlay thumbnail-badge"
+                  >
+                    {{ img.format.toUpperCase() }}
+                  </div>
+                  <div
+                    v-if="img.reference_folder_id"
+                    class="thumbnail-reference-badge thumbnail-badge"
+                    :title="img.file_path || 'Reference picture'"
+                    @click.stop="openReferenceLocation(img.id)"
+                  >
+                    <v-icon size="10">mdi-link-variant</v-icon>
+                  </div>
                 </div>
               </template>
               <template v-else>
@@ -548,6 +658,7 @@ import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "./EmptyScrapHeap.vue";
 import SelectionBar from "./SelectionBar.vue";
+import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import ComfyUiRunner from "./ComfyUiRunner.vue";
@@ -603,6 +714,10 @@ const emit = defineEmits([
   "update:stack-stats",
   "import-started",
   "import-ended",
+  "clear-multi-selection",
+  "update:character-multi-mode",
+  "update:set-multi-mode",
+  "update:set-difference-base-id",
 ]);
 
 // Props
@@ -648,15 +763,28 @@ const props = defineProps({
   comfyuiLoraFilter: { type: Array, default: () => [] },
   comfyuiConfigured: { type: Boolean, default: false },
   minScoreFilter: { type: Number, default: null },
+  maxScoreFilter: { type: Number, default: null },
+  smartScoreBucketFilter: { type: String, default: null },
+  resolutionBucketFilter: { type: String, default: null },
   tagFilter: { type: Array, default: () => [] },
   tagRejectedFilter: { type: Array, default: () => [] },
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
+  faceBboxFilter: { type: String, default: null },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   projectViewMode: { type: String, default: "global" },
   selectedProjectId: { type: Number, default: null },
+  referenceFolderIdFilter: { type: Number, default: null },
+  filePathPrefixFilter: { type: String, default: null },
+  importSourceFolderFilter: { type: String, default: null },
+  folderScanning: { type: Boolean, default: false },
+  selectedCharacterIds: { type: Array, default: () => [] },
+  characterMultiMode: { type: String, default: "union" },
+  setMultiMode: { type: String, default: "intersection" },
+  setDifferenceBaseId: { type: Number, default: null },
+  selectedSetNames: { type: Object, default: () => ({}) },
 });
 
 // ============================================================
@@ -696,6 +824,19 @@ const primarySelectedSetId = computed(() =>
     : null,
 );
 
+const normalizedSelectedCharacterIds = computed(() => {
+  const ids = Array.isArray(props.selectedCharacterIds)
+    ? props.selectedCharacterIds
+    : [];
+  return ids
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .sort((a, b) => a - b);
+});
+const isMultiCharacterView = computed(
+  () => normalizedSelectedCharacterIds.value.length > 1,
+);
+
 // ============================================================
 // THUMBNAIL SYSTEM STATE
 // ============================================================
@@ -731,6 +872,9 @@ const prefetchedFullImageOrder = [];
 const gridContainer = ref(null);
 const scrollWrapper = ref(null);
 const selectionBarRef = ref(null);
+const contextMenuVisible = ref(false);
+const contextMenuX = ref(0);
+const contextMenuY = ref(0);
 
 // ============================================================
 // GRID DATA STATE
@@ -1457,6 +1601,12 @@ watch(
       // not websocket events, to avoid jitter/out-of-order updates.
       return;
     }
+    if (pluginName === "comfyui") {
+      // ComfyUI has its own dedicated runner banner; suppress duplicate
+      // generic plugin overlay to avoid showing two concurrent error banners.
+      pluginProgress.visible = false;
+      return;
+    }
 
     pluginProgress.runId = String(payload.run_id || pluginProgress.runId || "");
     pluginProgress.status = String(payload.status || "running");
@@ -1879,6 +2029,82 @@ function formatCompactDate(dateStr) {
   }
 }
 
+function formatCompactDatetime(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const fmt =
+    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+  const y = d.getFullYear();
+  const day = d.getDate();
+  const MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const mon = MONTHS[d.getMonth()];
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const time24 = `${hh}:${mm}`;
+  function ampmTime() {
+    let h = d.getHours();
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return `${h}:${mm} ${ampm}`;
+  }
+  switch (fmt) {
+    case "eu":
+    case "british":
+    case "iso":
+      return sameYear
+        ? `${day} ${mon} ${time24}`
+        : `${day} ${mon} ${y} ${time24}`;
+    case "us":
+      return sameYear
+        ? `${mon} ${day} ${ampmTime()}`
+        : `${mon} ${day}, ${y} ${ampmTime()}`;
+    case "ymd-slash":
+    case "ymd-dot":
+      return sameYear
+        ? `${mon} ${day} ${time24}`
+        : `${y} ${mon} ${day} ${time24}`;
+    case "ymd-jp":
+      return sameYear
+        ? `${d.getMonth() + 1}月${day}日 ${time24}`
+        : `${y}年${d.getMonth() + 1}月${day}日 ${time24}`;
+    case "locale":
+    default:
+      return d.toLocaleString(
+        undefined,
+        sameYear
+          ? {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            }
+          : {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            },
+      );
+  }
+}
+
 function getCompactGroupLabel(img, visualIdx) {
   if (!props.compactMode || !img) return null;
   const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
@@ -1889,7 +2115,7 @@ function getCompactGroupLabel(img, visualIdx) {
     if (isSearchMode && typeof item.likeness_score === "number")
       return Math.round(item.likeness_score * 20);
     if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 10);
+      return item.imported_at.slice(0, 19);
     if (sort.includes("DATE") && item.created_at)
       return item.created_at.slice(0, 10);
     const smartScore = getGridSmartScoreValue(item);
@@ -1915,7 +2141,7 @@ function getCompactGroupLabel(img, visualIdx) {
   if (isSearchMode && typeof img.likeness_score === "number")
     return `≈ ${img.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && img.imported_at)
-    return formatCompactDate(img.imported_at);
+    return formatCompactDatetime(img.imported_at);
   if (sort.includes("DATE") && img.created_at)
     return formatCompactDate(img.created_at);
   const smartScore = getGridSmartScoreValue(img);
@@ -1941,7 +2167,7 @@ const compactStickyLabel = computed(() => {
     if (isSearchMode && typeof item.likeness_score === "number")
       return Math.round(item.likeness_score * 20);
     if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 10);
+      return item.imported_at.slice(0, 19);
     if (sort.includes("DATE") && item.created_at)
       return item.created_at.slice(0, 10);
     const smartScore = getGridSmartScoreValue(item);
@@ -1974,7 +2200,7 @@ const compactStickyLabel = computed(() => {
   if (isSearchMode && typeof firstImg.likeness_score === "number")
     return `≈ ${firstImg.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && firstImg.imported_at)
-    return formatCompactDate(firstImg.imported_at);
+    return formatCompactDatetime(firstImg.imported_at);
   if (sort.includes("DATE") && firstImg.created_at)
     return formatCompactDate(firstImg.created_at);
   const smartScore = getGridSmartScoreValue(firstImg);
@@ -2404,6 +2630,30 @@ function handleAddToCharacter(payload) {
   emit("refresh-sidebar");
 }
 
+function handleRemoveFromCharacter(payload) {
+  const pictureIds = Array.isArray(payload?.pictureIds)
+    ? payload.pictureIds
+    : [];
+  if (!pictureIds.length) return;
+  const removedCharId = payload?.characterId;
+  const currentChar = props.selectedCharacter;
+  const isInRemovedCharView =
+    removedCharId != null &&
+    currentChar != null &&
+    String(currentChar) === String(removedCharId) &&
+    currentChar !== props.allPicturesId &&
+    currentChar !== props.unassignedPicturesId &&
+    currentChar !== props.scrapheapPicturesId;
+  if (isInRemovedCharView) {
+    removeImagesById(pictureIds);
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId = null;
+    updateVisibleThumbnails();
+  }
+  emit("refresh-sidebar");
+}
+
 async function deleteSelected() {
   if (!selectedImageIds.value.length) return;
   const isScrapheapSelection = isScrapheapView.value;
@@ -2751,7 +3001,10 @@ const selectedExpandedCount = computed(() => {
     props.mediaTypeFilter === "all" &&
     (props.comfyuiModelFilter || []).length === 0 &&
     (props.comfyuiLoraFilter || []).length === 0 &&
-    props.minScoreFilter == null;
+    props.minScoreFilter == null &&
+    props.maxScoreFilter == null &&
+    props.smartScoreBucketFilter == null &&
+    props.resolutionBucketFilter == null;
 
   // Keep the info count aligned with sidebar summary for full category selections.
   if (
@@ -2861,6 +3114,14 @@ async function confirmRestoreScrapheap() {
     alert("Failed to restore scrapheap.");
   } finally {
     scrapheapRestoring.value = false;
+  }
+}
+
+async function openReferenceLocation(picId) {
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/${picId}/open-location`);
+  } catch {
+    // silently ignore — the OS might not support it
   }
 }
 
@@ -4172,11 +4433,24 @@ function buildGridFetchKey() {
         .filter((id) => Number.isFinite(id) && id > 0)
         .sort((a, b) => a - b)
     : [];
+  const selectedCharacterIds = normalizedSelectedCharacterIds.value;
   return JSON.stringify({
     selectedCharacter: props.selectedCharacter ?? null,
+    selectedCharacterIds,
+    isMultiCharacterView: selectedCharacterIds.length > 1,
+    characterMultiMode:
+      selectedCharacterIds.length > 1
+        ? (props.characterMultiMode ?? "union")
+        : null,
     selectedSet: props.selectedSet ?? null,
     selectedSetIds,
     isSetOverlapView: selectedSetIds.length > 1,
+    setMultiMode:
+      selectedSetIds.length > 1 ? (props.setMultiMode ?? "intersection") : null,
+    setDifferenceBaseId:
+      selectedSetIds.length > 1 && props.setMultiMode === "difference"
+        ? (props.setDifferenceBaseId ?? null)
+        : null,
     projectViewMode: props.projectViewMode ?? "global",
     selectedProjectId: props.selectedProjectId ?? null,
     searchQuery: props.searchQuery ?? "",
@@ -4187,6 +4461,9 @@ function buildGridFetchKey() {
     similarityCharacter: props.similarityCharacter ?? null,
     comfyuiModelFilter: props.comfyuiModelFilter ?? [],
     comfyuiLoraFilter: props.comfyuiLoraFilter ?? [],
+    referenceFolderIdFilter: props.referenceFolderIdFilter ?? null,
+    filePathPrefixFilter: props.filePathPrefixFilter ?? null,
+    importSourceFolderFilter: props.importSourceFolderFilter ?? null,
   });
 }
 
@@ -4196,10 +4473,29 @@ function _appendSelectionParams(params) {
       for (const setId of normalizedSelectedSetIds.value) {
         params.append("set_ids", String(setId));
       }
-      params.append("set_mode", "intersection");
+      params.append("set_mode", props.setMultiMode ?? "intersection");
+      if (
+        props.setMultiMode === "difference" &&
+        props.setDifferenceBaseId != null
+      ) {
+        params.append("base_set_id", String(props.setDifferenceBaseId));
+      }
     } else if (primarySelectedSetId.value != null) {
       params.append("set_id", String(primarySelectedSetId.value));
     }
+    if (props.projectViewMode === "project") {
+      params.append(
+        "project_id",
+        props.selectedProjectId != null
+          ? props.selectedProjectId
+          : "UNASSIGNED",
+      );
+    }
+  } else if (isMultiCharacterView.value) {
+    for (const charId of normalizedSelectedCharacterIds.value) {
+      params.append("character_ids", String(charId));
+    }
+    params.append("character_mode", props.characterMultiMode ?? "union");
     if (props.projectViewMode === "project") {
       params.append(
         "project_id",
@@ -4281,6 +4577,15 @@ function buildPictureIdsQueryParams() {
   if (props.minScoreFilter != null) {
     params.append("min_score", props.minScoreFilter);
   }
+  if (props.maxScoreFilter != null) {
+    params.append("max_score", props.maxScoreFilter);
+  }
+  if (props.smartScoreBucketFilter != null) {
+    params.append("smart_score_bucket", props.smartScoreBucketFilter);
+  }
+  if (props.resolutionBucketFilter != null) {
+    params.append("resolution_bucket", props.resolutionBucketFilter);
+  }
   (props.tagFilter || []).forEach((t) => params.append("tag", t));
   (props.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
@@ -4293,6 +4598,18 @@ function buildPictureIdsQueryParams() {
   );
   if (props.applyTagFilter) {
     params.append("apply_tag_filter", "true");
+  }
+  if (props.referenceFolderIdFilter != null) {
+    params.append("reference_folder_id", String(props.referenceFolderIdFilter));
+  }
+  if (props.filePathPrefixFilter != null) {
+    params.append("file_path_prefix", props.filePathPrefixFilter);
+  }
+  if (props.importSourceFolderFilter != null) {
+    params.append("import_source_folder", props.importSourceFolderFilter);
+  }
+  if (props.faceBboxFilter != null) {
+    params.append("face_filter", props.faceBboxFilter);
   }
   return params.toString();
 }
@@ -4310,6 +4627,15 @@ function buildLikenessGroupQueryParams() {
   if (props.minScoreFilter != null) {
     params.append("min_score", props.minScoreFilter);
   }
+  if (props.maxScoreFilter != null) {
+    params.append("max_score", props.maxScoreFilter);
+  }
+  if (props.smartScoreBucketFilter != null) {
+    params.append("smart_score_bucket", props.smartScoreBucketFilter);
+  }
+  if (props.resolutionBucketFilter != null) {
+    params.append("resolution_bucket", props.resolutionBucketFilter);
+  }
   (props.tagFilter || []).forEach((t) => params.append("tag", t));
   (props.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
@@ -4320,6 +4646,9 @@ function buildLikenessGroupQueryParams() {
   (props.tagConfidenceBelowFilter || []).forEach((e) =>
     params.append("tag_confidence_below", e),
   );
+  if (props.faceBboxFilter != null) {
+    params.append("face_filter", props.faceBboxFilter);
+  }
   if (props.applyTagFilter) {
     params.append("apply_tag_filter", "true");
   }
@@ -5628,6 +5957,9 @@ watch(
     () => props.selectedCharacter,
     () => props.selectedSet,
     () => props.selectedSetIds,
+    () => props.characterMultiMode,
+    () => props.setMultiMode,
+    () => props.setDifferenceBaseId,
     () => props.projectViewMode,
     () => props.selectedProjectId,
     () => props.searchQuery,
@@ -5649,10 +5981,14 @@ watch(
     () => props.comfyuiModelFilter,
     () => props.comfyuiLoraFilter,
     () => props.minScoreFilter,
+    () => props.maxScoreFilter,
+    () => props.smartScoreBucketFilter,
+    () => props.resolutionBucketFilter,
     () => props.tagFilter,
     () => props.tagRejectedFilter,
     () => props.tagConfidenceAboveFilter,
     () => props.tagConfidenceBelowFilter,
+    () => props.faceBboxFilter,
   ],
   () => {
     _resetGridState();
@@ -5893,11 +6229,18 @@ const emptyStateDelayPassed = ref(false);
 let emptyStateDelayTimer = null;
 
 const showEmptyState = computed(() => {
+  if (props.folderScanning) return false;
   return (
     gridReady.value &&
     !imagesLoading.value &&
     filteredGridCount.value === 0 &&
     emptyStateDelayPassed.value
+  );
+});
+
+const showFolderScanningState = computed(() => {
+  return (
+    props.folderScanning && gridReady.value && filteredGridCount.value === 0
   );
 });
 
@@ -5964,18 +6307,37 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
     emptyStateDelayTimer = null;
   }
 
-  if (loading || count > 0) {
+  if (loading || count > 0 || props.folderScanning) {
     emptyStateDelayPassed.value = false;
     return;
   }
 
   emptyStateDelayPassed.value = false;
   emptyStateDelayTimer = setTimeout(() => {
-    if (!imagesLoading.value && filteredGridCount.value === 0) {
+    if (
+      !imagesLoading.value &&
+      filteredGridCount.value === 0 &&
+      !props.folderScanning
+    ) {
       emptyStateDelayPassed.value = true;
     }
   }, EMPTY_STATE_DELAY_MS);
 });
+
+// When scanning ends the grid will reload; reset the delay so the
+// empty state only shows after images have had a chance to arrive.
+watch(
+  () => props.folderScanning,
+  (scanning) => {
+    if (!scanning) {
+      if (emptyStateDelayTimer) {
+        clearTimeout(emptyStateDelayTimer);
+        emptyStateDelayTimer = null;
+      }
+      emptyStateDelayPassed.value = false;
+    }
+  },
+);
 
 const gridImagesToRender = computed(() => {
   if (!allGridImages.value) {
@@ -6285,6 +6647,31 @@ function handleGridBackgroundClick(e) {
     lastSelectedImageId = null;
     cursorIdx.value = null;
   }
+}
+
+// ── Context menu ─────────────────────────────────────────────────────────────
+
+function handleImageContextMenu(img, event) {
+  if (!img?.id) return;
+  if (!selectedImageIds.value.includes(img.id)) {
+    selectedImageIds.value = [img.id];
+    lastSelectedImageId = img.id;
+  }
+  contextMenuX.value = event.clientX;
+  contextMenuY.value = event.clientY;
+  contextMenuVisible.value = true;
+}
+
+function handleContextMenuOpenTagPanel() {
+  selectionBarRef.value?.openTagInput();
+}
+
+function handleContextMenuOpenPluginPanel() {
+  selectionBarRef.value?.openPluginPanel();
+}
+
+function handleContextMenuOpenComfyuiPanel() {
+  selectionBarRef.value?.openComfyuiPanel();
 }
 
 // ============================================================
@@ -6882,7 +7269,7 @@ function handleEmptyStateReset() {
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   font-size: var(--badge-font-size, 0.8em);
   padding: var(--badge-padding, 2px 4px);
-  z-index: 20;
+  z-index: 30;
   max-width: 90%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6909,6 +7296,28 @@ function handleEmptyStateReset() {
 .thumbnail-badge--bottom-left {
   left: 2px;
   bottom: 2px;
+}
+
+.thumbnail-bottom-left-badges {
+  position: absolute;
+  bottom: 2px;
+  left: 2px;
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  max-width: 90%;
+}
+
+.thumbnail-bottom-left-badges > .thumbnail-badge {
+  max-width: 100%;
+}
+
+.thumbnail-reference-badge {
+  opacity: 0.65;
+  padding: 1px 2px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 }
 
 .thumbnail-badge--bottom-right {
@@ -7067,9 +7476,15 @@ function handleEmptyStateReset() {
 .selection-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(var(--v-theme-info), 0.62);
+  background: rgba(var(--v-theme-info), 0.38);
   pointer-events: none;
-  z-index: 2;
+  z-index: 25;
+  border-radius: 8px;
+  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1);
+}
+.image-card:hover .selection-overlay,
+.stack-hover-active .selection-overlay {
+  transform: scale(1.03);
 }
 .thumbnail-info-row {
   margin-top: 2px;
@@ -7316,59 +7731,106 @@ function handleEmptyStateReset() {
   }
 }
 
-.set-overlap-status-bar {
+.multi-select-toolbar {
   position: absolute;
-  left: 12px;
-  /* Keep clear of global F1 shortcuts FAB in bottom-right corner. */
-  right: 72px;
-  bottom: 10px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 6;
-  margin: 0;
-  padding: 10px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(var(--v-theme-on-accent), 0.28);
-  background: linear-gradient(
-    135deg,
-    rgba(var(--v-theme-accent), 0.96),
-    rgba(var(--v-theme-accent), 0.86)
-  );
-  color: rgb(var(--v-theme-on-accent));
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.015em;
-  backdrop-filter: blur(3px);
-  box-shadow:
-    0 10px 22px rgba(0, 0, 0, 0.28),
-    0 0 0 1px rgba(var(--v-theme-on-accent), 0.08) inset;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  pointer-events: none;
+  gap: 0;
+  height: 36px;
+  background: rgb(var(--v-theme-surface-variant));
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
 }
 
-.set-overlap-status-bar__main {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.set-overlap-status-bar__icon {
-  opacity: 0.95;
+.multi-select-toolbar__mode {
+  height: 100%;
+  padding: 0 10px;
+  border: none;
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  appearance: auto;
   flex: 0 0 auto;
 }
 
-.set-overlap-status-bar__text {
-  line-height: 1.35;
+.multi-select-toolbar__label {
+  padding: 0 12px;
+  white-space: nowrap;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
+}
+
+.multi-select-toolbar__spacer {
+  flex: 1;
+}
+
+.multi-select-toolbar__separator {
+  padding: 0 2px;
+  color: rgba(var(--v-theme-on-surface), 0.3);
+  font-size: 13px;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.multi-select-toolbar__base-label {
+  padding: 0 6px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface-variant));
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.multi-select-toolbar__base {
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  appearance: auto;
+  flex: 0 0 auto;
+}
+
+.multi-select-toolbar__clear {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 14px;
+  border: none;
+  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.15s;
+}
+
+.multi-select-toolbar__clear:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 @media (max-width: 900px) {
-  .set-overlap-status-bar {
-    right: 72px;
-    font-size: 13px;
-    padding: 9px 12px;
-    gap: 8px;
+  .multi-select-toolbar {
+    height: 40px;
+    font-size: 12px;
+  }
+  .multi-select-toolbar__mode {
+    font-size: 12px;
   }
 }
 </style>

@@ -1,3 +1,17 @@
+# [1.1.0]
+- Fix handling of import and reference folders in Docker mode. Provide copyable restart command to get the folders in.
+- Improve ComfyUI-workflow error handling.
+
+# [1.1.0rc1]
+- Support multi-select and boolean set operations on characters and picture sets
+  * Union, Overlap, Difference or Unique
+- Include Import Folders in the UI together with reference folders
+- Add context menus to the ImageGrid and the sidebar
+
+# [1.1.0b1]
+- Support reference folders: add folders to include in app but not import into database folder
+- Add statistics sidebar in Image Grid
+- Lots of bugfixes
 # [1.0.4]
 - Fix issue where the sort menu didn't show entries until the first character was created
 

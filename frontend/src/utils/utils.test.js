@@ -6,6 +6,9 @@ import {
   arraysEqualByString,
   isRangeOverlap,
   rangeCovers,
+  extractComfyuiExecutionErrorMessage,
+  formatComfyuiExecutionErrorMessage,
+  isComfyuiOutOfMemoryMessage,
   normalizePluginProgressMessage,
   getStackColorIndexFromId,
   applyStackBackgroundAlpha,
@@ -154,6 +157,60 @@ describe('normalizePluginProgressMessage', () => {
 
   it('passes plain strings through unchanged', () => {
     expect(normalizePluginProgressMessage('Processing image', '')).toBe('Processing image')
+  })
+})
+
+describe('extractComfyuiExecutionErrorMessage', () => {
+  it('extracts exception_message from execution_error payload', () => {
+    const payload = {
+      type: 'execution_error',
+      data: {
+        exception_message: 'Allocation on device 0 would exceed allowed memory. This error means you ran out of memory on your GPU.',
+      },
+    }
+    const result = extractComfyuiExecutionErrorMessage(payload)
+    expect(result).toContain('Allocation on device 0 would exceed allowed memory')
+    expect(result).toContain('out of memory on your GPU')
+  })
+
+  it('falls back to node_errors message when present', () => {
+    const payload = {
+      type: 'execution_error',
+      data: {
+        node_errors: {
+          '22': [
+            {
+              message: 'KSampler failed: CUDA out of memory',
+            },
+          ],
+        },
+      },
+    }
+    const result = extractComfyuiExecutionErrorMessage(payload)
+    expect(result).toContain('KSampler failed: CUDA out of memory')
+  })
+})
+
+describe('formatComfyuiExecutionErrorMessage', () => {
+  it('prefixes extracted message with fallback label', () => {
+    const payload = {
+      type: 'execution_error',
+      data: {
+        exception_message: 'CUDA out of memory',
+      },
+    }
+    expect(formatComfyuiExecutionErrorMessage(payload)).toBe('ComfyUI failed: CUDA out of memory')
+  })
+})
+
+describe('isComfyuiOutOfMemoryMessage', () => {
+  it('detects common OOM phrases', () => {
+    expect(isComfyuiOutOfMemoryMessage('CUDA out of memory')).toBe(true)
+    expect(isComfyuiOutOfMemoryMessage('Allocation on device 0 would exceed allowed memory')).toBe(true)
+  })
+
+  it('returns false for unrelated messages', () => {
+    expect(isComfyuiOutOfMemoryMessage('Workflow missing placeholder {{image_path}}')).toBe(false)
   })
 })
 

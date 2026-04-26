@@ -4,6 +4,8 @@ from typing import List, Tuple
 
 import cv2
 import numpy as np
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import delete
 
 from pixlstash.db_models.face import Face
@@ -150,6 +152,18 @@ class QualityUtils:
         """Persist quality records for pictures and return a change list."""
         changed = []
         for pic, quality in zip(pics, qualities):
+            picture_id = getattr(pic, "id", None)
+            if picture_id is None:
+                continue
+
+            picture_db = session.get(Picture, picture_id)
+            if picture_db is None:
+                logger.warning(
+                    "Skipping quality update for picture %s — picture was deleted.",
+                    picture_id,
+                )
+                continue
+
             if quality is None:
                 quality = Quality(
                     sharpness=-1.0,
@@ -163,18 +177,27 @@ class QualityUtils:
                     text_score=-1.0,
                     color_histogram=None,
                 )
-            session.exec(
-                delete(Quality).where(
-                    (Quality.picture_id == pic.id) & (Quality.face_id.is_(None))
+            try:
+                session.exec(
+                    delete(Quality).where(
+                        (Quality.picture_id == picture_id) & (Quality.face_id.is_(None))
+                    )
                 )
-            )
-            quality.picture_id = pic.id
-            quality.face_id = None
-            session.add(quality)
-            pic.likeness_parameters = None
-            session.add(pic)
-            changed.append((Picture, pic.id, "quality", quality))
-        session.commit()
+                quality.picture_id = picture_id
+                quality.face_id = None
+                session.add(quality)
+                picture_db.likeness_parameters = None
+                session.add(picture_db)
+                session.commit()
+            except (IntegrityError, StaleDataError):
+                session.rollback()
+                logger.warning(
+                    "Skipping quality update for picture %s — picture was deleted during update.",
+                    picture_id,
+                )
+                continue
+
+            changed.append((Picture, picture_id, "quality", quality))
         return changed
 
     def group_faces_by_format_and_size(
@@ -387,6 +410,17 @@ class QualityUtils:
         """Persist quality records for faces and return a change list."""
         changed = []
         for face, quality in zip(faces, qualities):
+            if getattr(face, "id", None) is None:
+                continue
+
+            face_db = session.get(Face, face.id)
+            if face_db is None:
+                logger.warning(
+                    "Skipping face quality update for face %s — face was deleted.",
+                    face.id,
+                )
+                continue
+
             if quality is None:
                 quality = Quality(
                     sharpness=-1.0,
@@ -396,11 +430,20 @@ class QualityUtils:
                     noise_level=-1.0,
                     color_histogram=None,
                 )
-            quality.face_id = face.id
-            quality.picture_id = face.picture_id
-            session.add(quality)
-            face.quality = quality
-            session.add(face)
-            changed.append((Face, face.id, "quality", quality))
-        session.commit()
+            try:
+                quality.face_id = face_db.id
+                quality.picture_id = face_db.picture_id
+                session.add(quality)
+                face_db.quality = quality
+                session.add(face_db)
+                session.commit()
+            except (IntegrityError, StaleDataError):
+                session.rollback()
+                logger.warning(
+                    "Skipping face quality update for face %s — row was deleted during update.",
+                    face.id,
+                )
+                continue
+
+            changed.append((Face, face_db.id, "quality", quality))
         return changed

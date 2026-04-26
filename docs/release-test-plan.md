@@ -201,20 +201,27 @@ pixlstash-server
 
 - [ ] In the sidebar, click a set with a known picture count — the grid shows only pictures in that set
 - [ ] Open the ImageOverlay on one of those pictures → Open the set menu. Uncheck the current set - exit the image overlay - confirm the sidebar count for that set decreases by 1 and the picture disappears from the set.
+- [ ] Using the project created in section 8, click each project set (for example `Release Set A` and `Release Set B`) — each set filter shows only pictures assigned to that set
 
 ---
 
 ## 8. Projects
 
-- [ ] Open the **Projects** view in the sidebar — at least one project is listed
-- [ ] Click the project — the grid shows only pictures belonging to that project and the sidebar count matches the grid count
+- [ ] Open the **Projects** view in the sidebar → create a new project named `Release Project`
+- [ ] Open `Release Project` → create two sets under it named `Release Set A` and `Release Set B`
+- [ ] Open `Release Project` → create one character under it named `Release Character`
+- [ ] In the grid, select at least 3 pictures → add them to `Release Project`
+- [ ] Add 2 of those project pictures to `Release Set A` and 1 picture to `Release Set B`
+- [ ] Click `Release Project` — the grid shows only pictures belonging to that project and the sidebar count matches the grid count
+- [ ] Click `Release Set A` then `Release Set B` — each set shows only its assigned project pictures and the counts match the sidebar
 
 ---
 
 ## 9. Characters
 
-- [ ] In the sidebar, click a character — the grid shows only pictures assigned to that character
-- [ ] Verify the character row shows a thumbnail and the correct picture/face count
+- [ ] In the sidebar, click `Release Character` created in section 8 — the grid shows only pictures/faces assigned to that character
+- [ ] Assign at least one face from a picture in `Release Project` to `Release Character` and verify the character count increases
+- [ ] Verify the character row shows a thumbnail and the updated picture/face count
 
 ---
 
@@ -279,3 +286,30 @@ For each plugin: open the ImageOverlay on a test picture, apply the plugin, conf
 
 - [ ] Import 200+ pictures; after thumbnails load, scroll through the full grid at normal speed — no thumbnails remain broken (grey/placeholder) and the browser does not freeze
 - [ ] While a face extraction background task is processing 20+ images: interact with the grid (scroll, sort, open ImageOverlay) — the UI remains responsive with no full-page freeze
+
+---
+
+## 18. Folder Management (Reference + Import)
+
+Use two test folders on disk:
+- `reference_test/` containing at least 2 images already present before adding the folder
+- `import_test/` initially empty, then add at least 1 new image during the test
+
+### 18.1 pip / native install
+
+- [ ] Open sidebar **Folders** tab → **Add folder** → **Reference folder** → add `reference_test/` absolute path — folder is created successfully with no error toast/dialog
+- [ ] After adding the reference folder, verify it does **not** show a pending-restart badge/status and begins scanning automatically
+- [ ] Click the new reference folder in sidebar — pictures from that folder appear in the grid
+- [ ] Open sidebar **Folders** tab → **Add folder** → **Import folder** → add `import_test/` absolute path — folder is created successfully
+- [ ] Copy one new image file into `import_test/` while PixlStash is running — image appears in the grid automatically without restarting PixlStash
+- [ ] Remove the reference folder from the sidebar context/delete action — folder entry disappears and its indexed pictures are removed from the grid
+
+### 18.2 Docker install
+
+- [ ] Start PixlStash container with host mounts that include the planned reference/import test paths
+- [ ] Open sidebar **Folders** tab → **Add folder** → **Reference folder** — in Docker mode, folder browsing UI is unavailable and manual path entry is required
+- [ ] Save a new reference folder path — Docker restart prompt appears telling user to restart container with updated mount
+- [ ] Newly added reference folder shows pending-restart/pending-mount status before restart
+- [ ] Restart container, then refresh UI — reference folder status transitions away from pending (active if mount is valid; mount error if invalid)
+- [ ] Add a new import folder path in Docker mode — restart prompt appears
+- [ ] After restart and adding a new file into mounted `import_test/`, verify automatic import picks up the file and it appears in the grid

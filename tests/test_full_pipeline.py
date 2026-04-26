@@ -31,6 +31,7 @@ import tempfile
 import time
 
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 from sqlmodel import func, select
 
 from pixlstash.db_models import Face, Picture, Quality
@@ -39,10 +40,11 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.server import Server
 from pixlstash.tasks.likeness_task import LikenessTask
 from pixlstash.tasks.quality_task import QualityTask
+from pixlstash.tasks.smart_score_task import SmartScoreTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
-from tests.utils import upload_pictures_and_wait
+from tests.utils import upload_pictures_and_wait, poll_until_zero
 
 logger = get_logger(__name__)
 
@@ -53,16 +55,7 @@ _API_PREFIX = "/api/v1"
 
 
 def _poll_until_zero(server, count_fn, label, timeout_s=_TASK_TIMEOUT_S, interval=0.5):
-    """Poll a count function (called in a DB read task) until it returns 0."""
-    start = time.time()
-    while time.time() - start < timeout_s:
-        remaining = server.vault.db.run_immediate_read_task(count_fn)
-        if remaining == 0:
-            return
-        time.sleep(interval)
-    raise AssertionError(
-        f"Timed out after {timeout_s}s waiting for {label}: {remaining} still pending"
-    )
+    poll_until_zero(server, count_fn, label, timeout_s=timeout_s, interval=interval)
 
 
 def _poll_until_nonzero(
@@ -527,6 +520,19 @@ def test_smart_score_correlates_with_reference_scores():
                     f"{_API_PREFIX}/pictures/{pic_id}", json={"score": score}
                 )
                 assert patch_resp.status_code == 200, patch_resp.text
+
+            # Smart scores may have been pre-computed before user scores were
+            # set (no good/bad anchors yet).  Reset them so the background
+            # worker recomputes with the now-available user anchors.
+            def _reset_smart_scores(session, ids):
+                session.execute(
+                    update(Picture).where(Picture.id.in_(ids)).values(smart_score=None)
+                )
+                session.commit()
+
+            server.vault.db.run_task(_reset_smart_scores, picture_ids)
+
+            _poll_until_zero(server, SmartScoreTask.count_remaining, "smart scores")
 
             smart_resp = client.get(
                 f"{_API_PREFIX}/pictures",

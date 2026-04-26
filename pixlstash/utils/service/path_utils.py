@@ -32,7 +32,15 @@ def resolve_path_within(base_dir: str, *segments: str) -> str:
     joined = os.path.join(base_dir, *segments)
     resolved = os.path.realpath(joined)
     safe_base = os.path.realpath(base_dir)
-    if resolved != safe_base and not resolved.startswith(safe_base + os.sep):
+    try:
+        common = os.path.commonpath([resolved, safe_base])
+    except ValueError as exc:
+        # Different drives / roots (not within base).
+        raise ValueError(
+            f"Path would escape allowed directory: {segments!r} is not within {base_dir!r}"
+        ) from exc
+
+    if common != safe_base:
         raise ValueError(
             f"Path would escape allowed directory: {segments!r} is not within {base_dir!r}"
         )

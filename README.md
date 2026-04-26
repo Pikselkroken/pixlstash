@@ -69,7 +69,6 @@ On first run in an interactive terminal, PixlStash now launches a short setup wi
 - `image_root` (storage path)
 - `port`
 - `require_ssl` (HTTP/HTTPS)
-- `watch_folders`
 
 Before the server starts, bootstrap also offers to set (or replace) the
 initial username/password.
@@ -81,11 +80,6 @@ python -m pixlstash.app --bootstrap
 ```
 
 When rerunning the wizard, pressing Enter keeps existing values as defaults.
-For watch folders:
-
-- Press `A` to add one or more folders (and set `delete_after_import` for each).
-- Press `E` to edit `delete_after_import` on existing folders.
-- Press Enter to keep the existing list unchanged.
 
 Edit the file and restart the server to apply changes.
 
@@ -116,23 +110,9 @@ Use `cors_origins` only if you need to allow origins on a different machine enti
 | Key             | Default               | Description                                                                                                                  |
 | --------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `image_root`    | `<config_dir>/images` | Directory where imported media files are stored.                                                                             |
-| `watch_folders` | `[]`                  | List of folder entries to watch for new images and automatically import them. Each entry is an object with the fields below. |
 
-Each entry in `watch_folders` has the following fields:
-
-| Field                 | Type    | Default | Description                                                                            |
-| --------------------- | ------- | ------- | -------------------------------------------------------------------------------------- |
-| `folder`              | string  | —       | Absolute path to the directory to monitor (recursively).                               |
-| `delete_after_import` | boolean | `false` | When `true`, source files are deleted from the watch folder after a successful import. |
-
-Example:
-
-```json
-"watch_folders": [
-  { "folder": "/home/user/downloads/photos", "delete_after_import": false },
-  { "folder": "/mnt/camera", "delete_after_import": true }
-]
-```
+Automatic import folders are stored in the database and managed via the
+Import Folders UI/API, not in `server-config.json`.
 
 ### Processing
 
@@ -163,9 +143,6 @@ python -m pixlstash.app --cleanup-missing-pictures
   "log_level": "info",
   "require_ssl": false,
   "image_root": "/home/user/.config/pixlstash/images",
-  "watch_folders": [
-    { "folder": "/path/to/photos", "delete_after_import": false }
-  ],
   "default_device": "cpu",
   "generate_thumbnails_on_startup": true
 }

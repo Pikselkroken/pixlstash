@@ -46,7 +46,10 @@
               class="task-manager-panel"
             >
               <div class="task-manager-panel-header">
-                <div class="task-manager-metric">
+                <div
+                  class="task-manager-metric"
+                  :title="formatLabel(entry.key, entry.snapshot.label)"
+                >
                   {{ formatLabel(entry.key, entry.snapshot.label) }}
                 </div>
                 <div class="task-manager-progress">
@@ -92,7 +95,9 @@
               class="task-manager-panel task-manager-panel--combined"
             >
               <div class="task-manager-panel-header">
-                <div class="task-manager-metric">Total throughput</div>
+                <div class="task-manager-metric" title="Total throughput">
+                  Total throughput
+                </div>
                 <div class="task-manager-progress">
                   {{ formatProgress(combinedSnapshot) }}
                 </div>
@@ -183,6 +188,14 @@ const labelMap = {
   watch_folder_import: "Folder import",
   comfyui_extraction: "ComfyUI backfill",
   tag_predictions_scored: "Tag Predictions",
+  missing_file_purge: "File cleanup",
+  planner_managed: "Planner task",
+};
+
+const workerLabelMap = {
+  ReferenceFolderScanTask: "Reference folder scan",
+  SourceFaceLikenessTask: "Source face likeness",
+  SmartScoreTask: "Smart score",
 };
 
 function seedSnapshotsIfEmpty() {
@@ -501,12 +514,30 @@ function drawSparkline(canvas, samples) {
   ctx.fill();
 }
 
+function toTitleWords(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim();
+}
+
+function fallbackWorkerLabel(key) {
+  if (workerLabelMap[key]) return workerLabelMap[key];
+  return toTitleWords(String(key || "").replace(/(Worker|Task)$/, ""));
+}
+
 function formatLabel(key, label) {
-  if (labelMap[label]) return labelMap[label];
-  if (label && label !== "idle" && label !== "uninitialized") {
-    return label.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  if (labelMap[label]) {
+    if (label === "planner_managed") {
+      return fallbackWorkerLabel(key);
+    }
+    return labelMap[label];
   }
-  return key.replace(/Worker$/, "");
+  if (label && label !== "idle" && label !== "uninitialized") {
+    return toTitleWords(label);
+  }
+  return fallbackWorkerLabel(key);
 }
 
 function formatProgress(snapshot) {
@@ -628,7 +659,7 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-on-background));
   padding: 16px 18px 20px 18px;
   border-radius: 16px;
-  width: min(92vw, 1600px);
+  width: min(96vw, 1700px);
   max-width: 100%;
   box-sizing: border-box;
   overflow-x: hidden;
@@ -723,13 +754,13 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 1280px) {
+@media (max-width: 1200px) {
   .task-manager-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 860px) {
+@media (max-width: 780px) {
   .task-manager-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -753,17 +784,18 @@ onBeforeUnmount(() => {
 .task-manager-panel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
 }
 
 .task-manager-metric {
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 140px;
+  min-width: 0;
+  flex: 1 1 auto;
   line-height: 1.2;
 }
 

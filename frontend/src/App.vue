@@ -17,6 +17,7 @@ import PhotosImportDialog from "./components/PhotosImportDialog.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import SearchOverlay from "./components/SearchOverlay.vue";
 import Toolbar from "./components/Toolbar.vue";
+import StatsSidebar from "./components/StatsSidebar.vue";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -32,10 +33,55 @@ const shortcutsDialogOpen = ref(false);
 const toolbarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
+const selectedCharacterIds = ref([]);
 const selectedSet = ref(null);
 const selectedSetIds = ref([]);
+function loadMultiMode(key, fallback) {
+  try {
+    const v = window.sessionStorage?.getItem(key);
+    return ["union", "intersection", "difference", "xor"].includes(v)
+      ? v
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveMultiMode(key, val) {
+  try {
+    window.sessionStorage?.setItem(key, val);
+  } catch {
+    // ignore
+  }
+}
+function loadBaseId(key) {
+  try {
+    const v = window.sessionStorage?.getItem(key);
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function saveBaseId(key, val) {
+  try {
+    window.sessionStorage?.setItem(key, val != null ? String(val) : "");
+  } catch {
+    // ignore
+  }
+}
+const characterMultiMode = ref(
+  loadMultiMode("pixlstash:characterMultiMode", "union"),
+);
+const setMultiMode = ref(
+  loadMultiMode("pixlstash:setMultiMode", "intersection"),
+);
+const setDifferenceBaseId = ref(loadBaseId("pixlstash:setDifferenceBaseId"));
+const selectedSetNames = ref({});
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = unassigned in project mode
+const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, importSourceFolder, label }
+const folderScanning = ref(false);
 const selectedSort = ref("");
 const selectedDescending = ref(true);
 const stackThreshold = ref(null);
@@ -73,11 +119,25 @@ const themeMode = ref("light");
 const theme = useTheme();
 
 const activeCategoryLabel = computed(() => {
+  if (selectedFolderFilter.value) {
+    return selectedFolderFilter.value.label || "Folder";
+  }
   if (selectedSetIds.value.length > 1) {
-    return `Set Overlap (${selectedSetIds.value.length})`;
+    const modeLabel =
+      { union: "Union", intersection: "Overlap", difference: "Difference" }[
+        setMultiMode.value
+      ] || "Multi";
+    return `Sets – ${modeLabel} (${selectedSetIds.value.length})`;
   }
   if (selectedSet.value) {
     return lastSelectedSetLabel.value || "Picture Set";
+  }
+  if (selectedCharacterIds.value.length > 1) {
+    const modeLabel =
+      { union: "Union", intersection: "Overlap", difference: "Difference" }[
+        characterMultiMode.value
+      ] || "Multi";
+    return `People – ${modeLabel} (${selectedCharacterIds.value.length})`;
   }
   if (selectedCharacter.value === ALL_PICTURES_ID) return "All Pictures";
   if (selectedCharacter.value === UNASSIGNED_PICTURES_ID)
@@ -107,6 +167,26 @@ const maxColumns = ref(12);
 const mainAreaRef = ref(null);
 let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
+function loadStatsOpen() {
+  try {
+    return (
+      window.localStorage?.getItem("pixlstash:statsSidebarOpen") !== "false"
+    );
+  } catch {
+    return true;
+  }
+}
+function saveStatsOpen(val) {
+  try {
+    window.localStorage?.setItem(
+      "pixlstash:statsSidebarOpen",
+      val ? "true" : "false",
+    );
+  } catch {
+    // ignore
+  }
+}
+const statsOpen = ref(loadStatsOpen());
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 1024;
 
@@ -116,14 +196,19 @@ const comfyuiModelFilter = ref([]);
 const comfyuiLoraFilter = ref([]);
 const comfyuiConfigured = ref(false);
 const minScoreFilter = ref(null);
+const maxScoreFilter = ref(null);
+const smartScoreBucketFilter = ref(null);
+const resolutionBucketFilter = ref(null);
 const tagFilter = ref([]);
 const tagRejectedFilter = ref([]);
 const tagConfidenceAboveFilter = ref([]);
 const tagConfidenceBelowFilter = ref([]);
+const faceBboxFilter = ref(null);
 
 // null = undecided (show dialog), true/false = user's explicit choice
 const checkForUpdates = ref(null);
 const updateCheckDialogOpen = ref(false);
+const installType = ref("pip");
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
@@ -500,7 +585,8 @@ function clearSearchForCategoryChange() {
 }
 
 async function handleSelectCharacter(payload) {
-  const { id: charId, label } = SelectionPayload(payload);
+  selectedFolderFilter.value = null;
+  const { id: charId, label, ids } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   if (charId == null) {
     selectedCharacter.value = null;
@@ -517,6 +603,11 @@ async function handleSelectCharacter(payload) {
     lastSelectedCharacterLabel.value = "Scrapheap";
   }
   selectedCharacter.value = charId;
+  selectedCharacterIds.value = ids.length ? ids : [];
+  if (ids.length <= 1) {
+    characterMultiMode.value = "union";
+    saveMultiMode("pixlstash:characterMultiMode", "union");
+  }
   if (charId === ALL_PICTURES_ID) {
     refreshGridVersion();
   }
@@ -527,7 +618,9 @@ async function handleSelectCharacter(payload) {
 }
 
 async function handleSelectSet(payload) {
+  selectedFolderFilter.value = null;
   const { id: setId, label, ids } = SelectionPayload(payload);
+  const names = payload && payload.names ? payload.names : {};
   clearSearchForCategoryChange();
   const nextIds = ids.length
     ? ids
@@ -539,6 +632,7 @@ async function handleSelectSet(payload) {
     const fallbackLabel =
       projectViewMode.value === "project" ? "Project Pictures" : "All Pictures";
     selectedCharacter.value = ALL_PICTURES_ID;
+    selectedCharacterIds.value = [];
     lastSelectedCharacterLabel.value = fallbackLabel;
     selectedSet.value = null;
     selectedSetIds.value = [];
@@ -554,14 +648,43 @@ async function handleSelectSet(payload) {
   selectedSetIds.value = nextIds;
   selectedSet.value = nextIds[0];
   selectedCharacter.value = null; // Clear character selection
+  selectedCharacterIds.value = [];
+  selectedSetNames.value = names;
+  if (
+    setDifferenceBaseId.value !== null &&
+    !nextIds.includes(setDifferenceBaseId.value)
+  ) {
+    setDifferenceBaseId.value = null;
+    saveBaseId("pixlstash:setDifferenceBaseId", null);
+  }
+  if (nextIds.length === 1) {
+    setMultiMode.value = "intersection";
+    saveMultiMode("pixlstash:setMultiMode", "intersection");
+    setDifferenceBaseId.value = null;
+    saveBaseId("pixlstash:setDifferenceBaseId", null);
+  }
   closeSidebarIfMobile();
 }
 
 function handleSearchAllPictures() {
   selectedCharacter.value = ALL_PICTURES_ID;
+  selectedCharacterIds.value = [];
   selectedSet.value = null;
   selectedSetIds.value = [];
+  selectedFolderFilter.value = null;
   lastSelectedCharacterLabel.value = "All Pictures";
+}
+
+function handleSelectFolder(payload) {
+  if (!payload) {
+    selectedFolderFilter.value = null;
+    return;
+  }
+  selectedFolderFilter.value = payload;
+  selectedCharacter.value = ALL_PICTURES_ID;
+  selectedCharacterIds.value = [];
+  selectedSet.value = null;
+  selectedSetIds.value = [];
 }
 
 async function handleUpdateSearchQuery(value) {
@@ -1093,10 +1216,14 @@ function handleResetToAll() {
   comfyuiModelFilter.value = [];
   comfyuiLoraFilter.value = [];
   minScoreFilter.value = null;
+  maxScoreFilter.value = null;
+  smartScoreBucketFilter.value = null;
+  resolutionBucketFilter.value = null;
   tagFilter.value = [];
   tagRejectedFilter.value = [];
   tagConfidenceAboveFilter.value = [];
   tagConfidenceBelowFilter.value = [];
+  faceBboxFilter.value = null;
   refreshGridVersion();
   closeSidebarIfMobile();
 }
@@ -1222,6 +1349,14 @@ watch(exportMenuOpen, async (isOpen) => {
 
 // --- Lifecycle ---
 onMounted(async () => {
+  apiClient
+    .get("/version")
+    .then((r) => {
+      if (typeof r.data?.install_type === "string") {
+        installType.value = r.data.install_type;
+      }
+    })
+    .catch(() => {});
   await fetchConfig();
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
@@ -1272,6 +1407,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             ref="sidebarRef"
             :collapsed="!sidebarVisible && !isMobile"
             :selectedCharacter="selectedCharacter"
+            :selectedCharacterIds="selectedCharacterIds"
             :allPicturesId="ALL_PICTURES_ID"
             :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
             :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
@@ -1285,7 +1421,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :sidebarThumbnailSize="sidebarThumbnailSize"
             :dateFormat="dateFormat"
             :themeMode="themeMode"
+            :hasFolderFilter="selectedFolderFilter != null"
             :checkForUpdates="checkForUpdates"
+            :installType="installType"
             :showKeyboardHint="showKeyboardHint"
             @update:show-keyboard-hint="showKeyboardHint = $event"
             @update:similarity-options="handleUpdateSimilarityOptions"
@@ -1300,6 +1438,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:selected-project-id="handleUpdateSelectedProjectId"
             @select-character="handleSelectCharacter"
             @select-set="handleSelectSet"
+            @select-folder="handleSelectFolder"
+            @update:folder-scanning="folderScanning = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMovedToSet"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
@@ -1327,11 +1467,11 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               >Check for updates automatically?</v-card-title
             >
             <v-card-text class="update-check-body">
-              When enabled, PixlStash checks for a newer version on startup.
+              When enabled, PixlStash checks for a newer version once per day.
               <br />
               <span class="update-check-note"
-                >The update page counts accesses anonymously. No IP addresses
-                are stored.</span
+                >The request sends your installed version and install type (e.g.
+                pip or docker) anonymously. No IP addresses are stored.</span
               >
             </v-card-text>
             <v-card-actions class="update-check-actions">
@@ -1421,15 +1561,24 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:comfyuiModelFilter="comfyuiModelFilter"
             v-model:comfyuiLoraFilter="comfyuiLoraFilter"
             v-model:minScoreFilter="minScoreFilter"
+            v-model:maxScoreFilter="maxScoreFilter"
+            v-model:smartScoreBucketFilter="smartScoreBucketFilter"
+            v-model:resolutionBucketFilter="resolutionBucketFilter"
             v-model:tagFilter="tagFilter"
             v-model:tagRejectedFilter="tagRejectedFilter"
             v-model:tagConfidenceAboveFilter="tagConfidenceAboveFilter"
             v-model:tagConfidenceBelowFilter="tagConfidenceBelowFilter"
+            v-model:faceBboxFilter="faceBboxFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
             @open-search-overlay="openSearchOverlay"
+            :statsOpen="statsOpen"
             @toggle-sidebar="sidebarVisible = !sidebarVisible"
+            @toggle-stats="
+              statsOpen = !statsOpen;
+              saveStatsOpen(statsOpen);
+            "
             @commit-search="commitSearch"
             @clear-search="handleClearSearch"
             @apply-search-history="applySearchHistory"
@@ -1443,62 +1592,194 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
           />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
-            style="margin-top: 0"
+            style="margin-top: 0; flex-direction: row; align-items: stretch"
           >
-            <ImageGrid
-              ref="gridContainer"
-              :thumbnailSize="thumbnailSize"
-              :sidebarVisible="sidebarVisible"
+            <div
+              style="
+                flex: 1;
+                min-width: 0;
+                position: relative;
+                overflow: hidden;
+              "
+            >
+              <ImageGrid
+                ref="gridContainer"
+                :thumbnailSize="thumbnailSize"
+                :sidebarVisible="sidebarVisible"
+                :backendUrl="BACKEND_URL"
+                :selectedCharacter="selectedCharacter"
+                :selectedCharacterIds="selectedCharacterIds"
+                :characterMultiMode="characterMultiMode"
+                :selectedSet="selectedSet"
+                :selectedSetIds="selectedSetIds"
+                :setMultiMode="setMultiMode"
+                :searchQuery="searchQuery"
+                :activeCategoryLabel="activeCategoryLabel"
+                :isAllPicturesActive="isAllPicturesActive"
+                :selectedSort="selectedSort"
+                :selectedDescending="selectedDescending"
+                :similarityCharacter="selectedSimilarityCharacter"
+                :stackThreshold="stackThreshold"
+                :showStars="showStars"
+                :gridVersion="gridVersion"
+                :wsUpdateKey="wsUpdateKey"
+                :wsTagUpdate="wsTagUpdate"
+                :wsPluginProgress="wsPluginProgress"
+                :mediaTypeFilter="mediaTypeFilter"
+                :comfyuiModelFilter="comfyuiModelFilter"
+                :comfyuiLoraFilter="comfyuiLoraFilter"
+                :comfyuiConfigured="comfyuiConfigured"
+                :minScoreFilter="minScoreFilter"
+                :maxScoreFilter="maxScoreFilter"
+                :smartScoreBucketFilter="smartScoreBucketFilter"
+                :resolutionBucketFilter="resolutionBucketFilter"
+                :tagFilter="tagFilter"
+                :tagRejectedFilter="tagRejectedFilter"
+                :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
+                :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
+                :faceBboxFilter="faceBboxFilter"
+                :showFaceBboxes="showFaceBboxes"
+                :showFormat="showFormat"
+                :showResolution="showResolution"
+                :showProblemIcon="showProblemIcon"
+                :penalisedTagWeights="penalisedTagWeights"
+                :showStacks="showStacks"
+                :compactMode="compactMode"
+                :themeMode="themeMode"
+                :dateFormat="dateFormat"
+                :hiddenTags="hiddenTags"
+                :applyTagFilter="applyTagFilter"
+                :allPicturesId="ALL_PICTURES_ID"
+                :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+                :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
+                :projectViewMode="projectViewMode"
+                :selectedProjectId="selectedProjectId"
+                :setDifferenceBaseId="setDifferenceBaseId"
+                :selectedSetNames="selectedSetNames"
+                :referenceFolderIdFilter="
+                  selectedFolderFilter?.referenceFolderId ?? null
+                "
+                :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+                :importSourceFolderFilter="
+                  selectedFolderFilter?.importSourceFolder ?? null
+                "
+                :folderScanning="folderScanning"
+                :columns="columns"
+                @clear-search="handleClearSearch"
+                @search-all="handleSearchAllPictures"
+                @update:selected-sort="handleUpdateSelectedSort"
+                @refresh-sidebar="refreshSidebar"
+                @reset-to-all="handleResetToAll"
+                @update:stack-stats="handleStackStatsUpdate"
+                @clear-multi-selection="
+                  () => {
+                    selectedCharacterIds.length > 1
+                      ? ((selectedCharacter = ALL_PICTURES_ID),
+                        (selectedCharacterIds = []))
+                      : ((selectedSet = null), (selectedSetIds = []));
+                  }
+                "
+                @update:character-multi-mode="
+                  (v) => {
+                    characterMultiMode = v;
+                    saveMultiMode('pixlstash:characterMultiMode', v);
+                  }
+                "
+                @update:set-multi-mode="
+                  (v) => {
+                    setMultiMode = v;
+                    saveMultiMode('pixlstash:setMultiMode', v);
+                  }
+                "
+                @update:set-difference-base-id="
+                  (v) => {
+                    setDifferenceBaseId = v;
+                    saveBaseId('pixlstash:setDifferenceBaseId', v);
+                  }
+                "
+                @import-started="isUploadInProgress = true"
+                @import-ended="isUploadInProgress = false"
+              />
+            </div>
+            <StatsSidebar
+              :open="statsOpen"
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectedCharacter"
+              :selectedCharacterIds="selectedCharacterIds"
+              :characterMode="characterMultiMode"
               :selectedSet="selectedSet"
               :selectedSetIds="selectedSetIds"
-              :searchQuery="searchQuery"
-              :activeCategoryLabel="activeCategoryLabel"
-              :isAllPicturesActive="isAllPicturesActive"
-              :selectedSort="selectedSort"
-              :selectedDescending="selectedDescending"
-              :similarityCharacter="selectedSimilarityCharacter"
-              :stackThreshold="stackThreshold"
-              :showStars="showStars"
-              :gridVersion="gridVersion"
-              :wsUpdateKey="wsUpdateKey"
-              :wsTagUpdate="wsTagUpdate"
-              :wsPluginProgress="wsPluginProgress"
-              :mediaTypeFilter="mediaTypeFilter"
-              :comfyuiModelFilter="comfyuiModelFilter"
-              :comfyuiLoraFilter="comfyuiLoraFilter"
-              :comfyuiConfigured="comfyuiConfigured"
-              :minScoreFilter="minScoreFilter"
+              :setMode="setMultiMode"
+              :setDifferenceBaseId="setDifferenceBaseId"
+              :projectViewMode="projectViewMode"
+              :selectedProjectId="selectedProjectId"
               :tagFilter="tagFilter"
               :tagRejectedFilter="tagRejectedFilter"
-              :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
-              :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
-              :showFaceBboxes="showFaceBboxes"
-              :showFormat="showFormat"
-              :showResolution="showResolution"
-              :showProblemIcon="showProblemIcon"
-              :penalisedTagWeights="penalisedTagWeights"
-              :showStacks="showStacks"
-              :compactMode="compactMode"
-              :themeMode="themeMode"
-              :dateFormat="dateFormat"
-              :hiddenTags="hiddenTags"
-              :applyTagFilter="applyTagFilter"
+              :mediaTypeFilter="mediaTypeFilter"
+              :minScoreFilter="minScoreFilter"
+              :maxScoreFilter="maxScoreFilter"
+              :smartScoreBucketFilter="smartScoreBucketFilter"
+              :resolutionBucketFilter="resolutionBucketFilter"
+              :faceBboxFilter="faceBboxFilter"
+              :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+              :importSourceFolderFilter="
+                selectedFolderFilter?.importSourceFolder ?? null
+              "
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-              :projectViewMode="projectViewMode"
-              :selectedProjectId="selectedProjectId"
-              :columns="columns"
-              @clear-search="handleClearSearch"
-              @search-all="handleSearchAllPictures"
-              @update:selected-sort="handleUpdateSelectedSort"
-              @refresh-sidebar="refreshSidebar"
-              @reset-to-all="handleResetToAll"
-              @update:stack-stats="handleStackStatsUpdate"
-              @import-started="isUploadInProgress = true"
-              @import-ended="isUploadInProgress = false"
+              :penalisedTagWeights="penalisedTagWeights"
+              :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
+              :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
+              :wsTagUpdate="wsTagUpdate"
+              @filter-tag="
+                (tag) => {
+                  if (tagFilter.includes(tag))
+                    tagFilter = tagFilter.filter((t) => t !== tag);
+                  else tagFilter = [...tagFilter, tag];
+                }
+              "
+              @filter-tags="
+                (tags) => {
+                  const allPresent = tags.every((t) => tagFilter.includes(t));
+                  if (allPresent)
+                    tagFilter = tagFilter.filter((t) => !tags.includes(t));
+                  else tagFilter = [...new Set([...tagFilter, ...tags])];
+                }
+              "
+              @filter-confidence-above="
+                (entry) => {
+                  if (tagConfidenceAboveFilter.includes(entry))
+                    tagConfidenceAboveFilter = tagConfidenceAboveFilter.filter(
+                      (e) => e !== entry,
+                    );
+                  else
+                    tagConfidenceAboveFilter = [
+                      ...tagConfidenceAboveFilter,
+                      entry,
+                    ];
+                }
+              "
+              @clear-tag-filter="
+                (tags) => {
+                  tagFilter = tagFilter.filter((t) => !tags.includes(t));
+                }
+              "
+              @clear-confidence-filter="
+                (entries) => {
+                  tagConfidenceAboveFilter = tagConfidenceAboveFilter.filter(
+                    (e) => !entries.includes(e),
+                  );
+                }
+              "
+              @update:minScoreFilter="(v) => (minScoreFilter = v)"
+              @update:maxScoreFilter="(v) => (maxScoreFilter = v)"
+              @update:smartScoreBucketFilter="
+                (v) => (smartScoreBucketFilter = v)
+              "
+              @update:resolutionBucketFilter="
+                (v) => (resolutionBucketFilter = v)
+              "
             />
           </div>
         </main>

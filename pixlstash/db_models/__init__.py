@@ -1,4 +1,5 @@
 from .character import Character  # noqa: F401
+from .deleted_file_log import DeletedFileLog  # noqa: F401
 from .face import Face  # noqa: F401
 from .picture import Picture, SortMechanism  # noqa: F401
 from .picture_project import PictureProjectMember  # noqa: F401
@@ -15,5 +16,7 @@ from .tag import (  # noqa: F401
     TAG_EMPTY_SENTINEL,
 )
 from .tag_prediction import TagPrediction  # noqa: F401
+from .import_folder import ImportFolder  # noqa: F401
+from .reference_folder import ReferenceFolder, ReferenceFolderStatus  # noqa: F401
 from .user import User  # noqa: F401
 from .user_token import UserToken  # noqa: F401

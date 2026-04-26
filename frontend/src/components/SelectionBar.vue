@@ -190,6 +190,7 @@
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           @added="$emit('add-to-character', $event)"
+          @removed="$emit('remove-from-character', $event)"
         />
         <AddToProjectControl
           v-if="!isScrapheapView"
@@ -552,6 +553,7 @@ const emit = defineEmits([
   "clear-selection",
   "added-to-set",
   "add-to-character",
+  "remove-from-character",
   "set-project",
   "remove-from-stack",
   "dissolve-stacks",
@@ -616,15 +618,7 @@ const hasSetSelectionContext = computed(() => {
 
 const showRemoveButton = computed(() => {
   if (props.selectedCount <= 0) return false;
-  if (isScrapheapView.value) return true;
-  if (hasSetSelectionContext.value) return false;
-  return (
-    !!normalizedSelectedCharacter.value &&
-    normalizedSelectedCharacter.value !==
-      String(props.allPicturesId).toUpperCase() &&
-    normalizedSelectedCharacter.value !==
-      String(props.unassignedPicturesId).toUpperCase()
-  );
+  return isScrapheapView.value;
 });
 
 const removeButtonLabel = computed(() => {
@@ -1217,13 +1211,17 @@ watch(tagMenuOpen, async (isOpen) => {
     predMinCoverage.value = 1;
     return;
   }
+  // Focus the input as soon as the menu is rendered so keystrokes typed
+  // immediately after pressing T are captured, rather than waiting for all
+  // fetch calls to complete before the input receives focus.
+  await nextTick();
+  tagInputRef.value?.focus();
   await Promise.all([
     fetchTagsSB(),
     fetchPenalisedTagsSB(),
     fetchSelectedImageTags(),
     fetchSelectedImagePredictions(),
   ]);
-  nextTick(() => tagInputRef.value?.focus());
 });
 
 watch(rejectedTagsCollapsedSB, (value) => {
@@ -1367,7 +1365,27 @@ function openTagInput() {
   tagBtnRef.value?.click();
 }
 
-defineExpose({ openTagInput });
+function openPluginPanel() {
+  if (pluginMenuOpen.value) return;
+  // Ensure a plugin is selected (watcher is immediate, but guard anyway)
+  if (!selectedPluginName.value && pluginOptions.value.length) {
+    selectedPluginName.value = String(pluginOptions.value[0].name);
+  }
+  // nextTick lets any in-progress Vue render cycle complete (e.g. a context
+  // menu closing on the same tick) before we open the overlay.
+  nextTick(() => {
+    pluginMenuOpen.value = true;
+  });
+}
+
+function openComfyuiPanel() {
+  if (comfyuiMenuOpen.value) return;
+  nextTick(() => {
+    comfyuiMenuOpen.value = true;
+  });
+}
+
+defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 </script>
 
 <style scoped>
