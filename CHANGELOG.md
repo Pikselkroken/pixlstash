@@ -1,3 +1,7 @@
+# [1.1.0]
+- Fix handling of import and reference folders in Docker mode. Provide copyable restart command to get the folders in.
+- Improve ComfyUI-workflow error handling.
+
 # [1.1.0rc1]
 - Support multi-select and boolean set operations on characters and picture sets
   * Union, Overlap, Difference or Unique
