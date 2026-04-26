@@ -1073,9 +1073,16 @@ def create_router(server) -> APIRouter:
         async def forward_upstream(upstream):
             try:
                 async for message in upstream:
-                    await websocket.send_text(message)
+                    if isinstance(message, (bytes, bytearray)):
+                        await websocket.send_bytes(bytes(message))
+                    else:
+                        await websocket.send_text(message)
             except asyncio.CancelledError:
                 raise
+            except WebSocketDisconnect:
+                logger.debug(
+                    "ComfyUI WebSocket client disconnected while forwarding upstream."
+                )
             except Exception as exc:
                 logger.debug("ComfyUI WebSocket upstream forward failed: %s", exc)
 
@@ -1096,10 +1103,19 @@ def create_router(server) -> APIRouter:
             async with websockets.connect(
                 ws_url, ping_interval=None, close_timeout=2
             ) as upstream:
-                await asyncio.gather(
-                    forward_upstream(upstream),
-                    forward_downstream(upstream),
+                upstream_task = asyncio.create_task(forward_upstream(upstream))
+                downstream_task = asyncio.create_task(forward_downstream(upstream))
+                done, pending = await asyncio.wait(
+                    {upstream_task, downstream_task},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                for task in done:
+                    exc = task.exception()
+                    if exc:
+                        raise exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
