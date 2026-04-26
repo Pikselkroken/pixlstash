@@ -75,9 +75,13 @@ RUN pip install --no-cache-dir \
     "python-jose[cryptography]" \
     passlib \
     "bcrypt<4.0.0" \
+    nvidia-ml-py \
     psutil \
     piexif \
+    watchdog \
+    dotenv \
     python-dotenv \
+    click \
     accelerate
 
 # Remove build tools — not needed at runtime
