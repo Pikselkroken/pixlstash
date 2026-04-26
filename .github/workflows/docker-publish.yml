@@ -53,6 +53,11 @@ jobs:
         id: release-kind
         shell: bash
         run: |
+          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "release_tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+          fi
           if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "is_stable=true" >> "$GITHUB_OUTPUT"
           else
@@ -70,6 +75,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            type=raw,value=${{ steps.release-kind.outputs.release_tag }},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable != 'true' }}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' }}
             type=edge,branch=${{ github.event.repository.default_branch }}
             type=sha,format=short
@@ -142,6 +148,11 @@ jobs:
         id: release-kind
         shell: bash
         run: |
+          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "release_tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+          fi
           if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "is_stable=true" >> "$GITHUB_OUTPUT"
           else
@@ -158,6 +169,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}-gpu
             type=semver,pattern={{major}}.{{minor}}-gpu
+            type=raw,value=${{ steps.release-kind.outputs.release_tag }}-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable != 'true' }}
             type=raw,value=latest-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' }}
             type=raw,value=edge-gpu,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short,suffix=-gpu
