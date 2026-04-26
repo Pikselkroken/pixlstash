@@ -550,7 +550,10 @@ def _select_pictures_for_listing(
                 if _cid > 0:
                     character_id_list.append(_cid)
             except (TypeError, ValueError):
-                pass
+                logger.warning(
+                    "Ignoring invalid character_ids value %r in /pictures request",
+                    _v,
+                )
         character_id_list = sorted(set(character_id_list))
     character_mode_raw = query_params.pop("character_mode", "union")
     character_mode = (character_mode_raw or "union").strip().lower()
@@ -584,7 +587,10 @@ def _select_pictures_for_listing(
                     s for s in set_filter_ids if s != _base_id
                 ]
         except (TypeError, ValueError):
-            pass
+            logger.warning(
+                "Ignoring invalid base_set_id value %r in /pictures request",
+                base_set_id_raw,
+            )
 
     def fetch_set_candidate_ids(session: Session):
         return _fetch_set_candidate_ids(
@@ -2495,7 +2501,10 @@ def create_router(server) -> APIRouter:
                         s for s in set_filter_ids if s != _base_id
                     ]
             except (TypeError, ValueError):
-                pass
+                logger.warning(
+                    "Ignoring invalid base_set_id value %r in /pictures/search request",
+                    base_set_id_raw,
+                )
 
         if sort:
             try:
@@ -2576,7 +2585,10 @@ def create_router(server) -> APIRouter:
                     if _cid > 0:
                         search_character_id_list.append(_cid)
                 except (TypeError, ValueError):
-                    pass
+                    logger.warning(
+                        "Ignoring invalid character_ids value %r in /pictures/search request",
+                        _v,
+                    )
             if search_character_id_list:
                 search_character_mode_raw = query_params.get("character_mode", "union")
                 search_character_mode = (
