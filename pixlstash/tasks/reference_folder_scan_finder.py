@@ -121,4 +121,4 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
             session.add(rf)
             session.commit()
 
-        self._db.run_task(update, priority=DBPriority.NORMAL)
+        self._db.run_task(update, priority=DBPriority.MEDIUM)
