@@ -82,11 +82,16 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
                     file_path = os.path.join(root, file_name)
                     try:
                         mtime = os.path.getmtime(file_path)
+                        ctime = os.path.getctime(file_path)
                     except OSError:
                         continue
                     if not self._is_supported_file(file_path):
                         continue
-                    if mtime > last_checked:
+                    # Some copy workflows preserve mtime from the source file,
+                    # so rely on the newer of mtime/ctime when deciding whether
+                    # this file is new relative to last_checked.
+                    seen_ts = max(mtime, ctime)
+                    if seen_ts > last_checked:
                         total_candidates += 1
                         candidate_files.append(
                             {
@@ -95,8 +100,8 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
                                 "import_source_folder": folder,
                             }
                         )
-                    if mtime > latest_seen:
-                        latest_seen = mtime
+                    if seen_ts > latest_seen:
+                        latest_seen = seen_ts
 
             last_checked_updates[int(entry.id)] = max(latest_seen, now_ts)
 
