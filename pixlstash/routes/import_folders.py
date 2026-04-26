@@ -12,6 +12,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -64,8 +65,8 @@ def create_router(server) -> APIRouter:
         host_path = str(value).strip()
         if not host_path:
             return None
-        normalized = os.path.normpath(host_path)
-        if not os.path.isabs(normalized):
+        normalized = normalize_host_path(host_path)
+        if not is_absolute_host_path(normalized):
             raise HTTPException(
                 status_code=400,
                 detail="Host path must be an absolute path.",
