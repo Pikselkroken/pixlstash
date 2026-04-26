@@ -48,6 +48,101 @@ SEED_FIELDS = {"noise_seed", "seed"}
 SEED_NODE_CLASSES = {"RandomNoise", "KSampler", "KSamplerAdvanced"}
 
 
+def _extract_history_entry(history_payload: dict, prompt_id: str) -> dict:
+    if not isinstance(history_payload, dict):
+        return {}
+    if prompt_id in history_payload and isinstance(history_payload[prompt_id], dict):
+        return history_payload[prompt_id]
+    if "status" in history_payload or "outputs" in history_payload:
+        return history_payload
+    return {}
+
+
+def _extract_text_from_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        for item in value:
+            text = _extract_text_from_value(item)
+            if text:
+                return text
+        return ""
+    if isinstance(value, dict):
+        for key in (
+            "exception_message",
+            "error",
+            "message",
+            "details",
+            "detail",
+            "exception",
+            "reason",
+            "node_errors",
+        ):
+            if key in value:
+                text = _extract_text_from_value(value.get(key))
+                if text:
+                    return text
+        try:
+            return json.dumps(value, ensure_ascii=True)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _extract_history_status_and_error(
+    history_payload: dict, prompt_id: str
+) -> tuple[str | None, str | None]:
+    entry = _extract_history_entry(history_payload, prompt_id)
+    status = entry.get("status") or {}
+    status_str = None
+    if isinstance(status, dict):
+        raw_status = status.get("status_str") or status.get("status")
+        if raw_status is not None:
+            status_str = str(raw_status).strip().lower() or None
+
+    error_text = ""
+    message_items = status.get("messages") if isinstance(status, dict) else None
+    if isinstance(message_items, list):
+        for item in reversed(message_items):
+            event_name = ""
+            event_payload = None
+            if isinstance(item, (list, tuple)) and item:
+                event_name = str(item[0] or "").strip().lower()
+                event_payload = item[1] if len(item) > 1 else None
+            elif isinstance(item, dict):
+                event_name = str(item.get("type") or "").strip().lower()
+                event_payload = item
+            if event_name in {
+                "execution_error",
+                "execution_failed",
+                "error",
+                "execution_interrupted",
+            }:
+                if status_str is None:
+                    status_str = "error"
+                error_text = _extract_text_from_value(event_payload)
+                if error_text:
+                    break
+
+    if not error_text:
+        for candidate in (
+            entry.get("error"),
+            entry.get("exception_message"),
+            status.get("error") if isinstance(status, dict) else None,
+            status.get("message") if isinstance(status, dict) else None,
+            status.get("details") if isinstance(status, dict) else None,
+        ):
+            error_text = _extract_text_from_value(candidate)
+            if error_text:
+                break
+
+    return status_str, (error_text or None)
+
+
 def _workflow_builtin_dir() -> str:
     return os.path.abspath(
         os.path.join(
@@ -419,11 +514,36 @@ def _wait_for_comfyui_outputs(
         images = _extract_comfyui_output_images(
             history_payload, prompt_id, output_node_ids
         )
+        status_str, error_text = _extract_history_status_and_error(
+            history_payload, prompt_id
+        )
         if images:
             return images
+        if status_str in {"error", "failed", "failure", "interrupted", "cancelled"}:
+            raise RuntimeError(error_text or f"ComfyUI status={status_str}")
+        if error_text and status_str != "success":
+            raise RuntimeError(error_text)
         last_images = images
         time.sleep(poll_s)
     return last_images
+
+
+def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
+    try:
+        server.vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "plugin": "ComfyUI",
+                "status": "failed",
+                "run_id": f"comfyui-{prompt_id}",
+                "message": str(message or "ComfyUI failed"),
+                "current": 0,
+                "total": 0,
+                "progress": 0,
+            },
+        )
+    except Exception as exc:
+        logger.debug("Failed to emit ComfyUI failure progress event: %s", exc)
 
 
 def _download_comfyui_image(base_url: str, entry: dict) -> tuple[bytes, str]:
@@ -816,6 +936,11 @@ def _process_comfyui_outputs(
         images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
         if not images:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
+            _emit_comfyui_failure_progress(
+                server,
+                prompt_id,
+                "ComfyUI finished without outputs.",
+            )
             return
         entries = []
         for entry in images:
@@ -872,8 +997,12 @@ def _process_comfyui_outputs(
             server.vault.notify(EventType.PICTURE_IMPORTED, new_ids)
         if all_ids:
             server.vault.notify(EventType.CHANGED_PICTURES, all_ids)
+    except RuntimeError as exc:
+        logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
+        _emit_comfyui_failure_progress(server, prompt_id, str(exc))
     except Exception as exc:
         logger.warning("Failed to import ComfyUI outputs: %s", exc)
+        _emit_comfyui_failure_progress(server, prompt_id, str(exc))
 
 
 def _comfyui_abort(base_url: str) -> dict:

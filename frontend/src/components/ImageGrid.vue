@@ -197,6 +197,7 @@
     <ComfyUiRunner
       ref="comfyuiRunner"
       :backendUrl="props.backendUrl"
+      :wsPluginProgress="props.wsPluginProgress"
       :overlayOpen="overlayOpen"
       :overlayImageId="overlayImageId"
       :allGridImages="allGridImages"
@@ -1598,6 +1599,12 @@ watch(
     if (pluginName === "smart_score") {
       // Smart score overlay is driven by local fetch instrumentation,
       // not websocket events, to avoid jitter/out-of-order updates.
+      return;
+    }
+    if (pluginName === "comfyui") {
+      // ComfyUI has its own dedicated runner banner; suppress duplicate
+      // generic plugin overlay to avoid showing two concurrent error banners.
+      pluginProgress.visible = false;
       return;
     }
 

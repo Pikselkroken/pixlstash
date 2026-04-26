@@ -190,6 +190,108 @@ export function normalizePluginProgressMessage(message, fallback) {
   return text;
 }
 
+function stringifyComfyuiErrorValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const joined = value
+        .map((item) => stringifyComfyuiErrorValue(item))
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+    return joined;
+  }
+  if (typeof value === 'object') {
+    const knownKeys = [
+      'message',
+      'error',
+      'detail',
+      'details',
+      'exception_message',
+      'exception',
+      'reason',
+    ];
+    for (const key of knownKeys) {
+      if (key in value) {
+        const text = stringifyComfyuiErrorValue(value[key]);
+        if (text) return text;
+      }
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function extractNodeErrorsMessage(nodeErrors) {
+  if (!nodeErrors || typeof nodeErrors !== 'object') return '';
+  for (const nodeError of Object.values(nodeErrors)) {
+    const text = stringifyComfyuiErrorValue(nodeError).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+export function extractComfyuiExecutionErrorMessage(payload, fallback = 'ComfyUI failed') {
+  const data = payload?.data || {};
+  const nodeErrorsMessage = extractNodeErrorsMessage(
+      data?.node_errors || data?.nodeErrors,
+  );
+  const candidates = [
+    payload?.message,
+    payload?.error,
+    payload?.detail,
+    payload?.details,
+    payload?.exception_message,
+    payload?.exception,
+    data?.exception_message,
+    data?.exception,
+    data?.error,
+    data?.errors,
+    data?.detail,
+    data?.details,
+    data?.status?.error,
+    data?.status?.message,
+    nodeErrorsMessage,
+  ];
+
+  for (const candidate of candidates) {
+    const raw = stringifyComfyuiErrorValue(candidate);
+    const normalized = normalizePluginProgressMessage(raw, '').trim();
+    if (normalized) return normalized;
+  }
+  const fallbackText = String(fallback || '').trim();
+  return fallbackText || 'ComfyUI failed';
+}
+
+export function isComfyuiOutOfMemoryMessage(message) {
+  const text = String(message || '').toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes('out of memory') ||
+    text.includes('allocation on device') ||
+    text.includes('would exceed allowed memory') ||
+    text.includes('cuda') && text.includes('memory')
+  );
+}
+
+export function formatComfyuiExecutionErrorMessage(payload, fallback = 'ComfyUI failed') {
+  const prefix = String(fallback || '').trim() || 'ComfyUI failed';
+  const raw = extractComfyuiExecutionErrorMessage(payload, '');
+  const oneLine = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!oneLine) return prefix;
+  if (oneLine.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return oneLine;
+  }
+  return `${prefix}: ${oneLine}`;
+}
+
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
