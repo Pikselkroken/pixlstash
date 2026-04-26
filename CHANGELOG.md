@@ -12,7 +12,6 @@
 - Support reference folders: add folders to include in app but not import into database folder
 - Add statistics sidebar in Image Grid
 - Lots of bugfixes
-
 # [1.0.4]
 - Fix issue where the sort menu didn't show entries until the first character was created
 
