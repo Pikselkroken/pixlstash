@@ -256,3 +256,37 @@ Expected output should include `CUDAExecutionProvider`.
 
 If you prefer CPU mode, set `"default_device": "cpu"` in `server-config.json`.
 
+### Import Folders and Reference Folders in Docker
+
+Because Docker containers have an isolated filesystem, folders on your host machine must be explicitly bind-mounted into the container before PixlStash can read them.
+
+**Key restrictions:**
+
+- **No folder browser.** The path browser is unavailable in Docker. You must type the host path manually in the folder editor.
+- **Volume mount required before the folder becomes active.** When you add a new Import or Reference folder, PixlStash saves it with a `pending_mount` status. The folder will not scan or import until you restart the container with the corresponding `-v` mount in your `docker run` command.
+- **Container restart needed for each new folder.** Adding a folder in the UI does not automatically mount it. You must stop and recreate the container with the new `-v` flag, then open PixlStash again.
+
+**Workflow:**
+
+1. Open the sidebar **Folders** tab and add a new Import or Reference folder.
+2. Enter the **host path** (the path on your machine) and note the suggested **container path** (e.g. `/data/import/pictures-001` or `/data/ref/pictures-001`).
+3. The editor shows a ready-to-copy `docker run` restart command that includes all current mounts. Copy and run it to recreate the container with the new mount.
+4. After the container restarts, the folder status changes from `pending_mount` to active and scanning begins.
+
+**Example** — adding a reference folder to an existing GPU container:
+
+```bash
+docker rm -f pixlstash-gpu 2>/dev/null || true
+docker run -d \
+  --runtime nvidia \
+  -e HOME=/home/pixlstash \
+  -e PIXLSTASH_HOST=0.0.0.0 \
+  -p 9537:9537 \
+  -v ~/Pictures/pixlstash:/home/pixlstash \
+  -v '/home/you/Photos:/data/ref/pictures-001' \
+  --name pixlstash-gpu \
+  ghcr.io/pikselkroken/pixlstash:latest-gpu
+```
+
+Replace `/home/you/Photos` with your actual host path and adjust the container path index if you have multiple folders.
+
