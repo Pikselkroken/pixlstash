@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>What's New in PixlStash 1.1</title>
+    <meta
+      name="description"
+      content="Explore what's new in PixlStash 1.1 including reference folders, context menus, and a statistics sidebar."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+      /* -- whatsnew.html page-specific -- */
+
+      .release-hero {
+        margin-top: 20px;
+        background:
+          radial-gradient(
+            circle at 15% 10%,
+            rgba(159, 177, 31, 0.2),
+            rgba(159, 177, 31, 0) 52%
+          ),
+          radial-gradient(
+            circle at 88% 0%,
+            rgba(47, 139, 95, 0.24),
+            rgba(47, 139, 95, 0) 48%
+          ),
+          var(--panel);
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 16px 38px var(--shadow);
+        overflow: hidden;
+      }
+
+      .release-hero-inner {
+        display: grid;
+        grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.15fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .release-copy {
+        padding: 28px;
+      }
+
+      .release-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(57, 63, 70, 0.08);
+        font-size: 0.74rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .release-copy h1 {
+        margin: 14px 0 12px;
+        line-height: 1.1;
+        font-size: clamp(2rem, 4vw, 3.1rem);
+      }
+
+      .release-copy p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.58;
+        max-width: 60ch;
+      }
+
+      .release-bullets {
+        margin: 14px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 8px;
+      }
+
+      .release-bullets li {
+        color: var(--text);
+        font-size: 0.95rem;
+      }
+
+      .release-hero-media {
+        min-height: 320px;
+      }
+
+      .release-hero-media img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        cursor: zoom-in;
+      }
+
+      .section-grid {
+        margin-top: 28px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+      }
+
+      .update-card {
+        background: var(--panel);
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: 0 10px 24px var(--shadow);
+      }
+
+      .section-grid--stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .stats-card {
+        display: grid;
+        grid-template-columns: minmax(130px, 180px) 1fr;
+        align-items: stretch;
+      }
+
+      .stats-card-media {
+        padding: 12px;
+        border-right: 1px solid rgba(34, 38, 44, 0.1);
+        background: linear-gradient(
+          145deg,
+          rgba(159, 177, 31, 0.08),
+          rgba(47, 139, 95, 0.1)
+        );
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .update-card img {
+        width: 100%;
+        max-height: 360px;
+        object-fit: contain;
+        display: block;
+        cursor: zoom-in;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(18, 20, 24, 0.72);
+        z-index: 2000;
+        padding: 28px;
+      }
+
+      .lightbox.open {
+        display: flex;
+      }
+
+      .lightbox-image {
+        max-width: min(1400px, 94vw);
+        max-height: 88vh;
+        width: auto;
+        height: auto;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
+      }
+
+      .lightbox-close {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+        border: none;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.9);
+        color: #1b1f24;
+        cursor: pointer;
+      }
+
+      .lightbox-close:hover {
+        background: rgba(255, 255, 255, 1);
+      }
+
+      .update-card-body {
+        padding: 18px;
+      }
+
+      .update-card h2 {
+        margin: 0 0 8px;
+        font-size: 1.3rem;
+      }
+
+      .update-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .release-cta {
+        margin-top: 24px;
+        padding: 22px;
+        border-radius: 18px;
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        background: linear-gradient(
+          125deg,
+          rgba(159, 177, 31, 0.14),
+          rgba(47, 139, 95, 0.12)
+        );
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      .release-cta h3 {
+        margin: 0;
+        font-size: clamp(1.3rem, 2.3vw, 1.8rem);
+      }
+
+      .release-cta p {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+
+      .release-cta-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .release-btn {
+        padding: 11px 16px;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        border: 1px solid transparent;
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+
+      .release-btn-primary {
+        color: #ffffff;
+        background: linear-gradient(130deg, var(--accent), var(--accent-2));
+        box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
+      }
+
+      .release-btn-secondary {
+        color: var(--text);
+        background: rgba(34, 38, 44, 0.06);
+        border-color: rgba(34, 38, 44, 0.16);
+      }
+
+      .release-btn:hover {
+        transform: translateY(-2px);
+      }
+
+      .page-footer {
+        margin-top: 40px;
+      }
+
+      @media (max-width: 980px) {
+        .release-hero-inner {
+          grid-template-columns: 1fr;
+        }
+
+        .release-hero-media {
+          min-height: 240px;
+          max-height: 320px;
+        }
+
+        .section-grid--stats {
+          grid-template-columns: 1fr;
+        }
+
+        .stats-card {
+          grid-template-columns: minmax(180px, 240px) 1fr;
+        }
+      }
+
+      @media (max-width: 700px) {
+        .shell {
+          padding: 8px 14px 18px;
+        }
+
+        .release-copy {
+          padding: 18px;
+        }
+
+        .update-card img {
+          max-height: 300px;
+        }
+
+        .stats-card {
+          grid-template-columns: 1fr;
+        }
+
+        .stats-card-media {
+          border-right: none;
+          border-bottom: 1px solid rgba(34, 38, 44, 0.1);
+        }
+
+        .release-cta {
+          padding: 18px;
+        }
+
+        .lightbox {
+          padding: 16px;
+        }
+
+        .lightbox-close {
+          top: 12px;
+          right: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
+
+      <section class="release-hero">
+        <div class="release-hero-inner">
+          <div class="release-copy">
+            <span class="release-kicker">PixlStash 1.1</span>
+            <h1>More control for over your image folders</h1>
+            <p>
+              This release adds reference folder support, letting you keep your
+              existing folder structure while still benefiting from PixlStash's
+              powerful organization and metadata features.
+            </p>
+            <ul class="release-bullets">
+              <li>
+                Reference folders and import folders managed within the UI
+              </li>
+              <li>Context menus in image grid and main sidebar</li>
+              <li>Statistics sidebar for rapid overview</li>
+            </ul>
+          </div>
+          <div class="release-hero-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotReferenceFolders.jpg"
+              alt="PixlStash screenshot with reference folders, context menu, and statistics sidebar"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section class="section-grid section-grid--stats">
+        <article class="update-card stats-card">
+          <div class="stats-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotTagStatistics.png"
+              alt="Tag distribution and confidence statistics sidebar in PixlStash"
+            />
+          </div>
+          <div class="update-card-body">
+            <h2>Tag Statistics</h2>
+            <p>
+              Get useful statistics about your picture sets. See tag
+              distribution and tag prediction confidence. A powerful way to
+              understand your training sets.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card stats-card">
+          <div class="stats-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotPictureStatistics.png"
+              alt="Picture statistics including image size and score distribution"
+            />
+          </div>
+          <div class="update-card-body">
+            <h2>Picture Statistics</h2>
+            <p>
+              See statistics about your pictures including size distribution and
+              score distribution. Filter image views by clicking on elements in
+              the sidebar. Quickly find outliers to review or delete.
+            </p>
+          </div>
+        </article>
+      </section>
+
+      <section class="release-cta">
+        <div>
+          <h3>Ready to upgrade?</h3>
+          <p>
+            Follow upgrade steps for pip, Docker, Windows installer, or source
+            builds.
+          </p>
+        </div>
+        <div class="release-cta-actions">
+          <a class="release-btn release-btn-primary" href="upgrade.html"
+            >Upgrade now</a
+          >
+          <a class="release-btn release-btn-secondary" href="index.html"
+            >Back to home</a
+          >
+        </div>
+      </section>
+
+      <div class="page-footer">
+        <p>
+          Looking for full release details?
+          <a
+            href="https://github.com/pikselkroken/pixlstash/releases"
+            target="_blank"
+            rel="noopener"
+            >Read all release notes on GitHub</a
+          >
+        </p>
+      </div>
+    </div>
+
+    <div class="lightbox" id="lightbox" aria-hidden="true">
+      <button class="lightbox-close" type="button">Close</button>
+      <img class="lightbox-image" alt="" />
+    </div>
+
+    <script>
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImage = lightbox.querySelector(".lightbox-image");
+      const lightboxClose = lightbox.querySelector(".lightbox-close");
+
+      function openLightbox(el) {
+        lightboxImage.src = el.dataset.full || el.src;
+        lightboxImage.alt = el.alt || "Screenshot";
+        lightbox.classList.add("open");
+        lightbox.setAttribute("aria-hidden", "false");
+      }
+
+      function closeLightbox() {
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        lightboxImage.src = "";
+      }
+
+      document.querySelectorAll(".zoomable-image").forEach((el) => {
+        el.addEventListener("click", () => openLightbox(el));
+      });
+
+      lightboxClose.addEventListener("click", closeLightbox);
+
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) closeLightbox();
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && lightbox.classList.contains("open")) {
+          closeLightbox();
+        }
+      });
+    </script>
+  </body>
+</html>

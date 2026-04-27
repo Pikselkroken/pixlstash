@@ -89,6 +89,70 @@
         justify-content: space-between;
       }
 
+      .whatsnew-teaser {
+        margin: 6px auto 22px;
+        background: var(--panel);
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 10px 24px var(--shadow);
+        overflow: hidden;
+      }
+
+      .whatsnew-teaser-wrap {
+        display: grid;
+        grid-template-columns: minmax(260px, 1.1fr) minmax(220px, 1fr);
+        gap: 0;
+        align-items: stretch;
+      }
+
+      .whatsnew-teaser-copy {
+        padding: 22px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 10px;
+        background: linear-gradient(
+          125deg,
+          rgba(159, 177, 31, 0.14),
+          rgba(47, 139, 95, 0.1)
+        );
+      }
+
+      .whatsnew-label {
+        font-size: 0.74rem;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .whatsnew-teaser-copy h2 {
+        margin: 0;
+        font-size: clamp(1.2rem, 2.3vw, 1.7rem);
+        line-height: 1.18;
+      }
+
+      .whatsnew-teaser-copy p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .whatsnew-link {
+        margin-top: 2px;
+        font-size: 0.86rem;
+        font-weight: 700;
+        color: var(--accent-2);
+      }
+
+      .whatsnew-teaser-media img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        max-height: 100%;
+        object-fit: cover;
+      }
+
       .cta-banner p {
         margin: 0;
         color: var(--muted);
@@ -133,6 +197,18 @@
 
         .cta-banner {
           padding: 20px;
+        }
+
+        .whatsnew-teaser-wrap {
+          grid-template-columns: 1fr;
+        }
+
+        .whatsnew-teaser-copy {
+          padding: 18px;
+        }
+
+        .whatsnew-teaser-media img {
+          max-height: 260px;
         }
 
         footer {
@@ -257,6 +333,26 @@
           </div>
         </div>
       </div>
+
+      <a class="whatsnew-teaser" href="whatsnew.html">
+        <div class="whatsnew-teaser-wrap">
+          <div class="whatsnew-teaser-copy">
+            <span class="whatsnew-label">What's New</span>
+            <h2>PixlStash 1.1 adds faster library control</h2>
+            <p>
+              Reference folders, context menus, and a statistics sidebar make it
+              much easier to sort, curate, and navigate large collections.
+            </p>
+            <span class="whatsnew-link">See the full update →</span>
+          </div>
+          <div class="whatsnew-teaser-media">
+            <img
+              src="assets/ScreenshotReferenceFolders.jpg"
+              alt="Reference folders, context menu, and statistics sidebar in PixlStash"
+            />
+          </div>
+        </div>
+      </a>
 
       <section class="cta-banner">
         <div>

@@ -3,6 +3,11 @@
     { href: "index.html", label: "Home" },
     { href: "introduction.html", label: "Getting started" },
     { href: "features.html", label: "Features" },
+    {
+      href: "whatsnew.html",
+      label: "What's New in 1.1",
+      className: "nav-link--whatsnew",
+    },
     { href: "api.html", label: "API" },
     {
       href: "https://github.com/pikselkroken/pixlstash",
@@ -19,7 +24,10 @@
       const ext = link.external
         ? ' target="_blank" rel="noopener noreferrer"'
         : "";
-      const cls = isActive ? ' class="nav-link--active"' : "";
+      const classes = [];
+      if (link.className) classes.push(link.className);
+      if (isActive) classes.push("nav-link--active");
+      const cls = classes.length ? ` class="${classes.join(" ")}"` : "";
       return `<a href="${link.href}"${ext}${cls}>${link.label}</a>`;
     })
     .join("\n          ");

@@ -97,6 +97,91 @@
         color: var(--muted);
         margin: 0;
       }
+
+      .whatsnew-banner {
+        display: grid;
+        grid-template-columns: minmax(280px, 1fr) minmax(340px, 1.25fr);
+        gap: 24px;
+        align-items: center;
+        padding: 22px;
+        margin: 0 0 24px;
+        background:
+          linear-gradient(
+            120deg,
+            rgba(159, 177, 31, 0.22),
+            rgba(47, 139, 95, 0.18)
+          ),
+          var(--panel);
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 12px 30px var(--shadow);
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease,
+          border-color 0.2s ease;
+      }
+
+      .whatsnew-banner:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 18px 38px rgba(17, 20, 26, 0.2);
+        border-color: rgba(142, 166, 4, 0.45);
+      }
+
+      .whatsnew-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 10px;
+        margin-bottom: 10px;
+        border-radius: 999px;
+        background: rgba(57, 63, 70, 0.08);
+        font-size: 0.74rem;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .whatsnew-title {
+        margin: 0;
+        font-size: clamp(1.6rem, 2.6vw, 2.2rem);
+        line-height: 1.15;
+      }
+
+      .whatsnew-copy {
+        margin: 10px 0 14px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .whatsnew-cta {
+        font-size: 0.86rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        color: var(--accent-2);
+      }
+
+      .whatsnew-media {
+        border-radius: 16px;
+        overflow: hidden;
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        box-shadow: 0 14px 30px rgba(17, 20, 26, 0.18);
+      }
+
+      .whatsnew-media img {
+        display: block;
+        width: 100%;
+        height: auto;
+        object-fit: cover;
+      }
+
+      @media (max-width: 920px) {
+        .whatsnew-banner {
+          grid-template-columns: 1fr;
+          gap: 16px;
+          padding: 18px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -120,6 +205,26 @@
           steps to get the latest version.
         </p>
       </div>
+
+      <a class="whatsnew-banner" href="whatsnew.html">
+        <div>
+          <span class="whatsnew-kicker">New in 1.1</span>
+          <h2 class="whatsnew-title">
+            Explore what changed before you upgrade
+          </h2>
+          <p class="whatsnew-copy">
+            See the new statistics sidebar, context menus, and reference folders
+            in one focused walkthrough with screenshots.
+          </p>
+          <span class="whatsnew-cta">Open the What's New page →</span>
+        </div>
+        <div class="whatsnew-media">
+          <img
+            src="assets/ScreenshotReferenceFolders.jpg"
+            alt="PixlStash showing reference folders, context menu, and statistics sidebar"
+          />
+        </div>
+      </a>
 
       <div class="method-grid">
         <!-- pip -->

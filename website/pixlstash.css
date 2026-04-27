@@ -104,6 +104,22 @@ a {
   color: var(--accent);
 }
 
+.nav-link--whatsnew {
+  color: var(--warning) !important;
+  font-weight: 700;
+  background: transparent;
+}
+
+.nav-link--whatsnew:hover {
+  color: var(--warning) !important;
+  background: transparent;
+}
+
+.nav-link--whatsnew.nav-link--active {
+  color: var(--warning) !important;
+  background: transparent;
+}
+
 .nav-link--active {
   color: var(--accent) !important;
   background: rgba(159, 177, 31, 0.14);
