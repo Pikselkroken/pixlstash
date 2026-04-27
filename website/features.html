@@ -167,6 +167,24 @@
         line-height: 1.5;
       }
 
+      .shot-image-pair {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .shot-image-pair .shot-image-btn {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .shot-image-pair .shot-image-btn img {
+        margin-bottom: 0;
+        height: 160px;
+        object-fit: cover;
+        object-position: top;
+      }
+
       @media (max-width: 700px) {
         .section-title {
           font-size: 1.5rem;
@@ -325,18 +343,59 @@
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>Mutual exclusivity</h4></div>
+            <div class="shot-label"><h4>Reference folders</h4></div>
             <button class="shot-image-btn" type="button">
               <img
-                src="assets/ScreenshotMutuallyExclusive.jpg"
-                data-full="assets/ScreenshotMutuallyExclusive.jpg"
-                alt="PixlStash mutually exclusive sets view"
+                src="assets/ScreenshotReferenceFolders.jpg"
+                data-full="assets/ScreenshotReferenceFolders.jpg"
+                alt="PixlStash reference folders and import folders"
                 loading="lazy"
               />
             </button>
             <p>
-              Ensure your evaluation sets do not overlap with your training data
-              with mutually exclusive set groups.
+              Keep your existing folder structure while still benefiting from
+              PixlStash's organization and metadata features. Manage reference
+              and import folders directly from the UI.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Statistics sidebar</h4></div>
+            <div class="shot-image-pair">
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotTagStatistics.png"
+                  data-full="assets/ScreenshotTagStatistics.png"
+                  alt="Tag distribution and statistics sidebar in PixlStash"
+                  loading="lazy"
+                />
+              </button>
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotPictureStatistics.png"
+                  data-full="assets/ScreenshotPictureStatistics.png"
+                  alt="Picture statistics sidebar in PixlStash"
+                  loading="lazy"
+                />
+              </button>
+            </div>
+            <p>
+              Get a rapid overview of your picture sets — tag distribution, tag
+              prediction confidence, and picture statistics at a glance.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Boolean set operations</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotOverlap.jpg"
+                data-full="assets/ScreenshotOverlap.jpg"
+                alt="PixlStash boolean set operations toolbar"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Ctrl-click multiple characters or picture sets, then combine them
+              with Union, Overlap, Difference, or Unique (XOR) operations.
             </p>
           </div>
           <div class="shot">

@@ -148,6 +148,27 @@
         cursor: zoom-in;
       }
 
+      .update-card--feature {
+        display: grid;
+        grid-template-columns: 1fr minmax(340px, 1.5fr);
+        align-items: stretch;
+      }
+
+      .update-card--feature .update-card-body {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .update-card--feature .update-card-media img {
+        width: 100%;
+        height: 100%;
+        max-height: none;
+        object-fit: cover;
+        display: block;
+        cursor: zoom-in;
+      }
+
       .lightbox {
         position: fixed;
         inset: 0;
@@ -287,6 +308,10 @@
         .stats-card {
           grid-template-columns: minmax(180px, 240px) 1fr;
         }
+
+        .update-card--feature {
+          grid-template-columns: 1fr;
+        }
       }
 
       @media (max-width: 700px) {
@@ -335,7 +360,7 @@
         <div class="release-hero-inner">
           <div class="release-copy">
             <span class="release-kicker">PixlStash 1.1</span>
-            <h1>More control for over your image folders</h1>
+            <h1>More control over your image folders</h1>
             <p>
               This release adds reference folder support, letting you keep your
               existing folder structure while still benefiting from PixlStash's
@@ -393,6 +418,33 @@
               score distribution. Filter image views by clicking on elements in
               the sidebar. Quickly find outliers to review or delete.
             </p>
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card update-card--feature">
+          <div class="update-card-body">
+            <h2>Boolean Set Operations for People &amp; Sets</h2>
+            <p>
+              Hold <kbd>Ctrl</kbd> and click names in the People or Sets sidebar
+              to build a multi-selection, then choose how to combine them using
+              the toolbar at the bottom of the grid. <strong>Union</strong>
+              shows all pictures from any selected person or set.
+              <strong>Overlap</strong> finds pictures where every selected
+              person appears together. <strong>Difference</strong> subtracts
+              one set from another — useful for finding pictures unique to a
+              base set. <strong>Unique (XOR)</strong> returns pictures that
+              belong to exactly one of the selections, letting you quickly
+              spot what each person or set contributes exclusively.
+            </p>
+          </div>
+          <div class="update-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotOverlap.jpg"
+              alt="Multi-select with Overlap mode showing pictures containing both selected people"
+            />
           </div>
         </article>
       </section>

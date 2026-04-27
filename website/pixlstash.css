@@ -107,17 +107,15 @@ a {
 .nav-link--whatsnew {
   color: var(--warning) !important;
   font-weight: 700;
-  background: transparent;
 }
 
 .nav-link--whatsnew:hover {
-  color: var(--warning) !important;
-  background: transparent;
+  color: #e0aa3a !important;
 }
 
 .nav-link--whatsnew.nav-link--active {
   color: var(--warning) !important;
-  background: transparent;
+  background: rgba(196, 148, 47, 0.15);
 }
 
 .nav-link--active {
