@@ -1619,8 +1619,20 @@ async function fetchSidebarData() {
   await Promise.all(
     characters.value.map(async (char) => {
       try {
+        const characterSummaryParams =
+          projectViewMode.value === "project"
+            ? {
+                project_id:
+                  selectedProjectId.value != null
+                    ? selectedProjectId.value
+                    : "UNASSIGNED",
+              }
+            : null;
         const res = await apiClient.get(
           `${props.backendUrl}/characters/${char.id}/summary`,
+          characterSummaryParams
+            ? { params: characterSummaryParams }
+            : undefined,
         );
         const data = await res.data;
         setCategoryCount(char.id, data.image_count, shouldFlash);

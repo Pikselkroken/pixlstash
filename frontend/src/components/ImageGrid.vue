@@ -5922,7 +5922,15 @@ async function fetchAllPicturesCount() {
       !hasSetSelection.value &&
       selectedCharacter !== String(props.allPicturesId)
     ) {
-      url = `${props.backendUrl}/characters/${selectedCharacter}/summary`;
+      if (props.projectViewMode === "project") {
+        const pid =
+          props.selectedProjectId != null
+            ? props.selectedProjectId
+            : "UNASSIGNED";
+        url = `${props.backendUrl}/characters/${selectedCharacter}/summary?project_id=${pid}`;
+      } else {
+        url = `${props.backendUrl}/characters/${selectedCharacter}/summary`;
+      }
     }
 
     if (props.applyTagFilter) {
