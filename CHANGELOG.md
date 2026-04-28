@@ -1,3 +1,7 @@
+# [1.1.1]
+- Fix counts for project characters when some pictures are not in the project
+- Update Pixlstash tagger to give less false positives
+
 # [1.1.0]
 - Fix handling of import and reference folders in Docker mode. Provide copyable restart command to get the folders in.
 - Improve ComfyUI-workflow error handling.
