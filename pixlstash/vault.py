@@ -172,6 +172,15 @@ class Vault:
             except Exception as exc:
                 logger.warning("Event listener failed for %s: %s", event_type, exc)
 
+    def wake(self) -> None:
+        """Wake the work planner without emitting an event.
+
+        This preserves compatibility with older call sites that used
+        ``vault.wake()`` to resume background work after DB mutations.
+        """
+        if self._work_planner and self._work_planner.is_running():
+            self._work_planner.wake()
+
     def add_event_listener(self, listener):
         """Register a callback to be invoked when vault events occur."""
         if not callable(listener):
