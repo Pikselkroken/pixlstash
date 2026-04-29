@@ -287,7 +287,13 @@ class Server:
         gc.collect()
 
     def _handle_vault_event(self, event_type: EventType, data=None):
-        if event_type in (EventType.CHANGED_TAGS, EventType.CLEARED_TAGS):
+        if event_type in (
+            EventType.CHANGED_TAGS,
+            EventType.CLEARED_TAGS,
+            EventType.CHANGED_PICTURES,
+            EventType.PICTURE_IMPORTED,
+            EventType.QUALITY_UPDATED,
+        ):
             clear_stats_cache()
         if not self._ws_loop:
             return
