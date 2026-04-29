@@ -4028,17 +4028,20 @@ async function applyScoresByEntries(entries, options = {}) {
   const { updateSort = true, emitRefreshSidebar = true } = options;
   if (!Array.isArray(entries) || !entries.length) return;
 
-  const chunkSize = 50;
-  for (let i = 0; i < entries.length; i += chunkSize) {
-    const chunk = entries.slice(i, i + chunkSize);
-    await Promise.all(
-      chunk.map(([id, score]) =>
-        apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
-          score,
-        }),
-      ),
-    );
+  // Score updates are applied locally below (including score-sort reordering),
+  // so the immediate WS gridVersion refresh would be redundant and can clear
+  // current multi-selection in some paths. Skip that next WS refresh.
+  skipNextWsRefresh.value = true;
+
+  const scoresPayload = {};
+  for (const [id, score] of entries) {
+    scoresPayload[String(id)] = Number(score);
   }
+
+  await apiClient.post(`${props.backendUrl}/pictures/apply-scores`, {
+    scores: scoresPayload,
+    only_unscored: false,
+  });
 
   const scoreMap = new Map(
     entries.map(([id, score]) => [String(id), Number(score)]),
@@ -4094,7 +4097,7 @@ async function applyScore(img, newScore) {
     return;
   }
   try {
-    // Suppress the WS-driven gridVersion reload that the PATCH triggers;
+    // Suppress the WS-driven gridVersion reload that the score apply triggers;
     // the score update is already applied locally by applyScoresByEntries.
     skipNextWsRefresh.value = true;
     await applyScoresByEntries([[String(imageId), newScore]], {

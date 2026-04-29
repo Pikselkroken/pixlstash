@@ -94,6 +94,26 @@ def clear_stats_cache() -> None:
     _stats_cache.clear()
 
 
+def _score_is_good_anchor(score_value: int | None) -> bool:
+    """Return True if score belongs to the good-anchor class used by smart-score seeding."""
+    return score_value is not None and score_value >= 4
+
+
+def _score_is_bad_anchor(score_value: int | None) -> bool:
+    """Return True if score belongs to the bad-anchor class used by smart-score seeding."""
+    return score_value is not None and 0 < score_value <= 1
+
+
+def _score_anchor_membership_changed(
+    old_score: int | None,
+    new_score: int | None,
+) -> bool:
+    """Return True when a score change crosses either smart-score anchor boundary."""
+    return _score_is_good_anchor(old_score) != _score_is_good_anchor(
+        new_score
+    ) or _score_is_bad_anchor(old_score) != _score_is_bad_anchor(new_score)
+
+
 _SIDECAR_TAG_PATTERN = re.compile(
     r"^[a-z0-9]+(?:[ _-][a-z0-9]+){0,2}$",
     re.IGNORECASE,
@@ -3494,6 +3514,157 @@ def create_router(server) -> APIRouter:
             "missing_ids": missing_ids,
         }
 
+    @router.post(
+        "/pictures/apply-scores",
+        summary="Batch apply manual scores",
+        description="Applies 0-5 manual scores to multiple pictures in one request while optionally enforcing only-unscored updates.",
+    )
+    def apply_scores_for_pictures(payload: dict = Body(...)):
+        scores_payload = payload.get("scores")
+        if not isinstance(scores_payload, dict) or not scores_payload:
+            raise HTTPException(
+                status_code=400,
+                detail="scores must be a non-empty object mapping picture ids to integer scores",
+            )
+
+        only_unscored_raw = payload.get("only_unscored", True)
+        if not isinstance(only_unscored_raw, bool):
+            raise HTTPException(
+                status_code=400,
+                detail="only_unscored must be a boolean",
+            )
+        only_unscored = bool(only_unscored_raw)
+
+        parsed_scores: dict[int, int] = {}
+        for raw_picture_id, raw_score in scores_payload.items():
+            try:
+                picture_id = int(raw_picture_id)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="scores keys must be valid positive integer picture ids",
+                ) from exc
+            if picture_id <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="scores keys must be valid positive integer picture ids",
+                )
+
+            try:
+                score_value = int(raw_score)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="scores values must be integers in range 0..5",
+                ) from exc
+            if score_value < 0 or score_value > 5:
+                raise HTTPException(
+                    status_code=400,
+                    detail="scores values must be integers in range 0..5",
+                )
+
+            parsed_scores[picture_id] = score_value
+
+        ordered_picture_ids = sorted(parsed_scores.keys())
+
+        def _apply_scores_batch(
+            session: Session,
+            picture_ids: list[int],
+            picture_scores: dict[int, int],
+            apply_only_unscored: bool,
+        ):
+            # Read only id+score to avoid loading heavy blob columns on Picture.
+            # Loading full ORM rows here can be very expensive for large batches.
+            score_rows = session.exec(
+                select(Picture.id, Picture.score)
+                .where(Picture.id.in_(picture_ids))
+                .where(Picture.deleted.is_(False))
+            ).all()
+
+            found_ids: set[int] = set()
+            updated_ids: list[int] = []
+            skipped_ids: list[int] = []
+            reset_triggered = False
+            score_updates: dict[int, int] = {}
+
+            for row in score_rows:
+                pic_id_raw, old_score = row
+                if pic_id_raw is None:
+                    continue
+                pic_id = int(pic_id_raw)
+                found_ids.add(pic_id)
+
+                if apply_only_unscored and old_score is not None:
+                    skipped_ids.append(pic_id)
+                    continue
+
+                new_score = picture_scores[pic_id]
+                if old_score == new_score:
+                    continue
+
+                if _score_anchor_membership_changed(old_score, new_score):
+                    reset_triggered = True
+
+                score_updates[pic_id] = new_score
+                updated_ids.append(pic_id)
+
+            missing_ids = [pid for pid in picture_ids if pid not in found_ids]
+
+            if score_updates:
+                session.exec(
+                    update(Picture)
+                    .where(Picture.id.in_(score_updates.keys()))
+                    .values(
+                        score=case(
+                            score_updates,
+                            value=Picture.id,
+                            else_=Picture.score,
+                        )
+                    )
+                )
+
+            if reset_triggered:
+                session.exec(
+                    update(Picture)
+                    .where(Picture.smart_score.is_not(None))
+                    .values(smart_score=None)
+                )
+
+            if updated_ids or reset_triggered:
+                session.commit()
+
+            return (
+                sorted(updated_ids),
+                sorted(skipped_ids),
+                sorted(missing_ids),
+                reset_triggered,
+            )
+
+        updated_ids, skipped_ids, missing_ids, reset_triggered = (
+            server.vault.db.run_task(
+                _apply_scores_batch,
+                ordered_picture_ids,
+                parsed_scores,
+                only_unscored,
+                priority=DBPriority.IMMEDIATE,
+            )
+        )
+
+        if updated_ids or reset_triggered:
+            server.vault.notify(EventType.CHANGED_PICTURES)
+
+        return {
+            "status": "success",
+            "only_unscored": only_unscored,
+            "updated_ids": updated_ids,
+            "updated_count": len(updated_ids),
+            "skipped_ids": skipped_ids,
+            "skipped_count": len(skipped_ids),
+            "missing_ids": missing_ids,
+            "missing_count": len(missing_ids),
+            "reset_triggered": bool(reset_triggered),
+        }
+
     @router.get(
         "/pictures/{id}.{ext}",
         summary="Get original picture file",
@@ -4062,17 +4233,7 @@ def create_router(server) -> APIRouter:
             if "score" in updated_fields:
                 new_score = updated_fields["score"]
 
-                def _score_is_good_anchor(s) -> bool:
-                    """Return True if this score value places a picture in the good anchor set."""
-                    return s is not None and s >= 4
-
-                def _score_is_bad_anchor(s) -> bool:
-                    """Return True if this score value places a picture in the bad anchor set."""
-                    return s is not None and 0 < s <= 1
-
-                if _score_is_good_anchor(old_score) != _score_is_good_anchor(
-                    new_score
-                ) or _score_is_bad_anchor(old_score) != _score_is_bad_anchor(new_score):
+                if _score_anchor_membership_changed(old_score, new_score):
 
                     def _reset_smart_scores(session: Session) -> None:
                         session.exec(update(Picture).values(smart_score=None))
