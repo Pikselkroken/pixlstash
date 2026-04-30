@@ -34,6 +34,7 @@ from .tasks.face_extraction_task import FaceExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
 from .tasks.likeness_task import LikenessTask
 from .tasks.quality_task import QualityTask
+from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
@@ -463,6 +464,34 @@ class Vault:
             picture_ids = result.get("caption_updated_picture_ids") or []
             if picture_ids:
                 self._queue_changed_tags_notification(picture_ids)
+            return
+
+        if task.type == "SmartScoreTask":
+            changed_count = int(result.get("changed_count") or 0)
+            picture_ids = list(task.params.get("picture_ids") or [])
+            if changed_count > 0 and picture_ids:
+                smart_score_changes = [
+                    (Picture, int(pic_id), "smart_score", None)
+                    for pic_id in picture_ids
+                    if pic_id is not None
+                ]
+                if smart_score_changes:
+                    self._notify_worker_ids_processed(
+                        TaskType.SMART_SCORE,
+                        smart_score_changes,
+                    )
+                remaining = int(
+                    self.db.run_immediate_read_task(SmartScoreTask.count_remaining)
+                    or 0
+                )
+                if remaining == 0:
+                    self.notify(EventType.CHANGED_PICTURES, picture_ids)
+                else:
+                    logger.debug(
+                        "SmartScoreTask updated %s pictures; deferring CHANGED_PICTURES event with %s smart scores remaining.",
+                        changed_count,
+                        remaining,
+                    )
             return
 
         changed = result.get("changed") if isinstance(result, dict) else None
