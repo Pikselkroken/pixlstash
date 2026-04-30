@@ -19,3 +19,4 @@ downloaded_models
 .DS_Store
 ssl
 docs/ideas/
+.api-token
