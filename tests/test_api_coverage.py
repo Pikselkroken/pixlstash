@@ -4,10 +4,16 @@ import gc
 import json
 import os
 import tempfile
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from pixlstash.db_models import Picture
+from pixlstash.event_types import EventType
 from pixlstash.server import Server
+from pixlstash.tasks.base_task import TaskStatus
+from pixlstash.tasks import TaskType
+from pixlstash.vault import Vault
 from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -119,6 +125,124 @@ def test_patch_user_config():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_patch_user_config_penalised_tags_wakes_workers_without_error():
+    temp_dir, client, server = _setup()
+    try:
+        resp = client.patch(
+            "/users/me/config",
+            json={"smart_score_penalised_tags": ["artifact", "blurry"]},
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload.get("status") == "success"
+        config = payload.get("config") or {}
+        penalised = config.get("smart_score_penalised_tags")
+        assert isinstance(penalised, dict)
+        assert penalised.get("artifact") == 3
+        assert penalised.get("blurry") == 3
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_smart_score_stats_refresh_after_picture_change_event():
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client, "Bad1.png")
+
+        def set_smart_score(session, picture_id: int, value):
+            pic = session.get(Picture, picture_id)
+            assert pic is not None
+            pic.smart_score = value
+            session.add(pic)
+            session.commit()
+
+        # Prime cache with an unscored distribution snapshot.
+        server.vault.db.run_task(set_smart_score, pic_id, None)
+        first = client.get("/pictures/stats?include=picture")
+        assert first.status_code == 200
+        first_dist = first.json().get("smart_score_distribution") or []
+        first_map = {row.get("label"): int(row.get("count") or 0) for row in first_dist}
+        assert first_map.get("Unscored", 0) >= 1
+
+        # Update smart score and notify picture change; cache should invalidate.
+        server.vault.db.run_task(set_smart_score, pic_id, 4.2)
+        server.vault.notify(EventType.CHANGED_PICTURES, [pic_id])
+
+        second = client.get("/pictures/stats?include=picture")
+        assert second.status_code == 200
+        second_dist = second.json().get("smart_score_distribution") or []
+        second_map = {
+            row.get("label"): int(row.get("count") or 0) for row in second_dist
+        }
+        assert second_map.get("Unscored", 0) == 0
+        assert second_map.get("4–5", 0) >= 1
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _fake_vault_for_smart_score_completion(remaining_after_batch: int):
+    vault = Vault.__new__(Vault)
+    worker_notifications = []
+    emitted_events = []
+
+    class _DB:
+        @staticmethod
+        def run_immediate_read_task(fn, *args, **kwargs):
+            assert fn.__name__ == "count_remaining"
+            return remaining_after_batch
+
+    vault.db = _DB()
+    vault._notify_worker_ids_processed = lambda worker_type, changed: worker_notifications.append(
+        (worker_type, changed)
+    )
+    vault.notify = lambda event_type, data=None: emitted_events.append((event_type, data))
+
+    return vault, worker_notifications, emitted_events
+
+
+def test_smart_score_task_defers_picture_change_notify_until_queue_drains():
+    vault, worker_notifications, emitted_events = _fake_vault_for_smart_score_completion(
+        remaining_after_batch=5
+    )
+
+    task = SimpleNamespace(
+        type="SmartScoreTask",
+        status=TaskStatus.COMPLETED,
+        result={"changed_count": 2},
+        params={"picture_ids": [101, 102]},
+    )
+
+    Vault._on_task_completed(vault, task, None)
+
+    assert worker_notifications
+    worker_type, changed = worker_notifications[0]
+    assert worker_type == TaskType.SMART_SCORE
+    assert len(changed) == 2
+    assert emitted_events == []
+
+
+def test_smart_score_task_notifies_picture_change_when_queue_drained():
+    vault, worker_notifications, emitted_events = _fake_vault_for_smart_score_completion(
+        remaining_after_batch=0
+    )
+
+    task = SimpleNamespace(
+        type="SmartScoreTask",
+        status=TaskStatus.COMPLETED,
+        result={"changed_count": 1},
+        params={"picture_ids": [201]},
+    )
+
+    Vault._on_task_completed(vault, task, None)
+
+    assert worker_notifications
+    assert emitted_events == [(EventType.CHANGED_PICTURES, [201])]
 
 
 def test_get_watch_folders():
