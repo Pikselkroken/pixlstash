@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import time
 
-from sqlalchemy.types import LargeBinary
 from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship, Session
 from typing import List, Optional, TYPE_CHECKING
 
@@ -33,12 +32,6 @@ class Quality(SQLModel, table=True):
     luminance_entropy: Optional[float] = Field(default=None, index=True)
     dominant_hue: Optional[float] = Field(default=None, index=True)
     text_score: Optional[float] = Field(default=None, index=True)
-
-    # Store color histogram as a binary blob (np.float32 array, serialised)
-    color_histogram: Optional[bytes] = Field(
-        default=None,
-        sa_column=Column("color_histogram", LargeBinary, default=None, nullable=True),
-    )
 
     # Relationships
     picture: Optional["Picture"] = Relationship(back_populates="quality")
@@ -75,7 +68,7 @@ class Quality(SQLModel, table=True):
 
     @staticmethod
     def calculate_quality_batch(
-        images: np.ndarray, calculate_histograms=True
+        images: np.ndarray
     ) -> List["Quality"]:
         """
         Calculate quality metrics for a batch of images.
@@ -166,20 +159,6 @@ class Quality(SQLModel, table=True):
         text_scores = np.zeros((batch_size,), dtype=np.float32)
         for i in range(batch_size):
             text_scores[i] = Quality._calculate_text_score(images[i])
-        # Compute color histograms for each image (flattened, float32, d)
-        if calculate_histograms:
-            histograms = []
-            for i in range(batch_size):
-                chans = cv2.split(images[i])
-                hist = [
-                    cv2.calcHist([c], [0], None, [32], [0, 256]).flatten()
-                    for c in chans
-                ]
-                hist = np.concatenate(hist).astype(np.float32)
-                hist /= np.sum(hist) + 1e-8
-                histograms.append(hist.tobytes())
-        else:
-            histograms = [None] * batch_size
 
         results = []
         for i in range(batch_size):
@@ -194,16 +173,9 @@ class Quality(SQLModel, table=True):
                     luminance_entropy=float(luminance_entropy[i]),
                     dominant_hue=float(dominant_hue[i]),
                     text_score=float(text_scores[i]),
-                    color_histogram=histograms[i],
                 )
             )
         return results
-
-    def get_color_histogram(self, bins=32):
-        """Return the color histogram as a np.ndarray (float32)."""
-        if self.color_histogram is None:
-            return None
-        return np.frombuffer(self.color_histogram, dtype=np.float32)
 
     """
     Stores subjective and objective quality metrics for an image.
