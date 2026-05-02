@@ -174,7 +174,6 @@ class QualityUtils:
                     luminance_entropy=-1.0,
                     dominant_hue=-1.0,
                     text_score=-1.0,
-                    color_histogram=None,
                 )
             try:
                 session.exec(delete(Quality).where(Quality.picture_id == picture_id))

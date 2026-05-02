@@ -1,7 +1,7 @@
 """Drop face_id column from quality table and remove face quality rows.
 
 Revision ID: 0035_drop_face_quality
-Revises: 0033_add_import_folder_host_path
+Revises: 0034_add_token_scope_fields
 Create Date: 2026-05-01 00:00:00.000000
 
 """
