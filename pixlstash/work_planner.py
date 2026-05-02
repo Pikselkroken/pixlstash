@@ -22,7 +22,6 @@ class WorkPlanner:
     ):
         from pixlstash.tasks import TaskType
         from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
-        from pixlstash.tasks.missing_face_quality_finder import MissingFaceQualityFinder
         from pixlstash.tasks.missing_face_extraction_finder import (
             MissingFaceExtractionFinder,
         )
@@ -66,9 +65,6 @@ class WorkPlanner:
                 picture_tagger_getter=picture_tagger_getter,
             ),
             TaskType.QUALITY: MissingQualityFinder(
-                database=database,
-            ),
-            TaskType.FACE_QUALITY: MissingFaceQualityFinder(
                 database=database,
             ),
             TaskType.TAGGER: MissingTagFinder(

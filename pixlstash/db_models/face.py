@@ -1,7 +1,6 @@
 import json
 import math
 
-from sqlalchemy.orm import joinedload
 from sqlmodel import (
     Column,
     ForeignKey,
@@ -14,8 +13,6 @@ from sqlmodel import (
     UniqueConstraint,
 )
 from typing import List, Optional, TYPE_CHECKING
-
-from .quality import Quality
 
 if TYPE_CHECKING:
     from .picture import Picture
@@ -43,13 +40,6 @@ class Face(SQLModel, table=True):
     features: Optional[bytes] = None
 
     # Relationships
-    quality: Optional[Quality] = Relationship(
-        back_populates="face",
-        sa_relationship_kwargs={
-            "cascade": "all, delete-orphan",
-            "passive_deletes": True,
-        },
-    )
     picture: Optional["Picture"] = Relationship(
         back_populates="faces", sa_relationship_kwargs={"overlaps": "character"}
     )
@@ -104,7 +94,7 @@ class Face(SQLModel, table=True):
         Find faces by picture_id, frame_index, and/or face_index.
         Supports passing a list for picture_id (uses IN_ if so).
         """
-        query = select(cls).options(joinedload(cls.quality)).where(cls.face_index != -1)
+        query = select(cls).where(cls.face_index != -1)
         for attr, value in filters.items():
             if hasattr(cls, attr):
                 col = getattr(cls, attr)

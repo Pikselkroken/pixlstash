@@ -224,7 +224,7 @@ class QualityTask(BaseTask):
             select(Picture)
             .outerjoin(
                 Quality,
-                (Quality.picture_id == Picture.id) & (Quality.face_id.is_(None)),
+                Quality.picture_id == Picture.id,
             )
             .where(Quality.text_score.is_(None))
             .where(Picture.deleted.is_(False))
@@ -240,7 +240,7 @@ class QualityTask(BaseTask):
             .select_from(Picture)
             .outerjoin(
                 Quality,
-                (Quality.picture_id == Picture.id) & (Quality.face_id.is_(None)),
+                Quality.picture_id == Picture.id,
             )
             .where(Quality.text_score.is_(None))
             .where(Picture.deleted.is_(False))

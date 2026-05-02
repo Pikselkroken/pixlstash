@@ -277,9 +277,6 @@ class Picture(SQLModel, table=True):
     quality: Optional["Quality"] = Relationship(
         back_populates="picture",
         sa_relationship_kwargs={
-            # face Quality rows share the same picture_id as their parent picture,
-            # so we must filter to face_id IS NULL to get only picture-level quality.
-            "primaryjoin": "(Quality.picture_id == Picture.id) & (Quality.face_id == None)",
             "foreign_keys": "[Quality.picture_id]",
         },
     )
@@ -1011,7 +1008,7 @@ class Picture(SQLModel, table=True):
             elif sort_mech.key == SortMechanism.Keys.TEXT_CONTENT:
                 query = query.join(
                     Quality,
-                    (Quality.picture_id == cls.id) & Quality.face_id.is_(None),
+                    Quality.picture_id == cls.id,
                     isouter=True,
                 )
                 if sort_mech.descending:
@@ -1319,7 +1316,7 @@ class Picture(SQLModel, table=True):
             elif sort_mech.key == SortMechanism.Keys.TEXT_CONTENT:
                 query = query.join(
                     Quality,
-                    (Quality.picture_id == Picture.id) & Quality.face_id.is_(None),
+                    Quality.picture_id == Picture.id,
                     isouter=True,
                 )
                 query = query.order_by(

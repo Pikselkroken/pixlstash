@@ -198,7 +198,6 @@ class LikenessParameterUtils:
                 if pic_ids:
                     quality_rows = session.exec(
                         select(Quality.picture_id).where(
-                            Quality.face_id.is_(None),
                             Quality.picture_id.in_(pic_ids),
                         )
                     ).all()
@@ -306,7 +305,6 @@ class LikenessParameterUtils:
                     Quality.luminance_entropy,
                     Quality.dominant_hue,
                 ).where(
-                    Quality.face_id.is_(None),
                     Quality.picture_id.in_(ids),
                 )
             ).all()

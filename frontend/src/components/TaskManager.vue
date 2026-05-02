@@ -177,7 +177,6 @@ const nowSeconds = ref(Date.now() / 1000);
 
 const labelMap = {
   quality_scored: "Quality",
-  face_quality_scored: "Face quality",
   pictures_tagged: "Tags",
   descriptions_generated: "Descriptions",
   text_embeddings: "Text embeddings",
