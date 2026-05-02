@@ -7,7 +7,6 @@ class TaskType(str, Enum):
     FACE_EXTRACTION = "FaceExtractionTask"
     TAGGER = "TagTask"
     QUALITY = "QualityTask"
-    FACE_QUALITY = "FaceQualityTask"
     LIKENESS = "LikenessTask"
     LIKENESS_PARAMETERS = "LikenessParametersTask"
     DESCRIPTION = "DescriptionTask"

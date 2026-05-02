@@ -2,10 +2,8 @@ from .task_type import TaskType
 from .base_task_finder import BaseTaskFinder, TaskFinderRegistry
 from .description_task import DescriptionTask
 from .face_extraction_task import FaceExtractionTask
-from .face_quality_task import FaceQualityTask
 from .quality_task import QualityTask
 from .image_embedding_task import ImageEmbeddingTask
-from .missing_face_quality_finder import MissingFaceQualityFinder
 from .missing_face_extraction_finder import MissingFaceExtractionFinder
 from .missing_image_embedding_finder import MissingImageEmbeddingFinder
 from .missing_likeness_finder import MissingLikenessFinder

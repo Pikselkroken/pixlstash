@@ -9,7 +9,6 @@ Tasks covered:
     - FaceExtractionTask     (FACE_EXTRACTION) → Face records exist per picture
     - TagTask                (TAGGER)    → Picture.tags populated
     - QualityTask            (QUALITY)   → Quality record linked to picture
-    - FaceQualityTask        (FACE_QUALITY) → Quality record linked to each real face
     - ImageEmbeddingTask     (IMAGE_EMBEDDING) → Picture.image_embedding populated
     - DescriptionTask        (DESCRIPTION)     → Picture.description populated
     - TextEmbeddingTask      (TEXT_EMBEDDING)  → Picture.text_embedding populated
@@ -225,30 +224,11 @@ def test_full_pipeline_on_real_pictures():
             }
 
             # ------------------------------------------------------------------ #
-            # Wait for face extraction, then register face-quality futures
+            # Wait for face extraction
             # ------------------------------------------------------------------ #
             for pid, future in face_futures.items():
                 future.result(timeout=_TASK_TIMEOUT_S)
             logger.info("Face extraction complete for all %d pictures.", n)
-
-            real_face_ids = server.vault.db.run_immediate_read_task(
-                lambda session: [
-                    f.id
-                    for f in session.exec(
-                        select(Face).where(Face.face_index != -1)
-                    ).all()
-                ]
-            )
-            face_quality_futures = {
-                fid: server.vault.get_worker_future(
-                    TaskType.FACE_QUALITY, Face, fid, "quality"
-                )
-                for fid in real_face_ids
-            }
-            logger.info(
-                "Registered face-quality futures for %d real faces.",
-                len(real_face_ids),
-            )
 
             # ------------------------------------------------------------------ #
             # Wait for tags and image embeddings
@@ -290,13 +270,6 @@ def test_full_pipeline_on_real_pictures():
             logger.info("Picture quality scoring complete.")
 
             # ------------------------------------------------------------------ #
-            # Wait for face quality
-            # ------------------------------------------------------------------ #
-            for fid, future in face_quality_futures.items():
-                future.result(timeout=_TASK_TIMEOUT_S)
-            logger.info("Face quality scoring complete for all real faces.")
-
-            # ------------------------------------------------------------------ #
             # Poll until all likeness parameters are computed
             # (depends on quality metrics and image embeddings being ready)
             # ------------------------------------------------------------------ #
@@ -335,12 +308,10 @@ def test_full_pipeline_on_real_pictures():
                     # Access relationships within the session so lazy loads succeed
                     tags = list(pic.tags)
                     # Use an explicit filtered query rather than the lazily-loaded
-                    # relationship to guarantee we get the picture-level quality row
-                    # (face_id IS NULL) and not a face quality row.
+                    # relationship to get the picture-level quality row.
                     quality = session.exec(
                         select(Quality).where(
                             Quality.picture_id == pic.id,
-                            Quality.face_id.is_(None),
                         )
                     ).first()
                     face_count = session.exec(

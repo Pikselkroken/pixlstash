@@ -29,7 +29,6 @@ from .db_models.tag_prediction import TagPrediction
 from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .utils.image_processing.image_utils import ImageUtils
-from .tasks.face_quality_task import FaceQualityTask
 from .tasks.face_extraction_task import FaceExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
 from .tasks.likeness_task import LikenessTask
@@ -472,10 +471,6 @@ class Vault:
             self.notify(EventType.QUALITY_UPDATED)
             return
 
-        if task.type == "FaceQualityTask":
-            self._notify_worker_ids_processed(TaskType.FACE_QUALITY, changed)
-            return
-
         if task.type == "LikenessParametersTask":
             self._notify_worker_ids_processed(TaskType.LIKENESS_PARAMETERS, changed)
             return
@@ -690,15 +685,6 @@ class Vault:
                     self.db.run_immediate_read_task(self._count_missing_quality) or 0
                 )
                 label = "quality_scored"
-            elif worker_type == TaskType.FACE_QUALITY:
-                total = int(
-                    self.db.run_immediate_read_task(self._count_total_faces) or 0
-                )
-                missing = int(
-                    self.db.run_immediate_read_task(self._count_missing_face_quality)
-                    or 0
-                )
-                label = "face_quality_scored"
             elif worker_type == TaskType.FACE_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(
@@ -881,14 +867,6 @@ class Vault:
     @staticmethod
     def _count_missing_quality(session: Session) -> int:
         return QualityTask.count_missing_quality(session)
-
-    @staticmethod
-    def _count_total_faces(session: Session) -> int:
-        return FaceQualityTask.count_total_faces(session)
-
-    @staticmethod
-    def _count_missing_face_quality(session: Session) -> int:
-        return FaceQualityTask.count_missing_face_quality(session)
 
     @staticmethod
     def _count_total_described(session: Session) -> int:

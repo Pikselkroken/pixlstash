@@ -11,7 +11,6 @@ from scipy.ndimage import median_filter
 from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
-    from .face import Face
     from .picture import Picture
 
 logger = get_logger(__name__)
@@ -22,12 +21,6 @@ class Quality(SQLModel, table=True):
     picture_id: Optional[int] = Field(
         sa_column=Column(
             Integer, ForeignKey("picture.id", ondelete="CASCADE"), index=True
-        ),
-        default=None,
-    )
-    face_id: Optional[int] = Field(
-        sa_column=Column(
-            Integer, ForeignKey("face.id", ondelete="CASCADE"), index=True
         ),
         default=None,
     )
@@ -49,7 +42,6 @@ class Quality(SQLModel, table=True):
 
     # Relationships
     picture: Optional["Picture"] = Relationship(back_populates="quality")
-    face: Optional["Face"] = Relationship(back_populates="quality")
 
     def calculate_quality_score(self) -> float:
         # Calculate heuristic quality score (1-10)
@@ -277,32 +269,6 @@ class Quality(SQLModel, table=True):
             dominant_hue=float(dominant_hue),
             text_score=float(text_score),
         )
-
-    @staticmethod
-    def calculate_face_quality(image_np, bbox):
-        """
-        Calculate the quality score for the face region in the image.
-        """
-        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
-        h, w = image_np.shape[:2]
-        # Clamp bbox to image bounds
-        x1_clamped = max(0, min(w, x1))
-        x2_clamped = max(0, min(w, x2))
-        y1_clamped = max(0, min(h, y1))
-        y2_clamped = max(0, min(h, y2))
-        if x2_clamped > x1_clamped and y2_clamped > y1_clamped:
-            face_crop = image_np[y1_clamped:y2_clamped, x1_clamped:x2_clamped]
-            if face_crop.size == 0:
-                logger.error(
-                    f"Face crop is empty after clamping bbox: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
-                )
-                return None
-            return Quality.calculate_quality(face_crop)
-
-        logger.error(
-            f"Invalid bbox after clamping: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
-        )
-        return None
 
     @staticmethod
     def _cell_sharpness(

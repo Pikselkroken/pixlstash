@@ -1220,7 +1220,6 @@ def _select_pictures_for_listing(
             rows = session.exec(
                 select(Quality.picture_id, Quality.text_score).where(
                     Quality.picture_id.in_(ids),
-                    Quality.face_id.is_(None),
                 )
             ).all()
             return {pid: ts for pid, ts in rows}

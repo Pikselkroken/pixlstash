@@ -135,7 +135,7 @@ class SmartScoreTask(BaseTask):
             select(Picture, Quality)
             .outerjoin(
                 Quality,
-                (Quality.picture_id == Picture.id) & (Quality.face_id.is_(None)),
+                Quality.picture_id == Picture.id,
             )
             .where(Picture.id.in_(candidate_ids))
             .where(Picture.image_embedding.is_not(None))

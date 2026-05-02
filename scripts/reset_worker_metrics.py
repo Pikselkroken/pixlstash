@@ -11,7 +11,6 @@ MEASURES = {
     "embeddings",
     "aesthetic_scores",
     "quality",
-    "face_quality",
     "features",
     "likeness_queue",
     "likeness_parameters",
@@ -53,13 +52,8 @@ def reset_aesthetic_scores(cursor) -> None:
 
 
 def reset_quality(cursor) -> None:
-    print("Clearing full-image quality rows...")
-    cursor.execute("DELETE FROM quality WHERE face_id IS NULL")
-
-
-def reset_face_quality(cursor) -> None:
-    print("Clearing face quality rows...")
-    cursor.execute("DELETE FROM quality WHERE face_id IS NOT NULL")
+    print("Clearing quality rows...")
+    cursor.execute("DELETE FROM quality")
 
 
 def reset_features(cursor) -> None:
@@ -107,8 +101,6 @@ def apply_reset(cursor, measure: str) -> None:
         reset_aesthetic_scores(cursor)
     elif measure == "quality":
         reset_quality(cursor)
-    elif measure == "face_quality":
-        reset_face_quality(cursor)
     elif measure == "features":
         reset_features(cursor)
     elif measure == "likeness_queue":
