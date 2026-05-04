@@ -1,5 +1,9 @@
 <template>
   <div class="login-screen">
+    <div v-if="tokenError" class="token-error-banner">
+      <v-icon size="20" class="token-error-icon">mdi-link-off</v-icon>
+      {{ tokenError }}
+    </div>
     <h1 class="headline">
       {{
         needsRegistration
@@ -64,6 +68,10 @@
 import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../utils/apiClient";
 
+const props = defineProps({
+  tokenError: { type: String, default: null },
+});
+
 const username = ref("");
 const password = ref("");
 const error = ref(null);
@@ -99,6 +107,26 @@ async function handleLogin() {
   height: 100vh;
   background: rgb(var(--v-theme-dark-surface));
   color-scheme: dark;
+}
+
+.token-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-error), 0.15);
+  border: 1px solid rgba(var(--v-theme-error), 0.5);
+  color: rgb(var(--v-theme-error));
+  font-size: 0.95rem;
+  max-width: 360px;
+  text-align: center;
+}
+
+.token-error-icon {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-error));
 }
 
 .headline {

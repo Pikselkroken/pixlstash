@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient, logout } from "../utils/apiClient";
+import { apiClient, isReadOnly, logout } from "../utils/apiClient";
 
 const appVersion = __APP_VERSION__;
 
@@ -107,6 +107,15 @@ const tokenCopied = ref(false);
 const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
 const tokenToDelete = ref(null);
+// Share token creation scope fields
+const tokenScope = ref("ALL");
+const tokenResourceType = ref(null);
+const tokenResourceId = ref(null);
+const tokenExpiresAt = ref(null);
+const tokenIncludeAttachments = ref(false);
+const shareResourceOptions = ref([]);
+const shareResourceLoading = ref(false);
+const shareLinkCopied = ref(false);
 const smartScorePenalisedTags = ref([]);
 const smartScoreTagInput = ref("");
 const smartScoreTagsLoading = ref(false);
@@ -209,6 +218,13 @@ function resetSettingsForm() {
   tokenDialogOpen.value = false;
   tokenDeleteDialogOpen.value = false;
   tokenToDelete.value = null;
+  tokenScope.value = "ALL";
+  tokenResourceType.value = null;
+  tokenResourceId.value = null;
+  tokenExpiresAt.value = null;
+  tokenIncludeAttachments.value = false;
+  shareResourceOptions.value = [];
+  shareLinkCopied.value = false;
   smartScoreTagInput.value = "";
   smartScoreTagsError.value = "";
   smartScoreTagsSuccess.value = "";
@@ -1291,12 +1307,73 @@ function copyToken() {
   }, 2000);
 }
 
+async function loadShareResourceOptions(type) {
+  if (!type) {
+    shareResourceOptions.value = [];
+    return;
+  }
+  shareResourceLoading.value = true;
+  try {
+    let items = [];
+    if (type === "picture_set") {
+      const res = await apiClient.get("/picture_sets");
+      items = (res.data || []).map((s) => ({ id: s.id, label: s.name }));
+    } else if (type === "character") {
+      const res = await apiClient.get("/characters");
+      items = (res.data || []).map((c) => ({ id: c.id, label: c.name }));
+    } else if (type === "project") {
+      const res = await apiClient.get("/projects");
+      items = (res.data || []).map((p) => ({ id: p.id, label: p.name }));
+    }
+    shareResourceOptions.value = items;
+  } catch {
+    shareResourceOptions.value = [];
+  } finally {
+    shareResourceLoading.value = false;
+  }
+}
+
+watch(tokenResourceType, (type) => {
+  tokenResourceId.value = null;
+  loadShareResourceOptions(type);
+});
+
+const shareUrl = computed(() => {
+  if (!newlyCreatedToken.value || tokenScope.value !== "READ") return null;
+  const base = window.location.origin + window.location.pathname;
+  return `${base}?token=${newlyCreatedToken.value}`;
+});
+
+async function copyShareLink() {
+  if (!shareUrl.value) return;
+  try {
+    await navigator.clipboard.writeText(shareUrl.value);
+    shareLinkCopied.value = true;
+    setTimeout(() => {
+      shareLinkCopied.value = false;
+    }, 2000);
+  } catch {
+    // Clipboard not available
+  }
+}
+
 async function createUserToken() {
   tokensError.value = "";
   const description = tokenDescription.value.trim() || null;
   tokensLoading.value = true;
   try {
-    const res = await apiClient.post("/users/me/token", { description });
+    const res = await apiClient.post("/users/me/token", {
+      description,
+      scope: tokenScope.value,
+      resource_type:
+        tokenScope.value === "READ" ? tokenResourceType.value : null,
+      resource_id: tokenScope.value === "READ" ? tokenResourceId.value : null,
+      expires_at: tokenExpiresAt.value || null,
+      include_attachments:
+        tokenScope.value === "READ" && tokenResourceType.value === "project"
+          ? tokenIncludeAttachments.value
+          : false,
+    });
     newlyCreatedToken.value = res.data?.token || "";
     tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
     tokenDescription.value = "";
@@ -1386,10 +1463,12 @@ watch(
     if (isOpen) {
       resetSettingsForm();
       settingsTab.value = "appearance";
-      fetchSettingsAuth();
-      fetchUserTokens();
-      fetchSmartScoreSettings();
-      fetchWorkflowList();
+      if (!isReadOnly.value) {
+        fetchSettingsAuth();
+        fetchUserTokens();
+        fetchSmartScoreSettings();
+        fetchWorkflowList();
+      }
     }
   },
 );
@@ -1470,10 +1549,10 @@ const workflowImportCaptionPreview = computed(() => {
           show-arrows
         >
           <v-tab value="appearance">Appearance</v-tab>
-          <v-tab value="behaviour">Behaviour</v-tab>
-          <v-tab value="smart-score">Smart Score</v-tab>
-          <v-tab value="workflows">Workflows</v-tab>
-          <v-tab value="account">Account Settings</v-tab>
+          <v-tab v-if="!isReadOnly" value="behaviour">Behaviour</v-tab>
+          <v-tab v-if="!isReadOnly" value="smart-score">Smart Score</v-tab>
+          <v-tab v-if="!isReadOnly" value="workflows">Workflows</v-tab>
+          <v-tab v-if="!isReadOnly" value="account">Account Settings</v-tab>
         </v-tabs>
         <v-card-text class="settings-dialog-body">
           <v-window v-model="settingsTab" class="settings-tab-body">
@@ -2209,12 +2288,77 @@ const workflowImportCaptionPreview = computed(() => {
                     v-model="tokenDescription"
                     label="Token description"
                     density="compact"
-                    variant="filled"
-                    class="settings-add-tag-input"
+                    variant="underlined"
+                    class="settings-add-tag-input token-field"
                     hide-details
                     :disabled="tokensLoading"
                     @keydown.enter.prevent="createUserToken"
                   />
+                  <v-select
+                    v-model="tokenScope"
+                    :items="[
+                      { title: 'Full access', value: 'ALL' },
+                      { title: 'Read-only share', value: 'READ' },
+                    ]"
+                    item-title="title"
+                    item-value="value"
+                    label="Access type"
+                    density="compact"
+                    variant="underlined"
+                    class="token-field"
+                    hide-details
+                    :disabled="tokensLoading"
+                  />
+                  <template v-if="tokenScope === 'READ'">
+                    <v-select
+                      v-model="tokenResourceType"
+                      :items="[
+                        { title: 'Picture Set', value: 'picture_set' },
+                        { title: 'Character', value: 'character' },
+                        { title: 'Project', value: 'project' },
+                      ]"
+                      item-title="title"
+                      item-value="value"
+                      label="Resource type"
+                      density="compact"
+                      variant="underlined"
+                      class="token-field"
+                      hide-details
+                      clearable
+                      :disabled="tokensLoading"
+                    />
+                    <v-select
+                      v-if="tokenResourceType"
+                      v-model="tokenResourceId"
+                      :items="shareResourceOptions"
+                      item-title="label"
+                      item-value="id"
+                      label="Resource"
+                      density="compact"
+                      variant="underlined"
+                      class="token-field"
+                      hide-details
+                      :loading="shareResourceLoading"
+                      :disabled="tokensLoading || shareResourceLoading"
+                    />
+                    <v-text-field
+                      v-model="tokenExpiresAt"
+                      label="Expires at (optional, e.g. 2027-01-01)"
+                      density="compact"
+                      variant="underlined"
+                      class="token-field"
+                      hide-details
+                      :disabled="tokensLoading"
+                    />
+                    <v-checkbox
+                      v-if="tokenResourceType === 'project'"
+                      v-model="tokenIncludeAttachments"
+                      label="Include project attachments"
+                      density="compact"
+                      hide-details
+                      :disabled="tokensLoading"
+                    />
+                  </template>
                   <v-btn
                     variant="outlined"
                     color="primary"
@@ -2238,15 +2382,25 @@ const workflowImportCaptionPreview = computed(() => {
                         <span class="settings-token-desc">
                           {{ token.description || "Token" }}
                         </span>
+                        <v-chip
+                          v-if="token.scope"
+                          size="x-small"
+                          :color="token.scope === 'ALL' ? 'default' : 'info'"
+                          class="settings-token-scope-chip"
+                        >
+                          {{
+                            token.scope === "ALL"
+                              ? "Full access"
+                              : `Read · ${token.resource_type ?? ""} ${token.resource_id != null ? "#" + token.resource_id : ""}`.trim()
+                          }}
+                        </v-chip>
                         <span class="settings-token-sub">
-                          <span>
-                            Created:
-                            {{ formatTokenTimestamp(token.created_at) }}
-                          </span>
-                          <span>
-                            Last used:
-                            {{ formatTokenTimestamp(token.last_used) }}
-                          </span>
+                          Created:
+                          {{
+                            formatTokenTimestamp(token.created_at)
+                          }}
+                          &nbsp;·&nbsp; Last used:
+                          {{ formatTokenTimestamp(token.last_used_at) }}
                         </span>
                       </div>
                       <v-btn
@@ -2299,6 +2453,32 @@ const workflowImportCaptionPreview = computed(() => {
             }}</v-icon>
           </v-btn>
         </div>
+        <template v-if="shareUrl">
+          <div class="settings-token-warning" style="margin-top: 8px">
+            Share this URL — anyone with it gets read access to the selected
+            resource.
+          </div>
+          <div class="settings-token-value-row">
+            <div
+              class="settings-token-value"
+              style="word-break: break-all; font-size: 11px"
+            >
+              {{ shareUrl }}
+            </div>
+            <v-btn
+              icon
+              variant="text"
+              size="small"
+              class="settings-token-copy-btn"
+              :title="shareLinkCopied ? 'Copied!' : 'Copy share link'"
+              @click="copyShareLink"
+            >
+              <v-icon size="18">{{
+                shareLinkCopied ? "mdi-check" : "mdi-link"
+              }}</v-icon>
+            </v-btn>
+          </div>
+        </template>
       </v-card-text>
       <v-card-actions class="settings-dialog-actions">
         <v-spacer />
@@ -2998,7 +3178,19 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-tokens {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+}
+
+.token-field {
+  font-size: 0.85em;
+}
+
+.token-field :deep(.v-label) {
+  font-size: 0.85em;
+}
+
+.token-field :deep(.v-field__input) {
+  font-size: 0.85em;
 }
 
 .settings-token-loading {
@@ -3009,8 +3201,8 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-token-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  max-height: 220px;
+  gap: 2px;
+  max-height: 120px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -3020,27 +3212,38 @@ const workflowImportCaptionPreview = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 2px 8px;
   border-radius: 6px;
   background: rgba(var(--v-theme-surface), 0.2);
 }
 
 .settings-token-meta {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 .settings-token-desc {
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 30%;
 }
 
 .settings-token-sub {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 0.78em;
+  font-size: 0.75em;
   color: rgba(var(--v-theme-on-surface), 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 .settings-token-delete {

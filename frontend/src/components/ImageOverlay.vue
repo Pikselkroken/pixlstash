@@ -221,7 +221,7 @@
             </v-menu>
           </div>
           <AddToSetControl
-            v-if="image"
+            v-if="image && !isReadOnly"
             ref="addToSetControlRef"
             :key="addToSetControlKey"
             :backend-url="backendUrl"
@@ -231,7 +231,7 @@
             @added="(payload) => emit('added-to-set', payload)"
           />
           <AddToProjectControl
-            v-if="image"
+            v-if="image && !isReadOnly"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
             :include-deleted-members="true"
@@ -240,14 +240,14 @@
             @selected="(payload) => emit('set-project', payload)"
           />
           <StarRatingOverlay
-            v-if="image && !isMobile"
+            v-if="image && !isMobile && !isReadOnly"
             :class="{ hidden: chromeHidden }"
             :score="image?.score || 0"
             icon-size="large"
             @set-score="setScore"
           />
           <v-menu
-            v-if="image && isMobile"
+            v-if="image && isMobile && !isReadOnly"
             v-model="starMenuOpen"
             location="bottom end"
             origin="top end"
@@ -314,7 +314,7 @@
             <v-icon size="20">mdi-face-recognition</v-icon>
           </button>
           <button
-            v-if="!isMobile"
+            v-if="!isMobile && !isReadOnly"
             class="overlay-icon-btn"
             type="button"
             title="Draw face bounding box"
@@ -683,9 +683,9 @@
                 <textarea
                   ref="descriptionEditorRef"
                   v-model="descriptionDraft"
-                  :readonly="!isEditingDescription"
-                  @focus="startEditDescription"
-                  @click="startEditDescription"
+                  :readonly="!isEditingDescription || isReadOnly"
+                  @focus="!isReadOnly && startEditDescription()"
+                  @click="!isReadOnly && startEditDescription()"
                   @keydown.enter.prevent="
                     isEditingDescription &&
                     !$event.shiftKey &&
@@ -762,7 +762,7 @@
                       </div>
                       <select
                         class="face-assign-select"
-                        :disabled="!face.id"
+                        :disabled="!face.id || isReadOnly"
                         :value="
                           face.character_id != null
                             ? String(face.character_id)
@@ -810,7 +810,7 @@
               <span>Tags</span>
               <span class="section-meta-group">
                 <button
-                  v-if="image"
+                  v-if="image && !isReadOnly"
                   class="section-meta-btn"
                   type="button"
                   title="Reset and regenerate tags — deletes all tags and predictions for this picture and requeues it for re-tagging"
@@ -820,7 +820,7 @@
                   <v-icon size="16">mdi-refresh</v-icon>
                 </button>
                 <button
-                  v-if="image"
+                  v-if="image && !isReadOnly"
                   class="section-meta-btn"
                   type="button"
                   title="Add tag (T)"
@@ -872,6 +872,7 @@
                     >
                       {{ tagLabel(tag) }}
                       <button
+                        v-if="!isReadOnly"
                         class="tag-delete-btn"
                         @click.stop="removeAllTag(tag)"
                         title="Remove tag"
@@ -886,7 +887,7 @@
                       Drop tags here
                     </div>
                     <input
-                      v-if="addingTag"
+                      v-if="addingTag && !isReadOnly"
                       ref="tagInputRef"
                       v-model="newTag"
                       @keydown.enter.prevent="confirmAddTag"
@@ -1174,7 +1175,7 @@ import {
   getOverlayFormat,
   buildMediaUrl,
 } from "../utils/media.js";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken, isReadOnly } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToProjectControl from "./AddToProjectControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
@@ -1654,6 +1655,7 @@ watch(pluginMenuOpen, (isOpen) => {
 });
 
 async function fetchPenalisedTags() {
+  if (isReadOnly.value) return;
   if (penalisedTagsLoading.value) return;
   penalisedTagsLoading.value = true;
   try {
@@ -1752,7 +1754,9 @@ function isPenalisedTag(tag) {
 
 function getFullImageUrl(targetImage = null) {
   const data = targetImage || image.value;
-  return buildMediaUrl({ backendUrl: backendUrl.value, image: data });
+  return appendShareToken(
+    buildMediaUrl({ backendUrl: backendUrl.value, image: data }),
+  );
 }
 
 function getFilmstripThumbSrc(target) {
@@ -1760,14 +1764,18 @@ function getFilmstripThumbSrc(target) {
   if (target.thumbnail) {
     const thumbnail = String(target.thumbnail);
     if (!thumbnail) return "";
-    if (thumbnail.startsWith("http")) return thumbnail;
+    if (thumbnail.startsWith("http")) return appendShareToken(thumbnail);
     if (thumbnail.startsWith("/")) {
-      return backendUrl.value ? `${backendUrl.value}${thumbnail}` : thumbnail;
+      return appendShareToken(
+        backendUrl.value ? `${backendUrl.value}${thumbnail}` : thumbnail,
+      );
     }
-    return thumbnail;
+    return appendShareToken(thumbnail);
   }
   if (target.id != null && backendUrl.value) {
-    return `${backendUrl.value}/pictures/thumbnails/${target.id}.webp`;
+    return appendShareToken(
+      `${backendUrl.value}/pictures/thumbnails/${target.id}.webp`,
+    );
   }
   return "";
 }
@@ -3170,7 +3178,9 @@ const videoSrc = computed(() => {
   const id = image.value?.id;
   const fmt = image.value?.format;
   if (!id || !fmt || !isSupportedVideoFile(`file.${fmt}`)) return "";
-  return `${backendUrl.value}/pictures/${id}.${fmt.toLowerCase()}`;
+  return appendShareToken(
+    `${backendUrl.value}/pictures/${id}.${fmt.toLowerCase()}`,
+  );
 });
 const overlayDims = ref({
   width: 1,
@@ -4049,7 +4059,9 @@ function preloadAdjacentImages() {
     // Only preload still images — video files are large; let the browser
     // fetch them on demand rather than pre-requesting gigabytes of video.
     if (isSupportedVideoFile(getOverlayFormat(img))) return [];
-    const url = buildMediaUrl({ backendUrl: backendUrl.value, image: img });
+    const url = appendShareToken(
+      buildMediaUrl({ backendUrl: backendUrl.value, image: img }),
+    );
     if (!url) return [];
     const probe = new Image();
     probe.src = url;

@@ -8,7 +8,9 @@
       tabindex="-1"
     >
       <!-- ── Set / Character / Project ─────────────────────────────── -->
-      <template v-if="!isScrapheapView && selectedImageIds.length">
+      <template
+        v-if="!isScrapheapView && selectedImageIds.length && !isReadOnly"
+      >
         <AddToSetControl
           placement="right"
           :backend-url="backendUrl"
@@ -33,7 +35,7 @@
       </template>
 
       <!-- ── Stack / Unstack ───────────────────────────────────────── -->
-      <template v-if="!isScrapheapView">
+      <template v-if="!isScrapheapView && !isReadOnly">
         <button
           v-if="showRemoveStackButton"
           class="ctx-item"
@@ -70,7 +72,7 @@
       </template>
 
       <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
-      <template v-if="!isScrapheapView">
+      <template v-if="!isScrapheapView && !isReadOnly">
         <button class="ctx-item" @click="delegate('open-tag-panel')">
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
           Tag
@@ -96,13 +98,14 @@
 
       <!-- ── Remove / Delete ───────────────────────────────────────── -->
       <button
-        v-if="showRemoveButton"
+        v-if="showRemoveButton && !isReadOnly"
         class="ctx-item ctx-item--danger"
         @click="onAction('remove-from-group')"
       >
         {{ removeButtonLabel }}
       </button>
       <button
+        v-if="!isReadOnly"
         class="ctx-item ctx-item--danger"
         @click="onAction('delete-selected')"
       >
@@ -114,7 +117,15 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
+import { isReadOnly } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToCharacterControl from "./AddToCharacterControl.vue";
 import AddToProjectControl from "./AddToProjectControl.vue";
@@ -173,8 +184,14 @@ async function clampPosition() {
     return;
   }
   const rect = menuRef.value.getBoundingClientRect();
-  adjustedX.value = Math.max(4, Math.min(props.x, window.innerWidth - rect.width - 4));
-  adjustedY.value = Math.max(4, Math.min(props.y, window.innerHeight - rect.height - 4));
+  adjustedX.value = Math.max(
+    4,
+    Math.min(props.x, window.innerWidth - rect.width - 4),
+  );
+  adjustedY.value = Math.max(
+    4,
+    Math.min(props.y, window.innerHeight - rect.height - 4),
+  );
 }
 
 watch(
@@ -184,14 +201,11 @@ watch(
   },
 );
 
-watch(
-  [() => props.x, () => props.y],
-  () => {
-    adjustedX.value = props.x;
-    adjustedY.value = props.y;
-    if (props.visible) clampPosition();
-  },
-);
+watch([() => props.x, () => props.y], () => {
+  adjustedX.value = props.x;
+  adjustedY.value = props.y;
+  if (props.visible) clampPosition();
+});
 
 const menuStyle = computed(() => ({
   left: `${adjustedX.value}px`,
@@ -203,12 +217,16 @@ const menuStyle = computed(() => ({
 const selectedCount = computed(() => props.selectedImageIds.length);
 
 const isScrapheapView = computed(() => {
-  const scrapId = String(props.scrapheapPicturesId || "SCRAPHEAP").toUpperCase();
+  const scrapId = String(
+    props.scrapheapPicturesId || "SCRAPHEAP",
+  ).toUpperCase();
   return String(props.selectedCharacter || "").toUpperCase() === scrapId;
 });
 
 const normalizedSelectedCharacter = computed(() => {
-  const raw = String(props.selectedCharacter ?? "").trim().toUpperCase();
+  const raw = String(props.selectedCharacter ?? "")
+    .trim()
+    .toUpperCase();
   return !raw || raw === "NULL" || raw === "UNDEFINED" ? "" : raw;
 });
 

@@ -1,8 +1,10 @@
+import hashlib
 import json
 import re
 import secrets
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -10,6 +12,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from passlib.hash import bcrypt
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority, VaultDatabase
@@ -47,6 +50,9 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
         "/version",
         "/check-session",
         "/logout",
+        "/Logo.png",
+        "/Empty.png",
+        "/EmptyTrash.png",
     }
 )
 AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
@@ -56,6 +62,21 @@ AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/redoc/",
 )
 AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
+
+# POST paths that are semantically read-only (large request bodies preclude GET).
+# These are exempted from the "block non-GET for READ tokens" check.
+READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
+    {
+        "/api/v1/pictures/thumbnails",
+    }
+)
+
+# GET paths that expose user settings and must not be accessible to READ-scoped tokens.
+READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
+    {
+        "/api/v1/users/me/config",
+    }
+)
 
 
 def is_auth_excluded_path(path: str) -> bool:
@@ -81,6 +102,17 @@ def is_auth_excluded_path(path: str) -> bool:
     return False
 
 
+@dataclass
+class TokenScope:
+    """Scope restriction carried on request.state for token-authenticated requests."""
+
+    scope: str
+    resource_type: Optional[str]
+    resource_id: Optional[int]
+    expires_at: Optional[datetime]
+    include_attachments: bool = False
+
+
 class AuthService:
     def __init__(
         self, db: VaultDatabase, server_config: dict, server_config_path: str, logger
@@ -95,6 +127,10 @@ class AuthService:
         self.username: Optional[str] = None
         self._failed_login_attempts: int = 0
         self._login_lockout_until: float = 0.0
+        # Cache of recently-verified tokens: digest(token_value) → (UserToken, expiry_monotonic)
+        # Avoids a bcrypt.verify() call on every authenticated request.
+        self._token_cache: dict[str, tuple[UserToken, float]] = {}
+        self._TOKEN_CACHE_TTL = 300.0  # seconds
 
     def ensure_secure_when_required(self, request: Request):
         if self._server_config.get("require_ssl", False):
@@ -210,25 +246,57 @@ class AuthService:
                 json.dump(self._server_config, f, indent=2)
         return user
 
-    def _user_id_from_bearer(self, request: Request) -> Optional[int]:
-        """Validate a Bearer token from the Authorization header and return the user id."""
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return None
-        token_value = auth_header[len("Bearer ") :]
+    def _token_from_value(self, token_value: str) -> Optional[UserToken]:
+        """Validate a raw token value using prefix-indexed lookup; return the
+        matching UserToken or None.  Legacy tokens without a token_prefix are
+        checked with full iteration as a backward-compatible fallback.
+
+        Results are cached for _TOKEN_CACHE_TTL seconds to avoid a bcrypt call
+        on every request (bcrypt is intentionally slow ~200 ms).
+        """
         if not token_value:
             return None
+
+        # Fast path: check in-memory cache first.
+        digest = hashlib.sha256(token_value.encode()).hexdigest()
+        now_mono = time.monotonic()
+        cached = self._token_cache.get(digest)
+        if cached is not None:
+            token_obj, expires_mono = cached
+            if now_mono < expires_mono:
+                # Validate token hasn't been expired server-side either.
+                if (
+                    token_obj.expires_at is None
+                    or token_obj.expires_at > datetime.utcnow()
+                ):
+                    return token_obj
+            # Cache entry stale — remove and fall through to verification.
+            self._token_cache.pop(digest, None)
+
         user = self.get_user()
         if user is None:
             return None
 
-        def fetch_tokens(session: Session, user_id: int):
+        prefix = token_value[:8]
+
+        def fetch_candidates(session: Session, user_id: int, prefix: str):
             return session.exec(
-                select(UserToken).where(UserToken.user_id == user_id)
+                select(UserToken).where(
+                    UserToken.user_id == user_id,
+                    or_(
+                        UserToken.token_prefix == prefix,
+                        UserToken.token_prefix.is_(None),
+                    ),
+                )
             ).all()
 
-        tokens = self._db.run_task(fetch_tokens, user.id, priority=DBPriority.IMMEDIATE)
+        tokens = self._db.run_task(
+            fetch_candidates, user.id, prefix, priority=DBPriority.IMMEDIATE
+        )
+        now = datetime.utcnow()
         for token in tokens:
+            if token.expires_at is not None and token.expires_at < now:
+                continue
             if bcrypt.verify(token_value, token.token_hash):
 
                 def update_last_used(session: Session, token_id: int):
@@ -241,10 +309,43 @@ class AuthService:
                 self._db.run_task(
                     update_last_used, token.id, priority=DBPriority.IMMEDIATE
                 )
-                return user.id
+                # Populate cache so subsequent requests skip bcrypt.
+                self._token_cache[digest] = (token, now_mono + self._TOKEN_CACHE_TTL)
+                # Evict entries beyond a reasonable cap to bound memory use.
+                if len(self._token_cache) > 1000:
+                    self._token_cache.pop(next(iter(self._token_cache)))
+                return token
         return None
 
+    def _user_id_from_bearer(self, request: Request) -> Optional[int]:
+        """Validate a Bearer token from the Authorization header and return the user id."""
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return None
+        token_value = auth_header[len("Bearer ") :]
+        matched = self._token_from_value(token_value)
+        if matched is not None:
+            user = self.get_user()
+            return user.id if user else None
+        return None
+
+    def _token_from_query_param(self, request: Request) -> Optional[UserToken]:
+        """Validate a ?token= query parameter.  Only READ-scoped tokens are
+        accepted this way — ALL-scoped tokens must not be placed in URLs."""
+        token_value = request.query_params.get("token")
+        if not token_value:
+            return None
+        matched = self._token_from_value(token_value)
+        if matched is None:
+            return None
+        if matched.scope != "READ":
+            return None
+        return matched
+
     def get_user_id(self, request: Request) -> Optional[int]:
+        user_id = getattr(request.state, "auth_user_id", None)
+        if user_id is not None:
+            return user_id
         session_id = request.cookies.get("session_id")
         if session_id:
             return self.active_session_ids.get(session_id)
@@ -253,6 +354,9 @@ class AuthService:
     def require_user_id(
         self, request: Request, detail: str = "Not authenticated"
     ) -> int:
+        user_id = getattr(request.state, "auth_user_id", None)
+        if user_id is not None:
+            return user_id
         session_id = request.cookies.get("session_id")
         if session_id:
             user_id = self.active_session_ids.get(session_id)
@@ -324,15 +428,63 @@ class AuthService:
             "has_password": bool(user.password_hash),
         }
 
-    def create_token(self, request: Request, description: Optional[str]):
+    def create_token(
+        self,
+        request: Request,
+        description: Optional[str],
+        scope: str = "ALL",
+        resource_type: Optional[str] = None,
+        resource_id: Optional[int] = None,
+        expires_at: Optional[datetime] = None,
+        include_attachments: bool = False,
+    ):
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
 
+        # Only the owner (full session or ALL-scope bearer) may create tokens
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(
+                status_code=403, detail="Scoped tokens cannot create new tokens"
+            )
+
+        if scope not in ("ALL", "READ"):
+            raise HTTPException(status_code=400, detail="scope must be 'ALL' or 'READ'")
+        if resource_type is not None and resource_type not in (
+            "picture_set",
+            "character",
+            "project",
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="resource_type must be 'picture_set', 'character', or 'project'",
+            )
+
+        # A date-only value (e.g. "2026-05-05") is parsed as midnight 00:00:00,
+        # which would expire the token at the very start of that day.  Normalize
+        # it to end-of-day so the token remains valid throughout the named day.
+        if (
+            expires_at is not None
+            and expires_at.hour == 0
+            and expires_at.minute == 0
+            and expires_at.second == 0
+        ):
+            expires_at = expires_at.replace(hour=23, minute=59, second=59)
+
         token_value = secrets.token_urlsafe(32)
         token_hash = bcrypt.hash(token_value)
+        token_prefix = token_value[:8]
 
-        def create_token(
-            session: Session, user_id: int, token_hash: str, desc: Optional[str]
+        def _create_token(
+            session: Session,
+            user_id: int,
+            token_hash: str,
+            token_prefix: str,
+            desc: Optional[str],
+            scope: str,
+            resource_type: Optional[str],
+            resource_id: Optional[int],
+            expires_at: Optional[datetime],
+            include_attachments: bool,
         ):
             user = session.get(User, user_id)
             if user is None:
@@ -340,8 +492,14 @@ class AuthService:
             token = UserToken(
                 user_id=user_id,
                 token_hash=token_hash,
+                token_prefix=token_prefix,
                 created_at=datetime.utcnow(),
                 description=desc,
+                scope=scope,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                expires_at=expires_at,
+                include_attachments=include_attachments,
             )
             session.add(token)
             session.commit()
@@ -349,16 +507,27 @@ class AuthService:
             return token
 
         token = self._db.run_task(
-            create_token,
+            _create_token,
             user_id,
             token_hash,
+            token_prefix,
             description,
+            scope,
+            resource_type,
+            resource_id,
+            expires_at,
+            include_attachments,
             priority=DBPriority.IMMEDIATE,
         )
 
         return {
             "token": token_value,
             "token_id": token.id,
+            "scope": token.scope,
+            "resource_type": token.resource_type,
+            "resource_id": token.resource_id,
+            "expires_at": token.expires_at,
+            "include_attachments": token.include_attachments,
         }
 
     def list_tokens(self, request: Request):
@@ -377,8 +546,13 @@ class AuthService:
             {
                 "id": token.id,
                 "description": token.description,
+                "scope": token.scope,
+                "resource_type": token.resource_type,
+                "resource_id": token.resource_id,
+                "expires_at": token.expires_at,
                 "created_at": token.created_at,
                 "last_used_at": token.last_used_at,
+                "include_attachments": token.include_attachments,
             }
             for token in tokens
         ]
@@ -398,6 +572,9 @@ class AuthService:
         self._db.run_task(
             remove_token, user_id, token_id, priority=DBPriority.IMMEDIATE
         )
+        # Clear the token cache — we can't map token_id back to the digest key,
+        # so flush all entries to ensure the deleted token is not reused.
+        self._token_cache.clear()
         return {"status": "success", "deleted_id": token_id}
 
     def check_session(self, request: Request) -> JSONResponse:
@@ -534,6 +711,32 @@ class AuthService:
         )
         return response
 
+    def get_session_context(self, request: Request) -> dict:
+        """Return the access scope for the current request.
+
+        Used by the frontend to determine what the current token/session allows.
+        """
+        token_scope = getattr(request.state, "token_scope", None)
+        user_id = getattr(request.state, "auth_user_id", None) or self.get_user_id(
+            request
+        )
+        if token_scope is None:
+            return {
+                "is_owner": user_id is not None,
+                "scope": "ALL",
+                "resource_type": None,
+                "resource_id": None,
+                "expires_at": None,
+            }
+        return {
+            "is_owner": False,
+            "scope": token_scope.scope,
+            "resource_type": token_scope.resource_type,
+            "resource_id": token_scope.resource_id,
+            "expires_at": token_scope.expires_at,
+            "include_attachments": token_scope.include_attachments,
+        }
+
     def check_registration(self) -> JSONResponse:
         user = self.get_user()
         if not user or not user.username or not user.password_hash:
@@ -555,9 +758,36 @@ class AuthService:
 
         if not is_auth_excluded_path(request.url.path):
             session_id = request.cookies.get("session_id")
-            if session_id not in self.active_session_ids:
-                # Fall back to Bearer token before rejecting
-                if self._user_id_from_bearer(request) is None:
+            user_id = self.active_session_ids.get(session_id) if session_id else None
+
+            if user_id is not None:
+                # Cookie session — full owner access, no scope restriction
+                request.state.auth_user_id = user_id
+            else:
+                # Try Bearer token, then fall back to ?token= query param
+                matched_token: Optional[UserToken] = None
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    token_value = auth_header[len("Bearer ") :]
+                    matched_token = self._token_from_value(token_value)
+                if matched_token is None:
+                    matched_token = self._token_from_query_param(request)
+
+                if matched_token is not None:
+                    user = self.get_user()
+                    user_id = user.id if user else None
+                    if user_id:
+                        request.state.auth_user_id = user_id
+                        if matched_token.scope != "ALL":
+                            request.state.token_scope = TokenScope(
+                                scope=matched_token.scope,
+                                resource_type=matched_token.resource_type,
+                                resource_id=matched_token.resource_id,
+                                expires_at=matched_token.expires_at,
+                                include_attachments=matched_token.include_attachments,
+                            )
+
+                if user_id is None:
                     self._logger.error(
                         "Invalid session_id. It has expired and the client needs to log in again. When trying to access %s",
                         request.url.path,
@@ -577,4 +807,26 @@ class AuthService:
                         content={"detail": "Not authenticated"},
                         headers=headers,
                     )
+
+            # Block write operations for READ-scoped tokens.
+            # Paths in READ_SAFE_POST_PATHS use POST for body size but are semantically read-only.
+            token_scope = getattr(request.state, "token_scope", None)
+            if token_scope is not None and token_scope.scope == "READ":
+                if (
+                    request.method not in ("GET", "HEAD", "OPTIONS")
+                    and request.url.path not in READ_SAFE_POST_PATHS
+                ):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Token is read-only"},
+                    )
+                if (
+                    request.method == "GET"
+                    and request.url.path in READ_BLOCKED_GET_PATHS
+                ):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Token is read-only"},
+                    )
+
         return await call_next(request)

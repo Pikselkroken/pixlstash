@@ -10,7 +10,12 @@ import {
   watch,
 } from "vue";
 import { useTheme } from "vuetify";
-import { apiClient, API_BASE_URL } from "./utils/apiClient";
+import {
+  apiClient,
+  API_BASE_URL,
+  isReadOnly,
+  sessionContext,
+} from "./utils/apiClient";
 
 import SideBar from "./components/SideBar.vue";
 import PhotosImportDialog from "./components/PhotosImportDialog.vue";
@@ -111,7 +116,7 @@ const showResolution = ref(true);
 const showProblemIcon = ref(true);
 const penalisedTagWeights = ref({});
 const showStacks = ref(true);
-const compactMode = ref(false);
+const compactMode = ref(isReadOnly.value);
 const expandedStackCount = ref(0);
 const totalStackCount = ref(0);
 const dateFormat = ref("locale");
@@ -157,7 +162,7 @@ const isAllPicturesActive = computed(
 const thumbnailSize = ref(256);
 const sidebarThumbnailSize = ref(48);
 const photosDialogOpen = ref(false);
-const columns = ref(4); // Default columns
+const columns = ref(isReadOnly.value ? 6 : 4); // Default columns
 const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
 const MIN_COLUMNS = 2;
@@ -809,6 +814,7 @@ function handleColumnsEnd() {
 }
 
 async function fetchConfig() {
+  if (isReadOnly.value) return;
   if (configLoading.value) return;
   configLoading.value = true;
   configApplying.value = true;
@@ -1358,6 +1364,22 @@ onMounted(async () => {
     })
     .catch(() => {});
   await fetchConfig();
+  // Navigate to the scoped resource when a share token is active
+  const ctx = sessionContext.value;
+  if (ctx && ctx.scope !== "ALL") {
+    if (ctx.resource_type === "picture_set") {
+      selectedSet.value = ctx.resource_id;
+      selectedCharacter.value = ALL_PICTURES_ID;
+    } else if (ctx.resource_type === "character") {
+      selectedCharacter.value = ctx.resource_id;
+      selectedSet.value = null;
+    } else if (ctx.resource_type === "project") {
+      selectedProjectId.value = ctx.resource_id;
+      projectViewMode.value = "project";
+      selectedSet.value = null;
+      selectedCharacter.value = ALL_PICTURES_ID;
+    }
+  }
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleGlobalKeydown);

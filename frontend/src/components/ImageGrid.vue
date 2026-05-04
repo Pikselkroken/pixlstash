@@ -579,7 +579,7 @@
                 :score="img.score || 0"
                 :icon-size="badgeIconSizes.star"
                 :compact="true"
-                @set-score="setScore(img, $event)"
+                @set-score="!isReadOnly && setScore(img, $event)"
               />
             </div>
             <!-- Compact mode group pill, straddling top edge of this row -->
@@ -663,7 +663,7 @@ import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import ComfyUiRunner from "./ComfyUiRunner.vue";
 import ProgressOverlay from "./ProgressOverlay.vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken, isReadOnly } from "../utils/apiClient";
 import {
   applyStackBackgroundAlpha,
   arraysEqualByString,
@@ -2233,7 +2233,9 @@ function prefetchFullImage(img) {
   if (prefetchedFullImageIds.has(id) || fullImagePrefetchControllers.has(id)) {
     return;
   }
-  const url = buildMediaUrl({ backendUrl: props.backendUrl, image: img });
+  const url = appendShareToken(
+    buildMediaUrl({ backendUrl: props.backendUrl, image: img }),
+  );
   if (!url) return;
   const preloader = new Image();
   fullImagePrefetchControllers.set(id, preloader);
@@ -6446,9 +6448,11 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
             thumbObj && thumbObj.thumbnail ? thumbObj.thumbnail : null;
           const previousThumbnail = gridImg.thumbnail || null;
           gridImg.thumbnail = thumbnailUrl
-            ? thumbnailUrl.startsWith("http")
-              ? thumbnailUrl
-              : `${props.backendUrl}${thumbnailUrl}`
+            ? appendShareToken(
+                thumbnailUrl.startsWith("http")
+                  ? thumbnailUrl
+                  : `${props.backendUrl}${thumbnailUrl}`,
+              )
             : null;
           if (
             gridImg.id != null &&
@@ -6664,6 +6668,7 @@ function handleGridBackgroundClick(e) {
 
 function handleImageContextMenu(img, event) {
   if (!img?.id) return;
+  if (isReadOnly.value) return;
   if (!selectedImageIds.value.includes(img.id)) {
     selectedImageIds.value = [img.id];
     lastSelectedImageId = img.id;

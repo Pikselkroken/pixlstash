@@ -111,6 +111,13 @@ def create_router(server) -> APIRouter:
     )
     def list_reference_folders(request: Request):
         server.auth.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            return ReferenceFoldersListResponse(
+                in_docker=server.running_in_docker(),
+                has_pending=False,
+                image_root=None,
+                folders=[],
+            )
 
         def fetch(session: Session):
             return session.exec(

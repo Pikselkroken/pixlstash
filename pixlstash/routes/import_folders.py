@@ -95,6 +95,8 @@ def create_router(server) -> APIRouter:
     )
     def list_import_folders(request: Request):
         server.auth.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            return ImportFoldersListResponse(folders=[])
 
         def fetch(session: Session):
             folders = session.exec(select(ImportFolder).order_by(ImportFolder.id)).all()

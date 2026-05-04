@@ -1094,7 +1094,7 @@
         </v-menu>
 
         <v-menu
-          v-if="props.comfyuiConfigured"
+          v-if="props.comfyuiConfigured && !isReadOnly"
           v-model="comfyuiMenuOpen"
           :close-on-content-click="false"
           location="top end"
@@ -1211,7 +1211,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../utils/apiClient";
 
 const props = defineProps({
   isMobile: { type: Boolean, default: false },
