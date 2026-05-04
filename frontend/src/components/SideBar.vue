@@ -2084,11 +2084,18 @@ async function characterSaved() {
   closeCharacterEditor();
 }
 
+const VERSION_CHECK_STORAGE_KEY = "pixlstash:lastVersionCheck";
+const VERSION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 function checkForUpdatesNow() {
+  const last = parseInt(localStorage.getItem(VERSION_CHECK_STORAGE_KEY) ?? "0", 10);
+  if (Date.now() - last < VERSION_CHECK_INTERVAL_MS) return;
+
   const url = `${LATEST_VERSION_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
   fetch(url)
     .then((r) => r.json())
     .then((data) => {
+      localStorage.setItem(VERSION_CHECK_STORAGE_KEY, String(Date.now()));
       const remote = data?.version;
       if (remote && isRemoteNewer(appVersion, remote)) {
         latestVersion.value = remote;
@@ -2108,7 +2115,7 @@ function startVersionCheckInterval() {
         checkForUpdatesNow();
       }
     },
-    24 * 60 * 60 * 1000,
+    VERSION_CHECK_INTERVAL_MS,
   );
 }
 
