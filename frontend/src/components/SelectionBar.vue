@@ -31,7 +31,12 @@
       </div>
       <div class="selection-bar-actions">
         <div
-          v-if="selectedCount > 0 && !isScrapheapView && pluginOptions.length"
+          v-if="
+            selectedCount > 0 &&
+            !isScrapheapView &&
+            pluginOptions.length &&
+            !isReadOnly
+          "
           class="plugin-run-controls"
           @keydown.esc="handlePluginMenuEsc"
         >
@@ -93,7 +98,7 @@
           </v-menu>
         </div>
         <div
-          v-if="selectedCount > 0 && !isScrapheapView"
+          v-if="selectedCount > 0 && !isScrapheapView && !isReadOnly"
           class="plugin-run-controls"
           @keydown.esc="handleComfyuiMenuEsc"
         >
@@ -180,27 +185,27 @@
           </v-menu>
         </div>
         <AddToSetControl
-          v-if="!isScrapheapView"
+          v-if="!isScrapheapView && !isReadOnly"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           @added="$emit('added-to-set', $event)"
         />
         <AddToCharacterControl
-          v-if="!isScrapheapView"
+          v-if="!isScrapheapView && !isReadOnly"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           @added="$emit('add-to-character', $event)"
           @removed="$emit('remove-from-character', $event)"
         />
         <AddToProjectControl
-          v-if="!isScrapheapView"
+          v-if="!isScrapheapView && !isReadOnly"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           :disabled="selectedCount <= 0"
           @selected="$emit('set-project', $event)"
         />
         <button
-          v-if="!isScrapheapView"
+          v-if="!isScrapheapView && !isReadOnly"
           class="stack-btn stack-toggle-btn"
           type="button"
           :disabled="showRemoveStackButton ? false : selectedCount <= 1"
@@ -221,7 +226,7 @@
           <span>{{ showRemoveStackButton ? "Unstack" : "Stack" }}</span>
         </button>
         <button
-          v-if="!isScrapheapView && showUnstackMultipleButton"
+          v-if="!isScrapheapView && showUnstackMultipleButton && !isReadOnly"
           class="stack-btn"
           type="button"
           title="Dissolve all selected stacks"
@@ -231,7 +236,7 @@
           <span>Unstack</span>
         </button>
         <button
-          v-if="showGroupStackButton"
+          v-if="showGroupStackButton && !isReadOnly"
           class="stack-btn"
           type="button"
           title="Create stacks from selected likeness groups"
@@ -241,13 +246,13 @@
           <span>Stack Groups</span>
         </button>
         <button
-          v-if="showRemoveButton"
+          v-if="showRemoveButton && !isReadOnly"
           class="remove-btn"
           @click="$emit('remove-from-group')"
         >
           {{ removeButtonLabel }}
         </button>
-        <div v-if="!isScrapheapView" class="plugin-run-controls">
+        <div v-if="!isScrapheapView && !isReadOnly" class="plugin-run-controls">
           <v-menu
             v-model="tagMenuOpen"
             :close-on-content-click="false"
@@ -474,6 +479,7 @@
           </v-menu>
         </div>
         <button
+          v-if="!isReadOnly"
           class="delete-btn"
           @click="$emit('delete-selected')"
           title="Delete selected items (DEL)"
@@ -515,7 +521,7 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToCharacterControl from "./AddToCharacterControl.vue";
 import AddToProjectControl from "./AddToProjectControl.vue";
@@ -1229,6 +1235,7 @@ watch(rejectedTagsCollapsedSB, (value) => {
 });
 
 async function fetchPenalisedTagsSB() {
+  if (isReadOnly.value) return;
   const now = Date.now();
   if (now - penalisedTagsFetchedAt < 60_000) return;
   try {

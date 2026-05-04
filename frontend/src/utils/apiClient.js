@@ -1,8 +1,30 @@
 import axios from 'axios';
-import {ref} from 'vue';
+import {computed, ref} from 'vue';
 
 // Centralised authentication state
 const isAuthenticated = ref(false);
+
+// Share token state (set when app is loaded with ?token= query param)
+let _shareToken = null;
+const sessionContext = ref(null);
+const isReadOnly = computed(() => sessionContext.value?.scope === 'READ');
+
+function activateShareToken(token) {
+  _shareToken = token;
+}
+
+/**
+ * Append the active share token as a ?token= query parameter to a URL.
+ * Should be used for all direct <img src> or similar browser-native requests
+ * that bypass the axios interceptor.
+ */
+function appendShareToken(url) {
+  if (!_shareToken || !url) return url;
+  // Avoid double-appending if the token is already in the URL.
+  if (url.includes(`token=${encodeURIComponent(_shareToken)}`)) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(_shareToken)}`;
+}
 
 const DEFAULT_BACKEND_PORT = 9537;
 const environmentBaseUrl = import.meta?.env?.VITE_BACKEND_URL;
@@ -44,6 +66,11 @@ apiClient.interceptors.request.use((config) => {
     return config;
   }
 
+  // Inject share token into every API request regardless of URL form.
+  if (_shareToken) {
+    config.params = {...(config.params || {}), token: _shareToken};
+  }
+
   // Leave fully-qualified URLs untouched. Components that use API_BASE_URL
   // already include the /api/v1 path.
   if (/^https?:\/\//i.test(rawUrl)) {
@@ -57,6 +84,7 @@ apiClient.interceptors.request.use((config) => {
   config.url = rawUrl.startsWith('/')
       ? `${API_PREFIX}${rawUrl}`
       : `${API_PREFIX}/${rawUrl}`;
+
   return config;
 });
 
@@ -137,10 +165,14 @@ apiClient.interceptors.response.use((response) => response, (error) => {
 
 export {
   apiClient,
+  activateShareToken,
+  appendShareToken,
   checkLoginStatus,
   checkSession,
   isAuthenticated,
+  isReadOnly,
   login,
   logout,
+  sessionContext,
   apiBaseUrl as API_BASE_URL,
 };

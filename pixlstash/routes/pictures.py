@@ -475,6 +475,8 @@ def _select_pictures_for_listing(
     exclude_query_params: set[str] | None = None,
     stack_leaders_only: bool = False,
     project_id: int | None = None,
+    scope_set_id: int | None = None,
+    scope_character_id: int | None = None,
 ):
     def serialize_metadata(pictures):
         result = []
@@ -611,6 +613,17 @@ def _select_pictures_for_listing(
                 "Ignoring invalid base_set_id value %r in /pictures request",
                 base_set_id_raw,
             )
+
+    # Token scope enforcement: if a picture_set token is active, restrict to that set.
+    if scope_set_id is not None:
+        set_filter_ids = [scope_set_id]
+        set_mode = "union"
+
+    # Token scope enforcement: if a character token is active, restrict to that character.
+    if scope_character_id is not None:
+        character_id = scope_character_id
+        character_id_list = [scope_character_id]
+        character_mode = "union"
 
     def fetch_set_candidate_ids(session: Session):
         return _fetch_set_candidate_ids(
@@ -1242,6 +1255,83 @@ def create_router(server) -> APIRouter:
     thumbnail_generation_locks: dict[int, asyncio.Lock] = {}
     thumbnail_memory_cache: OrderedDict[int, bytes] = OrderedDict()
     thumbnail_memory_cache_max = 128
+
+    def _picture_id_in_scoped_set(picture_id: int, set_id: int) -> bool:
+        """Return True if picture_id is a member of set_id."""
+
+        def check(session):
+            return (
+                session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.set_id == set_id,
+                        PictureSetMember.picture_id == picture_id,
+                    )
+                ).first()
+                is not None
+            )
+
+        return server.vault.db.run_immediate_read_task(check)
+
+    def _picture_id_in_scoped_character(picture_id: int, character_id: int) -> bool:
+        """Return True if the picture has at least one face assigned to character_id."""
+
+        def check(session):
+            return (
+                session.exec(
+                    select(Face).where(
+                        Face.picture_id == picture_id,
+                        Face.character_id == character_id,
+                    )
+                ).first()
+                is not None
+            )
+
+        return server.vault.db.run_immediate_read_task(check)
+
+    def _picture_id_in_scoped_project(picture_id: int, project_id: int) -> bool:
+        """Return True if picture_id is a member of project_id."""
+
+        def check(session):
+            return (
+                session.exec(
+                    select(PictureProjectMember).where(
+                        PictureProjectMember.picture_id == picture_id,
+                        PictureProjectMember.project_id == project_id,
+                    )
+                ).first()
+                is not None
+            )
+
+        return server.vault.db.run_immediate_read_task(check)
+
+    def _enforce_picture_scope(request: Request, picture_id: int):
+        """Raise 403 if a scoped token does not permit access to this picture."""
+        scope = getattr(request.state, "token_scope", None)
+        if scope is None:
+            return
+        if scope.resource_type == "picture_set":
+            if not _picture_id_in_scoped_set(picture_id, scope.resource_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access this picture",
+                )
+        elif scope.resource_type == "character":
+            if not _picture_id_in_scoped_character(picture_id, scope.resource_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access this picture",
+                )
+        elif scope.resource_type == "project":
+            if not _picture_id_in_scoped_project(picture_id, scope.resource_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access this picture",
+                )
+        elif scope.resource_type is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised for this resource type",
+            )
 
     def get_thumbnail_lock(picture_id: int) -> asyncio.Lock:
         lock = thumbnail_generation_locks.get(picture_id)
@@ -2027,7 +2117,7 @@ def create_router(server) -> APIRouter:
         summary="Get picture thumbnail image",
         description="Returns a WebP thumbnail for a picture id, generating and caching it on demand when needed.",
     )
-    async def get_thumbnail(id: int):
+    async def get_thumbnail(request: Request, id: int):
         started_at = datetime.now()
 
         def fetch_picture(session: Session, picture_id: int):
@@ -2046,6 +2136,7 @@ def create_router(server) -> APIRouter:
         pic = server.vault.db.run_immediate_read_task(fetch_picture, id)
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
+        _enforce_picture_scope(request, id)
 
         thumb_path = ImageUtils.get_thumbnail_path(
             server.vault.image_root, pic.file_path
@@ -3686,6 +3777,7 @@ def create_router(server) -> APIRouter:
             logger.error(f"Picture not found for id={id}")
             raise HTTPException(status_code=404, detail="Picture not found")
         pic = pics[0]
+        _enforce_picture_scope(request, id)
 
         file_path = ImageUtils.resolve_picture_path(
             server.vault.image_root, pic.file_path
@@ -4480,6 +4572,23 @@ def create_router(server) -> APIRouter:
             metadata_fields = [f.strip() for f in fields.split(",") if f.strip()]
         else:
             metadata_fields = Picture.metadata_fields()
+        token_scope = getattr(request.state, "token_scope", None)
+        scope_set_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "picture_set"
+            else None
+        )
+        # For project-scoped tokens, force the project filter regardless of what
+        # the caller passes.  For character-scoped tokens, force the character
+        # filter by injecting it as a query-param override via project_id /
+        # character_id below.
+        if token_scope is not None and token_scope.resource_type == "project":
+            project_id = str(token_scope.resource_id)
+        scope_character_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "character"
+            else None
+        )
         return _select_pictures_for_listing(
             server=server,
             request=request,
@@ -4491,6 +4600,8 @@ def create_router(server) -> APIRouter:
             return_ids_only=False,
             stack_leaders_only=(fields == "grid"),
             project_id=project_id,
+            scope_set_id=scope_set_id,
+            scope_character_id=scope_character_id,
         )
 
     @router.post(

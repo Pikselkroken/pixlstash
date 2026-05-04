@@ -177,11 +177,7 @@ class QualityUtils:
                     color_histogram=None,
                 )
             try:
-                session.exec(
-                    delete(Quality).where(
-                        Quality.picture_id == picture_id
-                    )
-                )
+                session.exec(delete(Quality).where(Quality.picture_id == picture_id))
                 quality.picture_id = picture_id
                 session.add(quality)
                 picture_db.likeness_parameters = None

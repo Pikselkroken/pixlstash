@@ -61,7 +61,11 @@
                 @click="previewPic = pic"
               >
                 <img
-                  :src="`${props.backendUrl}/pictures/thumbnails/${pic.id}.webp`"
+                  :src="
+                    appendShareToken(
+                      `${props.backendUrl}/pictures/thumbnails/${pic.id}.webp`,
+                    )
+                  "
                   class="ref-picture-thumb"
                   loading="lazy"
                 />
@@ -95,7 +99,11 @@
       @click="previewPic = null"
     >
       <img
-        :src="`${props.backendUrl}/pictures/thumbnails/${previewPic.id}.webp`"
+        :src="
+          appendShareToken(
+            `${props.backendUrl}/pictures/thumbnails/${previewPic.id}.webp`,
+          )
+        "
         class="ref-preview-img"
         @click="previewPic = null"
       />
@@ -118,7 +126,7 @@ import {
   VTextField,
   VTextarea,
 } from "vuetify/components";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken } from "../utils/apiClient";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 
 const props = defineProps({

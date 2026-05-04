@@ -18,7 +18,12 @@ import FolderTreeNode from "./FolderTreeNode.vue";
 import ReferenceFolderEditor from "./ReferenceFolderEditor.vue";
 import ImportFolderEditor from "./ImportFolderEditor.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
-import { apiClient } from "../utils/apiClient";
+import {
+  apiClient,
+  appendShareToken,
+  isReadOnly,
+  sessionContext,
+} from "../utils/apiClient";
 import { extractSupportedImportFilesFromDataTransfer } from "../utils/media.js";
 
 const appVersion = __APP_VERSION__;
@@ -921,6 +926,14 @@ const visibleCharacters = computed(() => {
   );
 });
 
+// When the session is scoped to a specific resource type via a share token,
+// this reflects that type ('character', 'picture_set', 'project') or null.
+const scopedResourceType = computed(() =>
+  sessionContext.value?.scope === "READ"
+    ? (sessionContext.value?.resource_type ?? null)
+    : null,
+);
+
 const projectMenuCharacterGroups = computed(() => {
   if (projectViewMode.value !== "project" || selectedProjectId.value === null)
     return [];
@@ -1322,6 +1335,7 @@ async function deleteImportFolderById(id) {
 }
 
 function openSidebarCtxMenu(type, item, event) {
+  if (isReadOnly.value) return;
   if (type === "character") {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
@@ -1741,6 +1755,15 @@ async function fetchSortOptions() {
 
 // --- Picture Sets ---
 async function fetchProjects() {
+  // A token scoped to a non-project resource cannot access the projects list.
+  if (
+    isReadOnly.value &&
+    sessionContext.value?.resource_type != null &&
+    sessionContext.value.resource_type !== "project"
+  ) {
+    projects.value = [];
+    return;
+  }
   try {
     const res = await apiClient.get(`${props.backendUrl}/projects`);
     projects.value = Array.isArray(res.data) ? res.data : [];
@@ -1787,7 +1810,9 @@ async function updateSetThumbnails(sets) {
     const url = baseUrl.startsWith("http")
       ? baseUrl
       : `${props.backendUrl}${baseUrl}`;
-    const nextUrl = `${url}?v=${encodeURIComponent(versionKey)}`;
+    const nextUrl = appendShareToken(
+      `${url}?v=${encodeURIComponent(versionKey)}`,
+    );
     nextMap[set.id] = nextUrl;
     const previousBaseUrl = stripSetThumbnailRetryParams(
       setThumbnails.value?.[set.id] || null,
@@ -2088,7 +2113,10 @@ const VERSION_CHECK_STORAGE_KEY = "pixlstash:lastVersionCheck";
 const VERSION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function checkForUpdatesNow() {
-  const last = parseInt(localStorage.getItem(VERSION_CHECK_STORAGE_KEY) ?? "0", 10);
+  const last = parseInt(
+    localStorage.getItem(VERSION_CHECK_STORAGE_KEY) ?? "0",
+    10,
+  );
   if (Date.now() - last < VERSION_CHECK_INTERVAL_MS) return;
 
   const url = `${LATEST_VERSION_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
@@ -2109,14 +2137,11 @@ let versionCheckInterval = null;
 
 function startVersionCheckInterval() {
   if (versionCheckInterval) return;
-  versionCheckInterval = setInterval(
-    () => {
-      if (props.checkForUpdates === true) {
-        checkForUpdatesNow();
-      }
-    },
-    VERSION_CHECK_INTERVAL_MS,
-  );
+  versionCheckInterval = setInterval(() => {
+    if (props.checkForUpdates === true) {
+      checkForUpdatesNow();
+    }
+  }, VERSION_CHECK_INTERVAL_MS);
 }
 
 function stopVersionCheckInterval() {
@@ -2141,6 +2166,16 @@ watch(
 );
 
 onMounted(() => {
+  // When the session is scoped to a project via a share token, initialise
+  // SideBar's internal project view state before any data is fetched.
+  if (
+    scopedResourceType.value === "project" &&
+    sessionContext.value?.resource_id != null
+  ) {
+    projectViewMode.value = "project";
+    selectedProjectId.value = sessionContext.value.resource_id;
+  }
+
   // Fetch latest version directly from pixlstash.dev when the user has opted in.
   // Also handled by a watcher above for when the prop resolves after mount.
   if (props.checkForUpdates === true) {
@@ -2645,6 +2680,7 @@ defineExpose({
             <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
           </div>
           <div
+            v-if="!isReadOnly"
             class="sidebar-project-menu-add"
             @click="
               createProject;
@@ -2657,7 +2693,7 @@ defineExpose({
         </div>
       </Teleport>
     </div>
-    <div v-else class="sidebar-view-tabs-row">
+    <div v-else-if="!scopedResourceType" class="sidebar-view-tabs-row">
       <div class="sidebar-view-tabs">
         <button
           class="sidebar-view-tab"
@@ -3063,6 +3099,7 @@ defineExpose({
               collections.
             </p>
             <v-btn
+              v-if="!isReadOnly"
               color="primary"
               size="small"
               prepend-icon="mdi-plus"
@@ -3117,17 +3154,22 @@ defineExpose({
                     >mdi-pencil</v-icon
                   >
                 </div>
-                <div class="sidebar-project-menu-add" @click="createProject">
+                <div
+                  v-if="!isReadOnly"
+                  class="sidebar-project-menu-add"
+                  @click="createProject"
+                >
                   <v-icon size="14">mdi-plus</v-icon>
                   Add new project
                 </div>
               </div>
             </div>
             <div
-              v-if="projectViewMode === 'global'"
+              v-if="projectViewMode === 'global' && !scopedResourceType"
               class="sidebar-section-divider"
             ></div>
             <div
+              v-if="!scopedResourceType || projectViewMode === 'project'"
               class="sidebar-all-pictures-row"
               :class="{
                 'drag-over-project':
@@ -3173,7 +3215,7 @@ defineExpose({
               </div>
             </div>
 
-            <div>
+            <div v-if="!scopedResourceType">
               <div
                 :class="[
                   'sidebar-list-item',
@@ -3197,6 +3239,7 @@ defineExpose({
             </div>
 
             <div
+              v-if="scopedResourceType !== 'picture_set'"
               class="sidebar-section-block"
               :style="
                 peopleSectionCollapsed
@@ -3231,7 +3274,11 @@ defineExpose({
                     <v-icon size="16">mdi-selection-off</v-icon>
                   </button>
                   <v-icon
-                    v-if="selectedCharacterObj && hasSingleSelectedCharacter"
+                    v-if="
+                      selectedCharacterObj &&
+                      hasSingleSelectedCharacter &&
+                      !isReadOnly
+                    "
                     class="edit-character-inline"
                     @click.stop="openCharacterEditor(selectedCharacterObj)"
                     title="Edit selected character"
@@ -3240,6 +3287,7 @@ defineExpose({
                   </v-icon>
                   <v-icon
                     v-if="
+                      !isReadOnly &&
                       props.selectedCharacter &&
                       props.selectedCharacter !== props.allPicturesId &&
                       props.selectedCharacter !== props.unassignedPicturesId &&
@@ -3254,6 +3302,7 @@ defineExpose({
                   </v-icon>
                   <span
                     v-if="
+                      !isReadOnly &&
                       projectViewMode === 'project' &&
                       selectedProjectId !== null
                     "
@@ -3326,7 +3375,7 @@ defineExpose({
                     </Teleport>
                   </span>
                   <v-icon
-                    v-if="projectViewMode !== 'project'"
+                    v-if="!isReadOnly && projectViewMode !== 'project'"
                     class="add-character-inline"
                     @click.stop="createCharacter"
                     title="Add character"
@@ -3448,6 +3497,7 @@ defineExpose({
             </div>
 
             <div
+              v-if="scopedResourceType !== 'character'"
               class="sidebar-section-block"
               :style="
                 setsSectionCollapsed
@@ -3476,7 +3526,7 @@ defineExpose({
                     <v-icon size="16">mdi-selection-off</v-icon>
                   </button>
                   <v-icon
-                    v-if="selectedSetObj && hasSingleSelectedSet"
+                    v-if="selectedSetObj && hasSingleSelectedSet && !isReadOnly"
                     class="edit-set-inline"
                     @click.stop="openSetEditor(selectedSetObj)"
                     title="Edit selected set"
@@ -3484,7 +3534,7 @@ defineExpose({
                     mdi-pencil
                   </v-icon>
                   <v-icon
-                    v-if="selectedSetIdSet.size > 0"
+                    v-if="!isReadOnly && selectedSetIdSet.size > 0"
                     class="delete-character-inline"
                     color="white"
                     @click.stop="handleDeleteSet"
@@ -3498,6 +3548,7 @@ defineExpose({
                   </v-icon>
                   <span
                     v-if="
+                      !isReadOnly &&
                       projectViewMode === 'project' &&
                       selectedProjectId !== null
                     "
@@ -3568,7 +3619,7 @@ defineExpose({
                     </Teleport>
                   </span>
                   <v-icon
-                    v-if="projectViewMode !== 'project'"
+                    v-if="!isReadOnly && projectViewMode !== 'project'"
                     class="add-character-inline"
                     @click.stop="createSet"
                     title="Create new set"
@@ -3648,7 +3699,11 @@ defineExpose({
               </div>
             </div>
             <div
-              v-if="projectViewMode === 'project' && selectedProjectId !== null"
+              v-if="
+                projectViewMode === 'project' &&
+                selectedProjectId !== null &&
+                (!isReadOnly || sessionContext?.include_attachments)
+              "
               class="sidebar-section-block"
             >
               <ProjectFiles
@@ -3672,6 +3727,7 @@ defineExpose({
         <span class="sidebar-footer-btn-label">Settings</span>
       </div>
       <div
+        v-if="!isReadOnly"
         class="sidebar-footer-btn sidebar-footer-btn--upload"
         title="Import photos"
         @click.stop="openImportDialog"
@@ -3680,6 +3736,7 @@ defineExpose({
         <span class="sidebar-footer-btn-label">Import</span>
       </div>
       <div
+        v-if="!isReadOnly"
         class="sidebar-footer-btn sidebar-footer-btn--tasks"
         title="Task Manager"
         @click.stop="taskManagerOpen = true"
@@ -3688,6 +3745,7 @@ defineExpose({
         <span class="sidebar-footer-btn-label">Tasks</span>
       </div>
       <div
+        v-if="!isReadOnly"
         :class="[
           'sidebar-footer-btn',
           'sidebar-footer-btn--scrapheap',
@@ -3725,7 +3783,7 @@ defineExpose({
       @contextmenu.prevent
       @mousedown.stop
     >
-      <template v-if="sidebarCtxCharacter">
+      <template v-if="sidebarCtxCharacter && !isReadOnly">
         <button
           class="sidebar-ctx-item"
           :disabled="sidebarCtxDeleteIds.length > 1"
@@ -3757,7 +3815,7 @@ defineExpose({
           }}
         </button>
       </template>
-      <template v-if="sidebarCtxSet">
+      <template v-if="sidebarCtxSet && !isReadOnly">
         <button
           class="sidebar-ctx-item"
           @click="
@@ -3781,7 +3839,7 @@ defineExpose({
           Delete
         </button>
       </template>
-      <template v-if="sidebarCtxFolder">
+      <template v-if="sidebarCtxFolder && !isReadOnly">
         <button
           class="sidebar-ctx-item"
           @click="
@@ -3805,7 +3863,7 @@ defineExpose({
           Remove
         </button>
       </template>
-      <template v-if="sidebarCtxImportFolder">
+      <template v-if="sidebarCtxImportFolder && !isReadOnly">
         <button
           class="sidebar-ctx-item"
           @click="

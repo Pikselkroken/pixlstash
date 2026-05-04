@@ -1,6 +1,6 @@
 """Drop face_id column from quality table and remove face quality rows.
 
-Revision ID: 0034_drop_face_quality
+Revision ID: 0035_drop_face_quality
 Revises: 0033_add_import_folder_host_path
 Create Date: 2026-05-01 00:00:00.000000
 
@@ -12,8 +12,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0034_drop_face_quality"
-down_revision: Union[str, None] = "0033_add_import_folder_host_path"
+revision: str = "0035_drop_face_quality"
+down_revision: Union[str, None] = "0034_add_token_scope_fields"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -26,7 +26,14 @@ def upgrade() -> None:
     existing_cols = {col["name"] for col in inspector.get_columns("quality")}
     if "face_id" in existing_cols:
         op.execute("DELETE FROM quality WHERE face_id IS NOT NULL")
-        op.drop_column("quality", "face_id")
+        # batch_alter_table with recreate='always' rewrites the entire table,
+        # which is required on SQLite when the column being dropped is referenced
+        # in a foreign key definition (plain ALTER TABLE DROP COLUMN fails).
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes("quality")}
+        with op.batch_alter_table("quality", recreate="always") as batch_op:
+            if "ix_quality_face_id" in existing_indexes:
+                batch_op.drop_index("ix_quality_face_id")
+            batch_op.drop_column("face_id")
 
 
 def downgrade() -> None:

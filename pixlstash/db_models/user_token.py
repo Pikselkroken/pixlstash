@@ -18,7 +18,11 @@ class UserToken(SQLModel, table=True):
         sa_column=Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True)
     )
     token_hash: str = Field(index=True)
+    token_prefix: Optional[str] = Field(default=None, index=True)
     description: Optional[str] = Field(default=None)
+    scope: str = Field(default="ALL")
+    resource_type: Optional[str] = Field(default=None)
+    resource_id: Optional[int] = Field(default=None)
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime, nullable=False),
@@ -27,6 +31,11 @@ class UserToken(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime, nullable=True),
     )
+    expires_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=True),
+    )
+    include_attachments: bool = Field(default=False)
 
     user: Optional["User"] = Relationship(
         back_populates="tokens",
