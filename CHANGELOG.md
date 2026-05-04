@@ -1,3 +1,7 @@
+# [1.1.2]
+- Fix issue causing very slow tagging of many pictures at the same time
+- Limit the optional version checks to once per 24h
+
 # [1.1.1]
 - Fix counts for project characters when some pictures are not in the project
 - Update Pixlstash tagger to give less false positives
