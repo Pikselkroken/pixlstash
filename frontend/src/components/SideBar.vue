@@ -79,6 +79,7 @@ const props = defineProps({
   selectedDescending: { type: Boolean, default: false },
   selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
+  publicUrl: { type: String, default: null },
   sidebarThumbnailSize: { type: Number, default: 48 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
@@ -110,6 +111,7 @@ const emit = defineEmits([
   "update:hidden-tags",
   "update:apply-tag-filter",
   "update:comfyui-configured",
+  "update:public-url",
   "open-import-dialog",
   "update:project-view-mode",
   "update:selected-project-id",
@@ -1456,7 +1458,8 @@ async function confirmShareCreate() {
     });
     const token = res.data?.token;
     if (!token) throw new Error("No token returned");
-    const base = window.location.origin + window.location.pathname;
+    const origin = props.publicUrl || window.location.origin;
+    const base = origin + window.location.pathname;
     shareDialogToken.value = token;
     shareDialogUrl.value = `${base}?token=${token}`;
   } catch {
@@ -2612,6 +2615,7 @@ defineExpose({
     @update:comfyui-configured="
       (value) => emit('update:comfyui-configured', value)
     "
+    @update:public-url="(value) => emit('update:public-url', value)"
     @update:check-for-updates="
       (value) => emit('update:check-for-updates', value)
     "
@@ -3224,7 +3228,14 @@ defineExpose({
               class="sidebar-project-menu-wrap"
               ref="projectMenuRef"
             >
+              <div v-if="isReadOnly" class="sidebar-project-label">
+                <v-icon size="14">mdi-folder-multiple-outline</v-icon>
+                <span class="sidebar-project-trigger-label">
+                  {{ selectedProjectObj?.name ?? "—" }}
+                </span>
+              </div>
               <button
+                v-else
                 class="sidebar-project-trigger"
                 @click.stop="toggleProjectMenu"
               >
@@ -3258,6 +3269,7 @@ defineExpose({
                     >mdi-download-outline</v-icon
                   >
                   <v-icon
+                    v-if="!isReadOnly"
                     size="14"
                     class="sidebar-project-menu-item-action"
                     @click.stop="openProjectEditor(p)"
@@ -3828,6 +3840,20 @@ defineExpose({
       </template>
     </div>
     <!-- end sidebar-scroll -->
+    <div v-if="isReadOnly" class="sidebar-readonly-notice">
+      <v-icon size="12">mdi-lock-outline</v-icon>
+      <span class="sidebar-readonly-notice-label">Read-only view</span>
+      <span class="sidebar-readonly-notice-sep">&middot;</span>
+      <a
+        href="https://pixlstash.dev"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="sidebar-readonly-notice-btn"
+      >
+        <img src="/Logo.png" class="sidebar-readonly-notice-logo" alt="PixlStash" />
+        <span>PixlStash</span>
+      </a>
+    </div>
     <div class="sidebar-sticky-footer">
       <div
         class="sidebar-footer-btn sidebar-footer-btn--settings"
@@ -4058,7 +4084,7 @@ defineExpose({
   </Teleport>
 
   <!-- Share dialog -->
-  <v-dialog v-model="shareDialogOpen" max-width="460" persistent>
+  <v-dialog v-model="shareDialogOpen" max-width="460">
     <v-card class="share-dialog-card">
       <v-card-title class="share-dialog-title">
         <v-icon size="18" class="share-dialog-title-icon"
@@ -4071,8 +4097,10 @@ defineExpose({
         <!-- Step 1: pick expiry -->
         <template v-if="!shareDialogToken">
           <p class="share-dialog-hint">
-            Optionally set an expiry date. Leave blank for a permanent link.
+            This will create a sharable read-only link that can be emailed or
+            posted online.
           </p>
+          <p class="share-dialog-hint">Optionally set an expiry date.</p>
           <v-text-field
             v-model="shareDialogExpiresAt"
             label="Expires on (optional)"
@@ -4420,6 +4448,19 @@ defineExpose({
   position: relative;
   padding: 0;
   border-bottom: none;
+}
+
+.sidebar-project-label {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.7);
+  background: rgba(var(--v-theme-tertiary), 0.38);
+  color: rgba(var(--v-theme-sidebar-text), 0.75);
+  font-size: 0.85rem;
+  font-weight: 500;
 }
 
 .sidebar-project-trigger {
@@ -4991,6 +5032,60 @@ defineExpose({
 
 .sidebar-scroll::-webkit-scrollbar-track {
   background: rgba(var(--v-theme-shadow), 0.15);
+}
+
+.sidebar-readonly-notice {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-top: 1px solid rgba(var(--v-theme-border), 0.2);
+  background: rgb(var(--v-theme-sidebar));
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: rgba(var(--v-theme-sidebar-text), 0.38);
+}
+
+.sidebar-readonly-notice-label {
+  white-space: nowrap;
+}
+
+.sidebar-readonly-notice-sep {
+  opacity: 0.5;
+}
+
+.sidebar-readonly-notice-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(var(--v-theme-accent), 0.15);
+  color: rgb(var(--v-theme-accent));
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.sidebar-readonly-notice-btn:hover {
+  background: rgba(var(--v-theme-accent), 0.28);
+}
+
+.sidebar-readonly-notice-logo {
+  width: 13px;
+  height: 13px;
+  object-fit: contain;
+  display: block;
+}
+
+.sidebar-collapsed .sidebar-readonly-notice {
+  display: none;
 }
 
 .sidebar-sticky-footer {
