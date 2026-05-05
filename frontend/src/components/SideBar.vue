@@ -195,7 +195,20 @@ const sidebarCtxCharacter = ref(null); // { id, name } or null
 const sidebarCtxSet = ref(null); // { id, name } or null
 const sidebarCtxFolder = ref(null); // reference folder object or null
 const sidebarCtxImportFolder = ref(null); // import folder object or null
+const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
+const shareNotification = ref(null); // { message, ok } or null — kept for errors only
+let shareNotificationTimer = null;
+
+// Share dialog state
+const shareDialogOpen = ref(false);
+const shareDialogPending = ref(null); // { resourceType, resourceId, label }
+const shareDialogExpiresAt = ref(null); // YYYY-MM-DD string or null
+const shareDialogExpiryError = ref("");
+const shareDialogLoading = ref(false);
+const shareDialogToken = ref(""); // set after creation
+const shareDialogUrl = ref("");
+const shareDialogCopied = ref(false);
 
 function openCharacterMoveMenu() {
   if (characterMoveMenuBtnRef.value) {
@@ -1341,6 +1354,7 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxSet.value = null;
     sidebarCtxFolder.value = null;
     sidebarCtxImportFolder.value = null;
+    sidebarCtxProject.value = null;
     const numId = Number(item.id);
     // If the right-clicked char is part of a multi-selection, offer bulk delete
     if (
@@ -1358,16 +1372,25 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxSet.value = item;
       sidebarCtxFolder.value = null;
       sidebarCtxImportFolder.value = null;
+      sidebarCtxProject.value = null;
     } else if (type === "folder") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = item;
       sidebarCtxImportFolder.value = null;
+      sidebarCtxProject.value = null;
     } else if (type === "import-folder") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
       sidebarCtxImportFolder.value = item;
+      sidebarCtxProject.value = null;
+    } else if (type === "project") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = null;
+      sidebarCtxFolder.value = null;
+      sidebarCtxImportFolder.value = null;
+      sidebarCtxProject.value = item;
     }
   }
   sidebarCtxX.value = event.clientX;
@@ -1377,6 +1400,91 @@ function openSidebarCtxMenu(type, item, event) {
 
 function closeSidebarCtxMenu() {
   sidebarCtxVisible.value = false;
+}
+
+async function shareResource(resourceType, resourceId, label) {
+  closeSidebarCtxMenu();
+  shareDialogPending.value = { resourceType, resourceId, label };
+  shareDialogExpiresAt.value = null;
+  shareDialogExpiryError.value = "";
+  shareDialogToken.value = "";
+  shareDialogUrl.value = "";
+  shareDialogCopied.value = false;
+  shareDialogLoading.value = false;
+  shareDialogOpen.value = true;
+}
+
+function shareDialogExpiryMin() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function shareDialogExpiryMax() {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+async function confirmShareCreate() {
+  shareDialogExpiryError.value = "";
+  if (shareDialogExpiresAt.value) {
+    const chosen = new Date(shareDialogExpiresAt.value);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (chosen < today) {
+      shareDialogExpiryError.value = "Expiry date must be in the future.";
+      return;
+    }
+    const maxDate = new Date();
+    maxDate.setFullYear(maxDate.getFullYear() + 1);
+    if (chosen > maxDate) {
+      shareDialogExpiryError.value =
+        "Expiry date cannot be more than 1 year from now.";
+      return;
+    }
+  }
+  shareDialogLoading.value = true;
+  const { resourceType, resourceId, label } = shareDialogPending.value;
+  try {
+    const res = await apiClient.post("/users/me/token", {
+      description: `Share – ${label}`,
+      scope: "READ",
+      resource_type: resourceType,
+      resource_id: resourceId,
+      expires_at: shareDialogExpiresAt.value || null,
+    });
+    const token = res.data?.token;
+    if (!token) throw new Error("No token returned");
+    const base = window.location.origin + window.location.pathname;
+    shareDialogToken.value = token;
+    shareDialogUrl.value = `${base}?token=${token}`;
+  } catch {
+    showShareNotification("Failed to create share link", false);
+    shareDialogOpen.value = false;
+  } finally {
+    shareDialogLoading.value = false;
+  }
+}
+
+async function copyShareDialogUrl() {
+  try {
+    await navigator.clipboard.writeText(shareDialogUrl.value);
+    shareDialogCopied.value = true;
+    setTimeout(() => {
+      shareDialogCopied.value = false;
+    }, 2000);
+  } catch {
+    // clipboard not available
+  }
+}
+
+function showShareNotification(message, ok) {
+  clearTimeout(shareNotificationTimer);
+  shareNotification.value = { message, ok };
+  shareNotificationTimer = setTimeout(() => {
+    shareNotification.value = null;
+  }, 3000);
 }
 
 function createCharacter() {
@@ -2683,7 +2791,7 @@ defineExpose({
             v-if="!isReadOnly"
             class="sidebar-project-menu-add"
             @click="
-              createProject;
+              createProject();
               projectMenuOpen = false;
             "
           >
@@ -3135,6 +3243,9 @@ defineExpose({
                   class="sidebar-project-menu-item"
                   :class="{ active: selectedProjectId === p.id }"
                   @click="selectProject(p.id)"
+                  @contextmenu.prevent="
+                    openSidebarCtxMenu('project', p, $event)
+                  "
                 >
                   <span class="sidebar-project-menu-item-label">{{
                     p.name
@@ -3786,6 +3897,21 @@ defineExpose({
       <template v-if="sidebarCtxCharacter && !isReadOnly">
         <button
           class="sidebar-ctx-item"
+          @click="
+            shareResource(
+              'character',
+              sidebarCtxCharacter.id,
+              sidebarCtxCharacter.name,
+            )
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-share-variant-outline</v-icon
+          >
+          Share
+        </button>
+        <button
+          class="sidebar-ctx-item"
           :disabled="sidebarCtxDeleteIds.length > 1"
           :class="{
             'sidebar-ctx-item--disabled': sidebarCtxDeleteIds.length > 1,
@@ -3819,6 +3945,17 @@ defineExpose({
         <button
           class="sidebar-ctx-item"
           @click="
+            shareResource('picture_set', sidebarCtxSet.id, sidebarCtxSet.name)
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-share-variant-outline</v-icon
+          >
+          Share
+        </button>
+        <button
+          class="sidebar-ctx-item"
+          @click="
             openSetEditor(sidebarCtxSet);
             closeSidebarCtxMenu();
           "
@@ -3837,6 +3974,23 @@ defineExpose({
             >mdi-trash-can-outline</v-icon
           >
           Delete
+        </button>
+      </template>
+      <template v-if="sidebarCtxProject && !isReadOnly">
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            shareResource(
+              'project',
+              sidebarCtxProject.id,
+              sidebarCtxProject.name,
+            )
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-share-variant-outline</v-icon
+          >
+          Share
         </button>
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
@@ -3889,9 +4043,174 @@ defineExpose({
       </template>
     </div>
   </Teleport>
+
+  <!-- Share notification toast (errors only) -->
+  <Teleport to="body">
+    <Transition name="share-toast">
+      <div
+        v-if="shareNotification"
+        class="sidebar-share-toast sidebar-share-toast--err"
+      >
+        <v-icon size="16">mdi-alert-circle-outline</v-icon>
+        {{ shareNotification.message }}
+      </div>
+    </Transition>
+  </Teleport>
+
+  <!-- Share dialog -->
+  <v-dialog v-model="shareDialogOpen" max-width="460" persistent>
+    <v-card class="share-dialog-card">
+      <v-card-title class="share-dialog-title">
+        <v-icon size="18" class="share-dialog-title-icon"
+          >mdi-share-variant-outline</v-icon
+        >
+        Share &ldquo;{{ shareDialogPending?.label }}&rdquo;
+      </v-card-title>
+
+      <v-card-text class="share-dialog-body">
+        <!-- Step 1: pick expiry -->
+        <template v-if="!shareDialogToken">
+          <p class="share-dialog-hint">
+            Optionally set an expiry date. Leave blank for a permanent link.
+          </p>
+          <v-text-field
+            v-model="shareDialogExpiresAt"
+            label="Expires on (optional)"
+            type="date"
+            :min="shareDialogExpiryMin()"
+            :max="shareDialogExpiryMax()"
+            density="compact"
+            variant="outlined"
+            hide-details="auto"
+            :error-messages="
+              shareDialogExpiryError ? [shareDialogExpiryError] : []
+            "
+            class="share-dialog-date"
+          />
+        </template>
+
+        <!-- Step 2: show link -->
+        <template v-else>
+          <p class="share-dialog-hint">
+            Copy this link. Anyone with it gets read-only access.
+          </p>
+          <div class="share-dialog-url-row">
+            <div class="share-dialog-url">{{ shareDialogUrl }}</div>
+            <v-btn
+              icon
+              variant="text"
+              size="small"
+              :title="shareDialogCopied ? 'Copied!' : 'Copy link'"
+              @click="copyShareDialogUrl"
+            >
+              <v-icon size="18">{{
+                shareDialogCopied ? "mdi-check" : "mdi-content-copy"
+              }}</v-icon>
+            </v-btn>
+          </div>
+        </template>
+      </v-card-text>
+
+      <v-card-actions class="share-dialog-actions">
+        <v-spacer />
+        <v-btn variant="text" @click="shareDialogOpen = false">
+          {{ shareDialogToken ? "Close" : "Cancel" }}
+        </v-btn>
+        <v-btn
+          v-if="!shareDialogToken"
+          variant="flat"
+          color="primary"
+          :loading="shareDialogLoading"
+          @click="confirmShareCreate"
+        >
+          Create Link
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <style scoped>
+.sidebar-share-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  z-index: 9999;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.sidebar-share-toast--ok {
+  background: rgba(30, 120, 60, 0.92);
+  color: #d0ffd8;
+}
+.sidebar-share-toast--err {
+  background: rgba(160, 30, 30, 0.92);
+  color: #ffd0d0;
+}
+.share-toast-enter-active,
+.share-toast-leave-active {
+  transition:
+    opacity 0.25s,
+    transform 0.25s;
+}
+.share-toast-enter-from,
+.share-toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(12px);
+}
+
+.share-dialog-card {
+  background: rgb(var(--v-theme-surface));
+}
+.share-dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 16px 20px 8px;
+}
+.share-dialog-title-icon {
+  opacity: 0.8;
+}
+.share-dialog-body {
+  padding: 8px 20px 4px;
+}
+.share-dialog-hint {
+  font-size: 0.85rem;
+  opacity: 0.75;
+  margin-bottom: 14px;
+}
+.share-dialog-date {
+  margin-bottom: 4px;
+}
+.share-dialog-url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.share-dialog-url {
+  flex: 1;
+  font-size: 11px;
+  word-break: break-all;
+  opacity: 0.9;
+  font-family: monospace;
+}
+.share-dialog-actions {
+  padding: 8px 16px 16px;
+}
+
 .sidebar-project-header {
   padding-top: 4px;
   padding-bottom: 4px;

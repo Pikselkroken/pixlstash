@@ -1359,6 +1359,21 @@ async function copyShareLink() {
 
 async function createUserToken() {
   tokensError.value = "";
+  if (tokenExpiresAt.value) {
+    const chosen = new Date(tokenExpiresAt.value);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (chosen < today) {
+      tokensError.value = "Expiry date must be in the future.";
+      return;
+    }
+    const maxDate = new Date();
+    maxDate.setFullYear(maxDate.getFullYear() + 1);
+    if (chosen > maxDate) {
+      tokensError.value = "Expiry date cannot be more than 1 year from now.";
+      return;
+    }
+  }
   const description = tokenDescription.value.trim() || null;
   tokensLoading.value = true;
   try {
@@ -2343,11 +2358,26 @@ const workflowImportCaptionPreview = computed(() => {
                     />
                     <v-text-field
                       v-model="tokenExpiresAt"
-                      label="Expires at (optional, e.g. 2027-01-01)"
+                      label="Expires on (optional)"
+                      type="date"
+                      :min="
+                        (() => {
+                          const d = new Date();
+                          d.setDate(d.getDate() + 1);
+                          return d.toISOString().slice(0, 10);
+                        })()
+                      "
+                      :max="
+                        (() => {
+                          const d = new Date();
+                          d.setFullYear(d.getFullYear() + 1);
+                          return d.toISOString().slice(0, 10);
+                        })()
+                      "
                       density="compact"
                       variant="underlined"
                       class="token-field"
-                      hide-details
+                      hide-details="auto"
                       :disabled="tokensLoading"
                     />
                     <v-checkbox
@@ -2396,9 +2426,7 @@ const workflowImportCaptionPreview = computed(() => {
                         </v-chip>
                         <span class="settings-token-sub">
                           Created:
-                          {{
-                            formatTokenTimestamp(token.created_at)
-                          }}
+                          {{ formatTokenTimestamp(token.created_at) }}
                           &nbsp;·&nbsp; Last used:
                           {{ formatTokenTimestamp(token.last_used_at) }}
                         </span>
