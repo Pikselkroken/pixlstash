@@ -1698,6 +1698,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 :importSourceFolderFilter="
                   selectedFolderFilter?.importSourceFolder ?? null
                 "
+                :publicUrl="publicUrl"
                 :folderScanning="folderScanning"
                 :columns="columns"
                 @clear-search="handleClearSearch"

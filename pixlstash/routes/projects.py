@@ -544,8 +544,15 @@ def create_router(server) -> APIRouter:
         request: Request,
         project_id: int,
         include_pictures: bool = Query(default=True),
+        include_attachments: bool = Query(default=True),
     ):
         server.auth.require_user_id(request)
+        token_scope = getattr(request.state, "token_scope", None)
+        if token_scope is not None and token_scope.scope == "READ":
+            if token_scope.resource_type == "project" and token_scope.resource_id != project_id:
+                raise HTTPException(status_code=403, detail="Token does not grant access to this project.")
+            if not token_scope.include_attachments:
+                include_attachments = False
 
         def _safe(name: str) -> str:
             """Slugify a name for use as a directory component."""
@@ -728,21 +735,22 @@ def create_router(server) -> APIRouter:
                             )
 
             # Attachments
-            used_attachment_names: set = set()
-            for att in attachments_data:
-                try:
-                    full = resolve_path_within(
-                        server.vault.image_root, att["stored_path"]
-                    )
-                except ValueError:
-                    continue
-                if not os.path.isfile(full):
-                    continue
-                fname = _unique_name(used_attachment_names, att["original_filename"])
-                try:
-                    zf.write(full, f"{root}/attachments/{fname}")
-                except OSError as exc:
-                    logger.debug("Failed to add attachment to export ZIP: %s", exc)
+            if include_attachments:
+                used_attachment_names: set = set()
+                for att in attachments_data:
+                    try:
+                        full = resolve_path_within(
+                            server.vault.image_root, att["stored_path"]
+                        )
+                    except ValueError:
+                        continue
+                    if not os.path.isfile(full):
+                        continue
+                    fname = _unique_name(used_attachment_names, att["original_filename"])
+                    try:
+                        zf.write(full, f"{root}/attachments/{fname}")
+                    except OSError as exc:
+                        logger.debug("Failed to add attachment to export ZIP: %s", exc)
 
         buf.seek(0)
         safe_filename = re.sub(r"[^\w\-.]", "_", project_data["name"] or "project")

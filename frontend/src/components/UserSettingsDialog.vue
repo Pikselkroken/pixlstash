@@ -2511,11 +2511,41 @@ const workflowImportCaptionPreview = computed(() => {
                           :color="token.scope === 'ALL' ? 'default' : 'info'"
                           class="settings-token-scope-chip"
                         >
-                          {{
-                            token.scope === "ALL"
-                              ? "Full access"
-                              : `Read · ${token.resource_type ?? ""} ${token.resource_id != null ? "#" + token.resource_id : ""}`.trim()
-                          }}
+                          <template v-if="token.scope === 'ALL'">
+                            <v-icon size="11" start
+                              >mdi-shield-account-outline</v-icon
+                            >
+                            Full access
+                          </template>
+                          <template
+                            v-else-if="token.resource_type === 'project'"
+                          >
+                            <v-icon size="11" start>mdi-folder-outline</v-icon>
+                            {{
+                              token.resource_name ??
+                              `Project #${token.resource_id}`
+                            }}
+                          </template>
+                          <template
+                            v-else-if="token.resource_type === 'character'"
+                          >
+                            <v-icon size="11" start>mdi-account-outline</v-icon>
+                            {{
+                              token.resource_name ??
+                              `Character #${token.resource_id}`
+                            }}
+                          </template>
+                          <template
+                            v-else-if="token.resource_type === 'picture_set'"
+                          >
+                            <v-icon size="11" start
+                              >mdi-image-multiple-outline</v-icon
+                            >
+                            {{
+                              token.resource_name ?? `Set #${token.resource_id}`
+                            }}
+                          </template>
+                          <template v-else> Read-only </template>
                         </v-chip>
                         <span class="settings-token-sub">
                           Created:

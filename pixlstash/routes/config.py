@@ -487,6 +487,46 @@ def create_router(server) -> APIRouter:
         return server.auth.delete_token(request, token_id)
 
     @router.get(
+        "/users/me/shared-resource-ids",
+        summary="Get shared resource IDs",
+        description=(
+            "Returns the IDs of resources of the given type that have at least one "
+            "active READ share token. Accepts ?resource_type= (character, picture_set, project, picture)."
+        ),
+    )
+    def get_shared_resource_ids(resource_type: str, request: Request):
+        valid = {"character", "picture_set", "project", "picture"}
+        if resource_type not in valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"resource_type must be one of: {', '.join(sorted(valid))}",
+            )
+        return server.auth.get_shared_resource_ids(request, resource_type)
+
+    class BatchSharedPictureIdsRequest(BaseModel):
+        picture_ids: list[int] = Field(default_factory=list)
+
+    @router.post(
+        "/users/me/shared-picture-ids/batch",
+        summary="Batch check shared picture IDs",
+        description="Given a list of picture IDs, returns which ones have active READ share tokens.",
+    )
+    def batch_shared_picture_ids(
+        payload: BatchSharedPictureIdsRequest, request: Request
+    ):
+        return server.auth.batch_get_shared_picture_ids(request, payload.picture_ids)
+
+    @router.delete(
+        "/users/me/tokens/by-resource",
+        summary="Revoke all tokens for a resource",
+        description="Deletes all READ tokens scoped to a specific resource (by type and id).",
+    )
+    def revoke_tokens_for_resource(
+        resource_type: str, resource_id: int, request: Request
+    ):
+        return server.auth.revoke_tokens_for_resource(request, resource_type, resource_id)
+
+    @router.get(
         "/session/context",
         summary="Get session access context",
         description=(

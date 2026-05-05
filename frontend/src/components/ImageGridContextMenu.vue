@@ -96,6 +96,25 @@
         <div class="ctx-sep" />
       </template>
 
+      <!-- ── Share image ──────────────────────────────────────────── -->
+      <template
+        v-if="!isReadOnly && contextImage?.id && selectedImageIds.length === 1"
+      >
+        <button class="ctx-item" @click="onAction('share-picture')">
+          <v-icon class="ctx-icon" size="15">mdi-link-variant</v-icon>
+          Share image
+        </button>
+        <button
+          v-if="isShared"
+          class="ctx-item ctx-item--danger"
+          @click="onAction('remove-picture-shares')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-link-variant-off</v-icon>
+          Remove all shares
+        </button>
+        <div class="ctx-sep" />
+      </template>
+
       <!-- ── Remove / Delete ───────────────────────────────────────── -->
       <button
         v-if="showRemoveButton && !isReadOnly"
@@ -151,6 +170,8 @@ const props = defineProps({
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
   availablePlugins: { type: Array, default: () => [] },
+  contextImage: { type: Object, default: null },
+  isShared: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -168,6 +189,8 @@ const emit = defineEmits([
   "open-tag-panel",
   "open-plugin-panel",
   "open-comfyui-panel",
+  "share-picture",
+  "remove-picture-shares",
 ]);
 
 const menuRef = ref(null);

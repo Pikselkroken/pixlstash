@@ -202,6 +202,15 @@ const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 const shareNotification = ref(null); // { message, ok } or null — kept for errors only
 let shareNotificationTimer = null;
 
+// Shared resource IDs — drives the share-link icon overlay on sidebar items
+const sharedCharacterIds = ref(new Set());
+const sharedSetIds = ref(new Set());
+const sharedProjectIds = ref(new Set());
+
+// Confirm-revoke-all dialog state
+const revokeSharesDialogOpen = ref(false);
+const revokeSharesPending = ref(null); // { resourceType, resourceId, label }
+
 // Share dialog state
 const shareDialogOpen = ref(false);
 const shareDialogPending = ref(null); // { resourceType, resourceId, label }
@@ -211,6 +220,7 @@ const shareDialogLoading = ref(false);
 const shareDialogToken = ref(""); // set after creation
 const shareDialogUrl = ref("");
 const shareDialogCopied = ref(false);
+const shareDialogIncludeAttachments = ref(false);
 
 function openCharacterMoveMenu() {
   if (characterMoveMenuBtnRef.value) {
@@ -817,7 +827,13 @@ function createProject() {
 
 function exportProject(project) {
   projectMenuOpen.value = false;
-  const url = `${props.backendUrl}/projects/${project.id}/export`;
+  const includeAttachments =
+    !isReadOnly.value || Boolean(sessionContext.value?.include_attachments);
+  let url = `${props.backendUrl}/projects/${project.id}/export`;
+  if (!includeAttachments) {
+    url += "?include_attachments=false";
+  }
+  url = appendShareToken(url);
   const a = document.createElement("a");
   a.href = url;
   a.download = `${project.name}.zip`;
@@ -1413,6 +1429,7 @@ async function shareResource(resourceType, resourceId, label) {
   shareDialogUrl.value = "";
   shareDialogCopied.value = false;
   shareDialogLoading.value = false;
+  shareDialogIncludeAttachments.value = false;
   shareDialogOpen.value = true;
 }
 
@@ -1455,6 +1472,10 @@ async function confirmShareCreate() {
       resource_type: resourceType,
       resource_id: resourceId,
       expires_at: shareDialogExpiresAt.value || null,
+      include_attachments:
+        resourceType === "project"
+          ? shareDialogIncludeAttachments.value
+          : false,
     });
     const token = res.data?.token;
     if (!token) throw new Error("No token returned");
@@ -1811,6 +1832,7 @@ function refreshSidebar(options = {}) {
   fetchCharacters();
   fetchPictureSets();
   fetchProjects();
+  fetchSharedIds();
   fetchSidebarData();
 }
 
@@ -1899,6 +1921,54 @@ async function fetchPictureSets() {
     console.error("Error fetching picture sets:", e);
     pictureSets.value = [...pictureSets.value]; // force reactivity on error
   }
+}
+
+async function fetchSharedIds() {
+  if (isReadOnly.value) return; // only owner can query tokens
+  try {
+    const [charRes, setRes, projRes] = await Promise.all([
+      apiClient.get("/users/me/shared-resource-ids?resource_type=character"),
+      apiClient.get("/users/me/shared-resource-ids?resource_type=picture_set"),
+      apiClient.get("/users/me/shared-resource-ids?resource_type=project"),
+    ]);
+    sharedCharacterIds.value = new Set(charRes.data?.ids ?? []);
+    sharedSetIds.value = new Set(setRes.data?.ids ?? []);
+    sharedProjectIds.value = new Set(projRes.data?.ids ?? []);
+  } catch (e) {
+    console.warn("[SideBar] fetchSharedIds error:", e);
+  }
+}
+
+async function revokeAllShares(resourceType, resourceId) {
+  try {
+    await apiClient.delete(
+      `/users/me/tokens/by-resource?resource_type=${encodeURIComponent(resourceType)}&resource_id=${encodeURIComponent(resourceId)}`,
+    );
+    // Remove from local set so icon disappears immediately
+    if (resourceType === "character") sharedCharacterIds.value.delete(resourceId);
+    else if (resourceType === "picture_set") sharedSetIds.value.delete(resourceId);
+    else if (resourceType === "project") sharedProjectIds.value.delete(resourceId);
+    // Trigger reactivity
+    sharedCharacterIds.value = new Set(sharedCharacterIds.value);
+    sharedSetIds.value = new Set(sharedSetIds.value);
+    sharedProjectIds.value = new Set(sharedProjectIds.value);
+  } catch (e) {
+    console.error("[SideBar] revokeAllShares error:", e);
+  }
+}
+
+function openRevokeSharesDialog(resourceType, resourceId, label) {
+  revokeSharesPending.value = { resourceType, resourceId, label };
+  revokeSharesDialogOpen.value = true;
+  closeSidebarCtxMenu();
+}
+
+async function confirmRevokeShares() {
+  if (!revokeSharesPending.value) return;
+  const { resourceType, resourceId } = revokeSharesPending.value;
+  revokeSharesDialogOpen.value = false;
+  revokeSharesPending.value = null;
+  await revokeAllShares(resourceType, resourceId);
 }
 
 async function updateSetThumbnails(sets) {
@@ -3233,16 +3303,34 @@ defineExpose({
                 <span class="sidebar-project-trigger-label">
                   {{ selectedProjectObj?.name ?? "—" }}
                 </span>
+                <v-icon
+                  v-if="selectedProjectObj"
+                  size="14"
+                  class="sidebar-project-menu-item-action"
+                  @click.stop="exportProject(selectedProjectObj)"
+                  title="Export project as ZIP"
+                  >mdi-download-outline</v-icon
+                >
               </div>
               <button
                 v-else
                 class="sidebar-project-trigger"
                 @click.stop="toggleProjectMenu"
+                @contextmenu.prevent="
+                  selectedProjectObj &&
+                    openSidebarCtxMenu('project', selectedProjectObj, $event)
+                "
               >
                 <v-icon size="14">mdi-folder-multiple-outline</v-icon>
                 <span class="sidebar-project-trigger-label">
                   {{ selectedProjectObj?.name ?? "—" }}
                 </span>
+                <v-icon
+                  v-if="selectedProjectId && sharedProjectIds.has(selectedProjectId)"
+                  size="11"
+                  class="sidebar-shared-icon sidebar-shared-icon--inline"
+                  title="Has active share links"
+                >mdi-link-variant</v-icon>
                 <v-icon size="14" class="sidebar-project-trigger-chevron">
                   {{ projectMenuOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}
                 </v-icon>
@@ -3261,6 +3349,12 @@ defineExpose({
                   <span class="sidebar-project-menu-item-label">{{
                     p.name
                   }}</span>
+                  <v-icon
+                    v-if="sharedProjectIds.has(p.id)"
+                    size="11"
+                    class="sidebar-shared-icon sidebar-shared-icon--inline"
+                    title="Has active share links"
+                  >mdi-link-variant</v-icon>
                   <v-icon
                     size="14"
                     class="sidebar-project-menu-item-action"
@@ -3602,6 +3696,12 @@ defineExpose({
                       </v-tooltip>
                     </span>
                     <span class="sidebar-character-actions">
+                      <v-icon
+                        v-if="sharedCharacterIds.has(char.id)"
+                        class="sidebar-shared-icon"
+                        size="11"
+                        title="Has active share links"
+                      >mdi-link-variant</v-icon>
                       <span class="sidebar-list-count">
                         <span
                           v-if="isCountNew(char.id)"
@@ -3814,6 +3914,12 @@ defineExpose({
                         <span>{{ pset.name }}</span>
                       </v-tooltip>
                     </span>
+                    <v-icon
+                      v-if="sharedSetIds.has(pset.id)"
+                      class="sidebar-shared-icon"
+                      size="11"
+                      title="Has active share links"
+                    >mdi-link-variant</v-icon>
                     <span class="sidebar-list-count">
                       {{ pset.picture_count ?? 0 }}
                     </span>
@@ -3951,6 +4057,20 @@ defineExpose({
           Edit
         </button>
         <button
+          v-if="sharedCharacterIds.has(sidebarCtxCharacter.id)"
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="
+            openRevokeSharesDialog(
+              'character',
+              sidebarCtxCharacter.id,
+              sidebarCtxCharacter.name,
+            )
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-link-variant-off</v-icon>
+          Remove all shares
+        </button>
+        <button
           class="sidebar-ctx-item sidebar-ctx-item--danger"
           @click="
             deleteCharactersByIds(sidebarCtxDeleteIds);
@@ -3990,6 +4110,20 @@ defineExpose({
           Edit
         </button>
         <button
+          v-if="sharedSetIds.has(sidebarCtxSet.id)"
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="
+            openRevokeSharesDialog(
+              'picture_set',
+              sidebarCtxSet.id,
+              sidebarCtxSet.name,
+            )
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-link-variant-off</v-icon>
+          Remove all shares
+        </button>
+        <button
           class="sidebar-ctx-item sidebar-ctx-item--danger"
           @click="
             deleteSetById(sidebarCtxSet.id);
@@ -4002,21 +4136,58 @@ defineExpose({
           Delete
         </button>
       </template>
-      <template v-if="sidebarCtxProject && !isReadOnly">
+      <template v-if="sidebarCtxProject">
         <button
+          v-if="!isReadOnly"
           class="sidebar-ctx-item"
           @click="
             shareResource(
               'project',
               sidebarCtxProject.id,
               sidebarCtxProject.name,
-            )
+            );
+            closeSidebarCtxMenu();
           "
         >
           <v-icon size="15" class="sidebar-ctx-icon"
             >mdi-share-variant-outline</v-icon
           >
           Share
+        </button>
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            exportProject(sidebarCtxProject);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-download-outline</v-icon>
+          Export as ZIP
+        </button>
+        <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item"
+          @click="
+            openProjectEditor(sidebarCtxProject);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-pencil</v-icon>
+          Edit
+        </button>
+        <button
+          v-if="!isReadOnly && sharedProjectIds.has(sidebarCtxProject.id)"
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="
+            openRevokeSharesDialog(
+              'project',
+              sidebarCtxProject.id,
+              sidebarCtxProject.name,
+            )
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-link-variant-off</v-icon>
+          Remove all shares
         </button>
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
@@ -4115,6 +4286,14 @@ defineExpose({
             "
             class="share-dialog-date"
           />
+          <v-checkbox
+            v-if="shareDialogPending?.resourceType === 'project'"
+            v-model="shareDialogIncludeAttachments"
+            label="Include project attachments"
+            density="compact"
+            hide-details
+            class="share-dialog-attachments-cb"
+          />
         </template>
 
         <!-- Step 2: show link -->
@@ -4152,6 +4331,30 @@ defineExpose({
           @click="confirmShareCreate"
         >
           Create Link
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <!-- ── Revoke all shares confirm dialog ──────────────────────── -->
+  <v-dialog v-model="revokeSharesDialogOpen" max-width="400">
+    <v-card class="share-dialog-card">
+      <v-card-title class="share-dialog-title">
+        <v-icon size="18" class="share-dialog-title-icon">mdi-link-variant-off</v-icon>
+        Remove all shares
+      </v-card-title>
+      <v-card-text class="share-dialog-body">
+        <p class="share-dialog-hint">
+          This will revoke all active share links for
+          <strong>{{ revokeSharesPending?.label }}</strong>.
+          Anyone with an existing link will lose access immediately.
+        </p>
+      </v-card-text>
+      <v-card-actions class="share-dialog-actions">
+        <v-btn variant="text" @click="revokeSharesDialogOpen = false">Cancel</v-btn>
+        <v-spacer />
+        <v-btn color="error" variant="tonal" @click="confirmRevokeShares">
+          Remove all shares
         </v-btn>
       </v-card-actions>
     </v-card>
@@ -5431,6 +5634,22 @@ defineExpose({
   margin: 0;
 }
 
+/* ── Share link indicator icon on sidebar list items ──────────── */
+.sidebar-shared-icon {
+  opacity: 0.5;
+  color: rgb(var(--v-theme-primary));
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.sidebar-shared-icon--inline {
+  opacity: 0.5;
+  color: rgb(var(--v-theme-primary));
+  flex-shrink: 0;
+  pointer-events: none;
+  margin-right: 2px;
+}
+
 .sidebar-character-toggle {
   cursor: pointer;
   color: rgb(var(--v-theme-sidebar-text));
@@ -5933,12 +6152,6 @@ defineExpose({
 .sidebar-ctx-icon {
   flex-shrink: 0;
   opacity: 0.7;
-  flex-shrink: 0;
-  opacity: 0;
-  cursor: pointer;
-  transition: opacity 0.15s;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
-  padding: 2px;
 }
 
 .folder-type-card {
