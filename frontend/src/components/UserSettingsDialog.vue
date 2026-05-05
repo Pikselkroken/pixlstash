@@ -23,6 +23,7 @@ const emit = defineEmits([
   "update:comfyui-configured",
   "update:check-for-updates",
   "update:show-keyboard-hint",
+  "update:public-url",
 ]);
 
 const dialogOpen = computed({
@@ -161,6 +162,10 @@ const maxVramGbSavedValue = ref(null);
 const maxVramGbHydrating = ref(false);
 const maxVramGbAutoSaveReady = ref(false);
 let maxVramGbSaveTimer = null;
+const publicUrlValue = ref("");
+const publicUrlLoading = ref(false);
+const publicUrlError = ref("");
+const publicUrlSuccess = ref("");
 const comfyuiHost = ref("");
 const comfyuiPort = ref("");
 const comfyuiEditHost = ref("");
@@ -191,6 +196,40 @@ const smartScoreImportanceOptions = [
   { value: 4, label: "High" },
   { value: 5, label: "Severe" },
 ];
+
+async function fetchPublicUrl() {
+  publicUrlLoading.value = true;
+  try {
+    const res = await apiClient.get("/users/me/config");
+    publicUrlValue.value = res.data?.public_url || "";
+  } catch (_) {
+    /* silent */
+  } finally {
+    publicUrlLoading.value = false;
+  }
+}
+
+async function savePublicUrl() {
+  publicUrlError.value = "";
+  publicUrlSuccess.value = "";
+  const trimmed = publicUrlValue.value.trim().replace(/\/$/, "");
+  publicUrlValue.value = trimmed;
+  publicUrlLoading.value = true;
+  try {
+    await apiClient.patch("/users/me/config", {
+      public_url: trimmed || null,
+    });
+    emit("update:public-url", trimmed || null);
+    publicUrlSuccess.value = "Saved.";
+    setTimeout(() => {
+      publicUrlSuccess.value = "";
+    }, 2500);
+  } catch (_) {
+    publicUrlError.value = "Failed to save.";
+  } finally {
+    publicUrlLoading.value = false;
+  }
+}
 
 async function fetchSettingsAuth() {
   settingsLoading.value = true;
@@ -233,6 +272,9 @@ function resetSettingsForm() {
   hiddenTagsSuccess.value = "";
   keepModelsInMemoryError.value = "";
   wd14TaggerError.value = "";
+  publicUrlValue.value = "";
+  publicUrlError.value = "";
+  publicUrlSuccess.value = "";
   customTaggerError.value = "";
   wd14ThresholdError.value = "";
   customTaggerThresholdOffsetError.value = "";
@@ -1340,7 +1382,9 @@ watch(tokenResourceType, (type) => {
 
 const shareUrl = computed(() => {
   if (!newlyCreatedToken.value || tokenScope.value !== "READ") return null;
-  const base = window.location.origin + window.location.pathname;
+  // Prefer the configured public URL so the link works from outside the LAN.
+  const origin = publicUrlValue.value?.trim().replace(/\/$/, "") || window.location.origin;
+  const base = origin + window.location.pathname;
   return `${base}?token=${newlyCreatedToken.value}`;
 });
 
@@ -1483,6 +1527,7 @@ watch(
         fetchUserTokens();
         fetchSmartScoreSettings();
         fetchWorkflowList();
+        fetchPublicUrl();
       }
     }
   },
@@ -2288,6 +2333,54 @@ const workflowImportCaptionPreview = computed(() => {
                   >
                     Update Password
                   </v-btn>
+                </div>
+              </div>
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div
+                  class="settings-section-title"
+                  title="Set a public URL so share links work outside your local network (e.g. a Cloudflare Tunnel address)."
+                >
+                  Sharing
+                </div>
+                <div class="settings-public-url-form">
+                  <v-text-field
+                    v-model="publicUrlValue"
+                    label="Public base URL (optional)"
+                    placeholder="https://my-tunnel.example.com"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    :disabled="publicUrlLoading"
+                    @keydown.enter.prevent="savePublicUrl"
+                  />
+                  <v-btn
+                    variant="outlined"
+                    color="primary"
+                    class="settings-action-btn"
+                    :loading="publicUrlLoading"
+                    :disabled="publicUrlLoading"
+                    @click="savePublicUrl"
+                  >
+                    Save
+                  </v-btn>
+                </div>
+                <div v-if="publicUrlError" class="settings-error">
+                  {{ publicUrlError }}
+                </div>
+                <div v-if="publicUrlSuccess" class="settings-success">
+                  {{ publicUrlSuccess }}
+                </div>
+                <div class="settings-section-desc">
+                  Share links use your browser's current address by default. Set
+                  this to a public URL (e.g. a
+                  <a
+                    href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >Cloudflare Tunnel</a
+                  >
+                  address) so links work for people outside your network.
                 </div>
               </div>
               <v-divider class="settings-section-divider" />
@@ -3189,6 +3282,12 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-success {
   color: rgb(var(--v-theme-accent));
   font-size: 0.9em;
+}
+
+.settings-public-url-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .settings-action-btn {

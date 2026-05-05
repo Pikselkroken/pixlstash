@@ -200,6 +200,7 @@ const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 const comfyuiModelFilter = ref([]);
 const comfyuiLoraFilter = ref([]);
 const comfyuiConfigured = ref(false);
+const publicUrl = ref(null);
 const minScoreFilter = ref(null);
 const maxScoreFilter = ref(null);
 const smartScoreBucketFilter = ref(null);
@@ -965,6 +966,9 @@ async function fetchConfig() {
       apply_tag_filter: applyTagFilter.value,
     };
     comfyuiConfigured.value = Boolean(res.data?.comfyui_url);
+    if (typeof res.data?.public_url === "string" && res.data.public_url) {
+      publicUrl.value = res.data.public_url;
+    }
     // tri-state: null = undecided → show dialog after config loads
     const cfu = res.data?.check_for_updates;
     checkForUpdates.value = cfu === true ? true : cfu === false ? false : null;
@@ -1446,6 +1450,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :selectedSort="selectedSort"
             :selectedDescending="selectedDescending"
             :backendUrl="BACKEND_URL"
+            :publicUrl="publicUrl"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
             :sidebarThumbnailSize="sidebarThumbnailSize"
             :dateFormat="dateFormat"
@@ -1460,6 +1465,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:hidden-tags="handleUpdateHiddenTags"
             @update:apply-tag-filter="handleUpdateApplyTagFilter"
             @update:comfyui-configured="comfyuiConfigured = $event"
+            @update:public-url="publicUrl = $event"
             @update:date-format="handleUpdateDateFormat"
             @update:theme-mode="handleUpdateThemeMode"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
