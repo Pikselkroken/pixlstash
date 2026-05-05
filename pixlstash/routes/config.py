@@ -15,10 +15,12 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     pynvml = None
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlmodel import Session, select
+
+from PIL import Image
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import ImportFolder, Picture, User
@@ -27,6 +29,7 @@ from pixlstash.utils.service.config_utils import (
     apply_user_config_patch,
     serialize_user_config,
 )
+from pixlstash.utils.watermark import get_default_watermark_bytes
 
 logger = get_logger(__name__)
 
@@ -351,6 +354,7 @@ def create_router(server) -> APIRouter:
         resource_id: Optional[int] = None
         expires_at: Optional[datetime] = None
         include_attachments: bool = False
+        watermark: bool = True
 
     @router.get(
         "/users/me/config",
@@ -468,6 +472,7 @@ def create_router(server) -> APIRouter:
             resource_id=payload.resource_id,
             expires_at=payload.expires_at,
             include_attachments=payload.include_attachments,
+            watermark=payload.watermark,
         )
 
     @router.get(
@@ -485,6 +490,94 @@ def create_router(server) -> APIRouter:
     )
     def delete_me_token(token_id: int, request: Request):
         return server.auth.delete_token(request, token_id)
+
+    # ── Watermark image endpoints ─────────────────────────────────────────────
+
+    @router.get(
+        "/users/me/watermark",
+        summary="Get watermark image",
+        description="Returns the user's watermark as a PNG. Returns the default if no custom watermark is set.",
+    )
+    def get_me_watermark(request: Request):
+        from fastapi.responses import Response as FastAPIResponse
+
+        _ensure_secure_when_required(request)
+        user = server.auth.get_user_for_request(request)
+        img_bytes = getattr(user, "watermark_image", None) if user else None
+        if not img_bytes:
+            img_bytes = get_default_watermark_bytes()
+        if not img_bytes:
+            raise HTTPException(status_code=404, detail="No watermark available")
+        return FastAPIResponse(content=img_bytes, media_type="image/png")
+
+    @router.post(
+        "/users/me/watermark",
+        summary="Upload custom watermark",
+        description="Uploads a PNG/JPEG/WebP image to use as the user's watermark.",
+    )
+    async def post_me_watermark(file: UploadFile, request: Request):
+        _ensure_secure_when_required(request)
+        user_id = server.auth.require_user_id(request)
+        if file.content_type not in ("image/png", "image/jpeg", "image/webp"):
+            raise HTTPException(
+                status_code=400, detail="Only PNG, JPEG, or WebP images are accepted"
+            )
+        data = await file.read()
+        if len(data) > 4 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400, detail="Watermark image must be under 4 MB"
+            )
+
+        # Validate the image with Pillow and transcode to PNG.
+        # This rejects spoofed content-type and ensures the GET endpoint
+        # can always return a consistent media_type of image/png.
+        try:
+            from io import BytesIO
+
+            img = Image.open(BytesIO(data))
+            img.verify()  # raises on corrupt/invalid data
+            # Re-open after verify() (verify() leaves the file in an unusable state)
+            img = Image.open(BytesIO(data)).convert("RGBA")
+            png_buf = BytesIO()
+            img.save(png_buf, format="PNG")
+            png_data = png_buf.getvalue()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid image data: {exc}"
+            ) from exc
+
+        def _save(session: Session, uid: int, img_data: bytes):
+            user = session.get(User, uid)
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            user.watermark_image = img_data
+            session.add(user)
+            session.commit()
+
+        server.vault.db.run_task(
+            _save, user_id, png_data, priority=DBPriority.IMMEDIATE
+        )
+        return {"status": "ok"}
+
+    @router.delete(
+        "/users/me/watermark",
+        summary="Remove custom watermark",
+        description="Removes the user's custom watermark; the default will be used for new shares.",
+    )
+    def delete_me_watermark(request: Request):
+        _ensure_secure_when_required(request)
+        user_id = server.auth.require_user_id(request)
+
+        def _clear(session: Session, uid: int):
+            user = session.get(User, uid)
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            user.watermark_image = None
+            session.add(user)
+            session.commit()
+
+        server.vault.db.run_task(_clear, user_id, priority=DBPriority.IMMEDIATE)
+        return {"status": "ok"}
 
     @router.get(
         "/users/me/shared-resource-ids",
@@ -524,7 +617,9 @@ def create_router(server) -> APIRouter:
     def revoke_tokens_for_resource(
         resource_type: str, resource_id: int, request: Request
     ):
-        return server.auth.revoke_tokens_for_resource(request, resource_type, resource_id)
+        return server.auth.revoke_tokens_for_resource(
+            request, resource_type, resource_id
+        )
 
     @router.get(
         "/session/context",

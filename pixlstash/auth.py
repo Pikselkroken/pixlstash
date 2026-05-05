@@ -112,6 +112,7 @@ class TokenScope:
     resource_id: Optional[int]
     expires_at: Optional[datetime]
     include_attachments: bool = False
+    watermark: bool = False
 
 
 class AuthService:
@@ -438,6 +439,7 @@ class AuthService:
         resource_id: Optional[int] = None,
         expires_at: Optional[datetime] = None,
         include_attachments: bool = False,
+        watermark: bool = False,
     ):
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
@@ -487,6 +489,7 @@ class AuthService:
             resource_id: Optional[int],
             expires_at: Optional[datetime],
             include_attachments: bool,
+            watermark: bool,
         ):
             user = session.get(User, user_id)
             if user is None:
@@ -502,6 +505,7 @@ class AuthService:
                 resource_id=resource_id,
                 expires_at=expires_at,
                 include_attachments=include_attachments,
+                watermark=watermark,
             )
             session.add(token)
             session.commit()
@@ -519,6 +523,7 @@ class AuthService:
             resource_id,
             expires_at,
             include_attachments,
+            watermark,
             priority=DBPriority.IMMEDIATE,
         )
 
@@ -530,6 +535,7 @@ class AuthService:
             "resource_id": token.resource_id,
             "expires_at": token.expires_at,
             "include_attachments": token.include_attachments,
+            "watermark": token.watermark,
         }
 
     def list_tokens(self, request: Request):
@@ -548,24 +554,29 @@ class AuthService:
                 if token.resource_type == "character" and token.resource_id is not None:
                     obj = session.get(Character, token.resource_id)
                     resource_name = obj.name if obj else None
-                elif token.resource_type == "picture_set" and token.resource_id is not None:
+                elif (
+                    token.resource_type == "picture_set"
+                    and token.resource_id is not None
+                ):
                     obj = session.get(PictureSet, token.resource_id)
                     resource_name = obj.name if obj else None
                 elif token.resource_type == "project" and token.resource_id is not None:
                     obj = session.get(Project, token.resource_id)
                     resource_name = obj.name if obj else None
-                result.append({
-                    "id": token.id,
-                    "description": token.description,
-                    "scope": token.scope,
-                    "resource_type": token.resource_type,
-                    "resource_id": token.resource_id,
-                    "resource_name": resource_name,
-                    "expires_at": token.expires_at,
-                    "created_at": token.created_at,
-                    "last_used_at": token.last_used_at,
-                    "include_attachments": token.include_attachments,
-                })
+                result.append(
+                    {
+                        "id": token.id,
+                        "description": token.description,
+                        "scope": token.scope,
+                        "resource_type": token.resource_type,
+                        "resource_id": token.resource_id,
+                        "resource_name": resource_name,
+                        "expires_at": token.expires_at,
+                        "created_at": token.created_at,
+                        "last_used_at": token.last_used_at,
+                        "include_attachments": token.include_attachments,
+                    }
+                )
             return result
 
         return self._db.run_task(fetch_tokens, user_id, priority=DBPriority.IMMEDIATE)
@@ -650,12 +661,12 @@ class AuthService:
                 and (t.expires_at is None or t.expires_at > now)
             ]
 
-        ids = self._db.run_task(_fetch, user_id, resource_type, priority=DBPriority.IMMEDIATE)
+        ids = self._db.run_task(
+            _fetch, user_id, resource_type, priority=DBPriority.IMMEDIATE
+        )
         return {"resource_type": resource_type, "ids": ids}
 
-    def batch_get_shared_picture_ids(
-        self, request: Request, picture_ids: list[int]
-    ):
+    def batch_get_shared_picture_ids(self, request: Request, picture_ids: list[int]):
         """Given a list of picture_ids, return which ones have active READ tokens."""
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
@@ -897,6 +908,9 @@ class AuthService:
                                 resource_id=matched_token.resource_id,
                                 expires_at=matched_token.expires_at,
                                 include_attachments=matched_token.include_attachments,
+                                watermark=bool(
+                                    getattr(matched_token, "watermark", False)
+                                ),
                             )
 
                 if user_id is None:

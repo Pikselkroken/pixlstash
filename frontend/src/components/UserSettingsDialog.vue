@@ -166,6 +166,10 @@ const publicUrlValue = ref("");
 const publicUrlLoading = ref(false);
 const publicUrlError = ref("");
 const publicUrlSuccess = ref("");
+const watermarkPreviewUrl = ref("");
+const watermarkInputRef = ref(null);
+const watermarkUploading = ref(false);
+const watermarkUploadError = ref("");
 const comfyuiHost = ref("");
 const comfyuiPort = ref("");
 const comfyuiEditHost = ref("");
@@ -231,6 +235,43 @@ async function savePublicUrl() {
   }
 }
 
+function refreshWatermarkPreview() {
+  watermarkPreviewUrl.value = `/api/v1/users/me/watermark?cb=${Date.now()}`;
+}
+
+async function handleWatermarkUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  watermarkUploadError.value = "";
+  watermarkUploading.value = true;
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    await apiClient.post("/users/me/watermark", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    refreshWatermarkPreview();
+  } catch (_) {
+    watermarkUploadError.value = "Upload failed.";
+  } finally {
+    watermarkUploading.value = false;
+    if (watermarkInputRef.value) watermarkInputRef.value.value = "";
+  }
+}
+
+async function clearWatermark() {
+  watermarkUploadError.value = "";
+  watermarkUploading.value = true;
+  try {
+    await apiClient.delete("/users/me/watermark");
+    refreshWatermarkPreview();
+  } catch (_) {
+    watermarkUploadError.value = "Failed to remove watermark.";
+  } finally {
+    watermarkUploading.value = false;
+  }
+}
+
 async function fetchSettingsAuth() {
   settingsLoading.value = true;
   settingsError.value = "";
@@ -275,6 +316,8 @@ function resetSettingsForm() {
   publicUrlValue.value = "";
   publicUrlError.value = "";
   publicUrlSuccess.value = "";
+  watermarkPreviewUrl.value = "";
+  watermarkUploadError.value = "";
   customTaggerError.value = "";
   wd14ThresholdError.value = "";
   customTaggerThresholdOffsetError.value = "";
@@ -1528,6 +1571,7 @@ watch(
         fetchSmartScoreSettings();
         fetchWorkflowList();
         fetchPublicUrl();
+        refreshWatermarkPreview();
       }
     }
   },
@@ -2381,6 +2425,44 @@ const workflowImportCaptionPreview = computed(() => {
                     >Cloudflare Tunnel</a
                   >
                   address) so links work for people outside your network.
+                </div>
+                <!-- Watermark -->
+                <div class="settings-watermark-row">
+                  <img
+                    v-if="watermarkPreviewUrl"
+                    :src="watermarkPreviewUrl"
+                    class="settings-watermark-preview"
+                    alt="Watermark preview"
+                  />
+                  <input
+                    ref="watermarkInputRef"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    style="display: none"
+                    @change="handleWatermarkUpload"
+                  />
+                  <v-btn
+                    size="small"
+                    variant="outlined"
+                    :loading="watermarkUploading"
+                    :disabled="watermarkUploading"
+                    @click="watermarkInputRef?.click()"
+                  >
+                    Upload watermark
+                  </v-btn>
+                  <v-btn
+                    size="small"
+                    variant="text"
+                    color="error"
+                    :disabled="watermarkUploading"
+                    title="Reset to default watermark"
+                    @click="clearWatermark"
+                  >
+                    Reset
+                  </v-btn>
+                </div>
+                <div v-if="watermarkUploadError" class="settings-error">
+                  {{ watermarkUploadError }}
                 </div>
               </div>
               <v-divider class="settings-section-divider" />
@@ -3318,6 +3400,23 @@ const workflowImportCaptionPreview = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.settings-watermark-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-watermark-preview {
+  max-height: 36px;
+  max-width: 120px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  padding: 2px;
 }
 
 .settings-action-btn {

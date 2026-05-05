@@ -36,6 +36,7 @@ class UserToken(SQLModel, table=True):
         sa_column=Column(DateTime, nullable=True),
     )
     include_attachments: bool = Field(default=False)
+    watermark: bool = Field(default=True)
 
     user: Optional["User"] = Relationship(
         back_populates="tokens",
