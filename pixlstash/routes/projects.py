@@ -549,8 +549,14 @@ def create_router(server) -> APIRouter:
         server.auth.require_user_id(request)
         token_scope = getattr(request.state, "token_scope", None)
         if token_scope is not None and token_scope.scope == "READ":
-            if token_scope.resource_type == "project" and token_scope.resource_id != project_id:
-                raise HTTPException(status_code=403, detail="Token does not grant access to this project.")
+            if (
+                token_scope.resource_type == "project"
+                and token_scope.resource_id != project_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token does not grant access to this project.",
+                )
             if not token_scope.include_attachments:
                 include_attachments = False
 
@@ -746,7 +752,9 @@ def create_router(server) -> APIRouter:
                         continue
                     if not os.path.isfile(full):
                         continue
-                    fname = _unique_name(used_attachment_names, att["original_filename"])
+                    fname = _unique_name(
+                        used_attachment_names, att["original_filename"]
+                    )
                     try:
                         zf.write(full, f"{root}/attachments/{fname}")
                     except OSError as exc:

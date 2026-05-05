@@ -1,6 +1,7 @@
 import json
 from typing import List, Optional, TYPE_CHECKING
 
+from sqlalchemy import Column, LargeBinary
 from sqlmodel import Field, SQLModel, Relationship
 
 from .picture import SortMechanism
@@ -48,6 +49,11 @@ class User(SQLModel, table=True):
     custom_tagger_threshold_offset: Optional[float] = Field(default=None)
     check_for_updates: Optional[bool] = Field(default=None)
     show_keyboard_hint: bool = Field(default=True)
+    embed_watermark: bool = Field(default=True)
+    watermark_image: Optional[bytes] = Field(
+        default=None,
+        sa_column=Column(LargeBinary, nullable=True),
+    )
 
     tokens: List["UserToken"] = Relationship(
         back_populates="user",

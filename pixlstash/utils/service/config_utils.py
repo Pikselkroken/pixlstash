@@ -61,6 +61,7 @@ def serialize_user_config(user) -> dict:
         "custom_tagger_threshold_offset",
         "check_for_updates",
         "show_keyboard_hint",
+        "embed_watermark",
     }
 
     config = {
@@ -149,6 +150,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "custom_tagger_threshold_offset",
         "check_for_updates",
         "show_keyboard_hint",
+        "embed_watermark",
     }
 
     allowed_date_formats = {

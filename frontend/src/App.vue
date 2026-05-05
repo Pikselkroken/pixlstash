@@ -201,6 +201,7 @@ const comfyuiModelFilter = ref([]);
 const comfyuiLoraFilter = ref([]);
 const comfyuiConfigured = ref(false);
 const publicUrl = ref(null);
+const embedWatermark = ref(false);
 const minScoreFilter = ref(null);
 const maxScoreFilter = ref(null);
 const smartScoreBucketFilter = ref(null);
@@ -969,6 +970,7 @@ async function fetchConfig() {
     if (typeof res.data?.public_url === "string" && res.data.public_url) {
       publicUrl.value = res.data.public_url;
     }
+    embedWatermark.value = Boolean(res.data?.embed_watermark);
     // tri-state: null = undecided → show dialog after config loads
     const cfu = res.data?.check_for_updates;
     checkForUpdates.value = cfu === true ? true : cfu === false ? false : null;
@@ -1451,6 +1453,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :selectedDescending="selectedDescending"
             :backendUrl="BACKEND_URL"
             :publicUrl="publicUrl"
+            :embedWatermark="embedWatermark"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
             :sidebarThumbnailSize="sidebarThumbnailSize"
             :dateFormat="dateFormat"
@@ -1466,6 +1469,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:apply-tag-filter="handleUpdateApplyTagFilter"
             @update:comfyui-configured="comfyuiConfigured = $event"
             @update:public-url="publicUrl = $event"
+            @update:embed-watermark="embedWatermark = $event"
             @update:date-format="handleUpdateDateFormat"
             @update:theme-mode="handleUpdateThemeMode"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
@@ -1699,6 +1703,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                   selectedFolderFilter?.importSourceFolder ?? null
                 "
                 :publicUrl="publicUrl"
+                :embedWatermark="embedWatermark"
                 :folderScanning="folderScanning"
                 :columns="columns"
                 @clear-search="handleClearSearch"

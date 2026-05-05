@@ -59,6 +59,7 @@ from pixlstash.db_models import (
     Tag,
     TagPrediction,
 )
+from pixlstash.db_models.user import User
 from pixlstash.event_types import EventType
 from pixlstash.image_plugins.registry import get_image_plugin_manager
 from pixlstash.image_plugins.service import apply_plugin_to_pictures
@@ -80,6 +81,7 @@ from pixlstash.utils.service.caption_utils import (
 )
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
+from pixlstash.utils.watermark import apply_watermark, get_watermark_bytes
 from pixlstash.tasks import TaskType
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 
@@ -3800,24 +3802,48 @@ def create_router(server) -> APIRouter:
 
         fmt_lower = pic.format.lower()
 
+        # Determine whether the active token requires a watermark.
+        _token_scope = getattr(request.state, "token_scope", None)
+        apply_wm = bool(_token_scope and getattr(_token_scope, "watermark", False))
+
+        def _get_user_watermark_bytes() -> bytes | None:
+            user_id = getattr(request.state, "auth_user_id", None)
+            if not user_id:
+                return None
+            user = server.vault.db.run_immediate_read_task(
+                lambda session: session.get(User, user_id)
+            )
+            return get_watermark_bytes(
+                getattr(user, "watermark_image", None) if user else None
+            )
+
         # Browsers (Chrome, Firefox) cannot display HEIC/HEIF natively.
         # Transcode to JPEG on-the-fly so the overlay image loads correctly.
-        if fmt_lower in ("heic", "heif"):
+        # Watermark compositing also requires PIL, so we share this branch.
+        if fmt_lower in ("heic", "heif") or apply_wm:
             try:
                 pil_img = Image.open(file_path)
+                if apply_wm:
+                    wm_bytes = _get_user_watermark_bytes()
+                    if wm_bytes:
+                        pil_img = apply_watermark(pil_img, wm_bytes)
+                    else:
+                        pil_img = pil_img.convert("RGB")
+                else:
+                    pil_img = pil_img.convert("RGB")
                 buf = BytesIO()
-                pil_img.convert("RGB").save(buf, format="JPEG", quality=92)
+                pil_img.save(buf, format="JPEG", quality=92)
                 buf.seek(0)
                 jpeg_bytes = buf.read()
             except Exception as exc:
                 logger.error(
-                    "Failed to transcode HEIF to JPEG for picture id=%s: %s",
+                    "Failed to process picture id=%s: %s",
                     pic.id,
                     exc,
                 )
                 raise HTTPException(
                     status_code=500,
-                    detail="Failed to transcode HEIF image",
+                    detail="Failed to process image",
                 )
             response = Response(
                 content=jpeg_bytes,
