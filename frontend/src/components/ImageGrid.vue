@@ -6963,7 +6963,7 @@ function handleKeyDown(event) {
       lastSelectedImageId = img.id;
     }
   } else if (event.key === "Delete" || event.key === "Backspace") {
-    if (selectedImageIds.value.length > 0) {
+    if (selectedImageIds.value.length > 0 && !isReadOnly.value) {
       deleteSelected();
     }
   } else if ((event.ctrlKey || event.metaKey) && event.key === "a") {
@@ -6980,13 +6980,15 @@ function handleKeyDown(event) {
     lastSelectedImageId = null;
   } else if (
     (event.key === "t" || event.key === "T") &&
-    selectedImageIds.value.length > 0
+    selectedImageIds.value.length > 0 &&
+    !isReadOnly.value
   ) {
     event.preventDefault();
     selectionBarRef.value?.openTagInput();
   } else if (
     (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
     !overlayOpen.value &&
+    !isReadOnly.value &&
     /^[1-5]$|^0$/.test(event.key)
   ) {
     // Number key pressed, set score for hovered image

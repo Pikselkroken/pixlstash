@@ -952,6 +952,7 @@
                   >{{ (pred.confidence * 100).toFixed(0) }}%</span
                 >
                 <button
+                  v-if="!isReadOnly"
                   class="tag-pred-btn tag-pred-btn--confirm"
                   title="Confirm prediction (add as tag)"
                   @click.stop="confirmPrediction(pred.tag)"
@@ -2603,8 +2604,10 @@ function handleKeydown(e) {
     if (e.key === "t" || e.key === "T") {
       e.preventDefault();
       handleUserActivity();
-      sidebarOpen.value = true;
-      nextTick(() => beginAddTag());
+      if (!isReadOnly.value) {
+        sidebarOpen.value = true;
+        nextTick(() => beginAddTag());
+      }
       return;
     }
     // All other keys: ignore while chrome is hidden
@@ -2706,11 +2709,15 @@ function handleKeydown(e) {
       addToSetControlRef.value.addToLastSet();
     }
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
-    e.preventDefault();
-    beginAddTag();
+    if (!isReadOnly.value) {
+      e.preventDefault();
+      beginAddTag();
+    }
   } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
-    const score = parseInt(e.key, 10);
-    if (image.value) setScore(score);
+    if (!isReadOnly.value) {
+      const score = parseInt(e.key, 10);
+      if (image.value) setScore(score);
+    }
   }
 }
 

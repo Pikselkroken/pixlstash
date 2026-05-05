@@ -1075,7 +1075,14 @@ function handleGlobalKeydown(e) {
     e.preventDefault();
     shortcutsDialogOpen.value = !shortcutsDialogOpen.value;
   }
-  if (e.key === "F2" && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditable) {
+  if (
+    e.key === "F2" &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !isEditable &&
+    !isReadOnly.value
+  ) {
     const gridHasFocus = gridContainer.value?.hasCursorFocus === true;
     if (!gridHasFocus) {
       e.preventDefault();
@@ -1837,11 +1844,11 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 <td><kbd>F</kbd></td>
                 <td>Focus search</td>
               </tr>
-              <tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
                 <td><kbd>1</kbd> – <kbd>5</kbd></td>
                 <td>Set star rating on hovered / selected image(s)</td>
               </tr>
-              <tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
                 <td><kbd>T</kbd></td>
                 <td>Tag selected images</td>
               </tr>
@@ -1873,7 +1880,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 <td><kbd>Enter</kbd></td>
                 <td>Open cursor image</td>
               </tr>
-              <tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
                 <td><kbd>Delete</kbd></td>
                 <td>Delete selected images</td>
               </tr>
@@ -1896,11 +1903,11 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 <td><kbd>←</kbd> <kbd>→</kbd></td>
                 <td>Previous / next image</td>
               </tr>
-              <tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
                 <td><kbd>1</kbd> – <kbd>5</kbd></td>
                 <td>Set star rating</td>
               </tr>
-              <tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
                 <td><kbd>T</kbd></td>
                 <td>Add tag</td>
               </tr>
@@ -1919,7 +1926,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               <tr>
                 <td colspan="2" class="shortcuts-section">General</td>
               </tr>
-              <tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
                 <td><kbd>F2</kbd></td>
                 <td>Edit selected character or picture set</td>
               </tr>

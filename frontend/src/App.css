@@ -436,6 +436,14 @@ button:focus:not(:focus-visible) {
   letter-spacing: 0.06em;
   opacity: 0.5;
 }
+.shortcut-disabled td {
+  opacity: 0.35;
+  text-decoration: line-through;
+  text-decoration-color: rgba(var(--v-theme-on-panel), 0.4);
+}
+.shortcut-disabled kbd {
+  opacity: 0.5;
+}
 kbd {
   display: inline-block;
   padding: 1px 5px;
