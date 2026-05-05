@@ -16,7 +16,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority, VaultDatabase
-from pixlstash.db_models import User, UserToken
+from pixlstash.db_models import Character, PictureSet, Project, User, UserToken
 from pixlstash.utils.service.system_utils import default_max_vram_gb
 
 
@@ -58,6 +58,7 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
 AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/assets/",
     "/pictures/shared/",
+    "/share/",
     "/docs/",
     "/redoc/",
 )
@@ -453,10 +454,11 @@ class AuthService:
             "picture_set",
             "character",
             "project",
+            "picture",
         ):
             raise HTTPException(
                 status_code=400,
-                detail="resource_type must be 'picture_set', 'character', or 'project'",
+                detail="resource_type must be 'picture_set', 'character', 'project', or 'picture'",
             )
 
         # A date-only value (e.g. "2026-05-05") is parsed as midnight 00:00:00,
@@ -535,27 +537,38 @@ class AuthService:
         user_id = self.require_user_id(request)
 
         def fetch_tokens(session: Session, user_id: int):
-            return session.exec(
+            tokens = session.exec(
                 select(UserToken)
                 .where(UserToken.user_id == user_id)
                 .order_by(UserToken.created_at.desc())
             ).all()
+            result = []
+            for token in tokens:
+                resource_name = None
+                if token.resource_type == "character" and token.resource_id is not None:
+                    obj = session.get(Character, token.resource_id)
+                    resource_name = obj.name if obj else None
+                elif token.resource_type == "picture_set" and token.resource_id is not None:
+                    obj = session.get(PictureSet, token.resource_id)
+                    resource_name = obj.name if obj else None
+                elif token.resource_type == "project" and token.resource_id is not None:
+                    obj = session.get(Project, token.resource_id)
+                    resource_name = obj.name if obj else None
+                result.append({
+                    "id": token.id,
+                    "description": token.description,
+                    "scope": token.scope,
+                    "resource_type": token.resource_type,
+                    "resource_id": token.resource_id,
+                    "resource_name": resource_name,
+                    "expires_at": token.expires_at,
+                    "created_at": token.created_at,
+                    "last_used_at": token.last_used_at,
+                    "include_attachments": token.include_attachments,
+                })
+            return result
 
-        tokens = self._db.run_task(fetch_tokens, user_id, priority=DBPriority.IMMEDIATE)
-        return [
-            {
-                "id": token.id,
-                "description": token.description,
-                "scope": token.scope,
-                "resource_type": token.resource_type,
-                "resource_id": token.resource_id,
-                "expires_at": token.expires_at,
-                "created_at": token.created_at,
-                "last_used_at": token.last_used_at,
-                "include_attachments": token.include_attachments,
-            }
-            for token in tokens
-        ]
+        return self._db.run_task(fetch_tokens, user_id, priority=DBPriority.IMMEDIATE)
 
     def delete_token(self, request: Request, token_id: int):
         self.ensure_secure_when_required(request)
@@ -576,6 +589,105 @@ class AuthService:
         # so flush all entries to ensure the deleted token is not reused.
         self._token_cache.clear()
         return {"status": "success", "deleted_id": token_id}
+
+    def revoke_tokens_for_resource(
+        self,
+        request: Request,
+        resource_type: str,
+        resource_id: int,
+    ):
+        """Delete all tokens scoped to a specific resource owned by the user."""
+        self.ensure_secure_when_required(request)
+        user_id = self.require_user_id(request)
+
+        # Only the owner (full session or ALL-scope bearer) may delete tokens.
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(
+                status_code=403, detail="Scoped tokens cannot revoke tokens"
+            )
+
+        def _revoke(session: Session, user_id: int, rt: str, rid: int) -> int:
+            tokens = session.exec(
+                select(UserToken).where(
+                    UserToken.user_id == user_id,
+                    UserToken.resource_type == rt,
+                    UserToken.resource_id == rid,
+                )
+            ).all()
+            count = len(tokens)
+            for t in tokens:
+                session.delete(t)
+            session.commit()
+            return count
+
+        deleted = self._db.run_task(
+            _revoke, user_id, resource_type, resource_id, priority=DBPriority.IMMEDIATE
+        )
+        self._token_cache.clear()
+        return {"status": "success", "deleted_count": deleted}
+
+    def get_shared_resource_ids(self, request: Request, resource_type: str):
+        """Return the set of resource_ids for which the user has active READ tokens."""
+        self.ensure_secure_when_required(request)
+        user_id = self.require_user_id(request)
+
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(status_code=403, detail="Not allowed for scoped tokens")
+
+        def _fetch(session: Session, user_id: int, rt: str) -> list[int]:
+            now = datetime.utcnow()
+            tokens = session.exec(
+                select(UserToken).where(
+                    UserToken.user_id == user_id,
+                    UserToken.resource_type == rt,
+                    UserToken.scope == "READ",
+                )
+            ).all()
+            return [
+                t.resource_id
+                for t in tokens
+                if t.resource_id is not None
+                and (t.expires_at is None or t.expires_at > now)
+            ]
+
+        ids = self._db.run_task(_fetch, user_id, resource_type, priority=DBPriority.IMMEDIATE)
+        return {"resource_type": resource_type, "ids": ids}
+
+    def batch_get_shared_picture_ids(
+        self, request: Request, picture_ids: list[int]
+    ):
+        """Given a list of picture_ids, return which ones have active READ tokens."""
+        self.ensure_secure_when_required(request)
+        user_id = self.require_user_id(request)
+
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(status_code=403, detail="Not allowed for scoped tokens")
+
+        if not picture_ids:
+            return {"shared_ids": []}
+
+        def _fetch(session: Session, user_id: int, ids: list[int]) -> list[int]:
+            now = datetime.utcnow()
+            id_set = set(ids)
+            tokens = session.exec(
+                select(UserToken).where(
+                    UserToken.user_id == user_id,
+                    UserToken.resource_type == "picture",
+                    UserToken.scope == "READ",
+                    UserToken.resource_id.in_(list(id_set)),
+                )
+            ).all()
+            return [
+                t.resource_id
+                for t in tokens
+                if t.resource_id is not None
+                and (t.expires_at is None or t.expires_at > now)
+            ]
+
+        shared = self._db.run_task(
+            _fetch, user_id, picture_ids, priority=DBPriority.IMMEDIATE
+        )
+        return {"shared_ids": shared}
 
     def check_session(self, request: Request) -> JSONResponse:
         session_id = request.cookies.get("session_id")

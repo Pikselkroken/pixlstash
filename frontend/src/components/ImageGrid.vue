@@ -97,6 +97,10 @@
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :available-plugins="availablePlugins"
+      :context-image="contextMenuImage"
+      :is-shared="
+        contextMenuImage ? sharedPictureIds.has(contextMenuImage.id) : false
+      "
       @close="contextMenuVisible = false"
       @added-to-set="handleOverlayAddedToSet"
       @add-to-character="handleAddToCharacter"
@@ -111,7 +115,45 @@
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+      @share-picture="sharePicture"
+      @remove-picture-shares="openRevokeSharesDialog"
     />
+    <Transition name="share-toast">
+      <div v-if="shareToast.visible" class="grid-share-toast">
+        {{ shareToast.message }}
+      </div>
+    </Transition>
+
+    <!-- ── Revoke picture shares confirm dialog ───────────────── -->
+    <v-dialog v-model="revokeSharesDialogOpen" max-width="380">
+      <v-card>
+        <v-card-title style="font-size: 1rem; padding: 16px 20px 8px">
+          <v-icon size="16" style="margin-right: 6px; opacity: 0.7"
+            >mdi-link-variant-off</v-icon
+          >
+          Remove all shares
+        </v-card-title>
+        <v-card-text
+          style="padding: 0 20px 12px; font-size: 0.875rem; opacity: 0.85"
+        >
+          This will revoke all active share links for this image. Anyone with an
+          existing link will lose access immediately.
+        </v-card-text>
+        <v-card-actions style="padding: 8px 16px 16px">
+          <v-btn variant="text" @click="revokeSharesDialogOpen = false"
+            >Cancel</v-btn
+          >
+          <v-spacer />
+          <v-btn
+            color="error"
+            variant="tonal"
+            @click="confirmRevokePictureShares"
+          >
+            Remove all shares
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
     <EmptyScrapHeap
       v-if="showScrapheapBar"
       :visible="showScrapheapBar"
@@ -535,7 +577,8 @@
                     ((props.showFormat &&
                       img.format &&
                       img.format !== 'unknown') ||
-                      img.reference_folder_id)
+                      img.reference_folder_id ||
+                      (!isReadOnly && sharedPictureIds.has(img.id)))
                   "
                   class="thumbnail-bottom-left-badges"
                 >
@@ -554,6 +597,13 @@
                     @click.stop="openReferenceLocation(img.id)"
                   >
                     <v-icon size="10">mdi-link-variant</v-icon>
+                  </div>
+                  <div
+                    v-if="!isReadOnly && sharedPictureIds.has(img.id)"
+                    class="thumbnail-share-badge thumbnail-badge"
+                    title="Has active share link"
+                  >
+                    <v-icon size="10">mdi-share-variant</v-icon>
                   </div>
                 </div>
               </template>
@@ -785,6 +835,7 @@ const props = defineProps({
   setMultiMode: { type: String, default: "intersection" },
   setDifferenceBaseId: { type: Number, default: null },
   selectedSetNames: { type: Object, default: () => ({}) },
+  publicUrl: { type: String, default: null },
 });
 
 // ============================================================
@@ -875,6 +926,11 @@ const selectionBarRef = ref(null);
 const contextMenuVisible = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
+const contextMenuImage = ref(null);
+const shareToast = ref({ visible: false, message: "" });
+const sharedPictureIds = ref(new Set());
+const revokeSharesDialogOpen = ref(false);
+const revokeSharesPending = ref(null); // { pictureId }
 
 // ============================================================
 // GRID DATA STATE
@@ -6548,6 +6604,7 @@ function updateVisibleThumbnails() {
       reason: "visible-window",
     });
   }, 80);
+  scheduleSharedPictureFetch();
 }
 
 function onGridScroll(e) {
@@ -6673,6 +6730,7 @@ function handleImageContextMenu(img, event) {
     selectedImageIds.value = [img.id];
     lastSelectedImageId = img.id;
   }
+  contextMenuImage.value = img;
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
@@ -6688,6 +6746,93 @@ function handleContextMenuOpenPluginPanel() {
 
 function handleContextMenuOpenComfyuiPanel() {
   selectionBarRef.value?.openComfyuiPanel();
+}
+
+async function sharePicture() {
+  const img = contextMenuImage.value;
+  if (!img?.id || !img?.format) return;
+  try {
+    const res = await apiClient.post(`${props.backendUrl}/users/me/token`, {
+      description: `Shared picture #${img.id}`,
+      scope: "READ",
+      resource_type: "picture",
+      resource_id: img.id,
+      expires_at: null,
+      include_attachments: false,
+    });
+    const token = res.data?.token;
+    if (!token) throw new Error("No token returned");
+    const ext = img.format.toLowerCase();
+    const origin = props.publicUrl || window.location.origin;
+    const url = `${origin}/share/${token}.${ext}`;
+    await navigator.clipboard.writeText(url);
+    // Mark this picture as now shared
+    sharedPictureIds.value = new Set([...sharedPictureIds.value, img.id]);
+    shareToast.value = { visible: true, message: "Link copied!" };
+    setTimeout(() => {
+      shareToast.value.visible = false;
+    }, 2500);
+  } catch (e) {
+    console.error("[ImageGrid] Failed to create picture share link", e);
+    shareToast.value = { visible: true, message: "Failed to create link" };
+    setTimeout(() => {
+      shareToast.value.visible = false;
+    }, 2500);
+  }
+}
+
+// ── Shared-picture IDs batch fetch ────────────────────────────────────────
+
+let _sharedIdsFetchTimeout = null;
+
+function scheduleSharedPictureFetch() {
+  if (isReadOnly.value) return;
+  if (_sharedIdsFetchTimeout) clearTimeout(_sharedIdsFetchTimeout);
+  _sharedIdsFetchTimeout = setTimeout(async () => {
+    const start = Math.max(0, visibleStart.value - renderBuffer.value);
+    const end = Math.min(
+      allGridImages.value.length,
+      visibleEnd.value + renderBuffer.value,
+    );
+    const visibleSlice = allGridImages.value.slice(start, end);
+    const ids = visibleSlice.map((img) => img.id).filter(Boolean);
+    if (!ids.length) return;
+    try {
+      const res = await apiClient.post(
+        `${props.backendUrl}/users/me/shared-picture-ids/batch`,
+        { picture_ids: ids },
+      );
+      const shared = new Set(res.data?.shared_ids ?? []);
+      // Merge with existing set (other visible ranges may already be loaded)
+      sharedPictureIds.value = new Set([...sharedPictureIds.value, ...shared]);
+    } catch (e) {
+      // Non-critical — silently ignore
+    }
+  }, 300);
+}
+
+function openRevokeSharesDialog() {
+  const img = contextMenuImage.value;
+  if (!img?.id) return;
+  revokeSharesPending.value = { pictureId: img.id };
+  revokeSharesDialogOpen.value = true;
+}
+
+async function confirmRevokePictureShares() {
+  const pending = revokeSharesPending.value;
+  revokeSharesDialogOpen.value = false;
+  revokeSharesPending.value = null;
+  if (!pending?.pictureId) return;
+  try {
+    await apiClient.delete(
+      `${props.backendUrl}/users/me/tokens/by-resource?resource_type=picture&resource_id=${pending.pictureId}`,
+    );
+    const next = new Set(sharedPictureIds.value);
+    next.delete(pending.pictureId);
+    sharedPictureIds.value = next;
+  } catch (e) {
+    console.error("[ImageGrid] Failed to revoke picture shares", e);
+  }
 }
 
 // ============================================================
@@ -7850,5 +7995,38 @@ function handleEmptyStateReset() {
   .multi-select-toolbar__mode {
     font-size: 12px;
   }
+}
+
+/* ── Picture share toast ─────────────────────────────────────────────── */
+.grid-share-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 30, 30, 0.92);
+  color: #fff;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 9999;
+  white-space: nowrap;
+}
+.share-toast-enter-active,
+.share-toast-leave-active {
+  transition: opacity 0.2s ease;
+}
+.share-toast-enter-from,
+.share-toast-leave-to {
+  opacity: 0;
+}
+
+/* ── Shared-link indicator on thumbnail ──────────────────────────────── */
+.thumbnail-share-badge {
+  opacity: 0.65;
+  padding: 1px 2px;
+  display: flex;
+  align-items: center;
+  color: rgb(var(--v-theme-primary));
 }
 </style>
