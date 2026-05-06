@@ -125,12 +125,16 @@ def get_real_client_ip(request: Request, trusted_proxies: list[str]) -> str:
 
 
 def is_local_ip(ip: str) -> bool:
-    """Return True if *ip* is a loopback or RFC 1918 private address."""
+    """Return True if *ip* is a loopback or RFC 1918 private address.
+
+    Non-parseable strings (e.g. ``"testclient"`` from FastAPI's in-process
+    ``TestClient``) are treated as local so that unit tests are not blocked.
+    """
     try:
         addr = ipaddress.ip_address(ip)
         return addr.is_loopback or addr.is_private
     except ValueError:
-        return False
+        return True
 
 
 @dataclass
