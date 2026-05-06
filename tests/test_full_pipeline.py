@@ -40,6 +40,7 @@ from pixlstash.server import Server
 from pixlstash.tasks.likeness_task import LikenessTask
 from pixlstash.tasks.quality_task import QualityTask
 from pixlstash.tasks.smart_score_task import SmartScoreTask
+from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
@@ -448,6 +449,11 @@ def test_smart_score_correlates_with_reference_scores():
             _poll_until_zero(
                 server, QualityTask.count_missing_quality, "picture quality"
             )
+
+            # Tags (e.g. "bad anatomy") feed the penalised-tag penalty in the
+            # smart-score formula.  Wait until all pictures are tagged so the
+            # penalty is applied correctly when smart scores are computed.
+            _poll_until_zero(server, TagTask.count_missing_tags, "tags")
 
             def fetch_imported_picture_shas(session):
                 pics = session.exec(

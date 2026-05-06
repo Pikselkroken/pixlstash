@@ -11,7 +11,7 @@ DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT = 3
 DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     "incorrect reflection": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     "bad anatomy": 5,
-    "malformed hand": 5,
+    "malformed hand": 4,
     "malformed teeth": 4,
     "missing nipples": 5,
     "malformed nipples": 4,

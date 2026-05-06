@@ -1,3 +1,4 @@
+from sqlalchemy import func
 from sqlmodel import Session, select, delete
 import os
 import threading
@@ -510,3 +511,18 @@ class TagTask(BaseTask):
                 self._release_idle_cpu_spillover_tagger(force=False)
 
         return tagged_pictures
+
+    @staticmethod
+    def count_missing_tags(session: Session) -> int:
+        """Count pictures that have no real tags yet (excluding the empty sentinel)."""
+        has_real_tag = (Tag.tag.is_not(None)) & (Tag.tag != TAG_EMPTY_SENTINEL)
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(~Picture.tags.any(has_real_tag))
+            .where(Picture.deleted.is_(False))
+            .where(Picture.file_path.is_not(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
