@@ -200,6 +200,7 @@ const sidebarCtxSet = ref(null); // { id, name } or null
 const sidebarCtxFolder = ref(null); // reference folder object or null
 const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
+const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 const shareNotification = ref(null); // { message, ok } or null — kept for errors only
 let shareNotificationTimer = null;
@@ -1394,24 +1395,35 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxFolder.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
+      sidebarCtxAllPictures.value = false;
     } else if (type === "folder") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = item;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
+      sidebarCtxAllPictures.value = false;
     } else if (type === "import-folder") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
       sidebarCtxImportFolder.value = item;
       sidebarCtxProject.value = null;
+      sidebarCtxAllPictures.value = false;
     } else if (type === "project") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = item;
+      sidebarCtxAllPictures.value = false;
+    } else if (type === "all-pictures") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = null;
+      sidebarCtxFolder.value = null;
+      sidebarCtxImportFolder.value = null;
+      sidebarCtxProject.value = null;
+      sidebarCtxAllPictures.value = true;
     }
   }
   sidebarCtxX.value = event.clientX;
@@ -2917,6 +2929,7 @@ defineExpose({
           Projects
         </button>
         <button
+          v-if="!isReadOnly"
           class="sidebar-view-tab"
           :class="{ active: sidebarPrimaryTab === 'folders' }"
           @click="selectFoldersTab()"
@@ -3435,6 +3448,9 @@ defineExpose({
                 ]"
                 @click="
                   selectCharacter(props.allPicturesId, allPicturesRowLabel)
+                "
+                @contextmenu.prevent="
+                  openSidebarCtxMenu('all-pictures', null, $event)
                 "
               >
                 <span class="sidebar-list-icon">
@@ -4053,6 +4069,20 @@ defineExpose({
       @contextmenu.prevent
       @mousedown.stop
     >
+      <template v-if="sidebarCtxAllPictures">
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            shareResource(null, null, 'All Pictures');
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-share-variant-outline</v-icon
+          >
+          Share
+        </button>
+      </template>
       <template v-if="sidebarCtxCharacter && !isReadOnly">
         <button
           class="sidebar-ctx-item"

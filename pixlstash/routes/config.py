@@ -655,6 +655,8 @@ def create_router(server) -> APIRouter:
     def get_watch_folders(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(status_code=403, detail="Not available for token-authenticated requests.")
         folders = _load_watch_folders()
         return {
             "status": "success",
@@ -673,6 +675,8 @@ def create_router(server) -> APIRouter:
     def get_filesystem_roots(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(status_code=403, detail="Not available for token-authenticated requests.")
         roots = [
             r
             for r in (server._server_config.get("filesystem_roots") or [])
