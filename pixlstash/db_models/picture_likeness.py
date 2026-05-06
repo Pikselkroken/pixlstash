@@ -166,6 +166,42 @@ class PictureLikeness(SQLModel, table=True):
             params={"a": picture_id_a, "top_k": top_k},
         )
 
+    @classmethod
+    def bulk_prune_below_top_k(
+        cls, session: Session, picture_ids: List[int], top_k: int
+    ) -> None:
+        """Prune top-k for all given ``picture_id_a`` values in a single SQL pass.
+
+        Replaces the per-picture loop with one CTE DELETE that processes all
+        picture_ids atomically, eliminating up to 256 separate write-queue
+        round-trips per task cycle.
+        """
+        if not picture_ids:
+            return
+        ids_csv = ",".join(str(int(pid)) for pid in picture_ids)
+        session.exec(
+            text(f"""
+                WITH ranked AS (
+                    SELECT
+                        picture_id_a,
+                        picture_id_b,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY picture_id_a
+                            ORDER BY likeness DESC, picture_id_b ASC
+                        ) AS rn
+                    FROM picturelikeness
+                    WHERE picture_id_a IN ({ids_csv})
+                )
+                DELETE FROM picturelikeness
+                WHERE (picture_id_a, picture_id_b) IN (
+                    SELECT picture_id_a, picture_id_b
+                    FROM ranked
+                    WHERE rn > :top_k
+                )
+            """),
+            params={"top_k": top_k},
+        )
+
 
 class PictureLikenessQueue(SQLModel, table=True):
     """

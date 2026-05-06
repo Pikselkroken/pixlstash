@@ -1,5 +1,6 @@
 from sqlmodel import Session
 
+from pixlstash.worker_config import SMART_SCORE_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .smart_score_task import SmartScoreTask
 
@@ -17,7 +18,7 @@ class MissingSmartScoreFinder(BaseTaskFinder):
         return "MissingSmartScoreFinder"
 
     def max_inflight_tasks(self) -> int:
-        return 1
+        return SMART_SCORE_MAX_INFLIGHT
 
     def find_task(self):
         pictures = self._db.run_immediate_read_task(

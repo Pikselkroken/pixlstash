@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -23,11 +24,26 @@ from pixlstash.db_models.picture_likeness import (
 logger = get_logger(__name__)
 
 
+@dataclass
+class BulkCandidateArrays:
+    """Pre-decoded, cached candidate data passed to every LikenessTask in a sweep.
+
+    Built once per sweep from ``build_bulk_arrays``; all arrays are read-only
+    and can be shared safely across concurrent tasks.
+    """
+
+    ids: np.ndarray            # (N,) int64 — picture IDs
+    param_matrix: np.ndarray   # (N, num_params) float32
+    emb_norm: np.ndarray       # (N, emb_dim) float32 — L2-normalised
+    phash_vec: np.ndarray      # (N,) uint64 — integer phash values for vectorised XOR
+    id_to_idx: Dict[int, int]  # id → row index in the arrays
+
+
 class LikenessUtils:
     """Speed-focused likeness utilities for stacking near-identical images."""
 
     BATCH_CANDIDATES = 1024
-    MAX_A_PER_CYCLE = 256
+    MAX_A_PER_CYCLE = 2048
     YIELD_SLEEP_SECONDS = 0.0
 
     PHASH_PREFIX_LEN = 3
@@ -135,10 +151,6 @@ class LikenessUtils:
                 Picture.likeness_parameters,
                 Picture.image_embedding,
                 Picture.perceptual_hash,
-                Picture.created_at,
-                Picture.width,
-                Picture.height,
-                Picture.size_bytes,
             )
             .where(Picture.deleted.is_(False))
             .where(Picture.image_embedding.is_not(None))
@@ -146,161 +158,238 @@ class LikenessUtils:
             .where(Picture.perceptual_hash.is_not(None))
         ).all()
 
+    @staticmethod
+    def build_bulk_arrays(session: Session) -> Optional["BulkCandidateArrays"]:
+        """Fetch and decode all candidates into pre-computed numpy arrays.
+
+        Called once per sweep by the finder and cached.  Decoding the 28k
+        embedding blobs (2 KB each) takes ~200-500 ms; caching removes this
+        cost from every subsequent task in the same sweep.
+        """
+        rows = LikenessUtils.fetch_bulk_candidate_data(session)
+        return LikenessUtils._decode_bulk_rows(rows)
+
+    @staticmethod
+    def _decode_bulk_rows(rows: List[Tuple]) -> Optional["BulkCandidateArrays"]:
+        """Decode raw DB rows into a ``BulkCandidateArrays`` struct."""
+        if not rows:
+            return None
+        num_params = len(LikenessParameter)
+        ids_list: List[int] = []
+        param_rows: List[np.ndarray] = []
+        emb_rows: List[np.ndarray] = []
+        phash_list: List[int] = []
+
+        for row in rows:
+            pic_id = int(row[0])
+            vec = LikenessUtils._decode_likeness_parameters(row[1], num_params)
+            emb = LikenessUtils._decode_embedding(row[2])
+            phash_str = str(row[3]) if row[3] else None
+            if vec is None or emb is None or not phash_str:
+                continue
+            try:
+                phash_val = int(phash_str, 16)
+            except ValueError:
+                continue
+            ids_list.append(pic_id)
+            param_rows.append(vec)
+            emb_rows.append(emb)
+            phash_list.append(phash_val)
+
+        if not ids_list:
+            return None
+
+        ids_arr = np.array(ids_list, dtype=np.int64)
+        param_matrix = np.stack(param_rows)                      # (N, num_params)
+        emb_matrix = np.stack(emb_rows)                          # (N, emb_dim)
+        norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
+        safe_norms = np.where(norms > 0, norms, 1.0)
+        emb_norm = emb_matrix / safe_norms
+        emb_norm[norms.ravel() == 0] = 0.0
+        phash_vec = np.array(phash_list, dtype=np.uint64)
+        id_to_idx = {pid: i for i, pid in enumerate(ids_list)}
+
+        return BulkCandidateArrays(
+            ids=ids_arr,
+            param_matrix=param_matrix,
+            emb_norm=emb_norm,
+            phash_vec=phash_vec,
+            id_to_idx=id_to_idx,
+        )
+
     def compute_bulk_likeness(
         self,
         queued_ids: List[int],
-        rows: List[Tuple],
-        param_thresholds: Optional[Dict[LikenessParameter, float]],
-        date_span_seconds: Optional[float],
+        bulk: "BulkCandidateArrays",
     ) -> List[PictureLikeness]:
-        """Compute bulk likeness relationships between queued pictures and all candidates."""
-        if not rows or not queued_ids:
-            return []
-        queued_set = set(int(pid) for pid in queued_ids)
-        ids = [int(row[0]) for row in rows]
-        vectors = [
-            self._decode_likeness_parameters(row[1], len(LikenessParameter))
-            for row in rows
-        ]
-        embeddings = {int(row[0]): self._decode_embedding(row[2]) for row in rows}
-        phash_by_id = {int(row[0]): str(row[3]) for row in rows if row[3]}
+        """Compute bulk likeness relationships using vectorised numpy operations.
 
-        n = len(ids)
-        candidate_counts: Dict[Tuple[int, int], int] = {}
-        params = [
+        Takes pre-decoded ``BulkCandidateArrays`` (built once per sweep by the
+        finder) so blobs are never re-decoded per task.  The sliding-window
+        pair-finding uses numpy offset subtraction rather than Python loops.
+        """
+        if bulk is None or not queued_ids:
+            return []
+
+        ids_arr = bulk.ids
+        param_matrix = bulk.param_matrix
+        emb_norm = bulk.emb_norm
+        phash_vec = bulk.phash_vec
+        id_to_idx = bulk.id_to_idx
+
+        queued_ids_arr = np.array(list(queued_ids), dtype=np.int64)
+        queued_mask = np.isin(ids_arr, queued_ids_arr)   # (N,) bool — no Python loop
+        n = len(ids_arr)
+
+        # ------------------------------------------------------------------ #
+        # Sliding-window pair accumulation — fully numpy, no Python dict.     #
+        #                                                                      #
+        # Each (param, k) combination yields a small numpy array of valid     #
+        # pair int64-encodings: (canon_a << 32) | canon_b.  All arrays are    #
+        # concatenated into one, then np.unique counts occurrences in C ─     #
+        # replacing the Python dict O(M) update loop with a single numpy sort.
+        # ------------------------------------------------------------------ #
+        pair_chunks: List[np.ndarray] = []   # each chunk: 1-D int64 encoded pairs
+
+        params_to_scan = [
             param
             for param in self.GATING_PARAMS
             if param not in {LikenessParameter.PHASH_PREFIX, LikenessParameter.DATE}
         ]
 
-        for param in params:
-            param_index = int(param)
-            values = [
-                vec[param_index] if vec is not None else LIKENESS_PARAMETER_SENTINEL
-                for vec in vectors
-            ]
-            sorted_indices = sorted(
-                range(n),
-                key=lambda i: (not math.isfinite(values[i]), values[i]),
-            )
-            values_sorted = [values[i] for i in sorted_indices]
-            diffs = []
-            for idx in range(1, n):
-                prev_val = values_sorted[idx - 1]
-                curr_val = values_sorted[idx]
-                if not math.isfinite(prev_val) or not math.isfinite(curr_val):
-                    continue
-                diff = curr_val - prev_val
-                if diff >= 0:
-                    diffs.append(diff)
+        for param in params_to_scan:
+            values = param_matrix[:, int(param)]   # (N,) view
+            finite_mask = np.isfinite(values)
+            finite_vals = values[finite_mask]
+            if len(finite_vals) < 2:
+                continue
+
+            sorted_fv = np.sort(finite_vals)
+            pos_diffs = np.diff(sorted_fv)
+            pos_diffs = pos_diffs[pos_diffs >= 0]
             gap_threshold = (
-                float(np.percentile(diffs, self.BULK_GAP_PERCENTILE)) if diffs else 0.0
+                float(np.percentile(pos_diffs, self.BULK_GAP_PERCENTILE))
+                if len(pos_diffs)
+                else 0.0
             )
-            for position, i in enumerate(sorted_indices):
-                value_a = values_sorted[position]
-                if not math.isfinite(value_a):
-                    continue
-                upper = min(position + self.BULK_MAX_WINDOW_SIZE, n - 1)
-                id_a = ids[i]
-                for neighbor_pos in range(position + 1, upper + 1):
-                    value_b = values_sorted[neighbor_pos]
-                    if not math.isfinite(value_b):
-                        break
-                    if (value_b - value_a) > gap_threshold:
-                        break
-                    j = sorted_indices[neighbor_pos]
-                    id_b = ids[j]
-                    if id_a not in queued_set and id_b not in queued_set:
-                        continue
-                    a_id, b_id = PictureLikeness.canon_pair(id_a, id_b)
-                    candidate_counts[(a_id, b_id)] = (
-                        candidate_counts.get((a_id, b_id), 0) + 1
-                    )
 
-        if date_span_seconds:
-            date_values = [
-                vec[int(LikenessParameter.DATE)] if vec is not None else -1.0
-                for vec in vectors
-            ]
-            finite_dates = [val for val in date_values if math.isfinite(val)]
-            if finite_dates:
-                min_date = min(finite_dates)
-                max_date = max(finite_dates)
-                date_span = max_date - min_date
-                max_gap = date_span * self.DATE_WINDOW_FRACTION
-                if max_gap > 0:
-                    date_sorted_indices = sorted(
-                        range(n),
-                        key=lambda i: (
-                            not math.isfinite(date_values[i]),
-                            date_values[i],
-                        ),
-                    )
-                    for position, i in enumerate(date_sorted_indices):
-                        date_a = date_values[i]
-                        if not math.isfinite(date_a):
-                            continue
-                        id_a = ids[i]
-                        upper = min(position + self.DATE_MAX_NEIGHBORS, n - 1)
-                        for neighbor_pos in range(position + 1, upper + 1):
-                            j = date_sorted_indices[neighbor_pos]
-                            date_b = date_values[j]
-                            if not math.isfinite(date_b):
-                                break
-                            if (date_b - date_a) > max_gap:
-                                break
-                            id_b = ids[j]
-                            if id_a not in queued_set and id_b not in queued_set:
-                                continue
-                            a_id, b_id = PictureLikeness.canon_pair(id_a, id_b)
-                            candidate_counts[(a_id, b_id)] = (
-                                candidate_counts.get((a_id, b_id), 0) + 1
-                            )
+            sort_key = np.where(finite_mask, values, np.inf)
+            order = np.argsort(sort_key, kind="stable")
+            sv = values[order]
+            si = ids_arr[order]
+            sq = queued_mask[order]
+            sf = np.isfinite(sv)
 
-        candidate_pairs = {
-            pair
-            for pair, count in candidate_counts.items()
-            if count >= self.MIN_PARAM_OVERLAP
-        }
-
-        results: List[PictureLikeness] = []
-        for a_id, b_id in candidate_pairs:
-            if a_id not in queued_set and b_id not in queued_set:
-                continue
-            phash_a = phash_by_id.get(a_id)
-            phash_b = phash_by_id.get(b_id)
-            if not phash_a or not phash_b:
-                continue
-            if self._phash_similarity(phash_a, phash_b) < self.PHASH_MIN_SIM:
-                continue
-            emb_a = embeddings.get(a_id)
-            emb_b = embeddings.get(b_id)
-            if emb_a is None or emb_b is None or emb_a.shape != emb_b.shape:
-                continue
-            norm_a = np.linalg.norm(emb_a)
-            norm_b = np.linalg.norm(emb_b)
-            if norm_a == 0 or norm_b == 0:
-                continue
-            sim = float((emb_a / norm_a) @ (emb_b / norm_b))
-            sim = float(np.clip(sim, -1.0, 1.0))
-            likeness = 0.5 * (sim + 1.0)
-            if self.LIKENESS_GAMMA != 1.0:
-                likeness = float(pow(max(likeness, 0.0), self.LIKENESS_GAMMA))
-            if likeness > 1.0:
-                likeness = 1.0
-            elif likeness < 0.0:
-                likeness = 0.0
-            if likeness < self.EMBEDDING_MIN_SIM:
-                continue
-            results.append(
-                PictureLikeness(
-                    picture_id_a=a_id,
-                    picture_id_b=b_id,
-                    likeness=likeness,
-                    metric="image_embedding",
+            for k in range(1, min(self.BULK_MAX_WINDOW_SIZE + 1, n)):
+                diffs_k = sv[k:] - sv[:-k]
+                valid = (
+                    sf[:-k] & sf[k:]
+                    & (diffs_k >= 0)
+                    & (diffs_k <= gap_threshold)
+                    & (sq[:-k] | sq[k:])
                 )
-            )
+                pos_i = np.nonzero(valid)[0]
+                if pos_i.size == 0:
+                    continue
+                a_ids = si[pos_i]
+                b_ids = si[pos_i + k]
+                # Encode as single int64: low 32 bits = min(a,b), high 32 bits = max(a,b)
+                lo = np.minimum(a_ids, b_ids).astype(np.int64)
+                hi = np.maximum(a_ids, b_ids).astype(np.int64)
+                pair_chunks.append((hi << 32) | lo)
 
+        # Date window.
+        date_vals = param_matrix[:, int(LikenessParameter.DATE)]
+        finite_date = np.isfinite(date_vals)
+        finite_date_vals = date_vals[finite_date]
+        if len(finite_date_vals) >= 2:
+            date_span = float(np.max(finite_date_vals) - np.min(finite_date_vals))
+            max_gap = date_span * self.DATE_WINDOW_FRACTION
+            if max_gap > 0:
+                sort_key_d = np.where(finite_date, date_vals, np.inf)
+                order_d = np.argsort(sort_key_d, kind="stable")
+                sd = date_vals[order_d]
+                si_d = ids_arr[order_d]
+                sq_d = queued_mask[order_d]
+                sf_d = np.isfinite(sd)
+
+                for k in range(1, min(self.DATE_MAX_NEIGHBORS + 1, n)):
+                    diffs_k = sd[k:] - sd[:-k]
+                    in_window = sf_d[:-k] & sf_d[k:] & (diffs_k <= max_gap)
+                    if not np.any(in_window):
+                        break
+                    valid = in_window & (sq_d[:-k] | sq_d[k:])
+                    pos_i = np.nonzero(valid)[0]
+                    if pos_i.size == 0:
+                        continue
+                    a_ids = si_d[pos_i]
+                    b_ids = si_d[pos_i + k]
+                    lo = np.minimum(a_ids, b_ids).astype(np.int64)
+                    hi = np.maximum(a_ids, b_ids).astype(np.int64)
+                    pair_chunks.append((hi << 32) | lo)
+
+        if not pair_chunks:
+            return []
+
+        # Count occurrences entirely in numpy — no Python dict.
+        all_encoded = np.concatenate(pair_chunks)      # 1-D int64
+        unique_encoded, counts = np.unique(all_encoded, return_counts=True)
+        keep = unique_encoded[counts >= self.MIN_PARAM_OVERLAP]
+        if keep.size == 0:
+            return []
+
+        # Decode back to (a, b) pairs — both are in id_to_idx by construction.
+        cand_a = keep & np.int64(0xFFFFFFFF)           # low 32 bits
+        cand_b = (keep >> 32) & np.int64(0xFFFFFFFF)   # high 32 bits
+
+        # ------------------------------------------------------------------ #
+        # Vectorised phash filter: XOR int64s, popcount, threshold.          #
+        # ------------------------------------------------------------------ #
+        a_idx = np.array([id_to_idx[int(a)] for a in cand_a.tolist()], dtype=np.int64)
+        b_idx = np.array([id_to_idx[int(b)] for b in cand_b.tolist()], dtype=np.int64)
+
+        xor = phash_vec[a_idx] ^ phash_vec[b_idx]       # (K,) uint64
+        # Vectorised Hamming weight (SWAR popcount).
+        v = xor.copy()
+        v = v - ((v >> np.uint64(1)) & np.uint64(0x5555555555555555))
+        v = (v & np.uint64(0x3333333333333333)) + ((v >> np.uint64(2)) & np.uint64(0x3333333333333333))
+        v = (v + (v >> np.uint64(4))) & np.uint64(0x0F0F0F0F0F0F0F0F)
+        hamming = ((v * np.uint64(0x0101010101010101)) >> np.uint64(56)).astype(np.float32)
+        phash_sim = 1.0 - hamming / float(self.PHASH_BITS)
+        phash_keep = phash_sim >= self.PHASH_MIN_SIM
+
+        if not np.any(phash_keep):
+            return []
+
+        # ------------------------------------------------------------------ #
+        # Batch embedding similarity.                                         #
+        # ------------------------------------------------------------------ #
+        a_idx_f = a_idx[phash_keep]
+        b_idx_f = b_idx[phash_keep]
+        sims = np.sum(emb_norm[a_idx_f] * emb_norm[b_idx_f], axis=1)
+        sims = np.clip(sims, -1.0, 1.0)
+        likeness_vals = 0.5 * (sims + 1.0)
+        if self.LIKENESS_GAMMA != 1.0:
+            likeness_vals = np.power(np.maximum(likeness_vals, 0.0), self.LIKENESS_GAMMA)
+        likeness_vals = np.clip(likeness_vals, 0.0, 1.0)
+
+        cand_a_f = cand_a[phash_keep]
+        cand_b_f = cand_b[phash_keep]
+        likeness_filter = likeness_vals >= self.EMBEDDING_MIN_SIM
+
+        results: List[PictureLikeness] = [
+            PictureLikeness(
+                picture_id_a=int(a),
+                picture_id_b=int(b),
+                likeness=float(lv),
+                metric="image_embedding",
+            )
+            for a, b, lv in zip(
+                cand_a_f[likeness_filter].tolist(),
+                cand_b_f[likeness_filter].tolist(),
+                likeness_vals[likeness_filter].tolist(),
+            )
+        ]
         return results
 
     @staticmethod
@@ -309,7 +398,7 @@ class LikenessUtils:
         likeness_results: List[PictureLikeness],
         top_k: int,
     ) -> None:
-        """Persist likeness results and prune below top-k."""
+        """Persist likeness results and prune below top-k in a single batched SQL."""
         logger.debug(
             "LikenessTask: writing %d candidate pairs (top_k=%d, unique_a=%d)",
             len(likeness_results),
@@ -317,9 +406,9 @@ class LikenessUtils:
             len({pl.picture_id_a for pl in likeness_results}),
         )
         PictureLikeness.bulk_insert_ignore(session, likeness_results)
-        processed_as = {pl.picture_id_a for pl in likeness_results}
-        for a_id in processed_as:
-            PictureLikeness.prune_below_top_k(session, a_id, top_k)
+        processed_as = list({pl.picture_id_a for pl in likeness_results})
+        if processed_as:
+            PictureLikeness.bulk_prune_below_top_k(session, processed_as, top_k)
         session.commit()
 
     @staticmethod

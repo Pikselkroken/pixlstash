@@ -19,6 +19,7 @@ class TaskType(str, Enum):
     MISSING_FILE_PURGE = "MissingFilePurgeTask"
     REFERENCE_FOLDER_SCAN = "ReferenceFolderScanTask"
     SMART_SCORE = "SmartScoreTask"
+    TEXT_SCORE = "TextScoreTask"
 
     @staticmethod
     def all():

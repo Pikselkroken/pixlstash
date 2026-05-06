@@ -31,7 +31,6 @@ class Quality(SQLModel, table=True):
     colorfulness: Optional[float] = Field(default=None, index=True)
     luminance_entropy: Optional[float] = Field(default=None, index=True)
     dominant_hue: Optional[float] = Field(default=None, index=True)
-    text_score: Optional[float] = Field(default=None, index=True)
 
     # Relationships
     picture: Optional["Picture"] = Relationship(back_populates="quality")
@@ -67,96 +66,149 @@ class Quality(SQLModel, table=True):
         return np.sum(X_a_norm * X_b_norm, axis=1)
 
     @staticmethod
-    def calculate_quality_batch(images: np.ndarray) -> List["Quality"]:
-        """
-        Calculate quality metrics for a batch of images.
-        Accepts a 4D np.ndarray (batch, height, width, channels) and returns a list of PictureQuality instances.
-        All metrics are vectorised for speed. If any metric is None, set to -1.0.
+    def calculate_quality_batch(
+        images: np.ndarray,
+    ) -> List["Quality"]:
+        """Calculate quality metrics for a batch of images.
+
+        Accepts a 4D np.ndarray (batch, H, W, C) and returns a list of Quality
+        instances.  Metrics are vectorised as much as possible:
+
+        - brightness, contrast, colorfulness — fully vectorised (single NumPy op)
+        - edge_density — batched L1 gradient (pure NumPy, replaces per-image Canny)
+        - luminance_entropy — offset-bincount trick (single C call for whole batch)
+        - dominant_hue — vectorised NumPy RGB→hue; per-image only for argmax
+        - sharpness, noise_level — fully vectorised discrete Laplacian
+        - text_score — stored on Picture; not computed here
         """
         batch_size = images.shape[0]
         if images.ndim != 4:
             raise ValueError(
                 "Input must be a 4D array: (batch, height, width, channels)"
             )
-        # Vectorised brightness and contrast
+
+        # --- Fully vectorised: brightness, contrast ---
         brightness = images.mean(axis=(1, 2, 3)) / 255.0
         contrast = images.std(axis=(1, 2, 3)) / 255.0
+
+        # --- Fully vectorised: colorfulness (Hasler & Süsstrunk) ---
+        # rgb is shared for edge_density, grayscale, and hue below — single float32 alloc.
+        rgb = images.astype(np.float32) / 255.0  # (B, H, W, C)
         if images.shape[3] == 3:
-            rgb = images.astype(np.float32) / 255.0
             rg = rgb[:, :, :, 0] - rgb[:, :, :, 1]
             yb = 0.5 * (rgb[:, :, :, 0] + rgb[:, :, :, 1]) - rgb[:, :, :, 2]
-            std_rg = rg.std(axis=(1, 2))
-            std_yb = yb.std(axis=(1, 2))
-            mean_rg = rg.mean(axis=(1, 2))
-            mean_yb = yb.mean(axis=(1, 2))
-            colorfulness = np.sqrt(std_rg**2 + std_yb**2) + 0.3 * np.sqrt(
-                mean_rg**2 + mean_yb**2
+            colorfulness = np.clip(
+                np.sqrt(rg.std(axis=(1, 2)) ** 2 + yb.std(axis=(1, 2)) ** 2)
+                + 0.3 * np.sqrt(rg.mean(axis=(1, 2)) ** 2 + yb.mean(axis=(1, 2)) ** 2),
+                0.0,
+                1.0,
             )
-            colorfulness = np.clip(colorfulness, 0.0, 1.0)
         else:
-            colorfulness = np.zeros((batch_size,), dtype=np.float32)
-        if images.shape[3] == 3:
-            gray = images.mean(axis=3)
-        else:
-            gray = images.squeeze(axis=3) if images.shape[3] == 1 else images
-        luminance_entropy = np.zeros((batch_size,), dtype=np.float32)
-        for i in range(batch_size):
-            gray_uint8 = np.clip(gray[i], 0, 255).astype(np.uint8, copy=False)
-            hist = np.bincount(gray_uint8.ravel(), minlength=256).astype(np.float64)
-            total = hist.sum()
-            if total > 0:
-                probs = hist / total
-                probs = probs[probs > 0]
-                entropy = -np.sum(probs * np.log2(probs))
-                luminance_entropy[i] = float(entropy / np.log2(256))
-        if images.shape[3] == 3:
-            dominant_hue = np.zeros((batch_size,), dtype=np.float32)
-            for i in range(batch_size):
-                hsv = cv2.cvtColor(images[i].astype(np.uint8), cv2.COLOR_RGB2HSV)
-                hue = hsv[:, :, 0]
-                sat = hsv[:, :, 1]
-                val = hsv[:, :, 2]
-                mask = (sat > 20) & (val > 20)
-                if not np.any(mask):
-                    continue
-                hist = np.bincount(hue[mask].ravel(), minlength=180).astype(np.float64)
-                if hist.sum() == 0:
-                    continue
-                bin_idx = int(hist.argmax())
-                dominant_hue[i] = float((bin_idx + 0.5) / 180.0)
-        else:
-            dominant_hue = np.zeros((batch_size,), dtype=np.float32)
-        lap_list = [
-            cv2.Laplacian(gray[i].astype(np.float32), cv2.CV_32F)
-            for i in range(batch_size)
-        ]
-        noise_level = np.clip(
-            np.array([np.abs(lap).mean() / 255.0 for lap in lap_list]), 0, 1
+            colorfulness = np.zeros(batch_size, dtype=np.float32)
+
+        # Grayscale for the metrics below — derived from rgb to avoid a second cast.
+        # Multiply by 255 so gray_uint8 clip/cast and Laplacian inputs are correct.
+        gray = rgb.mean(axis=3) * 255.0  # (B, H, W), float32, values in [0, 255]
+
+        # --- Batched L1 gradient as edge_density (replaces per-image cv2.Canny) ---
+        # Mean absolute first-order gradient across all channels/spatial dims,
+        # normalised to [0, 1].  Fully vectorised across the whole batch — no
+        # Python loop, no OpenCV.  Reuses rgb (0..1) — no second astype needed.
+        dy = np.abs(rgb[:, 1:, :, :] - rgb[:, :-1, :, :])
+        dx = np.abs(rgb[:, :, 1:, :] - rgb[:, :, :-1, :])
+        edge_density = (dy.mean(axis=(1, 2, 3)) + dx.mean(axis=(1, 2, 3))) / 2.0
+
+        # --- Luminance entropy: offset-bincount trick (single C call) ---
+        gray_uint8 = np.clip(gray, 0, 255).astype(np.uint8)       # (B, H, W)
+        gray_flat = gray_uint8.reshape(batch_size, -1)              # (B, H*W)
+        offsets = (np.arange(batch_size, dtype=np.int64) * 256)[:, None]
+        all_hists = (
+            np.bincount(
+                (gray_flat.astype(np.int64) + offsets).ravel(),
+                minlength=batch_size * 256,
+            )
+            .reshape(batch_size, 256)
+            .astype(np.float64)
         )
-        sharpness = np.array([Quality._cell_sharpness(lap) for lap in lap_list])
-        edges = [
-            cv2.Canny(gray[i].astype(np.uint8), 100, 200) for i in range(batch_size)
-        ]
-        edge_density = np.array([(e > 0).sum() / float(e.size) for e in edges])
+        totals = all_hists.sum(axis=1, keepdims=True)
+        probs = all_hists / np.maximum(totals, 1.0)
+        log_probs = np.where(probs > 0.0, np.log2(np.maximum(probs, 1e-12)), 0.0)
+        luminance_entropy = (
+            (-np.sum(probs * log_probs, axis=1) / np.log2(256)).astype(np.float32)
+        )
 
-        # Post-calc None checks
-        def fix_none(arr):
-            arr = np.array(arr)
-            arr[np.equal(arr, None)] = -1.0
-            return arr
+        # --- Dominant hue: vectorised NumPy RGB→hue, per-image argmax only ---
+        # cv2.cvtColor has no batch API; we compute hue for the entire batch as
+        # a single NumPy expression and only loop for the final histogram argmax.
+        if images.shape[3] == 3:
+            R, G, B_ch = rgb[:, :, :, 0], rgb[:, :, :, 1], rgb[:, :, :, 2]
+            Cmax = np.maximum(np.maximum(R, G), B_ch)
+            Cmin = np.minimum(np.minimum(R, G), B_ch)
+            delta = Cmax - Cmin
+            eps = 1e-7
+            h = np.zeros_like(delta)
+            mr = (Cmax == R) & (delta > eps)
+            h = np.where(mr, ((G - B_ch) / (delta + eps)) % 6.0, h)
+            mg = (Cmax == G) & (delta > eps)
+            h = np.where(mg, (B_ch - R) / (delta + eps) + 2.0, h)
+            mb = (Cmax == B_ch) & (delta > eps)
+            h = np.where(mb, (R - G) / (delta + eps) + 4.0, h)
+            # Scale to OpenCV HSV hue range (0–179)
+            hue_int = np.clip(h * (180.0 / 6.0), 0, 179).astype(np.int32)
+            sat = np.where(Cmax > eps, delta / (Cmax + eps), 0.0)
+            sat_val_mask = (sat > 20.0 / 255.0) & (Cmax > 20.0 / 255.0)  # (B, H, W)
+            # Fully vectorised histogram — same offset-bincount trick as entropy.
+            # sat_val_mask used as weights: 0.0 for masked-out pixels, 1.0 for valid,
+            # so they contribute nothing to the per-image hue counts.
+            hue_flat = hue_int.reshape(batch_size, -1).astype(np.int64)       # (B, H*W)
+            mask_flat = sat_val_mask.reshape(batch_size, -1).astype(np.float64)  # weights
+            hue_offsets = (np.arange(batch_size, dtype=np.int64) * 180)[:, None]
+            hue_hists = np.bincount(
+                (hue_flat + hue_offsets).ravel(),
+                weights=mask_flat.ravel(),
+                minlength=batch_size * 180,
+            ).reshape(batch_size, 180)
+            has_valid = hue_hists.sum(axis=1) > 0
+            dominant_hue_idx = hue_hists.argmax(axis=1).astype(np.float32)
+            dominant_hue = np.where(
+                has_valid, (dominant_hue_idx + 0.5) / 180.0, 0.0
+            ).astype(np.float32)
+        else:
+            dominant_hue = np.zeros(batch_size, dtype=np.float32)
 
-        sharpness = fix_none(sharpness)
-        edge_density = fix_none(edge_density)
-        contrast = fix_none(contrast)
-        brightness = fix_none(brightness)
-        noise_level = fix_none(noise_level)
-        colorfulness = fix_none(colorfulness)
-        luminance_entropy = fix_none(luminance_entropy)
-        dominant_hue = fix_none(dominant_hue)
-        # Compute text score using MSER region detection (per-image loop)
-        text_scores = np.zeros((batch_size,), dtype=np.float32)
-        for i in range(batch_size):
-            text_scores[i] = Quality._calculate_text_score(images[i])
+        # --- Fully vectorised: sharpness + noise_level via discrete Laplacian ---
+        # 5-point stencil (identical to cv2.Laplacian ksize=1) applied to the
+        # whole batch in one NumPy expression — no Python loop, no OpenCV call,
+        # GIL released for the entire computation.
+        lap = (
+            4.0 * gray[:, 1:-1, 1:-1]
+            - gray[:, :-2, 1:-1]
+            - gray[:, 2:, 1:-1]
+            - gray[:, 1:-1, :-2]
+            - gray[:, 1:-1, 2:]
+        )  # (B, H-2, W-2), float32
+
+        # noise_level: mean |Laplacian| normalised to [0, 1]
+        noise_level = np.clip(np.abs(lap).mean(axis=(1, 2)) / 255.0, 0.0, 1.0)
+
+        # sharpness: vectorised _cell_sharpness — rewards a sharp subject region.
+        # Divide each frame's Laplacian into a 4×4 grid, take the top-4 cell
+        # variances, normalise.  Equivalent to calling _cell_sharpness per image.
+        _GRID, _TOP_K, _NORM = 4, 4, 500.0
+        B_l, H_l, W_l = lap.shape
+        cell_h = max(1, H_l // _GRID)
+        cell_w = max(1, W_l // _GRID)
+        lap_c = lap[:, : cell_h * _GRID, : cell_w * _GRID]
+        lc = lap_c.reshape(B_l, _GRID, cell_h, _GRID, cell_w)
+        cell_var = lc.var(axis=(2, 4))  # (B, _GRID, _GRID)
+        cell_var_flat = cell_var.reshape(B_l, -1)  # (B, _GRID²)
+        n_cells = cell_var_flat.shape[1]
+        k = min(_TOP_K, n_cells)
+        if k > 0:
+            top_vals = np.partition(cell_var_flat, n_cells - k, axis=1)[:, n_cells - k :]
+            sharpness = np.clip(top_vals.mean(axis=1) / _NORM, 0.0, 1.0)
+        else:
+            sharpness = np.zeros(batch_size, dtype=np.float32)
 
         results = []
         for i in range(batch_size):
@@ -170,7 +222,7 @@ class Quality(SQLModel, table=True):
                     colorfulness=float(colorfulness[i]),
                     luminance_entropy=float(luminance_entropy[i]),
                     dominant_hue=float(dominant_hue[i]),
-                    text_score=float(text_scores[i]),
+                    text_score=None,  # Filled in separately by TextScoreTask
                 )
             )
         return results
@@ -214,9 +266,6 @@ class Quality(SQLModel, table=True):
         t0 = time.time()
         dominant_hue = Quality._calculate_dominant_hue(image)
         timings["dominant_hue"] = time.time() - t0
-        t0 = time.time()
-        text_score = Quality._calculate_text_score(image)
-        timings["text_score"] = time.time() - t0
 
         # Post-calc None checks
         sharpness = -1.0 if sharpness is None else sharpness
@@ -227,7 +276,6 @@ class Quality(SQLModel, table=True):
         colorfulness = -1.0 if colorfulness is None else colorfulness
         luminance_entropy = -1.0 if luminance_entropy is None else luminance_entropy
         dominant_hue = -1.0 if dominant_hue is None else dominant_hue
-        text_score = -1.0 if text_score is None else text_score
         return Quality(
             sharpness=float(sharpness),
             edge_density=float(edge_density),
@@ -237,7 +285,6 @@ class Quality(SQLModel, table=True):
             colorfulness=float(colorfulness),
             luminance_entropy=float(luminance_entropy),
             dominant_hue=float(dominant_hue),
-            text_score=float(text_score),
         )
 
     @staticmethod
@@ -532,7 +579,6 @@ class Quality(SQLModel, table=True):
             "colorfulness",
             "luminance_entropy",
             "dominant_hue",
-            "text_score",
         ]
 
     @classmethod

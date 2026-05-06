@@ -191,6 +191,7 @@ class Picture(SQLModel, table=True):
     score: Optional[int] = None
     aesthetic_score: Optional[float] = None
     smart_score: Optional[float] = Field(default=None, index=True)
+    text_score: Optional[float] = Field(default=None, index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
     # When True, the source file could not be deleted (allow_delete_file=False on
@@ -1006,15 +1007,10 @@ class Picture(SQLModel, table=True):
                 else:
                     query = query.order_by((cls.width * cls.height).asc(), cls.id.asc())
             elif sort_mech.key == SortMechanism.Keys.TEXT_CONTENT:
-                query = query.join(
-                    Quality,
-                    Quality.picture_id == cls.id,
-                    isouter=True,
-                )
                 if sort_mech.descending:
-                    query = query.order_by(Quality.text_score.desc(), cls.id.desc())
+                    query = query.order_by(cls.text_score.desc(), cls.id.desc())
                 else:
-                    query = query.order_by(Quality.text_score.asc(), cls.id.asc())
+                    query = query.order_by(cls.text_score.asc(), cls.id.asc())
             else:
                 field_name = sort_mech.field
                 field = (
@@ -1314,15 +1310,10 @@ class Picture(SQLModel, table=True):
                     Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                 )
             elif sort_mech.key == SortMechanism.Keys.TEXT_CONTENT:
-                query = query.join(
-                    Quality,
-                    Quality.picture_id == Picture.id,
-                    isouter=True,
-                )
                 query = query.order_by(
-                    Quality.text_score.desc()
+                    Picture.text_score.desc()
                     if sort_mech.descending
-                    else Quality.text_score.asc(),
+                    else Picture.text_score.asc(),
                     Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                 )
             else:

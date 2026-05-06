@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
-from pixlstash.utils.likeness.likeness_utils import LikenessUtils
+from pixlstash.utils.likeness.likeness_utils import LikenessUtils, BulkCandidateArrays
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.pixl_logging import get_logger
 
@@ -18,12 +18,13 @@ class LikenessTask(BaseTask):
     def priority(self) -> TaskPriority:
         return TaskPriority.LOW
 
-    def __init__(self, database):
+    def __init__(self, database, bulk_arrays: BulkCandidateArrays | None = None):
         super().__init__(
             task_type="LikenessTask",
             params={},
         )
         self._db = database
+        self._bulk_arrays = bulk_arrays
 
     def _run_task(self):
         helper = LikenessUtils(self._db)
@@ -33,14 +34,6 @@ class LikenessTask(BaseTask):
                 self._db.submit_task(func, *args, priority=DBPriority.LOW, **kwargs)
             )
 
-        submit_low(LikenessUtils.seed_queue)
-        param_thresholds = submit_low(
-            LikenessUtils.compute_param_gap_thresholds,
-            helper.PARAM_GAP_PERCENTILE,
-            helper.PARAM_THRESHOLD_SAMPLE_LIMIT,
-        )
-        date_span_seconds = submit_low(LikenessUtils.compute_date_span_seconds)
-
         work_items = submit_low(
             LikenessUtils.get_next_work_batch,
             helper.MAX_A_PER_CYCLE,
@@ -49,19 +42,23 @@ class LikenessTask(BaseTask):
             return {"changed_count": 0, "changed": [], "pairs_written": 0}
 
         queued_ids = [int(item[0]) for item in work_items]
-        bulk_rows = submit_low(LikenessUtils.fetch_bulk_candidate_data)
-        logger.debug(
+
+        # Use the cached pre-decoded arrays when available (set by the finder),
+        # falling back to a fresh fetch only if the task was created without them.
+        bulk = self._bulk_arrays
+        if bulk is None:
+            bulk = self._db.run_immediate_read_task(LikenessUtils.build_bulk_arrays)
+
+        if bulk is None:
+            return {"changed_count": 0, "changed": [], "pairs_written": 0}
+
+        logger.info(
             "LikenessTask: processing %d queued pictures against %d candidates",
             len(queued_ids),
-            len(bulk_rows),
+            len(bulk.ids),
         )
-        likeness_results = helper.compute_bulk_likeness(
-            queued_ids,
-            bulk_rows,
-            param_thresholds,
-            date_span_seconds,
-        )
-        logger.debug(
+        likeness_results = helper.compute_bulk_likeness(queued_ids, bulk)
+        logger.info(
             "LikenessTask: computed %d likeness pairs from %d queued pictures",
             len(likeness_results),
             len(queued_ids),

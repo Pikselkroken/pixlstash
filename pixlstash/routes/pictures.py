@@ -53,7 +53,6 @@ from pixlstash.db_models import (
     PictureProjectMember,
     PictureSetMember,
     Project,
-    Quality,
     ReferenceFolder,
     SortMechanism,
     Tag,
@@ -1268,24 +1267,9 @@ def _select_pictures_for_listing(
         return [pic.id for pic in pics]
     result = serialize_metadata(pics)
     if sort_mech and sort_mech.key == SortMechanism.Keys.TEXT_CONTENT and result:
-        pic_ids = [d["id"] for d in result if d.get("id") is not None]
-
-        def _fetch_text_scores(session, ids):
-            rows = session.exec(
-                select(Quality.picture_id, Quality.text_score).where(
-                    Quality.picture_id.in_(ids),
-                )
-            ).all()
-            return {pid: ts for pid, ts in rows}
-
-        text_score_map = server.vault.db.run_immediate_read_task(
-            _fetch_text_scores, pic_ids
-        )
         for d in result:
-            pid = d.get("id")
-            if pid is not None:
-                ts = text_score_map.get(pid)
-                d["text_score"] = round(ts, 3) if ts is not None and ts >= 0 else None
+            ts = d.get("text_score")
+            d["text_score"] = round(ts, 3) if ts is not None and ts >= 0 else None
     if stack_leaders_only:
         result = _enrich_stack_counts(server, result)
     return result
