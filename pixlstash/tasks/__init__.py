@@ -25,6 +25,8 @@ from .missing_source_face_likeness_finder import (
 )
 from .reference_folder_scan_task import ReferenceFolderScanTask
 from .reference_folder_scan_finder import ReferenceFolderScanFinder
+from .text_score_task import TextScoreTask
+from .missing_text_score_finder import MissingTextScoreFinder
 
 __all__ = [
     "TaskType",
@@ -55,4 +57,6 @@ __all__ = [
     "MissingSourceFaceLikenessCharacterFinder",
     "ReferenceFolderScanTask",
     "ReferenceFolderScanFinder",
+    "TextScoreTask",
+    "MissingTextScoreFinder",
 ]

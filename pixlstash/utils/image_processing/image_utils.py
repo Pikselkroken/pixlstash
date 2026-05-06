@@ -411,6 +411,49 @@ class ImageUtils:
             return None
 
     @staticmethod
+    def load_image_reduced(file_path: str, max_side: int) -> Optional[np.ndarray]:
+        """Load an image at reduced resolution, returning an RGB numpy array.
+
+        For JPEG files, PIL's ``draft()`` instructs the JPEG decoder to use DCT
+        subsampling (1/2, 1/4, or 1/8 of the original size), which is much
+        faster than decoding at full resolution and then resizing — for a 4K
+        JPEG targeting 256 px, this decodes roughly 64× fewer pixels.  For PNG,
+        WebP, and other formats ``draft()`` is a no-op and a normal decode +
+        cv2 resize is performed instead.
+
+        The returned array has its longest side <= ``max_side``.
+        """
+        try:
+            arr = None
+            try:
+                with Image.open(file_path) as img:
+                    # Must be called before load()/convert(); no-op for non-JPEG.
+                    img.draft("RGB", (max_side, max_side))
+                    img = ImageOps.exif_transpose(img)
+                    arr = np.array(img.convert("RGB"))
+            except Exception as exc:
+                logger.debug(
+                    "PIL failed to load image %s for reduced load; trying video: %s",
+                    file_path,
+                    exc,
+                )
+            if arr is None:
+                frame = VideoUtils._read_first_video_frame_bgr(file_path)
+                if frame is None:
+                    return None
+                arr = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w = arr.shape[:2]
+            if max(h, w) > max_side:
+                scale = max_side / float(max(h, w))
+                new_w = max(1, int(round(w * scale)))
+                new_h = max(1, int(round(h * scale)))
+                arr = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            return arr
+        except Exception as exc:
+            logger.error("Failed to load image at %s (reduced): %s", file_path, exc)
+            return None
+
+    @staticmethod
     def generate_thumbnail_bytes(img, size=(384, 384)) -> Optional[bytes]:
         """
         Crop to square (bottom-cropped for tall images) and resize longest edge.

@@ -1,6 +1,8 @@
 import time
 import os
 import threading
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 from sqlmodel import Session, select
@@ -20,18 +22,33 @@ logger = get_logger(__name__)
 class QualityTask(BaseTask):
     """Task that calculates full-image quality metrics for one batch.
 
-    Two tasks may be in-flight simultaneously (ping-pong I/O prefetch), but
-    only one may execute compute at a time.  While task N runs compute, task
-    N+1 preloads its images from disk in a background thread so that it is
-    ready to compute the moment the semaphore is released.
+    Multiple tasks may be in-flight simultaneously.  Each task starts an I/O
+    preload thread as soon as it is queued so that image data is ready by the
+    time compute begins.
     """
 
-    BATCH_SIZE = 64
-    FULL_IMAGE_MAX_SIDE = 512
+    BATCH_SIZE = 32
+    FULL_IMAGE_MAX_SIDE = 256
+    # Number of threads used to decode images during preload.
+    # PIL's JPEG decoder releases the GIL so threads run concurrently.  With
+    # QUALITY_MAX_INFLIGHT=2 only one task preloads at a time, so this means
+    # at most _PRELOAD_WORKERS concurrent disk reads — manageable and necessary
+    # to decode 256 images fast enough to hide behind the previous task's
+    # compute time (~3-5 s).  Sequential (1 thread) is too slow: 256 images
+    # take ~44 s, far longer than the compute window.
+    _PRELOAD_WORKERS = 4
+    # Ensures only one QualityTask executes _compute() at a time so that
+    # numpy/OpenCV operations don't compete for CPU cores.  The second inflight
+    # task preloads images while the first computes, then acquires the semaphore
+    # immediately (preload_wait ≈ 0) when the first finishes.
+    _compute_semaphore = threading.Semaphore(1)
 
-    # Only one QualityTask may run compute at a time.  A second task may be
-    # in-flight and preloading images concurrently (ping-pong pattern).
-    _execution_semaphore = threading.Semaphore(1)
+    # Timing feedback shared across all instances so the finder can size the
+    # next batch to match the observed preload rate.
+    # Written by _compute() under _feedback_lock; read by the finder.
+    _feedback_lock = threading.Lock()
+    _last_preload_s: float = 0.0   # wall time the preload thread ran
+    _last_batch_size: int = 0      # number of pictures in that task
 
     def __init__(self, database, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -64,26 +81,41 @@ class QualityTask(BaseTask):
         self._preload_thread.start()
 
     def _preload_images(self) -> None:
-        """Load every image in the batch from disk into memory (background thread)."""
-        preloaded: dict[str, np.ndarray | None] = {}
-        for pic in self._pictures:
+        """Load every image in the batch from disk into memory (background thread).
+
+        Images are immediately downscaled to FULL_IMAGE_MAX_SIDE during preload
+        so that only small (≤512px) arrays are held in memory, never the
+        full-resolution originals.  Loading is parallelised across
+        _PRELOAD_WORKERS threads: PIL's JPEG decoder releases the GIL so
+        multiple images are decoded concurrently on separate CPU cores,
+        reducing per-task preload time by up to _PRELOAD_WORKERS×.
+        """
+        def _load_one(pic):
             if self._preload_cancel.is_set():
-                break
+                return None, None
             file_path = None
             try:
                 file_path = str(
                     ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
                 )
-                img = ImageUtils.load_image_or_video(file_path)
-                preloaded[file_path] = img
+                img = ImageUtils.load_image_reduced(file_path, self.FULL_IMAGE_MAX_SIDE)
+                return file_path, img
             except Exception as exc:
                 logger.debug(
                     "Preload failed for %s: %s",
                     getattr(pic, "file_path", None),
                     exc,
                 )
+                return file_path, None
+
+        preloaded: dict[str, np.ndarray | None] = {}
+        n_workers = min(self._PRELOAD_WORKERS, len(self._pictures))
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {pool.submit(_load_one, pic): pic for pic in self._pictures}
+            for future in as_completed(futures):
+                file_path, img = future.result()
                 if file_path is not None:
-                    preloaded[file_path] = None
+                    preloaded[file_path] = img
         with self._preload_lock:
             self._preloaded_images = preloaded
         self._preload_finished_at = time.perf_counter()
@@ -115,15 +147,16 @@ class QualityTask(BaseTask):
             return dict(self._preloaded_images)
 
     def _run_task(self):
-        # Acquire the class-level semaphore so that only one QualityTask runs
-        # compute at a time.  The second in-flight task has been preloading
-        # images while this one ran, so it will be ready immediately after the
-        # semaphore is released (ping-pong I/O pattern).
-        self._execution_semaphore.acquire()
+        # Wait for preload to finish BEFORE acquiring the compute semaphore.
+        # This way a slow-preloading task (e.g. large PNGs) does not block
+        # a fully-loaded task from computing — whichever task finishes
+        # preloading first will win the semaphore and run next.
+        self._wait_for_preload()
+        QualityTask._compute_semaphore.acquire()
         try:
             return self._compute()
         finally:
-            self._execution_semaphore.release()
+            QualityTask._compute_semaphore.release()
 
     def _compute(self):
         start = time.time()
@@ -135,81 +168,95 @@ class QualityTask(BaseTask):
 
         self._backfill_missing_picture_metadata(pics)
 
-        # By the time we reach here the preload thread has had the full
-        # duration of the previous task's compute to finish I/O.  join() will
-        # return immediately in the common case.
-        preloaded = self._wait_for_preload()
+        t_preload_wait = time.perf_counter()
+        preloaded = self._wait_for_preload()  # instant — already joined in _run_task
+        t_preload_done = time.perf_counter()
 
-        grouped_full = quality_helper.group_pictures_by_format_and_size(pics)
-        if not grouped_full:
+        # Group by ACTUAL post-downscale shape so that images with different
+        # original resolutions that map to the same downscaled shape are batched
+        # together.  This avoids the 256-calls-of-1 pattern that occurs with
+        # diverse-resolution photo collections.
+        shape_groups: dict = defaultdict(list)  # shape → [(pic, img), ...]
+        skipped_pics: list = []
+
+        for pic in pics:
+            file_path = str(
+                ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+            )
+            img = preloaded.get(file_path)
+            if img is None:
+                # Fallback: not preloaded (added after on_queued, or preload failed).
+                img = ImageUtils.load_image_reduced(file_path, self.FULL_IMAGE_MAX_SIDE)
+            if img is None:
+                skipped_pics.append(pic)
+            else:
+                shape_groups[img.shape].append((pic, img))
+
+        if not shape_groups and not skipped_pics:
             return {"changed_count": 0, "changed": []}
 
-        changed = []
-        for group_key, group in grouped_full.items():
-            batch = group[: min(len(group), self.BATCH_SIZE)]
-            expected_shape = (group_key[2], group_key[1], 3)
-            valid_batch = []
-            valid_loaded = []
-            skipped = []
+        # Accumulate all (pics, qualities) pairs across every shape-group and
+        # sub-batch so the write queue is hit exactly once per task.
+        all_write_pics: list = []
+        all_write_qualities: list = []
 
-            for pic in batch:
-                file_path = str(
-                    ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
-                )
-                img = preloaded.get(file_path)
-                if img is None:
-                    # Fallback: not preloaded (added after on_queued, or preload failed).
-                    img = ImageUtils.load_image_or_video(file_path)
-                if img is None:
-                    skipped.append(pic)
-                    continue
-                if img.shape == expected_shape:
-                    valid_batch.append(pic)
-                    valid_loaded.append(img)
-                else:
-                    skipped.append(pic)
-
-            if valid_batch:
-                qualities = quality_helper.calculate_quality(
-                    valid_batch,
-                    valid_loaded,
-                    max_side=self.FULL_IMAGE_MAX_SIDE,
-                )
+        for shape, pic_img_pairs in shape_groups.items():
+            group_pics = [p for p, _ in pic_img_pairs]
+            group_imgs = [img for _, img in pic_img_pairs]
+            for batch_start in range(0, len(group_pics), self.BATCH_SIZE):
+                b_pics = group_pics[batch_start : batch_start + self.BATCH_SIZE]
+                b_imgs = group_imgs[batch_start : batch_start + self.BATCH_SIZE]
+                qualities = quality_helper.calculate_quality(b_pics, b_imgs)
                 if qualities:
-                    result = self._db.run_task(
-                        quality_helper.update_quality,
-                        valid_batch,
-                        qualities,
-                        priority=DBPriority.LOW,
-                    )
-                    changed.extend(result or [])
+                    all_write_pics.extend(b_pics)
+                    all_write_qualities.extend(qualities)
 
-            if skipped:
-                sentinel_qualities = [
-                    Quality(
-                        sharpness=-1.0,
-                        edge_density=-1.0,
-                        contrast=-1.0,
-                        brightness=-1.0,
-                        noise_level=-1.0,
-                        colorfulness=-1.0,
-                        luminance_entropy=-1.0,
-                        dominant_hue=-1.0,
-                        text_score=-1.0,
-                    )
-                    for _ in skipped
-                ]
-                result = self._db.run_task(
-                    quality_helper.update_quality,
-                    skipped,
-                    sentinel_qualities,
-                    priority=DBPriority.LOW,
+        if skipped_pics:
+            sentinel_qualities = [
+                Quality(
+                    sharpness=-1.0,
+                    edge_density=-1.0,
+                    contrast=-1.0,
+                    brightness=-1.0,
+                    noise_level=-1.0,
+                    colorfulness=-1.0,
+                    luminance_entropy=-1.0,
+                    dominant_hue=-1.0,
                 )
-                changed.extend(result or [])
+                for _ in skipped_pics
+            ]
+            all_write_pics.extend(skipped_pics)
+            all_write_qualities.extend(sentinel_qualities)
 
-        logger.debug(
-            "QualityTask completed in %.2fs with %s updates",
+        # Single write-queue call for the entire task — one commit, one lock acquisition.
+        changed = []
+        t_compute_done = time.perf_counter()
+        if all_write_pics:
+            result = self._db.run_task(
+                quality_helper.update_quality,
+                all_write_pics,
+                all_write_qualities,
+                priority=DBPriority.LOW,
+            )
+            changed.extend(result or [])
+        t_write_done = time.perf_counter()
+
+        preload_duration = (
+            self._preload_finished_at - self._preload_started_at
+            if self._preload_started_at is not None and self._preload_finished_at is not None
+            else 0.0
+        )
+        compute_duration = t_compute_done - t_preload_done
+        with QualityTask._feedback_lock:
+            QualityTask._last_preload_s = preload_duration
+            QualityTask._last_batch_size = len(pics)
+
+        logger.info(
+            "QualityTask completed in %.2fs — preload_wait=%.3fs compute=%.3fs write=%.3fs updates=%s",
             time.time() - start,
+            t_preload_done - t_preload_wait,
+            compute_duration,
+            t_write_done - t_compute_done,
             len(changed),
         )
         return {
@@ -225,7 +272,7 @@ class QualityTask(BaseTask):
                 Quality,
                 Quality.picture_id == Picture.id,
             )
-            .where(Quality.text_score.is_(None))
+            .where(Quality.sharpness.is_(None))
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
             .order_by(Picture.format, Picture.width, Picture.height)
@@ -241,7 +288,7 @@ class QualityTask(BaseTask):
                 Quality,
                 Quality.picture_id == Picture.id,
             )
-            .where(Quality.text_score.is_(None))
+            .where(Quality.sharpness.is_(None))
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
         ).one()

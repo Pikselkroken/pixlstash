@@ -39,6 +39,7 @@ from .task_runner import TaskRunner
 from .work_planner import WorkPlanner
 from .tasks import TaskType
 from .utils.reference_folder_watcher import ReferenceFolderWatcher
+from . import worker_config
 
 from pixlstash.event_types import EventType
 
@@ -109,7 +110,7 @@ class Vault:
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
         self._path_mapper = path_mapper
-        self._task_runner = TaskRunner(name="vault-task-runner", num_workers=4)
+        self._task_runner = TaskRunner(name="vault-task-runner", num_workers=worker_config.NUM_WORKERS)
         self._planner_work_finders = WorkPlanner.work_finders(
             database=self.db,
             picture_tagger_getter=lambda: self._picture_tagger,
@@ -765,6 +766,12 @@ class Vault:
                 total = 0
                 missing = 0
                 label = "missing_file_purge"
+            elif worker_type == TaskType.TEXT_SCORE:
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_text_score)
+                    or 0
+                )
+                label = "text_score"
             else:
                 missing = 0
                 label = "planner_managed"
@@ -910,6 +917,12 @@ class Vault:
     @staticmethod
     def _count_pending_likeness_parameters(session: Session) -> int:
         return LikenessParameterUtils.count_pending_parameters(session)
+
+    @staticmethod
+    def _count_missing_text_score(session: Session) -> int:
+        from pixlstash.tasks.text_score_task import TextScoreTask
+
+        return TextScoreTask.count_missing_text_score(session)
 
     @staticmethod
     def _count_pending_likeness_queue(session: Session) -> int:

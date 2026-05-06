@@ -78,59 +78,16 @@
                 <span
                   class="task-manager-status-dot"
                   :class="{
-                    'task-manager-status-dot--running': entry.snapshot.running,
+                    'task-manager-status-dot--running':
+                      entry.snapshot.running || getLatestRate(entry.key) > 0,
                   }"
                 ></span>
                 <span class="task-manager-status-text">
                   {{
-                    entry.snapshot.running
+                    entry.snapshot.running || getLatestRate(entry.key) > 0
                       ? "running"
                       : entry.snapshot.status || "idle"
                   }}
-                </span>
-              </div>
-            </div>
-            <div
-              v-if="combinedSnapshot"
-              class="task-manager-panel task-manager-panel--combined"
-            >
-              <div class="task-manager-panel-header">
-                <div class="task-manager-metric" title="Total throughput">
-                  Total throughput
-                </div>
-                <div class="task-manager-progress">
-                  {{ formatProgress(combinedSnapshot) }}
-                </div>
-              </div>
-              <div class="task-manager-panel-subheader">
-                <span class="task-manager-rate">
-                  {{ formatRate(getLatestRate(combinedKey)) }}/s
-                </span>
-                <span class="task-manager-max">
-                  Max {{ formatRate(getMaxRate(combinedKey)) }}/s
-                </span>
-              </div>
-              <div class="task-manager-canvas-wrap">
-                <canvas
-                  :ref="
-                    (el) =>
-                      registerCanvas(`${combinedKey}-grid`, combinedKey, el)
-                  "
-                  width="240"
-                  height="60"
-                  class="task-manager-canvas"
-                ></canvas>
-              </div>
-              <div class="task-manager-status">
-                <span
-                  class="task-manager-status-dot"
-                  :class="{
-                    'task-manager-status-dot--running':
-                      combinedSnapshot.running,
-                  }"
-                ></span>
-                <span class="task-manager-status-text">
-                  {{ combinedSnapshot.running ? "running" : "idle" }}
                 </span>
               </div>
             </div>
@@ -189,6 +146,7 @@ const labelMap = {
   tag_predictions_scored: "Tag Predictions",
   missing_file_purge: "File cleanup",
   planner_managed: "Planner task",
+  text_score: "Text score",
 };
 
 const workerLabelMap = {
@@ -385,7 +343,7 @@ async function fetchProgress() {
       let rate = 0;
       if (prev && now > prev.t) {
         const delta = current - prev.current;
-        rate = delta > 0 ? delta / (now - prev.t) : 0;
+        rate = delta !== 0 ? Math.abs(delta) / (now - prev.t) : 0;
       }
       if (rate > 0) {
         lastProgressAtByWorker.set(key, now);

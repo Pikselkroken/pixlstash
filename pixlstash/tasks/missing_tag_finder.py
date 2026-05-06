@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 
 from pixlstash.db_models import Picture, Tag, TAG_EMPTY_SENTINEL
-
+from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask
 
@@ -25,7 +25,7 @@ class MissingTagFinder(BaseTaskFinder):
         return "MissingTagFinder"
 
     def max_inflight_tasks(self) -> int:
-        return 2
+        return TAGGER_MAX_INFLIGHT
 
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()

@@ -6,7 +6,8 @@ import cv2
 import numpy as np
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
-from sqlmodel import delete
+from sqlalchemy import update as sa_update
+from sqlmodel import delete, select
 
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.quality import Quality
@@ -150,17 +151,42 @@ class QualityUtils:
     ) -> List[Tuple[type, object, str, object]]:
         """Persist quality records for pictures and return a change list."""
         changed = []
+        picture_ids = [getattr(pic, "id", None) for pic in pics]
+        valid_ids = [pid for pid in picture_ids if pid is not None]
+        if not valid_ids:
+            return changed
+
+        # One bulk query to find which pictures still exist and are not deleted.
+        existing_id_set = set(
+            session.exec(
+                select(Picture.id)
+                .where(Picture.id.in_(valid_ids))
+                .where(Picture.deleted == False)  # noqa: E712
+            ).all()
+        )
+
+        deleted_ids = set(valid_ids) - existing_id_set
+        for pid in deleted_ids:
+            logger.warning(
+                "Skipping quality update for picture %s — picture was deleted.", pid
+            )
+
+        surviving_ids = list(existing_id_set)
+        if not surviving_ids:
+            return changed
+
+        # Bulk-delete stale Quality rows and bulk-reset likeness_parameters in
+        # two statements instead of N individual gets + adds.
+        session.exec(delete(Quality).where(Quality.picture_id.in_(surviving_ids)))
+        session.exec(
+            sa_update(Picture)
+            .where(Picture.id.in_(surviving_ids))
+            .values(likeness_parameters=None)
+        )
+
         for pic, quality in zip(pics, qualities):
             picture_id = getattr(pic, "id", None)
-            if picture_id is None:
-                continue
-
-            picture_db = session.get(Picture, picture_id)
-            if picture_db is None:
-                logger.warning(
-                    "Skipping quality update for picture %s — picture was deleted.",
-                    picture_id,
-                )
+            if picture_id is None or picture_id not in existing_id_set:
                 continue
 
             if quality is None:
@@ -173,22 +199,19 @@ class QualityUtils:
                     colorfulness=-1.0,
                     luminance_entropy=-1.0,
                     dominant_hue=-1.0,
-                    text_score=-1.0,
                 )
-            try:
-                session.exec(delete(Quality).where(Quality.picture_id == picture_id))
-                quality.picture_id = picture_id
-                session.add(quality)
-                picture_db.likeness_parameters = None
-                session.add(picture_db)
-                session.commit()
-            except (IntegrityError, StaleDataError):
-                session.rollback()
-                logger.warning(
-                    "Skipping quality update for picture %s — picture was deleted during update.",
-                    picture_id,
-                )
-                continue
-
+            quality.picture_id = picture_id
+            session.add(quality)
             changed.append((Picture, picture_id, "quality", quality))
+
+        try:
+            session.commit()
+        except (IntegrityError, StaleDataError):
+            session.rollback()
+            logger.warning(
+                "Quality update rolled back for batch of %s pictures — concurrent deletion likely.",
+                len(pics),
+            )
+            return []
+
         return changed
