@@ -11,6 +11,7 @@ MEASURES = {
     "embeddings",
     "aesthetic_scores",
     "quality",
+    "smart_scores",
     "features",
     "likeness_queue",
     "likeness_parameters",
@@ -19,9 +20,8 @@ MEASURES = {
 
 def reset_tags(cursor) -> None:
     print("Clearing tag tables...")
-    cursor.execute("DELETE FROM face_tag")
-    cursor.execute("DELETE FROM hand_tag")
     cursor.execute("DELETE FROM tag")
+    cursor.execute("DELETE FROM tag_prediction")
 
 
 def reset_descriptions(cursor) -> None:
@@ -56,10 +56,13 @@ def reset_quality(cursor) -> None:
     cursor.execute("DELETE FROM quality")
 
 
+def reset_smart_scores(cursor) -> None:
+    print("Clearing smart scores...")
+    cursor.execute("UPDATE picture SET smart_score = NULL")
+
+
 def reset_features(cursor) -> None:
     print("Clearing face and hand detections...")
-    cursor.execute("DELETE FROM face_tag")
-    cursor.execute("DELETE FROM hand_tag")
     cursor.execute("DELETE FROM face")
     cursor.execute("DELETE FROM hand")
 
@@ -101,6 +104,8 @@ def apply_reset(cursor, measure: str) -> None:
         reset_aesthetic_scores(cursor)
     elif measure == "quality":
         reset_quality(cursor)
+    elif measure == "smart_scores":
+        reset_smart_scores(cursor)
     elif measure == "features":
         reset_features(cursor)
     elif measure == "likeness_queue":
