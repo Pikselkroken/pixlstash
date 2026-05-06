@@ -4296,6 +4296,10 @@ async function applyScoresForSelection(imageIds, targetScore) {
 // DRAG & DROP — GRID FILE IMPORT
 // ============================================================
 function handleGridDragEnter(e) {
+  // Ignore drags that originate from within the grid itself (e.g. reordering
+  // images). Chrome reports "Files" in dataTransfer.types for <img> element
+  // drags, which would otherwise trigger the import overlay incorrectly.
+  if (dragSource.value === 'grid') return;
   if (!e.dataTransfer) return;
   const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
   if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
@@ -4305,6 +4309,7 @@ function handleGridDragEnter(e) {
 }
 
 function handleGridDragOver(e) {
+  if (dragSource.value === 'grid') return;
   if (!e.dataTransfer) return;
   const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
   if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
