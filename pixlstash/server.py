@@ -1023,8 +1023,8 @@ class Server:
             return {"lan_ip": lan_ip, "is_private": is_private}
 
         @self.api.post(f"{API_V1_PREFIX}/login")
-        def login(request: LoginRequest):
-            response = self.auth.login(request)
+        def login(login_request: LoginRequest, http_request: Request):
+            response = self.auth.login(login_request, http_request)
             self._user = self.auth.user
             return response
 

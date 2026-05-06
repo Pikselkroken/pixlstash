@@ -117,6 +117,15 @@ class StartupChecks:
                 "cookie_samesite must be one of: Lax, Strict, None."
             )
 
+        host = str(self._server_config.get("host", "localhost"))
+        require_local = self._server_config.get("require_local_for_write", True)
+        if host == "0.0.0.0" and not require_local:
+            outcome.warnings.append(
+                "require_local_for_write is disabled while host is 0.0.0.0. "
+                "Full login (username/password and ALL-scope tokens) is accessible from any IP address. "
+                "Set require_local_for_write=true to restrict full access to local network connections."
+            )
+
         if ort is None:
             outcome.hard_failures.append(
                 "onnxruntime is required but could not be imported."

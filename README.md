@@ -87,13 +87,57 @@ Edit the file and restart the server to apply changes.
 
 | Key            | Default       | Description                                                                                                                                               |
 | -------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `host`         | `"localhost"` | Address the server binds to. Change to `"0.0.0.0"` to expose the server on the local network.                                                             |
+| `host`         | `"localhost"` | Address the server binds to. Change to `"0.0.0.0"` to expose the server on the local network or internet.                                                 |
 | `port`         | `9537`        | TCP port the server listens on.                                                                                                                           |
 | `cors_origins` | `[]`          | Extra origins allowed to make credentialed cross-origin requests. `localhost`, `127.0.0.1`, and the server's own LAN IP are always permitted on any port. |
+| `require_local_for_write` | `true` | When `true`, full login (username/password and ALL-scope tokens) is only permitted from local network addresses (RFC 1918 / loopback). READ-only share tokens are always accepted from any IP. Set to `false` to allow full login from any IP. |
+| `trusted_proxies` | `[]` | List of proxy IP addresses whose `X-Forwarded-For` header should be trusted for real-client-IP detection. See [Sharing and remote access](#sharing-and-remote-access) below. |
 
 At startup the server detects its own LAN IP and automatically allows it on any port. This means the Vite dev server works over LAN (`http://192.168.1.5:5173` → `http://192.168.1.5:9537`) without any extra configuration, as long as network access is enabled via `host`.
 
 Use `cors_origins` only if you need to allow origins on a different machine entirely.
+
+### Sharing and remote access
+
+PixlStash supports read-only share tokens that let you give guests access to
+a specific picture, picture set, character, or project without exposing your full
+account. To safely share over the internet while keeping your login protected:
+
+1. **Expose the server** — set `"host": "0.0.0.0"` and open/forward the port.
+2. **Enable HTTPS** — set `"require_ssl": true` (strongly recommended whenever
+   the server is internet-facing; see [SSL / HTTPS](#ssl--https) below).
+3. **Keep `require_local_for_write: true`** (the default) — this ensures that
+   full login is only possible from your local network or VPN. Share tokens
+   (READ-only) continue to work from any IP.
+4. **Create a share token** — in the PixlStash settings UI, create a READ-only
+   token scoped to the resource you want to share. Copy the generated URL and
+   send it to your guests.
+
+#### If you run a reverse proxy (nginx, Caddy, Cloudflare Tunnel…)
+
+When a proxy sits in front of PixlStash, `require_local_for_write` sees the
+proxy's IP instead of the real client IP. You must tell PixlStash which proxy
+addresses to trust so it reads the real IP from the `X-Forwarded-For` header:
+
+| Scenario | `trusted_proxies` value |
+|---|---|
+| nginx/Caddy on the same machine | `["127.0.0.1"]` |
+| Cloudflare Tunnel (cloudflared on same machine) | `["127.0.0.1"]` |
+| Proxy on a different LAN machine | `["192.168.1.x"]` (the proxy's LAN IP) |
+
+Example:
+```json
+{
+  "host": "0.0.0.0",
+  "require_ssl": true,
+  "require_local_for_write": true,
+  "trusted_proxies": ["127.0.0.1"]
+}
+```
+
+> **Warning:** Only add addresses you control to `trusted_proxies`. Trusting an
+> untrusted address allows that host to spoof any client IP, bypassing the local
+> network restriction entirely.
 
 ### SSL / HTTPS
 
@@ -104,6 +148,81 @@ Use `cors_origins` only if you need to allow origins on a different machine enti
 | `ssl_certfile`    | `<config_dir>/ssl/cert.pem` | Path to the SSL certificate file.                                             |
 | `cookie_samesite` | `"Lax"`                     | `SameSite` attribute for session cookies (`"Lax"`, `"Strict"`, or `"None"`).  |
 | `cookie_secure`   | `false`                     | Set the `Secure` flag on session cookies. Enable when serving over HTTPS.     |
+
+When `require_ssl` is enabled and no certificate files exist at the configured
+paths, PixlStash generates a **self-signed certificate** automatically. Browsers
+will show a security warning for self-signed certs. To get a trusted certificate
+without warnings, choose one of the options below.
+
+#### Option A — Replace the auto-generated certificate with a real one
+
+If you already have a certificate (e.g. from certbot or your DNS provider), drop
+the files into the config directory and restart:
+
+| OS | Default cert directory |
+|----|------------------------|
+| Linux / macOS | `~/.config/pixlstash/ssl/` |
+| Windows | `%LOCALAPPDATA%\pixlstash\ssl\` |
+
+Place your private key as `key.pem` and the full certificate chain as `cert.pem`,
+or point `ssl_keyfile` / `ssl_certfile` at any paths you prefer.
+
+To obtain a cert with **certbot** (requires port 80 reachable and a real domain):
+
+```bash
+certbot certonly --standalone -d pixlstash.example.com --email you@example.com
+```
+
+Then in `server-config.json`:
+
+```json
+{
+  "require_ssl": true,
+  "cookie_secure": true,
+  "ssl_keyfile": "/etc/letsencrypt/live/pixlstash.example.com/privkey.pem",
+  "ssl_certfile": "/etc/letsencrypt/live/pixlstash.example.com/fullchain.pem"
+}
+```
+
+Certbot installs a systemd timer / cron job that renews automatically. The
+`--standalone` renewal briefly needs port 80; use a
+[pre/post hook](https://eff-certbot.readthedocs.io/en/latest/using.html#pre-and-post-validation-hooks)
+to stop and restart PixlStash around the renewal if it is bound to port 80.
+
+#### Option B — Caddy as a reverse proxy (automatic Let's Encrypt)
+
+[Caddy](https://caddyserver.com/) provisions and renews a trusted TLS certificate
+automatically whenever it proxies a request for a real domain. No manual cert
+management required.
+
+1. Install Caddy: `sudo apt install caddy` (or see [caddyserver.com](https://caddyserver.com/docs/install))
+2. Create `/etc/caddy/Caddyfile`:
+   ```
+   pixlstash.example.com {
+       reverse_proxy localhost:9537
+   }
+   ```
+3. `sudo systemctl reload caddy`
+
+PixlStash itself can stay on plain HTTP (`require_ssl: false`); Caddy terminates
+TLS externally. Set `"trusted_proxies": ["127.0.0.1"]` in `server-config.json`
+so that `require_local_for_write` correctly identifies the real client IP (see
+[Sharing and remote access](#sharing-and-remote-access)).
+
+#### Option C — Cloudflare Tunnel (no open port, no domain purchase required)
+
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+routes traffic to PixlStash through Cloudflare's edge without opening any inbound
+firewall ports. Cloudflare provides a free `*.trycloudflare.com` subdomain with a
+valid TLS certificate, or you can use your own domain.
+
+```bash
+# Install cloudflared, then:
+cloudflared tunnel --url http://localhost:9537
+```
+
+Cloudflare terminates TLS; PixlStash runs plain HTTP internally. As with Caddy,
+set `"trusted_proxies": ["127.0.0.1"]` so local-write restrictions work correctly.
 
 ### Storage
 
