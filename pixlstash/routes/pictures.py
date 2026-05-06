@@ -3898,6 +3898,7 @@ def create_router(server) -> APIRouter:
             logger.error(f"Picture not found for id={id}")
             raise HTTPException(status_code=404, detail="Picture not found")
         pic = pics[0]
+        _enforce_picture_scope(request, pic.id)
 
         def fetch_image_only_tags(session: Session, pic_id: int):
             return session.exec(select(Tag).where(Tag.picture_id == pic_id)).all()

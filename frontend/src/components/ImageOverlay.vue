@@ -46,6 +46,7 @@
         </div>
         <div class="overlay-top-actions">
           <v-menu
+            v-if="!isReadOnly"
             v-model="pluginMenuOpen"
             :close-on-content-click="false"
             location-strategy="connected"

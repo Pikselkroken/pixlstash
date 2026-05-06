@@ -10,6 +10,7 @@ from pixlstash.server import Server
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 BACKEND_URL = "http://localhost:9537"
+API_V1 = "/api/v1"
 
 
 @pytest.mark.parametrize(
@@ -34,7 +35,8 @@ def test_order_stability(params):
             client = TestClient(server.api)
 
             resp = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{API_V1}/login",
+                json={"username": "testuser", "password": "testpassword"},
             )
             assert resp.status_code == 200
             print("Login Response: ", resp.json())  # Should include "session_id"
@@ -42,14 +44,14 @@ def test_order_stability(params):
                 "session_id cookie not set after login"
             )
 
-            resp = client.get("/protected")
+            resp = client.get(f"{API_V1}/protected")
             print("Protected Response: ", resp.json())
 
             first_ids = []
 
             for i in range(0, 3):
                 time.sleep(random.uniform(0.01, 0.05))
-                resp = client.get("/pictures", params={**params})
+                resp = client.get(f"{API_V1}/pictures", params={**params})
                 assert resp.status_code == 200, (
                     f"Backend returned {resp.status_code} for params {params}"
                 )
@@ -118,13 +120,14 @@ def test_date_sort_uses_seconds(sort_key, field):
 
             client = TestClient(server.api)
             resp = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{API_V1}/login",
+                json={"username": "testuser", "password": "testpassword"},
             )
             assert resp.status_code == 200
 
             # Descending: latest first → ts_late, ts_mid, ts_early
             resp = client.get(
-                "/pictures", params={"sort": sort_key, "descending": "true"}
+                f"{API_V1}/pictures", params={"sort": sort_key, "descending": "true"}
             )
             assert resp.status_code == 200
             ids_desc = [
@@ -138,7 +141,7 @@ def test_date_sort_uses_seconds(sort_key, field):
 
             # Ascending: earliest first → ts_early, ts_mid, ts_late
             resp = client.get(
-                "/pictures", params={"sort": sort_key, "descending": "false"}
+                f"{API_V1}/pictures", params={"sort": sort_key, "descending": "false"}
             )
             assert resp.status_code == 200
             ids_asc = [
