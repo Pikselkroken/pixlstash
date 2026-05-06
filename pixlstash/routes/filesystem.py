@@ -81,6 +81,12 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.require_user_id(request)
 
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Filesystem browsing is not available for token-authenticated requests.",
+            )
+
         if server.running_in_docker():
             raise HTTPException(
                 status_code=403,
