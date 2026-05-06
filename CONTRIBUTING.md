@@ -100,6 +100,72 @@ If you find a bug or have a feature request:
 
 ---
 
+## Handling Security Vulnerabilities
+
+### Reporting a vulnerability (external reporters)
+
+Please use the **"Report a vulnerability"** button on the
+[Security tab](https://github.com/pikselkroken/pixlstash/security) of the GitHub
+repository. This opens a private advisory draft visible only to you and the
+maintainer — do **not** open a public issue for security vulnerabilities.
+
+### Fixing a vulnerability (maintainer workflow)
+
+Follow coordinated disclosure so that a fix is available before the vulnerability
+is public knowledge:
+
+1. **Open a private advisory draft** — use the "Report a vulnerability" button on
+   your own repository. This keeps all discussion private until you choose to
+   publish.
+2. **Request a CVE ID** from within the advisory UI (GitHub is a CNA — typically
+   granted within a day). You can do this before the fix is ready.
+3. **Prepare the fix** — use the temporary private fork GitHub can create for you
+   from within the advisory, or work locally. Do not push to a public branch until
+   the release is ready.
+4. **Land the fix and tag the release** — merge the fix, update `CHANGELOG.md`
+   with a `[Security: LEVEL]` tag on the version header (see the Changelog
+   Convention section below), and publish the release on GitHub/PyPI.
+5. **Publish the advisory** — only after the fixed release is live. This makes the
+   GHSA public, activates the CVE, triggers Dependabot alerts for downstream
+   users, and pushes the advisory to osv.dev and the PyPI advisory feeds.
+
+> Publishing the advisory *before* the release would announce a vulnerability with
+> no fix available. Always land the release first.
+
+---
+
+## Changelog Convention
+
+When adding a new entry to `CHANGELOG.md`, use this format for the version header:
+
+```
+# [VERSION]
+```
+
+or, if the release contains a security fix:
+
+```
+# [VERSION] [Security: LEVEL]
+```
+
+where `LEVEL` is one of: `Critical`, `High`, `Moderate`, `Low`.
+
+Use the **highest** severity level present in that release if there are multiple
+security fixes. The level should reflect the CVSS score of the most severe issue:
+
+| Level    | CVSS range |
+|----------|------------|
+| Critical | 9.0 – 10.0 |
+| High     | 7.0 – 8.9  |
+| Moderate | 4.0 – 6.9  |
+| Low      | 0.1 – 3.9  |
+
+The CI build reads this tag from the changelog and publishes it in
+`latest-version.json` so that running instances can warn users when they need to
+upgrade for security reasons.
+
+---
+
 ## Thank You
 
 PixlStash is an open project, and contributions of all kinds, including bug reports, code, docs, ideas,

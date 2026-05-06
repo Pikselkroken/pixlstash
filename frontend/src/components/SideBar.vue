@@ -30,6 +30,7 @@ const appVersion = __APP_VERSION__;
 
 const latestVersion = ref(null);
 const latestVersionUrl = ref(null);
+const latestSecurityLevel = ref(null);
 
 // PEP 440-aware version comparison: treats rc/a/b/dev as pre-releases.
 function parseVersion(v) {
@@ -61,6 +62,21 @@ function isRemoteNewer(current, remote) {
 const updateAvailable = computed(
   () => latestVersion.value && isRemoteNewer(appVersion, latestVersion.value),
 );
+
+const securityUpdateClass = computed(() => {
+  if (!latestSecurityLevel.value) return "sidebar-update-available";
+  const high = ["critical", "high"].includes(
+    latestSecurityLevel.value.toLowerCase(),
+  );
+  return high
+    ? "sidebar-update-available sidebar-update-security sidebar-update-security--high"
+    : "sidebar-update-available sidebar-update-security";
+});
+
+const securityUpdateTitle = computed(() => {
+  if (!latestSecurityLevel.value) return undefined;
+  return `v${latestVersion.value} includes a ${latestSecurityLevel.value}-severity security fix. Update as soon as possible.`;
+});
 
 const LATEST_VERSION_URL = "https://pixlstash.dev/latest-version.json";
 const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
@@ -2338,6 +2354,7 @@ function checkForUpdatesNow() {
       if (remote && isRemoteNewer(appVersion, remote)) {
         latestVersion.value = remote;
         latestVersionUrl.value = `${UPDATE_PAGE_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
+        latestSecurityLevel.value = data?.security ?? null;
       }
     })
     .catch(() => {});
@@ -2812,8 +2829,9 @@ defineExpose({
             :href="latestVersionUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="sidebar-update-available"
-            >&#x2191; v{{ latestVersion }} available</a
+            :class="securityUpdateClass"
+            :title="securityUpdateTitle"
+            >&#x2191; v{{ latestVersion }}{{ latestSecurityLevel ? ' security \u26a0\ufe0f' : ' available' }}</a
           >
         </div>
       </div>
@@ -5034,6 +5052,22 @@ defineExpose({
 
 .sidebar-update-available:hover {
   text-decoration: underline;
+}
+
+.sidebar-update-security {
+  color: #e57c00;
+}
+
+.sidebar-update-security:hover {
+  color: #c96000;
+}
+
+.sidebar-update-security--high {
+  color: #d32f2f;
+}
+
+.sidebar-update-security--high:hover {
+  color: #b71c1c;
 }
 
 .sidebar-brand-task-btn {
