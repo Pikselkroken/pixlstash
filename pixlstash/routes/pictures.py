@@ -3822,19 +3822,33 @@ def create_router(server) -> APIRouter:
         # Watermark compositing also requires PIL, so we share this branch.
         if fmt_lower in ("heic", "heif") or apply_wm:
             try:
-                pil_img = Image.open(file_path)
-                if apply_wm:
-                    wm_bytes = _get_user_watermark_bytes()
-                    if wm_bytes:
-                        pil_img = apply_watermark(pil_img, wm_bytes)
-                    else:
+                with Image.open(file_path) as pil_img:
+                    if apply_wm:
+                        wm_bytes = _get_user_watermark_bytes()
+                        if wm_bytes:
+                            pil_img = apply_watermark(pil_img, wm_bytes)
+                    # HEIC/HEIF → JPEG (browser compat);
+                    # other formats preserve original so content-type matches URL.
+                    if fmt_lower in ("heic", "heif"):
+                        out_fmt = "JPEG"
+                        out_mime = "image/jpeg"
+                        save_kwargs = {"quality": 92}
                         pil_img = pil_img.convert("RGB")
-                else:
-                    pil_img = pil_img.convert("RGB")
-                buf = BytesIO()
-                pil_img.save(buf, format="JPEG", quality=92)
-                buf.seek(0)
-                jpeg_bytes = buf.read()
+                    else:
+                        out_fmt = pil_img.format or fmt_lower.upper()
+                        if out_fmt.upper() in ("JPG", "JPEG"):
+                            out_fmt = "JPEG"
+                            pil_img = pil_img.convert("RGB")
+                            save_kwargs = {"quality": 92}
+                        else:
+                            save_kwargs = {}
+                        out_mime = MEDIA_TYPE_BY_FORMAT.get(
+                            fmt_lower, "application/octet-stream"
+                        )
+                    buf = BytesIO()
+                    pil_img.save(buf, format=out_fmt, **save_kwargs)
+                    buf.seek(0)
+                    encoded_bytes = buf.read()
             except Exception as exc:
                 logger.error(
                     "Failed to process picture id=%s: %s",
@@ -3846,8 +3860,8 @@ def create_router(server) -> APIRouter:
                     detail="Failed to process image",
                 )
             response = Response(
-                content=jpeg_bytes,
-                media_type="image/jpeg",
+                content=encoded_bytes,
+                media_type=out_mime,
             )
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
             return response

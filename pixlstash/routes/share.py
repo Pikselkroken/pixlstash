@@ -95,35 +95,39 @@ def create_router(server) -> APIRouter:
         # extension and Content-Type remain consistent.
         if fmt_lower in ("heic", "heif") or apply_wm:
             try:
-                pil_img = Image.open(file_path)
-                if apply_wm:
-                    wm_bytes = _get_watermark_bytes(matched_token.user_id)
-                    if wm_bytes:
-                        pil_img = apply_watermark(pil_img, wm_bytes)
+                with Image.open(file_path) as pil_img:
+                    if apply_wm:
+                        wm_bytes = _get_watermark_bytes(matched_token.user_id)
+                        if wm_bytes:
+                            pil_img = apply_watermark(pil_img, wm_bytes)
 
-                # Determine output format: HEIC/HEIF → JPEG (browser compat);
-                # other formats → preserve original so content-type matches URL.
-                if fmt_lower in ("heic", "heif"):
-                    out_fmt = "JPEG"
-                    out_mime = "image/jpeg"
-                    save_kwargs = {"quality": 92}
-                    pil_img = pil_img.convert("RGB")
-                else:
-                    out_fmt = pil_img.format or fmt_lower.upper()
-                    if out_fmt.upper() in ("JPG", "JPEG"):
+                    # Determine output format: HEIC/HEIF → JPEG (browser compat);
+                    # other formats → preserve original so content-type matches URL.
+                    if fmt_lower in ("heic", "heif"):
                         out_fmt = "JPEG"
-                        pil_img = pil_img.convert("RGB")
+                        out_mime = "image/jpeg"
                         save_kwargs = {"quality": 92}
+                        pil_img = pil_img.convert("RGB")
                     else:
-                        save_kwargs = {}
-                    out_mime = MEDIA_TYPE_BY_FORMAT.get(
-                        fmt_lower, "application/octet-stream"
-                    )
+                        out_fmt = pil_img.format or fmt_lower.upper()
+                        if out_fmt.upper() in ("JPG", "JPEG"):
+                            out_fmt = "JPEG"
+                            pil_img = pil_img.convert("RGB")
+                            save_kwargs = {"quality": 92}
+                        else:
+                            save_kwargs = {}
+                        out_mime = MEDIA_TYPE_BY_FORMAT.get(
+                            fmt_lower, "application/octet-stream"
+                        )
 
-                buf = BytesIO()
-                pil_img.save(buf, format=out_fmt, **save_kwargs)
-                buf.seek(0)
-                return Response(content=buf.read(), media_type=out_mime)
+                    buf = BytesIO()
+                    pil_img.save(buf, format=out_fmt, **save_kwargs)
+                    buf.seek(0)
+                    return Response(
+                        content=buf.read(),
+                        media_type=out_mime,
+                        headers={"Cache-Control": "no-cache, must-revalidate"},
+                    )
             except Exception as exc:
                 logger.error(
                     "Failed to process shared picture id=%s: %s",
