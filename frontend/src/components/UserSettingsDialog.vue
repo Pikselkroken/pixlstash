@@ -1364,9 +1364,22 @@ async function openLabelThresholdsDialog() {
 }
 
 function formatTokenTimestamp(value) {
-  if (!value) return "Never used";
+  if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Never used";
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString();
+}
+
+function isTokenExpired(token) {
+  if (!token.expires_at) return false;
+  return new Date(token.expires_at) < new Date();
+}
+
+function formatTokenExpiry(token) {
+  if (!token.expires_at) return "Never";
+  const date = new Date(token.expires_at);
+  if (Number.isNaN(date.getTime())) return "Never";
+  if (date < new Date()) return "Expired";
   return date.toLocaleString();
 }
 
@@ -2578,76 +2591,76 @@ const workflowImportCaptionPreview = computed(() => {
                     {{ tokensError }}
                   </div>
                   <div class="settings-token-list">
-                    <div
-                      v-for="token in tokens"
-                      :key="token.id"
-                      class="settings-token-row"
-                    >
-                      <div class="settings-token-meta">
-                        <span class="settings-token-desc">
-                          {{ token.description || "Token" }}
-                        </span>
-                        <v-chip
-                          v-if="token.scope"
-                          size="x-small"
-                          :color="token.scope === 'ALL' ? 'default' : 'info'"
-                          class="settings-token-scope-chip"
+                    <table v-if="tokens.length" class="settings-token-table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Scope</th>
+                          <th>Created</th>
+                          <th>Last used</th>
+                          <th>Expires</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="token in tokens"
+                          :key="token.id"
+                          class="settings-token-row"
                         >
-                          <template v-if="token.scope === 'ALL'">
-                            <v-icon size="11" start
-                              >mdi-shield-account-outline</v-icon
+                          <td class="settings-token-desc">
+                            {{ token.description || "Token" }}
+                          </td>
+                          <td>
+                            <v-chip
+                              v-if="token.scope"
+                              size="x-small"
+                              :color="token.scope === 'ALL' ? 'default' : 'info'"
+                              class="settings-token-scope-chip"
                             >
-                            Full access
-                          </template>
-                          <template
-                            v-else-if="token.resource_type === 'project'"
+                              <template v-if="token.scope === 'ALL'">
+                                <v-icon size="11" start>mdi-shield-account-outline</v-icon>
+                                Full access
+                              </template>
+                              <template v-else-if="token.resource_type === 'project'">
+                                <v-icon size="11" start>mdi-folder-outline</v-icon>
+                                {{ token.resource_name ?? `Project #${token.resource_id}` }}
+                              </template>
+                              <template v-else-if="token.resource_type === 'character'">
+                                <v-icon size="11" start>mdi-account-outline</v-icon>
+                                {{ token.resource_name ?? `Character #${token.resource_id}` }}
+                              </template>
+                              <template v-else-if="token.resource_type === 'picture_set'">
+                                <v-icon size="11" start>mdi-image-multiple-outline</v-icon>
+                                {{ token.resource_name ?? `Set #${token.resource_id}` }}
+                              </template>
+                              <template v-else>Read-only</template>
+                            </v-chip>
+                          </td>
+                          <td class="settings-token-sub">{{ formatTokenTimestamp(token.created_at) }}</td>
+                          <td class="settings-token-sub">{{ formatTokenTimestamp(token.last_used_at) }}</td>
+                          <td
+                            class="settings-token-sub"
+                            :class="{ 'settings-token-expired': isTokenExpired(token) }"
                           >
-                            <v-icon size="11" start>mdi-folder-outline</v-icon>
-                            {{
-                              token.resource_name ??
-                              `Project #${token.resource_id}`
-                            }}
-                          </template>
-                          <template
-                            v-else-if="token.resource_type === 'character'"
-                          >
-                            <v-icon size="11" start>mdi-account-outline</v-icon>
-                            {{
-                              token.resource_name ??
-                              `Character #${token.resource_id}`
-                            }}
-                          </template>
-                          <template
-                            v-else-if="token.resource_type === 'picture_set'"
-                          >
-                            <v-icon size="11" start
-                              >mdi-image-multiple-outline</v-icon
+                            {{ formatTokenExpiry(token) }}
+                          </td>
+                          <td class="settings-token-actions">
+                            <v-btn
+                              icon
+                              size="small"
+                              density="compact"
+                              variant="text"
+                              class="settings-token-delete"
+                              :disabled="tokensLoading"
+                              @click="confirmDeleteToken(token)"
                             >
-                            {{
-                              token.resource_name ?? `Set #${token.resource_id}`
-                            }}
-                          </template>
-                          <template v-else> Read-only </template>
-                        </v-chip>
-                        <span class="settings-token-sub">
-                          Created:
-                          {{ formatTokenTimestamp(token.created_at) }}
-                          &nbsp;·&nbsp; Last used:
-                          {{ formatTokenTimestamp(token.last_used_at) }}
-                        </span>
-                      </div>
-                      <v-btn
-                        icon
-                        size="small"
-                        density="compact"
-                        variant="text"
-                        class="settings-token-delete"
-                        :disabled="tokensLoading"
-                        @click="confirmDeleteToken(token)"
-                      >
-                        <v-icon size="16">mdi-delete</v-icon>
-                      </v-btn>
-                    </div>
+                              <v-icon size="16">mdi-delete</v-icon>
+                            </v-btn>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
                     <div
                       v-if="!tokensLoading && !tokens.length"
                       class="settings-token-empty"
@@ -3455,32 +3468,37 @@ const workflowImportCaptionPreview = computed(() => {
 }
 
 .settings-token-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 120px;
+  max-height: 200px;
   overflow-y: auto;
   padding-right: 4px;
 }
 
-.settings-token-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: rgba(var(--v-theme-surface), 0.2);
+.settings-token-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82em;
 }
 
-.settings-token-meta {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
+.settings-token-table thead th {
+  text-align: left;
+  padding: 2px 8px 4px;
+  font-size: 0.78em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  white-space: nowrap;
+}
+
+.settings-token-row td {
+  padding: 3px 8px;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.05);
+}
+
+.settings-token-row:last-child td {
+  border-bottom: none;
 }
 
 .settings-token-desc {
@@ -3488,18 +3506,23 @@ const workflowImportCaptionPreview = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 0;
-  max-width: 30%;
+  max-width: 140px;
 }
 
 .settings-token-sub {
-  font-size: 0.75em;
   color: rgba(var(--v-theme-on-surface), 0.7);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
+}
+
+.settings-token-expired {
+  color: rgb(var(--v-theme-error));
+  font-weight: 600;
+}
+
+.settings-token-actions {
+  text-align: right;
+  white-space: nowrap;
+  padding-left: 0;
 }
 
 .settings-token-delete {
