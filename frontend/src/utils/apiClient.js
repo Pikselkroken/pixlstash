@@ -66,15 +66,15 @@ apiClient.interceptors.request.use((config) => {
     return config;
   }
 
-  // Inject share token into every API request regardless of URL form.
-  if (_shareToken) {
-    config.params = {...(config.params || {}), token: _shareToken};
-  }
-
-  // Leave fully-qualified URLs untouched. Components that use API_BASE_URL
-  // already include the /api/v1 path.
+  // Leave fully-qualified URLs untouched and do not inject the share token
+  // into external requests (e.g. ComfyUI) to prevent credential leakage.
   if (/^https?:\/\//i.test(rawUrl)) {
     return config;
+  }
+
+  // Inject share token into API requests.
+  if (_shareToken) {
+    config.params = {...(config.params || {}), token: _shareToken};
   }
 
   if (rawUrl.startsWith(API_PREFIX)) {

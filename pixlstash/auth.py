@@ -3,6 +3,7 @@ import ipaddress
 import json
 import re
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -167,6 +168,7 @@ class AuthService:
         # Avoids a bcrypt.verify() call on every authenticated request.
         self._token_cache: dict[str, tuple[UserToken, float]] = {}
         self._TOKEN_CACHE_TTL = 300.0  # seconds
+        self._token_cache_lock = threading.Lock()
 
     def ensure_secure_when_required(self, request: Request):
         if self._server_config.get("require_ssl", False):
@@ -313,18 +315,19 @@ class AuthService:
         # Fast path: check in-memory cache first.
         digest = hashlib.sha256(token_value.encode()).hexdigest()
         now_mono = time.monotonic()
-        cached = self._token_cache.get(digest)
-        if cached is not None:
-            token_obj, expires_mono = cached
-            if now_mono < expires_mono:
-                # Validate token hasn't been expired server-side either.
-                if (
-                    token_obj.expires_at is None
-                    or token_obj.expires_at > datetime.utcnow()
-                ):
-                    return token_obj
-            # Cache entry stale — remove and fall through to verification.
-            self._token_cache.pop(digest, None)
+        with self._token_cache_lock:
+            cached = self._token_cache.get(digest)
+            if cached is not None:
+                token_obj, expires_mono = cached
+                if now_mono < expires_mono:
+                    # Validate token hasn't been expired server-side either.
+                    if (
+                        token_obj.expires_at is None
+                        or token_obj.expires_at > datetime.utcnow()
+                    ):
+                        return token_obj
+                # Cache entry stale — remove and fall through to verification.
+                self._token_cache.pop(digest, None)
 
         user = self.get_user()
         if user is None:
@@ -363,10 +366,14 @@ class AuthService:
                     update_last_used, token.id, priority=DBPriority.IMMEDIATE
                 )
                 # Populate cache so subsequent requests skip bcrypt.
-                self._token_cache[digest] = (token, now_mono + self._TOKEN_CACHE_TTL)
-                # Evict entries beyond a reasonable cap to bound memory use.
-                if len(self._token_cache) > 1000:
-                    self._token_cache.pop(next(iter(self._token_cache)))
+                with self._token_cache_lock:
+                    self._token_cache[digest] = (
+                        token,
+                        now_mono + self._TOKEN_CACHE_TTL,
+                    )
+                    # Evict entries beyond a reasonable cap to bound memory use.
+                    if len(self._token_cache) > 1000:
+                        self._token_cache.pop(next(iter(self._token_cache)))
                 return token
         return None
 
@@ -513,6 +520,21 @@ class AuthService:
                 status_code=400,
                 detail="resource_type must be 'picture_set', 'character', 'project', or 'picture'",
             )
+        if resource_type is not None and resource_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_id is required when resource_type is set",
+            )
+        if resource_id is not None and resource_type is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_type is required when resource_id is set",
+            )
+        if include_attachments and resource_type != "project":
+            raise HTTPException(
+                status_code=400,
+                detail="include_attachments is only valid for project tokens",
+            )
 
         # A date-only value (e.g. "2026-05-05") is parsed as midnight 00:00:00,
         # which would expire the token at the very start of that day.  Normalize
@@ -654,7 +676,8 @@ class AuthService:
         )
         # Clear the token cache — we can't map token_id back to the digest key,
         # so flush all entries to ensure the deleted token is not reused.
-        self._token_cache.clear()
+        with self._token_cache_lock:
+            self._token_cache.clear()
         return {"status": "success", "deleted_id": token_id}
 
     def revoke_tokens_for_resource(
@@ -690,7 +713,8 @@ class AuthService:
         deleted = self._db.run_task(
             _revoke, user_id, resource_type, resource_id, priority=DBPriority.IMMEDIATE
         )
-        self._token_cache.clear()
+        with self._token_cache_lock:
+            self._token_cache.clear()
         return {"status": "success", "deleted_count": deleted}
 
     def get_shared_resource_ids(self, request: Request, resource_type: str):
