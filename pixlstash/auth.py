@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import json
 import re
 import secrets
@@ -109,6 +110,29 @@ def is_auth_excluded_path(path: str) -> bool:
     return False
 
 
+def get_real_client_ip(request: Request, trusted_proxies: list[str]) -> str:
+    """Return the real client IP, walking X-Forwarded-For when the direct connection is from a trusted proxy."""
+    direct_ip = request.client.host if request.client else "127.0.0.1"
+    if direct_ip not in trusted_proxies:
+        return direct_ip
+    # Walk X-Forwarded-For right-to-left, skipping trusted proxy IPs.
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
+    for hop in reversed(hops):
+        if hop not in trusted_proxies:
+            return hop
+    return direct_ip
+
+
+def is_local_ip(ip: str) -> bool:
+    """Return True if *ip* is a loopback or RFC 1918 private address."""
+    try:
+        addr = ipaddress.ip_address(ip)
+        return addr.is_loopback or addr.is_private
+    except ValueError:
+        return False
+
+
 @dataclass
 class TokenScope:
     """Scope restriction carried on request.state for token-authenticated requests."""
@@ -147,6 +171,23 @@ class AuthService:
                     status_code=403,
                     detail="HTTPS is required for this operation.",
                 )
+
+    def _get_real_client_ip(self, request: Request) -> str:
+        trusted = self._server_config.get("trusted_proxies", [])
+        return get_real_client_ip(request, trusted)
+
+    def _require_local_for_write(self, http_request: Optional[Request]) -> None:
+        """Raise 403 if require_local_for_write is enabled and the client is not on the local network."""
+        if not self._server_config.get("require_local_for_write", True):
+            return
+        if http_request is None:
+            return  # programmatic call (e.g. tests) — treat as local
+        client_ip = self._get_real_client_ip(http_request)
+        if not is_local_ip(client_ip):
+            raise HTTPException(
+                status_code=403,
+                detail="Full access is restricted to local network connections. Use a share token for remote access.",
+            )
 
     def _validate_bcrypt_password_length(self, password: Optional[str]):
         if password is None:
@@ -717,7 +758,8 @@ class AuthService:
             return JSONResponse(content={"status": "success"})
         raise HTTPException(status_code=401, detail="Invalid session")
 
-    def login(self, request) -> Response:
+    def login(self, request, http_request: Optional[Request] = None) -> Response:
+        self._require_local_for_write(http_request)
         remaining = self._login_lockout_until - time.monotonic()
         if remaining > 0:
             raise HTTPException(
@@ -911,6 +953,18 @@ class AuthService:
                     user = self.get_user()
                     user_id = user.id if user else None
                     if user_id:
+                        # Block ALL-scope tokens from non-local IPs when require_local_for_write is enabled.
+                        if matched_token.scope == "ALL" and self._server_config.get(
+                            "require_local_for_write", True
+                        ):
+                            client_ip = self._get_real_client_ip(request)
+                            if not is_local_ip(client_ip):
+                                return JSONResponse(
+                                    status_code=403,
+                                    content={
+                                        "detail": "Full access is restricted to local network connections. Use a share token for remote access."
+                                    },
+                                )
                         request.state.auth_user_id = user_id
                         if matched_token.scope != "ALL":
                             request.state.token_scope = TokenScope(
