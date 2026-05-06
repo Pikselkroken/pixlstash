@@ -72,10 +72,16 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
     }
 )
 
-# GET paths that expose user settings and must not be accessible to READ-scoped tokens.
+# GET paths that must not be accessible to READ-scoped tokens.
+# Covers sensitive user settings and all folder/filesystem endpoints — READ tokens
+# are allowed to access content (pictures, picture_sets, characters, projects)
+# but must never expose server filesystem or import-folder configuration.
 READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
     {
         "/api/v1/users/me/config",
+        "/api/v1/server-config/watch-folders",
+        "/api/v1/server-config/filesystem-roots",
+        "/api/v1/filesystem/browse",
     }
 )
 
@@ -541,6 +547,11 @@ class AuthService:
     def list_tokens(self, request: Request):
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
+
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(
+                status_code=403, detail="Scoped tokens cannot list tokens"
+            )
 
         def fetch_tokens(session: Session, user_id: int):
             tokens = session.exec(

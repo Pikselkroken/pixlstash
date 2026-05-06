@@ -67,9 +67,7 @@ class Quality(SQLModel, table=True):
         return np.sum(X_a_norm * X_b_norm, axis=1)
 
     @staticmethod
-    def calculate_quality_batch(
-        images: np.ndarray
-    ) -> List["Quality"]:
+    def calculate_quality_batch(images: np.ndarray) -> List["Quality"]:
         """
         Calculate quality metrics for a batch of images.
         Accepts a 4D np.ndarray (batch, height, width, channels) and returns a list of PictureQuality instances.
