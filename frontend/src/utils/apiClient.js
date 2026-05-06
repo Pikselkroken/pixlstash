@@ -66,13 +66,19 @@ apiClient.interceptors.request.use((config) => {
     return config;
   }
 
-  // Leave fully-qualified URLs untouched and do not inject the share token
-  // into external requests (e.g. ComfyUI) to prevent credential leakage.
+  // For fully-qualified URLs, only inject the token when the request targets
+  // the same origin (skip external hosts like ComfyUI to prevent leakage),
+  // then return early — the URL needs no path rewriting.
   if (/^https?:\/\//i.test(rawUrl)) {
+    const isSameOrigin = typeof window !== 'undefined' &&
+        rawUrl.startsWith(window.location.origin);
+    if (isSameOrigin && _shareToken) {
+      config.params = {...(config.params || {}), token: _shareToken};
+    }
     return config;
   }
 
-  // Inject share token into API requests.
+  // Inject share token into relative API requests.
   if (_shareToken) {
     config.params = {...(config.params || {}), token: _shareToken};
   }
@@ -155,7 +161,9 @@ async function checkLoginStatus() {
 apiClient.interceptors.response.use((response) => response, (error) => {
   if (error.response && error.response.status === 401) {
     const url = error?.config?.url || '';
-    if (!url.includes('/users/me/auth')) {
+    // Don't log out when operating under a share token — a 401 just means
+    // this particular endpoint isn't accessible to the token's scope.
+    if (!url.includes('/users/me/auth') && !_shareToken) {
       console.error('Unauthorised! Logging out...');
       logout();  // Call the centralised logout function
     }
