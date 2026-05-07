@@ -60,6 +60,7 @@ from pixlstash.db_models import (
     TagPrediction,
 )
 from pixlstash.db_models.user import User
+from pixlstash.db_models.user_token import UserToken
 from pixlstash.event_types import EventType
 from pixlstash.image_plugins.registry import get_image_plugin_manager
 from pixlstash.image_plugins.service import apply_plugin_to_pictures
@@ -541,6 +542,9 @@ def _select_pictures_for_listing(
             face_filter_param = request.query_params.get("face_filter")
             if face_filter_param in ("with_face", "without_face"):
                 query_params["face_filter"] = face_filter_param
+            shared_only_param = request.query_params.get("shared_only")
+            if shared_only_param == "true":
+                query_params["shared_only"] = True
         return format, query_params
 
     def _character_id(value):
@@ -597,6 +601,7 @@ def _select_pictures_for_listing(
     project_id_raw = query_params.pop("project_id", None)
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
     face_filter = query_params.pop("face_filter", None)
+    shared_only = bool(query_params.pop("shared_only", False))
     only_deleted = False
     set_mode = _normalize_set_mode(set_mode_raw)
     set_filter_ids = _collect_set_filter_ids(
@@ -626,6 +631,40 @@ def _select_pictures_for_listing(
         character_id = scope_character_id
         character_id_list = [scope_character_id]
         character_mode = "union"
+
+    # Shared-only filter: restrict to pictures that have an active READ token for the current user.
+    if shared_only:
+        auth_user_id = getattr(request.state, "auth_user_id", None)
+        if auth_user_id is not None:
+
+            def _fetch_shared_ids(session: Session, uid: int) -> list[int]:
+                now = datetime.utcnow()
+                return list(
+                    session.exec(
+                        select(UserToken.resource_id).where(
+                            UserToken.user_id == uid,
+                            UserToken.resource_type == "picture",
+                            UserToken.scope == "READ",
+                            UserToken.resource_id.is_not(None),
+                            or_(
+                                UserToken.expires_at.is_(None),
+                                UserToken.expires_at > now,
+                            ),
+                        )
+                    ).all()
+                )
+
+            shared_ids = server.vault.db.run_task(
+                _fetch_shared_ids, auth_user_id, priority=DBPriority.IMMEDIATE
+            )
+            shared_id_set = set(shared_ids)
+            existing_ids = query_params.get("id")
+            if existing_ids:
+                query_params["id"] = [
+                    i for i in existing_ids if int(i) in shared_id_set
+                ]
+            else:
+                query_params["id"] = [str(i) for i in shared_id_set]
 
     def fetch_set_candidate_ids(session: Session):
         return _fetch_set_candidate_ids(

@@ -1439,7 +1439,8 @@ watch(tokenResourceType, (type) => {
 const shareUrl = computed(() => {
   if (!newlyCreatedToken.value || tokenScope.value !== "READ") return null;
   // Prefer the configured public URL so the link works from outside the LAN.
-  const origin = publicUrlValue.value?.trim().replace(/\/$/, "") || window.location.origin;
+  const origin =
+    publicUrlValue.value?.trim().replace(/\/$/, "") || window.location.origin;
   const base = origin + window.location.pathname;
   return `${base}?token=${newlyCreatedToken.value}`;
 });
@@ -2615,33 +2616,66 @@ const workflowImportCaptionPreview = computed(() => {
                             <v-chip
                               v-if="token.scope"
                               size="x-small"
-                              :color="token.scope === 'ALL' ? 'default' : 'info'"
+                              :color="
+                                token.scope === 'ALL' ? 'default' : 'info'
+                              "
                               class="settings-token-scope-chip"
                             >
                               <template v-if="token.scope === 'ALL'">
-                                <v-icon size="11" start>mdi-shield-account-outline</v-icon>
+                                <v-icon size="11" start
+                                  >mdi-shield-account-outline</v-icon
+                                >
                                 Full access
                               </template>
-                              <template v-else-if="token.resource_type === 'project'">
-                                <v-icon size="11" start>mdi-folder-outline</v-icon>
-                                {{ token.resource_name ?? `Project #${token.resource_id}` }}
+                              <template
+                                v-else-if="token.resource_type === 'project'"
+                              >
+                                <v-icon size="11" start
+                                  >mdi-folder-outline</v-icon
+                                >
+                                {{
+                                  token.resource_name ??
+                                  `Project #${token.resource_id}`
+                                }}
                               </template>
-                              <template v-else-if="token.resource_type === 'character'">
-                                <v-icon size="11" start>mdi-account-outline</v-icon>
-                                {{ token.resource_name ?? `Character #${token.resource_id}` }}
+                              <template
+                                v-else-if="token.resource_type === 'character'"
+                              >
+                                <v-icon size="11" start
+                                  >mdi-account-outline</v-icon
+                                >
+                                {{
+                                  token.resource_name ??
+                                  `Character #${token.resource_id}`
+                                }}
                               </template>
-                              <template v-else-if="token.resource_type === 'picture_set'">
-                                <v-icon size="11" start>mdi-image-multiple-outline</v-icon>
-                                {{ token.resource_name ?? `Set #${token.resource_id}` }}
+                              <template
+                                v-else-if="
+                                  token.resource_type === 'picture_set'
+                                "
+                              >
+                                <v-icon size="11" start
+                                  >mdi-image-multiple-outline</v-icon
+                                >
+                                {{
+                                  token.resource_name ??
+                                  `Set #${token.resource_id}`
+                                }}
                               </template>
                               <template v-else>Read-only</template>
                             </v-chip>
                           </td>
-                          <td class="settings-token-sub">{{ formatTokenTimestamp(token.created_at) }}</td>
-                          <td class="settings-token-sub">{{ formatTokenTimestamp(token.last_used_at) }}</td>
+                          <td class="settings-token-sub">
+                            {{ formatTokenTimestamp(token.created_at) }}
+                          </td>
+                          <td class="settings-token-sub">
+                            {{ formatTokenTimestamp(token.last_used_at) }}
+                          </td>
                           <td
                             class="settings-token-sub"
-                            :class="{ 'settings-token-expired': isTokenExpired(token) }"
+                            :class="{
+                              'settings-token-expired': isTokenExpired(token),
+                            }"
                           >
                             {{ formatTokenExpiry(token) }}
                           </td>

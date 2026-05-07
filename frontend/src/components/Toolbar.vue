@@ -403,6 +403,18 @@
                 >Clear all</v-btn
               >
             </div>
+            <div class="filter-shared-only-row">
+              <label class="filter-shared-only-label">
+                <input
+                  type="checkbox"
+                  :checked="props.sharedOnlyFilter"
+                  @change="
+                    emit('update:sharedOnlyFilter', $event.target.checked)
+                  "
+                />
+                Shared pictures only
+              </label>
+            </div>
             <div class="toolbar-filter-section-label">Media</div>
             <div
               class="media-type-toggle"
@@ -789,12 +801,20 @@
               v-if="comfyuiModelOptions.length || comfyuiLoraOptions.length"
             >
               <div
-                class="toolbar-filter-section-label"
-                style="margin-top: 10px"
+                class="toolbar-filter-section-header comfyui-section-header"
+                style="margin-top: 10px; cursor: pointer"
+                @click="comfyuiFilterExpanded = !comfyuiFilterExpanded"
               >
-                ComfyUI
+                <span class="toolbar-filter-section-label" style="margin-top: 0"
+                  >ComfyUI</span
+                >
+                <v-icon size="16" style="opacity: 0.6">{{
+                  comfyuiFilterExpanded ? "mdi-chevron-up" : "mdi-chevron-down"
+                }}</v-icon>
               </div>
-              <template v-if="comfyuiModelOptions.length">
+              <template
+                v-if="comfyuiModelOptions.length && comfyuiFilterExpanded"
+              >
                 <div
                   style="
                     display: flex;
@@ -852,7 +872,9 @@
                   />
                 </div>
               </template>
-              <template v-if="comfyuiLoraOptions.length">
+              <template
+                v-if="comfyuiLoraOptions.length && comfyuiFilterExpanded"
+              >
                 <div
                   style="
                     display: flex;
@@ -1261,6 +1283,7 @@ const props = defineProps({
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
+  sharedOnlyFilter: { type: Boolean, default: false },
   statsOpen: { type: Boolean, default: true },
   sortOptions: { type: Array, default: () => [] },
   selectedSort: { type: String, default: "" },
@@ -1305,6 +1328,7 @@ const emit = defineEmits([
   "update:tagConfidenceAboveFilter",
   "update:tagConfidenceBelowFilter",
   "update:faceBboxFilter",
+  "update:sharedOnlyFilter",
   "update:similarity-character",
   "update:stack-threshold",
   "open-search-overlay",
@@ -1374,7 +1398,8 @@ const isFilterActive = computed(
       props.comfyuiModelFilter.length > 0) ||
     (Array.isArray(props.comfyuiLoraFilter) &&
       props.comfyuiLoraFilter.length > 0) ||
-    props.faceBboxFilter != null,
+    props.faceBboxFilter != null ||
+    props.sharedOnlyFilter,
 );
 
 const activeFilterCount = computed(() => {
@@ -1396,6 +1421,7 @@ const activeFilterCount = computed(() => {
   if (Array.isArray(props.comfyuiLoraFilter))
     count += props.comfyuiLoraFilter.length;
   if (props.faceBboxFilter != null) count++;
+  if (props.sharedOnlyFilter) count++;
   return count;
 });
 
@@ -1412,6 +1438,7 @@ function clearAllFilters() {
   emit("update:tagConfidenceBelowFilter", []);
   emit("update:comfyuiModelFilter", []);
   emit("update:comfyuiLoraFilter", []);
+  emit("update:sharedOnlyFilter", false);
 }
 
 watch(
@@ -1769,6 +1796,7 @@ function confidenceEntryLabel(entry) {
 
 const comfyuiModelOptions = ref([]);
 const comfyuiLoraOptions = ref([]);
+const comfyuiFilterExpanded = ref(false);
 
 const sortMenuOpen = ref(false);
 const sortButtonRef = ref(null);
@@ -2700,6 +2728,23 @@ defineExpose({ blurSearchInput, focusSearchInput });
   padding: 0 4px;
   height: 18px;
   font-size: 0.75em;
+}
+
+.filter-shared-only-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  margin-top: 2px;
+}
+
+.filter-shared-only-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9em;
+  color: rgb(var(--v-theme-on-background));
+  cursor: pointer;
+  user-select: none;
 }
 
 .toolbar-filter-section-label {
