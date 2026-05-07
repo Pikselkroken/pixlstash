@@ -64,6 +64,35 @@ jobs:
             echo "is_stable=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Guard broad tags against old-line patch releases (CPU)
+        id: guard
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
+            echo "skip_broad_tags=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CURRENT="${GITHUB_REF_NAME#v}"
+          EXISTING=$(skopeo inspect \
+            --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            --format '{{index .Labels "org.opencontainers.image.version"}}' \
+            "docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" 2>/dev/null || echo "")
+          if [[ -z "$EXISTING" ]]; then
+            echo "skip_broad_tags=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          SKIP=$(python3 -c "
+from packaging.version import Version
+try:
+    print('true' if Version('$EXISTING') > Version('$CURRENT') else 'false')
+except Exception:
+    print('false')
+")
+          echo "skip_broad_tags=$SKIP" >> "$GITHUB_OUTPUT"
+          if [[ "$SKIP" == "true" ]]; then
+            echo "::warning::Skipping broad tags (latest, major, major.minor): existing published version $EXISTING is newer than $CURRENT"
+          fi
+
       - name: Extract Docker metadata (CPU)
         id: meta
         uses: docker/metadata-action@v5
@@ -73,10 +102,10 @@ jobs:
             docker.io/lindkvis/pixlstash
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.guard.outputs.skip_broad_tags != 'true' }}
+            type=semver,pattern={{major}},enable=${{ steps.guard.outputs.skip_broad_tags != 'true' }}
             type=raw,value=${{ steps.release-kind.outputs.release_tag }},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable != 'true' }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' && steps.guard.outputs.skip_broad_tags != 'true' }}
             type=edge,branch=${{ github.event.repository.default_branch }}
             type=sha,format=short
 
@@ -159,6 +188,37 @@ jobs:
             echo "is_stable=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Guard broad tags against old-line patch releases (GPU)
+        id: guard
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
+            echo "skip_broad_tags=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CURRENT="${GITHUB_REF_NAME#v}"
+          EXISTING=$(skopeo inspect \
+            --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            --format '{{index .Labels "org.opencontainers.image.version"}}' \
+            "docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-gpu" 2>/dev/null || echo "")
+          if [[ -z "$EXISTING" ]]; then
+            echo "skip_broad_tags=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          SKIP=$(python3 -c "
+from packaging.version import Version
+try:
+    # Strip -gpu suffix if present
+    v = '$EXISTING'.removesuffix('-gpu')
+    print('true' if Version(v) > Version('$CURRENT') else 'false')
+except Exception:
+    print('false')
+")
+          echo "skip_broad_tags=$SKIP" >> "$GITHUB_OUTPUT"
+          if [[ "$SKIP" == "true" ]]; then
+            echo "::warning::Skipping broad GPU tags (latest-gpu, major.minor-gpu): existing published version $EXISTING is newer than $CURRENT"
+          fi
+
       - name: Extract Docker metadata (GPU)
         id: meta
         uses: docker/metadata-action@v5
@@ -168,9 +228,9 @@ jobs:
             docker.io/lindkvis/pixlstash
           tags: |
             type=semver,pattern={{version}}-gpu
-            type=semver,pattern={{major}}.{{minor}}-gpu
+            type=semver,pattern={{major}}.{{minor}}-gpu,enable=${{ steps.guard.outputs.skip_broad_tags != 'true' }}
             type=raw,value=${{ steps.release-kind.outputs.release_tag }}-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable != 'true' }}
-            type=raw,value=latest-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' }}
+            type=raw,value=latest-gpu,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release-kind.outputs.is_stable == 'true' && steps.guard.outputs.skip_broad_tags != 'true' }}
             type=raw,value=edge-gpu,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short,suffix=-gpu
 
