@@ -211,6 +211,7 @@ const tagRejectedFilter = ref([]);
 const tagConfidenceAboveFilter = ref([]);
 const tagConfidenceBelowFilter = ref([]);
 const faceBboxFilter = ref(null);
+const sharedOnlyFilter = ref(false);
 
 // null = undecided (show dialog), true/false = user's explicit choice
 const checkForUpdates = ref(null);
@@ -1608,6 +1609,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:tagConfidenceAboveFilter="tagConfidenceAboveFilter"
             v-model:tagConfidenceBelowFilter="tagConfidenceBelowFilter"
             v-model:faceBboxFilter="faceBboxFilter"
+            v-model:sharedOnlyFilter="sharedOnlyFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
@@ -1677,6 +1679,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
                 :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
                 :faceBboxFilter="faceBboxFilter"
+                :sharedOnlyFilter="sharedOnlyFilter"
                 :showFaceBboxes="showFaceBboxes"
                 :showFormat="showFormat"
                 :showResolution="showResolution"
@@ -1762,6 +1765,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :smartScoreBucketFilter="smartScoreBucketFilter"
               :resolutionBucketFilter="resolutionBucketFilter"
               :faceBboxFilter="faceBboxFilter"
+              :sharedOnlyFilter="sharedOnlyFilter"
               :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
               :importSourceFolderFilter="
                 selectedFolderFilter?.importSourceFolder ?? null

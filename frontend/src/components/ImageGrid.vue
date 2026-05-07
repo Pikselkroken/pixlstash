@@ -881,6 +881,7 @@ const props = defineProps({
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
+  sharedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
@@ -4299,7 +4300,7 @@ function handleGridDragEnter(e) {
   // Ignore drags that originate from within the grid itself (e.g. reordering
   // images). Chrome reports "Files" in dataTransfer.types for <img> element
   // drags, which would otherwise trigger the import overlay incorrectly.
-  if (dragSource.value === 'grid') return;
+  if (dragSource.value === "grid") return;
   if (!e.dataTransfer) return;
   const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
   if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
@@ -4309,7 +4310,7 @@ function handleGridDragEnter(e) {
 }
 
 function handleGridDragOver(e) {
-  if (dragSource.value === 'grid') return;
+  if (dragSource.value === "grid") return;
   if (!e.dataTransfer) return;
   const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
   if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
@@ -4745,6 +4746,9 @@ function buildPictureIdsQueryParams() {
   if (props.faceBboxFilter != null) {
     params.append("face_filter", props.faceBboxFilter);
   }
+  if (props.sharedOnlyFilter) {
+    params.append("shared_only", "true");
+  }
   return params.toString();
 }
 
@@ -4785,6 +4789,9 @@ function buildLikenessGroupQueryParams() {
   }
   if (props.applyTagFilter) {
     params.append("apply_tag_filter", "true");
+  }
+  if (props.sharedOnlyFilter) {
+    params.append("shared_only", "true");
   }
   return params.toString();
 }
@@ -6131,6 +6138,7 @@ watch(
     () => props.tagConfidenceAboveFilter,
     () => props.tagConfidenceBelowFilter,
     () => props.faceBboxFilter,
+    () => props.sharedOnlyFilter,
   ],
   () => {
     _resetGridState();
