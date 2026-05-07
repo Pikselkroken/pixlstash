@@ -1,3 +1,6 @@
+# [1.1.3]
+- [Security: High] Updated Axios due to a High severity security alert.
+
 # [1.1.2]
 - Fix issue causing very slow tagging of many pictures at the same time
 - Limit the optional version checks to once per 24h
