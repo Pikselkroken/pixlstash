@@ -2459,7 +2459,7 @@ class PictureTagger:
                 text = self._clip_tokenizer([query]).to(self._clip_device)
                 text_features = self._clip_model.encode_text(text)
                 text_features /= text_features.norm(dim=-1, keepdim=True)
-                return text_features.cpu().numpy()[0]
+                return text_features.cpu().float().numpy()[0]
         except Exception as e:
             logger.error(f"PictureTagger: Failed to generate CLIP text embedding: {e}")
             return None
