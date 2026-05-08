@@ -87,4 +87,3 @@ class LikenessParametersTask(BaseTask):
             "changed_count": len(ids),
             "changed": [(Picture, pid, "likeness_parameters", None) for pid in ids],
         }
-

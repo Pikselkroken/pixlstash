@@ -67,7 +67,8 @@ class MissingLikenessFinder(BaseTaskFinder):
             if self._bulk_cache is None:
                 return None
             logger.info(
-                "MissingLikenessFinder: cache built (%d candidates)", len(self._bulk_cache.ids)
+                "MissingLikenessFinder: cache built (%d candidates)",
+                len(self._bulk_cache.ids),
             )
 
         return LikenessTask(database=self._db, bulk_arrays=self._bulk_cache)
@@ -79,4 +80,3 @@ class MissingLikenessFinder(BaseTaskFinder):
             LikenessTask.count_total_candidates(session),
             LikenessTask.count_total_pairs(session),
         )
-

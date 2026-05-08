@@ -13,7 +13,7 @@ from .face_extraction_task import FaceExtractionTask
 # so a single task drains the backlog instead of making the planner round-trip
 # every max_concurrent_images pictures (which is tuned for the tagger, not
 # for sequential face detection).
-FACE_EXTRACTION_BATCH_LIMIT = 512
+FACE_EXTRACTION_BATCH_LIMIT = 100
 
 
 class MissingFaceExtractionFinder(BaseTaskFinder):
@@ -26,6 +26,9 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
 
     def finder_name(self) -> str:
         return "MissingFaceExtractionFinder"
+
+    def max_inflight_tasks(self) -> int:
+        return 3
 
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()

@@ -32,10 +32,10 @@ class BulkCandidateArrays:
     and can be shared safely across concurrent tasks.
     """
 
-    ids: np.ndarray            # (N,) int64 — picture IDs
-    param_matrix: np.ndarray   # (N, num_params) float32
-    emb_norm: np.ndarray       # (N, emb_dim) float32 — L2-normalised
-    phash_vec: np.ndarray      # (N,) uint64 — integer phash values for vectorised XOR
+    ids: np.ndarray  # (N,) int64 — picture IDs
+    param_matrix: np.ndarray  # (N, num_params) float32
+    emb_norm: np.ndarray  # (N, emb_dim) float32 — L2-normalised
+    phash_vec: np.ndarray  # (N,) uint64 — integer phash values for vectorised XOR
     id_to_idx: Dict[int, int]  # id → row index in the arrays
 
 
@@ -200,8 +200,8 @@ class LikenessUtils:
             return None
 
         ids_arr = np.array(ids_list, dtype=np.int64)
-        param_matrix = np.stack(param_rows)                      # (N, num_params)
-        emb_matrix = np.stack(emb_rows)                          # (N, emb_dim)
+        param_matrix = np.stack(param_rows)  # (N, num_params)
+        emb_matrix = np.stack(emb_rows)  # (N, emb_dim)
         norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
         safe_norms = np.where(norms > 0, norms, 1.0)
         emb_norm = emb_matrix / safe_norms
@@ -238,7 +238,7 @@ class LikenessUtils:
         id_to_idx = bulk.id_to_idx
 
         queued_ids_arr = np.array(list(queued_ids), dtype=np.int64)
-        queued_mask = np.isin(ids_arr, queued_ids_arr)   # (N,) bool — no Python loop
+        queued_mask = np.isin(ids_arr, queued_ids_arr)  # (N,) bool — no Python loop
         n = len(ids_arr)
 
         # ------------------------------------------------------------------ #
@@ -249,7 +249,7 @@ class LikenessUtils:
         # concatenated into one, then np.unique counts occurrences in C ─     #
         # replacing the Python dict O(M) update loop with a single numpy sort.
         # ------------------------------------------------------------------ #
-        pair_chunks: List[np.ndarray] = []   # each chunk: 1-D int64 encoded pairs
+        pair_chunks: List[np.ndarray] = []  # each chunk: 1-D int64 encoded pairs
 
         params_to_scan = [
             param
@@ -258,7 +258,7 @@ class LikenessUtils:
         ]
 
         for param in params_to_scan:
-            values = param_matrix[:, int(param)]   # (N,) view
+            values = param_matrix[:, int(param)]  # (N,) view
             finite_mask = np.isfinite(values)
             finite_vals = values[finite_mask]
             if len(finite_vals) < 2:
@@ -283,7 +283,8 @@ class LikenessUtils:
             for k in range(1, min(self.BULK_MAX_WINDOW_SIZE + 1, n)):
                 diffs_k = sv[k:] - sv[:-k]
                 valid = (
-                    sf[:-k] & sf[k:]
+                    sf[:-k]
+                    & sf[k:]
                     & (diffs_k >= 0)
                     & (diffs_k <= gap_threshold)
                     & (sq[:-k] | sq[k:])
@@ -332,15 +333,15 @@ class LikenessUtils:
             return []
 
         # Count occurrences entirely in numpy — no Python dict.
-        all_encoded = np.concatenate(pair_chunks)      # 1-D int64
+        all_encoded = np.concatenate(pair_chunks)  # 1-D int64
         unique_encoded, counts = np.unique(all_encoded, return_counts=True)
         keep = unique_encoded[counts >= self.MIN_PARAM_OVERLAP]
         if keep.size == 0:
             return []
 
         # Decode back to (a, b) pairs — both are in id_to_idx by construction.
-        cand_a = keep & np.int64(0xFFFFFFFF)           # low 32 bits
-        cand_b = (keep >> 32) & np.int64(0xFFFFFFFF)   # high 32 bits
+        cand_a = keep & np.int64(0xFFFFFFFF)  # low 32 bits
+        cand_b = (keep >> 32) & np.int64(0xFFFFFFFF)  # high 32 bits
 
         # ------------------------------------------------------------------ #
         # Vectorised phash filter: XOR int64s, popcount, threshold.          #
@@ -348,13 +349,17 @@ class LikenessUtils:
         a_idx = np.array([id_to_idx[int(a)] for a in cand_a.tolist()], dtype=np.int64)
         b_idx = np.array([id_to_idx[int(b)] for b in cand_b.tolist()], dtype=np.int64)
 
-        xor = phash_vec[a_idx] ^ phash_vec[b_idx]       # (K,) uint64
+        xor = phash_vec[a_idx] ^ phash_vec[b_idx]  # (K,) uint64
         # Vectorised Hamming weight (SWAR popcount).
         v = xor.copy()
         v = v - ((v >> np.uint64(1)) & np.uint64(0x5555555555555555))
-        v = (v & np.uint64(0x3333333333333333)) + ((v >> np.uint64(2)) & np.uint64(0x3333333333333333))
+        v = (v & np.uint64(0x3333333333333333)) + (
+            (v >> np.uint64(2)) & np.uint64(0x3333333333333333)
+        )
         v = (v + (v >> np.uint64(4))) & np.uint64(0x0F0F0F0F0F0F0F0F)
-        hamming = ((v * np.uint64(0x0101010101010101)) >> np.uint64(56)).astype(np.float32)
+        hamming = ((v * np.uint64(0x0101010101010101)) >> np.uint64(56)).astype(
+            np.float32
+        )
         phash_sim = 1.0 - hamming / float(self.PHASH_BITS)
         phash_keep = phash_sim >= self.PHASH_MIN_SIM
 
@@ -370,7 +375,9 @@ class LikenessUtils:
         sims = np.clip(sims, -1.0, 1.0)
         likeness_vals = 0.5 * (sims + 1.0)
         if self.LIKENESS_GAMMA != 1.0:
-            likeness_vals = np.power(np.maximum(likeness_vals, 0.0), self.LIKENESS_GAMMA)
+            likeness_vals = np.power(
+                np.maximum(likeness_vals, 0.0), self.LIKENESS_GAMMA
+            )
         likeness_vals = np.clip(likeness_vals, 0.0, 1.0)
 
         cand_a_f = cand_a[phash_keep]

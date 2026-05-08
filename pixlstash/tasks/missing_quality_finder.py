@@ -114,4 +114,3 @@ class MissingQualityFinder(BaseTaskFinder):
     @staticmethod
     def _count_missing_quality(session: Session) -> int:
         return QualityTask.count_missing_quality(session)
-

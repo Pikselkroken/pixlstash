@@ -119,8 +119,8 @@ class Quality(SQLModel, table=True):
         edge_density = (dy.mean(axis=(1, 2, 3)) + dx.mean(axis=(1, 2, 3))) / 2.0
 
         # --- Luminance entropy: offset-bincount trick (single C call) ---
-        gray_uint8 = np.clip(gray, 0, 255).astype(np.uint8)       # (B, H, W)
-        gray_flat = gray_uint8.reshape(batch_size, -1)              # (B, H*W)
+        gray_uint8 = np.clip(gray, 0, 255).astype(np.uint8)  # (B, H, W)
+        gray_flat = gray_uint8.reshape(batch_size, -1)  # (B, H*W)
         offsets = (np.arange(batch_size, dtype=np.int64) * 256)[:, None]
         all_hists = (
             np.bincount(
@@ -133,8 +133,8 @@ class Quality(SQLModel, table=True):
         totals = all_hists.sum(axis=1, keepdims=True)
         probs = all_hists / np.maximum(totals, 1.0)
         log_probs = np.where(probs > 0.0, np.log2(np.maximum(probs, 1e-12)), 0.0)
-        luminance_entropy = (
-            (-np.sum(probs * log_probs, axis=1) / np.log2(256)).astype(np.float32)
+        luminance_entropy = (-np.sum(probs * log_probs, axis=1) / np.log2(256)).astype(
+            np.float32
         )
 
         # --- Dominant hue: vectorised NumPy RGB→hue, per-image argmax only ---
@@ -160,8 +160,10 @@ class Quality(SQLModel, table=True):
             # Fully vectorised histogram — same offset-bincount trick as entropy.
             # sat_val_mask used as weights: 0.0 for masked-out pixels, 1.0 for valid,
             # so they contribute nothing to the per-image hue counts.
-            hue_flat = hue_int.reshape(batch_size, -1).astype(np.int64)       # (B, H*W)
-            mask_flat = sat_val_mask.reshape(batch_size, -1).astype(np.float64)  # weights
+            hue_flat = hue_int.reshape(batch_size, -1).astype(np.int64)  # (B, H*W)
+            mask_flat = sat_val_mask.reshape(batch_size, -1).astype(
+                np.float64
+            )  # weights
             hue_offsets = (np.arange(batch_size, dtype=np.int64) * 180)[:, None]
             hue_hists = np.bincount(
                 (hue_flat + hue_offsets).ravel(),
@@ -205,7 +207,9 @@ class Quality(SQLModel, table=True):
         n_cells = cell_var_flat.shape[1]
         k = min(_TOP_K, n_cells)
         if k > 0:
-            top_vals = np.partition(cell_var_flat, n_cells - k, axis=1)[:, n_cells - k :]
+            top_vals = np.partition(cell_var_flat, n_cells - k, axis=1)[
+                :, n_cells - k :
+            ]
             sharpness = np.clip(top_vals.mean(axis=1) / _NORM, 0.0, 1.0)
         else:
             sharpness = np.zeros(batch_size, dtype=np.float32)

@@ -46,7 +46,9 @@ class TextScoreTask(BaseTask):
         updates: list[tuple[int, float]] = []
 
         for pic in self._pictures:
-            file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+            file_path = ImageUtils.resolve_picture_path(
+                self._db.image_root, pic.file_path
+            )
             img = ImageUtils.load_image_or_video(str(file_path))
             if img is None:
                 score = -1.0
