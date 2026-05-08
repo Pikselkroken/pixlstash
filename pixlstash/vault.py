@@ -110,7 +110,9 @@ class Vault:
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
         self._path_mapper = path_mapper
-        self._task_runner = TaskRunner(name="vault-task-runner", num_workers=worker_config.NUM_WORKERS)
+        self._task_runner = TaskRunner(
+            name="vault-task-runner", num_workers=worker_config.NUM_WORKERS
+        )
         self._planner_work_finders = WorkPlanner.work_finders(
             database=self.db,
             picture_tagger_getter=lambda: self._picture_tagger,
@@ -768,8 +770,7 @@ class Vault:
                 label = "missing_file_purge"
             elif worker_type == TaskType.TEXT_SCORE:
                 missing = int(
-                    self.db.run_immediate_read_task(self._count_missing_text_score)
-                    or 0
+                    self.db.run_immediate_read_task(self._count_missing_text_score) or 0
                 )
                 label = "text_score"
             else:

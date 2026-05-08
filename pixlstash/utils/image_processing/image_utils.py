@@ -788,3 +788,56 @@ class ImageUtils:
         arr_b_norm = arr_b / np.linalg.norm(arr_b, axis=1, keepdims=True)
         sims = np.sum(arr_a_norm * arr_b_norm, axis=1)
         return 0.5 * (sims + 1.0)
+
+    @staticmethod
+    def load_image_bgr_reduced(file_path: str, max_side: int) -> tuple:
+        """Load a still image at reduced resolution, returning ``(bgr_array, inv_scale)``.
+
+        ``inv_scale`` converts coordinates in the returned image back to the
+        original (exif-corrected) image space: multiply any bbox or pixel
+        coordinate by ``inv_scale`` to get the original-space value.
+
+        Uses PIL ``draft()`` for JPEG files so the JPEG decoder subsamples at
+        the DCT level — much faster than full decode + resize for large JPEGs.
+        For HEIF, PNG, WebP the image is decoded at full resolution and then
+        resized with ``cv2.INTER_AREA``.
+
+        Returns ``(None, 1.0)`` on failure.
+        """
+        try:
+            with Image.open(file_path) as img:
+                # Read stored dimensions from the file header (lazy, no pixel decode).
+                stored_w, stored_h = img.size
+                # Determine the logical (exif-corrected) original dimensions cheaply.
+                # Orientations 5-8 rotate 90° or 270°, which swaps width and height.
+                try:
+                    orientation = (img.getexif() or {}).get(274, 1)
+                except Exception:
+                    orientation = 1
+                if orientation in (5, 6, 7, 8):
+                    orig_w, _ = stored_h, stored_w
+                else:
+                    orig_w, _ = stored_w, stored_h
+
+                # draft() tells the JPEG decoder to use DCT subsampling — a no-op
+                # for other formats.  Must be called before load()/convert().
+                img.draft("RGB", (max_side, max_side))
+                img = ImageOps.exif_transpose(img)
+                arr = np.array(img.convert("RGB"))
+
+            h, w = arr.shape[:2]
+            if max(h, w) > max_side:
+                s = max_side / max(h, w)
+                new_w = max(1, int(round(w * s)))
+                new_h = max(1, int(round(h * s)))
+                arr = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                h, w = arr.shape[:2]
+
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            # inv_scale: multiply loaded-space coords by this to recover original-space
+            # coords.  Both axes have the same factor because the resize is proportional.
+            inv_scale = orig_w / w if w > 0 else 1.0
+            return bgr, inv_scale
+        except Exception as exc:
+            logger.debug("load_image_bgr_reduced failed for %s: %s", file_path, exc)
+            return None, 1.0

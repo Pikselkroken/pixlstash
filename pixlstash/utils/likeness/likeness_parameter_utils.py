@@ -168,9 +168,7 @@ class LikenessParameterUtils:
             ids[:10],
         )
         rows = session.exec(
-            select(Picture.id, Picture.likeness_parameters).where(
-                Picture.id.in_(ids)
-            )
+            select(Picture.id, Picture.likeness_parameters).where(Picture.id.in_(ids))
         ).all()
         updates = []
         for pic_id, blob in rows:
@@ -208,9 +206,7 @@ class LikenessParameterUtils:
         )
         values_by_id = dict(zip(ids, values))
         rows = session.exec(
-            select(Picture.id, Picture.likeness_parameters).where(
-                Picture.id.in_(ids)
-            )
+            select(Picture.id, Picture.likeness_parameters).where(Picture.id.in_(ids))
         ).all()
         updates = []
         for pic_id, blob in rows:
@@ -232,9 +228,7 @@ class LikenessParameterUtils:
         serialised write queue only has to run the bare bulk UPDATE.
         """
         rows = session.exec(
-            select(Picture.id, Picture.likeness_parameters).where(
-                Picture.id.in_(ids)
-            )
+            select(Picture.id, Picture.likeness_parameters).where(Picture.id.in_(ids))
         ).all()
         result: Dict[int, Optional[bytes]] = {int(pid): blob for pid, blob in rows}
         for pid in ids:
@@ -396,15 +390,21 @@ class LikenessParameterUtils:
                 full_path = ImageUtils.resolve_picture_path(image_root, file_path)
                 if full_path and os.path.exists(full_path):
                     if created_at_value is None:
-                        created_at_value = LikenessParameterUtils.compute_created_at_from_file_static(
-                            full_path, file_path
+                        created_at_value = (
+                            LikenessParameterUtils.compute_created_at_from_file_static(
+                                full_path, file_path
+                            )
                         )
                         if created_at_value is not None:
                             updates_by_id.setdefault(int(pic_id), {})["created_at"] = (
                                 created_at_value
                             )
                     if not phash_value:
-                        phash_value = LikenessParameterUtils.compute_phash_from_file_static(full_path, file_path)
+                        phash_value = (
+                            LikenessParameterUtils.compute_phash_from_file_static(
+                                full_path, file_path
+                            )
+                        )
                         if phash_value:
                             updates_by_id.setdefault(int(pic_id), {})[
                                 "perceptual_hash"
@@ -478,7 +478,9 @@ class LikenessParameterUtils:
         self, full_path: str, rel_path: Optional[str]
     ) -> Optional[str]:
         """Compute a perceptual hash for an image or video file."""
-        return LikenessParameterUtils.compute_phash_from_file_static(full_path, rel_path)
+        return LikenessParameterUtils.compute_phash_from_file_static(
+            full_path, rel_path
+        )
 
     @staticmethod
     def compute_phash_from_file_static(
@@ -511,7 +513,9 @@ class LikenessParameterUtils:
         self, full_path: str, rel_path: Optional[str]
     ) -> Optional[datetime]:
         """Extract (or infer) the creation datetime for an image or video file."""
-        return LikenessParameterUtils.compute_created_at_from_file_static(full_path, rel_path)
+        return LikenessParameterUtils.compute_created_at_from_file_static(
+            full_path, rel_path
+        )
 
     @staticmethod
     def compute_created_at_from_file_static(
@@ -591,9 +595,7 @@ class LikenessParameterUtils:
         if not ids:
             return
         rows = session.exec(
-            select(Picture.id, Picture.likeness_parameters).where(
-                Picture.id.in_(ids)
-            )
+            select(Picture.id, Picture.likeness_parameters).where(Picture.id.in_(ids))
         ).all()
         updates = []
         for pic_id, blob in rows:

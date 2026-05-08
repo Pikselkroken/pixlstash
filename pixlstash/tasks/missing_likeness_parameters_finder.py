@@ -42,7 +42,9 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
         if self._db.run_immediate_read_task(QualityTask.count_missing_quality) > 0:
             return None
 
-        if not self._db.run_immediate_read_task(LikenessParameterUtils.has_pending_work):
+        if not self._db.run_immediate_read_task(
+            LikenessParameterUtils.has_pending_work
+        ):
             return None
 
         # Discover work and pre-fetch all required data inside a single
@@ -64,9 +66,7 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
             payload=payload,
         )
 
-    def _find_and_prefetch(
-        self, session: Session, image_root: str
-    ):
+    def _find_and_prefetch(self, session: Session, image_root: str):
         """Run inside a read session: find next work batch and pre-fetch all data."""
         id_wh_list = LikenessParameterUtils.find_next_work(
             session, LikenessParametersTask.SCAN_LIMIT

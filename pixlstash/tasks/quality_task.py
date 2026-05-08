@@ -47,8 +47,8 @@ class QualityTask(BaseTask):
     # next batch to match the observed preload rate.
     # Written by _compute() under _feedback_lock; read by the finder.
     _feedback_lock = threading.Lock()
-    _last_preload_s: float = 0.0   # wall time the preload thread ran
-    _last_batch_size: int = 0      # number of pictures in that task
+    _last_preload_s: float = 0.0  # wall time the preload thread ran
+    _last_batch_size: int = 0  # number of pictures in that task
 
     def __init__(self, database, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -90,6 +90,7 @@ class QualityTask(BaseTask):
         multiple images are decoded concurrently on separate CPU cores,
         reducing per-task preload time by up to _PRELOAD_WORKERS×.
         """
+
         def _load_one(pic):
             if self._preload_cancel.is_set():
                 return None, None
@@ -243,7 +244,8 @@ class QualityTask(BaseTask):
 
         preload_duration = (
             self._preload_finished_at - self._preload_started_at
-            if self._preload_started_at is not None and self._preload_finished_at is not None
+            if self._preload_started_at is not None
+            and self._preload_finished_at is not None
             else 0.0
         )
         compute_duration = t_compute_done - t_preload_done
