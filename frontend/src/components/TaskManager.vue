@@ -9,8 +9,7 @@
           <div class="task-manager-header-main">
             <div class="task-manager-title">Worker Task Manager</div>
             <div class="task-manager-subtitle">
-              Last {{ windowSeconds / 60 }} minutes. Rates are pictures per
-              second.
+              Last {{ windowSeconds }} seconds. Rates are pictures per second.
             </div>
           </div>
           <div v-if="systemItems.length" class="task-manager-header-system">
@@ -112,7 +111,7 @@ import { apiClient } from "../utils/apiClient";
 const props = defineProps({
   active: { type: Boolean, default: false },
   pollIntervalMs: { type: Number, default: 2000 },
-  windowSeconds: { type: Number, default: 300 },
+  windowSeconds: { type: Number, default: 120 },
 });
 
 const emit = defineEmits(["close"]);
@@ -127,7 +126,6 @@ const lastSnapshot = new Map();
 const lastActiveAtByWorker = new Map();
 const lastProgressAtByWorker = new Map();
 let pollTimer = null;
-const combinedKey = "__combined__";
 const RATE_AVERAGE_WINDOW_SECONDS = 8;
 const WORKER_REMOVE_GRACE_SECONDS = 10;
 const nowSeconds = ref(Date.now() / 1000);
@@ -172,7 +170,6 @@ function seedSnapshotsIfEmpty() {
     "EmbeddingWorker",
     "FaceQualityWorker",
     "TagPredictionTask",
-    combinedKey,
   ]);
   for (const workerKey of seedKeys) {
     nextSnapshots[workerKey] = {
@@ -233,28 +230,6 @@ const workerEntries = computed(() => {
     );
   });
   return filtered.map(([key, snapshot]) => ({ key, snapshot }));
-});
-
-const combinedSnapshot = computed(() => {
-  const snapshots = Object.values(workerSnapshots.value || {});
-  if (!snapshots.length) return null;
-  let current = 0;
-  let total = 0;
-  let running = false;
-  for (const snap of snapshots) {
-    current += Number(snap.current || 0);
-    total += Number(snap.total || 0);
-    if (snap.running) {
-      running = true;
-    }
-  }
-  return {
-    label: "total_throughput",
-    current,
-    total,
-    running,
-    status: running ? "running" : "idle",
-  };
 });
 
 const systemItems = computed(() => {
@@ -334,7 +309,6 @@ async function fetchProgress() {
     nowSeconds.value = now;
     const nextSeries = { ...series.value };
     workerSnapshots.value = workers;
-    let combinedRate = 0;
 
     for (const [key, snapshot] of Object.entries(workers)) {
       const current = Number(snapshot.current || 0);
@@ -355,7 +329,6 @@ async function fetchProgress() {
       if (isActive) {
         lastActiveAtByWorker.set(key, now);
       }
-      combinedRate += rate;
       lastSnapshot.set(key, { current, t: now });
 
       const entry = {
@@ -383,25 +356,6 @@ async function fetchProgress() {
       }
     }
 
-    if (Object.keys(workers).length) {
-      const combinedEntry = {
-        t: now,
-        rate: combinedRate,
-        current: combinedSnapshot.value?.current || 0,
-        total: combinedSnapshot.value?.total || 0,
-        label: "total_throughput",
-        running: combinedSnapshot.value?.running || false,
-      };
-      const combinedSeries = nextSeries[combinedKey]
-        ? [...nextSeries[combinedKey]]
-        : [];
-      combinedSeries.push(combinedEntry);
-      const cutoff = now - props.windowSeconds;
-      nextSeries[combinedKey] = combinedSeries.filter(
-        (item) => item.t >= cutoff,
-      );
-    }
-
     series.value = nextSeries;
     await nextTick();
     drawAll();
@@ -414,11 +368,11 @@ async function fetchProgress() {
 
 function drawAll() {
   for (const { el, dataKey } of canvasRefs.values()) {
-    drawSparkline(el, series.value[dataKey] || []);
+    drawSparkline(el, series.value[dataKey] || [], props.windowSeconds);
   }
 }
 
-function drawSparkline(canvas, samples) {
+function drawSparkline(canvas, samples, windowSeconds) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const rect = canvas.getBoundingClientRect();
@@ -442,18 +396,32 @@ function drawSparkline(canvas, samples) {
   ctx.fillStyle = themeRgba("surface", 0.2, "255, 255, 255");
   ctx.fillRect(0, 0, width, height);
 
-  const plotSamples = samples.length ? samples : [{ rate: 0 }];
-  const maxRate = Math.max(1, ...plotSamples.map((s) => s.rate || 0));
+  const plotSamples = samples.length
+    ? samples
+    : [{ rate: 0, smoothedRate: 0, t: Date.now() / 1000 }];
+  const maxRate = Math.max(
+    1,
+    ...plotSamples.map((s) => Number(s.smoothedRate ?? s.rate ?? 0)),
+  );
   const pad = 6;
   const plotWidth = width - pad * 2;
   const plotHeight = height - pad * 2;
-  const step =
-    plotSamples.length > 1 ? plotWidth / (plotSamples.length - 1) : 0;
+
+  // Use a fixed time window so samples scroll off the left edge rather than
+  // always stretching to fill the full width.
+  const tNow = Date.now() / 1000;
+  const tMin = tNow - (windowSeconds || 120);
+  const tRange = tNow - tMin;
+
+  const tToX = (t) => pad + ((t - tMin) / tRange) * plotWidth;
 
   ctx.beginPath();
   plotSamples.forEach((sample, index) => {
-    const x = pad + step * index;
-    const y = pad + plotHeight * (1 - (sample.rate || 0) / maxRate);
+    const x = tToX(sample.t ?? tNow);
+    const y =
+      pad +
+      plotHeight *
+        (1 - Number(sample.smoothedRate ?? sample.rate ?? 0) / maxRate);
     if (index === 0) {
       ctx.moveTo(x, y);
     } else {
@@ -464,7 +432,9 @@ function drawSparkline(canvas, samples) {
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  ctx.lineTo(pad + step * (plotSamples.length - 1), pad + plotHeight);
+  const lastSample = plotSamples[plotSamples.length - 1];
+  const lastX = tToX(lastSample.t ?? tNow);
+  ctx.lineTo(lastX, pad + plotHeight);
   ctx.lineTo(pad, pad + plotHeight);
   ctx.closePath();
   ctx.fillStyle = themeRgba("tertiary", 0.18, "142, 166, 4");
