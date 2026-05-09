@@ -46,8 +46,15 @@ class MissingLikenessFinder(BaseTaskFinder):
             int(pair_count or 0),
         )
 
-        has_work = int(queue_count or 0) > 0 or (
-            int(candidate_count or 0) > 0 and int(pair_count or 0) == 0
+        # Require at least one fully-ready candidate (embedding + parameters +
+        # phash all set).  Queue count alone is not sufficient because
+        # ImageEmbeddingTask enqueues pictures immediately after writing their
+        # embeddings, before likeness_parameters or perceptual_hash are ready.
+        # Without this guard, the finder spams "building bulk candidate cache…"
+        # every planning cycle whenever newly-enqueued pictures lack the other
+        # two fields (build_bulk_arrays returns None → cache stays None → loop).
+        has_work = int(candidate_count or 0) > 0 and (
+            int(queue_count or 0) > 0 or int(pair_count or 0) == 0
         )
         if not has_work:
             # Sweep done — drop the cache so the next sweep gets fresh data.

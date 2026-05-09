@@ -35,5 +35,10 @@ SMART_SCORE_MAX_INFLIGHT: int = 2
 # complete before its task reaches the semaphore, eliminating preload stalls.
 TAGGER_MAX_INFLIGHT: int = 3
 
+# Image embeddings: CLIP ViT-B-32.  Tasks preload images from disk while the
+# previous task runs inference, so 2 inflight (1 running + 1 preloading) keeps
+# the GPU continuously fed.
+IMAGE_EMBEDDING_MAX_INFLIGHT: int = 3
+
 # Likeness parameters: fast enough with a single inflight task after batching fix.
 LIKENESS_PARAMETERS_MAX_INFLIGHT: int = 2

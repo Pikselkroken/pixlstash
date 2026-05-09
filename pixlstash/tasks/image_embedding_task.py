@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from collections import defaultdict
 from typing import Optional
@@ -25,7 +26,7 @@ logger = get_logger(__name__)
 class ImageEmbeddingTask(BaseTask):
     """Task for generating image embeddings and aesthetic scores for one batch."""
 
-    BATCH_SIZE = 32
+    BATCH_SIZE = 128
     BACKEND_ERROR_LOG_INTERVAL_SECONDS = 60
 
     AESTHETIC_MODELS = {
@@ -45,24 +46,90 @@ class ImageEmbeddingTask(BaseTask):
     _aesthetic_model = None
     _aesthetic_disabled: Optional[bool] = None
 
-    def __init__(self, database, picture_tagger):
+    def __init__(self, database, picture_tagger, batch: list):
+        """
+        Args:
+            batch: List of ``(picture_id, file_path)`` pairs pre-fetched by the
+                finder.  Images are loaded from disk in ``on_queued()`` so that
+                I/O overlaps with the previous task's GPU inference.
+        """
+        picture_ids = [pid for pid, _ in (batch or [])]
         super().__init__(
             task_type="ImageEmbeddingTask",
             params={
-                "batch_size": self.BATCH_SIZE,
+                "picture_ids": picture_ids,
+                "batch_size": len(picture_ids),
             },
         )
         self._db = database
         self._picture_tagger = picture_tagger
+        self._batch = batch or []
         self.model = None
         self._last_backend_error_log_at = 0.0
+
+        # Preloading state — images loaded from disk in on_queued() so I/O
+        # overlaps with the previous task's GPU inference.
+        self._preloaded_images: list = []  # list of (pid, file_path, PIL.Image)
+        self._preload_lock = threading.Lock()
+        self._preload_thread: threading.Thread | None = None
+        self._preload_cancel = threading.Event()
 
         if ImageEmbeddingTask._aesthetic_disabled is None:
             ImageEmbeddingTask._aesthetic_disabled = self._aesthetic_config() is None
 
+    def on_queued(self) -> None:
+        if self._preload_thread is not None and self._preload_thread.is_alive():
+            return
+        self._preload_cancel.clear()
+        self._preload_thread = threading.Thread(
+            target=self._preload_images_task,
+            name=f"EmbedPreload-{self.id[:8]}",
+            daemon=True,
+        )
+        self._preload_thread.start()
+
+    def on_cancel(self) -> None:
+        self._preload_cancel.set()
+        if self._preload_thread is not None:
+            self._preload_thread.join(timeout=10)
+
+    def _preload_images_task(self) -> None:
+        preloaded = []
+        for pid, file_path in self._batch:
+            if self._preload_cancel.is_set():
+                break
+            try:
+                full_path = os.path.join(self._db.image_root, file_path)
+                if VideoUtils.is_video_file(file_path):
+                    frames = VideoUtils.extract_representative_video_frames(
+                        full_path, count=3
+                    )
+                    for frame in frames:
+                        preloaded.append((pid, file_path, frame.convert("RGB")))
+                else:
+                    img = Image.open(full_path).convert("RGB")
+                    preloaded.append((pid, file_path, img))
+            except Exception as exc:
+                logger.debug("EmbedPreload: failed to load %s: %s", file_path, exc)
+                preloaded.append((pid, file_path, None))
+        with self._preload_lock:
+            self._preloaded_images = preloaded
+        logger.debug(
+            "[EMBED_PRELOAD] task_id=%s preloaded=%d/%d",
+            self.id,
+            sum(1 for _, _, img in preloaded if img is not None),
+            len(self._batch),
+        )
+
+    def _wait_for_preload(self) -> list:
+        if self._preload_thread is not None:
+            self._preload_thread.join()
+        with self._preload_lock:
+            return list(self._preloaded_images)
+
     @property
     def priority(self) -> TaskPriority:
-        return TaskPriority.LOW
+        return TaskPriority.MEDIUM
 
     @property
     def queue_type(self) -> QueueType:
@@ -70,17 +137,11 @@ class ImageEmbeddingTask(BaseTask):
 
     def estimated_vram_mb(self) -> int:
         fn = getattr(self._picture_tagger, "estimate_image_embedding_vram_mb", None)
-        suggest_fn = getattr(
-            self._picture_tagger, "suggested_image_embedding_batch_size", None
-        )
-        if callable(fn) and callable(suggest_fn):
+        if callable(fn):
             try:
-                return max(0, int(fn(suggest_fn())))
+                return max(0, int(fn(len(self._batch))))
             except Exception:
-                logger.warning(
-                    "ImageEmbeddingTask: Failed to estimate VRAM usage from PictureTagger"
-                )
-                return 0
+                pass
         return 0
 
     @classmethod
@@ -306,76 +367,34 @@ class ImageEmbeddingTask(BaseTask):
         if not self._ensure_embedding_backend():
             return {"changed_count": 0, "changed": []}
 
-        batch_size_limit = ImageEmbeddingTask.BATCH_SIZE
-        suggest_fn = getattr(
-            self._picture_tagger, "suggested_image_embedding_batch_size", None
-        )
-        if callable(suggest_fn):
-            try:
-                batch_size_limit = max(1, int(suggest_fn()))
-            except Exception as exc:
-                logger.debug("Failed to get suggested batch size: %s", exc)
-
-        batch = self._db.run_immediate_read_task(
-            lambda session: self.fetch_work(session=session, limit=batch_size_limit)
-        )
-        if not batch:
+        if not self._batch:
             return {"changed_count": 0, "changed": []}
 
-        changed = self._process_batch(batch)
+        preloaded = self._wait_for_preload()
+        changed = self._process_preloaded(preloaded)
         return {"changed_count": len(changed), "changed": changed}
 
-    def _process_batch(self, batch) -> list:
-        """Process one batch of (picture_id, file_path) pairs.
+    def _process_preloaded(self, preloaded: list) -> list:
+        """Process a list of ``(pid, file_path, PIL.Image | None)`` triples.
 
         Returns a list of (model, pic_id, field, value) change tuples.
         """
         flat_images = []
         flat_pids = []
         flat_hashes = []
-        failed_files = []
-        batch_pids = {pid for pid, _ in batch}
-        batch_files = {pid: file_path for pid, file_path in batch}
+        failed_pids = set()
+        batch_pids = {pid for pid, _, _ in preloaded}
+        batch_files = {pid: fp for pid, fp, _ in preloaded}
 
-        for pid, file_path in batch:
-            try:
-                full_path = os.path.join(self._db.image_root, file_path)
-
-                if VideoUtils.is_video_file(file_path):
-                    pil_imgs = VideoUtils.extract_representative_video_frames(
-                        full_path, count=3
-                    )
-                    if pil_imgs:
-                        flat_images.extend(pil_imgs)
-                        flat_hashes.extend(
-                            [self._compute_dhash(img) for img in pil_imgs]
-                        )
-                        flat_pids.extend([pid] * len(pil_imgs))
-                else:
-                    try:
-                        img = Image.open(full_path)
-                    except Exception as exc:
-                        logger.error(
-                            "ImageEmbeddingTask: PIL failed to open %s: %s",
-                            file_path,
-                            exc,
-                        )
-                        failed_files.append(file_path)
-                        continue
-
-                    if img.mode != "RGB":
-                        img = img.convert("RGB")
-                    flat_images.append(img)
-                    flat_hashes.append(self._compute_dhash(img))
-                    flat_pids.append(pid)
-
-            except Exception as exc:
-                logger.error("ImageEmbeddingTask: Error loading %s: %s", file_path, exc)
-                failed_files.append(file_path)
+        for pid, file_path, img in preloaded:
+            if img is None:
+                failed_pids.add(pid)
+                continue
+            flat_images.append(img)
+            flat_hashes.append(self._compute_dhash(img))
+            flat_pids.append(pid)
 
         if not flat_images:
-            if not failed_files:
-                failed_files = [batch_files[pid] for pid in batch_pids]
             failure_updates = self._build_failure_updates(batch_pids)
             updated_ids = self._db.run_task(
                 self._save_results, failure_updates, priority=DBPriority.LOW
@@ -385,11 +404,12 @@ class ImageEmbeddingTask(BaseTask):
                 "ImageEmbeddingTask: No images loaded for batch. Marked %s pictures as failed.",
                 len(batch_pids),
             )
-            logger.warning(
-                "ImageEmbeddingTask: Failed to process %s files in this batch: %s",
-                len(failed_files),
-                failed_files,
-            )
+            if failed_pids:
+                logger.warning(
+                    "ImageEmbeddingTask: Failed to load %d pictures: %s",
+                    len(failed_pids),
+                    [batch_files.get(pid) for pid in failed_pids],
+                )
             return changed
 
         embeddings = None
@@ -460,11 +480,6 @@ class ImageEmbeddingTask(BaseTask):
                 bool(getattr(self._picture_tagger, "_clip_model", None)),
                 bool(self.model),
             )
-            logger.warning(
-                "ImageEmbeddingTask: Failed to process %s files in this batch: %s",
-                len(failed_files),
-                failed_files,
-            )
             return []
 
         pid_updates = defaultdict(lambda: {"embs": [], "scores": []})
@@ -500,8 +515,6 @@ class ImageEmbeddingTask(BaseTask):
         failed_pids = batch_pids - processed_pids
         if failed_pids:
             updates.extend(self._build_failure_updates(failed_pids))
-            if not failed_files:
-                failed_files = [batch_files[pid] for pid in failed_pids]
 
         updated_ids = self._db.run_task(
             self._save_results, updates, priority=DBPriority.LOW
@@ -509,15 +522,10 @@ class ImageEmbeddingTask(BaseTask):
         changed = [(Picture, pid, "image_embedding", None) for pid in updated_ids]
 
         if failed_pids:
+            failed_files = [batch_files.get(pid) for pid in failed_pids]
             logger.warning(
-                "ImageEmbeddingTask: Marked %s pictures as failed.",
+                "ImageEmbeddingTask: Marked %s pictures as failed: %s",
                 len(failed_pids),
-            )
-
-        if failed_files:
-            logger.warning(
-                "ImageEmbeddingTask: Failed to process %s files in this batch: %s",
-                len(failed_files),
                 failed_files,
             )
 

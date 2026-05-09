@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 class WorkPlanner:
     """Central planner that discovers tasks through registered task finders."""
 
-    MIN_INTERVAL_S = 0.2
+    MIN_INTERVAL_S = 0.05
     MAX_INTERVAL_S = 10.0
     BACKOFF_FACTOR = 1.8
 
@@ -127,6 +127,11 @@ class WorkPlanner:
         self._finder_order_idx = 0
         self._inflight_by_finder = {}
         self._finder_by_task_id = {}
+        # Tracks whether a finder has explicitly returned None (no work found).
+        # A finder starts as NOT exhausted (False = may have work) so that
+        # dependent finders are blocked until the finder has been given a chance
+        # to run and confirmed it has nothing to do.
+        self._finder_exhausted: dict[str, bool] = {}
         self._lock = threading.Lock()
 
     def start(self):
@@ -162,12 +167,23 @@ class WorkPlanner:
 
     def on_task_complete(self, task, error):
         finder_name = None
+        all_done = False
         with self._lock:
             finder_name = self._finder_by_task_id.pop(getattr(task, "id", None), None)
             if finder_name:
                 inflight_count = int(self._inflight_by_finder.get(finder_name, 0))
-                self._inflight_by_finder[finder_name] = max(0, inflight_count - 1)
+                new_inflight = max(0, inflight_count - 1)
+                self._inflight_by_finder[finder_name] = new_inflight
+                is_exhausted = self._finder_exhausted.get(finder_name, False)
+                all_done = new_inflight == 0 and is_exhausted
         if finder_name:
+            _GPU_FINDERS = {"MissingTagFinder", "MissingFaceExtractionFinder"}
+            if new_inflight == 0 and not is_exhausted and finder_name in _GPU_FINDERS:
+                logger.warning(
+                    "[PIPELINE_STALL] %s inflight count hit 0 while work remains; "
+                    "GPU may be idle until next finder cycle.",
+                    finder_name,
+                )
             finder = self._task_finders_by_name.get(finder_name)
             if finder is not None:
                 try:
@@ -178,6 +194,15 @@ class WorkPlanner:
                         finder_name,
                         exc,
                     )
+                if all_done:
+                    try:
+                        finder.on_all_tasks_complete()
+                    except Exception as exc:
+                        logger.warning(
+                            "Finder all-complete callback failed for %s: %s",
+                            finder_name,
+                            exc,
+                        )
         self._wake.set()
 
     def _run(self):
@@ -201,6 +226,7 @@ class WorkPlanner:
         if not self._task_finders:
             return False
 
+        submitted_any = False
         finder_count = len(self._task_finders)
         for offset in range(finder_count):
             idx = (self._finder_order_idx + offset) % finder_count
@@ -208,57 +234,70 @@ class WorkPlanner:
             finder_name = finder.finder_name()
             max_inflight = max(1, int(finder.max_inflight_tasks()))
 
-            with self._lock:
-                inflight_count = int(self._inflight_by_finder.get(finder_name, 0))
-            if inflight_count >= max_inflight:
-                continue
-
             blocking_finders = finder.depends_on()
             if blocking_finders:
                 with self._lock:
                     if any(
                         self._inflight_by_finder.get(name, 0) > 0
+                        or not self._finder_exhausted.get(name, False)
                         for name in blocking_finders
                     ):
                         continue
 
-            task = finder.find_task()
-            if task is None:
-                continue
+            # Fill all available inflight slots for this finder in one pass so
+            # that fast-completing tasks (e.g. custom tagger at ~100ms) don't
+            # leave the GPU idle while the planner sleeps MIN_INTERVAL_S between
+            # cycles.  Previously, a single submit + return True meant inflight
+            # was always 1 regardless of max_inflight.
+            while True:
+                with self._lock:
+                    inflight_count = int(self._inflight_by_finder.get(finder_name, 0))
+                if inflight_count >= max_inflight:
+                    break
 
-            task_id = getattr(task, "id", None)
-            with self._lock:
-                current_inflight = int(self._inflight_by_finder.get(finder_name, 0))
-                self._inflight_by_finder[finder_name] = current_inflight + 1
-                if task_id:
-                    self._finder_by_task_id[task_id] = finder_name
+                task = finder.find_task()
+                if task is None:
+                    with self._lock:
+                        self._finder_exhausted[finder_name] = True
+                    break
 
-            try:
-                submitted_task_id = self._task_runner.submit(task)
-            except Exception:
+                task_id = getattr(task, "id", None)
                 with self._lock:
                     current_inflight = int(self._inflight_by_finder.get(finder_name, 0))
-                    self._inflight_by_finder[finder_name] = max(
-                        0,
-                        current_inflight - 1,
-                    )
+                    self._inflight_by_finder[finder_name] = current_inflight + 1
+                    self._finder_exhausted[finder_name] = False
                     if task_id:
-                        self._finder_by_task_id.pop(task_id, None)
-                raise
+                        self._finder_by_task_id[task_id] = finder_name
 
-            if submitted_task_id and submitted_task_id != task_id:
-                with self._lock:
-                    if task_id:
-                        self._finder_by_task_id.pop(task_id, None)
-                    self._finder_by_task_id[submitted_task_id] = finder_name
+                try:
+                    submitted_task_id = self._task_runner.submit(task)
+                except Exception:
+                    with self._lock:
+                        current_inflight = int(
+                            self._inflight_by_finder.get(finder_name, 0)
+                        )
+                        self._inflight_by_finder[finder_name] = max(
+                            0,
+                            current_inflight - 1,
+                        )
+                        if task_id:
+                            self._finder_by_task_id.pop(task_id, None)
+                    raise
 
-            self._finder_order_idx = (idx + 1) % finder_count
-            logger.debug(
-                "WorkPlanner submitted task id=%s via finder=%s",
-                submitted_task_id,
-                finder_name,
-            )
-            return True
+                if submitted_task_id and submitted_task_id != task_id:
+                    with self._lock:
+                        if task_id:
+                            self._finder_by_task_id.pop(task_id, None)
+                        self._finder_by_task_id[submitted_task_id] = finder_name
 
-        self._finder_order_idx = (self._finder_order_idx + 1) % finder_count
-        return False
+                self._finder_order_idx = (idx + 1) % finder_count
+                logger.debug(
+                    "WorkPlanner submitted task id=%s via finder=%s",
+                    submitted_task_id,
+                    finder_name,
+                )
+                submitted_any = True
+
+        if not submitted_any:
+            self._finder_order_idx = (self._finder_order_idx + 1) % finder_count
+        return submitted_any

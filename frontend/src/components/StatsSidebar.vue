@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed, onMounted } from "vue";
+import { ref, watch, computed, onMounted, onUnmounted } from "vue";
 import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
@@ -362,19 +362,27 @@ onMounted(() => {
 
 // When tags change on any picture, the backend cache is already cleared via the
 // CHANGED_TAGS event. Refetch stats so the sidebar reflects the updated counts.
+// Debounce rapid tag-change bursts (e.g. a tagging run) so we don't hit
+// /pictures/stats on every task completion while the sidebar is closed.
+let _wsTagUpdateTimer = null;
 watch(
   () => props.wsTagUpdate,
   () => {
-    fetchStats().then(() => {
-      if (coocOpen.value) fetchCooc();
-      if (confHistOpen.value) fetchConf();
-      if (activeTab.value === "pictures") fetchPicStats();
-      if (penalisedOnlyTags.value || penalisedOnlyCooc.value > 0)
-        fetchStatsPenalised();
-      if (penalisedOnlyCooc.value === 2) fetchStatsPenalisedBoth();
-    });
+    if (!props.open) return;
+    clearTimeout(_wsTagUpdateTimer);
+    _wsTagUpdateTimer = setTimeout(() => {
+      fetchStats().then(() => {
+        if (coocOpen.value) fetchCooc();
+        if (confHistOpen.value) fetchConf();
+        if (activeTab.value === "pictures") fetchPicStats();
+        if (penalisedOnlyTags.value || penalisedOnlyCooc.value > 0)
+          fetchStatsPenalised();
+        if (penalisedOnlyCooc.value === 2) fetchStatsPenalisedBoth();
+      });
+    }, 2000);
   },
 );
+onUnmounted(() => clearTimeout(_wsTagUpdateTimer));
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;

@@ -220,6 +220,10 @@ class FaceExtractionTask(BaseTask):
                 if self._stop_event.is_set():
                     break
 
+            # Release preloaded numpy arrays immediately — each BGR image can
+            # be several MB; a batch of 64 can be 500+ MB held unnecessarily.
+            self._preloaded_images = {}
+
             for bulk_faces, bulk_thumbnail_crops in pending_flushes:
                 self._flush_to_db(bulk_faces, bulk_thumbnail_crops)
 
@@ -405,7 +409,6 @@ class FaceExtractionTask(BaseTask):
         precheck_s = 0.0
         image_load_s = 0.0
         inference_s = 0.0
-        loop_s = 0.0
         thumb_gen_s = 0.0
         thumb_write_s = 0.0
         processed_images = 0

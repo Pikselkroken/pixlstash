@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlmodel import Session, select, delete
@@ -87,12 +88,15 @@ class TagTask(BaseTask):
                 self.id,
             )
 
+    _PRELOAD_WORKERS = 4
+
     def _preload_images(self) -> None:
         preloaded = {}
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
-        for pic in self._pictures:
+
+        def _load_one(pic):
             if self._preload_cancel.is_set():
-                break
+                return None, None
             try:
                 file_path = ImageUtils.resolve_picture_path(
                     self._db.image_root, pic.file_path
@@ -100,18 +104,27 @@ class TagTask(BaseTask):
                 ext = os.path.splitext(str(file_path))[1].lower()
                 if ext in video_exts:
                     frames = VideoUtils.extract_representative_video_frames(
-                        str(file_path),
-                        count=1,
+                        str(file_path), count=1
                     )
                     if not frames:
-                        continue
-                    preloaded[file_path] = frames[0].convert("RGB")
-                    continue
-                preloaded[file_path] = PILImage.open(file_path).convert("RGB")
+                        return None, None
+                    return file_path, frames[0].convert("RGB")
+                return file_path, PILImage.open(file_path).convert("RGB")
             except Exception as exc:
                 logger.debug(
                     "Preload failed for %s: %s", getattr(pic, "file_path", None), exc
                 )
+                return None, None
+
+        n_workers = min(self._PRELOAD_WORKERS, max(1, len(self._pictures)))
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {pool.submit(_load_one, pic): pic for pic in self._pictures}
+            for future in as_completed(futures):
+                if self._preload_cancel.is_set():
+                    break
+                file_path, img = future.result()
+                if file_path is not None and img is not None:
+                    preloaded[file_path] = img
         with self._preload_lock:
             self._preloaded_images = preloaded
         self._preload_finished_at = time.perf_counter()
@@ -129,6 +142,10 @@ class TagTask(BaseTask):
             return {"changed_count": 0, "changed": []}
 
         changed = self._tag_pictures_batch()
+        # Release preloaded PIL Images immediately after inference.  Without
+        # this the images stay alive until the task object is garbage collected
+        # (one full task cycle later), which can hold several hundred MB of RAM.
+        self._preloaded_images = {}
         return {
             "changed_count": len(changed),
             "changed": changed,
