@@ -13,6 +13,7 @@ import onnxruntime as ort
 import os
 import platform
 import re
+import subprocess
 import threading
 import time
 import torch
@@ -128,7 +129,7 @@ MODEL_DIR = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
 BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = _env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU", 64)
 MAX_CONCURRENT_IMAGES_CPU = _env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU", 8)
-FLORENCE_BATCH_SIZE_GPU = _env_int("PIXLSTASH_FLORENCE_BATCH_GPU", 8)
+FLORENCE_BATCH_SIZE_GPU = _env_int("PIXLSTASH_FLORENCE_BATCH_GPU", 32)
 FLORENCE_BATCH_SIZE_CPU = _env_int("PIXLSTASH_FLORENCE_BATCH_CPU", 2)
 TAGGER_DATALOADER_TIMEOUT = 30
 GENERAL_THRESHOLD = 0.85
@@ -153,7 +154,7 @@ CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
 CUSTOM_TAGGER_BATCH = _env_int("PIXLSTASH_CUSTOM_TAGGER_BATCH", 16)
 CLIP_MODEL_NAME = "ViT-B-32"
 DEFAULT_MAX_VRAM_GB = _env_float("PIXLSTASH_MAX_VRAM_GB", None)
-EXPECTED_CONCURRENT_TAG_TASKS = _env_int("PIXLSTASH_EXPECTED_TAG_TASKS", 2)
+EXPECTED_CONCURRENT_TAG_TASKS = _env_int("PIXLSTASH_EXPECTED_TAG_TASKS", 3)
 
 # Approximate VRAM footprints for non-tagging GPU pipelines
 INSIGHTFACE_VRAM_MB = 400  # RetinaFace + ArcFace models via CUDA provider
@@ -316,8 +317,6 @@ class PictureTagger:
     @staticmethod
     def _query_total_vram_mb() -> int:
         try:
-            import subprocess
-
             output = subprocess.check_output(
                 [
                     "nvidia-smi",
@@ -336,46 +335,6 @@ class PictureTagger:
             return sum(totals)
         except Exception:
             return 0
-
-    @staticmethod
-    def _query_process_vram_mb() -> int:
-        try:
-            import subprocess
-
-            pid = os.getpid()
-            output = subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "--query-compute-apps=pid,used_memory",
-                    "--format=csv,noheader,nounits",
-                ],
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            used_mb = 0
-            for line in output.splitlines():
-                parts = [part.strip() for part in line.split(",")]
-                if len(parts) < 2:
-                    continue
-                try:
-                    line_pid = int(parts[0])
-                    line_used_mb = int(float(parts[1]))
-                except Exception:
-                    continue
-                if line_pid == pid:
-                    used_mb += line_used_mb
-            return used_mb
-        except Exception:
-            return 0
-
-    def _runtime_vram_headroom_mb(self, reserve_mb: int = 128) -> int | None:
-        budget_mb = self._max_vram_usage_mb
-        if self._device != "cuda" or not budget_mb:
-            return None
-        used_mb = self._query_process_vram_mb()
-        if used_mb <= 0:
-            return None
-        return max(0, int(budget_mb - used_mb - max(0, int(reserve_mb))))
 
     def set_max_vram_usage_gb(self, max_vram_gb: float | None):
         if self._device != "cuda":
@@ -443,84 +402,87 @@ class PictureTagger:
                 wd14_batch,
                 self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
             )
-            runtime_headroom_mb = self._runtime_vram_headroom_mb(reserve_mb=128)
-            if runtime_headroom_mb is not None:
-                runtime_batch_cap = max(1, int(runtime_headroom_mb / 220))
-                wd14_batch = min(wd14_batch, runtime_batch_cap)
         return max(1, int(wd14_batch))
 
     def _effective_custom_batch_size(self) -> int:
-        custom_batch = max(1, int(self._custom_tagger_batch))
-        if self._device == "cuda":
-            custom_batch = min(
-                custom_batch,
-                self._vram_limited_batch_cap(base_mb=700, per_item_mb=180),
-            )
-            runtime_headroom_mb = self._runtime_vram_headroom_mb(reserve_mb=128)
-            if runtime_headroom_mb is not None:
-                runtime_batch_cap = max(1, int(runtime_headroom_mb / 180))
-                custom_batch = min(custom_batch, runtime_batch_cap)
-        # Do NOT cap by _effective_wd14_batch_size: WD14 and custom model run
-        # sequentially, so their VRAM peaks are independent.
-        return max(1, int(custom_batch))
+        # Use the same VRAM-budget cap as WD14 so that both taggers share a
+        # single unified batch size.  WD14 (900 MB base + 220 MB/image) is the
+        # more conservative bound, so any task sized for WD14 is safe for the
+        # custom ConvNext tagger too.
+        return self._effective_wd14_batch_size()
 
     def suggested_tag_task_size(self) -> int:
-        # The WD14 ONNX loop in tag_images already processes images in
-        # sub-batches at _onnx_batch_capacity, so the task size does not need
-        # to match the ONNX batch dimension.  Use max_concurrent_images()
-        # (VRAM-capped on CUDA) so the finder creates large batches.
+        # Use the tightest applicable VRAM cap across enabled taggers.
+        # WD14 ONNX uses 900 MB base + 220 MB/image; the custom ConvNext
+        # tagger uses 700 MB base + 90 MB/image.  When only the custom
+        # tagger is active the WD14 cap is overly conservative and would
+        # shrink batch sizes to ~18 on a 12 GB GPU instead of ~46.
         max_concurrent = max(1, int(self.max_concurrent_images()))
         if self._device == "cuda":
-            max_concurrent = min(
-                max_concurrent,
-                self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
-            )
-            runtime_headroom_mb = self._runtime_vram_headroom_mb(reserve_mb=128)
-            if runtime_headroom_mb is not None:
-                runtime_batch_cap = max(1, int(runtime_headroom_mb / 220))
-                max_concurrent = min(max_concurrent, runtime_batch_cap)
+            wd14_enabled = getattr(self, "_use_wd14_tagger", True)
+            custom_enabled = getattr(self, "_use_custom_tagger", False)
+            if wd14_enabled:
+                max_concurrent = min(
+                    max_concurrent,
+                    self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
+                )
+            if custom_enabled:
+                max_concurrent = min(
+                    max_concurrent,
+                    self._vram_limited_batch_cap(base_mb=700, per_item_mb=90),
+                )
         return max(1, max_concurrent)
 
     def estimate_task_vram_mb(self, image_count: int) -> int:
         image_count = max(1, int(image_count or 1))
-        wd14_batch = min(self._effective_wd14_batch_size(), image_count)
-        custom_batch = min(self._effective_custom_batch_size(), image_count)
-        wd14_estimate = 900 + 220 * wd14_batch
-        custom_estimate = 700 + 180 * custom_batch
-        return int(max(wd14_estimate, custom_estimate, 1200))
+        wd14_enabled = getattr(self, "_use_wd14_tagger", True)
+        custom_enabled = getattr(self, "_use_custom_tagger", False)
+        candidates = [1200]
+        if wd14_enabled:
+            wd14_batch = min(self._effective_wd14_batch_size(), image_count)
+            candidates.append(900 + 220 * wd14_batch)
+        if custom_enabled:
+            custom_batch = min(self._effective_custom_batch_size(), image_count)
+            candidates.append(700 + 90 * custom_batch)
+        return int(max(candidates))
 
     def estimate_task_incremental_vram_mb(self, image_count: int) -> int:
-        wd14_batch = min(
-            self._effective_wd14_batch_size(),
-            max(1, int(image_count or 1)),
-        )
-        custom_batch = min(
-            self._effective_custom_batch_size(),
-            max(1, int(image_count or 1)),
-        )
-        wd14_incremental = 220 * wd14_batch
-        custom_incremental = 180 * custom_batch
-        return int(max(256, wd14_incremental, custom_incremental))
+        wd14_enabled = getattr(self, "_use_wd14_tagger", True)
+        custom_enabled = getattr(self, "_use_custom_tagger", False)
+        candidates = [256]
+        if wd14_enabled:
+            wd14_batch = min(
+                self._effective_wd14_batch_size(),
+                max(1, int(image_count or 1)),
+            )
+            candidates.append(220 * wd14_batch)
+        if custom_enabled:
+            custom_batch = min(
+                self._effective_custom_batch_size(),
+                max(1, int(image_count or 1)),
+            )
+            candidates.append(90 * custom_batch)
+        return int(max(candidates))
 
     def suggested_image_embedding_batch_size(self) -> int:
         """VRAM-budget-constrained batch size for ImageEmbeddingTask CLIP inference."""
-        max_batch = 32
+        # CLIP ViT-B-32: ~350 MB model (fp16), ~8 MB per image activation.
+        # This is vastly cheaper than the tagger (220 MB/image) so a much
+        # larger batch fits in the same VRAM budget.
+        max_batch = 128
         if self._device == "cuda":
             max_batch = min(
                 max_batch,
-                self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
+                self._vram_limited_batch_cap(base_mb=350, per_item_mb=8),
             )
-            runtime_headroom_mb = self._runtime_vram_headroom_mb(reserve_mb=128)
-            if runtime_headroom_mb is not None:
-                max_batch = min(max_batch, max(1, int(runtime_headroom_mb / 220)))
         return max(1, max_batch)
 
     def estimate_image_embedding_vram_mb(self, image_count: int) -> int:
         """Incremental VRAM estimate for an ImageEmbeddingTask batch."""
         if self._device != "cuda":
             return 0
-        batch = min(max(1, int(image_count or 1)), 32)
-        return int(max(128, 220 * batch))
+        batch = min(max(1, int(image_count or 1)), 512)
+        return int(max(64, 8 * batch))
 
     def estimate_face_extraction_vram_mb(self) -> int:
         """Flat VRAM estimate for FaceExtractionTask (InsightFace model + inference)."""
@@ -620,6 +582,24 @@ class PictureTagger:
         self._trim_process_memory()
         self._models_ready = False
         logger.debug("PictureTagger.__exit__ called, all resources released.")
+
+    def unload_tagger_session(self):
+        """Release the WD14 ONNX inference session and its CUDA arena.
+
+        ORT's BFC allocator holds the full activation workspace for the session
+        lifetime.  Deleting the session object frees that CUDA memory so that
+        subsequent GPU pipelines (embeddings, descriptions) start with a clean
+        VRAM budget.  The session is rebuilt lazily the next time tagging runs.
+        """
+        if getattr(self, "ort_sess", None) is not None:
+            del self.ort_sess
+            self.ort_sess = None
+            logger.info("PictureTagger: WD14 ONNX session unloaded (CUDA arena freed).")
+            import gc as _gc
+
+            _gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def aggressive_unload(self):
         logger.warning("PictureTagger.aggressive_unload() called, releasing models...")
@@ -1402,12 +1382,18 @@ class PictureTagger:
                 len(self._custom_label_thresholds),
             )
         self._custom_model = self._build_custom_tagger_model(arch, len(labels))
+        # Normalise dtype first: safetensors weights may be FP16 while the
+        # freshly-built classifier head is FP32.  Cast everything to FP32,
+        # load the state dict (now a consistent dtype), then promote to FP16
+        # on CUDA for faster inference.  CPU always stays FP32.
+        self._custom_model.float()
         self._custom_model.load_state_dict(state_dict)
         self._custom_model.to(self._custom_device)
-        # Normalise to FP32: weights from safetensors may be FP16 while the
-        # freshly-built classifier head stays FP32, creating mixed-precision
-        # biases that cause "Input type (c10::Half) and bias type (float)" errors.
-        self._custom_model.float()
+        if str(self._custom_device) == "cuda":
+            self._custom_model.half()
+            self._custom_tagger_dtype = torch.float16
+        else:
+            self._custom_tagger_dtype = torch.float32
         self._custom_model.eval()
         self._custom_transform_cache = {}
         self._custom_transform = self._build_custom_transform(
@@ -1418,8 +1404,10 @@ class PictureTagger:
         logger.warning("Custom tagger GPU inference failed; reloading on CPU...")
         try:
             if hasattr(self, "_custom_model") and self._custom_model is not None:
+                self._custom_model.float()
                 self._custom_model.to("cpu")
             self._custom_device = "cpu"
+            self._custom_tagger_dtype = torch.float32
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             logger.debug("Custom tagger reloaded on CPU")
@@ -1932,11 +1920,12 @@ class PictureTagger:
                 continue
             inputs = torch.stack(batch_tensors)
             custom_device = getattr(self, "_custom_device", self._device)
+            custom_dtype = getattr(self, "_custom_tagger_dtype", torch.float32)
             try:
-                inputs = inputs.to(custom_device).float()
+                inputs = inputs.to(device=custom_device, dtype=custom_dtype)
                 with torch.inference_mode():
                     logits = self._custom_model(inputs)
-                    probs = torch.sigmoid(logits).cpu().numpy()
+                    probs = torch.sigmoid(logits).float().cpu().numpy()
             except Exception as exc:
                 is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
                     "CUDA out of memory" in str(exc)
@@ -1947,10 +1936,11 @@ class PictureTagger:
                     )
                     if self._reload_custom_tagger_on_cpu():
                         logger.warning("Custom tagger is now running on CPU.")
-                        inputs = inputs.to("cpu").float()
+                        self._custom_tagger_dtype = torch.float32
+                        inputs = inputs.to(device="cpu", dtype=torch.float32)
                         with torch.inference_mode():
                             logits = self._custom_model(inputs)
-                            probs = torch.sigmoid(logits).cpu().numpy()
+                            probs = torch.sigmoid(logits).float().cpu().numpy()
                     else:
                         logger.error("Custom tagger CPU fallback failed.")
                         break

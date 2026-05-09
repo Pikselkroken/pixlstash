@@ -126,8 +126,15 @@ def test_missing_tags_finder_uses_suggested_task_size():
     assert task.params["batch_size"] == 3
 
 
-def test_runtime_headroom_rounds_down_effective_batch_size():
-    tagger = _build_tagger_for_budget_tests(
+def test_larger_budget_gives_bigger_batch_than_smaller_budget():
+    small_budget = _build_tagger_for_budget_tests(
+        budget_mb=4096,
+        expected_tasks=2,
+        max_concurrent=64,
+        onnx_capacity=64,
+        custom_batch=32,
+    )
+    large_budget = _build_tagger_for_budget_tests(
         budget_mb=8192,
         expected_tasks=2,
         max_concurrent=64,
@@ -135,8 +142,9 @@ def test_runtime_headroom_rounds_down_effective_batch_size():
         custom_batch=32,
     )
 
-    tagger._query_process_vram_mb = lambda: 6404
+    small_batch = small_budget._effective_wd14_batch_size()
+    large_batch = large_budget._effective_wd14_batch_size()
 
-    assert tagger._effective_wd14_batch_size() == 7
-    assert tagger._effective_custom_batch_size() == 7
-    assert tagger.suggested_tag_task_size() == 7
+    assert large_batch > small_batch
+    assert large_budget._effective_custom_batch_size() == large_batch
+    assert large_budget.suggested_tag_task_size() == large_batch

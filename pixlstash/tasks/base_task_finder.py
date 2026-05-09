@@ -72,6 +72,13 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
         """
         return []
 
+    def on_all_tasks_complete(self) -> None:
+        """Called once when the finder is exhausted and all its in-flight tasks finish.
+
+        Override to release GPU resources (e.g. ONNX session CUDA arenas) that
+        are no longer needed until the next work sweep.
+        """
+
     def on_task_complete(self, task, error) -> None:
         """Release any picture IDs that were claimed by *task*."""
         picture_ids = (getattr(task, "params", None) or {}).get("picture_ids") or []

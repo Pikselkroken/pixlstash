@@ -8,11 +8,6 @@ from pixlstash.db_models import Picture
 from .base_task_finder import BaseTaskFinder
 from .face_extraction_task import FaceExtractionTask
 
-# InsightFace processes images sequentially (one at a time), so the batch size
-# here controls task granularity, not neural-net parallelism. Use a large cap
-# so a single task drains the backlog instead of making the planner round-trip
-# every max_concurrent_images pictures (which is tuned for the tagger, not
-# for sequential face detection).
 FACE_EXTRACTION_BATCH_LIMIT = 100
 
 
@@ -50,6 +45,17 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
             picture_tagger=picture_tagger,
             pictures=selected,
         )
+
+    def on_all_tasks_complete(self) -> None:
+        """Release InsightFace ORT sessions and their CUDA arena once all face
+        extraction work is done.
+
+        ORT's CUDAExecutionProvider arena grows with each batch and never shrinks
+        on its own.  Destroying the session here frees that memory (often 20+ GB)
+        so the next pipeline stage (tagging, embeddings) has a clean VRAM budget.
+        The model is small (~400 MB) and reloads quickly if more faces arrive later.
+        """
+        FaceExtractionTask.release_detection_models()
 
     @staticmethod
     def _fetch_missing_features(session: Session):

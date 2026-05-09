@@ -1,4 +1,7 @@
+import ctypes
+import gc
 import itertools
+import platform
 import queue
 import threading
 import traceback
@@ -503,7 +506,7 @@ class TaskRunner:
         logger.debug("TaskRunner %s worker started.", self._name)
         while not self._stop.is_set():
             try:
-                _priority, _seq, task = work_queue.get(timeout=0.2)
+                _priority, _seq, task = work_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
 
@@ -533,7 +536,15 @@ class TaskRunner:
                 work_queue.qsize(),
             )
 
-            vram_reserved_mb = self._wait_for_vram_budget(task)
+            # GPU-queue tasks are physically serialised by the single GPU worker
+            # thread — only one runs at a time, so there is no concurrent GPU
+            # usage to gate against.  Skipping the VRAM gate avoids the
+            # spillover escape that fires when loaded-model baseline VRAM
+            # already exceeds the configured budget.
+            if task.queue_type == QueueType.GPU:
+                vram_reserved_mb = 0
+            else:
+                vram_reserved_mb = self._wait_for_vram_budget(task)
 
             task_start = time.perf_counter()
             logger.debug(
@@ -568,19 +579,44 @@ class TaskRunner:
             finally:
                 with self._active_task_lock:
                     self._active_tasks.pop(thread_ident, None)
-                if vram_reserved_mb > 0:
+                # Always flush PyTorch's CUDA allocator cache after a GPU-queue
+                # task so that activation tensors (data, not models) are returned
+                # promptly.  CPU-queue tasks only flush when they held a VRAM
+                # reservation.
+                if task.queue_type == QueueType.GPU:
+                    try:
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            with TaskRunner._vram_cache_lock:
+                                TaskRunner._vram_cache_ts = 0.0
+                    except Exception:
+                        logger.warning(
+                            "Failed to flush CUDA cache after task %s (%s): %s",
+                            task.id,
+                            task.type,
+                            traceback.format_exc(),
+                        )
+                    # Collect Python objects freed during inference (e.g. preloaded
+                    # image dicts) and trim glibc's malloc arena so that resident
+                    # set size drops back towards the true working set.
+                    gc.collect()
+                    if platform.system().lower().startswith("linux"):
+                        try:
+                            trim = getattr(
+                                ctypes.CDLL("libc.so.6"), "malloc_trim", None
+                            )
+                            if trim is not None:
+                                trim(0)
+                        except Exception:
+                            pass
+                elif vram_reserved_mb > 0:
                     with self._vram_gate_lock:
                         self._vram_reserved_mb = max(
                             0, self._vram_reserved_mb - vram_reserved_mb
                         )
-                    # Flush PyTorch's CUDA allocator cache so that the next
-                    # nvidia-smi reading in _get_process_vram_mb() reflects
-                    # actual live tensor usage rather than freed-but-held blocks.
                     try:
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
-                            # Invalidate the VRAM cache so the next gate check
-                            # reads fresh data rather than the pre-flush reading.
                             with TaskRunner._vram_cache_lock:
                                 TaskRunner._vram_cache_ts = 0.0
                     except Exception:

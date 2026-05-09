@@ -42,7 +42,7 @@ class User(SQLModel, table=True):
     hidden_tags: Optional[str] = Field(default_factory=lambda: json.dumps([]))
     apply_tag_filter: bool = Field(default=False)
     keep_models_in_memory: bool = Field(default=True)
-    max_vram_gb: Optional[float] = Field(default=None)
+    max_vram_gb: Optional[float] = Field(default=2.0)
     wd14_tagger_enabled: bool = Field(default=False)
     custom_tagger_enabled: bool = Field(default=True)
     wd14_threshold: Optional[float] = Field(default=None)

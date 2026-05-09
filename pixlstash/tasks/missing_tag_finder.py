@@ -32,6 +32,18 @@ class MissingTagFinder(BaseTaskFinder):
         # extraction has GPU priority and must not be starved by queued tagging.
         return ["MissingFaceExtractionFinder"]
 
+    def on_all_tasks_complete(self) -> None:
+        """Unload the WD14 ONNX session once all tagging work is done.
+
+        ORT's CUDAExecutionProvider holds its entire activation arena inside the
+        session object.  Deleting the session returns that memory (often tens of
+        GB for large batches) so the next GPU pipeline stage starts with a clean
+        VRAM budget.  The session is rebuilt lazily on the next tagging cycle.
+        """
+        tagger = self._picture_tagger_getter()
+        if tagger is not None and hasattr(tagger, "unload_tagger_session"):
+            tagger.unload_tagger_session()
+
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()
         if picture_tagger is None:
@@ -49,8 +61,18 @@ class MissingTagFinder(BaseTaskFinder):
                 else picture_tagger.max_concurrent_images()
             ),
         )
+        # Fetch enough candidates that _filter_and_claim can always fill one
+        # additional task even when all max_inflight slots are already in-flight.
+        # With max_inflight=3 and batch_limit=18, the 3 running tasks claim 54
+        # picture IDs.  Fetching only batch_limit*3=54 returns the same 54 IDs
+        # (all claimed) so find_task() returns None → _finder_exhausted=True →
+        # on_all_tasks_complete() fires and destroys the ONNX session mid-run.
+        # Fetching batch_limit*(max_inflight+1) guarantees unclaimed candidates.
+        max_inflight = max(1, self.max_inflight_tasks())
         pictures = self._db.run_immediate_read_task(
-            lambda session: self._fetch_missing_tags(session, batch_limit * 3)
+            lambda session: self._fetch_missing_tags(
+                session, batch_limit * (max_inflight + 1)
+            )
         )
         if not pictures:
             return None
