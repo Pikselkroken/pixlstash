@@ -149,7 +149,7 @@ CUSTOM_TAGGER_DEFAULT_THRESHOLD = 0.50
 # Negative values lower the effective threshold (more tags); positive values raise it.
 CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
-CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 384
+CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
 CUSTOM_TAGGER_BATCH = _env_int("PIXLSTASH_CUSTOM_TAGGER_BATCH", 16)
 CLIP_MODEL_NAME = "ViT-B-32"
 DEFAULT_MAX_VRAM_GB = _env_float("PIXLSTASH_MAX_VRAM_GB", None)
@@ -460,13 +460,26 @@ class PictureTagger:
             if runtime_headroom_mb is not None:
                 runtime_batch_cap = max(1, int(runtime_headroom_mb / 180))
                 custom_batch = min(custom_batch, runtime_batch_cap)
-        wd14_batch = self._effective_wd14_batch_size()
-        return max(1, int(min(custom_batch, wd14_batch)))
+        # Do NOT cap by _effective_wd14_batch_size: WD14 and custom model run
+        # sequentially, so their VRAM peaks are independent.
+        return max(1, int(custom_batch))
 
     def suggested_tag_task_size(self) -> int:
-        wd14_batch = self._effective_wd14_batch_size()
-        custom_batch = self._effective_custom_batch_size()
-        return max(1, min(wd14_batch, custom_batch))
+        # The WD14 ONNX loop in tag_images already processes images in
+        # sub-batches at _onnx_batch_capacity, so the task size does not need
+        # to match the ONNX batch dimension.  Use max_concurrent_images()
+        # (VRAM-capped on CUDA) so the finder creates large batches.
+        max_concurrent = max(1, int(self.max_concurrent_images()))
+        if self._device == "cuda":
+            max_concurrent = min(
+                max_concurrent,
+                self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
+            )
+            runtime_headroom_mb = self._runtime_vram_headroom_mb(reserve_mb=128)
+            if runtime_headroom_mb is not None:
+                runtime_batch_cap = max(1, int(runtime_headroom_mb / 220))
+                max_concurrent = min(max_concurrent, runtime_batch_cap)
+        return max(1, max_concurrent)
 
     def estimate_task_vram_mb(self, image_count: int) -> int:
         image_count = max(1, int(image_count or 1))
@@ -1700,7 +1713,9 @@ class PictureTagger:
         ny2 = min(img_height, int(round(cy + half)))
         return [nx1, ny1, nx2, ny2]
 
-    def tag_quality_crops(self, items, stop_event=None):
+    def tag_quality_crops(
+        self, items, stop_event=None, out_raw_scores: dict | None = None
+    ):
         """Run the custom tagger on pre-cropped PIL images and return only
         quality-relevant tags.
 
@@ -1711,6 +1726,10 @@ class PictureTagger:
         Args:
             items: List of ``(key, PIL.Image)`` pairs.
             stop_event: Optional threading.Event to interrupt inference.
+            out_raw_scores: When provided, the raw confidence scores for every
+                label above ``min_confidence`` are written into this dict
+                (``{key: {label: float}}``) during the same GPU pass — avoiding
+                a separate ``score_quality_crops_raw`` call.
 
         Returns:
             Dict mapping key to list of quality tags that passed the whitelist
@@ -1722,13 +1741,23 @@ class PictureTagger:
             logger.debug("Custom tagger not available; skipping quality crop pass.")
             return {}
 
-        raw = self._tag_custom_items(
-            items,
-            stop_event=stop_event,
-            threshold=None,
-            image_size=self._custom_tagger_image_size_quality_crop,
-            pass_name="quality_crops",
-        )
+        if out_raw_scores is not None:
+            raw, scores_by_key = self._tag_and_score_custom_items(
+                items,
+                stop_event=stop_event,
+                threshold=None,
+                image_size=self._custom_tagger_image_size_quality_crop,
+                pass_name="quality_crops",
+            )
+            out_raw_scores.update(scores_by_key)
+        else:
+            raw = self._tag_custom_items(
+                items,
+                stop_event=stop_event,
+                threshold=None,
+                image_size=self._custom_tagger_image_size_quality_crop,
+                pass_name="quality_crops",
+            )
         # Filter to only quality-relevant whitelist tags, as documented.
         # Without this filter, non-quality tags (e.g. "flux chin") that happen
         # to score above threshold on a zoomed-in face crop would be promoted
@@ -1829,6 +1858,125 @@ class PictureTagger:
                 results[path] = [tag for tag, _ in all_tags_sorted]
 
         return self._naturalize_tags(results)
+
+    def _tag_and_score_custom_items(
+        self,
+        items,
+        stop_event=None,
+        threshold=None,
+        image_size=None,
+        pass_name: str = "full_images",
+        min_confidence: float = 0.05,
+    ) -> tuple:
+        """Run the custom tagger once and return both thresholded tags and raw scores.
+
+        Identical to calling ``_tag_custom_items`` followed by ``_score_custom_items``
+        on the same batch, but runs the GPU forward pass only once.
+
+        Args:
+            items: List of ``(key, PIL.Image)`` pairs.
+            stop_event: Optional threading.Event to interrupt.
+            threshold: Override per-label threshold base value.
+            image_size: Override image size for the transform.
+            pass_name: Logging label for debug output.
+            min_confidence: Floor for raw scores returned in the scores dict.
+
+        Returns:
+            Tuple ``(tags_by_key, scores_by_key)`` where:
+            - ``tags_by_key``: ``{key: [tag, ...]}`` thresholded and naturalized.
+            - ``scores_by_key``: ``{key: {natural_label: float}}`` raw scores.
+        """
+        if not items:
+            return {}, {}
+        if self._custom_model is None or self._custom_labels is None:
+            logger.warning(
+                "Custom tagger model is None; skipping _tag_and_score_custom_items."
+            )
+            return {}, {}
+
+        tag_threshold = (
+            float(threshold)
+            if threshold is not None and float(threshold) > 0
+            else CUSTOM_TAGGER_DEFAULT_THRESHOLD
+        )
+        if image_size is None:
+            image_size = self._custom_tagger_image_size_full
+        transform = self._custom_transform_cache.get(image_size)
+        if transform is None:
+            transform = self._build_custom_transform(image_size)
+            self._custom_transform_cache[image_size] = transform
+
+        logger.debug(
+            "Performing custom tagging+scoring (%s) on %d items...",
+            pass_name,
+            len(items),
+        )
+        batch_size = self._effective_custom_batch_size()
+        tags_results: dict = {}
+        scores_results: dict = {}
+
+        for batch_start in range(0, len(items), batch_size):
+            if stop_event is not None and stop_event.is_set():
+                logger.info("Tagging interrupted by stop event.")
+                break
+            batch = items[batch_start : batch_start + batch_size]
+            batch_paths = []
+            batch_tensors = []
+            for path, image in batch:
+                try:
+                    batch_tensors.append(transform(image))
+                    batch_paths.append(path)
+                except Exception as e:
+                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
+            if not batch_tensors:
+                continue
+            inputs = torch.stack(batch_tensors)
+            custom_device = getattr(self, "_custom_device", self._device)
+            try:
+                inputs = inputs.to(custom_device).float()
+                with torch.inference_mode():
+                    logits = self._custom_model(inputs)
+                    probs = torch.sigmoid(logits).cpu().numpy()
+            except Exception as exc:
+                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
+                    "CUDA out of memory" in str(exc)
+                )
+                if is_cuda_oom and custom_device == "cuda":
+                    logger.warning(
+                        "Custom tagger CUDA OOM; falling back to CPU for this run."
+                    )
+                    if self._reload_custom_tagger_on_cpu():
+                        logger.warning("Custom tagger is now running on CPU.")
+                        inputs = inputs.to("cpu").float()
+                        with torch.inference_mode():
+                            logits = self._custom_model(inputs)
+                            probs = torch.sigmoid(logits).cpu().numpy()
+                    else:
+                        logger.error("Custom tagger CPU fallback failed.")
+                        break
+                else:
+                    logger.error("Custom tagger inference failed: %s", exc)
+                    break
+            for path, prob in zip(batch_paths, probs):
+                tag_probs = []
+                scores: dict = {}
+                for label, p in zip(self._custom_labels, prob):
+                    p_f = float(p)
+                    base = self._custom_label_thresholds.get(label, tag_threshold)
+                    per_label_threshold = max(
+                        0.01, base + self._custom_tagger_threshold_offset
+                    )
+                    if p_f >= per_label_threshold:
+                        tag_probs.append((label, p_f))
+                    if p_f >= min_confidence:
+                        natural = sanitise_tag(label)
+                        if natural:
+                            scores[natural] = p_f
+                all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
+                tags_results[path] = [tag for tag, _ in all_tags_sorted]
+                scores_results[path] = scores
+
+        return self._naturalize_tags(tags_results), scores_results
 
     def _score_custom_items(
         self,
@@ -2004,7 +2152,13 @@ class PictureTagger:
             image_size=self._custom_tagger_image_size_quality_crop,
         )
 
-    def _tag_images_custom(self, image_paths, stop_event=None, preloaded_images=None):
+    def _tag_images_custom(
+        self,
+        image_paths,
+        stop_event=None,
+        preloaded_images=None,
+        out_raw_scores: dict | None = None,
+    ):
         from PIL import Image
 
         if self._custom_transform is None:
@@ -2023,6 +2177,10 @@ class PictureTagger:
             path = str(image_path)
             ext = os.path.splitext(path)[1].lower()
             if ext in video_exts:
+                # Use preloaded frame if the preloader already extracted it.
+                if preloaded_images is not None and path in preloaded_images:
+                    items.append((f"{path}#frame0", preloaded_images[path]))
+                    continue
                 frames = VideoUtils.extract_representative_video_frames(path, count=1)
                 if not frames:
                     logger.error("No frames extracted from video: %s", path)
@@ -2043,16 +2201,39 @@ class PictureTagger:
         if not items:
             return {}
 
-        results = self._tag_custom_items(
-            items,
-            stop_event=stop_event,
-            threshold=None,
-            image_size=self._custom_tagger_image_size_full,
-            pass_name="full_images",
-        )
-        return self._merge_video_frame_tags(results)
+        if out_raw_scores is not None:
+            tags_by_key, scores_by_key = self._tag_and_score_custom_items(
+                items,
+                stop_event=stop_event,
+                threshold=None,
+                image_size=self._custom_tagger_image_size_full,
+                pass_name="full_images",
+            )
+            # Merge video-frame raw scores back to the original path key.
+            for key, scores in scores_by_key.items():
+                orig = key.split("#frame")[0] if "#frame" in key else key
+                existing = out_raw_scores.get(orig, {})
+                for label, conf in scores.items():
+                    if conf > existing.get(label, 0.0):
+                        existing[label] = conf
+                out_raw_scores[orig] = existing
+        else:
+            tags_by_key = self._tag_custom_items(
+                items,
+                stop_event=stop_event,
+                threshold=None,
+                image_size=self._custom_tagger_image_size_full,
+                pass_name="full_images",
+            )
+        return self._merge_video_frame_tags(tags_by_key)
 
-    def tag_images(self, image_paths, stop_event=None, preloaded_images=None):
+    def tag_images(
+        self,
+        image_paths,
+        stop_event=None,
+        preloaded_images=None,
+        _out_raw_custom_scores: dict | None = None,
+    ):
         """
         Tag images using WD14 and optionally extend with the custom tagger.
 
@@ -2247,6 +2428,7 @@ class PictureTagger:
             image_paths,
             stop_event=stop_event,
             preloaded_images=preloaded_map,
+            out_raw_scores=_out_raw_custom_scores,
         )
 
         combined_results = {}

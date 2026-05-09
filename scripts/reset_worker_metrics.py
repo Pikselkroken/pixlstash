@@ -144,12 +144,25 @@ def main() -> None:
         "-m",
         "--measure",
         action="append",
-        required=True,
+        dest="measures",
         choices=sorted(MEASURES),
         help="Measure to reset. Can be provided multiple times.",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Reset all measures. Overrides -m/--measure.",
+    )
     args = parser.parse_args()
-    reset_worker_metrics(args.db_path, args.measure)
+
+    if args.all:
+        measures = sorted(MEASURES)
+    elif args.measures:
+        measures = args.measures
+    else:
+        parser.error("Specify at least one -m/--measure or use --all.")
+
+    reset_worker_metrics(args.db_path, measures)
 
 
 if __name__ == "__main__":

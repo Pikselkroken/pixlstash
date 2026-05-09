@@ -746,24 +746,6 @@ class Vault:
                     or 0
                 )
                 label = "comfyui_extraction"
-            elif worker_type == TaskType.TAG_PREDICTION:
-                tagger = self._picture_tagger
-                use_custom = tagger is not None and getattr(
-                    tagger, "_use_custom_tagger", False
-                )
-                if use_custom:
-                    model_version = f"v{tagger.custom_tagger_version()}"
-                    missing = int(
-                        self.db.run_immediate_read_task(
-                            lambda s, mv=model_version: (
-                                self._count_missing_tag_predictions(s, mv)
-                            )
-                        )
-                        or 0
-                    )
-                else:
-                    missing = 0
-                label = "tag_predictions_scored"
             elif worker_type == TaskType.MISSING_FILE_PURGE:
                 total = 0
                 missing = 0

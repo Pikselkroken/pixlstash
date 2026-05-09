@@ -31,7 +31,9 @@ TEXT_SCORE_MAX_INFLIGHT: int = 2
 SMART_SCORE_MAX_INFLIGHT: int = 2
 
 # Tagger: WD14 / custom model inference.
-TAGGER_MAX_INFLIGHT: int = 2
+# 3 inflight ensures the preloader always has 2 full GPU cycles (~0.54s) to
+# complete before its task reaches the semaphore, eliminating preload stalls.
+TAGGER_MAX_INFLIGHT: int = 3
 
 # Likeness parameters: fast enough with a single inflight task after batching fix.
 LIKENESS_PARAMETERS_MAX_INFLIGHT: int = 2
