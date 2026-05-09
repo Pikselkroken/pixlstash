@@ -126,6 +126,7 @@ const lastSnapshot = new Map();
 const lastActiveAtByWorker = new Map();
 const lastProgressAtByWorker = new Map();
 let pollTimer = null;
+let fetchInFlight = false;
 const RATE_AVERAGE_WINDOW_SECONDS = 8;
 const WORKER_REMOVE_GRACE_SECONDS = 10;
 const nowSeconds = ref(Date.now() / 1000);
@@ -298,6 +299,8 @@ function stopPolling() {
 }
 
 async function fetchProgress() {
+  if (fetchInFlight) return;
+  fetchInFlight = true;
   if (!Object.keys(workerSnapshots.value || {}).length) {
     loading.value = true;
   }
@@ -317,7 +320,7 @@ async function fetchProgress() {
       let rate = 0;
       if (prev && now > prev.t) {
         const delta = current - prev.current;
-        rate = delta !== 0 ? Math.abs(delta) / (now - prev.t) : 0;
+        rate = delta > 0 ? delta / (now - prev.t) : 0;
       }
       if (rate > 0) {
         lastProgressAtByWorker.set(key, now);
@@ -362,6 +365,7 @@ async function fetchProgress() {
   } catch (err) {
     // keep last known samples
   } finally {
+    fetchInFlight = false;
     loading.value = false;
   }
 }

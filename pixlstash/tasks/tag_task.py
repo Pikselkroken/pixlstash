@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlmodel import Session, select, delete
 import os
@@ -12,6 +13,9 @@ from pixlstash.db_models import Face, Picture, Tag, TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.service.tag_prediction_utils import (
+    recompute_anomaly_tag_uncertainty,
+)
 from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
@@ -127,11 +131,29 @@ class TagTask(BaseTask):
         # GPU inference at a time.  The second in-flight task has already been
         # preloading images while this one ran, so it will be ready immediately
         # after the semaphore is released (ping-pong pattern).
+        sem_wait_start = time.perf_counter()
         self._execution_semaphore.acquire()
+        sem_wait_s = time.perf_counter() - sem_wait_start
+        if sem_wait_s > 0.05:
+            logger.info(
+                "[TAG_TIMING] task_id=%s sem_wait_s=%.3f (waited for semaphore)",
+                self.id,
+                sem_wait_s,
+            )
+        # Use a one-shot callback so the semaphore can be released inside
+        # _tag_pictures_batch immediately after GPU inference — before DB writes.
+        # The finally block calls it as a no-op if already fired.
+        _sem_released = [False]
+
+        def _release_gpu_sem():
+            if not _sem_released[0]:
+                _sem_released[0] = True
+                self._execution_semaphore.release()
+
         try:
-            changed = self._tag_pictures_batch()
+            changed = self._tag_pictures_batch(_release_gpu_sem=_release_gpu_sem)
         finally:
-            self._execution_semaphore.release()
+            _release_gpu_sem()  # no-op if already released after GPU inference
 
         return {
             "changed_count": len(changed),
@@ -292,7 +314,7 @@ class TagTask(BaseTask):
                     pred.status = correct_status
         session.commit()
 
-    def _tag_pictures_batch(self) -> list:
+    def _tag_pictures_batch(self, _release_gpu_sem=None) -> list:
         assert self._pictures is not None
 
         if self._preload_thread is None:
@@ -356,24 +378,33 @@ class TagTask(BaseTask):
             if image_paths:
                 logger.debug("Tagging %s images", len(image_paths))
                 logger.debug("Tagging image paths: %s", image_paths)
+                # Collect raw confidence scores in the same GPU pass as tagging.
+                full_scores_by_path: dict = {}
+                use_custom = getattr(active_tagger, "_use_custom_tagger", False)
+                inference_start = time.perf_counter()
                 tag_results = active_tagger.tag_images(
                     image_paths,
                     preloaded_images=preloaded_images,
+                    _out_raw_custom_scores=full_scores_by_path if use_custom else None,
                 )
+                inference_s = time.perf_counter() - inference_start
                 logger.debug("Got tag results for %s images.", len(tag_results))
 
                 # --- Quality crop pass ---
                 # Fetch face bboxes and run the custom tagger on expanded crops so
                 # that quality tags (e.g. "pixelated") that are invisible at full-
                 # image resolution can still be detected.
+                crop_inference_s = 0.0
+                crop_fetch_s = 0.0
                 try:
+                    crop_fetch_start = time.perf_counter()
                     pic_ids = [p.id for p in batch]
-                    faces_by_pic = self._db.run_task(
+                    faces_by_pic = self._db.run_immediate_read_task(
                         lambda session: self._fetch_faces_for_pictures(
                             session, pic_ids
                         ),
-                        priority=DBPriority.LOW,
                     )
+                    crop_fetch_s = time.perf_counter() - crop_fetch_start
                     target = active_tagger.custom_tagger_image_size_quality_crop()
                     quality_items = []
                     key_to_path = {}
@@ -437,7 +468,14 @@ class TagTask(BaseTask):
                                 exc,
                             )
                     if quality_items:
-                        quality_results = active_tagger.tag_quality_crops(quality_items)
+                        # Single GPU pass: get quality tags AND raw scores for predictions.
+                        crop_raw_scores: dict = {}
+                        crop_inf_start = time.perf_counter()
+                        quality_results = active_tagger.tag_quality_crops(
+                            quality_items,
+                            out_raw_scores=crop_raw_scores if use_custom else None,
+                        )
+                        crop_inference_s = time.perf_counter() - crop_inf_start
                         # Accumulate quality tags found across all crops per picture path.
                         quality_tags_by_path = {}
                         for key, quality_tags in quality_results.items():
@@ -463,9 +501,26 @@ class TagTask(BaseTask):
                                 logger.debug(
                                     "Quality crop tags for %s: %s", path, crop_quality
                                 )
+                        # Boost whitelist-tag prediction scores using crop confidence.
+                        if full_scores_by_path and crop_raw_scores:
+                            for key, tag_scores in crop_raw_scores.items():
+                                path = key_to_path.get(key)
+                                if path is None:
+                                    continue
+                                merged = full_scores_by_path.setdefault(path, {})
+                                for tag, conf in tag_scores.items():
+                                    if tag not in QUALITY_CROP_TAG_WHITELIST:
+                                        continue
+                                    if conf > merged.get(tag, 0.0):
+                                        merged[tag] = conf
                 except Exception as exc:
                     logger.warning("Quality crop pass failed: %s", exc)
                 # --- end quality crop pass ---
+
+                # GPU inference is complete.  Release the semaphore now so the
+                # next TagTask can start its GPU pass while we do DB writes.
+                if _release_gpu_sem is not None:
+                    _release_gpu_sem()
 
                 update_payloads = []
                 for path, tags in tag_results.items():
@@ -483,11 +538,13 @@ class TagTask(BaseTask):
                     )
 
                 if update_payloads:
+                    db_tags_start = time.perf_counter()
                     updated_ids = self._db.run_task(
                         self._add_tags_bulk,
                         update_payloads,
                         priority=DBPriority.LOW,
                     )
+                    db_tags_s = time.perf_counter() - db_tags_start
                     updated_set = set(updated_ids or [])
                     for update in update_payloads:
                         pic_id = update.get("pic_id")
@@ -499,10 +556,69 @@ class TagTask(BaseTask):
                     # Flip any PENDING predictions to CONFIRMED/REJECTED now that
                     # TagTask has made its decision for all processed pictures.
                     all_pic_ids = [u["pic_id"] for u in update_payloads]
+                    db_resolve_start = time.perf_counter()
                     self._db.run_task(
                         self._resolve_pending_predictions,
                         all_pic_ids,
                         priority=DBPriority.LOW,
+                    )
+                    db_resolve_s = time.perf_counter() - db_resolve_start
+
+                    # Write TagPrediction rows for this batch alongside the tags.
+                    db_predictions_s = 0.0
+                    if full_scores_by_path:
+                        label_scores_by_pic_id: dict = {}
+                        for path, scores in full_scores_by_path.items():
+                            pic = pic_by_path.get(path)
+                            if pic is not None and scores:
+                                label_scores_by_pic_id[pic.id] = scores
+                        if label_scores_by_pic_id:
+                            tags_by_pic_id = {
+                                u["pic_id"]: set(u.get("tags") or [])
+                                for u in update_payloads
+                            }
+                            model_version = "unknown"
+                            try:
+                                version_fn = getattr(
+                                    active_tagger, "custom_tagger_version", None
+                                )
+                                if callable(version_fn):
+                                    model_version = f"v{version_fn()}"
+                            except Exception:
+                                pass
+                            db_pred_start = time.perf_counter()
+                            self._db.run_task(
+                                self._write_predictions_from_tags,
+                                label_scores_by_pic_id,
+                                tags_by_pic_id,
+                                model_version,
+                                priority=DBPriority.LOW,
+                            )
+                            db_predictions_s = time.perf_counter() - db_pred_start
+
+                    n = len(update_payloads)
+                    total_s = time.perf_counter() - task_start_at
+                    gpu_s = inference_s + crop_inference_s
+                    gpu_throughput = n / gpu_s if gpu_s > 0 else 0.0
+                    wall_throughput = n / total_s if total_s > 0 else 0.0
+                    logger.info(
+                        "[TAG_TIMING] task_id=%s n=%d "
+                        "preload_wait_s=%.3f inference_s=%.3f "
+                        "crop_fetch_s=%.3f crop_inference_s=%.3f "
+                        "db_tags_s=%.3f db_resolve_s=%.3f db_pred_s=%.3f "
+                        "total_s=%.3f gpu_throughput=%.1f/s wall_throughput=%.1f/s",
+                        self.id,
+                        n,
+                        preload_wait_s,
+                        inference_s,
+                        crop_fetch_s,
+                        crop_inference_s,
+                        db_tags_s,
+                        db_resolve_s,
+                        db_predictions_s,
+                        total_s,
+                        gpu_throughput,
+                        wall_throughput,
                     )
         finally:
             if cpu_spillover_tagger is not None:
@@ -511,6 +627,105 @@ class TagTask(BaseTask):
                 self._release_idle_cpu_spillover_tagger(force=False)
 
         return tagged_pictures
+
+    @staticmethod
+    def _write_predictions_from_tags(
+        session: Session,
+        label_scores_by_pic_id: dict,
+        tags_by_pic_id: dict,
+        model_version: str,
+    ) -> int:
+        """Persist raw confidence scores to TagPrediction alongside tag writes.
+
+        Called from _tag_pictures_batch so CONFIRMED/REJECTED status is resolved
+        immediately, without needing a separate TagPredictionTask pass.
+
+        Args:
+            session: Database session.
+            label_scores_by_pic_id: Mapping of picture_id to {tag: confidence}.
+            tags_by_pic_id: Mapping of picture_id to the set of applied tag strings.
+            model_version: Custom tagger model version string (e.g. "v42").
+
+        Returns:
+            Number of TagPrediction rows written or updated.
+        """
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        written = 0
+        for picture_id, label_scores in label_scores_by_pic_id.items():
+            if not label_scores:
+                continue
+            applied_tags = tags_by_pic_id.get(picture_id, set())
+
+            # Remove predictions from older model versions.
+            session.exec(
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id == picture_id)
+                .where(TagPrediction.model_version != model_version)
+                .where(TagPrediction.model_version != "manual")
+            )
+
+            for tag, confidence in label_scores.items():
+                status = "CONFIRMED" if tag in applied_tags else "REJECTED"
+                existing = session.exec(
+                    select(TagPrediction).where(
+                        TagPrediction.picture_id == picture_id,
+                        TagPrediction.tag == tag,
+                    )
+                ).first()
+                if existing is None:
+                    session.add(
+                        TagPrediction(
+                            picture_id=picture_id,
+                            tag=tag,
+                            confidence=confidence,
+                            model_version=model_version,
+                            status=status,
+                            predicted_at=now,
+                        )
+                    )
+                    written += 1
+                elif existing.status != status or existing.confidence != confidence:
+                    existing.confidence = confidence
+                    existing.model_version = model_version
+                    existing.status = status
+                    existing.predicted_at = now
+                    written += 1
+
+            # Ensure every applied tag has a prediction row even if the model
+            # didn't score it (confidence=0.0 so the UI can still show a tooltip
+            # for manually-added or low-scoring tags).
+            label_score_tags = set(label_scores.keys())
+            for tag in applied_tags:
+                if tag in label_score_tags:
+                    continue
+                existing = session.exec(
+                    select(TagPrediction).where(
+                        TagPrediction.picture_id == picture_id,
+                        TagPrediction.tag == tag,
+                    )
+                ).first()
+                if existing is None:
+                    session.add(
+                        TagPrediction(
+                            picture_id=picture_id,
+                            tag=tag,
+                            confidence=0.0,
+                            model_version=model_version,
+                            status="CONFIRMED",
+                            predicted_at=now,
+                        )
+                    )
+                    written += 1
+
+            confs = list(label_scores.values())
+            uncertainty = float(max(min(c, 1.0 - c) for c in confs)) if confs else 0.0
+            recompute_anomaly_tag_uncertainty(session, picture_id)
+            pic = session.get(Picture, picture_id)
+            if pic is not None:
+                pic.tag_uncertainty = uncertainty
+
+        session.commit()
+        return written
 
     @staticmethod
     def count_missing_tags(session: Session) -> int:

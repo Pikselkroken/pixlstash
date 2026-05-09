@@ -23,4 +23,7 @@ class TaskType(str, Enum):
 
     @staticmethod
     def all():
-        return set(item for item in TaskType)
+        # TAG_PREDICTION is retired as a standalone task type: predictions are
+        # now written inline by TagTask.  Exclude it so it never appears in the
+        # workers progress response or the frontend task manager.
+        return {item for item in TaskType if item is not TaskType.TAG_PREDICTION}

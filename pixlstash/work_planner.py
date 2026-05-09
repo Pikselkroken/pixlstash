@@ -43,9 +43,6 @@ class WorkPlanner:
         from pixlstash.tasks.missing_comfyui_extraction_finder import (
             MissingComfyUIExtractionFinder,
         )
-        from pixlstash.tasks.missing_tag_prediction_finder import (
-            MissingTagPredictionFinder,
-        )
         from pixlstash.tasks.missing_source_face_likeness_finder import (
             MissingSourceFaceLikenessCharacterFinder,
         )
@@ -96,10 +93,6 @@ class WorkPlanner:
             TaskType.COMFYUI_EXTRACTION: MissingComfyUIExtractionFinder(
                 database=database,
                 image_root=image_root or "",
-            ),
-            TaskType.TAG_PREDICTION: MissingTagPredictionFinder(
-                database=database,
-                picture_tagger_getter=picture_tagger_getter,
             ),
             TaskType.SOURCE_FACE_LIKENESS: MissingSourceFaceLikenessCharacterFinder(
                 database=database,
