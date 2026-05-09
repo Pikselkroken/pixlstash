@@ -172,7 +172,7 @@ class SmartScoreTask(BaseTask):
                     "sharpness": quality.sharpness if quality else None,
                     "edge_density": quality.edge_density if quality else None,
                     "luminance_entropy": quality.luminance_entropy if quality else None,
-                    "text_score": quality.text_score if quality else None,
+                    "text_score": pic.text_score,
                 }
             )
             candidate_id_list.append(pic.id)

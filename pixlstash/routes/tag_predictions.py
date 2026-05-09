@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import Session, delete, or_, select
 
 from pixlstash.db_models import Tag
+from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
@@ -270,6 +271,26 @@ def create_router(server) -> APIRouter:
 
         server.vault.db.run_task(_reset)
         server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
+
+        # Submit an interactive TagTask directly so the retag is not held
+        # behind the face-extraction priority gate.
+        tagger = server.vault._picture_tagger
+        if tagger is not None:
+            from pixlstash.tasks.tag_task import TagTask
+
+            def _fetch_pic(session: Session):
+                return session.get(Picture, pic_id)
+
+            pic = server.vault.db.run_immediate_read_task(_fetch_pic)
+            if pic is not None:
+                task = TagTask(
+                    database=server.vault.db,
+                    picture_tagger=tagger,
+                    pictures=[pic],
+                    interactive=True,
+                )
+                server.vault.submit_task(task)
+
         return {"status": "reset"}
 
     @router.get(

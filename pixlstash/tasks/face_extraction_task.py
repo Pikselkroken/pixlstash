@@ -23,7 +23,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.insightface_batched import BatchedFaceRunner
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tasks.base_task import BaseTask, TaskPriority
+from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 # Suppress noisy FutureWarning from insightface's face_align.py about
 # SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
@@ -67,7 +67,10 @@ class FaceExtractionTask(BaseTask):
     # Semaphore that limits concurrent ONNX inference to 1 session at a time.
     # With INFLIGHT=2, Task 2's preload runs while Task 1 holds this semaphore,
     # so Task 2 can start ONNX immediately after Task 1 finishes — no I/O wait.
-    _inference_semaphore = threading.Semaphore(1)
+    # Uses the shared GPU queue — the single GPU worker ensures only one
+    # face-extraction task runs at a time.  HIGH priority in the GPU queue
+    # means face extraction is always preferred over tagging or embeddings.
+    # gate so tagging/embedding tasks never compete while FE is active.
     # Timing feedback shared across instances so the finder can tune batch sizes.
     _feedback_lock = threading.Lock()
     _last_preload_s: float = 0.0
@@ -98,6 +101,10 @@ class FaceExtractionTask(BaseTask):
     @property
     def priority(self) -> TaskPriority:
         return TaskPriority.HIGH
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.GPU
 
     def allow_cpu_spillover(self) -> bool:
         return True
@@ -196,33 +203,22 @@ class FaceExtractionTask(BaseTask):
         with FaceExtractionTask._active_task_lock:
             FaceExtractionTask._active_task_count += 1
         try:
-            # Acquire before _wait_for_preload so this task's preload runs
-            # concurrently with the previous task's inference (not after it).
-            FaceExtractionTask._inference_semaphore.acquire()
-            semaphore_wait_s = time.time() - _preload_wait_start
-            try:
-                _preload_join_start = time.time()
-                self._wait_for_preload()
-                preload_wait_s = time.time() - _preload_join_start
-                all_changed: list = []
-                pending_flushes: list = []
-                for i in range(0, len(self._pictures), self._FLUSH_CHUNK_SIZE):
-                    chunk = self._pictures[i : i + self._FLUSH_CHUNK_SIZE]
-                    changed, bulk_faces, bulk_thumbnail_crops = self._extract_features(
-                        chunk,
-                        semaphore_wait_s=semaphore_wait_s,
-                        preload_wait_s=preload_wait_s,
-                    )
-                    semaphore_wait_s = 0.0  # only charge to first chunk
-                    preload_wait_s = 0.0  # only charge it to the first chunk
-                    pending_flushes.append((bulk_faces, bulk_thumbnail_crops))
-                    all_changed.extend(changed or [])
-                    if self._stop_event.is_set():
-                        break
-            finally:
-                # Release before DB flush so the next task can start ONNX
-                # immediately while we fire-and-forget the write.
-                FaceExtractionTask._inference_semaphore.release()
+            self._wait_for_preload()
+            preload_wait_s = time.time() - _preload_wait_start
+            all_changed: list = []
+            pending_flushes: list = []
+            for i in range(0, len(self._pictures), self._FLUSH_CHUNK_SIZE):
+                chunk = self._pictures[i : i + self._FLUSH_CHUNK_SIZE]
+                changed, bulk_faces, bulk_thumbnail_crops = self._extract_features(
+                    chunk,
+                    semaphore_wait_s=0.0,
+                    preload_wait_s=preload_wait_s,
+                )
+                preload_wait_s = 0.0  # only charge it to the first chunk
+                pending_flushes.append((bulk_faces, bulk_thumbnail_crops))
+                all_changed.extend(changed or [])
+                if self._stop_event.is_set():
+                    break
 
             for bulk_faces, bulk_thumbnail_crops in pending_flushes:
                 self._flush_to_db(bulk_faces, bulk_thumbnail_crops)

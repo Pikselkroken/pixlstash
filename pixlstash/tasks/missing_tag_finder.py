@@ -27,6 +27,11 @@ class MissingTagFinder(BaseTaskFinder):
     def max_inflight_tasks(self) -> int:
         return TAGGER_MAX_INFLIGHT
 
+    def depends_on(self) -> list[str]:
+        # Never submit tag tasks while face extraction is inflight — face
+        # extraction has GPU priority and must not be starved by queued tagging.
+        return ["MissingFaceExtractionFinder"]
+
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()
         if picture_tagger is None:

@@ -17,9 +17,17 @@ class TaskStatus(str, Enum):
 class TaskPriority(int, Enum):
     """Task execution priority. Lower value = higher priority (min-heap ordering)."""
 
+    URGENT = 0  # user-triggered interactive tasks — skip ahead of everything
     HIGH = 1
     MEDIUM = 2
     LOW = 3
+
+
+class QueueType(str, Enum):
+    """Which worker pool a task should run in."""
+
+    CPU = "cpu"
+    GPU = "gpu"
 
 
 class BaseTask(ABC):
@@ -65,6 +73,12 @@ class BaseTask(ABC):
     @property
     def priority(self) -> TaskPriority:
         return TaskPriority.MEDIUM
+
+    @property
+    def queue_type(self) -> QueueType:
+        """Which worker pool this task runs in.  Override to return ``QueueType.GPU``
+        for tasks that require the GPU so they are serialised on the GPU worker."""
+        return QueueType.CPU
 
     def on_queued(self) -> None:
         return None

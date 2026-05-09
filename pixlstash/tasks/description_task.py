@@ -7,7 +7,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tasks.base_task import BaseTask
+from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 
 logger = get_logger(__name__)
@@ -45,6 +45,14 @@ class DescriptionTask(BaseTask):
         self._picture_tagger = picture_tagger
         self._pictures = pictures or []
         self._cpu_spillover_enabled = False
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.LOW
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.GPU
 
     def allow_cpu_spillover(self) -> bool:
         return True

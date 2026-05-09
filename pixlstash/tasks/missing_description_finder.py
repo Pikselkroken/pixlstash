@@ -24,6 +24,9 @@ class MissingDescriptionFinder(BaseTaskFinder):
     def finder_name(self) -> str:
         return "MissingDescriptionFinder"
 
+    def depends_on(self) -> list[str]:
+        return ["MissingFaceExtractionFinder"]
+
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()
         if picture_tagger is None:

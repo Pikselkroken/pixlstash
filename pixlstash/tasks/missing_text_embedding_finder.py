@@ -27,10 +27,14 @@ class MissingTextEmbeddingFinder(BaseTaskFinder):
         return "MissingTextEmbeddingFinder"
 
     def depends_on(self) -> list[str]:
-        # Defer text embeddings until both tagging and description generation
-        # have drained — both tags and description feed into the embedded text,
-        # so running before they complete would produce incomplete embeddings.
-        return ["MissingTagFinder", "MissingDescriptionFinder"]
+        # Defer text embeddings until face extraction, tagging and description
+        # generation have all drained.  Face extraction has GPU priority;
+        # tags and descriptions feed into the embedded text so must complete first.
+        return [
+            "MissingFaceExtractionFinder",
+            "MissingTagFinder",
+            "MissingDescriptionFinder",
+        ]
 
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()
