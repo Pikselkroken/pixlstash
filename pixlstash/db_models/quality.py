@@ -226,7 +226,6 @@ class Quality(SQLModel, table=True):
                     colorfulness=float(colorfulness[i]),
                     luminance_entropy=float(luminance_entropy[i]),
                     dominant_hue=float(dominant_hue[i]),
-                    text_score=None,  # Filled in separately by TextScoreTask
                 )
             )
         return results

@@ -16,7 +16,7 @@ from pixlstash.db_models import Picture, PictureLikenessQueue
 from pixlstash.picture_tagger import CLIP_MODEL_NAME, MODEL_DIR
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tasks.base_task import BaseTask
+from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 
 logger = get_logger(__name__)
@@ -59,6 +59,14 @@ class ImageEmbeddingTask(BaseTask):
 
         if ImageEmbeddingTask._aesthetic_disabled is None:
             ImageEmbeddingTask._aesthetic_disabled = self._aesthetic_config() is None
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.LOW
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.GPU
 
     def estimated_vram_mb(self) -> int:
         fn = getattr(self._picture_tagger, "estimate_image_embedding_vram_mb", None)
@@ -424,22 +432,8 @@ class ImageEmbeddingTask(BaseTask):
                     "ImageEmbeddingTask: Failed to use local CLIP model: %s", exc
                 )
 
-        if embeddings is None:
-            logger.error(
-                "ImageEmbeddingTask: No embeddings generated for batch of %s pictures (clip_ready=%s fallback_ready=%s).",
-                len(batch_pids),
-                bool(getattr(self._picture_tagger, "_clip_model", None)),
-                bool(self.model),
-            )
-            logger.warning(
-                "ImageEmbeddingTask: Failed to process %s files in this batch: %s",
-                len(failed_files),
-                failed_files,
-            )
-            return []
-
         aesthetic_scores = []
-        if ImageEmbeddingTask._aesthetic_model is not None:
+        if ImageEmbeddingTask._aesthetic_model is not None and embeddings is not None:
             try:
                 with torch.no_grad():
                     model_param = next(ImageEmbeddingTask._aesthetic_model.parameters())
@@ -458,7 +452,20 @@ class ImageEmbeddingTask(BaseTask):
                     aesthetic_scores = scores
             except Exception as exc:
                 logger.error("ImageEmbeddingTask: Aesthetic scoring failed: %s", exc)
-                aesthetic_scores = []
+
+        if embeddings is None:
+            logger.error(
+                "ImageEmbeddingTask: No embeddings generated for batch of %s pictures (clip_ready=%s fallback_ready=%s).",
+                len(batch_pids),
+                bool(getattr(self._picture_tagger, "_clip_model", None)),
+                bool(self.model),
+            )
+            logger.warning(
+                "ImageEmbeddingTask: Failed to process %s files in this batch: %s",
+                len(failed_files),
+                failed_files,
+            )
+            return []
 
         pid_updates = defaultdict(lambda: {"embs": [], "scores": []})
         for pid, emb, score in zip(

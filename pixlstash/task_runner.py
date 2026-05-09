@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional
 from datetime import datetime, UTC
 
 from .pixl_logging import get_logger
-from .tasks.base_task import BaseTask, TaskPriority, TaskStatus
+from .tasks.base_task import BaseTask, QueueType, TaskPriority, TaskStatus
 
 
 logger = get_logger(__name__)
@@ -58,7 +58,14 @@ class TaskRunner:
     def __init__(self, name: str = "TaskRunner", num_workers: int = 1):
         self._name = name
         self._num_workers = max(1, int(num_workers))
+        # CPU queue: serviced by num_workers threads.
         self._queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = (
+            queue.PriorityQueue()
+        )
+        # GPU queue: serviced by exactly ONE dedicated thread so GPU tasks are
+        # never concurrent.  Priority ordering ensures high-priority tasks
+        # (e.g. face extraction) always run before lower-priority ones.
+        self._gpu_queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = (
             queue.PriorityQueue()
         )
         self._queue_seq = itertools.count()
@@ -390,11 +397,21 @@ class TaskRunner:
         for i in range(self._num_workers):
             t = threading.Thread(
                 target=self._run,
-                name=f"{self._name}-{i}",
+                args=(self._queue,),
+                name=f"{self._name}-cpu-{i}",
                 daemon=True,
             )
             t.start()
             self._threads.append(t)
+        # Single dedicated GPU worker — one task at a time, priority-ordered.
+        gpu_worker = threading.Thread(
+            target=self._run,
+            args=(self._gpu_queue,),
+            name=f"{self._name}-gpu",
+            daemon=True,
+        )
+        gpu_worker.start()
+        self._threads.append(gpu_worker)
 
     def stop(self):
         with self._lock:
@@ -403,26 +420,27 @@ class TaskRunner:
             self._closed = True
             self._stop.set()
 
-        # Cancel tasks still waiting in the queue so task-specific background
+        # Cancel tasks still waiting in both queues so task-specific background
         # resources (such as preload threads) can be released deterministically.
-        while True:
-            try:
-                _priority, _seq, queued_task = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            if isinstance(queued_task, _StopTask):
-                continue
-            try:
-                queued_task.on_cancel()
-            except Exception as exc:
-                logger.warning(
-                    "Task %s (%s) cancel hook failed: %s",
-                    queued_task.id,
-                    queued_task.type,
-                    exc,
-                )
-            queued_task.status = TaskStatus.CANCELLED
-            queued_task.completed_at = datetime.now(UTC)
+        for q in (self._queue, self._gpu_queue):
+            while True:
+                try:
+                    _priority, _seq, queued_task = q.get_nowait()
+                except queue.Empty:
+                    break
+                if isinstance(queued_task, _StopTask):
+                    continue
+                try:
+                    queued_task.on_cancel()
+                except Exception as exc:
+                    logger.warning(
+                        "Task %s (%s) cancel hook failed: %s",
+                        queued_task.id,
+                        queued_task.type,
+                        exc,
+                    )
+                queued_task.status = TaskStatus.CANCELLED
+                queued_task.completed_at = datetime.now(UTC)
 
         # Cancel tasks that are currently executing so their loops can exit early.
         with self._active_task_lock:
@@ -438,9 +456,10 @@ class TaskRunner:
                     exc,
                 )
 
-        # Unblock every worker with a dedicated stop sentinel.
+        # Unblock CPU workers + the single GPU worker with stop sentinels.
         for _ in range(self._num_workers):
             self._queue.put((TaskPriority.HIGH, next(self._queue_seq), _StopTask()))
+        self._gpu_queue.put((TaskPriority.HIGH, next(self._queue_seq), _StopTask()))
         for t in self._threads:
             t.join(timeout=60)
             if t.is_alive():
@@ -462,13 +481,17 @@ class TaskRunner:
                 task.type,
                 exc,
             )
-        self._queue.put((task.priority, next(self._queue_seq), task))
-        qsize = self._queue.qsize()
+        target_queue = (
+            self._gpu_queue if task.queue_type == QueueType.GPU else self._queue
+        )
+        target_queue.put((task.priority, next(self._queue_seq), task))
+        qsize = target_queue.qsize()
         logger.debug(
-            "TaskRunner %s: submitted task id=%s type=%s queue_depth=%s",
+            "TaskRunner %s: submitted task id=%s type=%s queue=%s queue_depth=%s",
             self._name,
             task.id,
             task.type,
+            task.queue_type,
             qsize,
         )
         return task.id
@@ -476,11 +499,11 @@ class TaskRunner:
     def is_running(self) -> bool:
         return any(t.is_alive() for t in self._threads)
 
-    def _run(self):
-        logger.debug("TaskRunner %s started.", self._name)
+    def _run(self, work_queue: queue.PriorityQueue):
+        logger.debug("TaskRunner %s worker started.", self._name)
         while not self._stop.is_set():
             try:
-                _priority, _seq, task = self._queue.get(timeout=0.2)
+                _priority, _seq, task = work_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
 
@@ -498,15 +521,16 @@ class TaskRunner:
                         exc,
                     )
                 task.status = TaskStatus.CANCELLED
-                task.completed_at = datetime.datetime.now(UTC)
+                task.completed_at = datetime.now(UTC)
                 continue
 
             logger.debug(
-                "TaskRunner %s: dequeued task id=%s type=%s queue_depth=%s.",
+                "TaskRunner %s: dequeued task id=%s type=%s queue=%s queue_depth=%s.",
                 self._name,
                 task.id,
                 task.type,
-                self._queue.qsize(),
+                task.queue_type,
+                work_queue.qsize(),
             )
 
             vram_reserved_mb = self._wait_for_vram_budget(task)

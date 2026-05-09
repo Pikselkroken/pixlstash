@@ -18,7 +18,7 @@ from pixlstash.utils.service.tag_prediction_utils import (
 )
 from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tasks.base_task import BaseTask, TaskPriority
+from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 
 logger = get_logger(__name__)
@@ -32,16 +32,16 @@ class TagTask(BaseTask):
     _cpu_spillover_last_used_at: float = 0.0
     _cpu_spillover_lock = threading.Lock()
 
-    # Only one TagTask may execute at a time.  max_inflight_tasks=2 in
-    # MissingTagFinder allows a second task to preload images concurrently
-    # (ping-pong), but currently running them concurrently would hurt rather than help throughput
-    _execution_semaphore = threading.Semaphore(1)
+    # Tagging is low-priority relative to face extraction.  Uses the shared
+    # GPU queue: serialised by the single GPU worker.
+    # Face extraction (HIGH) always precedes tagging in the queue.
 
     def __init__(
         self,
         database,
         picture_tagger,
         pictures: list,
+        interactive: bool = False,
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
@@ -54,6 +54,7 @@ class TagTask(BaseTask):
         self._db = database
         self._picture_tagger = picture_tagger
         self._pictures = pictures or []
+        self._interactive = interactive
         self._preloaded_images: dict[str, PILImage.Image] = {}
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
@@ -127,34 +128,7 @@ class TagTask(BaseTask):
         if not self._pictures:
             return {"changed_count": 0, "changed": []}
 
-        # Acquire the class-level semaphore so that only one TagTask runs its
-        # GPU inference at a time.  The second in-flight task has already been
-        # preloading images while this one ran, so it will be ready immediately
-        # after the semaphore is released (ping-pong pattern).
-        sem_wait_start = time.perf_counter()
-        self._execution_semaphore.acquire()
-        sem_wait_s = time.perf_counter() - sem_wait_start
-        if sem_wait_s > 0.05:
-            logger.info(
-                "[TAG_TIMING] task_id=%s sem_wait_s=%.3f (waited for semaphore)",
-                self.id,
-                sem_wait_s,
-            )
-        # Use a one-shot callback so the semaphore can be released inside
-        # _tag_pictures_batch immediately after GPU inference — before DB writes.
-        # The finally block calls it as a no-op if already fired.
-        _sem_released = [False]
-
-        def _release_gpu_sem():
-            if not _sem_released[0]:
-                _sem_released[0] = True
-                self._execution_semaphore.release()
-
-        try:
-            changed = self._tag_pictures_batch(_release_gpu_sem=_release_gpu_sem)
-        finally:
-            _release_gpu_sem()  # no-op if already released after GPU inference
-
+        changed = self._tag_pictures_batch()
         return {
             "changed_count": len(changed),
             "changed": changed,
@@ -181,7 +155,13 @@ class TagTask(BaseTask):
 
     @property
     def priority(self) -> TaskPriority:
-        return TaskPriority.HIGH
+        # Interactive (user-triggered) tasks jump ahead of everything including
+        # face extraction.  Background tagging takes priority over embeddings/descriptions.
+        return TaskPriority.URGENT if self._interactive else TaskPriority.MEDIUM
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.GPU
 
     def allow_cpu_spillover(self) -> bool:
         return True
@@ -314,7 +294,7 @@ class TagTask(BaseTask):
                     pred.status = correct_status
         session.commit()
 
-    def _tag_pictures_batch(self, _release_gpu_sem=None) -> list:
+    def _tag_pictures_batch(self) -> list:
         assert self._pictures is not None
 
         if self._preload_thread is None:
@@ -516,11 +496,6 @@ class TagTask(BaseTask):
                 except Exception as exc:
                     logger.warning("Quality crop pass failed: %s", exc)
                 # --- end quality crop pass ---
-
-                # GPU inference is complete.  Release the semaphore now so the
-                # next TagTask can start its GPU pass while we do DB writes.
-                if _release_gpu_sem is not None:
-                    _release_gpu_sem()
 
                 update_payloads = []
                 for path, tags in tag_results.items():

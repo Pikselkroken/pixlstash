@@ -137,7 +137,7 @@ const labelMap = {
   descriptions_generated: "Descriptions",
   text_embeddings: "Text embeddings",
   image_embeddings: "Image embeddings",
-  features_extracted: "Features extracted",
+  faces_extracted: "Faces extracted",
   likeness_pairs: "Likeness pairs",
   likeness_parameters: "Likeness params",
   watch_folder_import: "Folder import",

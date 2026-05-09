@@ -5,7 +5,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, Picture
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tasks.base_task import BaseTask
+from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 
 logger = get_logger(__name__)
@@ -31,6 +31,14 @@ class TextEmbeddingTask(BaseTask):
         self._db = database
         self._picture_tagger = picture_tagger
         self._pictures = pictures or []
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.LOW
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.GPU
 
     def _run_task(self):
         if not self._pictures:

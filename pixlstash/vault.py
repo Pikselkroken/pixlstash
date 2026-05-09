@@ -695,7 +695,7 @@ class Vault:
                     )
                     or 0
                 )
-                label = "features_extracted"
+                label = "faces_extracted"
             elif worker_type == TaskType.TEXT_EMBEDDING:
                 described = int(
                     self.db.run_immediate_read_task(self._count_total_described) or 0
