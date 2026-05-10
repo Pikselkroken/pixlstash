@@ -1661,11 +1661,13 @@ watch(pluginMenuOpen, (isOpen) => {
 });
 
 async function fetchPenalisedTags() {
-  if (isReadOnly.value) return;
   if (penalisedTagsLoading.value) return;
   penalisedTagsLoading.value = true;
   try {
-    const res = await apiClient.get("/users/me/config");
+    const endpoint = isReadOnly.value
+      ? "/users/me/penalised-tags"
+      : "/users/me/config";
+    const res = await apiClient.get(endpoint);
     let list = [];
     if (Array.isArray(res.data?.smart_score_penalised_tags)) {
       list = res.data.smart_score_penalised_tags;
