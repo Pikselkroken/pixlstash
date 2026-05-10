@@ -43,6 +43,7 @@
           ${navLinksHTML}
         </div>
         <div class="nav-actions">
+          <a class="demo-btn" href="https://pixlstash-demo.fly.dev" target="_blank" rel="noopener noreferrer">Try demo</a>
           <a class="download-btn" href="install.html">Install now</a>
         </div>`;
 

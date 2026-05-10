@@ -129,22 +129,33 @@ a {
   gap: 16px;
 }
 
+.demo-btn,
 .download-btn {
-  background: linear-gradient(130deg, var(--accent), var(--accent-2));
-  color: #ffffff;
+  display: inline-block;
   padding: 10px 16px;
   border-radius: 10px;
-  font-weight: 600;
   font-size: 0.9rem;
-  border: 1px solid transparent;
-  box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease;
+  font-weight: 600;
+  color: #ffffff;
+  text-decoration: none;
+  border: none;
+  transition: background 0.15s ease;
+}
+
+.demo-btn {
+  background: #0e7fa8;
+}
+
+.demo-btn:hover {
+  background: #0a6a8e;
+}
+
+.download-btn {
+  background: linear-gradient(130deg, var(--accent), var(--accent-2));
 }
 
 .download-btn:hover {
-  box-shadow: 0 18px 34px rgba(97, 117, 12, 0.35);
+  background: linear-gradient(130deg, var(--accent-2), #6a7815);
 }
 
 /* ── Page hero (inner pages) ── */
@@ -327,7 +338,7 @@ a {
   grid-template-columns: 1fr 1fr;
   gap: 32px;
   align-items: center;
-  max-width: 820px;
+  max-width: 1000px;
   margin: 0 auto;
 }
 
