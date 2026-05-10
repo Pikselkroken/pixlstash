@@ -3895,7 +3895,35 @@ def create_router(server) -> APIRouter:
         # Browsers (Chrome, Firefox) cannot display HEIC/HEIF natively.
         # Transcode to JPEG on-the-fly so the overlay image loads correctly.
         # Watermark compositing also requires PIL, so we share this branch.
-        if fmt_lower in ("heic", "heif") or apply_wm:
+        #
+        # Disk cache for watermarked images: stored as {stem}_watermarked.{ext}
+        # next to the original. Valid while the cached file is at least as new as
+        # the source. Served directly via FileResponse so the browser can also
+        # cache it by ETag.
+        is_heic = fmt_lower in ("heic", "heif")
+        if apply_wm and not is_heic:
+            file_stem, file_ext = os.path.splitext(file_path)
+            wm_cache_path = f"{file_stem}_watermarked{file_ext}"
+            if os.path.isfile(wm_cache_path):
+                try:
+                    if os.path.getmtime(wm_cache_path) >= os.path.getmtime(file_path):
+                        media_type = MEDIA_TYPE_BY_FORMAT.get(
+                            fmt_lower, "application/octet-stream"
+                        )
+                        stat = os.stat(wm_cache_path)
+                        etag = f'W/"{stat.st_size}-{int(stat.st_mtime)}"'
+                        if request.headers.get("if-none-match") == etag:
+                            return Response(status_code=304)
+                        resp = FileResponse(wm_cache_path, media_type=media_type)
+                        resp.headers["ETag"] = etag
+                        resp.headers["Cache-Control"] = "public, max-age=86400"
+                        return resp
+                except OSError:
+                    pass  # fall through to regenerate
+        else:
+            wm_cache_path = None
+
+        if is_heic or apply_wm:
             try:
                 with Image.open(file_path) as pil_img:
                     if apply_wm:
@@ -3904,7 +3932,7 @@ def create_router(server) -> APIRouter:
                             pil_img = apply_watermark(pil_img, wm_bytes)
                     # HEIC/HEIF → JPEG (browser compat);
                     # other formats preserve original so content-type matches URL.
-                    if fmt_lower in ("heic", "heif"):
+                    if is_heic:
                         out_fmt = "JPEG"
                         out_mime = "image/jpeg"
                         save_kwargs = {"quality": 92}
@@ -3934,6 +3962,17 @@ def create_router(server) -> APIRouter:
                     status_code=500,
                     detail="Failed to process image",
                 )
+
+            # Persist the watermarked result to disk so future requests are free.
+            if wm_cache_path is not None:
+                try:
+                    with open(wm_cache_path, "wb") as _f:
+                        _f.write(encoded_bytes)
+                except OSError as exc:
+                    logger.warning(
+                        "Could not write watermark cache for id=%s: %s", pic.id, exc
+                    )
+
             response = Response(
                 content=encoded_bytes,
                 media_type=out_mime,
