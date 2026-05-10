@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, String
+from sqlalchemy import Column, DateTime, ForeignKey, String, UniqueConstraint
 from sqlmodel import SQLModel, Field
 
 if TYPE_CHECKING:
@@ -22,9 +22,16 @@ class GuestSession(SQLModel, table=True):
         created_at: Wall-clock UTC timestamp used for FIFO eviction ordering.
         last_active_at: Updated on each score POST; used to determine whether
             the session is currently active (within the last hour).
+        cookie_token: Server-generated opaque token (URL-safe base64, 43 chars)
+            stored in the HttpOnly ``guest_session`` cookie.  Kept separate from
+            ``session_id`` so no user-supplied value ever appears in a cookie.
+            NULL when the user has not accepted persistent cookie storage.
     """
 
     __tablename__ = "guest_session"
+    __table_args__ = (
+        UniqueConstraint("cookie_token", name="uq_guest_session_cookie_token"),
+    )
 
     session_id: str = Field(
         sa_column=Column(String(64), primary_key=True, nullable=False)
@@ -41,4 +48,8 @@ class GuestSession(SQLModel, table=True):
     last_active_at: datetime = Field(
         sa_column=Column(DateTime, nullable=False),
         default_factory=datetime.utcnow,
+    )
+    cookie_token: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True, unique=True),
     )

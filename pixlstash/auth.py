@@ -1036,17 +1036,42 @@ class AuthService:
                             )
                             request.state.token_id = matched_token.id
                             # Resolve the guest session cookie for READ-scoped tokens.
-                            # The value is validated by the route handler; we only attach
-                            # it here so route handlers can read request.state.guest_session_id.
+                            # The cookie value is a server-generated cookie_token, NOT
+                            # the client-supplied session_id.  We look up the DB row by
+                            # cookie_token to get the real session_id; this ensures no
+                            # user-supplied value is ever trusted directly from the cookie.
                             raw_gs = request.cookies.get("guest_session", "")
                             if raw_gs and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", raw_gs):
-                                request.state.guest_session_id = raw_gs
-                                self.record_guest_activity(raw_gs)
-                                self._logger.info(
-                                    "[guest-scores] Resolved guest_session cookie for %s: %r",
-                                    request.url.path,
-                                    raw_gs,
+                                from pixlstash.db_models.guest_session import (
+                                    GuestSession,
                                 )
+
+                                def _lookup_by_token(
+                                    session: Session, tok: str = raw_gs
+                                ):
+                                    return session.exec(
+                                        select(GuestSession).where(
+                                            GuestSession.cookie_token == tok
+                                        )
+                                    ).first()
+
+                                gs = self._db.run_task(
+                                    _lookup_by_token, priority=DBPriority.IMMEDIATE
+                                )
+                                if gs is not None:
+                                    request.state.guest_session_id = gs.session_id
+                                    self.record_guest_activity(gs.session_id)
+                                    self._logger.info(
+                                        "[guest-scores] Resolved guest_session cookie for %s → session_id=%r",
+                                        request.url.path,
+                                        gs.session_id,
+                                    )
+                                else:
+                                    request.state.guest_session_id = None
+                                    self._logger.info(
+                                        "[guest-scores] No session found for guest_session cookie at %s",
+                                        request.url.path,
+                                    )
                             else:
                                 request.state.guest_session_id = None
                                 self._logger.info(

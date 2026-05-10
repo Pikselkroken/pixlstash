@@ -8,6 +8,7 @@ GET  /pictures/guest-scores  — retrieve this session's scores (READ tokens)
 """
 
 import re
+import secrets
 from datetime import datetime
 from typing import Any
 
@@ -138,6 +139,10 @@ def create_router(server) -> APIRouter:
         session_id = _session_id_match.group()
 
         set_cookie: bool = bool(body.get("set_cookie", False))
+        # Generate a server-side opaque token now so no user-supplied value
+        # ever flows into set_cookie().  Stored in the DB and used as the
+        # cookie value; the client-supplied session_id remains the DB PK.
+        cookie_token: str | None = secrets.token_urlsafe(32) if set_cookie else None
         raw_scores: Any = body.get("scores", {})
 
         if not isinstance(raw_scores, dict):
@@ -204,12 +209,16 @@ def create_router(server) -> APIRouter:
                     token_id=token_id,
                     created_at=now,
                     last_active_at=now,
+                    cookie_token=cookie_token,
                 )
                 session.add(new_session)
                 session.flush()
             else:
-                # Returning session — just update last_active_at
+                # Returning session — update last_active_at and cookie_token
+                # (user may accept cookies on a later visit).
                 existing.last_active_at = now
+                if cookie_token is not None:
+                    existing.cookie_token = cookie_token
 
             # Upsert scores using SQLite INSERT OR REPLACE
             for pic_id, score_val in validated_scores.items():
@@ -253,10 +262,11 @@ def create_router(server) -> APIRouter:
                 session_id,
                 is_https,
             )
-            # HttpOnly cookie — the actual session identifier; JS cannot read it
+            # HttpOnly cookie — server-generated token, not the user-supplied
+            # session_id, so no user-controlled value reaches set_cookie().
             response.set_cookie(
                 "guest_session",
-                session_id,
+                cookie_token,
                 httponly=True,
                 max_age=_COOKIE_MAX_AGE,
                 samesite="lax",
