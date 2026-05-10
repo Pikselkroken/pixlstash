@@ -577,7 +577,10 @@ class TagTask(BaseTask):
                                 if callable(version_fn):
                                     model_version = f"v{version_fn()}"
                             except Exception:
-                                pass
+                                logger.warning(
+                                    "custom_tagger_version() failed, using 'unknown' model version",
+                                    exc_info=True,
+                                )
                             db_pred_start = time.perf_counter()
                             self._db.run_task(
                                 self._write_predictions_from_tags,

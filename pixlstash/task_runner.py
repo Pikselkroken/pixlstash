@@ -608,7 +608,12 @@ class TaskRunner:
                             if trim is not None:
                                 trim(0)
                         except Exception:
-                            pass
+                            logger.warning(
+                                "Failed to trim malloc arena after task %s (%s): %s",
+                                task.id,
+                                task.type,
+                                traceback.format_exc(),
+                            )
                 elif vram_reserved_mb > 0:
                     with self._vram_gate_lock:
                         self._vram_reserved_mb = max(
