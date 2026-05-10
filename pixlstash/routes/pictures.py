@@ -3999,44 +3999,7 @@ def create_router(server) -> APIRouter:
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
 
         if smart_score:
-            try:
-                penalised_tags = get_smart_score_penalised_tags_from_request(
-                    server, request
-                )
-                (
-                    good_anchors,
-                    bad_anchors,
-                    candidates,
-                ) = fetch_smart_score_data(
-                    server,
-                    None,
-                    candidate_ids=[pic.id],
-                    penalised_tags=penalised_tags,
-                )
-                smart_score_value = None
-                if candidates:
-                    (
-                        good_list,
-                        bad_list,
-                        cand_list,
-                        cand_ids,
-                    ) = prepare_smart_score_inputs(
-                        good_anchors, bad_anchors, candidates
-                    )
-                    if cand_list:
-                        scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
-                            cand_list, good_list, bad_list
-                        )
-                        if cand_ids:
-                            smart_score_value = float(scores[0])
-                pic_dict["smartScore"] = smart_score_value
-            except Exception as exc:
-                logger.warning(
-                    "[metadata] Failed to compute smart score for id=%s: %s",
-                    pic.id,
-                    exc,
-                )
-                pic_dict["smartScore"] = None
+            pic_dict["smartScore"] = pic.smart_score  # already stored in DB
 
         embedded_metadata = {}
         try:
