@@ -1976,7 +1976,7 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
                     (
                         "file",
                         (
-                            "set-intersection-stack-a.png",
+                            "set-intersection-a.png",
                             random_images[10],
                             "image/png",
                         ),
@@ -1989,7 +1989,7 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
                     (
                         "file",
                         (
-                            "set-intersection-stack-b.png",
+                            "set-intersection-b.png",
                             random_images[11],
                             "image/png",
                         ),
@@ -2002,7 +2002,7 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
                     (
                         "file",
                         (
-                            "set-intersection-stack-c.png",
+                            "set-intersection-c.png",
                             random_images[12],
                             "image/png",
                         ),
@@ -2014,8 +2014,8 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
             pic_b = imported_b["results"][0]["picture_id"]
             pic_c = imported_c["results"][0]["picture_id"]
 
-            set_a_resp = client.post("/picture_sets", json={"name": "Stack Set A"})
-            set_b_resp = client.post("/picture_sets", json={"name": "Stack Set B"})
+            set_a_resp = client.post("/picture_sets", json={"name": "Set A"})
+            set_b_resp = client.post("/picture_sets", json={"name": "Set B"})
             assert set_a_resp.status_code == 200
             assert set_b_resp.status_code == 200
             set_a_id = (set_a_resp.json().get("picture_set") or {}).get("id")
