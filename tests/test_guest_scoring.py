@@ -39,8 +39,6 @@ from pixlstash.server import Server
 
 API = "/api/v1"
 _SID = "test-session-id-0001"
-_SID2 = "test-session-id-0002"
-
 
 # ---------------------------------------------------------------------------
 # Helpers
