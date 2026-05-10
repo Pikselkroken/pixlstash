@@ -1,7 +1,6 @@
 """Likeness parameter vector computation utilities."""
 
 import os
-import struct
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -41,20 +40,6 @@ PICTURE_PARAM_FIELDS = {
 
 PHASH_BITS = 64
 PHASH_HEX_LEN = PHASH_BITS // 4
-
-# Sentinel value (-1.0) expressed as 4 bytes (little-endian float32).
-# Used to find uncomputed parameter slots via SQL substr() — avoids loading
-# blobs into Python just to check one value.
-_SENTINEL_BYTES = struct.pack("<f", LIKENESS_PARAMETER_SENTINEL)
-
-# Quality params are all written together by update_quality_values.
-# Checking the BRIGHTNESS slot is enough to determine whether any quality param
-# is still pending.  1-based SQLite offset = slot_index * 4 + 1.
-_QUALITY_CHECK_OFFSET = int(LikenessParameter.BRIGHTNESS) * 4 + 1  # 5
-
-# Picture params are all written together by update_picture_values.
-# Checking the ASPECT_RATIO slot is sufficient.
-_PICTURE_CHECK_OFFSET = int(LikenessParameter.ASPECT_RATIO) * 4 + 1  # 21
 
 
 class LikenessParameterUtils:

@@ -6,6 +6,10 @@ from .base_task_finder import BaseTaskFinder
 from .image_embedding_task import ImageEmbeddingTask
 from pixlstash.worker_config import IMAGE_EMBEDDING_MAX_INFLIGHT
 
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class MissingImageEmbeddingFinder(BaseTaskFinder):
     """Find pending image embedding work and create an ImageEmbeddingTask."""
@@ -37,7 +41,10 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
             try:
                 batch_size = max(1, int(suggest_fn()))
             except Exception:
-                pass
+                logger.warning(
+                    "suggested_image_embedding_batch_size() failed, using default batch size",
+                    exc_info=True,
+                )
 
         # Fetch more than one task worth so _filter_and_claim can skip claimed IDs.
         candidates = self._db.run_immediate_read_task(
