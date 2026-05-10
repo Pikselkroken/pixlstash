@@ -192,7 +192,10 @@ def create_router(server) -> APIRouter:
                 if active_count >= max_concurrent:
                     raise HTTPException(
                         status_code=503,
-                        detail="Too many active guest sessions, please try again later",
+                        detail=(
+                            "The PixlStash demo is very popular right now! "
+                            "Please try again in a little while."
+                        ),
                     )
 
                 # FIFO eviction: delete oldest session if stored cap is reached
