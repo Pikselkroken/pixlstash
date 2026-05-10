@@ -58,6 +58,7 @@ from pixlstash.db_models import (
     Tag,
     TagPrediction,
 )
+from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user import User
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.event_types import EventType
@@ -601,6 +602,7 @@ def _select_pictures_for_listing(
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
     face_filter = query_params.pop("face_filter", None)
     shared_only = bool(query_params.pop("shared_only", False))
+    query_params.pop("guest_session_id", None)  # handled separately; must not leak into **query_params
     only_deleted = False
     set_mode = _normalize_set_mode(set_mode_raw)
     set_filter_ids = _collect_set_filter_ids(
@@ -680,6 +682,17 @@ def _select_pictures_for_listing(
     except ValueError as ve:
         logger.error(f"Invalid sort mechanism: {sort} - {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
+
+    guest_session_id = getattr(request.state, "guest_session_id", None)
+    # Fallback: rejected-consent guests have no HttpOnly cookie, but may pass
+    # the in-memory session ID as a query param so scores are overlaid for the
+    # current page session.  Only honoured for READ-scoped tokens.
+    if not guest_session_id:
+        token_scope = getattr(request.state, "token_scope", None)
+        if token_scope is not None and token_scope.scope == "READ":
+            qp_sid = request.query_params.get("guest_session_id", "")
+            if qp_sid and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", qp_sid):
+                guest_session_id = qp_sid
 
     pics = []
     if character_id == "SCRAPHEAP":
@@ -1033,6 +1046,7 @@ def _select_pictures_for_listing(
             )
             or None,
             face_filter=face_filter,
+            guest_session_id=guest_session_id,
         )
     elif only_deleted:
         pics = server.vault.db.run_task(
@@ -1050,6 +1064,7 @@ def _select_pictures_for_listing(
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
+            guest_session_id=guest_session_id,
             **query_params,
         )
     else:
@@ -1253,6 +1268,7 @@ def _select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             face_filter=face_filter,
+            guest_session_id=guest_session_id,
             **query_params,
         )
     if pics:
@@ -1272,6 +1288,34 @@ def _select_pictures_for_listing(
             d["text_score"] = round(ts, 3) if ts is not None and ts >= 0 else None
     if stack_leaders_only:
         result = _enrich_stack_counts(server, result)
+
+    if guest_session_id and result:
+        picture_ids_set = {d["id"] for d in result if "id" in d}
+
+        def fetch_guest_scores(session: Session) -> dict[int, int]:
+            # Fetch all scores for this session; filter to the current page in
+            # Python.  Avoids .in_() on sa_column-defined fields which can
+            # silently produce no rows in SQLModel.
+            rows = session.exec(
+                select(GuestScore).where(
+                    GuestScore.session_id == guest_session_id,
+                )
+            ).all()
+            return {row.picture_id: row.score for row in rows}
+
+        try:
+            guest_scores: dict[int, int] = server.vault.db.run_immediate_read_task(
+                fetch_guest_scores
+            )
+        except Exception:
+            logger.exception("[guest-scores] Failed to fetch guest scores for overlay")
+            guest_scores = {}
+
+        if guest_scores:
+            for d in result:
+                pic_id = d.get("id")
+                if pic_id in guest_scores and pic_id in picture_ids_set:
+                    d["score"] = guest_scores[pic_id]
     return result
 
 

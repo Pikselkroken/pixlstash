@@ -241,14 +241,14 @@
             @selected="(payload) => emit('set-project', payload)"
           />
           <StarRatingOverlay
-            v-if="image && !isMobile && !isReadOnly"
+            v-if="image && !isMobile"
             :class="{ hidden: chromeHidden }"
-            :score="image?.score || 0"
+            :score="isReadOnly ? guestScore || 0 : image?.score || 0"
             icon-size="large"
             @set-score="setScore"
           />
           <v-menu
-            v-if="image && isMobile && !isReadOnly"
+            v-if="image && isMobile"
             v-model="starMenuOpen"
             location="bottom end"
             origin="top end"
@@ -267,7 +267,7 @@
                   >mdi-star</v-icon
                 >
                 <span class="overlay-star-mobile-label">{{
-                  image?.score || 0
+                  isReadOnly ? guestScore || 0 : image?.score || 0
                 }}</span>
               </button>
             </template>
@@ -277,7 +277,8 @@
                 :key="n"
                 class="overlay-star-menu-item"
                 :class="{
-                  'overlay-star-menu-item--active': (image?.score || 0) === n,
+                  'overlay-star-menu-item--active':
+                    (isReadOnly ? guestScore || 0 : image?.score || 0) === n,
                 }"
                 type="button"
                 @click.stop="setScore(n)"
@@ -1214,6 +1215,7 @@ const props = defineProps({
   pluginProgressPercent: { type: Number, default: 0 },
   comfyuiClientId: { type: String, default: "" },
   comfyuiConfigured: { type: Boolean, default: false },
+  guestScore: { type: Number, default: 0 },
 });
 
 const {
@@ -1234,6 +1236,7 @@ const {
   pluginProgressPercent,
   comfyuiClientId,
   comfyuiConfigured,
+  guestScore,
 } = toRefs(props);
 
 const image = ref(null);
@@ -1365,6 +1368,7 @@ const emit = defineEmits([
   "prev",
   "next",
   "apply-score",
+  "set-guest-score",
   "remove-tag",
   "add-tag",
   "update-description",
@@ -2522,6 +2526,10 @@ function unpinUserVisibleHiddenTag(tag) {
 
 function setScore(n) {
   if (!image.value) return;
+  if (isReadOnly.value) {
+    emit("set-guest-score", image.value, n);
+    return;
+  }
   image.value.score = toggleScore(image.value.score, n);
   emit("apply-score", image.value, image.value.score);
 }

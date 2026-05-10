@@ -18,8 +18,10 @@
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiClientId="comfyuiClientId"
     :comfyuiConfigured="props.comfyuiConfigured"
+    :guestScore="overlayGuestScore"
     @close="closeOverlay"
     @apply-score="applyScore"
+    @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
     @remove-tag="removeTagFromImage"
     @update-description="updateDescriptionForImage"
@@ -685,10 +687,14 @@
                   props.showStars && isThumbnailReady(img.id) && img.thumbnail
                 "
                 :class="['thumbnail-badge', 'thumbnail-badge--top-right']"
-                :score="img.score || 0"
+                :score="
+                  isReadOnly
+                    ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
+                    : img.score || 0
+                "
                 :icon-size="badgeIconSizes.star"
                 :compact="true"
-                @set-score="!isReadOnly && setScore(img, $event)"
+                @set-score="setScore(img, $event)"
               />
             </div>
             <!-- Compact mode group pill, straddling top edge of this row -->
@@ -739,6 +745,39 @@
       @search-all="emit('search-all')"
       @clear="clearSearchQuery"
     />
+
+    <!-- Guest scoring consent banner -->
+    <v-snackbar
+      v-if="isReadOnly"
+      v-model="guestConsentBannerVisible"
+      location="bottom"
+      :timeout="-1"
+      multi-line
+      color="surface"
+      elevation="4"
+    >
+      <span>
+        To remember your ratings between visits, we need to store a small
+        session cookie. Without it, your ratings will be lost when you close the
+        browser.
+      </span>
+      <template #actions>
+        <v-btn
+          color="primary"
+          variant="text"
+          @click="handleGuestConsentAccepted"
+        >
+          Accept
+        </v-btn>
+        <v-btn
+          color="default"
+          variant="text"
+          @click="handleGuestConsentRejected"
+        >
+          No thanks
+        </v-btn>
+      </template>
+    </v-snackbar>
   </div>
 </template>
 
@@ -1031,6 +1070,18 @@ const badgeIconSizes = computed(() => {
 });
 
 const allGridImages = ref([]);
+
+// ---- Guest scoring state (READ-token users) ----
+// null = not yet decided, 'accepted' = cookie consent given, 'rejected' = declined
+const guestConsentState = ref(null);
+const guestSessionId = ref(null);
+// Map<picture_id (number), score (0-5)>
+const guestScoreMap = ref(new Map());
+const guestConsentBannerVisible = ref(false);
+// Intent queued while the consent banner is shown
+const pendingGuestScoreIntent = ref(null);
+// ------------------------------------------------
+
 const lastFetchedGridImages = ref([]);
 // Maps stack_id → { index, row, col } where:
 //   index = sequential appearance order of the stack in the grid (drives hue)
@@ -1574,6 +1625,7 @@ onMounted(() => {
 
   fetchAvailablePlugins();
   fetchAllPicturesCount();
+  initGuestSession();
   const mountFetchKey = buildGridFetchKey();
   if (!hasLoadedOnce.value && !imagesLoading.value) {
     if (
@@ -3432,6 +3484,16 @@ const renderBuffer = computed(() =>
 const overlayOpen = ref(false);
 const overlayImageId = ref(null);
 const overlayInitialExpandedStackIds = ref([]);
+const overlayGuestScore = computed(() => {
+  const id = overlayImageId.value;
+  if (id == null) return 0;
+  // guestScoreMap holds optimistic updates; fall back to img.score which the
+  // backend now returns pre-overridden with the guest score for READ sessions.
+  const fromMap = guestScoreMap.value.get(Number(id));
+  if (fromMap != null) return fromMap;
+  const img = allGridImages.value?.find((i) => i.id === Number(id));
+  return img?.score ?? 0;
+});
 // Set to true when a tag mutation was deferred (applyTagFilter=true, overlay
 // open). Triggers a filtered grid refetch once the overlay closes.
 const pendingTagFilterRefresh = ref(false);
@@ -3989,8 +4051,170 @@ function closeOverlay() {
 // SCORING
 // ============================================================
 async function setScore(img, n) {
+  if (isReadOnly.value) {
+    setGuestScore(img, n);
+    return;
+  }
   const newScore = toggleScore(img.score, n);
   applyScore(img, newScore);
+}
+
+// ---- Guest scoring helpers ----
+
+function _generateGuestSessionId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback for older browsers
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function _getOrCreateGuestSessionId() {
+  if (guestSessionId.value) return guestSessionId.value;
+  const id = _generateGuestSessionId();
+  guestSessionId.value = id;
+  return id;
+}
+
+async function _submitGuestScores(scores, setCookie) {
+  const sid = _getOrCreateGuestSessionId();
+  const payload = { session_id: sid, set_cookie: setCookie, scores };
+  console.log("[guest-scores] POST", {
+    session_id: sid,
+    set_cookie: setCookie,
+    scores,
+  });
+  await apiClient.post(`${props.backendUrl}/pictures/guest-scores`, payload);
+}
+
+function setGuestScore(img, n) {
+  const currentScore = guestScoreMap.value.get(img.id) ?? null;
+  const newScore = toggleScore(currentScore, n);
+
+  if (guestConsentState.value === null) {
+    // Show consent banner; queue the intent
+    pendingGuestScoreIntent.value = { img, newScore };
+    guestConsentBannerVisible.value = true;
+    return;
+  }
+
+  // Optimistic local update
+  const updated = new Map(guestScoreMap.value);
+  updated.set(img.id, newScore);
+  guestScoreMap.value = updated;
+
+  const setCookie = guestConsentState.value === "accepted";
+  _submitGuestScores({ [String(img.id)]: newScore }, setCookie)
+    .then(() => {
+      if (isScoreSortActive()) {
+        debouncedFetchAllGridImages({ force: true });
+      }
+    })
+    .catch((err) => {
+      console.error("Failed to submit guest score:", err);
+    });
+}
+
+async function handleGuestConsentAccepted() {
+  guestConsentState.value = "accepted";
+  guestConsentBannerVisible.value = false;
+  // Persist session ID so we can re-associate on reload (POST body must match
+  // the session_id the server stored in the HttpOnly cookie).
+  const sid = _getOrCreateGuestSessionId();
+  localStorage.setItem("guest_session_id", sid);
+  const intent = pendingGuestScoreIntent.value;
+  pendingGuestScoreIntent.value = null;
+  if (intent) {
+    const updated = new Map(guestScoreMap.value);
+    updated.set(intent.img.id, intent.newScore);
+    guestScoreMap.value = updated;
+    await _submitGuestScores({ [String(intent.img.id)]: intent.newScore }, true)
+      .then(() => {
+        if (isScoreSortActive()) debouncedFetchAllGridImages({ force: true });
+      })
+      .catch((err) => console.error("Failed to submit guest score:", err));
+  }
+}
+
+function handleGuestConsentRejected() {
+  guestConsentState.value = "rejected";
+  guestConsentBannerVisible.value = false;
+  // Do NOT persist the session ID anywhere — if the user reloads they get a
+  // brand-new session with no connection to these scores.
+  const intent = pendingGuestScoreIntent.value;
+  pendingGuestScoreIntent.value = null;
+  if (intent) {
+    const updated = new Map(guestScoreMap.value);
+    updated.set(intent.img.id, intent.newScore);
+    guestScoreMap.value = updated;
+    _submitGuestScores({ [String(intent.img.id)]: intent.newScore }, false)
+      .then(() => {
+        if (isScoreSortActive()) debouncedFetchAllGridImages({ force: true });
+      })
+      .catch((err) => console.error("Failed to submit guest score:", err));
+  }
+}
+
+async function fetchGuestScores() {
+  // Kept only as a fallback / explicit refresh. The main listing
+  // (GET /pictures) now overlays guest scores onto img.score server-side.
+  try {
+    const resp = await apiClient.get(
+      `${props.backendUrl}/pictures/guest-scores`,
+    );
+    const scores = resp?.data?.scores ?? {};
+    console.log("[guest-scores] fetchGuestScores response", scores);
+    const map = new Map();
+    for (const [k, v] of Object.entries(scores)) {
+      map.set(Number(k), v);
+    }
+    guestScoreMap.value = map;
+  } catch (err) {
+    console.error("[guest-scores] Failed to fetch guest scores:", err);
+  }
+}
+
+function initGuestSession() {
+  const readOnly = isReadOnly.value;
+  const cookies = document.cookie;
+  const ls = localStorage.getItem("guest_session_id");
+  console.log(
+    "[guest-scores] initGuestSession isReadOnly=%o cookies=%o localStorage.guest_session_id=%o",
+    readOnly,
+    cookies,
+    ls,
+  );
+  if (!readOnly) return;
+  // A non-HttpOnly sentinel cookie is set alongside the HttpOnly guest_session
+  // cookie when the user accepted persistent storage.
+  const hasCookieConsent = cookies
+    .split(";")
+    .some((c) => c.trim().startsWith("guest_session_active=1"));
+  console.log(
+    "[guest-scores] hasCookieConsent=%o storedId=%o",
+    hasCookieConsent,
+    ls,
+  );
+  if (hasCookieConsent) {
+    guestConsentState.value = "accepted";
+    // Restore the session ID from localStorage so POST bodies stay in sync
+    // with the HttpOnly cookie the server already knows about.
+    if (ls) {
+      guestSessionId.value = ls;
+    }
+    // Scores are now overlaid by the backend in GET /pictures, so
+    // fetchAllGridImages() will include them in img.score directly.
+    // fetchGuestScores() is only needed to pre-populate guestScoreMap
+    // for optimistic-update display before the grid loads.
+    fetchGuestScores();
+    return;
+  }
+  // No cookie consent — fresh start.  The banner will appear on first score.
+  // (Rejected users are intentionally not remembered across page loads.)
 }
 
 function isScoreSortActive() {
@@ -4748,6 +4972,15 @@ function buildPictureIdsQueryParams() {
   }
   if (props.sharedOnlyFilter) {
     params.append("shared_only", "true");
+  }
+  // For rejected-consent guests: pass the in-memory session ID so the backend
+  // can overlay their scores for the current page session (no cookie available).
+  if (
+    isReadOnly.value &&
+    guestConsentState.value === "rejected" &&
+    guestSessionId.value
+  ) {
+    params.append("guest_session_id", guestSessionId.value);
   }
   return params.toString();
 }

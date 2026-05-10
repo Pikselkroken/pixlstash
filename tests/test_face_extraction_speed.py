@@ -66,7 +66,9 @@ def test_face_extraction_speed_cpu():
                 task = FaceExtractionTask(server.vault.db, None, pictures)
                 prepare_start = time()
                 task._insightface_app = insightface.app.FaceAnalysis()
-                task._insightface_app.prepare(ctx_id=-1, det_thresh=0.25)
+                task._insightface_app.prepare(
+                    ctx_id=-1, det_thresh=0.25, det_size=(256, 256)
+                )
                 prepare_done = time()
                 logger.info(
                     "CPU InsightFace prepare took %.3fs",
@@ -146,7 +148,7 @@ def test_face_extraction_speed_gpu():
                     providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
                 )
                 task._insightface_app.prepare(
-                    ctx_id=0, det_thresh=0.25, det_size=(480, 480)
+                    ctx_id=0, det_thresh=0.25, det_size=(256, 256)
                 )
                 prepare_done = time()
                 logger.info(

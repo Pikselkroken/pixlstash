@@ -28,6 +28,7 @@ from .picture_project import PictureProjectMember
 from .picture_set import PictureSet, PictureSetMember
 from .picture_stack import PictureStack
 from .quality import Quality
+from .guest_score import GuestScore
 from .tag import Tag
 from .tag_prediction import TagPrediction
 
@@ -741,6 +742,7 @@ class Picture(SQLModel, table=True):
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         file_path_prefix: Optional[str] = None,
+        guest_session_id: Optional[str] = None,
         **search,
     ) -> List["Picture"]:
         """
@@ -1011,6 +1013,20 @@ class Picture(SQLModel, table=True):
                     query = query.order_by(cls.text_score.desc(), cls.id.desc())
                 else:
                     query = query.order_by(cls.text_score.asc(), cls.id.asc())
+            elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
+                # Guest session: sort by the guest's own score, falling back to
+                # picture.score when no guest_score row exists for this picture.
+                gs_alias = aliased(GuestScore)
+                query = query.outerjoin(
+                    gs_alias,
+                    (gs_alias.picture_id == cls.id)
+                    & (gs_alias.session_id == guest_session_id),
+                )
+                score_expr = func.coalesce(gs_alias.score, cls.score)
+                if sort_mech.descending:
+                    query = query.order_by(score_expr.desc(), cls.id.desc())
+                else:
+                    query = query.order_by(score_expr.asc(), cls.id.asc())
             else:
                 field_name = sort_mech.field
                 field = (
@@ -1132,6 +1148,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_above_filter: Optional[List[str]] = None,
         tags_confidence_below_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        guest_session_id: Optional[str] = None,
     ):
         query = select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
@@ -1314,6 +1331,20 @@ class Picture(SQLModel, table=True):
                     Picture.text_score.desc()
                     if sort_mech.descending
                     else Picture.text_score.asc(),
+                    Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                )
+            elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
+                # Guest session: sort by the guest's own score, falling back to
+                # picture.score when no guest_score row exists for this picture.
+                gs_alias = aliased(GuestScore)
+                query = query.outerjoin(
+                    gs_alias,
+                    (gs_alias.picture_id == Picture.id)
+                    & (gs_alias.session_id == guest_session_id),
+                )
+                score_expr = func.coalesce(gs_alias.score, Picture.score)
+                query = query.order_by(
+                    score_expr.desc() if sort_mech.descending else score_expr.asc(),
                     Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                 )
             else:

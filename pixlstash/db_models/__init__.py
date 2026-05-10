@@ -20,3 +20,5 @@ from .import_folder import ImportFolder  # noqa: F401
 from .reference_folder import ReferenceFolder, ReferenceFolderStatus  # noqa: F401
 from .user import User  # noqa: F401
 from .user_token import UserToken  # noqa: F401
+from .guest_session import GuestSession  # noqa: F401
+from .guest_score import GuestScore  # noqa: F401

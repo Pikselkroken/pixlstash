@@ -92,6 +92,30 @@ const showKeyboardHintModel = computed({
 
 const settingsTab = ref("appearance");
 const settingsUsername = ref("");
+
+// ---- Guest session / privacy ----
+const clearingGuestSession = ref(false);
+const hasGuestSessionCookie = computed(() =>
+  document.cookie
+    .split(";")
+    .some((c) => c.trim().startsWith("guest_session_active=1")),
+);
+
+async function clearGuestSession() {
+  clearingGuestSession.value = true;
+  try {
+    await apiClient.delete("/pictures/guest-scores/session");
+  } catch (err) {
+    console.error("Failed to clear guest session:", err);
+  } finally {
+    clearingGuestSession.value = false;
+  }
+  localStorage.removeItem("guest_session_id");
+  // Reload so the in-memory guest state (guestScoreMap, guestConsentState)
+  // is fully reset and the page reflects the clean slate.
+  window.location.reload();
+}
+// ---------------------------------
 const settingsHasPassword = ref(false);
 const settingsLoading = ref(false);
 const settingsError = ref("");
@@ -1746,6 +1770,36 @@ const workflowImportCaptionPreview = computed(() => {
                   label="Show keyboard shortcut (F1) indicator"
                 />
               </div>
+              <template v-if="isReadOnly">
+                <v-divider class="settings-section-divider" />
+                <div class="settings-section">
+                  <div class="settings-section-title">Privacy</div>
+                  <div class="settings-section-desc">
+                    If you previously accepted the ratings cookie, your scores
+                    are remembered across visits. Clicking below clears the
+                    cookie so your next visit starts fresh with no scores
+                    retrieved.
+                  </div>
+                  <v-btn
+                    variant="tonal"
+                    size="small"
+                    color="default"
+                    style="margin-top: 10px"
+                    :loading="clearingGuestSession"
+                    :disabled="!hasGuestSessionCookie"
+                    @click="clearGuestSession"
+                  >
+                    Clear ratings cookie
+                  </v-btn>
+                  <div
+                    v-if="!hasGuestSessionCookie"
+                    class="settings-section-desc"
+                    style="margin-top: 6px; opacity: 0.6"
+                  >
+                    No ratings cookie is currently set.
+                  </div>
+                </div>
+              </template>
             </v-window-item>
             <v-window-item value="behaviour">
               <v-divider class="settings-section-divider" />
