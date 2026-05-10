@@ -1473,6 +1473,12 @@ def test_stack_query_respects_project_filter():
                 ):
                     break
                 time.sleep(0.05)
+            assert (
+                _pending == 0
+                and not server.vault._task_runner.has_active_task_of_type(
+                    "LikenessParametersTask"
+                )
+            ), f"LikenessParametersTask did not complete within deadline ({_pending} pending)"
 
             server.vault.db.run_task(seed_likeness)
 
@@ -2078,6 +2084,12 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
                 ):
                     break
                 time.sleep(0.05)
+            assert (
+                _pending == 0
+                and not server.vault._task_runner.has_active_task_of_type(
+                    "LikenessParametersTask"
+                )
+            ), f"LikenessParametersTask did not complete within deadline ({_pending} pending)"
 
             server.vault.db.run_task(seed_likeness_edges, pic_a, pic_b, pic_c)
 
