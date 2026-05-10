@@ -1,3 +1,13 @@
+# [1.2.0b1]
+- Share picture sets, projects, characters and single pictures by easily creating read-tokens
+- Copy and paste in chat or emails
+- Create share in the context menus
+- Filter on shared images to easily remove the share
+- Add a user-specific or company-specific watermark to your shared images
+- Massively improve the speed of the asynchronous tasks AND massively reduce VRAM usage. Face extraction, tagging, embedding calculation, likeness etc. should now be from 3x to 50x faster. This by doing pipelining instead of trying to do GPU tasks concurrently
+- Allow for limiting full logins to a local network (i.e. through VPN) and only allow read tokens over the Internet
+- Add demo site on https://demo.pixlstash.dev/
+
 # [1.1.2]
 - Fix issue causing very slow tagging of many pictures at the same time
 - Limit the optional version checks to once per 24h
