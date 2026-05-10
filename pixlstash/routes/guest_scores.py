@@ -122,13 +122,20 @@ def create_router(server) -> APIRouter:
 
         body: dict[str, Any] = await request.json()
 
-        # Validate session_id
-        session_id = body.get("session_id", "")
-        if not isinstance(session_id, str) or not _SESSION_ID_RE.fullmatch(session_id):
+        # Validate session_id — rebind from the match group so the value used
+        # downstream is the regex-validated string, not raw user input.
+        _raw_session_id = body.get("session_id", "")
+        _session_id_match = (
+            _SESSION_ID_RE.fullmatch(_raw_session_id)
+            if isinstance(_raw_session_id, str)
+            else None
+        )
+        if _session_id_match is None:
             raise HTTPException(
                 status_code=400,
                 detail="session_id must be 1-64 characters [A-Za-z0-9_-]",
             )
+        session_id = _session_id_match.group()
 
         set_cookie: bool = bool(body.get("set_cookie", False))
         raw_scores: Any = body.get("scores", {})
