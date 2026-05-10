@@ -366,6 +366,17 @@ def create_router(server) -> APIRouter:
         user = server.auth.get_user_for_request(request)
         return serialize_user_config(user)
 
+    @router.get(
+        "/users/me/penalised-tags",
+        summary="Get penalised tags",
+        description="Returns the smart-score penalised tags for the authenticated user. Accessible to READ-scoped tokens.",
+    )
+    def get_me_penalised_tags(request: Request):
+        _ensure_secure_when_required(request)
+        user = server.auth.get_user_for_request(request)
+        config = serialize_user_config(user)
+        return {"smart_score_penalised_tags": config["smart_score_penalised_tags"]}
+
     @router.patch(
         "/users/me/config",
         summary="Update current user config",
