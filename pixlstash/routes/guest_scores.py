@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -52,12 +52,16 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=403, detail="Requires a READ-scoped token")
 
         session_id: str | None = getattr(request.state, "guest_session_id", None)
-        if not session_id:
+        token_id: int | None = getattr(request.state, "token_id", None)
+        if not session_id or token_id is None:
             return {"scores": {}}
 
         def fetch(session: Session):
             rows = session.exec(
-                select(GuestScore).where(GuestScore.session_id == session_id)
+                select(GuestScore)
+                .join(GuestSession, GuestSession.session_id == GuestScore.session_id)
+                .where(GuestScore.session_id == session_id)
+                .where(GuestSession.token_id == token_id)
             ).all()
             return {str(row.picture_id): row.score for row in rows}
 
@@ -192,10 +196,10 @@ def create_router(server) -> APIRouter:
                     )
 
                 # FIFO eviction: delete oldest session if stored cap is reached
-                total_count_row = session.exec(
-                    select(GuestSession).where(text("1=1"))
-                ).all()
-                if len(total_count_row) >= max_stored:
+                total_count = session.exec(
+                    select(func.count()).select_from(GuestSession)
+                ).one()
+                if total_count >= max_stored:
                     oldest = session.exec(
                         select(GuestSession).order_by(GuestSession.created_at)
                     ).first()
@@ -214,7 +218,14 @@ def create_router(server) -> APIRouter:
                 session.add(new_session)
                 session.flush()
             else:
-                # Returning session — update last_active_at and cookie_token
+                # Returning session — check it belongs to the same token to
+                # prevent cross-token score writes via a replayed session_id.
+                if existing.token_id != token_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="session_id belongs to a different share token",
+                    )
+                # Update last_active_at and cookie_token
                 # (user may accept cookies on a later visit).
                 existing.last_active_at = now
                 if cookie_token is not None:

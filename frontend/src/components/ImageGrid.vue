@@ -4124,10 +4124,9 @@ function setGuestScore(img, n) {
 async function handleGuestConsentAccepted() {
   guestConsentState.value = "accepted";
   guestConsentBannerVisible.value = false;
-  // Persist session ID so we can re-associate on reload (POST body must match
-  // the session_id the server stored in the HttpOnly cookie).
-  const sid = _getOrCreateGuestSessionId();
-  localStorage.setItem("guest_session_id", sid);
+  // Do not persist the guest session identifier in localStorage.
+  // The server-managed HttpOnly cookie handles durable session continuity;
+  // keeping the session_id only in memory is sufficient for the current visit.
   const intent = pendingGuestScoreIntent.value;
   pendingGuestScoreIntent.value = null;
   if (intent) {
