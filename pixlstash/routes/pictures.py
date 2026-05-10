@@ -602,7 +602,9 @@ def _select_pictures_for_listing(
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
     face_filter = query_params.pop("face_filter", None)
     shared_only = bool(query_params.pop("shared_only", False))
-    query_params.pop("guest_session_id", None)  # handled separately; must not leak into **query_params
+    query_params.pop(
+        "guest_session_id", None
+    )  # handled separately; must not leak into **query_params
     only_deleted = False
     set_mode = _normalize_set_mode(set_mode_raw)
     set_filter_ids = _collect_set_filter_ids(
