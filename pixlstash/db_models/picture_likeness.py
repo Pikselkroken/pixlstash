@@ -157,10 +157,13 @@ class PictureLikeness(SQLModel, table=True):
                     WHERE picture_id_a = :a
                 )
                 DELETE FROM picturelikeness
-                WHERE (picture_id_a, picture_id_b) IN (
-                    SELECT picture_id_a, picture_id_b
-                    FROM ranked
-                    WHERE rn > :top_k
+                WHERE rowid IN (
+                    SELECT p.rowid
+                    FROM picturelikeness p
+                    JOIN ranked r
+                        ON r.picture_id_a = p.picture_id_a
+                        AND r.picture_id_b = p.picture_id_b
+                    WHERE r.rn > :top_k
                 );
             """),
             params={"a": picture_id_a, "top_k": top_k},
@@ -191,13 +194,16 @@ class PictureLikeness(SQLModel, table=True):
                             ORDER BY likeness DESC, picture_id_b ASC
                         ) AS rn
                     FROM picturelikeness
-                    WHERE picture_id_a IN (:picture_ids)
+                    WHERE picture_id_a IN :picture_ids
                 )
                 DELETE FROM picturelikeness
-                WHERE (picture_id_a, picture_id_b) IN (
-                    SELECT picture_id_a, picture_id_b
-                    FROM ranked
-                    WHERE rn > :top_k
+                WHERE rowid IN (
+                    SELECT p.rowid
+                    FROM picturelikeness p
+                    JOIN ranked r
+                        ON r.picture_id_a = p.picture_id_a
+                        AND r.picture_id_b = p.picture_id_b
+                    WHERE r.rn > :top_k
                 )
             """).bindparams(
                 bindparam("picture_ids", expanding=True),
