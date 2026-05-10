@@ -24,7 +24,20 @@ def tagger(request):
         torch.cuda.empty_cache()
 
     tagger = PictureTagger()
-    tagger._init_florence_captioning()
+    try:
+        tagger._init_florence_captioning()
+    except Exception as exc:
+        exc_str = str(exc)
+        # HuggingFace rate-limiting surfaces as an OSError or an HfHubHTTPError
+        # with HTTP 429 in the message.  Skip rather than fail so CI is not
+        # broken by transient upstream throttling.
+        if (
+            "429" in exc_str
+            or "rate limit" in exc_str.lower()
+            or "too many requests" in exc_str.lower()
+        ):
+            pytest.skip(f"HuggingFace rate-limited during model download: {exc}")
+        raise
 
     yield tagger
 

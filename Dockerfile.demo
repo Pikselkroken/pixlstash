@@ -12,7 +12,7 @@
 #   docker build -f Dockerfile.demo -t registry.fly.io/pixlstash-demo:latest .
 #   flyctl auth docker
 #   docker push registry.fly.io/pixlstash-demo:latest
-#   flyctl deploy --config fly.demo.toml --image registry.fly.io/pixlstash-demo:latest
+#   flyctl deploy --config fly.toml --image registry.fly.io/pixlstash-demo:latest
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Stage 1: Build the Vue frontend ──────────────────────────────────────────

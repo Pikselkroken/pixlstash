@@ -743,6 +743,7 @@ class Picture(SQLModel, table=True):
         resolution_bucket: Optional[str] = None,
         file_path_prefix: Optional[str] = None,
         guest_session_id: Optional[str] = None,
+        guest_token_id: Optional[int] = None,
         **search,
     ) -> List["Picture"]:
         """
@@ -1017,11 +1018,12 @@ class Picture(SQLModel, table=True):
                 # Guest session: sort by the guest's own score, falling back to
                 # picture.score when no guest_score row exists for this picture.
                 gs_alias = aliased(GuestScore)
-                query = query.outerjoin(
-                    gs_alias,
-                    (gs_alias.picture_id == cls.id)
-                    & (gs_alias.session_id == guest_session_id),
+                join_cond = (gs_alias.picture_id == cls.id) & (
+                    gs_alias.session_id == guest_session_id
                 )
+                if guest_token_id is not None:
+                    join_cond = join_cond & (gs_alias.token_id == guest_token_id)
+                query = query.outerjoin(gs_alias, join_cond)
                 score_expr = func.coalesce(gs_alias.score, cls.score)
                 if sort_mech.descending:
                     query = query.order_by(score_expr.desc(), cls.id.desc())
@@ -1149,6 +1151,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_below_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
         guest_session_id: Optional[str] = None,
+        guest_token_id: Optional[int] = None,
     ):
         query = select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
@@ -1337,11 +1340,12 @@ class Picture(SQLModel, table=True):
                 # Guest session: sort by the guest's own score, falling back to
                 # picture.score when no guest_score row exists for this picture.
                 gs_alias = aliased(GuestScore)
-                query = query.outerjoin(
-                    gs_alias,
-                    (gs_alias.picture_id == Picture.id)
-                    & (gs_alias.session_id == guest_session_id),
+                join_cond = (gs_alias.picture_id == Picture.id) & (
+                    gs_alias.session_id == guest_session_id
                 )
+                if guest_token_id is not None:
+                    join_cond = join_cond & (gs_alias.token_id == guest_token_id)
+                query = query.outerjoin(gs_alias, join_cond)
                 score_expr = func.coalesce(gs_alias.score, Picture.score)
                 query = query.order_by(
                     score_expr.desc() if sort_mech.descending else score_expr.asc(),
