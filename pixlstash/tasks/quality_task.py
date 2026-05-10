@@ -28,14 +28,13 @@ class QualityTask(BaseTask):
     """
 
     BATCH_SIZE = 32
-    FULL_IMAGE_MAX_SIDE = 256
+    FULL_IMAGE_MAX_SIDE = 512
     # Number of threads used to decode images during preload.
     # PIL's JPEG decoder releases the GIL so threads run concurrently.  With
     # QUALITY_MAX_INFLIGHT=2 only one task preloads at a time, so this means
     # at most _PRELOAD_WORKERS concurrent disk reads — manageable and necessary
-    # to decode 256 images fast enough to hide behind the previous task's
-    # compute time (~3-5 s).  Sequential (1 thread) is too slow: 256 images
-    # take ~44 s, far longer than the compute window.
+    # to decode 512px images fast enough to hide behind the previous task's
+    # compute time.  Sequential (1 thread) is too slow for large batches.
     _PRELOAD_WORKERS = 4
     # Ensures only one QualityTask executes _compute() at a time so that
     # numpy/OpenCV operations don't compete for CPU cores.  The second inflight
