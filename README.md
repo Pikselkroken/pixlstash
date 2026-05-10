@@ -17,14 +17,19 @@ It provides:
 - Simple keyboard shortcuts for scoring, selection, tagging, deletion and navigation.
 - Integration with ComfyUI for running workflows on selected images within PixlStash.
 - Plugin system for defining new filter operations that can be performed on a set of images.
+- Sharing of pictures, picture sets, characters and projects.
 
-PixlStash runs on your machine and serves the UI at a local web address.
+PixlStash runs on your machine and serves the UI at a local (or Internet-facing) web address.
 
-## Install PixlStash
+## Install or try PixlStash
 
 <p align="center">
   <a href="https://pixlstash.dev/install.html">
     <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
+  </a>
+  &nbsp;
+  <a href="https://demo.pixlstash.dev?token=MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE">
+    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
   </a>
 </p>
 
