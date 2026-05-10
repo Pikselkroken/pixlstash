@@ -694,8 +694,8 @@ class FaceExtractionTask(BaseTask):
                     bulk_faces.extend(face_objects)
 
                 updates.append(
-                    (Picture, pic.id, "faces", [])
-                )  # face ids filled after bulk insert
+                    (Picture, pic.id, "faces", None)
+                )  # bulk insert determines final face ids; waiters must re-read from DB
 
             processed_images += 1
             if profile_enabled and (time.time() - pic_start) > 0.75:
