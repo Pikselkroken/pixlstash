@@ -2831,7 +2831,10 @@ defineExpose({
             rel="noopener noreferrer"
             :class="securityUpdateClass"
             :title="securityUpdateTitle"
-            >&#x2191; v{{ latestVersion }}{{ latestSecurityLevel ? ' security \u26a0\ufe0f' : ' available' }}</a
+            >&#x2191; v{{ latestVersion
+            }}{{
+              latestSecurityLevel ? " security \u26a0\ufe0f" : " available"
+            }}</a
           >
         </div>
       </div>
@@ -3346,7 +3349,10 @@ defineExpose({
               class="sidebar-project-menu-wrap"
               ref="projectMenuRef"
             >
-              <div v-if="isReadOnly" class="sidebar-project-label">
+              <div
+                v-if="isReadOnly && sessionContext?.resource_type != null"
+                class="sidebar-project-label"
+              >
                 <v-icon size="14">mdi-folder-multiple-outline</v-icon>
                 <span class="sidebar-project-trigger-label">
                   {{ selectedProjectObj?.name ?? "—" }}
@@ -3365,6 +3371,7 @@ defineExpose({
                 class="sidebar-project-trigger"
                 @click.stop="toggleProjectMenu"
                 @contextmenu.prevent="
+                  !isReadOnly &&
                   selectedProjectObj &&
                   openSidebarCtxMenu('project', selectedProjectObj, $event)
                 "

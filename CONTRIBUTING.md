@@ -233,11 +233,14 @@ flyctl deploy --image registry.fly.io/pixlstash-demo:latest
 Link visitors directly to:
 
 ```
-https://demo.pixlstash.dev?token=<your-read-only-token>
+https://demo.pixlstash.dev?token=MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE
 ```
 
 The frontend picks up the token on load and authenticates all API calls
 automatically. No login screen is shown.
+
+> **Note:** This is a read-only token baked into the public URL — it is not a
+> secret. Anyone visiting the demo site will see it in their address bar.
 
 ### Refreshing the demo content
 
