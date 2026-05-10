@@ -123,7 +123,9 @@ COPY --chown=pixlstash:pixlstash demo-data/server-config.json \
 # Rewrite image_root, host, port and security settings to canonical in-container values.
 # disable_password_auth is always forced to true so nobody can log in via password
 # regardless of how demo-data/server-config.json was configured locally.
-RUN python3 -c "import json; path='/home/pixlstash/.config/pixlstash/server-config.json'; cfg=json.load(open(path)); cfg['image_root']='/home/pixlstash/images'; cfg['host']='0.0.0.0'; cfg['port']=8080; cfg['disable_password_auth']=True; open(path,'w').write(json.dumps(cfg, indent=2))"
+# disable_background_workers is forced to true so no models are loaded and no
+# background tasks run — the demo database is fully processed and read-only.
+RUN python3 -c "import json; path='/home/pixlstash/.config/pixlstash/server-config.json'; cfg=json.load(open(path)); cfg['image_root']='/home/pixlstash/images'; cfg['host']='0.0.0.0'; cfg['port']=8080; cfg['disable_password_auth']=True; cfg['disable_background_workers']=True; open(path,'w').write(json.dumps(cfg, indent=2))"
 
 COPY --chown=pixlstash:pixlstash demo-data/images/ \
     /home/pixlstash/images/
@@ -131,16 +133,6 @@ COPY --chown=pixlstash:pixlstash demo-data/images/ \
 # Ensure the directories themselves (not just their contents) are owned by
 # pixlstash so the startup writable-check can create temp files there.
 RUN chown pixlstash:pixlstash /home/pixlstash/images /home/pixlstash/.config/pixlstash
-
-# Bake in the WD14 tagger model so the app doesn't download it at runtime.
-# MODEL_DIR = user_data_dir("pixlstash")/downloaded_models on Linux =
-#   /home/pixlstash/.local/share/pixlstash/downloaded_models
-# The model subdirectory name mirrors DEFAULT_WD14_TAGGER_REPO with "/" → "_".
-RUN mkdir -p /home/pixlstash/.local/share/pixlstash/downloaded_models/SmilingWolf_wd-convnext-tagger-v3
-COPY --chown=pixlstash:pixlstash cpu/model.onnx cpu/selected_tags.csv \
-    /home/pixlstash/.local/share/pixlstash/downloaded_models/SmilingWolf_wd-convnext-tagger-v3/
-RUN chown pixlstash:pixlstash \
-    /home/pixlstash/.local/share/pixlstash/downloaded_models/SmilingWolf_wd-convnext-tagger-v3
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -150,7 +142,6 @@ USER pixlstash
 
 ENV HOME=/home/pixlstash
 ENV PIXLSTASH_PORT=8080
-ENV MPLCONFIGDIR=/tmp/matplotlib
 
 EXPOSE 8080
 

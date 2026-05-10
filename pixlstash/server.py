@@ -205,6 +205,9 @@ class Server:
             description=User().description,
             server_config_path=self._server_config_path,
             path_mapper=self.path_mapper,
+            disable_background_workers=self._server_config.get(
+                "disable_background_workers", False
+            ),
         )
 
         self._ws_clients = []

@@ -69,6 +69,7 @@ class Vault:
         description: Optional[str] = None,
         server_config_path: Optional[str] = None,
         path_mapper=None,
+        disable_background_workers: bool = False,
     ):
         """
         Initialize a Vault instance.
@@ -77,6 +78,10 @@ class Vault:
             db_path (str): Path to the SQLite database file.
             image_root (Optional[str]): Path to the image root directory.
             description (Optional[str]): Description of the vault.
+            disable_background_workers (bool): When True, the TaskRunner,
+                WorkPlanner and ReferenceFolderWatcher are not started and
+                no models are ever loaded.  Intended for read-only deployments
+                where all processing is already complete.
         """
         self.image_root = image_root
         logger.debug(f"Image root: {self.image_root}")
@@ -100,6 +105,7 @@ class Vault:
         self._wd14_threshold = None
         self._custom_tagger_threshold_offset = None
         self._server_config_path = server_config_path
+        self._disable_background_workers = disable_background_workers
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -110,6 +116,19 @@ class Vault:
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
         self._path_mapper = path_mapper
+
+        if disable_background_workers:
+            logger.info(
+                "disable_background_workers=True: TaskRunner, WorkPlanner and "
+                "ReferenceFolderWatcher will not be started. No models will be loaded."
+            )
+            self._task_runner = None
+            self._planner_work_finders = {}
+            self._work_planner = None
+            self._ref_folder_watcher = None
+            self._closed = False
+            return
+
         self._task_runner = TaskRunner(
             name="vault-task-runner", num_workers=worker_config.NUM_WORKERS
         )
@@ -144,6 +163,8 @@ class Vault:
         Call this at server startup. Tests that do not need the tagger can skip it;
         tagger init is also triggered lazily by get_worker_future().
         """
+        if self._disable_background_workers:
+            return
         if not self._picture_tagger:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
@@ -188,6 +209,8 @@ class Vault:
 
     def _start_existing_folder_watches(self) -> None:
         """Start filesystem watches for all reference folders already in the DB."""
+        if self._ref_folder_watcher is None:
+            return
         from pixlstash.db_models.reference_folder import ReferenceFolder
         from pixlstash.utils.path_mapper import PathMapper
 
@@ -231,6 +254,8 @@ class Vault:
         effective_mapper = (
             self._path_mapper if self._path_mapper is not None else PathMapper()
         )
+        if self._ref_folder_watcher is None:
+            return
         try:
             resolved = effective_mapper.resolve(folder_path)
             self._ref_folder_watcher.watch_folder(folder_id, resolved)
@@ -250,6 +275,8 @@ class Vault:
         Args:
             folder_id: Primary key of the reference folder to stop watching.
         """
+        if self._ref_folder_watcher is None:
+            return
         self._ref_folder_watcher.unwatch_folder(folder_id)
 
     def _on_reference_folder_fs_changed(self, folder_id: int) -> None:
@@ -302,11 +329,15 @@ class Vault:
             self._changed_tags_pending_ids.clear()
         if timer is not None:
             timer.cancel()
-        self._ref_folder_watcher.stop()
-        self._work_planner.stop()
-        self._task_runner.stop()
-        FaceExtractionTask.release_detection_models()
-        ImageEmbeddingTask.release_models()
+        if self._ref_folder_watcher is not None:
+            self._ref_folder_watcher.stop()
+        if self._work_planner is not None:
+            self._work_planner.stop()
+        if self._task_runner is not None:
+            self._task_runner.stop()
+        if not self._disable_background_workers:
+            FaceExtractionTask.release_detection_models()
+            ImageEmbeddingTask.release_models()
         if self._picture_tagger:
             self._picture_tagger.close()
             del self._picture_tagger
@@ -335,7 +366,8 @@ class Vault:
 
     def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
         self._max_vram_gb = max_vram_gb
-        self._task_runner.set_max_vram_usage_gb(max_vram_gb)
+        if self._task_runner is not None:
+            self._task_runner.set_max_vram_usage_gb(max_vram_gb)
         if self._picture_tagger and hasattr(
             self._picture_tagger, "set_max_vram_usage_gb"
         ):
@@ -434,6 +466,8 @@ class Vault:
 
     def submit_task(self, task):
         """Submit an in-memory task to the shared task runner."""
+        if self._task_runner is None:
+            return None
         return self._task_runner.submit(task)
 
     def _on_task_completed(self, task, error):
