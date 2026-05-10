@@ -820,6 +820,14 @@ class AuthService:
         return response
 
     def _do_login(self, request) -> Response:
+        if not request.token and self._server_config.get(
+            "disable_password_auth", False
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Password authentication is disabled on this server.",
+            )
+
         if request.token:
             user = self.get_user()
             if not user:
