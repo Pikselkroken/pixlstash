@@ -59,6 +59,7 @@ from pixlstash.routes.import_folders import (
     create_router as create_import_folders_router,
 )
 from pixlstash.routes.filesystem import create_router as create_filesystem_router
+from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
@@ -961,6 +962,13 @@ class Server:
             create_tag_predictions_router(self),
             prefix=API_V1_PREFIX,
             tags=["tag_predictions"],
+        )
+        # guest_scores must be registered before pictures for the same reason:
+        # /pictures/guest-scores must not be swallowed by /pictures/{id}/{field}.
+        self.api.include_router(
+            create_guest_scores_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["guest_scores"],
         )
         self.api.include_router(
             create_pictures_router(self),

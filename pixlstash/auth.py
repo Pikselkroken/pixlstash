@@ -71,6 +71,8 @@ AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
 READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
     {
         "/api/v1/pictures/thumbnails",
+        "/api/v1/pictures/guest-scores",
+        "/api/v1/pictures/guest-scores/session",
     }
 )
 
@@ -169,6 +171,25 @@ class AuthService:
         self._token_cache: dict[str, tuple[UserToken, float]] = {}
         self._TOKEN_CACHE_TTL = 300.0  # seconds
         self._token_cache_lock = threading.Lock()
+        # In-memory guest session tracking: session_id → last_active_at (monotonic seconds).
+        # Bounded by guest_max_stored_sessions config value.  Used to count currently
+        # active guest sessions (last activity within _GUEST_SESSION_ACTIVE_TTL seconds)
+        # without touching the database on every request.
+        self._guest_sessions: dict[str, float] = {}
+        self._guest_sessions_lock = threading.Lock()
+        self._GUEST_SESSION_ACTIVE_TTL = 3600.0  # seconds — 1 hour
+
+    def record_guest_activity(self, session_id: str) -> None:
+        """Update the in-memory last-active timestamp for a guest session."""
+        now = time.monotonic()
+        with self._guest_sessions_lock:
+            self._guest_sessions[session_id] = now
+
+    def count_active_guest_sessions(self) -> int:
+        """Return the number of guest sessions active within the last hour."""
+        cutoff = time.monotonic() - self._GUEST_SESSION_ACTIVE_TTL
+        with self._guest_sessions_lock:
+            return sum(1 for ts in self._guest_sessions.values() if ts >= cutoff)
 
     def ensure_secure_when_required(self, request: Request):
         if self._server_config.get("require_ssl", False):
@@ -1013,6 +1034,27 @@ class AuthService:
                                     getattr(matched_token, "watermark", False)
                                 ),
                             )
+                            request.state.token_id = matched_token.id
+                            # Resolve the guest session cookie for READ-scoped tokens.
+                            # The value is validated by the route handler; we only attach
+                            # it here so route handlers can read request.state.guest_session_id.
+                            raw_gs = request.cookies.get("guest_session", "")
+                            if raw_gs and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", raw_gs):
+                                request.state.guest_session_id = raw_gs
+                                self.record_guest_activity(raw_gs)
+                                self._logger.info(
+                                    "[guest-scores] Resolved guest_session cookie for %s: %r",
+                                    request.url.path,
+                                    raw_gs,
+                                )
+                            else:
+                                request.state.guest_session_id = None
+                                self._logger.info(
+                                    "[guest-scores] No valid guest_session cookie for %s (raw=%r, all_cookies=%r)",
+                                    request.url.path,
+                                    raw_gs,
+                                    list(request.cookies.keys()),
+                                )
 
                 if user_id is None:
                     self._logger.error(
