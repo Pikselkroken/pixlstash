@@ -390,6 +390,11 @@ class TaskRunner:
     ):
         self._on_task_complete_callbacks.append(callback)
 
+    def has_active_task_of_type(self, task_type: str) -> bool:
+        """Return True if any task of the given type is currently executing."""
+        with self._active_task_lock:
+            return any(t.type == task_type for t in self._active_tasks.values())
+
     def start(self):
         with self._lock:
             self._threads = [t for t in self._threads if t.is_alive()]

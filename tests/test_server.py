@@ -27,6 +27,7 @@ from pixlstash.db_models.picture_set import PictureSetMember
 import pixlstash.routes.pictures as pictures_routes
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.server import Server
@@ -1457,6 +1458,22 @@ def test_stack_query_respects_project_filter():
                 )
                 session.commit()
 
+            # Wait for LikenessParametersTask to finish before seeding edges.
+            # That task calls reset_likeness_for_pictures which wipes PictureLikeness rows.
+            _deadline = time.monotonic() + 30.0
+            while time.monotonic() < _deadline:
+                _pending = server.vault.db.run_immediate_read_task(
+                    LikenessParameterUtils.count_pending_parameters
+                )
+                if (
+                    _pending == 0
+                    and not server.vault._task_runner.has_active_task_of_type(
+                        "LikenessParametersTask"
+                    )
+                ):
+                    break
+                time.sleep(0.05)
+
             server.vault.db.run_task(seed_likeness)
 
             stacks_a_resp = client.get(
@@ -2044,6 +2061,23 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
                     )
                 )
                 session.commit()
+
+            # Wait for LikenessParametersTask to finish before seeding edges.
+            # That task calls reset_likeness_for_pictures which deletes PictureLikeness
+            # rows, so any edges seeded before it completes will be wiped.
+            _deadline = time.monotonic() + 30.0
+            while time.monotonic() < _deadline:
+                _pending = server.vault.db.run_immediate_read_task(
+                    LikenessParameterUtils.count_pending_parameters
+                )
+                if (
+                    _pending == 0
+                    and not server.vault._task_runner.has_active_task_of_type(
+                        "LikenessParametersTask"
+                    )
+                ):
+                    break
+                time.sleep(0.05)
 
             server.vault.db.run_task(seed_likeness_edges, pic_a, pic_b, pic_c)
 
