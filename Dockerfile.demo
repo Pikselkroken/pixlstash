@@ -1,0 +1,150 @@
+# ── Dockerfile.demo ───────────────────────────────────────────────────────────
+# Builds a self-contained read-only demo image with vault.db and pictures baked
+# in.  No persistent volume is used — the data is static.
+#
+# Prerequisites — create this layout alongside the repo before building:
+#
+#   demo-data/
+#     server-config.json   # image_root must be "/home/pixlstash/images"
+#     images/              # vault.db + all picture files go here
+#
+# Build and push:
+#   docker build -f Dockerfile.demo -t registry.fly.io/pixlstash-demo:latest .
+#   flyctl auth docker
+#   docker push registry.fly.io/pixlstash-demo:latest
+#   flyctl deploy --config fly.demo.toml --image registry.fly.io/pixlstash-demo:latest
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: Build the Vue frontend ──────────────────────────────────────────
+FROM node:22-slim AS frontend-builder
+
+WORKDIR /build/frontend
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+# Copy pyproject.toml so Vite can read the version at build time
+COPY pyproject.toml /build/pyproject.toml
+RUN npm run build
+
+
+# ── Stage 2: Runtime image (CPU-only) ────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    libheif-dev \
+    libde265-dev \
+    libx265-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --no-cache-dir --upgrade pip wheel setuptools
+
+RUN pip install --no-cache-dir \
+    torch \
+    torchvision \
+    --index-url https://download.pytorch.org/whl/cpu
+
+RUN pip install --no-cache-dir onnxruntime
+
+RUN pip install --no-cache-dir \
+    open_clip_torch \
+    fastapi \
+    "uvicorn[standard]" \
+    numpy \
+    pillow \
+    opencv-python-headless \
+    scipy \
+    platformdirs \
+    tomli \
+    colorlog \
+    httpx \
+    python-multipart \
+    requests \
+    transformers \
+    insightface \
+    rapidfuzz \
+    tqdm \
+    einops \
+    sentence_transformers \
+    spacy \
+    pillow-heif \
+    sqlmodel \
+    alembic \
+    "python-jose[cryptography]" \
+    passlib \
+    "bcrypt<4.0.0" \
+    nvidia-ml-py \
+    psutil \
+    piexif \
+    watchdog \
+    dotenv \
+    python-dotenv \
+    click \
+    accelerate
+
+RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*
+
+RUN python -m spacy download en_core_web_sm
+
+RUN groupadd -f -g 10001 pixlstash \
+    && useradd -r -u 10001 -g 10001 -m -d /home/pixlstash pixlstash \
+    && chown -R pixlstash:pixlstash /app
+
+COPY --chown=pixlstash:pixlstash pyproject.toml setup.py MANIFEST.in alembic.ini ./
+COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
+
+RUN pip install --no-cache-dir --no-deps -e .
+
+COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
+
+# ── Bake in demo data ─────────────────────────────────────────────────────────
+# demo-data/server-config.json  →  /home/pixlstash/.config/pixlstash/server-config.json
+# demo-data/images/             →  /home/pixlstash/images/  (contains vault.db + pictures)
+#
+# image_root is rewritten to the in-container path at build time so you don't
+# have to edit server-config.json manually before each build.
+RUN mkdir -p /home/pixlstash/.config/pixlstash /home/pixlstash/images
+
+COPY --chown=pixlstash:pixlstash demo-data/server-config.json \
+    /home/pixlstash/.config/pixlstash/server-config.json
+
+# Rewrite image_root, host and port to canonical in-container values.
+RUN python3 -c "
+import json
+path = '/home/pixlstash/.config/pixlstash/server-config.json'
+with open(path) as f:
+    cfg = json.load(f)
+cfg['image_root'] = '/home/pixlstash/images'
+cfg['host'] = '0.0.0.0'
+cfg['port'] = 8080
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+"
+
+COPY --chown=pixlstash:pixlstash demo-data/images/ \
+    /home/pixlstash/images/
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+USER pixlstash
+
+ENV HOME=/home/pixlstash
+ENV PIXLSTASH_PORT=8080
+
+EXPOSE 8080
+
+ENTRYPOINT ["docker-entrypoint.sh"]

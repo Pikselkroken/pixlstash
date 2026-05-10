@@ -166,6 +166,86 @@ upgrade for security reasons.
 
 ---
 
+## Demo Site Deployment (Fly.io)
+
+The demo site at `demo.pixlstash.dev` runs as a self-contained, read-only Docker
+image on Fly.io. No persistent volume is used — the database and images are baked
+into the image at build time.
+
+### Prerequisites
+
+- [flyctl](https://fly.io/docs/hands-on/install-flyctl/) installed and authenticated
+- Docker installed locally
+- A curated `demo-data/` directory alongside the repo root (never committed — it
+  is `.gitignore`d):
+
+```
+demo-data/
+  server-config.json   # set image_root to the local absolute path of demo-data/images/
+  images/              # vault.db + all picture files
+```
+
+### Building the demo database interactively
+
+1. Create `demo-data/server-config.json` with `image_root` pointing at your local
+   `demo-data/images/` path, e.g.:
+   ```json
+   {
+     "host": "127.0.0.1",
+     "port": 9537,
+     "image_root": "/home/you/Projects/pixlstash/demo-data/images",
+     "require_ssl": false,
+     "cookie_samesite": "Lax",
+     "cookie_secure": false,
+     "disable_password_auth": false
+   }
+   ```
+2. Launch pixlstash against that config:
+   ```bash
+   python -m pixlstash.app --server-config demo-data/server-config.json
+   ```
+3. Log in, import pictures, create sets/characters, let tagging and scoring run.
+4. Create a read-only token (Settings → Tokens → scope: READ, no resource restriction).
+   Note the token value — it becomes the `?token=` in the public URL.
+5. Set `"disable_password_auth": true` in `demo-data/server-config.json` so nobody
+   can log in via username/password once deployed.
+
+### Building and deploying the image
+
+The `Dockerfile.demo` build automatically rewrites `image_root` to the
+in-container path `/home/pixlstash/images`, so you do not need to edit
+`server-config.json` before building.
+
+```bash
+# Build the image locally
+docker build -f Dockerfile.demo -t registry.fly.io/pixlstash-demo:latest .
+
+# Authenticate Docker with Fly and push
+flyctl auth docker
+docker push registry.fly.io/pixlstash-demo:latest
+
+# Deploy — fly.toml picks up the app name and config automatically
+flyctl deploy --image registry.fly.io/pixlstash-demo:latest
+```
+
+### Sharing the demo
+
+Link visitors directly to:
+
+```
+https://demo.pixlstash.dev?token=<your-read-only-token>
+```
+
+The frontend picks up the token on load and authenticates all API calls
+automatically. No login screen is shown.
+
+### Refreshing the demo content
+
+Repeat the interactive database building steps above, then rebuild and redeploy
+the image. The old machine is replaced in-place with no downtime window needed.
+
+---
+
 ## Thank You
 
 PixlStash is an open project, and contributions of all kinds, including bug reports, code, docs, ideas,
