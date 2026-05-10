@@ -1,16 +1,19 @@
-# fly.toml app configuration file generated for pixlstash on 2026-05-09T19:20:46Z
+# fly.toml — Read-only demo deployment for pixlstash-demo.fly.dev
 #
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# Data (vault.db + images) is baked into the image — no persistent volume.
+# Deploy with:
+#   flyctl deploy --image registry.fly.io/pixlstash-demo:latest
 
-app = 'pixlstash'
+app = 'pixlstash-demo'
 primary_region = 'arn'
 
-[build]
+# No [build] section — always deploy a pre-built image:
+#   docker build -f Dockerfile.demo -t registry.fly.io/pixlstash-demo:latest .
+#   flyctl auth docker && docker push registry.fly.io/pixlstash-demo:latest
+#   flyctl deploy --image registry.fly.io/pixlstash-demo:latest
 
-[[mounts]]
-  source = 'pixlstash'
-  destination = '/home/pixlstash'
+[env]
+  PIXLSTASH_PORT = '8080'
 
 [http_service]
   internal_port = 8080
@@ -24,4 +27,3 @@ primary_region = 'arn'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
