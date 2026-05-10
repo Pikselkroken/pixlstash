@@ -34,7 +34,6 @@ from pixlstash.db_models import (
 
 from pixlstash.event_types import EventType
 from pixlstash.auth import AuthService, LoginRequest
-from pixlstash.picture_tagger import PictureTagger
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.vault import Vault
@@ -184,7 +183,13 @@ class Server:
             logger=logger,
         ).run()
         # Re-apply any test-level FORCE_CPU override that startup checks may have clobbered.
-        if Server.DEFAULT_FORCE_CPU is not None:
+        # Skip when workers are disabled — importing PictureTagger loads the entire
+        # torch/open_clip/onnxruntime stack which consumes ~700 MB on a demo machine.
+        if Server.DEFAULT_FORCE_CPU is not None and not self._server_config.get(
+            "disable_background_workers", False
+        ):
+            from pixlstash.picture_tagger import PictureTagger  # deferred: heavy ML
+
             PictureTagger.FORCE_CPU = Server.DEFAULT_FORCE_CPU
         with open(server_config_path, "w") as f:
             json.dump(self._server_config, f, indent=2)
