@@ -4090,11 +4090,6 @@ function _getOrCreateGuestSessionId() {
 async function _submitGuestScores(scores, setCookie) {
   const sid = _getOrCreateGuestSessionId();
   const payload = { session_id: sid, set_cookie: setCookie, scores };
-  console.log("[guest-scores] POST", {
-    session_id: sid,
-    set_cookie: setCookie,
-    scores,
-  });
   await apiClient.post(`${props.backendUrl}/pictures/guest-scores`, payload);
 }
 
@@ -4174,7 +4169,6 @@ async function fetchGuestScores() {
       `${props.backendUrl}/pictures/guest-scores`,
     );
     const scores = resp?.data?.scores ?? {};
-    console.log("[guest-scores] fetchGuestScores response", scores);
     const map = new Map();
     for (const [k, v] of Object.entries(scores)) {
       map.set(Number(k), v);
@@ -4189,23 +4183,12 @@ function initGuestSession() {
   const readOnly = isReadOnly.value;
   const cookies = document.cookie;
   const ls = localStorage.getItem("guest_session_id");
-  console.log(
-    "[guest-scores] initGuestSession isReadOnly=%o cookies=%o localStorage.guest_session_id=%o",
-    readOnly,
-    cookies,
-    ls,
-  );
   if (!readOnly) return;
   // A non-HttpOnly sentinel cookie is set alongside the HttpOnly guest_session
   // cookie when the user accepted persistent storage.
   const hasCookieConsent = cookies
     .split(";")
     .some((c) => c.trim().startsWith("guest_session_active=1"));
-  console.log(
-    "[guest-scores] hasCookieConsent=%o storedId=%o",
-    hasCookieConsent,
-    ls,
-  );
   if (hasCookieConsent) {
     guestConsentState.value = "accepted";
     // Restore the session ID from localStorage so POST bodies stay in sync

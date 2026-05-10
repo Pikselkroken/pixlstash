@@ -2656,9 +2656,6 @@ function handleKeydown(e) {
       target.getAttribute("role") === "textbox");
   if (isEditable) {
     if (e.key === "Escape") {
-      console.log(
-        "ESC pressed in editable element, checking for open menus...",
-      );
       if (pluginMenuOpen.value) {
         pluginMenuOpen.value = false;
         e.preventDefault();
@@ -2854,9 +2851,6 @@ function handleOverlayClick(event) {
     return;
   }
   if (Date.now() - chromeRevealTimestamp.value < 500) {
-    console.log(
-      "Aborting overlay click handling to avoid immediate re-hiding of chrome",
-    );
     return;
   }
   if (menuWasOpenOnPointerDown) {
