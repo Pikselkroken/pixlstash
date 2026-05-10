@@ -26,6 +26,8 @@ def get_default_watermark_bytes() -> bytes | None:
         os.path.normpath(
             os.path.join(here, "..", "..", "frontend", "dist", "Watermark.png")
         ),
+        # Installed/Docker layout: dist is copied into pixlstash/frontend/dist/
+        os.path.normpath(os.path.join(here, "..", "frontend", "dist", "Watermark.png")),
     ]
     for path in candidates:
         if os.path.isfile(path):
