@@ -403,7 +403,7 @@
                 >Clear all</v-btn
               >
             </div>
-            <div class="filter-shared-only-row">
+            <div v-if="!isReadOnly" class="filter-shared-only-row">
               <label class="filter-shared-only-label">
                 <input
                   type="checkbox"

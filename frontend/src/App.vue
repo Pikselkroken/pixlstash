@@ -108,11 +108,11 @@ const filteredSearchHistory = computed(() => {
     item.toLowerCase().startsWith(needle),
   );
 });
-const showStars = ref(true);
+const showStars = ref(!isReadOnly.value);
 const showKeyboardHint = ref(true);
 const showFaceBboxes = ref(false);
-const showFormat = ref(true);
-const showResolution = ref(true);
+const showFormat = ref(!isReadOnly.value);
+const showResolution = ref(!isReadOnly.value);
 const showProblemIcon = ref(true);
 const penalisedTagWeights = ref({});
 const showStacks = ref(true);
@@ -120,7 +120,7 @@ const compactMode = ref(isReadOnly.value);
 const expandedStackCount = ref(0);
 const totalStackCount = ref(0);
 const dateFormat = ref("locale");
-const themeMode = ref("light");
+const themeMode = ref(isReadOnly.value ? "dark" : "light");
 const theme = useTheme();
 
 const activeCategoryLabel = computed(() => {
@@ -160,9 +160,9 @@ const isAllPicturesActive = computed(
 );
 
 const thumbnailSize = ref(256);
-const sidebarThumbnailSize = ref(48);
+const sidebarThumbnailSize = ref(isReadOnly.value ? 32 : 48);
 const photosDialogOpen = ref(false);
-const columns = ref(isReadOnly.value ? 6 : 4); // Default columns
+const columns = ref(isReadOnly.value ? 5 : 4); // Default columns
 const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
 const MIN_COLUMNS = 2;
@@ -817,7 +817,17 @@ function handleColumnsEnd() {
 }
 
 async function fetchConfig() {
-  if (isReadOnly.value) return;
+  if (isReadOnly.value) {
+    // Apply read-only defaults: dark mode, compact sidebar, problem icon only.
+    themeMode.value = "dark";
+    sidebarThumbnailSize.value = 32;
+    showProblemIcon.value = true;
+    showFaceBboxes.value = false;
+    showStars.value = false;
+    showFormat.value = false;
+    showResolution.value = false;
+    return;
+  }
   if (configLoading.value) return;
   configLoading.value = true;
   configApplying.value = true;
