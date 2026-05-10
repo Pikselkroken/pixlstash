@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, ForeignKey, Index, text
+from sqlalchemy import Column, ForeignKey, Index, bindparam, text
 from sqlmodel import (
     CheckConstraint,
     SQLModel,
@@ -178,9 +178,10 @@ class PictureLikeness(SQLModel, table=True):
         """
         if not picture_ids:
             return
-        ids_csv = ",".join(str(int(pid)) for pid in picture_ids)
+        # Ensure picture_ids is a list for consistent behavior with expanding parameter
+        picture_ids = list(picture_ids)
         session.exec(
-            text(f"""
+            text("""
                 WITH ranked AS (
                     SELECT
                         picture_id_a,
@@ -190,7 +191,7 @@ class PictureLikeness(SQLModel, table=True):
                             ORDER BY likeness DESC, picture_id_b ASC
                         ) AS rn
                     FROM picturelikeness
-                    WHERE picture_id_a IN ({ids_csv})
+                    WHERE picture_id_a IN (:picture_ids)
                 )
                 DELETE FROM picturelikeness
                 WHERE (picture_id_a, picture_id_b) IN (
@@ -198,8 +199,11 @@ class PictureLikeness(SQLModel, table=True):
                     FROM ranked
                     WHERE rn > :top_k
                 )
-            """),
-            params={"top_k": top_k},
+            """).bindparams(
+                bindparam("picture_ids", expanding=True),
+                bindparam("top_k"),
+            ),
+            params={"picture_ids": picture_ids, "top_k": top_k},
         )
 
 
