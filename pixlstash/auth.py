@@ -172,24 +172,67 @@ class AuthService:
         self._TOKEN_CACHE_TTL = 300.0  # seconds
         self._token_cache_lock = threading.Lock()
         # In-memory guest session tracking: session_id → last_active_at (monotonic seconds).
-        # Bounded by guest_max_stored_sessions config value.  Used to count currently
-        # active guest sessions (last activity within _GUEST_SESSION_ACTIVE_TTL seconds)
-        # without touching the database on every request.
+        # Entries expire after _GUEST_SESSION_INACTIVE_TTL (30 days) and are pruned lazily
+        # in record_guest_activity().  When the cache reaches _guest_max_tracked_sessions
+        # the oldest entry is evicted, provided it is at least _GUEST_SESSION_EVICT_MIN_AGE
+        # old (4 hours), so a truly-active burst of sessions is never silently dropped.
         self._guest_sessions: dict[str, float] = {}
         self._guest_sessions_lock = threading.Lock()
-        self._GUEST_SESSION_ACTIVE_TTL = 3600.0  # seconds — 1 hour
+        self._GUEST_SESSION_ACTIVE_TTL = 3600.0  # 1 hour — "currently active"
+        self._GUEST_SESSION_INACTIVE_TTL = 30 * 86400.0  # 30 days — hard expiry
+        self._GUEST_SESSION_EVICT_MIN_AGE = (
+            4 * 3600.0
+        )  # 4 hours — min age to evict under cap
+        self._guest_max_tracked_sessions: int = int(
+            self._server_config.get("guest_max_stored_sessions", 1000)
+        )
 
     def record_guest_activity(self, session_id: str) -> None:
-        """Update the in-memory last-active timestamp for a guest session."""
+        """Record or refresh the in-memory last-active timestamp for a guest session.
+
+        Also performs two bounded maintenance operations while the lock is held:
+        1. Prune all entries that have been inactive for more than 30 days.
+        2. If the cache still exceeds the configured cap after pruning, evict the
+           single oldest entry provided it is at least 4 hours old.
+        """
         now = time.monotonic()
+        expire_before = now - self._GUEST_SESSION_INACTIVE_TTL
+        evict_before = now - self._GUEST_SESSION_EVICT_MIN_AGE
         with self._guest_sessions_lock:
+            # 1. Prune expired entries (inactive for > 30 days).
+            expired = [
+                sid for sid, ts in self._guest_sessions.items() if ts < expire_before
+            ]
+            for sid in expired:
+                del self._guest_sessions[sid]
+
+            # 2. Cap enforcement: if still over the limit, evict the oldest entry
+            #    that is at least 4 hours old so we never silently drop a hot session.
+            if len(self._guest_sessions) >= self._guest_max_tracked_sessions:
+                oldest_sid = min(
+                    self._guest_sessions, key=self._guest_sessions.__getitem__
+                )
+                if self._guest_sessions[oldest_sid] < evict_before:
+                    del self._guest_sessions[oldest_sid]
+
             self._guest_sessions[session_id] = now
 
     def count_active_guest_sessions(self) -> int:
-        """Return the number of guest sessions active within the last hour."""
-        cutoff = time.monotonic() - self._GUEST_SESSION_ACTIVE_TTL
+        """Return the number of guest sessions with activity in the last hour.
+
+        Expired entries (inactive > 30 days) are pruned while the lock is held
+        so the dict stays bounded between calls to record_guest_activity().
+        """
+        now = time.monotonic()
+        active_cutoff = now - self._GUEST_SESSION_ACTIVE_TTL
+        expire_before = now - self._GUEST_SESSION_INACTIVE_TTL
         with self._guest_sessions_lock:
-            return sum(1 for ts in self._guest_sessions.values() if ts >= cutoff)
+            expired = [
+                sid for sid, ts in self._guest_sessions.items() if ts < expire_before
+            ]
+            for sid in expired:
+                del self._guest_sessions[sid]
+            return sum(1 for ts in self._guest_sessions.values() if ts >= active_cutoff)
 
     def ensure_secure_when_required(self, request: Request):
         if self._server_config.get("require_ssl", False):
