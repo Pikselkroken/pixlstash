@@ -40,6 +40,11 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
     def __init__(self, database):
         super().__init__()
         self._db = database
+        # Normalized paths seen in a previous scan cycle.  Any path not in this
+        # set is treated as newly discovered regardless of its mtime/ctime, which
+        # handles copy tools (e.g. shutil.copy2 on Windows) that preserve old
+        # timestamps on the destination file.
+        self._seen_file_paths: set[str] = set()
 
     def finder_name(self) -> str:
         return "MissingWatchFolderImportFinder"
@@ -80,6 +85,7 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
             for root, _, files in os.walk(folder):
                 for file_name in files:
                     file_path = os.path.join(root, file_name)
+                    normalized = os.path.normcase(os.path.abspath(file_path))
                     try:
                         mtime = os.path.getmtime(file_path)
                         ctime = os.path.getctime(file_path)
@@ -91,7 +97,13 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
                     # so rely on the newer of mtime/ctime when deciding whether
                     # this file is new relative to last_checked.
                     seen_ts = max(mtime, ctime)
-                    if seen_ts > last_checked:
+                    # A path not seen in any previous scan cycle is always a
+                    # candidate, even when both timestamps predate last_checked.
+                    # This handles shutil.copy2 on Windows, which copies ctime
+                    # from the source, making it equally old as mtime.
+                    is_new_path = normalized not in self._seen_file_paths
+                    self._seen_file_paths.add(normalized)
+                    if seen_ts > last_checked or is_new_path:
                         total_candidates += 1
                         candidate_files.append(
                             {
