@@ -46,9 +46,15 @@
                 @click="gbToggleSortDirection"
               >
                 <v-icon size="18">
-                  {{ gbDescendingModel ? "mdi-sort-descending" : "mdi-sort-ascending" }}
+                  {{
+                    gbDescendingModel
+                      ? "mdi-sort-descending"
+                      : "mdi-sort-ascending"
+                  }}
                 </v-icon>
-                <span>{{ gbDescendingModel ? "Descending" : "Ascending" }}</span>
+                <span>{{
+                  gbDescendingModel ? "Descending" : "Ascending"
+                }}</span>
               </v-btn>
             </div>
             <div v-if="gb?.isSearchActive?.value" class="gb-sort-search-note">
@@ -74,7 +80,8 @@
                   v-if="gbSortMenuModel === opt.value"
                   size="16"
                   class="gb-sort-grid-selected"
-                >mdi-circle-medium</v-icon>
+                  >mdi-circle-medium</v-icon
+                >
               </v-btn>
             </v-btn-toggle>
             <div
@@ -86,7 +93,10 @@
                 <v-btn-toggle
                   v-model="gbSimilarityCharacterModel"
                   class="gb-sort-grid"
-                  :class="{ 'gb-sort-grid--pending-parameter': gbIsPendingSimilarityParameter }"
+                  :class="{
+                    'gb-sort-grid--pending-parameter':
+                      gbIsPendingSimilarityParameter,
+                  }"
                   :disabled="!gbHasSimilarityOptions"
                 >
                   <v-btn
@@ -103,14 +113,21 @@
                       class="gb-similarity-thumb"
                       alt=""
                     />
-                    <div v-else class="gb-similarity-thumb gb-similarity-thumb--placeholder"></div>
+                    <div
+                      v-else
+                      class="gb-similarity-thumb gb-similarity-thumb--placeholder"
+                    ></div>
                     <span class="gb-sort-grid-label">{{ opt.text }}</span>
                     <v-icon
                       v-if="gbSimilarityCharacterModel === opt.value"
                       size="16"
                       class="gb-sort-grid-selected"
-                      :class="{ 'gb-sort-grid-selected--pending': gbIsPendingSimilarityParameter }"
-                    >mdi-circle-medium</v-icon>
+                      :class="{
+                        'gb-sort-grid-selected--pending':
+                          gbIsPendingSimilarityParameter,
+                      }"
+                      >mdi-circle-medium</v-icon
+                    >
                   </v-btn>
                 </v-btn-toggle>
               </div>
@@ -124,7 +141,10 @@
                 <v-btn-toggle
                   v-model="gbStackThresholdModel"
                   class="gb-sort-grid"
-                  :class="{ 'gb-sort-grid--pending-parameter': gbIsPendingStackParameter }"
+                  :class="{
+                    'gb-sort-grid--pending-parameter':
+                      gbIsPendingStackParameter,
+                  }"
                 >
                   <v-btn
                     v-for="opt in gbStackThresholdOptions"
@@ -139,8 +159,12 @@
                       v-if="gbStackThresholdModel === opt.value"
                       size="16"
                       class="gb-sort-grid-selected"
-                      :class="{ 'gb-sort-grid-selected--pending': gbIsPendingStackParameter }"
-                    >mdi-circle-medium</v-icon>
+                      :class="{
+                        'gb-sort-grid-selected--pending':
+                          gbIsPendingStackParameter,
+                      }"
+                      >mdi-circle-medium</v-icon
+                    >
                   </v-btn>
                 </v-btn-toggle>
               </div>
@@ -165,7 +189,9 @@
             >
               <v-icon size="13">mdi-filter</v-icon>
               <span class="bar-btn-label">Filter</span>
-              <span v-if="gbActiveFilterCount > 0" class="bar-filter-badge">{{ gbActiveFilterCount > 99 ? "99+" : gbActiveFilterCount }}</span>
+              <span v-if="gbActiveFilterCount > 0" class="bar-filter-badge">{{
+                gbActiveFilterCount > 99 ? "99+" : gbActiveFilterCount
+              }}</span>
               <v-icon size="13">mdi-menu-down</v-icon>
             </button>
           </template>
@@ -183,8 +209,11 @@
                 >Clear all</v-btn
               >
             </div>
-            <div v-if="!isReadOnly" class="gb-filter-shared-only-row">
-              <label class="gb-filter-shared-only-label">
+            <div
+              v-if="!isReadOnly || isAllPicturesView"
+              class="gb-filter-shared-only-row"
+            >
+              <label v-if="!isReadOnly" class="gb-filter-shared-only-label">
                 <input
                   type="checkbox"
                   :checked="gbSharedOnlyFilter"
@@ -192,14 +221,32 @@
                 />
                 Shared pictures only
               </label>
+              <label
+                v-if="isAllPicturesView"
+                class="gb-filter-shared-only-label gb-filter-shared-only-label--right"
+              >
+                <input
+                  type="checkbox"
+                  :checked="gbUnassignedOnlyFilter"
+                  @change="gbUnassignedOnlyFilter = $event.target.checked"
+                />
+                Unassigned only
+              </label>
             </div>
             <div class="gb-filter-section-label">Media</div>
-            <div class="gb-media-type-toggle" role="group" aria-label="Media type filter">
+            <div
+              class="gb-media-type-toggle"
+              role="group"
+              aria-label="Media type filter"
+            >
               <v-btn
                 v-for="opt in gbMediaTypeOptions"
                 :key="opt.value"
                 class="gb-media-type-button"
-                :class="{ 'gb-media-type-button--active': gbMediaTypeFilter === opt.value }"
+                :class="{
+                  'gb-media-type-button--active':
+                    gbMediaTypeFilter === opt.value,
+                }"
                 variant="text"
                 :title="opt.title"
                 :aria-pressed="gbMediaTypeFilter === opt.value"
@@ -211,7 +258,10 @@
             <div class="gb-score-range-section">
               <div class="gb-score-range-headers">
                 <span class="gb-score-range-header-label">Min Score</span>
-                <span class="gb-score-range-header-label gb-score-range-header-label--right">Max Score</span>
+                <span
+                  class="gb-score-range-header-label gb-score-range-header-label--right"
+                  >Max Score</span
+                >
               </div>
               <div class="gb-score-range-filter">
                 <div class="gb-score-range-stars">
@@ -223,7 +273,19 @@
                     :title="`Set minimum score ${n}`"
                     @click="gbSetMinScore(n)"
                   >
-                    <v-icon size="15" :color="gbMinScoreFilter != null && n <= gbMinScoreFilter ? 'warning' : undefined">{{ gbMinScoreFilter != null && n <= gbMinScoreFilter ? 'mdi-star' : 'mdi-star-outline' }}</v-icon>
+                    <v-icon
+                      size="15"
+                      :color="
+                        gbMinScoreFilter != null && n <= gbMinScoreFilter
+                          ? 'warning'
+                          : undefined
+                      "
+                      >{{
+                        gbMinScoreFilter != null && n <= gbMinScoreFilter
+                          ? "mdi-star"
+                          : "mdi-star-outline"
+                      }}</v-icon
+                    >
                   </button>
                 </div>
                 <div class="gb-score-range-stars gb-score-range-stars--right">
@@ -235,31 +297,57 @@
                     :title="`Set maximum score ${n}`"
                     @click="gbSetMaxScore(n)"
                   >
-                    <v-icon size="15" :color="gbMaxScoreFilter != null && n <= gbMaxScoreFilter ? 'warning' : undefined">{{ gbMaxScoreFilter != null && n <= gbMaxScoreFilter ? 'mdi-star' : 'mdi-star-outline' }}</v-icon>
+                    <v-icon
+                      size="15"
+                      :color="
+                        gbMaxScoreFilter != null && n <= gbMaxScoreFilter
+                          ? 'warning'
+                          : undefined
+                      "
+                      >{{
+                        gbMaxScoreFilter != null && n <= gbMaxScoreFilter
+                          ? "mdi-star"
+                          : "mdi-star-outline"
+                      }}</v-icon
+                    >
                   </button>
                 </div>
               </div>
             </div>
-            <div class="gb-filter-section-label" style="margin-top: 10px">Face</div>
-            <div class="gb-media-type-toggle" role="group" aria-label="Face filter">
+            <div class="gb-filter-section-label" style="margin-top: 10px">
+              Face
+            </div>
+            <div
+              class="gb-media-type-toggle"
+              role="group"
+              aria-label="Face filter"
+            >
               <v-btn
                 v-for="opt in gbFaceBboxFilterOptions"
                 :key="String(opt.value)"
                 class="gb-media-type-button"
-                :class="{ 'gb-media-type-button--active': gbFaceBboxFilter === opt.value }"
+                :class="{
+                  'gb-media-type-button--active':
+                    gbFaceBboxFilter === opt.value,
+                }"
                 variant="text"
                 :title="opt.title"
                 :aria-pressed="gbFaceBboxFilter === opt.value"
                 @click="gbSetFaceBboxFilter(opt.value)"
               >
-                <span v-if="opt.value === 'without_face'" class="gb-face-no-detection-icon">
+                <span
+                  v-if="opt.value === 'without_face'"
+                  class="gb-face-no-detection-icon"
+                >
                   <v-icon size="16">{{ opt.icon }}</v-icon>
                 </span>
                 <v-icon v-else size="16">{{ opt.icon }}</v-icon>
               </v-btn>
             </div>
             <div class="gb-filter-section-header" style="margin-top: 10px">
-              <span class="gb-filter-section-label" style="margin-top: 0">Tags</span>
+              <span class="gb-filter-section-label" style="margin-top: 0"
+                >Tags</span
+              >
               <v-btn
                 v-if="gbTagFilter.length || gbTagRejectedFilter.length"
                 variant="text"
@@ -267,7 +355,10 @@
                 size="x-small"
                 color="primary"
                 class="gb-filter-clear-all-btn"
-                @click="gbTagFilter = []; gbTagRejectedFilter = [];"
+                @click="
+                  gbTagFilter = [];
+                  gbTagRejectedFilter = [];
+                "
                 >Clear</v-btn
               >
             </div>
@@ -284,31 +375,53 @@
                 "
                 @keydown.tab.prevent="
                   gbTagFilterSuggestions.length
-                    ? gbAddTagFilter(gbTagFilterSuggestions[gbTagFilterIndex >= 0 ? gbTagFilterIndex : 0])
+                    ? gbAddTagFilter(
+                        gbTagFilterSuggestions[
+                          gbTagFilterIndex >= 0 ? gbTagFilterIndex : 0
+                        ],
+                      )
                     : gbAddTagFilter(gbTagFilterInput.trim())
                 "
-                @keydown.down.prevent="gbTagFilterIndex = Math.min(gbTagFilterIndex + 1, gbTagFilterSuggestions.length - 1)"
-                @keydown.up.prevent="gbTagFilterIndex = Math.max(gbTagFilterIndex - 1, -1)"
+                @keydown.down.prevent="
+                  gbTagFilterIndex = Math.min(
+                    gbTagFilterIndex + 1,
+                    gbTagFilterSuggestions.length - 1,
+                  )
+                "
+                @keydown.up.prevent="
+                  gbTagFilterIndex = Math.max(gbTagFilterIndex - 1, -1)
+                "
                 @keydown.escape.prevent="gbTagFilterSuggestions = []"
               />
               <div
                 v-if="gbTagFilterSuggestions.length"
                 class="gb-tag-filter-dropdown"
-                :class="{ 'gb-tag-filter-dropdown--hover-enabled': gbTagFilterHoverEnabled }"
+                :class="{
+                  'gb-tag-filter-dropdown--hover-enabled':
+                    gbTagFilterHoverEnabled,
+                }"
                 @mousemove.once="gbTagFilterHoverEnabled = true"
               >
                 <button
                   v-for="(tag, idx) in gbTagFilterSuggestions"
                   :key="tag"
                   class="gb-tag-filter-suggestion"
-                  :class="{ 'gb-tag-filter-suggestion--active': idx === gbTagFilterIndex }"
+                  :class="{
+                    'gb-tag-filter-suggestion--active':
+                      idx === gbTagFilterIndex,
+                  }"
                   type="button"
                   @mousedown.prevent="gbAddTagFilter(tag)"
                   @mousemove="gbTagFilterIndex = idx"
-                >{{ tag }}</button>
+                >
+                  {{ tag }}
+                </button>
               </div>
             </div>
-            <div v-if="gbTagFilter.length || gbTagRejectedFilter.length" class="gb-tag-filter-chips">
+            <div
+              v-if="gbTagFilter.length || gbTagRejectedFilter.length"
+              class="gb-tag-filter-chips"
+            >
               <button
                 v-for="tag in gbTagFilter"
                 :key="`confirmed-${tag}`"
@@ -318,7 +431,12 @@
                 @click.stop="gbToggleTagRejected(tag)"
               >
                 <span class="tag-chip-label">{{ tag }}</span>
-                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveTagFilter(tag)">mdi-close</v-icon>
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="gbRemoveTagFilter(tag)"
+                  >mdi-close</v-icon
+                >
               </button>
               <button
                 v-for="tag in gbTagRejectedFilter"
@@ -329,46 +447,80 @@
                 @click.stop="gbToggleTagRejected(tag)"
               >
                 <span class="tag-chip-label">{{ tag }}</span>
-                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveTagFilter(tag)">mdi-close</v-icon>
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="gbRemoveTagFilter(tag)"
+                  >mdi-close</v-icon
+                >
               </button>
             </div>
-            <div class="gb-filter-section-label" style="margin-top: 10px">Tag confidence</div>
+            <div class="gb-filter-section-label" style="margin-top: 10px">
+              Tag confidence
+            </div>
             <div class="gb-confidence-filter-row">
-              <div class="gb-tag-filter-input-wrap gb-confidence-filter-tag-wrap">
+              <div
+                class="gb-tag-filter-input-wrap gb-confidence-filter-tag-wrap"
+              >
                 <input
                   v-model="gbConfidenceTagInput"
                   class="gb-tag-filter-input gb-confidence-filter-tag-input"
                   placeholder="Tag…"
                   autocomplete="off"
                   @keydown.enter.prevent="
-                    gbConfidenceTagIndex >= 0 && gbConfidenceTagSuggestions.length
-                      ? gbSelectConfidenceTagSuggestion(gbConfidenceTagSuggestions[gbConfidenceTagIndex])
+                    gbConfidenceTagIndex >= 0 &&
+                    gbConfidenceTagSuggestions.length
+                      ? gbSelectConfidenceTagSuggestion(
+                          gbConfidenceTagSuggestions[gbConfidenceTagIndex],
+                        )
                       : gbAddConfidenceFilter(gbConfidenceTagInput.trim())
                   "
                   @keydown.tab.prevent="
                     gbConfidenceTagSuggestions.length
-                      ? gbSelectConfidenceTagSuggestion(gbConfidenceTagSuggestions[gbConfidenceTagIndex >= 0 ? gbConfidenceTagIndex : 0])
+                      ? gbSelectConfidenceTagSuggestion(
+                          gbConfidenceTagSuggestions[
+                            gbConfidenceTagIndex >= 0 ? gbConfidenceTagIndex : 0
+                          ],
+                        )
                       : undefined
                   "
-                  @keydown.down.prevent="gbConfidenceTagIndex = Math.min(gbConfidenceTagIndex + 1, gbConfidenceTagSuggestions.length - 1)"
-                  @keydown.up.prevent="gbConfidenceTagIndex = Math.max(gbConfidenceTagIndex - 1, -1)"
+                  @keydown.down.prevent="
+                    gbConfidenceTagIndex = Math.min(
+                      gbConfidenceTagIndex + 1,
+                      gbConfidenceTagSuggestions.length - 1,
+                    )
+                  "
+                  @keydown.up.prevent="
+                    gbConfidenceTagIndex = Math.max(
+                      gbConfidenceTagIndex - 1,
+                      -1,
+                    )
+                  "
                   @keydown.escape.prevent="gbConfidenceTagSuggestions = []"
                 />
                 <div
                   v-if="gbConfidenceTagSuggestions.length"
                   class="gb-tag-filter-dropdown"
-                  :class="{ 'gb-tag-filter-dropdown--hover-enabled': gbConfidenceTagHoverEnabled }"
+                  :class="{
+                    'gb-tag-filter-dropdown--hover-enabled':
+                      gbConfidenceTagHoverEnabled,
+                  }"
                   @mousemove.once="gbConfidenceTagHoverEnabled = true"
                 >
                   <button
                     v-for="(tag, idx) in gbConfidenceTagSuggestions"
                     :key="tag"
                     class="gb-tag-filter-suggestion"
-                    :class="{ 'gb-tag-filter-suggestion--active': idx === gbConfidenceTagIndex }"
+                    :class="{
+                      'gb-tag-filter-suggestion--active':
+                        idx === gbConfidenceTagIndex,
+                    }"
                     type="button"
                     @mousedown.prevent="gbSelectConfidenceTagSuggestion(tag)"
                     @mousemove="gbConfidenceTagIndex = idx"
-                  >{{ tag }}</button>
+                  >
+                    {{ tag }}
+                  </button>
                 </div>
               </div>
               <div class="gb-confidence-threshold-stepper">
@@ -384,18 +536,32 @@
               <button
                 class="gb-confidence-mode-btn"
                 type="button"
-                :title="gbConfidenceMode === 'above' ? 'High confidence, not labelled – click to switch' : 'Low confidence, labelled – click to switch'"
-                @click="gbConfidenceMode = gbConfidenceMode === 'above' ? 'below' : 'above'"
-              >{{ gbConfidenceMode === "above" ? "≥" : "<" }}</button>
+                :title="
+                  gbConfidenceMode === 'above'
+                    ? 'High confidence, not labelled – click to switch'
+                    : 'Low confidence, labelled – click to switch'
+                "
+                @click="
+                  gbConfidenceMode =
+                    gbConfidenceMode === 'above' ? 'below' : 'above'
+                "
+              >
+                {{ gbConfidenceMode === "above" ? "≥" : "<" }}
+              </button>
               <button
                 class="gb-confidence-add-btn"
                 type="button"
                 :disabled="!gbConfidenceTagInput.trim()"
                 @click="gbAddConfidenceFilter()"
-              >Add</button>
+              >
+                Add
+              </button>
             </div>
             <div
-              v-if="gbTagConfidenceAboveFilter.length || gbTagConfidenceBelowFilter.length"
+              v-if="
+                gbTagConfidenceAboveFilter.length ||
+                gbTagConfidenceBelowFilter.length
+              "
               class="gb-tag-filter-chips"
             >
               <button
@@ -405,8 +571,15 @@
                 type="button"
                 :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
               >
-                <span class="tag-chip-label">≥{{ gbConfidenceEntryLabel(entry) }}</span>
-                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveConfidenceAboveFilter(entry)">mdi-close</v-icon>
+                <span class="tag-chip-label"
+                  >≥{{ gbConfidenceEntryLabel(entry) }}</span
+                >
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="gbRemoveConfidenceAboveFilter(entry)"
+                  >mdi-close</v-icon
+                >
               </button>
               <button
                 v-for="entry in gbTagConfidenceBelowFilter"
@@ -415,35 +588,151 @@
                 type="button"
                 :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
               >
-                <span class="tag-chip-label">&lt;{{ gbConfidenceEntryLabel(entry) }}</span>
-                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveConfidenceBelowFilter(entry)">mdi-close</v-icon>
+                <span class="tag-chip-label"
+                  >&lt;{{ gbConfidenceEntryLabel(entry) }}</span
+                >
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="gbRemoveConfidenceBelowFilter(entry)"
+                  >mdi-close</v-icon
+                >
               </button>
             </div>
-            <template v-if="gbComfyuiModelOptions.length || gbComfyuiLoraOptions.length">
+            <template
+              v-if="gbComfyuiModelOptions.length || gbComfyuiLoraOptions.length"
+            >
               <div
                 class="gb-filter-section-header gb-comfyui-section-header"
                 style="margin-top: 10px; cursor: pointer"
                 @click="gbComfyuiFilterExpanded = !gbComfyuiFilterExpanded"
               >
-                <span class="gb-filter-section-label" style="margin-top: 0">ComfyUI</span>
-                <v-icon size="16" style="opacity: 0.6">{{ gbComfyuiFilterExpanded ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
+                <span class="gb-filter-section-label" style="margin-top: 0"
+                  >ComfyUI</span
+                >
+                <v-icon size="16" style="opacity: 0.6">{{
+                  gbComfyuiFilterExpanded
+                    ? "mdi-chevron-up"
+                    : "mdi-chevron-down"
+                }}</v-icon>
               </div>
-              <template v-if="gbComfyuiModelOptions.length && gbComfyuiFilterExpanded">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; width: 100%;">
-                  <span style="font-size: 0.85em; color: rgb(var(--v-theme-on-background));">Models</span>
-                  <v-btn v-if="gbComfyuiModelFilter.length" variant="text" density="compact" size="x-small" color="primary" style="min-width: 0; padding: 0 4px; height: 18px; font-size: 0.75em;" @click="gbComfyuiModelFilter = []">Clear</v-btn>
+              <template
+                v-if="gbComfyuiModelOptions.length && gbComfyuiFilterExpanded"
+              >
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 4px;
+                    width: 100%;
+                  "
+                >
+                  <span
+                    style="
+                      font-size: 0.85em;
+                      color: rgb(var(--v-theme-on-background));
+                    "
+                    >Models</span
+                  >
+                  <v-btn
+                    v-if="gbComfyuiModelFilter.length"
+                    variant="text"
+                    density="compact"
+                    size="x-small"
+                    color="primary"
+                    style="
+                      min-width: 0;
+                      padding: 0 4px;
+                      height: 18px;
+                      font-size: 0.75em;
+                    "
+                    @click="gbComfyuiModelFilter = []"
+                    >Clear</v-btn
+                  >
                 </div>
-                <div style="width: 100%; height: 200px; overflow-y: auto; margin-bottom: 8px; border: 1px solid rgba(var(--v-theme-on-background), 0.18); border-radius: 6px; padding: 2px 4px; background: rgba(var(--v-theme-on-background), 0.04); color: rgb(var(--v-theme-on-background));">
-                  <v-checkbox v-for="m in gbComfyuiModelOptions" :key="m" v-model="gbComfyuiModelFilter" :value="m" :label="m.replace(/\.[^/.]+$/, '')" density="compact" hide-details color="primary" />
+                <div
+                  style="
+                    width: 100%;
+                    height: 200px;
+                    overflow-y: auto;
+                    margin-bottom: 8px;
+                    border: 1px solid rgba(var(--v-theme-on-background), 0.18);
+                    border-radius: 6px;
+                    padding: 2px 4px;
+                    background: rgba(var(--v-theme-on-background), 0.04);
+                    color: rgb(var(--v-theme-on-background));
+                  "
+                >
+                  <v-checkbox
+                    v-for="m in gbComfyuiModelOptions"
+                    :key="m"
+                    v-model="gbComfyuiModelFilter"
+                    :value="m"
+                    :label="m.replace(/\.[^/.]+$/, '')"
+                    density="compact"
+                    hide-details
+                    color="primary"
+                  />
                 </div>
               </template>
-              <template v-if="gbComfyuiLoraOptions.length && gbComfyuiFilterExpanded">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; width: 100%;">
-                  <span style="font-size: 0.85em; color: rgb(var(--v-theme-on-background));">LoRAs</span>
-                  <v-btn v-if="gbComfyuiLoraFilter.length" variant="text" density="compact" size="x-small" color="primary" style="min-width: 0; padding: 0 4px; height: 18px; font-size: 0.75em;" @click="gbComfyuiLoraFilter = []">Clear</v-btn>
+              <template
+                v-if="gbComfyuiLoraOptions.length && gbComfyuiFilterExpanded"
+              >
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 4px;
+                    width: 100%;
+                  "
+                >
+                  <span
+                    style="
+                      font-size: 0.85em;
+                      color: rgb(var(--v-theme-on-background));
+                    "
+                    >LoRAs</span
+                  >
+                  <v-btn
+                    v-if="gbComfyuiLoraFilter.length"
+                    variant="text"
+                    density="compact"
+                    size="x-small"
+                    color="primary"
+                    style="
+                      min-width: 0;
+                      padding: 0 4px;
+                      height: 18px;
+                      font-size: 0.75em;
+                    "
+                    @click="gbComfyuiLoraFilter = []"
+                    >Clear</v-btn
+                  >
                 </div>
-                <div style="width: 100%; height: 200px; overflow-y: auto; border: 1px solid rgba(var(--v-theme-on-background), 0.18); border-radius: 6px; padding: 2px 4px; background: rgba(var(--v-theme-on-background), 0.04); color: rgb(var(--v-theme-on-background));">
-                  <v-checkbox v-for="l in gbComfyuiLoraOptions" :key="l" v-model="gbComfyuiLoraFilter" :value="l" :label="l.replace(/\.[^/.]+$/, '')" density="compact" hide-details color="primary" />
+                <div
+                  style="
+                    width: 100%;
+                    height: 200px;
+                    overflow-y: auto;
+                    border: 1px solid rgba(var(--v-theme-on-background), 0.18);
+                    border-radius: 6px;
+                    padding: 2px 4px;
+                    background: rgba(var(--v-theme-on-background), 0.04);
+                    color: rgb(var(--v-theme-on-background));
+                  "
+                >
+                  <v-checkbox
+                    v-for="l in gbComfyuiLoraOptions"
+                    :key="l"
+                    v-model="gbComfyuiLoraFilter"
+                    :value="l"
+                    :label="l.replace(/\.[^/.]+$/, '')"
+                    density="compact"
+                    hide-details
+                    color="primary"
+                  />
                 </div>
               </template>
             </template>
@@ -471,9 +760,18 @@
           </template>
           <div class="gb-view-panel">
             <div class="gb-filter-section-label">Grid View</div>
-            <v-switch v-model="gbCompactModeModel" label="Compact mode" color="primary" density="compact" hide-details class="gb-view-switch" />
+            <v-switch
+              v-model="gbCompactModeModel"
+              label="Compact mode"
+              color="primary"
+              density="compact"
+              hide-details
+              class="gb-view-switch"
+            />
             <div class="gb-columns-row">
-              <span class="gb-columns-label">Columns: {{ gbPendingColumns }}</span>
+              <span class="gb-columns-label"
+                >Columns: {{ gbPendingColumns }}</span
+              >
               <v-slider
                 class="gb-columns-slider"
                 v-model="gbPendingColumns"
@@ -490,11 +788,29 @@
             <div class="gb-stacks-controls">
               <div class="gb-filter-section-label">Stacks</div>
               <div class="gb-stacks-buttons">
-                <v-btn class="gb-stack-toggle-btn" color="primary" variant="flat" size="small" :disabled="gbExpandAllStacksDisabled" @click="gb?.expandAllStacks?.()">Expand all</v-btn>
-                <v-btn class="gb-stack-toggle-btn" color="primary" variant="flat" size="small" :disabled="gbCollapseAllStacksDisabled" @click="gb?.collapseAllStacks?.()">Collapse all</v-btn>
+                <v-btn
+                  class="gb-stack-toggle-btn"
+                  color="primary"
+                  variant="flat"
+                  size="small"
+                  :disabled="gbExpandAllStacksDisabled"
+                  @click="gb?.expandAllStacks?.()"
+                  >Expand all</v-btn
+                >
+                <v-btn
+                  class="gb-stack-toggle-btn"
+                  color="primary"
+                  variant="flat"
+                  size="small"
+                  :disabled="gbCollapseAllStacksDisabled"
+                  @click="gb?.collapseAllStacks?.()"
+                  >Collapse all</v-btn
+                >
               </div>
             </div>
-            <div class="gb-filter-section-label" style="margin-top: 10px">Overlays</div>
+            <div class="gb-filter-section-label" style="margin-top: 10px">
+              Overlays
+            </div>
             <div class="gb-overlay-grid">
               <button
                 v-for="ovl in gbOverlayOptions"
@@ -513,7 +829,10 @@
         </v-menu>
       </div>
       <div class="selection-bar-right">
-        <span v-if="visible && selectedFaceCount > 0" class="selection-face-count">
+        <span
+          v-if="visible && selectedFaceCount > 0"
+          class="selection-face-count"
+        >
           {{ selectedFaceCount }} Faces selected
         </span>
         <div
@@ -535,7 +854,13 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button v-bind="menuProps" class="hidden-panel-activator" type="button" tabindex="-1" aria-hidden="true"></button>
+              <button
+                v-bind="menuProps"
+                class="hidden-panel-activator"
+                type="button"
+                tabindex="-1"
+                aria-hidden="true"
+              ></button>
             </template>
             <div class="plugin-menu-panel">
               <div class="plugin-menu-header">Apply Filters</div>
@@ -590,7 +915,13 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button v-bind="menuProps" class="hidden-panel-activator" type="button" tabindex="-1" aria-hidden="true"></button>
+              <button
+                v-bind="menuProps"
+                class="hidden-panel-activator"
+                type="button"
+                tabindex="-1"
+                aria-hidden="true"
+              ></button>
             </template>
             <div class="plugin-menu-panel">
               <div class="plugin-menu-header">ComfyUI I2I</div>
@@ -668,11 +999,13 @@
               class="stack-btn"
               type="button"
               :disabled="selectedCount === 0"
-              :title="selectedCount === 0
-                ? 'Select images to apply actions'
-                : props.selectedExpandedCount > selectedCount
-                  ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
-                  : `Actions for ${selectedCount} selected`"
+              :title="
+                selectedCount === 0
+                  ? 'Select images to apply actions'
+                  : props.selectedExpandedCount > selectedCount
+                    ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
+                    : `Actions for ${selectedCount} selected`
+              "
             >
               <v-icon size="15">mdi-image-multiple-outline</v-icon>
               <span>Apply to ({{ selectedCount }})</span>
@@ -713,7 +1046,10 @@
                 v-if="showRemoveStackButton"
                 class="ctx-item"
                 title="Remove selected images from their stack"
-                @click="$emit('remove-from-stack'); selectionMenuOpen = false"
+                @click="
+                  $emit('remove-from-stack');
+                  selectionMenuOpen = false;
+                "
               >
                 <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
                 Unstack
@@ -722,7 +1058,10 @@
                 v-else-if="selectedCount > 1"
                 class="ctx-item"
                 title="Create a stack from the selected images"
-                @click="$emit('create-stack'); selectionMenuOpen = false"
+                @click="
+                  $emit('create-stack');
+                  selectionMenuOpen = false;
+                "
               >
                 <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
                 Stack
@@ -731,7 +1070,10 @@
                 v-if="showUnstackMultipleButton"
                 class="ctx-item"
                 title="Dissolve all selected stacks"
-                @click="$emit('dissolve-stacks'); selectionMenuOpen = false"
+                @click="
+                  $emit('dissolve-stacks');
+                  selectionMenuOpen = false;
+                "
               >
                 <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
                 Unstack all
@@ -740,7 +1082,10 @@
                 v-if="showGroupStackButton"
                 class="ctx-item"
                 title="Create stacks from selected likeness groups"
-                @click="$emit('create-stacks-from-groups'); selectionMenuOpen = false"
+                @click="
+                  $emit('create-stacks-from-groups');
+                  selectionMenuOpen = false;
+                "
               >
                 <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
                 Stack groups
@@ -754,7 +1099,10 @@
                 class="ctx-item"
                 :disabled="selectedCount === 0"
                 title="Tag selected (T)"
-                @click="openTagInput(); selectionMenuOpen = false"
+                @click="
+                  openTagInput();
+                  selectionMenuOpen = false;
+                "
               >
                 <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
                 Tag
@@ -763,7 +1111,10 @@
                 v-if="pluginOptions.length"
                 class="ctx-item"
                 :disabled="selectedCount === 0"
-                @click="openPluginPanel(); selectionMenuOpen = false"
+                @click="
+                  openPluginPanel();
+                  selectionMenuOpen = false;
+                "
               >
                 <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
                 Filters
@@ -772,7 +1123,10 @@
                 v-if="props.comfyuiConfigured"
                 class="ctx-item"
                 :disabled="selectedCount === 0"
-                @click="openComfyuiPanel(); selectionMenuOpen = false"
+                @click="
+                  openComfyuiPanel();
+                  selectionMenuOpen = false;
+                "
               >
                 <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
                 ComfyUI
@@ -785,7 +1139,10 @@
               v-if="showRemoveButton && !isReadOnly"
               class="ctx-item ctx-item--danger"
               :disabled="selectedCount === 0"
-              @click="$emit('remove-from-group'); selectionMenuOpen = false"
+              @click="
+                $emit('remove-from-group');
+                selectionMenuOpen = false;
+              "
             >
               {{ removeButtonLabel }}
             </button>
@@ -794,7 +1151,10 @@
               class="ctx-item ctx-item--danger"
               :disabled="selectedCount === 0"
               title="Delete selected items (DEL)"
-              @click="$emit('delete-selected'); selectionMenuOpen = false"
+              @click="
+                $emit('delete-selected');
+                selectionMenuOpen = false;
+              "
             >
               <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
               {{ deleteButtonLabel }}
@@ -1256,14 +1616,19 @@ function gbHandleSortModelUpdate(sortValue) {
 }
 
 function gbHandleSimilarityOptionClick() {
-  if (String(gbSortMenuModel.value || "").toUpperCase() === SIMILARITY_SORT_KEY_GB) {
+  if (
+    String(gbSortMenuModel.value || "").toUpperCase() === SIMILARITY_SORT_KEY_GB
+  ) {
     gbCommitSortSelection(SIMILARITY_SORT_KEY_GB);
     gbSortMenuOpen.value = false;
   }
 }
 
 function gbHandleStackThresholdOptionClick() {
-  if (String(gbSortMenuModel.value || "").toUpperCase() === LIKENESS_GROUPS_SORT_KEY_GB) {
+  if (
+    String(gbSortMenuModel.value || "").toUpperCase() ===
+    LIKENESS_GROUPS_SORT_KEY_GB
+  ) {
     gbCommitSortSelection(LIKENESS_GROUPS_SORT_KEY_GB);
     gbSortMenuOpen.value = false;
   }
@@ -1282,7 +1647,9 @@ const gbSelectedSimilarityOption = computed(() =>
   ),
 );
 const gbSelectedStackThresholdOption = computed(() =>
-  gbStackThresholdOptions.find((opt) => opt.value === gbStackThresholdModel.value),
+  gbStackThresholdOptions.find(
+    (opt) => opt.value === gbStackThresholdModel.value,
+  ),
 );
 
 const gbSortButtonLabel = computed(() => {
@@ -1312,47 +1679,81 @@ const gbFilterMenuOpen = ref(false);
 
 const gbMediaTypeFilter = computed({
   get: () => gb?.mediaTypeFilter?.value ?? "all",
-  set: (v) => { if (gb?.mediaTypeFilter) gb.mediaTypeFilter.value = v; },
+  set: (v) => {
+    if (gb?.mediaTypeFilter) gb.mediaTypeFilter.value = v;
+  },
 });
 const gbMinScoreFilter = computed({
   get: () => gb?.minScoreFilter?.value ?? null,
-  set: (v) => { if (gb?.minScoreFilter) gb.minScoreFilter.value = v ?? null; },
+  set: (v) => {
+    if (gb?.minScoreFilter) gb.minScoreFilter.value = v ?? null;
+  },
 });
 const gbMaxScoreFilter = computed({
   get: () => gb?.maxScoreFilter?.value ?? null,
-  set: (v) => { if (gb?.maxScoreFilter) gb.maxScoreFilter.value = v ?? null; },
+  set: (v) => {
+    if (gb?.maxScoreFilter) gb.maxScoreFilter.value = v ?? null;
+  },
 });
 const gbFaceBboxFilter = computed({
   get: () => gb?.faceBboxFilter?.value ?? null,
-  set: (v) => { if (gb?.faceBboxFilter) gb.faceBboxFilter.value = v; },
+  set: (v) => {
+    if (gb?.faceBboxFilter) gb.faceBboxFilter.value = v;
+  },
 });
 const gbTagFilter = computed({
   get: () => gb?.tagFilter?.value ?? [],
-  set: (v) => { if (gb?.tagFilter) gb.tagFilter.value = v ?? []; },
+  set: (v) => {
+    if (gb?.tagFilter) gb.tagFilter.value = v ?? [];
+  },
 });
 const gbTagRejectedFilter = computed({
   get: () => gb?.tagRejectedFilter?.value ?? [],
-  set: (v) => { if (gb?.tagRejectedFilter) gb.tagRejectedFilter.value = v ?? []; },
+  set: (v) => {
+    if (gb?.tagRejectedFilter) gb.tagRejectedFilter.value = v ?? [];
+  },
 });
 const gbTagConfidenceAboveFilter = computed({
   get: () => gb?.tagConfidenceAboveFilter?.value ?? [],
-  set: (v) => { if (gb?.tagConfidenceAboveFilter) gb.tagConfidenceAboveFilter.value = v ?? []; },
+  set: (v) => {
+    if (gb?.tagConfidenceAboveFilter)
+      gb.tagConfidenceAboveFilter.value = v ?? [];
+  },
 });
 const gbTagConfidenceBelowFilter = computed({
   get: () => gb?.tagConfidenceBelowFilter?.value ?? [],
-  set: (v) => { if (gb?.tagConfidenceBelowFilter) gb.tagConfidenceBelowFilter.value = v ?? []; },
+  set: (v) => {
+    if (gb?.tagConfidenceBelowFilter)
+      gb.tagConfidenceBelowFilter.value = v ?? [];
+  },
 });
 const gbSharedOnlyFilter = computed({
   get: () => gb?.sharedOnlyFilter?.value ?? false,
-  set: (v) => { if (gb?.sharedOnlyFilter) gb.sharedOnlyFilter.value = Boolean(v); },
+  set: (v) => {
+    if (gb?.sharedOnlyFilter) gb.sharedOnlyFilter.value = Boolean(v);
+  },
 });
+const gbUnassignedOnlyFilter = computed({
+  get: () => gb?.unassignedOnlyFilter?.value ?? false,
+  set: (v) => {
+    if (gb?.unassignedOnlyFilter) gb.unassignedOnlyFilter.value = Boolean(v);
+  },
+});
+const isAllPicturesView = computed(
+  () =>
+    String(props.selectedCharacter ?? "") === String(props.allPicturesId ?? ""),
+);
 const gbComfyuiModelFilter = computed({
   get: () => gb?.comfyuiModelFilter?.value ?? [],
-  set: (v) => { if (gb?.comfyuiModelFilter) gb.comfyuiModelFilter.value = v ?? []; },
+  set: (v) => {
+    if (gb?.comfyuiModelFilter) gb.comfyuiModelFilter.value = v ?? [];
+  },
 });
 const gbComfyuiLoraFilter = computed({
   get: () => gb?.comfyuiLoraFilter?.value ?? [],
-  set: (v) => { if (gb?.comfyuiLoraFilter) gb.comfyuiLoraFilter.value = v ?? []; },
+  set: (v) => {
+    if (gb?.comfyuiLoraFilter) gb.comfyuiLoraFilter.value = v ?? [];
+  },
 });
 
 const gbIsFilterActive = computed(
@@ -1363,13 +1764,19 @@ const gbIsFilterActive = computed(
     (gb?.smartScoreBucketFilter?.value ?? null) != null ||
     (gb?.resolutionBucketFilter?.value ?? null) != null ||
     (Array.isArray(gb?.tagFilter?.value) && gb.tagFilter.value.length > 0) ||
-    (Array.isArray(gb?.tagRejectedFilter?.value) && gb.tagRejectedFilter.value.length > 0) ||
-    (Array.isArray(gb?.tagConfidenceAboveFilter?.value) && gb.tagConfidenceAboveFilter.value.length > 0) ||
-    (Array.isArray(gb?.tagConfidenceBelowFilter?.value) && gb.tagConfidenceBelowFilter.value.length > 0) ||
-    (Array.isArray(gb?.comfyuiModelFilter?.value) && gb.comfyuiModelFilter.value.length > 0) ||
-    (Array.isArray(gb?.comfyuiLoraFilter?.value) && gb.comfyuiLoraFilter.value.length > 0) ||
+    (Array.isArray(gb?.tagRejectedFilter?.value) &&
+      gb.tagRejectedFilter.value.length > 0) ||
+    (Array.isArray(gb?.tagConfidenceAboveFilter?.value) &&
+      gb.tagConfidenceAboveFilter.value.length > 0) ||
+    (Array.isArray(gb?.tagConfidenceBelowFilter?.value) &&
+      gb.tagConfidenceBelowFilter.value.length > 0) ||
+    (Array.isArray(gb?.comfyuiModelFilter?.value) &&
+      gb.comfyuiModelFilter.value.length > 0) ||
+    (Array.isArray(gb?.comfyuiLoraFilter?.value) &&
+      gb.comfyuiLoraFilter.value.length > 0) ||
     (gb?.faceBboxFilter?.value ?? null) != null ||
-    (gb?.sharedOnlyFilter?.value ?? false),
+    (gb?.sharedOnlyFilter?.value ?? false) ||
+    (gb?.unassignedOnlyFilter?.value ?? false),
 );
 
 const gbActiveFilterCount = computed(() => {
@@ -1380,13 +1787,19 @@ const gbActiveFilterCount = computed(() => {
   if ((gb?.smartScoreBucketFilter?.value ?? null) != null) count++;
   if ((gb?.resolutionBucketFilter?.value ?? null) != null) count++;
   if (Array.isArray(gb?.tagFilter?.value)) count += gb.tagFilter.value.length;
-  if (Array.isArray(gb?.tagRejectedFilter?.value)) count += gb.tagRejectedFilter.value.length;
-  if (Array.isArray(gb?.tagConfidenceAboveFilter?.value)) count += gb.tagConfidenceAboveFilter.value.length;
-  if (Array.isArray(gb?.tagConfidenceBelowFilter?.value)) count += gb.tagConfidenceBelowFilter.value.length;
-  if (Array.isArray(gb?.comfyuiModelFilter?.value)) count += gb.comfyuiModelFilter.value.length;
-  if (Array.isArray(gb?.comfyuiLoraFilter?.value)) count += gb.comfyuiLoraFilter.value.length;
+  if (Array.isArray(gb?.tagRejectedFilter?.value))
+    count += gb.tagRejectedFilter.value.length;
+  if (Array.isArray(gb?.tagConfidenceAboveFilter?.value))
+    count += gb.tagConfidenceAboveFilter.value.length;
+  if (Array.isArray(gb?.tagConfidenceBelowFilter?.value))
+    count += gb.tagConfidenceBelowFilter.value.length;
+  if (Array.isArray(gb?.comfyuiModelFilter?.value))
+    count += gb.comfyuiModelFilter.value.length;
+  if (Array.isArray(gb?.comfyuiLoraFilter?.value))
+    count += gb.comfyuiLoraFilter.value.length;
   if ((gb?.faceBboxFilter?.value ?? null) != null) count++;
   if (gb?.sharedOnlyFilter?.value) count++;
+  if (gb?.unassignedOnlyFilter?.value) count++;
   return count;
 });
 
@@ -1405,6 +1818,7 @@ function gbClearAllFilters() {
   if (gb.comfyuiModelFilter) gb.comfyuiModelFilter.value = [];
   if (gb.comfyuiLoraFilter) gb.comfyuiLoraFilter.value = [];
   if (gb.sharedOnlyFilter) gb.sharedOnlyFilter.value = false;
+  if (gb.unassignedOnlyFilter) gb.unassignedOnlyFilter.value = false;
 }
 
 const gbMediaTypeOptions = [
@@ -1420,7 +1834,11 @@ function gbSetMediaTypeFilter(value) {
 const gbFaceBboxFilterOptions = [
   { value: null, icon: "mdi-all-inclusive", title: "All pictures" },
   { value: "with_face", icon: "mdi-face-man", title: "With detected face" },
-  { value: "without_face", icon: "mdi-face-man", title: "Without detected face" },
+  {
+    value: "without_face",
+    icon: "mdi-face-man",
+    title: "Without detected face",
+  },
 ];
 
 function gbSetFaceBboxFilter(value) {
@@ -1431,7 +1849,11 @@ function gbSetFaceBboxFilter(value) {
 function gbSetMinScore(n) {
   const newMin = gbMinScoreFilter.value === n ? null : n;
   gbMinScoreFilter.value = newMin;
-  if (newMin !== null && gbMaxScoreFilter.value !== null && newMin > gbMaxScoreFilter.value) {
+  if (
+    newMin !== null &&
+    gbMaxScoreFilter.value !== null &&
+    newMin > gbMaxScoreFilter.value
+  ) {
     gbMaxScoreFilter.value = newMin;
   }
 }
@@ -1439,7 +1861,11 @@ function gbSetMinScore(n) {
 function gbSetMaxScore(n) {
   const newMax = gbMaxScoreFilter.value === n ? null : n;
   gbMaxScoreFilter.value = newMax;
-  if (newMax !== null && gbMinScoreFilter.value !== null && newMax < gbMinScoreFilter.value) {
+  if (
+    newMax !== null &&
+    gbMinScoreFilter.value !== null &&
+    newMax < gbMinScoreFilter.value
+  ) {
     gbMinScoreFilter.value = newMax;
   }
 }
@@ -1492,7 +1918,9 @@ function gbAddTagFilter(tag) {
 
 function gbRemoveTagFilter(tag) {
   gbTagFilter.value = gbTagFilter.value.filter((t) => t !== tag);
-  gbTagRejectedFilter.value = gbTagRejectedFilter.value.filter((t) => t !== tag);
+  gbTagRejectedFilter.value = gbTagRejectedFilter.value.filter(
+    (t) => t !== tag,
+  );
 }
 
 function gbToggleTagRejected(tag) {
@@ -1500,7 +1928,9 @@ function gbToggleTagRejected(tag) {
     gbTagFilter.value = gbTagFilter.value.filter((t) => t !== tag);
     gbTagRejectedFilter.value = [...gbTagRejectedFilter.value, tag];
   } else {
-    gbTagRejectedFilter.value = gbTagRejectedFilter.value.filter((t) => t !== tag);
+    gbTagRejectedFilter.value = gbTagRejectedFilter.value.filter(
+      (t) => t !== tag,
+    );
     gbTagFilter.value = [...gbTagFilter.value, tag];
   }
 }
@@ -1553,10 +1983,16 @@ function gbAddConfidenceFilter(tagArg) {
   const entry = `${tag}:${gbConfidenceThreshold.value.toFixed(2)}`;
   if (gbConfidenceMode.value === "above") {
     if (!gbTagConfidenceAboveFilter.value.includes(entry))
-      gbTagConfidenceAboveFilter.value = [...gbTagConfidenceAboveFilter.value, entry];
+      gbTagConfidenceAboveFilter.value = [
+        ...gbTagConfidenceAboveFilter.value,
+        entry,
+      ];
   } else {
     if (!gbTagConfidenceBelowFilter.value.includes(entry))
-      gbTagConfidenceBelowFilter.value = [...gbTagConfidenceBelowFilter.value, entry];
+      gbTagConfidenceBelowFilter.value = [
+        ...gbTagConfidenceBelowFilter.value,
+        entry,
+      ];
   }
   gbConfidenceTagInput.value = "";
   gbConfidenceTagSuggestions.value = [];
@@ -1564,11 +2000,15 @@ function gbAddConfidenceFilter(tagArg) {
 }
 
 function gbRemoveConfidenceAboveFilter(entry) {
-  gbTagConfidenceAboveFilter.value = gbTagConfidenceAboveFilter.value.filter((e) => e !== entry);
+  gbTagConfidenceAboveFilter.value = gbTagConfidenceAboveFilter.value.filter(
+    (e) => e !== entry,
+  );
 }
 
 function gbRemoveConfidenceBelowFilter(entry) {
-  gbTagConfidenceBelowFilter.value = gbTagConfidenceBelowFilter.value.filter((e) => e !== entry);
+  gbTagConfidenceBelowFilter.value = gbTagConfidenceBelowFilter.value.filter(
+    (e) => e !== entry,
+  );
 }
 
 function gbConfidenceEntryLabel(entry) {
@@ -1583,7 +2023,11 @@ const gbComfyuiFilterExpanded = ref(false);
 watch(gbFilterMenuOpen, async (isOpen) => {
   if (isOpen) {
     const backendUrl = gb?.backendUrl ?? "";
-    if (backendUrl && !gbComfyuiModelOptions.value.length && !gbComfyuiLoraOptions.value.length) {
+    if (
+      backendUrl &&
+      !gbComfyuiModelOptions.value.length &&
+      !gbComfyuiLoraOptions.value.length
+    ) {
       try {
         const [mRes, lRes] = await Promise.all([
           apiClient.get(`${backendUrl}/pictures/comfyui_models`),
@@ -1620,35 +2064,107 @@ function gbCommitColumns() {
 
 const gbCompactModeModel = computed({
   get: () => gb?.compactMode?.value ?? false,
-  set: (v) => { if (gb?.compactMode) gb.compactMode.value = Boolean(v); },
+  set: (v) => {
+    if (gb?.compactMode) gb.compactMode.value = Boolean(v);
+  },
 });
 const gbShowStarsModel = computed({
   get: () => gb?.showStars?.value ?? true,
-  set: (v) => { if (gb?.showStars) gb.showStars.value = Boolean(v); },
+  set: (v) => {
+    if (gb?.showStars) gb.showStars.value = Boolean(v);
+  },
 });
 const gbShowFaceBboxesModel = computed({
   get: () => gb?.showFaceBboxes?.value ?? false,
-  set: (v) => { if (gb?.showFaceBboxes) gb.showFaceBboxes.value = Boolean(v); },
+  set: (v) => {
+    if (gb?.showFaceBboxes) gb.showFaceBboxes.value = Boolean(v);
+  },
 });
 const gbShowFormatModel = computed({
   get: () => gb?.showFormat?.value ?? true,
-  set: (v) => { if (gb?.showFormat) gb.showFormat.value = Boolean(v); },
+  set: (v) => {
+    if (gb?.showFormat) gb.showFormat.value = Boolean(v);
+  },
 });
 const gbShowResolutionModel = computed({
   get: () => gb?.showResolution?.value ?? true,
-  set: (v) => { if (gb?.showResolution) gb.showResolution.value = Boolean(v); },
+  set: (v) => {
+    if (gb?.showResolution) gb.showResolution.value = Boolean(v);
+  },
 });
 const gbShowProblemIconModel = computed({
   get: () => gb?.showProblemIcon?.value ?? true,
-  set: (v) => { if (gb?.showProblemIcon) gb.showProblemIcon.value = Boolean(v); },
+  set: (v) => {
+    if (gb?.showProblemIcon) gb.showProblemIcon.value = Boolean(v);
+  },
 });
 
 const gbOverlayOptions = computed(() => [
-  { key: 'stars',   label: 'Stars',       icon: 'mdi-star',            model: { get value() { return gbShowStarsModel.value; },      set value(v) { gbShowStarsModel.value = v; } } },
-  { key: 'faces',   label: 'Face boxes',  icon: 'mdi-face-recognition',model: { get value() { return gbShowFaceBboxesModel.value; }, set value(v) { gbShowFaceBboxesModel.value = v; } } },
-  { key: 'format',  label: 'Format',      icon: 'mdi-file-image',      model: { get value() { return gbShowFormatModel.value; },     set value(v) { gbShowFormatModel.value = v; } } },
-  { key: 'res',     label: 'Resolution',  icon: 'mdi-aspect-ratio',    model: { get value() { return gbShowResolutionModel.value; }, set value(v) { gbShowResolutionModel.value = v; } } },
-  { key: 'problem', label: 'Problems',    icon: 'mdi-alert',           model: { get value() { return gbShowProblemIconModel.value; },set value(v) { gbShowProblemIconModel.value = v; } } },
+  {
+    key: "stars",
+    label: "Stars",
+    icon: "mdi-star",
+    model: {
+      get value() {
+        return gbShowStarsModel.value;
+      },
+      set value(v) {
+        gbShowStarsModel.value = v;
+      },
+    },
+  },
+  {
+    key: "faces",
+    label: "Face boxes",
+    icon: "mdi-face-recognition",
+    model: {
+      get value() {
+        return gbShowFaceBboxesModel.value;
+      },
+      set value(v) {
+        gbShowFaceBboxesModel.value = v;
+      },
+    },
+  },
+  {
+    key: "format",
+    label: "Format",
+    icon: "mdi-file-image",
+    model: {
+      get value() {
+        return gbShowFormatModel.value;
+      },
+      set value(v) {
+        gbShowFormatModel.value = v;
+      },
+    },
+  },
+  {
+    key: "res",
+    label: "Resolution",
+    icon: "mdi-aspect-ratio",
+    model: {
+      get value() {
+        return gbShowResolutionModel.value;
+      },
+      set value(v) {
+        gbShowResolutionModel.value = v;
+      },
+    },
+  },
+  {
+    key: "problem",
+    label: "Problems",
+    icon: "mdi-alert",
+    model: {
+      get value() {
+        return gbShowProblemIconModel.value;
+      },
+      set value(v) {
+        gbShowProblemIconModel.value = v;
+      },
+    },
+  },
 ]);
 
 const gbExpandAllStacksDisabled = computed(() => {
@@ -3411,6 +3927,10 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .gb-filter-shared-only-row {
   width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .gb-filter-shared-only-label {
@@ -3419,6 +3939,10 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   gap: 6px;
   font-size: 0.85em;
   cursor: pointer;
+}
+
+.gb-filter-shared-only-label--right {
+  margin-left: auto;
 }
 
 .gb-filter-section-label {
@@ -3744,7 +4268,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   cursor: pointer;
   font-size: 0;
   opacity: 0.5;
-  transition: opacity 0.12s, background 0.12s;
+  transition:
+    opacity 0.12s,
+    background 0.12s;
 }
 
 .gb-overlay-btn:hover {
@@ -3765,5 +4291,4 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   line-height: 1.2;
   color: inherit;
 }
-
 </style>

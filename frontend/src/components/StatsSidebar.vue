@@ -524,13 +524,21 @@ const tmSystemItems = computed(() => {
   if (Number.isFinite(usage.ram_used_gb)) {
     items.push({
       label: "RAM",
-      value: tmFormatUsage(usage.ram_used_gb, usage.ram_total_gb, usage.ram_percent),
+      value: tmFormatUsage(
+        usage.ram_used_gb,
+        usage.ram_total_gb,
+        usage.ram_percent,
+      ),
     });
   }
   items.push({
     label: "VRAM",
     value: Number.isFinite(usage.vram_used_gb)
-      ? tmFormatUsage(usage.vram_used_gb, usage.vram_total_gb, usage.vram_percent)
+      ? tmFormatUsage(
+          usage.vram_used_gb,
+          usage.vram_total_gb,
+          usage.vram_percent,
+        )
       : "n/a",
   });
   return items;
@@ -1660,8 +1668,12 @@ function handleResolutionBarClick(label) {
                   entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
               }"
             ></span>
-            <span class="tm-worker-label">{{ tmFormatLabel(entry.key, entry.snapshot.label) }}</span>
-            <span class="tm-worker-progress">{{ tmFormatProgress(entry.snapshot) }}</span>
+            <span class="tm-worker-label">{{
+              tmFormatLabel(entry.key, entry.snapshot.label)
+            }}</span>
+            <span class="tm-worker-progress">{{
+              tmFormatProgress(entry.snapshot)
+            }}</span>
           </div>
         </div>
         <div v-if="tmSystemItems.length" class="tm-system-bar">
@@ -1690,6 +1702,7 @@ function handleResolutionBarClick(label) {
   flex-direction: row;
   flex-shrink: 0;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  border-top: 2px solid rgb(var(--v-theme-primary));
   background: rgba(var(--v-theme-surface), 1);
   transition:
     width 0.15s,
@@ -1703,6 +1716,7 @@ function handleResolutionBarClick(label) {
   min-width: 0;
   max-width: 0;
   border-left-color: transparent;
+  border-top-color: transparent;
   overflow: visible;
   background: transparent;
 }

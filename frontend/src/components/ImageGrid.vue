@@ -920,6 +920,7 @@ const props = defineProps({
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
   sharedOnlyFilter: { type: Boolean, default: false },
+  unassignedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
@@ -4805,6 +4806,7 @@ function buildGridFetchKey() {
     referenceFolderIdFilter: props.referenceFolderIdFilter ?? null,
     filePathPrefixFilter: props.filePathPrefixFilter ?? null,
     importSourceFolderFilter: props.importSourceFolderFilter ?? null,
+    unassignedOnlyFilter: props.unassignedOnlyFilter ?? false,
   });
 }
 
@@ -4852,6 +4854,19 @@ function _appendSelectionParams(params) {
     props.selectedCharacter !== props.allPicturesId
   ) {
     params.append("character_id", props.selectedCharacter);
+    if (props.projectViewMode === "project") {
+      params.append(
+        "project_id",
+        props.selectedProjectId != null
+          ? props.selectedProjectId
+          : "UNASSIGNED",
+      );
+    }
+  } else if (
+    props.selectedCharacter === props.allPicturesId &&
+    props.unassignedOnlyFilter
+  ) {
+    params.append("character_id", props.unassignedPicturesId);
     if (props.projectViewMode === "project") {
       params.append(
         "project_id",
@@ -6354,6 +6369,7 @@ watch(
     () => props.tagConfidenceBelowFilter,
     () => props.faceBboxFilter,
     () => props.sharedOnlyFilter,
+    () => props.unassignedOnlyFilter,
   ],
   () => {
     _resetGridState();
