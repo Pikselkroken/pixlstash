@@ -93,6 +93,11 @@ watch(activeTab, (tab) => {
   if (tab === "pictures" && !picStatsLoaded.value && !picStatsLoading.value) {
     fetchPicStats();
   }
+  if (tab === "tasks") {
+    tmStartPolling();
+  } else {
+    tmStopPolling();
+  }
 });
 
 // Tag confidence filter
@@ -382,7 +387,210 @@ watch(
     }, 2000);
   },
 );
-onUnmounted(() => clearTimeout(_wsTagUpdateTimer));
+onUnmounted(() => {
+  clearTimeout(_wsTagUpdateTimer);
+  tmStopPolling();
+});
+
+// ─── Tasks tab ────────────────────────────────────────────────────────────────
+const tmWorkerSnapshots = ref({});
+const tmSystemUsage = ref(null);
+const tmSeries = ref({});
+const tmLastSnapshot = new Map();
+const tmLastActiveAtByWorker = new Map();
+const tmLastProgressAtByWorker = new Map();
+let tmPollTimer = null;
+let tmFetchInFlight = false;
+const TM_WORKER_REMOVE_GRACE_SECONDS = 10;
+const TM_RATE_AVERAGE_WINDOW_SECONDS = 8;
+const tmNowSeconds = ref(Date.now() / 1000);
+
+const tmLabelMap = {
+  quality_scored: "Quality",
+  pictures_tagged: "Tags",
+  descriptions_generated: "Descriptions",
+  text_embeddings: "Text embeddings",
+  image_embeddings: "Image embeddings",
+  faces_extracted: "Faces extracted",
+  likeness_pairs: "Likeness pairs",
+  likeness_parameters: "Likeness params",
+  watch_folder_import: "Folder import",
+  comfyui_extraction: "ComfyUI backfill",
+  tag_predictions_scored: "Tag Predictions",
+  missing_file_purge: "File cleanup",
+  planner_managed: "Planner task",
+  text_score: "Text score",
+};
+
+const tmWorkerLabelMap = {
+  ReferenceFolderScanTask: "Reference folder scan",
+  SourceFaceLikenessTask: "Source face likeness",
+  SmartScoreTask: "Smart score",
+};
+
+function tmToTitleWords(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim();
+}
+
+function tmFallbackWorkerLabel(key) {
+  if (tmWorkerLabelMap[key]) return tmWorkerLabelMap[key];
+  return tmToTitleWords(String(key || "").replace(/(Worker|Task)$/, ""));
+}
+
+function tmFormatLabel(key, label) {
+  if (tmLabelMap[label]) {
+    if (label === "planner_managed") return tmFallbackWorkerLabel(key);
+    return tmLabelMap[label];
+  }
+  if (label && label !== "idle" && label !== "uninitialized") {
+    return tmToTitleWords(label);
+  }
+  return tmFallbackWorkerLabel(key);
+}
+
+function tmFormatProgress(snapshot) {
+  const current = Number(snapshot?.current || 0);
+  const total = Number(snapshot?.total || 0);
+  if (!total) return `${current}`;
+  return `${current} / ${total}`;
+}
+
+function tmFormatPercent(value) {
+  const percent = Number(value);
+  if (!Number.isFinite(percent)) return "n/a";
+  if (percent >= 10) return `${percent.toFixed(0)}%`;
+  return `${percent.toFixed(1)}%`;
+}
+
+function tmFormatGigabytes(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "n/a";
+  return `${amount.toFixed(1)} GB`;
+}
+
+function tmFormatUsage(used, total, percent) {
+  const usedLabel = tmFormatGigabytes(used);
+  if (Number.isFinite(total)) {
+    return `${usedLabel} / ${tmFormatGigabytes(total)} (${tmFormatPercent(percent)})`;
+  }
+  const percentLabel = tmFormatPercent(percent);
+  if (percentLabel !== "n/a") return `${usedLabel} (${percentLabel})`;
+  return usedLabel;
+}
+
+function tmGetLatestRate(key) {
+  const samples = tmSeries.value[key] || [];
+  if (!samples.length) return 0;
+  const latest = samples[samples.length - 1];
+  const latestTime = Number(latest?.t || 0);
+  if (!latestTime) return Number(latest?.rate || 0);
+  const cutoff = latestTime - TM_RATE_AVERAGE_WINDOW_SECONDS;
+  const windowSamples = samples.filter((s) => Number(s?.t || 0) >= cutoff);
+  if (!windowSamples.length) return Number(latest?.rate || 0);
+  const sum = windowSamples.reduce((acc, s) => acc + Number(s?.rate || 0), 0);
+  return sum / windowSamples.length;
+}
+
+const tmWorkerEntries = computed(() => {
+  const entries = Object.entries(tmWorkerSnapshots.value || {});
+  return entries
+    .filter(([key, snapshot]) => {
+      if (!snapshot) return false;
+      if (typeof snapshot.active === "boolean") return snapshot.active;
+      const lastActiveAt = Number(tmLastActiveAtByWorker.get(key) || 0);
+      const lastProgressAt = Number(tmLastProgressAtByWorker.get(key) || 0);
+      const latestActivityAt = Math.max(lastActiveAt, lastProgressAt);
+      return (
+        latestActivityAt > 0 &&
+        tmNowSeconds.value - latestActivityAt <= TM_WORKER_REMOVE_GRACE_SECONDS
+      );
+    })
+    .map(([key, snapshot]) => ({ key, snapshot }));
+});
+
+const tmSystemItems = computed(() => {
+  const usage = tmSystemUsage.value || {};
+  const items = [];
+  const cpuAllCores = Number.isFinite(usage.cpu_percent_all_cores)
+    ? usage.cpu_percent_all_cores
+    : usage.cpu_percent;
+  if (Number.isFinite(cpuAllCores)) {
+    items.push({ label: "CPU", value: tmFormatPercent(cpuAllCores) });
+  }
+  if (Number.isFinite(usage.ram_used_gb)) {
+    items.push({
+      label: "RAM",
+      value: tmFormatUsage(usage.ram_used_gb, usage.ram_total_gb, usage.ram_percent),
+    });
+  }
+  items.push({
+    label: "VRAM",
+    value: Number.isFinite(usage.vram_used_gb)
+      ? tmFormatUsage(usage.vram_used_gb, usage.vram_total_gb, usage.vram_percent)
+      : "n/a",
+  });
+  return items;
+});
+
+async function tmFetchProgress() {
+  if (tmFetchInFlight) return;
+  tmFetchInFlight = true;
+  try {
+    const res = await apiClient.get("/workers/progress");
+    const workers = res.data?.workers || {};
+    tmSystemUsage.value = res.data?.process || res.data?.system || null;
+    const now = Date.now() / 1000;
+    tmNowSeconds.value = now;
+    const nextSeries = { ...tmSeries.value };
+    tmWorkerSnapshots.value = workers;
+    for (const [key, snapshot] of Object.entries(workers)) {
+      const current = Number(snapshot.current || 0);
+      const prev = tmLastSnapshot.get(key);
+      let rate = 0;
+      if (prev && current > prev.current && now > prev.t) {
+        rate = (current - prev.current) / (now - prev.t);
+      }
+      if (rate > 0) tmLastProgressAtByWorker.set(key, now);
+      const hasExplicitActive = typeof snapshot?.active === "boolean";
+      const isActive = hasExplicitActive
+        ? snapshot.active
+        : Boolean(snapshot?.running) && rate > 0;
+      if (isActive) tmLastActiveAtByWorker.set(key, now);
+      tmLastSnapshot.set(key, { current, t: now });
+      const entry = { t: now, rate, current };
+      const existing = nextSeries[key] ? [...nextSeries[key]] : [];
+      existing.push(entry);
+      nextSeries[key] = existing.filter((e) => e.t >= now - 120);
+    }
+    for (const key of Array.from(tmLastActiveAtByWorker.keys())) {
+      if (!(key in workers)) tmLastActiveAtByWorker.delete(key);
+    }
+    for (const key of Array.from(tmLastProgressAtByWorker.keys())) {
+      if (!(key in workers)) tmLastProgressAtByWorker.delete(key);
+    }
+    tmSeries.value = nextSeries;
+  } catch {
+    // silent
+  } finally {
+    tmFetchInFlight = false;
+  }
+}
+
+function tmStartPolling() {
+  if (tmPollTimer) return;
+  tmFetchProgress();
+  tmPollTimer = setInterval(tmFetchProgress, 2000);
+}
+
+function tmStopPolling() {
+  if (!tmPollTimer) return;
+  clearInterval(tmPollTimer);
+  tmPollTimer = null;
+}
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;
@@ -652,6 +860,15 @@ function handleResolutionBarClick(label) {
         >
           <v-icon size="12">mdi-image-multiple-outline</v-icon>
           Pictures
+        </button>
+        <button
+          class="stats-tab-btn"
+          :class="{ active: activeTab === 'tasks' }"
+          type="button"
+          @click="activeTab = 'tasks'"
+        >
+          <v-icon size="12">mdi-timeline-clock-outline</v-icon>
+          Tasks
         </button>
       </div>
 
@@ -1424,6 +1641,40 @@ function handleResolutionBarClick(label) {
           </div>
         </template>
       </template>
+
+      <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
+      <template v-if="activeTab === 'tasks'">
+        <div v-if="tmWorkerEntries.length === 0" class="tm-idle-msg">
+          No active workers
+        </div>
+        <div v-else class="tm-worker-list">
+          <div
+            v-for="entry in tmWorkerEntries"
+            :key="entry.key"
+            class="tm-worker-row"
+          >
+            <span
+              class="tm-status-dot"
+              :class="{
+                'tm-status-dot--running':
+                  entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
+              }"
+            ></span>
+            <span class="tm-worker-label">{{ tmFormatLabel(entry.key, entry.snapshot.label) }}</span>
+            <span class="tm-worker-progress">{{ tmFormatProgress(entry.snapshot) }}</span>
+          </div>
+        </div>
+        <div v-if="tmSystemItems.length" class="tm-system-bar">
+          <div
+            v-for="item in tmSystemItems"
+            :key="item.label"
+            class="tm-system-item"
+          >
+            <span class="tm-system-label">{{ item.label }}</span>
+            <span class="tm-system-value">{{ item.value }}</span>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -1928,5 +2179,97 @@ function handleResolutionBarClick(label) {
   fill: rgba(var(--v-theme-tertiary), 0.85);
   stroke: rgba(var(--v-theme-tertiary), 1);
   stroke-width: 1;
+}
+
+/* ── Tasks tab ─────────────────────────────────────────────────────────────── */
+.tm-idle-msg {
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), 0.4);
+  font-style: italic;
+  padding: 12px 0 4px;
+}
+
+.tm-worker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.tm-worker-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+  min-width: 0;
+}
+
+.tm-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(var(--v-theme-on-surface), 0.2);
+}
+
+.tm-status-dot--running {
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.55);
+}
+
+.tm-worker-label {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(var(--v-theme-on-surface), 0.85);
+}
+
+.tm-worker-progress {
+  font-size: 11px;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tm-system-bar {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.tm-system-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.tm-system-label {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+  text-transform: uppercase;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.tm-system-value {
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

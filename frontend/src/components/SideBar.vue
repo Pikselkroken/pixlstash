@@ -12,7 +12,6 @@ import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
 import ProjectEditor from "./ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
-import TaskManager from "./TaskManager.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import FolderTreeNode from "./FolderTreeNode.vue";
 import ReferenceFolderEditor from "./ReferenceFolderEditor.vue";
@@ -271,8 +270,6 @@ const characterEditorCharacter = ref(null);
 const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 const settingsDialogOpen = ref(false);
-const taskManagerOpen = ref(false);
-
 // --- Reference Folders (Folders tab) ---
 const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
 const referenceFolders = ref([]);
@@ -2797,10 +2794,6 @@ defineExpose({
     </v-card>
   </v-dialog>
 
-  <v-dialog v-model="taskManagerOpen" width="min(96vw, 1700px)">
-    <TaskManager :active="taskManagerOpen" @close="taskManagerOpen = false" />
-  </v-dialog>
-
   <aside
     ref="sidebarRootRef"
     class="sidebar"
@@ -4027,51 +4020,6 @@ defineExpose({
         />
         <span>PixlStash</span>
       </a>
-    </div>
-    <div class="sidebar-sticky-footer">
-      <div
-        class="sidebar-footer-btn sidebar-footer-btn--settings"
-        title="Settings"
-        @click.stop="openSettingsDialog"
-      >
-        <v-icon size="20">mdi-cog-outline</v-icon>
-        <span class="sidebar-footer-btn-label">Settings</span>
-      </div>
-      <div
-        v-if="!isReadOnly"
-        class="sidebar-footer-btn sidebar-footer-btn--upload"
-        title="Import photos"
-        @click.stop="openImportDialog"
-      >
-        <v-icon size="20">mdi-cloud-upload-outline</v-icon>
-        <span class="sidebar-footer-btn-label">Import</span>
-      </div>
-      <div
-        v-if="!isReadOnly"
-        class="sidebar-footer-btn sidebar-footer-btn--tasks"
-        title="Task Manager"
-        @click.stop="taskManagerOpen = true"
-      >
-        <v-icon size="20">mdi-timeline-clock-outline</v-icon>
-        <span class="sidebar-footer-btn-label">Tasks</span>
-      </div>
-      <div
-        v-if="!isReadOnly"
-        :class="[
-          'sidebar-footer-btn',
-          'sidebar-footer-btn--scrapheap',
-          {
-            active:
-              props.selectedCharacter === props.scrapheapPicturesId &&
-              !props.hasFolderFilter,
-          },
-        ]"
-        title="Scrapheap"
-        @click.stop="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
-      >
-        <v-icon size="20">mdi-trash-can-outline</v-icon>
-        <span class="sidebar-footer-btn-label">Scrapheap</span>
-      </div>
     </div>
   </aside>
   <div
@@ -5402,62 +5350,6 @@ defineExpose({
 }
 
 .sidebar-collapsed .sidebar-readonly-notice {
-  display: none;
-}
-
-.sidebar-sticky-footer {
-  display: flex;
-  align-items: stretch;
-  border-top: 1px solid rgba(var(--v-theme-border), 0.3);
-  background: rgb(var(--v-theme-sidebar));
-  flex-shrink: 0;
-}
-
-.sidebar-footer-btn {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 10px 4px;
-  cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
-  transition:
-    background 0.15s,
-    color 0.15s;
-  font-size: 0.72rem;
-  font-weight: 500;
-}
-
-.sidebar-footer-btn:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-  background: rgba(var(--v-theme-sidebar-text), 0.08);
-}
-
-.sidebar-footer-btn--upload:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-footer-btn--scrapheap:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-footer-btn--scrapheap.active {
-  color: rgb(var(--v-theme-error));
-  opacity: 1;
-}
-
-.sidebar-collapsed .sidebar-sticky-footer {
-  flex-direction: column;
-}
-
-.sidebar-collapsed .sidebar-footer-btn {
-  flex: 0 0 auto;
-  padding: 8px 4px;
-}
-
-.sidebar-collapsed .sidebar-footer-btn-label {
   display: none;
 }
 

@@ -84,6 +84,27 @@
         >
           <v-icon>mdi-magnify</v-icon>
         </v-btn>
+        <v-btn
+          v-if="!isMobile"
+          icon
+          color="surface"
+          title="Settings"
+          class="toolbar-action-btn"
+          @click="emit('open-settings')"
+        >
+          <v-icon :color="'on-background'">mdi-cog-outline</v-icon>
+        </v-btn>
+        <v-btn
+          v-if="!isMobile && !isReadOnly"
+          icon
+          color="surface"
+          title="Import photos"
+          class="toolbar-action-btn"
+          @click="emit('open-import')"
+        >
+          <v-icon :color="'on-background'">mdi-cloud-upload-outline</v-icon>
+        </v-btn>
+
         <v-menu
           v-if="!isMobile"
           v-model="exportMenuOpenModel"
@@ -291,6 +312,17 @@
         </v-menu>
 
         <v-btn
+          v-if="!isMobile && !isReadOnly"
+          icon
+          :color="scrapheapActive ? 'error' : 'surface'"
+          title="Scrapheap"
+          class="toolbar-action-btn"
+          @click="emit('open-scrapheap')"
+        >
+          <v-icon :color="scrapheapActive ? 'on-error' : 'on-background'">mdi-trash-can-outline</v-icon>
+        </v-btn>
+
+        <v-btn
           icon
           :color="statsOpen ? 'primary' : 'surface'"
           title="Toggle stats sidebar"
@@ -331,6 +363,7 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
   statsOpen: { type: Boolean, default: true },
   backendUrl: { type: String, default: "" },
+  scrapheapActive: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -350,6 +383,8 @@ const emit = defineEmits([
   "clear-search-history",
   "confirm-export-zip",
   "open-settings",
+  "open-import",
+  "open-scrapheap",
   "toggle-sidebar",
   "toggle-stats",
   "comfyui-run-grid",
