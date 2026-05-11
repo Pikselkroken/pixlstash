@@ -3221,8 +3221,11 @@ const showScrapheapBar = computed(() => {
 const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const wrapperStyle = { position: "relative", height: "100%" };
 const scrollWrapperStyle = computed(() => ({
-  position: "relative",
-  paddingTop: `${SCRAPHEAP_BAR_HEIGHT_PX}px`,
+  position: "absolute",
+  top: `${SCRAPHEAP_BAR_HEIGHT_PX}px`,
+  left: "0",
+  right: "0",
+  bottom: "0",
 }));
 const scrapheapEmptyDisabled = computed(() => {
   return (
@@ -7935,14 +7938,7 @@ function handleEmptyStateReset() {
   gap: 0px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar {
-  width: 8px;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgb(var(--v-theme-accent));
-  border-radius: 8px;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: rgba(var(--v-theme-shadow), 0.15);
+  width: 10px;
 }
 .image-card-cursor .thumbnail-img {
   outline: 2px solid rgba(var(--v-theme-primary), 0.9);
@@ -8424,5 +8420,32 @@ function handleEmptyStateReset() {
 }
 .share-dialog-actions {
   padding: 8px 16px 16px;
+}
+</style>
+
+<style>
+/* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
+/* Thumb uses transparent border + background-clip trick: expands on hover, colour stays the same */
+.grid-scroll-wrapper::-webkit-scrollbar-thumb {
+  background: rgb(var(--v-theme-accent)) !important;
+  background-clip: padding-box !important;
+  border: 3px solid transparent !important;
+  border-radius: 8px !important;
+  transition: border-width 0.15s ease !important;
+}
+.grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--v-theme-accent)) !important;
+  background-clip: padding-box !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+}
+.grid-scroll-wrapper::-webkit-scrollbar-track {
+  background: rgba(var(--v-theme-shadow), 0.15) !important;
+}
+.grid-scroll-wrapper::-webkit-scrollbar-track:hover {
+  background: rgba(var(--v-theme-shadow), 0.15) !important;
+}
+.grid-scroll-wrapper::-webkit-scrollbar-corner {
+  background: transparent !important;
 }
 </style>
