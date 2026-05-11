@@ -9,22 +9,6 @@
         >
           Clear
         </button>
-        <span v-if="selectedCount > 0" class="selection-count"
-          >{{ selectedCount }} selected</span
-        >
-        <span
-          v-if="props.selectedExpandedCount > selectedCount"
-          class="selection-expanded-count"
-          title="including images in stacks"
-        >
-          ({{ props.selectedExpandedCount }}
-          <v-icon
-            size="14"
-            style="vertical-align: middle"
-            class="selection-count-explanation"
-            >mdi-information-outline</v-icon
-          >)
-        </span>
         <span v-if="selectedFaceCount > 0" class="selection-face-count">
           {{ selectedFaceCount }} Faces selected
         </span>
@@ -49,15 +33,7 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button
-                v-bind="menuProps"
-                class="stack-btn"
-                type="button"
-                :disabled="!selectedPluginName"
-              >
-                <v-icon size="16">mdi-tune-variant</v-icon>
-                <span>Filters</span>
-              </button>
+              <button v-bind="menuProps" class="hidden-panel-activator" type="button" tabindex="-1" aria-hidden="true"></button>
             </template>
             <div class="plugin-menu-panel">
               <div class="plugin-menu-header">Apply Filters</div>
@@ -112,15 +88,7 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button
-                v-bind="menuProps"
-                class="stack-btn"
-                type="button"
-                :disabled="!selectedImageIds.length"
-              >
-                <v-icon size="16">mdi-robot</v-icon>
-                <span>ComfyUI</span>
-              </button>
+              <button v-bind="menuProps" class="hidden-panel-activator" type="button" tabindex="-1" aria-hidden="true"></button>
             </template>
             <div class="plugin-menu-panel">
               <div class="plugin-menu-header">ComfyUI I2I</div>
@@ -184,74 +152,144 @@
             </div>
           </v-menu>
         </div>
-        <AddToSetControl
-          v-if="!isScrapheapView && !isReadOnly"
-          :backend-url="backendUrl"
-          :picture-ids="selectedImageIds"
-          @added="$emit('added-to-set', $event)"
-        />
-        <AddToCharacterControl
-          v-if="!isScrapheapView && !isReadOnly"
-          :backend-url="backendUrl"
-          :picture-ids="selectedImageIds"
-          @added="$emit('add-to-character', $event)"
-          @removed="$emit('remove-from-character', $event)"
-        />
-        <AddToProjectControl
-          v-if="!isScrapheapView && !isReadOnly"
-          :backend-url="backendUrl"
-          :picture-ids="selectedImageIds"
-          :disabled="selectedCount <= 0"
-          @selected="$emit('set-project', $event)"
-        />
-        <button
-          v-if="!isScrapheapView && !isReadOnly"
-          class="stack-btn stack-toggle-btn"
-          type="button"
-          :disabled="showRemoveStackButton ? false : selectedCount <= 1"
-          :title="
-            showRemoveStackButton
-              ? 'Remove selected images from their stack'
-              : 'Create a stack from the selected images'
-          "
-          @click="
-            showRemoveStackButton
-              ? $emit('remove-from-stack')
-              : $emit('create-stack')
-          "
+        <!-- Selection ▾ dropdown — mirrors the right-click context menu exactly -->
+        <v-menu
+          v-if="selectedCount > 0"
+          v-model="selectionMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          transition="scale-transition"
         >
-          <v-icon size="16">{{
-            showRemoveStackButton ? "mdi-layers-off" : "mdi-layers"
-          }}</v-icon>
-          <span>{{ showRemoveStackButton ? "Unstack" : "Stack" }}</span>
-        </button>
-        <button
-          v-if="!isScrapheapView && showUnstackMultipleButton && !isReadOnly"
-          class="stack-btn"
-          type="button"
-          title="Dissolve all selected stacks"
-          @click="$emit('dissolve-stacks')"
-        >
-          <v-icon size="16">mdi-layers-off</v-icon>
-          <span>Unstack</span>
-        </button>
-        <button
-          v-if="showGroupStackButton && !isReadOnly"
-          class="stack-btn"
-          type="button"
-          title="Create stacks from selected likeness groups"
-          @click="$emit('create-stacks-from-groups')"
-        >
-          <v-icon size="16">mdi-layers-plus</v-icon>
-          <span>Stack Groups</span>
-        </button>
-        <button
-          v-if="showRemoveButton && !isReadOnly"
-          class="remove-btn"
-          @click="$emit('remove-from-group')"
-        >
-          {{ removeButtonLabel }}
-        </button>
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="stack-btn"
+              type="button"
+              :title="props.selectedExpandedCount > selectedCount
+                ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
+                : `Actions for ${selectedCount} selected`"
+            >
+              <v-icon size="15">mdi-image-multiple-outline</v-icon>
+              <span>Apply to ({{ selectedCount }})</span>
+              <v-icon size="16">mdi-menu-down</v-icon>
+            </button>
+          </template>
+          <div class="selection-menu-panel">
+            <!-- ── Set / Character / Project ─────────────────────── -->
+            <template v-if="!isScrapheapView && selectedCount > 0 && !isReadOnly">
+              <AddToSetControl
+                placement="right"
+                :backend-url="backendUrl"
+                :picture-ids="selectedImageIds"
+                @added="$emit('added-to-set', $event)"
+              />
+              <AddToCharacterControl
+                placement="right"
+                :backend-url="backendUrl"
+                :picture-ids="selectedImageIds"
+                @added="$emit('add-to-character', $event)"
+                @removed="$emit('remove-from-character', $event)"
+              />
+              <AddToProjectControl
+                placement="right"
+                :backend-url="backendUrl"
+                :picture-ids="selectedImageIds"
+                :disabled="selectedCount <= 0"
+                @selected="$emit('set-project', $event)"
+              />
+              <div class="ctx-sep" />
+            </template>
+
+            <!-- ── Stack / Unstack ───────────────────────────────── -->
+            <template v-if="!isScrapheapView && !isReadOnly">
+              <button
+                v-if="showRemoveStackButton"
+                class="ctx-item"
+                title="Remove selected images from their stack"
+                @click="$emit('remove-from-stack'); selectionMenuOpen = false"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+                Unstack
+              </button>
+              <button
+                v-else-if="selectedCount > 1"
+                class="ctx-item"
+                title="Create a stack from the selected images"
+                @click="$emit('create-stack'); selectionMenuOpen = false"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
+                Stack
+              </button>
+              <button
+                v-if="showUnstackMultipleButton"
+                class="ctx-item"
+                title="Dissolve all selected stacks"
+                @click="$emit('dissolve-stacks'); selectionMenuOpen = false"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+                Unstack all
+              </button>
+              <button
+                v-if="showGroupStackButton"
+                class="ctx-item"
+                title="Create stacks from selected likeness groups"
+                @click="$emit('create-stacks-from-groups'); selectionMenuOpen = false"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
+                Stack groups
+              </button>
+              <div v-if="showAnyStackAction" class="ctx-sep" />
+            </template>
+
+            <!-- ── Tag / Filters / ComfyUI ───────────────────────── -->
+            <template v-if="!isScrapheapView && !isReadOnly">
+              <button
+                class="ctx-item"
+                title="Tag selected (T)"
+                @click="openTagInput(); selectionMenuOpen = false"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
+                Tag
+              </button>
+              <button
+                v-if="pluginOptions.length"
+                class="ctx-item"
+                @click="openPluginPanel(); selectionMenuOpen = false"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
+                Filters
+              </button>
+              <button
+                v-if="props.comfyuiConfigured"
+                class="ctx-item"
+                @click="openComfyuiPanel(); selectionMenuOpen = false"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
+                ComfyUI
+              </button>
+              <div class="ctx-sep" />
+            </template>
+
+            <!-- ── Remove / Delete (danger) ──────────────────────── -->
+            <button
+              v-if="showRemoveButton && !isReadOnly"
+              class="ctx-item ctx-item--danger"
+              @click="$emit('remove-from-group'); selectionMenuOpen = false"
+            >
+              {{ removeButtonLabel }}
+            </button>
+            <button
+              v-if="!isReadOnly"
+              class="ctx-item ctx-item--danger"
+              title="Delete selected items (DEL)"
+              @click="$emit('delete-selected'); selectionMenuOpen = false"
+            >
+              <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
+              {{ deleteButtonLabel }}
+            </button>
+          </div>
+        </v-menu>
         <div v-if="!isScrapheapView && !isReadOnly" class="plugin-run-controls">
           <v-menu
             v-model="tagMenuOpen"
@@ -265,14 +303,11 @@
               <button
                 v-bind="menuProps"
                 ref="tagBtnRef"
-                class="stack-btn"
+                class="hidden-panel-activator"
                 type="button"
-                title="Tag selected (T)"
-                :disabled="isScrapheapView"
-              >
-                <v-icon size="16">mdi-tag-plus</v-icon>
-                <span>Tag</span>
-              </button>
+                tabindex="-1"
+                aria-hidden="true"
+              ></button>
             </template>
             <div class="plugin-menu-panel tag-panel-wide">
               <div class="plugin-menu-header">
@@ -644,6 +679,16 @@ const showGroupStackButton = computed(() => {
   );
 });
 
+const showAnyStackAction = computed(() => {
+  if (isScrapheapView.value || isReadOnly.value) return false;
+  return (
+    showRemoveStackButton.value ||
+    (props.selectedCount > 1 && !showRemoveStackButton.value) ||
+    showUnstackMultipleButton.value ||
+    showGroupStackButton.value
+  );
+});
+
 const showRemoveStackButton = computed(() => {
   if (isScrapheapView.value) return false;
   return props.showRemoveFromStack === true;
@@ -673,6 +718,7 @@ const pluginOptions = computed(() => {
 
 const selectedPluginName = ref("");
 const pluginMenuOpen = ref(false);
+const selectionMenuOpen = ref(false);
 const pluginParameters = ref({});
 const comfyuiMenuOpen = ref(false);
 const comfyuiWorkflows = ref([]);
@@ -1509,6 +1555,71 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .stack-toggle-btn {
   min-width: 5.5rem;
   justify-content: center;
+}
+
+/* Hidden panel activators — zero-size but remain in DOM for menu positioning */
+.hidden-panel-activator {
+  display: block;
+  width: 0;
+  min-width: 0;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Selection ▾ dropdown panel — styled like ImageGridContextMenu */
+.selection-menu-panel {
+  min-width: 160px;
+  background: rgba(var(--v-theme-surface), 0.98);
+  color: rgb(var(--v-theme-on-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ctx-item:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.ctx-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ctx-item--danger {
+  color: rgb(var(--v-theme-error));
+}
+
+.ctx-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .plugin-run-controls {

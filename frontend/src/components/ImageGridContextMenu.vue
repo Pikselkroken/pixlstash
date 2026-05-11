@@ -39,6 +39,7 @@
         <button
           v-if="showRemoveStackButton"
           class="ctx-item"
+          title="Remove selected images from their stack"
           @click="onAction('remove-from-stack')"
         >
           <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
@@ -47,6 +48,7 @@
         <button
           v-else-if="selectedImageIds.length > 1"
           class="ctx-item"
+          title="Create a stack from the selected images"
           @click="onAction('create-stack')"
         >
           <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
@@ -55,6 +57,7 @@
         <button
           v-if="showUnstackMultipleButton"
           class="ctx-item"
+          title="Dissolve all selected stacks"
           @click="onAction('dissolve-stacks')"
         >
           <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
@@ -63,6 +66,7 @@
         <button
           v-if="showGroupStackButton"
           class="ctx-item"
+          title="Create stacks from selected likeness groups"
           @click="onAction('create-stacks-from-groups')"
         >
           <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
@@ -73,7 +77,7 @@
 
       <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
       <template v-if="!isScrapheapView && !isReadOnly">
-        <button class="ctx-item" @click="delegate('open-tag-panel')">
+        <button class="ctx-item" title="Tag selected (T)" @click="delegate('open-tag-panel')">
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
           Tag
         </button>
@@ -126,6 +130,7 @@
       <button
         v-if="!isReadOnly"
         class="ctx-item ctx-item--danger"
+        title="Delete selected items (DEL)"
         @click="onAction('delete-selected')"
       >
         <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
