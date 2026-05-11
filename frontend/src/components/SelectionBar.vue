@@ -10,7 +10,7 @@
           Clear
         </button>
         <span v-if="selectedCount > 0" class="selection-count"
-          >{{ selectedCount }} Images selected</span
+          >{{ selectedCount }} selected</span
         >
         <span
           v-if="props.selectedExpandedCount > selectedCount"
@@ -1403,10 +1403,12 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 4px 8px;
+  padding: 0 8px 4px;
   margin: 0;
-  height: 38px;
+  height: 30px;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
 }
 .selection-bar-content {
   display: flex;
@@ -1449,10 +1451,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   border: none;
-  padding: 4px 10px;
-  border-radius: 4px;
+  padding: 2px 10px;
+  border-radius: 3px;
   cursor: pointer;
   font-size: 0.85rem;
+  line-height: 1.4;
 }
 .clear-btn:hover {
   filter: brightness(1.3);
@@ -1461,10 +1464,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgb(var(--v-theme-warning));
   color: rgb(var(--v-theme-on-warning));
   border: none;
-  padding: 4px 10px;
-  border-radius: 4px;
+  padding: 2px 10px;
+  border-radius: 3px;
   cursor: pointer;
   font-size: 0.85rem;
+  line-height: 1.4;
 }
 .remove-btn:hover {
   filter: brightness(1.3);
@@ -1473,10 +1477,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgb(var(--v-theme-error));
   color: #fff;
   border: none;
-  padding: 4px 12px;
-  border-radius: 4px;
+  padding: 2px 12px;
+  border-radius: 3px;
   cursor: pointer;
   font-size: 0.85rem;
+  line-height: 1.4;
 }
 .delete-btn:hover {
   filter: brightness(1.3);
@@ -1487,11 +1492,12 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   gap: 4px;
   background: rgba(var(--v-theme-primary), 0.15);
   color: rgb(var(--v-theme-on-background));
-  border: 1px solid rgba(var(--v-theme-primary), 0.4);
-  padding: 4px 8px;
-  border-radius: 4px;
+  border: none;
+  padding: 2px 8px;
+  border-radius: 3px;
   cursor: pointer;
   font-size: 0.85rem;
+  line-height: 1.4;
 }
 .stack-btn:hover:not(:disabled) {
   filter: brightness(1.2);
