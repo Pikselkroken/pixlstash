@@ -1052,6 +1052,11 @@ def _select_pictures_for_listing(
             )
             or None,
             face_filter=face_filter,
+            picture_ids=(
+                [int(i) for i in query_params["id"] if str(i).isdigit()]
+                if query_params.get("id")
+                else None
+            ),
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,
         )

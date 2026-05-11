@@ -484,6 +484,41 @@ def create_router(server) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
 
+    @router.post(
+        "/characters/membership",
+        summary="Batch character membership lookup",
+        description=(
+            "Given a list of picture IDs, returns character_assignments "
+            "(character_id → [picture_ids]) and pictures_with_faces ([picture_ids]). "
+            "Used by the AddToCharacter menu to load membership in a single request."
+        ),
+    )
+    def get_batch_character_membership(
+        picture_ids: list[int] = Body(default=[], embed=True),
+    ):
+        if not picture_ids:
+            return {"character_assignments": {}, "pictures_with_faces": []}
+
+        def fetch(session, ids: list[int]):
+            rows = session.exec(
+                select(Face.character_id, Face.picture_id).where(
+                    Face.picture_id.in_(ids),
+                    Face.face_index != -1,
+                )
+            ).all()
+            assignments: dict[int, list[int]] = {}
+            pictures_with_faces: set[int] = set()
+            for character_id, pid in rows:
+                pictures_with_faces.add(int(pid))
+                if character_id is not None:
+                    assignments.setdefault(int(character_id), []).append(int(pid))
+            return {
+                "character_assignments": assignments,
+                "pictures_with_faces": sorted(pictures_with_faces),
+            }
+
+        return server.vault.db.run_immediate_read_task(fetch, picture_ids)
+
     @router.get(
         "/characters/{id}",
         summary="Get character by id",

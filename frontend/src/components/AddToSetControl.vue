@@ -6,6 +6,7 @@
       open: menuOpen,
       disabled,
       'add-to-set--flyout': placement === 'right',
+      'add-to-set--force-dark': forceDark,
     }"
   >
     <button
@@ -25,64 +26,79 @@
       }}</v-icon>
     </button>
 
-    <div class="add-to-set-menu" role="menu">
-      <div class="add-to-set-search">
-        <v-icon size="14">mdi-magnify</v-icon>
-        <input
-          ref="searchInputRef"
-          v-model="searchQuery"
-          type="text"
-          placeholder="Search sets..."
-          @keydown.escape.stop.prevent="closeMenu"
-        />
-      </div>
-
-      <div v-if="isLoading" class="add-to-set-empty">Loading sets...</div>
-      <div v-else-if="filteredSets.length === 0" class="add-to-set-empty">
-        No sets found
-      </div>
-      <button
-        v-for="set in filteredSets"
-        :key="set.id"
-        :class="[
-          'add-to-set-item',
-          {
-            'add-to-set-item--disabled': isSetDisabled(set),
-            'add-to-set-item--checked': getSetState(set) === 'checked',
-          },
-        ]"
-        type="button"
-        role="menuitem"
-        :disabled="isSetDisabled(set)"
-        @click.stop="toggleSetMembership(set)"
+    <Teleport :disabled="placement !== 'right'" to="body">
+      <div
+        ref="menuRef"
+        class="add-to-set-menu"
+        role="menu"
+        :style="placement === 'right' ? flyoutMenuStyle : {}"
+        :class="{
+          open: menuOpen,
+          flyout: placement === 'right',
+          'force-dark': forceDark,
+        }"
       >
-        <v-icon size="16" class="add-to-set-item-check">
-          {{
-            getSetState(set) === "checked"
-              ? "mdi-checkbox-marked"
-              : getSetState(set) === "partial"
-                ? "mdi-minus-box-outline"
-                : "mdi-checkbox-blank-outline"
-          }}
-        </v-icon>
-        <span class="add-to-set-item-name">{{ set.name }}</span>
-        <span class="add-to-set-item-meta">
-          <span v-if="set.picture_count != null" class="add-to-set-item-count">
-            {{ set.picture_count }}
-          </span>
-          <span
-            v-if="isLastUsedSet(set)"
-            class="add-to-set-item-shortcut"
-            title="Press A to add to this set"
-            >A</span
-          >
-        </span>
-      </button>
+        <div class="add-to-set-search">
+          <v-icon size="14">mdi-magnify</v-icon>
+          <input
+            ref="searchInputRef"
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search sets..."
+            @keydown.escape.stop.prevent="closeMenu"
+          />
+        </div>
 
-      <div v-if="statusMessage" class="add-to-set-status">
-        {{ statusMessage }}
+        <div v-if="isLoading" class="add-to-set-empty">Loading sets...</div>
+        <div v-else-if="filteredSets.length === 0" class="add-to-set-empty">
+          No sets found
+        </div>
+        <button
+          v-for="set in filteredSets"
+          :key="set.id"
+          :class="[
+            'add-to-set-item',
+            {
+              'add-to-set-item--disabled': isSetDisabled(set),
+              'add-to-set-item--checked': getSetState(set) === 'checked',
+            },
+          ]"
+          type="button"
+          role="menuitem"
+          :disabled="isSetDisabled(set)"
+          @click.stop="toggleSetMembership(set)"
+        >
+          <v-icon size="16" class="add-to-set-item-check">
+            {{
+              getSetState(set) === "checked"
+                ? "mdi-checkbox-marked"
+                : getSetState(set) === "partial"
+                  ? "mdi-minus-box-outline"
+                  : "mdi-checkbox-blank-outline"
+            }}
+          </v-icon>
+          <span class="add-to-set-item-name">{{ set.name }}</span>
+          <span class="add-to-set-item-meta">
+            <span
+              v-if="set.picture_count != null"
+              class="add-to-set-item-count"
+            >
+              {{ set.picture_count }}
+            </span>
+            <span
+              v-if="isLastUsedSet(set)"
+              class="add-to-set-item-shortcut"
+              title="Press A to add to this set"
+              >A</span
+            >
+          </span>
+        </button>
+
+        <div v-if="statusMessage" class="add-to-set-status">
+          {{ statusMessage }}
+        </div>
       </div>
-    </div>
+    </Teleport>
 
     <div
       v-if="statusMessage && !menuOpen"
@@ -99,6 +115,28 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { apiClient } from "../utils/apiClient";
 
+const flyoutMenuStyle = ref({});
+
+function positionFlyout() {
+  if (props.placement !== "right" || !rootRef.value) return;
+  const rect = rootRef.value.getBoundingClientRect();
+  const menuW = 250;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const left =
+    rect.right + 4 + menuW <= vw - 8
+      ? rect.right + 4
+      : Math.max(8, rect.left - menuW - 4);
+  const top = Math.min(rect.top, vh - 32);
+  flyoutMenuStyle.value = {
+    position: "fixed",
+    top: `${top}px`,
+    left: `${left}px`,
+    maxHeight: `${vh - top - 16}px`,
+    overflowY: "auto",
+  };
+}
+
 // Persists the last set the user added a picture to, shared across all
 // AddToSetControl instances for the lifetime of the page.
 const lastUsedSet = ref(null); // { id, name }
@@ -110,11 +148,13 @@ const props = defineProps({
   label: { type: String, default: "Set" },
   includeDeletedMembers: { type: Boolean, default: false },
   placement: { type: String, default: "bottom" },
+  forceDark: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["added"]);
 
 const rootRef = ref(null);
+const menuRef = ref(null);
 const searchInputRef = ref(null);
 const menuOpen = ref(false);
 const searchQuery = ref("");
@@ -185,8 +225,12 @@ function toggleMenu() {
 function openMenu() {
   menuOpen.value = true;
   fetchSets(true);
+  if (props.placement === "right") positionFlyout();
   nextTick(() => searchInputRef.value?.focus());
   document.addEventListener("pointerdown", handleOutsideClick, true);
+  if (props.placement === "right") {
+    window.addEventListener("resize", positionFlyout, { passive: true });
+  }
 }
 
 function closeMenu() {
@@ -194,12 +238,14 @@ function closeMenu() {
   searchQuery.value = "";
   searchInputRef.value?.blur();
   document.removeEventListener("pointerdown", handleOutsideClick, true);
+  window.removeEventListener("resize", positionFlyout);
 }
 
 function handleOutsideClick(event) {
   const target = event?.target;
   if (!target || !(target instanceof HTMLElement)) return;
-  if (!rootRef.value || rootRef.value.contains(target)) return;
+  if (rootRef.value?.contains(target)) return;
+  if (menuRef.value?.contains(target)) return;
   closeMenu();
 }
 
@@ -212,12 +258,20 @@ async function fetchSets(force = false) {
   lastFetchKey.value = key;
   isLoading.value = true;
   try {
-    const res = await apiClient.get(resolveUrl("/picture_sets"));
-    const data = await res.data;
+    const [setsRes] = await Promise.all([
+      apiClient.get(resolveUrl("/picture_sets")),
+      fetchSetMembers(),
+    ]);
+    const data = setsRes.data;
     const list = Array.isArray(data) ? data : [];
     const filtered = list.filter((set) => !set?.reference_character);
     sets.value = filtered;
-    await fetchSetMembers(filtered);
+    // Ensure every known set has an entry so isSetDisabled returns false.
+    const current = setMembersById.value;
+    filtered.forEach((set) => {
+      if (!(set.id in current)) current[set.id] = new Set();
+    });
+    setMembersById.value = { ...current };
   } catch (e) {
     sets.value = [];
     setMembersById.value = {};
@@ -226,28 +280,20 @@ async function fetchSets(force = false) {
   }
 }
 
-async function fetchSetMembers(list) {
+async function fetchSetMembers() {
   const ids = normalisedPictureIds.value;
   if (!props.backendUrl || !ids.length) {
     setMembersById.value = {};
     return;
   }
   try {
-    const params = new URLSearchParams();
-    ids.forEach((id) => params.append("picture_id", id));
-    if (props.includeDeletedMembers) {
-      params.set("include_deleted", "true");
-    }
-    const res = await apiClient.get(
-      resolveUrl(`/picture_sets/membership?${params}`),
-    );
+    const res = await apiClient.post(resolveUrl("/picture_sets/membership"), {
+      picture_ids: ids,
+      include_deleted: props.includeDeletedMembers ?? false,
+    });
     const data = res.data ?? {};
     // data is { set_id: [picture_id, ...] }
     const next = {};
-    // Initialise every known set to an empty Set so isSetDisabled works.
-    list.forEach((set) => {
-      next[set.id] = new Set();
-    });
     Object.entries(data).forEach(([setId, memberIds]) => {
       next[Number(setId)] = new Set(
         (Array.isArray(memberIds) ? memberIds : []).map((id) => String(id)),
@@ -382,6 +428,7 @@ async function addToLastSet() {
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("pointerdown", handleOutsideClick, true);
+  window.removeEventListener("resize", positionFlyout);
 });
 
 watch(
@@ -405,8 +452,8 @@ defineExpose({ addToLastSet, lastUsedSet });
 }
 
 .add-to-set-btn {
-  background-color: rgba(var(--v-theme-dark-surface), 0.6);
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  background-color: rgba(var(--v-theme-surface), 0.85);
+  color: rgb(var(--v-theme-on-surface));
   border: none;
   padding: 2px 8px;
   border-radius: 3px;
@@ -416,6 +463,11 @@ defineExpose({ addToLastSet, lastUsedSet });
   font-size: 0.85rem;
   line-height: 1.4;
   cursor: pointer;
+}
+
+.add-to-set--force-dark .add-to-set-btn {
+  background-color: rgba(var(--v-theme-dark-surface), 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
 }
 
 .add-to-set-btn:disabled {
@@ -439,8 +491,8 @@ defineExpose({ addToLastSet, lastUsedSet });
   min-width: 200px;
   padding: 10px;
   border-radius: 10px;
-  background-color: rgba(var(--v-theme-dark-surface), 0.9);
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  background-color: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
 
   .add-to-set-item-check {
     color: rgba(var(--v-theme-on-surface), 0.7);
@@ -459,7 +511,48 @@ defineExpose({ addToLastSet, lastUsedSet });
   z-index: 6;
 }
 
-.add-to-set.open .add-to-set-menu {
+.add-to-set-menu.force-dark {
+  background-color: rgba(var(--v-theme-dark-surface), 0.9);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+
+  .add-to-set-search {
+    color: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .add-to-set-search input {
+    color: #fff;
+  }
+
+  .add-to-set-item {
+    color: rgba(var(--v-theme-on-dark-surface), 1);
+  }
+
+  .add-to-set-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .add-to-set-item-count {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .add-to-set-item-shortcut {
+    border-color: rgba(255, 255, 255, 0.32);
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .add-to-set-empty {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .add-to-set-status {
+    color: rgba(255, 255, 255, 0.7);
+  }
+}
+
+.add-to-set.open .add-to-set-menu,
+.add-to-set-menu.open {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
@@ -470,18 +563,17 @@ defineExpose({ addToLastSet, lastUsedSet });
   align-items: center;
   gap: 6px;
   font-size: 0.72rem;
-  color: rgba(var(--v-theme-on-background), 0.7);
-  background: rgba(var(--v-theme-surface), 0.1);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   padding: 6px 8px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   margin-bottom: 8px;
 }
 
 .add-to-set-search input {
   background: transparent;
   border: none;
-  color: #fff;
+  color: rgb(var(--v-theme-on-surface));
   width: 100%;
   font-size: 0.78rem;
   outline: none;
@@ -492,7 +584,7 @@ defineExpose({ addToLastSet, lastUsedSet });
   padding: 6px 8px;
   border-radius: 6px;
   font-size: 0.78rem;
-  color: #fff;
+  color: rgb(var(--v-theme-on-surface));
   background: transparent;
   border: none;
   text-align: left;
@@ -516,7 +608,7 @@ defineExpose({ addToLastSet, lastUsedSet });
 }
 
 .add-to-set-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .add-to-set-item--disabled {
@@ -527,30 +619,30 @@ defineExpose({ addToLastSet, lastUsedSet });
 
 .add-to-set-item-count {
   font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .add-to-set-item-shortcut {
-  border: 1px solid rgba(255, 255, 255, 0.32);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.32);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 0.68rem;
   line-height: 1;
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.08);
+  color: rgba(var(--v-theme-on-surface), 0.9);
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .add-to-set-empty {
   padding: 6px 8px;
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .add-to-set-status {
   margin-top: 6px;
   padding: 6px 8px;
   font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .add-to-set-shortcut-status {
@@ -560,13 +652,18 @@ defineExpose({ addToLastSet, lastUsedSet });
   max-width: 220px;
   padding: 6px 10px;
   border-radius: 8px;
-  background: rgba(var(--v-theme-dark-surface), 0.92);
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
   font-size: 0.74rem;
   line-height: 1.2;
   z-index: 12;
   pointer-events: none;
+}
+
+.add-to-set--force-dark .add-to-set-shortcut-status {
+  background: rgba(var(--v-theme-dark-surface), 0.92);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
 }
 
 /* ── Flyout (right-placement) mode ──────────────────────────── */
@@ -594,13 +691,16 @@ defineExpose({ addToLastSet, lastUsedSet });
   opacity: 0.7;
 }
 
-.add-to-set--flyout .add-to-set-menu {
-  top: 0;
-  left: calc(100% + 4px);
+.add-to-set--flyout .add-to-set-menu,
+.add-to-set-menu.flyout {
+  /* top/left set by JS positionFlyout() via inline style */
   transform: translateX(-6px);
+  z-index: 2500;
 }
 
-.add-to-set--flyout.open .add-to-set-menu {
+.add-to-set--flyout.open .add-to-set-menu,
+.add-to-set--flyout .add-to-set-menu.open,
+.add-to-set-menu.flyout.open {
   transform: translateX(0);
 }
 </style>
