@@ -4571,14 +4571,13 @@ defineExpose({
 .sidebar-view-tabs-row {
   display: flex;
   align-items: center;
-  padding: 0 4px 0 4px;
+  padding: 0 4px 2px 4px;
   position: relative;
   z-index: 1;
   margin-top: 0;
   margin-bottom: 0;
   gap: 0;
   background: rgba(var(--v-theme-shadow), 0.14);
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.35);
 }
 
 .sidebar-view-tabs-icon {

@@ -7917,12 +7917,12 @@ function handleEmptyStateReset() {
   width: 100%;
   box-sizing: border-box;
   flex: 1 1 0%;
-  padding: 2px 4px 2px 4px !important;
+  padding: 0 4px 2px 4px !important;
   align-content: start;
   justify-content: start;
 }
 .compact-mode.image-grid {
-  padding-top: 2px !important;
+  padding-top: 0 !important;
   gap: 0px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar {
