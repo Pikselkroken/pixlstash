@@ -45,7 +45,6 @@
   <div :style="wrapperStyle">
     <SelectionBar
       ref="selectionBarRef"
-      v-if="showSelectionBar"
       :selectedCount="selectedImageIds.length"
       :selectedExpandedCount="selectedExpandedCount"
       :selectedFaceCount="selectedFaceIds.length"
@@ -3220,16 +3219,10 @@ const showScrapheapBar = computed(() => {
 });
 const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const wrapperStyle = { position: "relative", height: "100%" };
-const scrollWrapperStyle = computed(() => {
-  const offset =
-    showSelectionBar.value || showScrapheapBar.value
-      ? SCRAPHEAP_BAR_HEIGHT_PX
-      : 0;
-  return {
-    position: "relative",
-    paddingTop: `${offset}px`,
-  };
-});
+const scrollWrapperStyle = computed(() => ({
+  position: "relative",
+  paddingTop: `${SCRAPHEAP_BAR_HEIGHT_PX}px`,
+}));
 const scrapheapEmptyDisabled = computed(() => {
   return (
     scrapheapEmptying.value ||

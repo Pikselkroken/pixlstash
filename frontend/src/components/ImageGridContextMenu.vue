@@ -9,18 +9,20 @@
     >
       <!-- ── Set / Character / Project ─────────────────────────────── -->
       <template
-        v-if="!isScrapheapView && selectedImageIds.length && !isReadOnly"
+        v-if="!isScrapheapView && !isReadOnly"
       >
         <AddToSetControl
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
+          :disabled="!selectedImageIds.length"
           @added="onAction('added-to-set', $event)"
         />
         <AddToCharacterControl
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
+          :disabled="!selectedImageIds.length"
           @added="onAction('add-to-character', $event)"
           @removed="onAction('remove-from-character', $event)"
         />
@@ -77,13 +79,14 @@
 
       <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
       <template v-if="!isScrapheapView && !isReadOnly">
-        <button class="ctx-item" title="Tag selected (T)" @click="delegate('open-tag-panel')">
+        <button class="ctx-item" title="Tag selected (T)" :disabled="!selectedImageIds.length" @click="delegate('open-tag-panel')">
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
           Tag
         </button>
         <button
           v-if="pluginOptions.length"
           class="ctx-item"
+          :disabled="!selectedImageIds.length"
           @click="delegate('open-plugin-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
@@ -92,6 +95,7 @@
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"
+          :disabled="!selectedImageIds.length"
           @click="delegate('open-comfyui-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
@@ -123,6 +127,7 @@
       <button
         v-if="showRemoveButton && !isReadOnly"
         class="ctx-item ctx-item--danger"
+        :disabled="!selectedImageIds.length"
         @click="onAction('remove-from-group')"
       >
         {{ removeButtonLabel }}
@@ -130,6 +135,7 @@
       <button
         v-if="!isReadOnly"
         class="ctx-item ctx-item--danger"
+        :disabled="!selectedImageIds.length"
         title="Delete selected items (DEL)"
         @click="onAction('delete-selected')"
       >

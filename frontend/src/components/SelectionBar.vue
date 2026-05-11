@@ -1,19 +1,521 @@
 <template>
-  <div v-if="visible" class="selection-bar-overlay">
+  <div class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
-        <button
-          class="clear-btn"
-          @click="$emit('clear-selection')"
-          title="Clear selection (ESC)"
+        <!-- ── Sort split-button ──────────────────────────────────── -->
+        <v-menu
+          v-model="gbSortMenuOpen"
+          :close-on-content-click="false"
+          location="bottom start"
+          origin="top start"
+          transition="scale-transition"
         >
-          Clear
-        </button>
-        <span v-if="selectedFaceCount > 0" class="selection-face-count">
+          <template #activator="{ props: menuProps }">
+            <div class="bar-split-button">
+              <button
+                class="bar-btn bar-split-toggle"
+                type="button"
+                :title="gbDescendingModel ? 'Descending' : 'Ascending'"
+                @click.stop="gbToggleSortDirection"
+              >
+                <v-icon size="13">{{ gbSortButtonIcon }}</v-icon>
+              </button>
+              <button
+                v-bind="menuProps"
+                class="bar-btn bar-split-menu"
+                type="button"
+                :title="gbSortButtonLabel"
+              >
+                <span class="bar-btn-prefix">Sort:</span>
+                <v-icon size="13">{{ gbSortTypeIcon }}</v-icon>
+                <span class="bar-btn-label">{{ gbSortButtonLabel }}</span>
+                <v-icon size="13">mdi-menu-down</v-icon>
+              </button>
+            </div>
+          </template>
+          <div class="gb-sort-panel">
+            <div class="gb-sort-header">
+              <div class="gb-sort-panel-title">
+                Sort order
+                <span>Choose one</span>
+              </div>
+              <v-btn
+                class="gb-sort-direction"
+                variant="text"
+                :disabled="gb?.isSearchActive?.value"
+                @click="gbToggleSortDirection"
+              >
+                <v-icon size="18">
+                  {{ gbDescendingModel ? "mdi-sort-descending" : "mdi-sort-ascending" }}
+                </v-icon>
+                <span>{{ gbDescendingModel ? "Descending" : "Ascending" }}</span>
+              </v-btn>
+            </div>
+            <div v-if="gb?.isSearchActive?.value" class="gb-sort-search-note">
+              Search relevance (fixed)
+            </div>
+            <v-btn-toggle
+              :model-value="gbSortMenuModel"
+              @update:model-value="gbHandleSortModelUpdate"
+              mandatory
+              class="gb-sort-grid"
+              :disabled="gb?.isSearchActive?.value"
+            >
+              <v-btn
+                v-for="opt in gb?.sortOptions?.value ?? []"
+                :key="opt.value"
+                :value="opt.value"
+                class="gb-sort-grid-btn"
+                variant="text"
+              >
+                <v-icon size="18">{{ gbGetSortIcon(opt.value) }}</v-icon>
+                <span class="gb-sort-grid-label">{{ opt.label }}</span>
+                <v-icon
+                  v-if="gbSortMenuModel === opt.value"
+                  size="16"
+                  class="gb-sort-grid-selected"
+                >mdi-circle-medium</v-icon>
+              </v-btn>
+            </v-btn-toggle>
+            <div
+              v-if="gbSortMenuModel === SIMILARITY_SORT_KEY_GB"
+              class="gb-sort-similarity-row"
+            >
+              <span>Similarity to ...</span>
+              <div class="gb-similarity-scroll">
+                <v-btn-toggle
+                  v-model="gbSimilarityCharacterModel"
+                  class="gb-sort-grid"
+                  :class="{ 'gb-sort-grid--pending-parameter': gbIsPendingSimilarityParameter }"
+                  :disabled="!gbHasSimilarityOptions"
+                >
+                  <v-btn
+                    v-for="opt in gb?.similarityCharacterOptions?.value ?? []"
+                    :key="opt.value"
+                    :value="opt.value"
+                    class="gb-sort-grid-btn"
+                    variant="text"
+                    @click="gbHandleSimilarityOptionClick(opt.value)"
+                  >
+                    <img
+                      v-if="opt.thumbnail"
+                      :src="opt.thumbnail"
+                      class="gb-similarity-thumb"
+                      alt=""
+                    />
+                    <div v-else class="gb-similarity-thumb gb-similarity-thumb--placeholder"></div>
+                    <span class="gb-sort-grid-label">{{ opt.text }}</span>
+                    <v-icon
+                      v-if="gbSimilarityCharacterModel === opt.value"
+                      size="16"
+                      class="gb-sort-grid-selected"
+                      :class="{ 'gb-sort-grid-selected--pending': gbIsPendingSimilarityParameter }"
+                    >mdi-circle-medium</v-icon>
+                  </v-btn>
+                </v-btn-toggle>
+              </div>
+            </div>
+            <div
+              v-if="gbSortMenuModel === LIKENESS_GROUPS_SORT_KEY_GB"
+              class="gb-sort-similarity-row"
+            >
+              <span>Group strictness</span>
+              <div class="gb-similarity-scroll">
+                <v-btn-toggle
+                  v-model="gbStackThresholdModel"
+                  class="gb-sort-grid"
+                  :class="{ 'gb-sort-grid--pending-parameter': gbIsPendingStackParameter }"
+                >
+                  <v-btn
+                    v-for="opt in gbStackThresholdOptions"
+                    :key="opt.value"
+                    :value="opt.value"
+                    class="gb-sort-grid-btn"
+                    variant="text"
+                    @click="gbHandleStackThresholdOptionClick(opt.value)"
+                  >
+                    <span class="gb-sort-grid-label">{{ opt.label }}</span>
+                    <v-icon
+                      v-if="gbStackThresholdModel === opt.value"
+                      size="16"
+                      class="gb-sort-grid-selected"
+                      :class="{ 'gb-sort-grid-selected--pending': gbIsPendingStackParameter }"
+                    >mdi-circle-medium</v-icon>
+                  </v-btn>
+                </v-btn-toggle>
+              </div>
+            </div>
+          </div>
+        </v-menu>
+        <!-- ── Filter button ──────────────────────────────────────── -->
+        <v-menu
+          v-model="gbFilterMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--boxed"
+              :class="{ 'bar-btn--active': gbIsFilterActive }"
+              type="button"
+              title="Filters"
+            >
+              <v-icon size="13">mdi-filter</v-icon>
+              <span class="bar-btn-label">Filter</span>
+              <span v-if="gbActiveFilterCount > 0" class="bar-filter-badge">{{ gbActiveFilterCount > 99 ? "99+" : gbActiveFilterCount }}</span>
+              <v-icon size="13">mdi-menu-down</v-icon>
+            </button>
+          </template>
+          <div class="gb-filter-panel">
+            <div class="gb-filter-panel-header">
+              <div class="gb-filter-panel-title">Filters</div>
+              <v-btn
+                v-if="gbIsFilterActive"
+                variant="text"
+                density="compact"
+                size="x-small"
+                color="primary"
+                class="gb-filter-clear-all-btn"
+                @click="gbClearAllFilters"
+                >Clear all</v-btn
+              >
+            </div>
+            <div v-if="!isReadOnly" class="gb-filter-shared-only-row">
+              <label class="gb-filter-shared-only-label">
+                <input
+                  type="checkbox"
+                  :checked="gbSharedOnlyFilter"
+                  @change="gbSharedOnlyFilter = $event.target.checked"
+                />
+                Shared pictures only
+              </label>
+            </div>
+            <div class="gb-filter-section-label">Media</div>
+            <div class="gb-media-type-toggle" role="group" aria-label="Media type filter">
+              <v-btn
+                v-for="opt in gbMediaTypeOptions"
+                :key="opt.value"
+                class="gb-media-type-button"
+                :class="{ 'gb-media-type-button--active': gbMediaTypeFilter === opt.value }"
+                variant="text"
+                :title="opt.title"
+                :aria-pressed="gbMediaTypeFilter === opt.value"
+                @click="gbSetMediaTypeFilter(opt.value)"
+              >
+                <v-icon size="16">{{ opt.icon }}</v-icon>
+              </v-btn>
+            </div>
+            <div class="gb-score-range-section">
+              <div class="gb-score-range-headers">
+                <span class="gb-score-range-header-label">Min Score</span>
+                <span class="gb-score-range-header-label gb-score-range-header-label--right">Max Score</span>
+              </div>
+              <div class="gb-score-range-filter">
+                <div class="gb-score-range-stars">
+                  <button
+                    v-for="n in 5"
+                    :key="'min-' + n"
+                    class="gb-score-star-btn"
+                    type="button"
+                    :title="`Set minimum score ${n}`"
+                    @click="gbSetMinScore(n)"
+                  >
+                    <v-icon size="15" :color="gbMinScoreFilter != null && n <= gbMinScoreFilter ? 'warning' : undefined">{{ gbMinScoreFilter != null && n <= gbMinScoreFilter ? 'mdi-star' : 'mdi-star-outline' }}</v-icon>
+                  </button>
+                </div>
+                <div class="gb-score-range-stars gb-score-range-stars--right">
+                  <button
+                    v-for="n in 5"
+                    :key="'max-' + n"
+                    class="gb-score-star-btn"
+                    type="button"
+                    :title="`Set maximum score ${n}`"
+                    @click="gbSetMaxScore(n)"
+                  >
+                    <v-icon size="15" :color="gbMaxScoreFilter != null && n <= gbMaxScoreFilter ? 'warning' : undefined">{{ gbMaxScoreFilter != null && n <= gbMaxScoreFilter ? 'mdi-star' : 'mdi-star-outline' }}</v-icon>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="gb-filter-section-label" style="margin-top: 10px">Face</div>
+            <div class="gb-media-type-toggle" role="group" aria-label="Face filter">
+              <v-btn
+                v-for="opt in gbFaceBboxFilterOptions"
+                :key="String(opt.value)"
+                class="gb-media-type-button"
+                :class="{ 'gb-media-type-button--active': gbFaceBboxFilter === opt.value }"
+                variant="text"
+                :title="opt.title"
+                :aria-pressed="gbFaceBboxFilter === opt.value"
+                @click="gbSetFaceBboxFilter(opt.value)"
+              >
+                <span v-if="opt.value === 'without_face'" class="gb-face-no-detection-icon">
+                  <v-icon size="16">{{ opt.icon }}</v-icon>
+                </span>
+                <v-icon v-else size="16">{{ opt.icon }}</v-icon>
+              </v-btn>
+            </div>
+            <div class="gb-filter-section-header" style="margin-top: 10px">
+              <span class="gb-filter-section-label" style="margin-top: 0">Tags</span>
+              <v-btn
+                v-if="gbTagFilter.length || gbTagRejectedFilter.length"
+                variant="text"
+                density="compact"
+                size="x-small"
+                color="primary"
+                class="gb-filter-clear-all-btn"
+                @click="gbTagFilter = []; gbTagRejectedFilter = [];"
+                >Clear</v-btn
+              >
+            </div>
+            <div class="gb-tag-filter-input-wrap">
+              <input
+                v-model="gbTagFilterInput"
+                class="gb-tag-filter-input"
+                placeholder="Filter by tag…"
+                autocomplete="off"
+                @keydown.enter.prevent="
+                  gbTagFilterIndex >= 0 && gbTagFilterSuggestions.length
+                    ? gbAddTagFilter(gbTagFilterSuggestions[gbTagFilterIndex])
+                    : gbAddTagFilter(gbTagFilterInput.trim())
+                "
+                @keydown.tab.prevent="
+                  gbTagFilterSuggestions.length
+                    ? gbAddTagFilter(gbTagFilterSuggestions[gbTagFilterIndex >= 0 ? gbTagFilterIndex : 0])
+                    : gbAddTagFilter(gbTagFilterInput.trim())
+                "
+                @keydown.down.prevent="gbTagFilterIndex = Math.min(gbTagFilterIndex + 1, gbTagFilterSuggestions.length - 1)"
+                @keydown.up.prevent="gbTagFilterIndex = Math.max(gbTagFilterIndex - 1, -1)"
+                @keydown.escape.prevent="gbTagFilterSuggestions = []"
+              />
+              <div
+                v-if="gbTagFilterSuggestions.length"
+                class="gb-tag-filter-dropdown"
+                :class="{ 'gb-tag-filter-dropdown--hover-enabled': gbTagFilterHoverEnabled }"
+                @mousemove.once="gbTagFilterHoverEnabled = true"
+              >
+                <button
+                  v-for="(tag, idx) in gbTagFilterSuggestions"
+                  :key="tag"
+                  class="gb-tag-filter-suggestion"
+                  :class="{ 'gb-tag-filter-suggestion--active': idx === gbTagFilterIndex }"
+                  type="button"
+                  @mousedown.prevent="gbAddTagFilter(tag)"
+                  @mousemove="gbTagFilterIndex = idx"
+                >{{ tag }}</button>
+              </div>
+            </div>
+            <div v-if="gbTagFilter.length || gbTagRejectedFilter.length" class="gb-tag-filter-chips">
+              <button
+                v-for="tag in gbTagFilter"
+                :key="`confirmed-${tag}`"
+                class="tag-chip tag-chip--filter"
+                type="button"
+                :title="`'${tag}' – click to switch to rejected match`"
+                @click.stop="gbToggleTagRejected(tag)"
+              >
+                <span class="tag-chip-label">{{ tag }}</span>
+                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveTagFilter(tag)">mdi-close</v-icon>
+              </button>
+              <button
+                v-for="tag in gbTagRejectedFilter"
+                :key="`rejected-${tag}`"
+                class="tag-chip tag-chip--filter tag-chip--filter-rejected"
+                type="button"
+                :title="`'${tag}' (rejected) – click to switch to confirmed match`"
+                @click.stop="gbToggleTagRejected(tag)"
+              >
+                <span class="tag-chip-label">{{ tag }}</span>
+                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveTagFilter(tag)">mdi-close</v-icon>
+              </button>
+            </div>
+            <div class="gb-filter-section-label" style="margin-top: 10px">Tag confidence</div>
+            <div class="gb-confidence-filter-row">
+              <div class="gb-tag-filter-input-wrap gb-confidence-filter-tag-wrap">
+                <input
+                  v-model="gbConfidenceTagInput"
+                  class="gb-tag-filter-input gb-confidence-filter-tag-input"
+                  placeholder="Tag…"
+                  autocomplete="off"
+                  @keydown.enter.prevent="
+                    gbConfidenceTagIndex >= 0 && gbConfidenceTagSuggestions.length
+                      ? gbSelectConfidenceTagSuggestion(gbConfidenceTagSuggestions[gbConfidenceTagIndex])
+                      : gbAddConfidenceFilter(gbConfidenceTagInput.trim())
+                  "
+                  @keydown.tab.prevent="
+                    gbConfidenceTagSuggestions.length
+                      ? gbSelectConfidenceTagSuggestion(gbConfidenceTagSuggestions[gbConfidenceTagIndex >= 0 ? gbConfidenceTagIndex : 0])
+                      : undefined
+                  "
+                  @keydown.down.prevent="gbConfidenceTagIndex = Math.min(gbConfidenceTagIndex + 1, gbConfidenceTagSuggestions.length - 1)"
+                  @keydown.up.prevent="gbConfidenceTagIndex = Math.max(gbConfidenceTagIndex - 1, -1)"
+                  @keydown.escape.prevent="gbConfidenceTagSuggestions = []"
+                />
+                <div
+                  v-if="gbConfidenceTagSuggestions.length"
+                  class="gb-tag-filter-dropdown"
+                  :class="{ 'gb-tag-filter-dropdown--hover-enabled': gbConfidenceTagHoverEnabled }"
+                  @mousemove.once="gbConfidenceTagHoverEnabled = true"
+                >
+                  <button
+                    v-for="(tag, idx) in gbConfidenceTagSuggestions"
+                    :key="tag"
+                    class="gb-tag-filter-suggestion"
+                    :class="{ 'gb-tag-filter-suggestion--active': idx === gbConfidenceTagIndex }"
+                    type="button"
+                    @mousedown.prevent="gbSelectConfidenceTagSuggestion(tag)"
+                    @mousemove="gbConfidenceTagIndex = idx"
+                  >{{ tag }}</button>
+                </div>
+              </div>
+              <div class="gb-confidence-threshold-stepper">
+                <input
+                  v-model.number="gbConfidenceThreshold"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  class="gb-confidence-threshold-input"
+                />
+              </div>
+              <button
+                class="gb-confidence-mode-btn"
+                type="button"
+                :title="gbConfidenceMode === 'above' ? 'High confidence, not labelled – click to switch' : 'Low confidence, labelled – click to switch'"
+                @click="gbConfidenceMode = gbConfidenceMode === 'above' ? 'below' : 'above'"
+              >{{ gbConfidenceMode === "above" ? "≥" : "<" }}</button>
+              <button
+                class="gb-confidence-add-btn"
+                type="button"
+                :disabled="!gbConfidenceTagInput.trim()"
+                @click="gbAddConfidenceFilter()"
+              >Add</button>
+            </div>
+            <div
+              v-if="gbTagConfidenceAboveFilter.length || gbTagConfidenceBelowFilter.length"
+              class="gb-tag-filter-chips"
+            >
+              <button
+                v-for="entry in gbTagConfidenceAboveFilter"
+                :key="`ca-${entry}`"
+                class="tag-chip tag-chip--filter tag-chip--confidence-above"
+                type="button"
+                :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
+              >
+                <span class="tag-chip-label">≥{{ gbConfidenceEntryLabel(entry) }}</span>
+                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveConfidenceAboveFilter(entry)">mdi-close</v-icon>
+              </button>
+              <button
+                v-for="entry in gbTagConfidenceBelowFilter"
+                :key="`cb-${entry}`"
+                class="tag-chip tag-chip--filter tag-chip--confidence-below"
+                type="button"
+                :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
+              >
+                <span class="tag-chip-label">&lt;{{ gbConfidenceEntryLabel(entry) }}</span>
+                <v-icon size="11" class="tag-chip-close" @click.stop="gbRemoveConfidenceBelowFilter(entry)">mdi-close</v-icon>
+              </button>
+            </div>
+            <template v-if="gbComfyuiModelOptions.length || gbComfyuiLoraOptions.length">
+              <div
+                class="gb-filter-section-header gb-comfyui-section-header"
+                style="margin-top: 10px; cursor: pointer"
+                @click="gbComfyuiFilterExpanded = !gbComfyuiFilterExpanded"
+              >
+                <span class="gb-filter-section-label" style="margin-top: 0">ComfyUI</span>
+                <v-icon size="16" style="opacity: 0.6">{{ gbComfyuiFilterExpanded ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
+              </div>
+              <template v-if="gbComfyuiModelOptions.length && gbComfyuiFilterExpanded">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; width: 100%;">
+                  <span style="font-size: 0.85em; color: rgb(var(--v-theme-on-background));">Models</span>
+                  <v-btn v-if="gbComfyuiModelFilter.length" variant="text" density="compact" size="x-small" color="primary" style="min-width: 0; padding: 0 4px; height: 18px; font-size: 0.75em;" @click="gbComfyuiModelFilter = []">Clear</v-btn>
+                </div>
+                <div style="width: 100%; height: 200px; overflow-y: auto; margin-bottom: 8px; border: 1px solid rgba(var(--v-theme-on-background), 0.18); border-radius: 6px; padding: 2px 4px; background: rgba(var(--v-theme-on-background), 0.04); color: rgb(var(--v-theme-on-background));">
+                  <v-checkbox v-for="m in gbComfyuiModelOptions" :key="m" v-model="gbComfyuiModelFilter" :value="m" :label="m.replace(/\.[^/.]+$/, '')" density="compact" hide-details color="primary" />
+                </div>
+              </template>
+              <template v-if="gbComfyuiLoraOptions.length && gbComfyuiFilterExpanded">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; width: 100%;">
+                  <span style="font-size: 0.85em; color: rgb(var(--v-theme-on-background));">LoRAs</span>
+                  <v-btn v-if="gbComfyuiLoraFilter.length" variant="text" density="compact" size="x-small" color="primary" style="min-width: 0; padding: 0 4px; height: 18px; font-size: 0.75em;" @click="gbComfyuiLoraFilter = []">Clear</v-btn>
+                </div>
+                <div style="width: 100%; height: 200px; overflow-y: auto; border: 1px solid rgba(var(--v-theme-on-background), 0.18); border-radius: 6px; padding: 2px 4px; background: rgba(var(--v-theme-on-background), 0.04); color: rgb(var(--v-theme-on-background));">
+                  <v-checkbox v-for="l in gbComfyuiLoraOptions" :key="l" v-model="gbComfyuiLoraFilter" :value="l" :label="l.replace(/\.[^/.]+$/, '')" density="compact" hide-details color="primary" />
+                </div>
+              </template>
+            </template>
+          </div>
+        </v-menu>
+        <!-- ── View button ────────────────────────────────────────── -->
+        <v-menu
+          v-model="gbViewMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--boxed"
+              type="button"
+              title="View options"
+            >
+              <v-icon size="13">mdi-view-grid</v-icon>
+              <span class="bar-btn-label">View</span>
+              <v-icon size="13">mdi-menu-down</v-icon>
+            </button>
+          </template>
+          <div class="gb-view-panel">
+            <div class="gb-filter-section-label">Grid View</div>
+            <v-switch v-model="gbCompactModeModel" label="Compact mode" color="primary" density="compact" hide-details class="gb-view-switch" />
+            <div class="gb-columns-row">
+              <span class="gb-columns-label">Columns: {{ gbPendingColumns }}</span>
+              <v-slider
+                class="gb-columns-slider"
+                v-model="gbPendingColumns"
+                :min="gb?.minColumns?.value ?? 2"
+                :max="gb?.maxColumns?.value ?? 14"
+                :step="1"
+                density="compact"
+                hide-details
+                track-color="#888"
+                thumb-color="primary"
+                @end="gbCommitColumns"
+              />
+            </div>
+            <div class="gb-stacks-controls">
+              <div class="gb-filter-section-label">Stacks</div>
+              <div class="gb-stacks-buttons">
+                <v-btn class="gb-stack-toggle-btn" color="primary" variant="flat" size="small" :disabled="gbExpandAllStacksDisabled" @click="gb?.expandAllStacks?.()">Expand all</v-btn>
+                <v-btn class="gb-stack-toggle-btn" color="primary" variant="flat" size="small" :disabled="gbCollapseAllStacksDisabled" @click="gb?.collapseAllStacks?.()">Collapse all</v-btn>
+              </div>
+            </div>
+            <div class="gb-filter-section-label" style="margin-top: 10px">Overlays</div>
+            <div class="gb-overlay-grid">
+              <button
+                v-for="ovl in gbOverlayOptions"
+                :key="ovl.key"
+                class="gb-overlay-btn"
+                :class="{ 'gb-overlay-btn--active': ovl.model.value }"
+                :title="ovl.label"
+                type="button"
+                @click="ovl.model.value = !ovl.model.value"
+              >
+                <v-icon size="16">{{ ovl.icon }}</v-icon>
+                <span class="gb-overlay-btn-label">{{ ovl.label }}</span>
+              </button>
+            </div>
+          </div>
+        </v-menu>
+      </div>
+      <div class="selection-bar-right">
+        <span v-if="visible && selectedFaceCount > 0" class="selection-face-count">
           {{ selectedFaceCount }} Faces selected
         </span>
-      </div>
-      <div class="selection-bar-actions">
         <div
           v-if="
             selectedCount > 0 &&
@@ -154,7 +656,6 @@
         </div>
         <!-- Selection ▾ dropdown — mirrors the right-click context menu exactly -->
         <v-menu
-          v-if="selectedCount > 0"
           v-model="selectionMenuOpen"
           :close-on-content-click="false"
           location="bottom end"
@@ -166,9 +667,12 @@
               v-bind="menuProps"
               class="stack-btn"
               type="button"
-              :title="props.selectedExpandedCount > selectedCount
-                ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
-                : `Actions for ${selectedCount} selected`"
+              :disabled="selectedCount === 0"
+              :title="selectedCount === 0
+                ? 'Select images to apply actions'
+                : props.selectedExpandedCount > selectedCount
+                  ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
+                  : `Actions for ${selectedCount} selected`"
             >
               <v-icon size="15">mdi-image-multiple-outline</v-icon>
               <span>Apply to ({{ selectedCount }})</span>
@@ -177,17 +681,19 @@
           </template>
           <div class="selection-menu-panel">
             <!-- ── Set / Character / Project ─────────────────────── -->
-            <template v-if="!isScrapheapView && selectedCount > 0 && !isReadOnly">
+            <template v-if="!isScrapheapView && !isReadOnly">
               <AddToSetControl
                 placement="right"
                 :backend-url="backendUrl"
                 :picture-ids="selectedImageIds"
+                :disabled="selectedCount === 0"
                 @added="$emit('added-to-set', $event)"
               />
               <AddToCharacterControl
                 placement="right"
                 :backend-url="backendUrl"
                 :picture-ids="selectedImageIds"
+                :disabled="selectedCount === 0"
                 @added="$emit('add-to-character', $event)"
                 @removed="$emit('remove-from-character', $event)"
               />
@@ -195,7 +701,7 @@
                 placement="right"
                 :backend-url="backendUrl"
                 :picture-ids="selectedImageIds"
-                :disabled="selectedCount <= 0"
+                :disabled="selectedCount === 0"
                 @selected="$emit('set-project', $event)"
               />
               <div class="ctx-sep" />
@@ -246,6 +752,7 @@
             <template v-if="!isScrapheapView && !isReadOnly">
               <button
                 class="ctx-item"
+                :disabled="selectedCount === 0"
                 title="Tag selected (T)"
                 @click="openTagInput(); selectionMenuOpen = false"
               >
@@ -255,6 +762,7 @@
               <button
                 v-if="pluginOptions.length"
                 class="ctx-item"
+                :disabled="selectedCount === 0"
                 @click="openPluginPanel(); selectionMenuOpen = false"
               >
                 <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
@@ -263,6 +771,7 @@
               <button
                 v-if="props.comfyuiConfigured"
                 class="ctx-item"
+                :disabled="selectedCount === 0"
                 @click="openComfyuiPanel(); selectionMenuOpen = false"
               >
                 <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
@@ -275,6 +784,7 @@
             <button
               v-if="showRemoveButton && !isReadOnly"
               class="ctx-item ctx-item--danger"
+              :disabled="selectedCount === 0"
               @click="$emit('remove-from-group'); selectionMenuOpen = false"
             >
               {{ removeButtonLabel }}
@@ -282,6 +792,7 @@
             <button
               v-if="!isReadOnly"
               class="ctx-item ctx-item--danger"
+              :disabled="selectedCount === 0"
               title="Delete selected items (DEL)"
               @click="$emit('delete-selected'); selectionMenuOpen = false"
             >
@@ -514,11 +1025,22 @@
           </v-menu>
         </div>
         <button
+          class="clear-btn"
+          :disabled="!visible"
+          @click="$emit('clear-selection')"
+          title="Clear selection (ESC)"
+        >
+          <v-icon size="14" color="primary">mdi-close</v-icon>
+          Clear
+        </button>
+        <button
           v-if="!isReadOnly"
           class="delete-btn"
+          :disabled="!visible"
           @click="$emit('delete-selected')"
           title="Delete selected items (DEL)"
         >
+          <v-icon size="14" color="error">mdi-delete</v-icon>
           {{ deleteButtonLabel }}
         </button>
       </div>
@@ -555,7 +1077,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, inject, nextTick, ref, watch } from "vue";
 import { apiClient, isReadOnly } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToCharacterControl from "./AddToCharacterControl.vue";
@@ -608,6 +1130,536 @@ const emit = defineEmits([
 ]);
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Grid Bar state (inject from App.vue via provide/inject)
+// ═══════════════════════════════════════════════════════════════════════════════
+const gb = inject("gridBarState", null);
+
+// ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
+const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
+const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";
+const gbSortMenuOpen = ref(false);
+const gbPendingSortSelection = ref(null);
+
+const gbSortModel = computed({
+  get: () => gb?.selectedSort?.value ?? "",
+  set: (value) =>
+    gb?.updateSort?.({
+      sort: value != null ? String(value) : "",
+      descending: gb?.selectedDescending?.value ?? true,
+    }),
+});
+
+const gbDescendingModel = computed({
+  get: () => gb?.selectedDescending?.value ?? true,
+  set: (value) =>
+    gb?.updateSort?.({ sort: gbSortModel.value, descending: Boolean(value) }),
+});
+
+const gbSortMenuModel = computed(
+  () => gbPendingSortSelection.value ?? gbSortModel.value,
+);
+
+const gbPendingSortKey = computed(() =>
+  String(gbSortMenuModel.value || "").toUpperCase(),
+);
+const gbCommittedSortKey = computed(() =>
+  String(gbSortModel.value || "").toUpperCase(),
+);
+
+const gbIsPendingParameterSortCommit = computed(
+  () =>
+    gbSortRequiresParameter(gbPendingSortKey.value) &&
+    gbPendingSortKey.value !== gbCommittedSortKey.value,
+);
+const gbIsPendingSimilarityParameter = computed(
+  () =>
+    gbIsPendingParameterSortCommit.value &&
+    gbPendingSortKey.value === SIMILARITY_SORT_KEY_GB,
+);
+const gbIsPendingStackParameter = computed(
+  () =>
+    gbIsPendingParameterSortCommit.value &&
+    gbPendingSortKey.value === LIKENESS_GROUPS_SORT_KEY_GB,
+);
+
+watch(gbSortMenuOpen, (isOpen) => {
+  if (isOpen) gbPendingSortSelection.value = gbSortModel.value;
+  else gbPendingSortSelection.value = null;
+});
+
+const gbHasSimilarityOptions = computed(
+  () =>
+    Array.isArray(gb?.similarityCharacterOptions?.value) &&
+    gb.similarityCharacterOptions.value.length > 0,
+);
+
+const gbSimilarityCharacterModel = computed({
+  get: () => gb?.selectedSimilarityCharacter?.value ?? null,
+  set: (value) => gb?.updateSimilarityCharacter?.(value ?? null),
+});
+
+const gbStackThresholdOptions = [
+  { label: "Very Loose", value: "0.92" },
+  { label: "Loose", value: "0.95" },
+  { label: "Medium", value: "0.97" },
+  { label: "Strict", value: "0.99" },
+  { label: "Very Strict", value: "0.995" },
+];
+
+const gbStackThresholdModel = computed({
+  get: () => {
+    const v = gb?.stackThreshold?.value;
+    if (v == null || v === "") return "0.92";
+    const parsed = parseFloat(String(v));
+    if (!Number.isFinite(parsed) || parsed <= 0) return "0.92";
+    return String(v);
+  },
+  set: (value) => gb?.updateStackThreshold?.(value),
+});
+
+const GB_SORT_ICON_MAP = {
+  DATE: "mdi-calendar",
+  IMPORTED_AT: "mdi-calendar-import",
+  SMART_SCORE: "mdi-brain",
+  SCORE: "mdi-star",
+  NAME: "mdi-sort-alphabetical",
+  IMAGE_SIZE: "mdi-image-size-select-large",
+  RANDOM: "mdi-shuffle",
+  TEXT_CONTENT: "mdi-text-recognition",
+  CHARACTER_LIKENESS: "mdi-account-search",
+  LIKENESS_GROUPS: "mdi-layers",
+};
+
+function gbGetSortIcon(value) {
+  if (!value) return "mdi-sort";
+  return GB_SORT_ICON_MAP[String(value).toUpperCase()] || "mdi-sort";
+}
+
+function gbSortRequiresParameter(sortValue) {
+  const key = String(sortValue || "").toUpperCase();
+  return key === SIMILARITY_SORT_KEY_GB || key === LIKENESS_GROUPS_SORT_KEY_GB;
+}
+
+function gbCommitSortSelection(sortValue) {
+  gbSortModel.value = sortValue != null ? String(sortValue) : "";
+}
+
+function gbHandleSortModelUpdate(sortValue) {
+  if (gb?.isSearchActive?.value) return;
+  gbPendingSortSelection.value = sortValue != null ? String(sortValue) : "";
+  if (!gbSortRequiresParameter(gbPendingSortSelection.value)) {
+    gbCommitSortSelection(gbPendingSortSelection.value);
+    gbSortMenuOpen.value = false;
+  }
+}
+
+function gbHandleSimilarityOptionClick() {
+  if (String(gbSortMenuModel.value || "").toUpperCase() === SIMILARITY_SORT_KEY_GB) {
+    gbCommitSortSelection(SIMILARITY_SORT_KEY_GB);
+    gbSortMenuOpen.value = false;
+  }
+}
+
+function gbHandleStackThresholdOptionClick() {
+  if (String(gbSortMenuModel.value || "").toUpperCase() === LIKENESS_GROUPS_SORT_KEY_GB) {
+    gbCommitSortSelection(LIKENESS_GROUPS_SORT_KEY_GB);
+    gbSortMenuOpen.value = false;
+  }
+}
+
+function gbToggleSortDirection() {
+  gbDescendingModel.value = !gbDescendingModel.value;
+}
+
+const gbSelectedSortOption = computed(() =>
+  (gb?.sortOptions?.value ?? []).find((opt) => opt.value === gbSortModel.value),
+);
+const gbSelectedSimilarityOption = computed(() =>
+  (gb?.similarityCharacterOptions?.value ?? []).find(
+    (opt) => opt.value === gbSimilarityCharacterModel.value,
+  ),
+);
+const gbSelectedStackThresholdOption = computed(() =>
+  gbStackThresholdOptions.find((opt) => opt.value === gbStackThresholdModel.value),
+);
+
+const gbSortButtonLabel = computed(() => {
+  if (gb?.isSearchActive?.value) return "Search relevance";
+  if (gbSortModel.value === SIMILARITY_SORT_KEY_GB)
+    return gbSelectedSimilarityOption.value?.text
+      ? `Similarity: ${gbSelectedSimilarityOption.value.text}`
+      : "Similarity";
+  if (gbSortModel.value === LIKENESS_GROUPS_SORT_KEY_GB)
+    return gbSelectedStackThresholdOption.value?.label
+      ? `Groups: ${gbSelectedStackThresholdOption.value.label}`
+      : "Groups";
+  return gbSelectedSortOption.value?.label || "Sort";
+});
+
+const gbSortButtonIcon = computed(() =>
+  gbDescendingModel.value ? "mdi-sort-descending" : "mdi-sort-ascending",
+);
+
+const gbSortTypeIcon = computed(() => {
+  if (gb?.isSearchActive?.value) return "mdi-magnify";
+  return gbGetSortIcon(gbSortModel.value);
+});
+
+// ── Grid Bar: Filter ───────────────────────────────────────────────────────────
+const gbFilterMenuOpen = ref(false);
+
+const gbMediaTypeFilter = computed({
+  get: () => gb?.mediaTypeFilter?.value ?? "all",
+  set: (v) => { if (gb?.mediaTypeFilter) gb.mediaTypeFilter.value = v; },
+});
+const gbMinScoreFilter = computed({
+  get: () => gb?.minScoreFilter?.value ?? null,
+  set: (v) => { if (gb?.minScoreFilter) gb.minScoreFilter.value = v ?? null; },
+});
+const gbMaxScoreFilter = computed({
+  get: () => gb?.maxScoreFilter?.value ?? null,
+  set: (v) => { if (gb?.maxScoreFilter) gb.maxScoreFilter.value = v ?? null; },
+});
+const gbFaceBboxFilter = computed({
+  get: () => gb?.faceBboxFilter?.value ?? null,
+  set: (v) => { if (gb?.faceBboxFilter) gb.faceBboxFilter.value = v; },
+});
+const gbTagFilter = computed({
+  get: () => gb?.tagFilter?.value ?? [],
+  set: (v) => { if (gb?.tagFilter) gb.tagFilter.value = v ?? []; },
+});
+const gbTagRejectedFilter = computed({
+  get: () => gb?.tagRejectedFilter?.value ?? [],
+  set: (v) => { if (gb?.tagRejectedFilter) gb.tagRejectedFilter.value = v ?? []; },
+});
+const gbTagConfidenceAboveFilter = computed({
+  get: () => gb?.tagConfidenceAboveFilter?.value ?? [],
+  set: (v) => { if (gb?.tagConfidenceAboveFilter) gb.tagConfidenceAboveFilter.value = v ?? []; },
+});
+const gbTagConfidenceBelowFilter = computed({
+  get: () => gb?.tagConfidenceBelowFilter?.value ?? [],
+  set: (v) => { if (gb?.tagConfidenceBelowFilter) gb.tagConfidenceBelowFilter.value = v ?? []; },
+});
+const gbSharedOnlyFilter = computed({
+  get: () => gb?.sharedOnlyFilter?.value ?? false,
+  set: (v) => { if (gb?.sharedOnlyFilter) gb.sharedOnlyFilter.value = Boolean(v); },
+});
+const gbComfyuiModelFilter = computed({
+  get: () => gb?.comfyuiModelFilter?.value ?? [],
+  set: (v) => { if (gb?.comfyuiModelFilter) gb.comfyuiModelFilter.value = v ?? []; },
+});
+const gbComfyuiLoraFilter = computed({
+  get: () => gb?.comfyuiLoraFilter?.value ?? [],
+  set: (v) => { if (gb?.comfyuiLoraFilter) gb.comfyuiLoraFilter.value = v ?? []; },
+});
+
+const gbIsFilterActive = computed(
+  () =>
+    (gb?.mediaTypeFilter?.value ?? "all") !== "all" ||
+    (gb?.minScoreFilter?.value ?? null) != null ||
+    (gb?.maxScoreFilter?.value ?? null) != null ||
+    (gb?.smartScoreBucketFilter?.value ?? null) != null ||
+    (gb?.resolutionBucketFilter?.value ?? null) != null ||
+    (Array.isArray(gb?.tagFilter?.value) && gb.tagFilter.value.length > 0) ||
+    (Array.isArray(gb?.tagRejectedFilter?.value) && gb.tagRejectedFilter.value.length > 0) ||
+    (Array.isArray(gb?.tagConfidenceAboveFilter?.value) && gb.tagConfidenceAboveFilter.value.length > 0) ||
+    (Array.isArray(gb?.tagConfidenceBelowFilter?.value) && gb.tagConfidenceBelowFilter.value.length > 0) ||
+    (Array.isArray(gb?.comfyuiModelFilter?.value) && gb.comfyuiModelFilter.value.length > 0) ||
+    (Array.isArray(gb?.comfyuiLoraFilter?.value) && gb.comfyuiLoraFilter.value.length > 0) ||
+    (gb?.faceBboxFilter?.value ?? null) != null ||
+    (gb?.sharedOnlyFilter?.value ?? false),
+);
+
+const gbActiveFilterCount = computed(() => {
+  let count = 0;
+  if ((gb?.mediaTypeFilter?.value ?? "all") !== "all") count++;
+  if ((gb?.minScoreFilter?.value ?? null) != null) count++;
+  if ((gb?.maxScoreFilter?.value ?? null) != null) count++;
+  if ((gb?.smartScoreBucketFilter?.value ?? null) != null) count++;
+  if ((gb?.resolutionBucketFilter?.value ?? null) != null) count++;
+  if (Array.isArray(gb?.tagFilter?.value)) count += gb.tagFilter.value.length;
+  if (Array.isArray(gb?.tagRejectedFilter?.value)) count += gb.tagRejectedFilter.value.length;
+  if (Array.isArray(gb?.tagConfidenceAboveFilter?.value)) count += gb.tagConfidenceAboveFilter.value.length;
+  if (Array.isArray(gb?.tagConfidenceBelowFilter?.value)) count += gb.tagConfidenceBelowFilter.value.length;
+  if (Array.isArray(gb?.comfyuiModelFilter?.value)) count += gb.comfyuiModelFilter.value.length;
+  if (Array.isArray(gb?.comfyuiLoraFilter?.value)) count += gb.comfyuiLoraFilter.value.length;
+  if ((gb?.faceBboxFilter?.value ?? null) != null) count++;
+  if (gb?.sharedOnlyFilter?.value) count++;
+  return count;
+});
+
+function gbClearAllFilters() {
+  if (!gb) return;
+  if (gb.mediaTypeFilter) gb.mediaTypeFilter.value = "all";
+  if (gb.minScoreFilter) gb.minScoreFilter.value = null;
+  if (gb.maxScoreFilter) gb.maxScoreFilter.value = null;
+  if (gb.smartScoreBucketFilter) gb.smartScoreBucketFilter.value = null;
+  if (gb.resolutionBucketFilter) gb.resolutionBucketFilter.value = null;
+  if (gb.faceBboxFilter) gb.faceBboxFilter.value = null;
+  if (gb.tagFilter) gb.tagFilter.value = [];
+  if (gb.tagRejectedFilter) gb.tagRejectedFilter.value = [];
+  if (gb.tagConfidenceAboveFilter) gb.tagConfidenceAboveFilter.value = [];
+  if (gb.tagConfidenceBelowFilter) gb.tagConfidenceBelowFilter.value = [];
+  if (gb.comfyuiModelFilter) gb.comfyuiModelFilter.value = [];
+  if (gb.comfyuiLoraFilter) gb.comfyuiLoraFilter.value = [];
+  if (gb.sharedOnlyFilter) gb.sharedOnlyFilter.value = false;
+}
+
+const gbMediaTypeOptions = [
+  { value: "all", icon: "mdi-multimedia", title: "Show all media" },
+  { value: "images", icon: "mdi-image", title: "Show images only" },
+  { value: "videos", icon: "mdi-video", title: "Show videos only" },
+];
+
+function gbSetMediaTypeFilter(value) {
+  gbMediaTypeFilter.value = value;
+}
+
+const gbFaceBboxFilterOptions = [
+  { value: null, icon: "mdi-all-inclusive", title: "All pictures" },
+  { value: "with_face", icon: "mdi-face-man", title: "With detected face" },
+  { value: "without_face", icon: "mdi-face-man", title: "Without detected face" },
+];
+
+function gbSetFaceBboxFilter(value) {
+  gbFaceBboxFilter.value =
+    gbFaceBboxFilter.value === value && value !== null ? null : value;
+}
+
+function gbSetMinScore(n) {
+  const newMin = gbMinScoreFilter.value === n ? null : n;
+  gbMinScoreFilter.value = newMin;
+  if (newMin !== null && gbMaxScoreFilter.value !== null && newMin > gbMaxScoreFilter.value) {
+    gbMaxScoreFilter.value = newMin;
+  }
+}
+
+function gbSetMaxScore(n) {
+  const newMax = gbMaxScoreFilter.value === n ? null : n;
+  gbMaxScoreFilter.value = newMax;
+  if (newMax !== null && gbMinScoreFilter.value !== null && newMax < gbMinScoreFilter.value) {
+    gbMinScoreFilter.value = newMax;
+  }
+}
+
+const gbTagFilterInput = ref("");
+const gbTagFilterSuggestions = ref([]);
+const gbTagFilterHoverEnabled = ref(false);
+const gbTagFilterIndex = ref(-1);
+
+async function gbLoadTagFilterSuggestions(input) {
+  if (!input || input.length < 1) {
+    gbTagFilterSuggestions.value = [];
+    return;
+  }
+  try {
+    const res = await apiClient.get(`${gb?.backendUrl ?? ""}/tags`);
+    const all = Array.isArray(res.data) ? res.data : [];
+    const q = input.toLowerCase();
+    gbTagFilterSuggestions.value = all
+      .filter(
+        (t) =>
+          t.tag.toLowerCase().includes(q) &&
+          !gbTagFilter.value.includes(t.tag) &&
+          !gbTagRejectedFilter.value.includes(t.tag),
+      )
+      .slice(0, 8)
+      .map((t) => t.tag);
+  } catch {
+    gbTagFilterSuggestions.value = [];
+  }
+}
+
+watch(gbTagFilterInput, (val) => {
+  gbTagFilterIndex.value = -1;
+  gbLoadTagFilterSuggestions(val);
+});
+
+function gbAddTagFilter(tag) {
+  if (
+    tag &&
+    !gbTagFilter.value.includes(tag) &&
+    !gbTagRejectedFilter.value.includes(tag)
+  ) {
+    gbTagFilter.value = [...gbTagFilter.value, tag];
+  }
+  gbTagFilterInput.value = "";
+  gbTagFilterSuggestions.value = [];
+  gbTagFilterIndex.value = -1;
+}
+
+function gbRemoveTagFilter(tag) {
+  gbTagFilter.value = gbTagFilter.value.filter((t) => t !== tag);
+  gbTagRejectedFilter.value = gbTagRejectedFilter.value.filter((t) => t !== tag);
+}
+
+function gbToggleTagRejected(tag) {
+  if (gbTagFilter.value.includes(tag)) {
+    gbTagFilter.value = gbTagFilter.value.filter((t) => t !== tag);
+    gbTagRejectedFilter.value = [...gbTagRejectedFilter.value, tag];
+  } else {
+    gbTagRejectedFilter.value = gbTagRejectedFilter.value.filter((t) => t !== tag);
+    gbTagFilter.value = [...gbTagFilter.value, tag];
+  }
+}
+
+const gbConfidenceTagInput = ref("");
+const gbConfidenceTagSuggestions = ref([]);
+const gbConfidenceTagHoverEnabled = ref(false);
+const gbConfidenceTagIndex = ref(-1);
+const gbConfidenceThreshold = ref(0.7);
+const gbConfidenceMode = ref("above");
+let gbSuppressConfidenceSuggestionLoad = false;
+
+async function gbLoadConfidenceTagSuggestions(input) {
+  if (!input || input.length < 1) {
+    gbConfidenceTagSuggestions.value = [];
+    return;
+  }
+  try {
+    const res = await apiClient.get(`${gb?.backendUrl ?? ""}/tags`);
+    const all = Array.isArray(res.data) ? res.data : [];
+    const q = input.toLowerCase();
+    gbConfidenceTagSuggestions.value = all
+      .filter((t) => t.tag.toLowerCase().includes(q))
+      .slice(0, 8)
+      .map((t) => t.tag);
+  } catch {
+    gbConfidenceTagSuggestions.value = [];
+  }
+}
+
+watch(gbConfidenceTagInput, (val) => {
+  if (gbSuppressConfidenceSuggestionLoad) {
+    gbSuppressConfidenceSuggestionLoad = false;
+    return;
+  }
+  gbConfidenceTagIndex.value = -1;
+  gbLoadConfidenceTagSuggestions(val);
+});
+
+function gbSelectConfidenceTagSuggestion(tag) {
+  gbSuppressConfidenceSuggestionLoad = true;
+  gbConfidenceTagInput.value = tag;
+  gbConfidenceTagSuggestions.value = [];
+  gbConfidenceTagIndex.value = -1;
+}
+
+function gbAddConfidenceFilter(tagArg) {
+  const tag = (tagArg ?? gbConfidenceTagInput.value).trim();
+  if (!tag) return;
+  const entry = `${tag}:${gbConfidenceThreshold.value.toFixed(2)}`;
+  if (gbConfidenceMode.value === "above") {
+    if (!gbTagConfidenceAboveFilter.value.includes(entry))
+      gbTagConfidenceAboveFilter.value = [...gbTagConfidenceAboveFilter.value, entry];
+  } else {
+    if (!gbTagConfidenceBelowFilter.value.includes(entry))
+      gbTagConfidenceBelowFilter.value = [...gbTagConfidenceBelowFilter.value, entry];
+  }
+  gbConfidenceTagInput.value = "";
+  gbConfidenceTagSuggestions.value = [];
+  gbConfidenceTagIndex.value = -1;
+}
+
+function gbRemoveConfidenceAboveFilter(entry) {
+  gbTagConfidenceAboveFilter.value = gbTagConfidenceAboveFilter.value.filter((e) => e !== entry);
+}
+
+function gbRemoveConfidenceBelowFilter(entry) {
+  gbTagConfidenceBelowFilter.value = gbTagConfidenceBelowFilter.value.filter((e) => e !== entry);
+}
+
+function gbConfidenceEntryLabel(entry) {
+  const [tag, threshold] = entry.split(":");
+  return `${tag} ${Math.round(parseFloat(threshold) * 100)}%`;
+}
+
+const gbComfyuiModelOptions = ref([]);
+const gbComfyuiLoraOptions = ref([]);
+const gbComfyuiFilterExpanded = ref(false);
+
+watch(gbFilterMenuOpen, async (isOpen) => {
+  if (isOpen) {
+    const backendUrl = gb?.backendUrl ?? "";
+    if (backendUrl && !gbComfyuiModelOptions.value.length && !gbComfyuiLoraOptions.value.length) {
+      try {
+        const [mRes, lRes] = await Promise.all([
+          apiClient.get(`${backendUrl}/pictures/comfyui_models`),
+          apiClient.get(`${backendUrl}/pictures/comfyui_loras`),
+        ]);
+        gbComfyuiModelOptions.value = Array.isArray(mRes.data) ? mRes.data : [];
+        gbComfyuiLoraOptions.value = Array.isArray(lRes.data) ? lRes.data : [];
+      } catch {}
+    }
+  } else {
+    gbTagFilterInput.value = "";
+    gbTagFilterSuggestions.value = [];
+  }
+});
+
+// ── Grid Bar: View ─────────────────────────────────────────────────────────────
+const gbViewMenuOpen = ref(false);
+const gbPendingColumns = ref(gb?.columns?.value ?? 4);
+
+watch(
+  () => gb?.columns?.value,
+  (v) => {
+    if (!gbViewMenuOpen.value) gbPendingColumns.value = v ?? 4;
+  },
+);
+
+watch(gbViewMenuOpen, (isOpen) => {
+  if (isOpen) gbPendingColumns.value = gb?.columns?.value ?? 4;
+});
+
+function gbCommitColumns() {
+  if (gb?.columns) gb.columns.value = gbPendingColumns.value;
+}
+
+const gbCompactModeModel = computed({
+  get: () => gb?.compactMode?.value ?? false,
+  set: (v) => { if (gb?.compactMode) gb.compactMode.value = Boolean(v); },
+});
+const gbShowStarsModel = computed({
+  get: () => gb?.showStars?.value ?? true,
+  set: (v) => { if (gb?.showStars) gb.showStars.value = Boolean(v); },
+});
+const gbShowFaceBboxesModel = computed({
+  get: () => gb?.showFaceBboxes?.value ?? false,
+  set: (v) => { if (gb?.showFaceBboxes) gb.showFaceBboxes.value = Boolean(v); },
+});
+const gbShowFormatModel = computed({
+  get: () => gb?.showFormat?.value ?? true,
+  set: (v) => { if (gb?.showFormat) gb.showFormat.value = Boolean(v); },
+});
+const gbShowResolutionModel = computed({
+  get: () => gb?.showResolution?.value ?? true,
+  set: (v) => { if (gb?.showResolution) gb.showResolution.value = Boolean(v); },
+});
+const gbShowProblemIconModel = computed({
+  get: () => gb?.showProblemIcon?.value ?? true,
+  set: (v) => { if (gb?.showProblemIcon) gb.showProblemIcon.value = Boolean(v); },
+});
+
+const gbOverlayOptions = computed(() => [
+  { key: 'stars',   label: 'Stars',       icon: 'mdi-star',            model: { get value() { return gbShowStarsModel.value; },      set value(v) { gbShowStarsModel.value = v; } } },
+  { key: 'faces',   label: 'Face boxes',  icon: 'mdi-face-recognition',model: { get value() { return gbShowFaceBboxesModel.value; }, set value(v) { gbShowFaceBboxesModel.value = v; } } },
+  { key: 'format',  label: 'Format',      icon: 'mdi-file-image',      model: { get value() { return gbShowFormatModel.value; },     set value(v) { gbShowFormatModel.value = v; } } },
+  { key: 'res',     label: 'Resolution',  icon: 'mdi-aspect-ratio',    model: { get value() { return gbShowResolutionModel.value; }, set value(v) { gbShowResolutionModel.value = v; } } },
+  { key: 'problem', label: 'Problems',    icon: 'mdi-alert',           model: { get value() { return gbShowProblemIconModel.value; },set value(v) { gbShowProblemIconModel.value = v; } } },
+]);
+
+const gbExpandAllStacksDisabled = computed(() => {
+  const total = Number(gb?.stackTotalCount?.value || 0);
+  const expanded = Number(gb?.stackExpandedCount?.value || 0);
+  return total <= 0 || expanded >= total;
+});
+
+const gbCollapseAllStacksDisabled = computed(
+  () => Number(gb?.stackExpandedCount?.value || 0) <= 0,
+);
 
 // ── Tag-panel mini-grid ───────────────────────────────────────────────────────
 const previewImages = computed(() => {
@@ -1465,10 +2517,8 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .selection-bar-left {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-width: 0;
-  flex: 1 1 0;
-  overflow: hidden;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .selection-count,
 .selection-face-count {
@@ -1486,7 +2536,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   white-space: nowrap;
   cursor: default;
 }
-.selection-bar-actions {
+.selection-bar-right {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1494,17 +2544,29 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   flex-shrink: 0;
 }
 .clear-btn {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  border: none;
-  padding: 2px 10px;
-  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(var(--v-theme-on-background), 0.07);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.14);
+  padding: 0 8px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: 0.82em;
+  font-family: inherit;
+  height: 22px;
+  white-space: nowrap;
 }
-.clear-btn:hover {
-  filter: brightness(1.3);
+.clear-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-background), 0.12);
+}
+.clear-btn:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: rgb(var(--v-theme-on-background));
+  opacity: 0.35;
+  cursor: default;
 }
 .remove-btn {
   background: rgb(var(--v-theme-warning));
@@ -1520,33 +2582,47 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   filter: brightness(1.3);
 }
 .delete-btn {
-  background: rgb(var(--v-theme-error));
-  color: #fff;
-  border: none;
-  padding: 2px 12px;
-  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(var(--v-theme-on-background), 0.07);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.14);
+  padding: 0 8px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: 0.82em;
+  font-family: inherit;
+  height: 22px;
+  white-space: nowrap;
 }
-.delete-btn:hover {
-  filter: brightness(1.3);
+.delete-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-background), 0.12);
+}
+.delete-btn:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: rgb(var(--v-theme-on-background));
+  opacity: 0.35;
+  cursor: default;
 }
 .stack-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(var(--v-theme-primary), 0.15);
+  gap: 3px;
+  background: rgba(var(--v-theme-on-background), 0.07);
   color: rgb(var(--v-theme-on-background));
-  border: none;
-  padding: 2px 8px;
-  border-radius: 3px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.14);
+  padding: 0 8px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: 0.82em;
+  font-family: inherit;
+  height: 22px;
+  white-space: nowrap;
 }
 .stack-btn:hover:not(:disabled) {
-  filter: brightness(1.2);
+  background: rgba(var(--v-theme-on-background), 0.12);
 }
 .stack-btn:disabled {
   opacity: 0.35;
@@ -2084,4 +3160,610 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   flex: 1;
   min-width: 340px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Grid Bar – Sort / Filter / View buttons and panels
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Bar buttons ──────────────────────────────────────────────────────────── */
+.bar-split-button {
+  display: flex;
+  align-items: center;
+  background: rgba(var(--v-theme-on-background), 0.07);
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.14);
+}
+
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.82em;
+  font-family: inherit;
+  color: rgb(var(--v-theme-on-background));
+  background: transparent;
+  border: none;
+  height: 22px;
+  white-space: nowrap;
+  position: relative;
+}
+
+.bar-btn:hover {
+  background: rgba(var(--v-theme-on-background), 0.1);
+}
+
+.bar-btn--active {
+  color: rgb(var(--v-theme-primary));
+}
+
+.bar-btn--boxed {
+  background: rgba(var(--v-theme-on-background), 0.07);
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.14);
+}
+
+.bar-btn-label {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+}
+
+.bar-btn-prefix {
+  font-size: 0.82em;
+  opacity: 0.55;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bar-split-toggle {
+  border-radius: 3px 0 0 3px;
+  padding-right: 4px;
+}
+
+.bar-split-menu {
+  border-radius: 0 3px 3px 0;
+  border-left: 1px solid rgba(var(--v-theme-on-background), 0.18);
+  padding-left: 5px;
+}
+
+.bar-filter-badge {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  border-radius: 8px;
+  font-size: 0.65em;
+  font-weight: 700;
+  padding: 0 4px;
+  min-width: 14px;
+  text-align: center;
+  line-height: 14px;
+  flex-shrink: 0;
+}
+
+.bar-separator {
+  width: 1px;
+  height: 16px;
+  background: rgba(var(--v-theme-on-background), 0.2);
+  margin: 0 4px;
+  align-self: center;
+  flex-shrink: 0;
+}
+
+/* ── Sort panel ───────────────────────────────────────────────────────────── */
+.gb-sort-panel {
+  min-width: 340px;
+  max-width: 400px;
+  padding: 8px 8px 10px;
+  background: rgba(var(--v-theme-background), 0.96);
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 8px;
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+}
+
+.gb-sort-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.gb-sort-panel-title {
+  font-size: 1em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gb-sort-panel-title span {
+  font-size: 0.78em;
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+.gb-sort-direction {
+  font-size: 0.82em;
+  min-width: 0;
+}
+
+.gb-sort-search-note {
+  font-size: 0.8em;
+  opacity: 0.7;
+  padding: 4px 4px 8px;
+}
+
+.gb-sort-grid {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 2px;
+  width: 100%;
+  height: auto !important;
+  background: transparent !important;
+}
+
+.gb-sort-grid--pending-parameter .v-btn {
+  opacity: 0.5;
+}
+
+.gb-sort-grid-btn {
+  flex: 1 1 calc(50% - 2px);
+  min-width: 100px;
+  max-width: none;
+  height: 32px !important;
+  justify-content: flex-start !important;
+  padding: 0 8px !important;
+  font-size: 0.82em;
+  color: rgb(var(--v-theme-on-background)) !important;
+  opacity: 1 !important;
+}
+
+.gb-sort-grid-btn.v-btn--active {
+  color: rgb(var(--v-theme-on-primary)) !important;
+  background: rgb(var(--v-theme-primary)) !important;
+}
+
+.gb-sort-grid-label {
+  flex: 1;
+  text-align: left;
+  font-size: 0.9em;
+  margin-left: 4px;
+}
+
+.gb-sort-grid-selected {
+  color: rgb(var(--v-theme-on-primary)) !important;
+  margin-left: auto;
+}
+
+.gb-sort-grid-selected--pending {
+  opacity: 0.4;
+}
+
+.gb-sort-similarity-row {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.gb-sort-similarity-row > span {
+  font-size: 0.85em;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.gb-similarity-scroll {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+.gb-similarity-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.gb-similarity-thumb--placeholder {
+  background: rgba(var(--v-theme-on-background), 0.15);
+}
+
+/* ── Filter panel ─────────────────────────────────────────────────────────── */
+.gb-filter-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
+  min-width: 280px;
+  max-width: 340px;
+  background: rgba(var(--v-theme-background), 0.96);
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 8px;
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+}
+
+.gb-filter-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.gb-filter-panel-title {
+  font-size: 1.02em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.gb-filter-clear-all-btn {
+  min-width: 0;
+  padding: 0 4px;
+  height: 20px;
+  font-size: 0.8em;
+}
+
+.gb-filter-shared-only-row {
+  width: 100%;
+}
+
+.gb-filter-shared-only-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.gb-filter-section-label {
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-top: 4px;
+  width: 100%;
+}
+
+.gb-filter-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.gb-media-type-toggle {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+}
+
+.gb-media-type-button {
+  flex: 1 !important;
+  min-width: 0 !important;
+  padding: 0 4px !important;
+  height: 32px !important;
+  border-radius: 4px !important;
+  opacity: 0.55 !important;
+}
+
+.gb-media-type-button--active {
+  opacity: 1 !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
+  background: rgb(var(--v-theme-primary)) !important;
+}
+
+.gb-face-no-detection-icon {
+  position: relative;
+  display: inline-flex;
+}
+
+.gb-face-no-detection-icon::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  width: 2px;
+  height: 18px;
+  background: currentColor;
+  pointer-events: none;
+}
+
+.gb-score-range-section {
+  width: 100%;
+}
+
+.gb-score-range-headers {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.gb-score-range-header-label {
+  font-size: 0.78em;
+  opacity: 0.65;
+}
+
+.gb-score-range-filter {
+  display: flex;
+  justify-content: space-between;
+}
+
+.gb-score-range-stars {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.gb-score-star-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 2px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: rgb(var(--v-theme-on-background));
+  opacity: 0.7;
+  line-height: 1;
+}
+.gb-score-star-btn:hover {
+  opacity: 1;
+}
+
+.gb-tag-filter-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.gb-tag-filter-input {
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.25);
+  background: rgba(var(--v-theme-on-background), 0.06);
+  color: rgb(var(--v-theme-on-background));
+  font-size: 0.85em;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.gb-tag-filter-input:focus {
+  border-color: rgb(var(--v-theme-primary));
+}
+
+.gb-tag-filter-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 200;
+  background: rgba(var(--v-theme-background), 0.98);
+  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.gb-tag-filter-dropdown--hover-enabled {
+  pointer-events: auto;
+}
+
+.gb-tag-filter-suggestion {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.85em;
+  background: transparent;
+  border: none;
+  color: rgb(var(--v-theme-on-background));
+}
+
+.gb-tag-filter-suggestion--active,
+.gb-tag-filter-suggestion:hover {
+  background: rgba(var(--v-theme-primary), 0.12);
+}
+
+.gb-tag-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+}
+
+.gb-confidence-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.gb-confidence-filter-tag-wrap {
+  flex: 1;
+  min-width: 80px;
+}
+
+.gb-confidence-filter-tag-input {
+  width: 100%;
+}
+
+.gb-confidence-threshold-stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.gb-threshold-step-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.3);
+  background: transparent;
+  color: rgb(var(--v-theme-on-background));
+  cursor: pointer;
+  font-size: 0.9em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.gb-threshold-step-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.gb-confidence-threshold-input {
+  width: 64px;
+  padding: 4px 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.25);
+  background: rgba(var(--v-theme-on-background), 0.06);
+  color: rgb(var(--v-theme-on-background));
+  font-size: 0.85em;
+  text-align: center;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.gb-confidence-mode-btn {
+  min-width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.25);
+  background: transparent;
+  color: rgb(var(--v-theme-on-background));
+  cursor: pointer;
+  font-size: 0.9em;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+.gb-confidence-add-btn {
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-primary), 0.5);
+  background: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+  font-size: 0.85em;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.gb-confidence-add-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.gb-comfyui-section-header {
+  width: 100%;
+}
+
+/* ── View panel ───────────────────────────────────────────────────────────── */
+.gb-view-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 12px 12px;
+  min-width: 220px;
+  background: rgba(var(--v-theme-background), 0.96);
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 8px;
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+}
+
+.gb-view-switch {
+  width: 100%;
+}
+
+.gb-columns-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.gb-columns-label {
+  font-size: 0.82em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 76px;
+}
+
+.gb-columns-slider {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.gb-stacks-controls {
+  width: 100%;
+}
+
+.gb-stacks-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.gb-stack-toggle-btn {
+  flex: 1;
+}
+
+.gb-overlay-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  width: 100%;
+}
+
+.gb-overlay-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 4px;
+  border-radius: 5px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.14);
+  background: rgba(var(--v-theme-on-background), 0.04);
+  color: rgb(var(--v-theme-on-background));
+  cursor: pointer;
+  font-size: 0;
+  opacity: 0.5;
+  transition: opacity 0.12s, background 0.12s;
+}
+
+.gb-overlay-btn:hover {
+  opacity: 0.8;
+  background: rgba(var(--v-theme-on-background), 0.09);
+}
+
+.gb-overlay-btn--active {
+  opacity: 1;
+  color: rgb(var(--v-theme-on-primary));
+  border-color: rgb(var(--v-theme-primary));
+  background: rgb(var(--v-theme-primary));
+}
+
+.gb-overlay-btn-label {
+  font-size: 0.72em;
+  white-space: nowrap;
+  line-height: 1.2;
+  color: inherit;
+}
+
 </style>

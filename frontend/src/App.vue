@@ -5,6 +5,7 @@ import {
   nextTick,
   onBeforeUnmount,
   onMounted,
+  provide,
   reactive,
   ref,
   watch,
@@ -1443,6 +1444,57 @@ onBeforeUnmount(() => {
 });
 
 defineExpose({ sidebarVisible, mediaTypeFilter });
+
+// ---------------------------------------------------------------------------
+// GridBar state – shared with SelectionBar via provide/inject so we don't need
+// to thread dozens of props through ImageGrid.
+// ---------------------------------------------------------------------------
+provide("gridBarState", {
+  // Sort
+  sortOptions,
+  selectedSort,
+  selectedDescending,
+  isSearchActive: computed(() =>
+    Boolean(searchQuery.value && searchQuery.value.trim()),
+  ),
+  similarityCharacterOptions,
+  selectedSimilarityCharacter,
+  stackThreshold,
+  updateSort: handleUpdateSelectedSort,
+  updateSimilarityCharacter: handleUpdateSimilarityCharacter,
+  updateStackThreshold: handleUpdateStackThreshold,
+  // Filter
+  mediaTypeFilter,
+  minScoreFilter,
+  maxScoreFilter,
+  smartScoreBucketFilter,
+  resolutionBucketFilter,
+  tagFilter,
+  tagRejectedFilter,
+  tagConfidenceAboveFilter,
+  tagConfidenceBelowFilter,
+  faceBboxFilter,
+  sharedOnlyFilter,
+  comfyuiModelFilter,
+  comfyuiLoraFilter,
+  comfyuiConfigured,
+  backendUrl: BACKEND_URL,
+  // View
+  columns,
+  minColumns,
+  maxColumns,
+  compactMode,
+  showStars,
+  showFaceBboxes,
+  showFormat,
+  showResolution,
+  showProblemIcon,
+  showStacks,
+  stackExpandedCount: expandedStackCount,
+  stackTotalCount: totalStackCount,
+  expandAllStacks: handleExpandAllStacks,
+  collapseAllStacks: handleCollapseAllStacks,
+});
 </script>
 <template>
   <v-app>
@@ -1570,59 +1622,23 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :searchOverlayVisible="searchOverlayVisible"
             :isSearchActive="Boolean(searchQuery && searchQuery.trim())"
             :filteredSearchHistory="filteredSearchHistory"
-            :minColumns="minColumns"
-            :maxColumns="maxColumns"
             :exportCount="exportCount"
             :exportCaptionOptions="exportCaptionOptions"
             :exportTypeOptions="exportTypeOptions"
             :exportResolutionOptions="exportResolutionOptions"
             :exportTagFormatOptions="exportTagFormatOptions"
             :exportTypeLocksCaptions="exportTypeLocksCaptions"
-            :sortOptions="sortOptions"
-            :selectedSort="selectedSort"
-            :selectedDescending="selectedDescending"
-            :similarityCharacterOptions="similarityCharacterOptions"
-            :selectedSimilarityCharacter="selectedSimilarityCharacter"
-            :stackThreshold="stackThreshold"
-            :stackExpandedCount="expandedStackCount"
-            :stackTotalCount="totalStackCount"
             :backendUrl="BACKEND_URL"
             :comfyuiConfigured="comfyuiConfigured"
             v-model:searchInput="searchInput"
             v-model:isSearchHistoryOpen="isSearchHistoryOpen"
-            v-model:columnsMenuOpen="columnsMenuOpen"
-            v-model:overlaysMenuOpen="overlaysMenuOpen"
             v-model:exportMenuOpen="exportMenuOpen"
-            v-model:columns="columns"
-            v-model:showStars="showStars"
-            v-model:showFaceBboxes="showFaceBboxes"
-            v-model:showFormat="showFormat"
-            v-model:showResolution="showResolution"
-            v-model:showProblemIcon="showProblemIcon"
-            v-model:showStacks="showStacks"
-            v-model:compactMode="compactMode"
             v-model:exportType="exportType"
             v-model:exportCaptionMode="exportCaptionMode"
             v-model:exportTagFormat="exportTagFormat"
             v-model:exportResolution="exportResolution"
             v-model:exportIncludeCharacterName="exportIncludeCharacterName"
             v-model:exportUseOriginalFileNames="exportUseOriginalFileNames"
-            v-model:mediaTypeFilter="mediaTypeFilter"
-            v-model:comfyuiModelFilter="comfyuiModelFilter"
-            v-model:comfyuiLoraFilter="comfyuiLoraFilter"
-            v-model:minScoreFilter="minScoreFilter"
-            v-model:maxScoreFilter="maxScoreFilter"
-            v-model:smartScoreBucketFilter="smartScoreBucketFilter"
-            v-model:resolutionBucketFilter="resolutionBucketFilter"
-            v-model:tagFilter="tagFilter"
-            v-model:tagRejectedFilter="tagRejectedFilter"
-            v-model:tagConfidenceAboveFilter="tagConfidenceAboveFilter"
-            v-model:tagConfidenceBelowFilter="tagConfidenceBelowFilter"
-            v-model:faceBboxFilter="faceBboxFilter"
-            v-model:sharedOnlyFilter="sharedOnlyFilter"
-            @update:selected-sort="handleUpdateSelectedSort"
-            @update:similarity-character="handleUpdateSimilarityCharacter"
-            @update:stack-threshold="handleUpdateStackThreshold"
             @open-search-overlay="openSearchOverlay"
             :statsOpen="statsOpen"
             @toggle-sidebar="sidebarVisible = !sidebarVisible"
@@ -1634,11 +1650,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @clear-search="handleClearSearch"
             @apply-search-history="applySearchHistory"
             @clear-search-history="clearSearchHistory"
-            @columns-end="handleColumnsEnd"
             @confirm-export-zip="confirmExportZip"
             @open-settings="openSettingsDialog"
-            @expand-all-stacks="handleExpandAllStacks"
-            @collapse-all-stacks="handleCollapseAllStacks"
             @comfyui-run-grid="handleComfyuiRunGrid"
           />
           <div
