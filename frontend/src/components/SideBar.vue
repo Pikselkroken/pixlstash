@@ -196,6 +196,16 @@ const projectMenuRef = ref(null);
 const collapsedProjectBtnRef = ref(null);
 const collapsedProjectMenuRef = ref(null);
 const collapsedProjectMenuPos = ref({ top: 0, left: 0 });
+
+const collapsedCharBtnRef = ref(null);
+const collapsedCharMenuRef = ref(null);
+const collapsedCharMenuOpen = ref(false);
+const collapsedCharMenuPos = ref({ top: 0, left: 0 });
+
+const collapsedSetBtnRef = ref(null);
+const collapsedSetMenuRef = ref(null);
+const collapsedSetMenuOpen = ref(false);
+const collapsedSetMenuPos = ref({ top: 0, left: 0 });
 const projectEditorProject = ref(null);
 
 // --- Move-to-project menus ---
@@ -829,6 +839,24 @@ function toggleProjectMenu() {
     collapsedProjectMenuPos.value = { top: rect.top, left: rect.right + 4 };
   }
   projectMenuOpen.value = !projectMenuOpen.value;
+}
+
+function toggleCollapsedCharMenu() {
+  collapsedSetMenuOpen.value = false;
+  if (!collapsedCharMenuOpen.value && collapsedCharBtnRef.value) {
+    const rect = collapsedCharBtnRef.value.getBoundingClientRect();
+    collapsedCharMenuPos.value = { top: rect.top, left: rect.right + 4 };
+  }
+  collapsedCharMenuOpen.value = !collapsedCharMenuOpen.value;
+}
+
+function toggleCollapsedSetMenu() {
+  collapsedCharMenuOpen.value = false;
+  if (!collapsedSetMenuOpen.value && collapsedSetBtnRef.value) {
+    const rect = collapsedSetBtnRef.value.getBoundingClientRect();
+    collapsedSetMenuPos.value = { top: rect.top, left: rect.right + 4 };
+  }
+  collapsedSetMenuOpen.value = !collapsedSetMenuOpen.value;
 }
 
 function selectProject(id) {
@@ -2433,6 +2461,20 @@ onMounted(() => {
       return;
     }
     projectMenuOpen.value = false;
+    if (
+      collapsedCharMenuRef.value &&
+      !collapsedCharMenuRef.value.contains(e.target) &&
+      !(collapsedCharBtnRef.value && collapsedCharBtnRef.value.contains(e.target))
+    ) {
+      collapsedCharMenuOpen.value = false;
+    }
+    if (
+      collapsedSetMenuRef.value &&
+      !collapsedSetMenuRef.value.contains(e.target) &&
+      !(collapsedSetBtnRef.value && collapsedSetBtnRef.value.contains(e.target))
+    ) {
+      collapsedSetMenuOpen.value = false;
+    }
     const inCharMenu = e.target.closest(".sidebar-move-menu");
     if (
       !(
@@ -2983,66 +3025,140 @@ defineExpose({
             <v-icon>mdi-account-off-outline</v-icon>
           </div>
           <div class="sidebar-collapsed-divider"></div>
-          <button
-            v-for="char in visibleCharacters"
-            :key="char.id"
+
+          <!-- Characters flyout button -->
+          <div
+            v-if="visibleCharacters.length"
             :class="[
-              'sidebar-collapsed-thumb',
+              'sidebar-collapsed-item',
               {
                 active:
-                  props.selectedCharacter === char.id && !props.hasFolderFilter,
-                droppable: dragOverCharacter === char.id,
+                  selectedCharacterIdSet.size > 0 && !props.hasFolderFilter,
               },
             ]"
-            :ref="(el) => registerCharacterRef(char.id, el)"
-            :title="char.name || 'Character'"
-            @click="selectCharacter(char.id, char.name || 'Character')"
-            @dragover.prevent="handleDragOverCharacter(char.id)"
-            @dragleave="handleDragLeaveCharacter"
-            @drop.prevent="
-              handleDropOnCharacter({ characterId: char.id, event: $event })
+            :title="
+              selectedCharacterObj
+                ? selectedCharacterObj.name
+                : 'Characters'
             "
+            ref="collapsedCharBtnRef"
+            @click.stop="toggleCollapsedCharMenu"
           >
             <img
-              :src="characterThumbnails[char.id] || unknownPerson"
+              v-if="selectedCharacterObj && characterThumbnails[selectedCharacterObj.id]"
+              :src="characterThumbnails[selectedCharacterObj.id]"
               alt=""
               :width="sidebarThumbnailSizeModel"
               :height="sidebarThumbnailSizeModel"
               class="sidebar-character-thumb"
             />
-          </button>
+            <v-icon v-else>mdi-account-group</v-icon>
+          </div>
+          <Teleport to="body">
+            <div
+              v-if="collapsedCharMenuOpen"
+              ref="collapsedCharMenuRef"
+              class="sidebar-collapsed-flyout-menu"
+              :style="{
+                top: collapsedCharMenuPos.top + 'px',
+                left: collapsedCharMenuPos.left + 'px',
+              }"
+            >
+              <div class="sidebar-collapsed-flyout-header">Characters</div>
+              <div
+                v-for="char in visibleCharacters"
+                :key="char.id"
+                :class="[
+                  'sidebar-collapsed-flyout-item',
+                  {
+                    active:
+                      props.selectedCharacter === char.id &&
+                      !props.hasFolderFilter,
+                  },
+                ]"
+                @click="
+                  selectCharacter(char.id, char.name || 'Character');
+                  collapsedCharMenuOpen = false;
+                "
+              >
+                <img
+                  :src="characterThumbnails[char.id] || unknownPerson"
+                  alt=""
+                  class="sidebar-collapsed-flyout-thumb"
+                />
+                <span class="sidebar-collapsed-flyout-label">{{
+                  char.name || "Character"
+                }}</span>
+              </div>
+            </div>
+          </Teleport>
+
+          <!-- Picture Sets flyout button -->
           <div
             v-if="visibleSets.length"
             class="sidebar-collapsed-divider"
           ></div>
           <div
-            v-for="pset in visibleSets"
-            :key="pset.id"
+            v-if="visibleSets.length"
             :class="[
               'sidebar-collapsed-item',
               {
-                active: selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
-                droppable: dragOverSet === pset.id,
+                active: selectedSetIdSet.size > 0 && !props.hasFolderFilter,
               },
             ]"
-            :title="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
-            @click="selectSet(pset.id, pset.name || 'Picture Set', $event)"
-            @dragover.prevent="dragOverSetItem(pset.id)"
-            @dragleave="dragLeaveSetItem"
-            @drop.prevent="handleDropOnSet(pset.id, $event)"
+            :title="selectedSetObj ? selectedSetObj.name : 'Picture Sets'"
+            ref="collapsedSetBtnRef"
+            @click.stop="toggleCollapsedSetMenu"
           >
             <img
-              v-if="hasSetThumbnail(pset)"
-              :src="getSetThumbnail(pset.id)"
+              v-if="selectedSetObj && hasSetThumbnail(selectedSetObj)"
+              :src="getSetThumbnail(selectedSetObj.id)"
               alt=""
               class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
               :width="sidebarThumbnailSizeModel"
               :height="sidebarThumbnailSizeModel"
-              @load="handleSetThumbnailLoad(pset.id)"
-              @error="handleSetThumbnailError(pset.id)"
             />
-            <v-icon width="40" size="40" v-else>mdi-image-album</v-icon>
+            <v-icon v-else>mdi-image-album</v-icon>
           </div>
+          <Teleport to="body">
+            <div
+              v-if="collapsedSetMenuOpen"
+              ref="collapsedSetMenuRef"
+              class="sidebar-collapsed-flyout-menu"
+              :style="{
+                top: collapsedSetMenuPos.top + 'px',
+                left: collapsedSetMenuPos.left + 'px',
+              }"
+            >
+              <div class="sidebar-collapsed-flyout-header">Picture Sets</div>
+              <div
+                v-for="pset in visibleSets"
+                :key="pset.id"
+                :class="[
+                  'sidebar-collapsed-flyout-item',
+                  {
+                    active:
+                      selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                  },
+                ]"
+                @click="
+                  selectSet(pset.id, pset.name || 'Picture Set', $event);
+                  collapsedSetMenuOpen = false;
+                "
+              >
+                <img
+                  v-if="hasSetThumbnail(pset)"
+                  :src="getSetThumbnail(pset.id)"
+                  alt=""
+                  class="sidebar-collapsed-flyout-thumb"
+                />
+                <v-icon v-else size="24">mdi-image-album</v-icon>
+                <span class="sidebar-collapsed-flyout-label">{{
+                  pset.name || "Picture Set"
+                }}</span>
+              </div>
+            </div>
+          </Teleport>
         </div>
       </template>
       <template v-else>
@@ -4692,6 +4808,62 @@ defineExpose({
 .sidebar-collapsed-project-menu .sidebar-project-menu-item,
 .sidebar-collapsed-project-menu .sidebar-project-menu-add {
   color: rgb(var(--v-theme-on-surface));
+}
+
+.sidebar-collapsed-flyout-menu {
+  position: fixed;
+  z-index: 300;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-border), 0.4);
+  border-radius: 6px;
+  overflow-y: auto;
+  max-height: 60vh;
+  min-width: 200px;
+  white-space: nowrap;
+}
+
+.sidebar-collapsed-flyout-header {
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(var(--v-theme-sidebar-text), 0.55);
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.4);
+  background: rgba(var(--v-theme-tertiary), 0.2);
+}
+
+.sidebar-collapsed-flyout-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  color: rgb(var(--v-theme-on-surface));
+  transition: background 0.12s;
+}
+
+.sidebar-collapsed-flyout-item:hover {
+  background: rgba(var(--v-theme-tertiary), 0.25);
+}
+
+.sidebar-collapsed-flyout-item.active {
+  background: rgba(var(--v-theme-primary), 0.15);
+  color: rgb(var(--v-theme-primary));
+}
+
+.sidebar-collapsed-flyout-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.sidebar-collapsed-flyout-label {
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-project-menu-wrap {
