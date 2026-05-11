@@ -207,6 +207,42 @@ def create_router(server) -> APIRouter:
         ]
 
     @router.post(
+        "/projects/membership",
+        summary="Batch project membership lookup",
+        description=(
+            "Given a list of picture IDs, returns project_assignments "
+            "(project_id → [picture_ids]) and unassigned_picture_ids "
+            "([picture_ids with no project membership]). "
+            "Used by the AddToProject menu to load membership in a single request."
+        ),
+    )
+    def get_batch_project_membership(
+        picture_ids: list[int] = Body(default=[], embed=True),
+    ):
+        if not picture_ids:
+            return {"project_assignments": {}, "unassigned_picture_ids": []}
+
+        def fetch(session, ids: list[int]):
+            rows = session.exec(
+                select(PictureProjectMember.project_id, PictureProjectMember.picture_id).where(
+                    PictureProjectMember.picture_id.in_(ids),
+                )
+            ).all()
+            assignments: dict[int, list[int]] = {}
+            assigned_ids: set[int] = set()
+            for project_id, pid in rows:
+                assigned_ids.add(int(pid))
+                if project_id is not None:
+                    assignments.setdefault(int(project_id), []).append(int(pid))
+            unassigned = sorted(set(ids) - assigned_ids)
+            return {
+                "project_assignments": assignments,
+                "unassigned_picture_ids": unassigned,
+            }
+
+        return server.vault.db.run_immediate_read_task(fetch, picture_ids)
+
+    @router.post(
         "/projects",
         summary="Create a project",
         response_model=ProjectResponse,

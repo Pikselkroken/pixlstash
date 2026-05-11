@@ -228,6 +228,7 @@
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
             :include-deleted-members="true"
+            :force-dark="true"
             :class="{ hidden: chromeHidden }"
             @added="(payload) => emit('added-to-set', payload)"
           />
@@ -237,6 +238,7 @@
             :picture-ids="[image.id]"
             :include-deleted-members="true"
             :expand-stacks="false"
+            :force-dark="true"
             :class="{ hidden: chromeHidden }"
             @selected="(payload) => emit('set-project', payload)"
           />

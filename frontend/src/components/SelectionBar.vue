@@ -3172,7 +3172,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   padding: 4px 0;
-  overflow: hidden;
 }
 
 .ctx-item {

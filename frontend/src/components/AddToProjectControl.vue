@@ -2,7 +2,12 @@
   <div
     ref="rootRef"
     class="add-to-project"
-    :class="{ open: menuOpen, disabled, 'add-to-project--flyout': placement === 'right' }"
+    :class="{
+      open: menuOpen,
+      disabled,
+      'add-to-project--flyout': placement === 'right',
+      'add-to-project--force-dark': forceDark,
+    }"
   >
     <button
       class="add-to-project-btn"
@@ -16,62 +21,76 @@
     >
       <v-icon size="18">mdi-briefcase-edit-outline</v-icon>
       <span class="add-to-project-label">{{ label }}</span>
-      <v-icon size="16" class="add-to-project-chevron">{{ placement === 'right' ? 'mdi-chevron-right' : 'mdi-chevron-down' }}</v-icon>
+      <v-icon size="16" class="add-to-project-chevron">{{
+        placement === "right" ? "mdi-chevron-right" : "mdi-chevron-down"
+      }}</v-icon>
     </button>
 
-    <div class="add-to-project-menu" role="menu">
-      <div class="add-to-project-search">
-        <v-icon size="14">mdi-magnify</v-icon>
-        <input
-          ref="searchInputRef"
-          v-model="searchQuery"
-          type="text"
-          placeholder="Search projects..."
-          @keydown.escape.stop.prevent="closeMenu"
-        />
-      </div>
-
-      <div v-if="isLoading" class="add-to-project-empty">
-        Loading projects...
-      </div>
+    <Teleport :disabled="placement !== 'right'" to="body">
       <div
-        v-else-if="filteredProjects.length === 0"
-        class="add-to-project-empty"
+        ref="menuRef"
+        class="add-to-project-menu"
+        role="menu"
+        :style="placement === 'right' ? flyoutMenuStyle : {}"
+        :class="{
+          open: menuOpen,
+          flyout: placement === 'right',
+          'force-dark': forceDark,
+        }"
       >
-        No projects found
-      </div>
-      <button
-        v-for="project in filteredProjects"
-        :key="project.key"
-        :class="[
-          'add-to-project-item',
-          {
-            'add-to-project-item--disabled': isProjectDisabled(project),
-            'add-to-project-item--checked':
-              getProjectState(project) === 'checked',
-          },
-        ]"
-        type="button"
-        role="menuitem"
-        :disabled="isProjectDisabled(project)"
-        @click.stop="toggleProjectMembership(project)"
-      >
-        <v-icon size="16" class="add-to-project-item-check">
-          {{
-            getProjectState(project) === "checked"
-              ? "mdi-checkbox-marked"
-              : getProjectState(project) === "partial"
-                ? "mdi-minus-box-outline"
-                : "mdi-checkbox-blank-outline"
-          }}
-        </v-icon>
-        <span class="add-to-project-item-name">{{ project.name }}</span>
-      </button>
+        <div class="add-to-project-search">
+          <v-icon size="14">mdi-magnify</v-icon>
+          <input
+            ref="searchInputRef"
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search projects..."
+            @keydown.escape.stop.prevent="closeMenu"
+          />
+        </div>
 
-      <div v-if="statusMessage" class="add-to-project-status">
-        {{ statusMessage }}
+        <div v-if="isLoading" class="add-to-project-empty">
+          Loading projects...
+        </div>
+        <div
+          v-else-if="filteredProjects.length === 0"
+          class="add-to-project-empty"
+        >
+          No projects found
+        </div>
+        <button
+          v-for="project in filteredProjects"
+          :key="project.key"
+          :class="[
+            'add-to-project-item',
+            {
+              'add-to-project-item--disabled': isProjectDisabled(project),
+              'add-to-project-item--checked':
+                getProjectState(project) === 'checked',
+            },
+          ]"
+          type="button"
+          role="menuitem"
+          :disabled="isProjectDisabled(project)"
+          @click.stop="toggleProjectMembership(project)"
+        >
+          <v-icon size="16" class="add-to-project-item-check">
+            {{
+              getProjectState(project) === "checked"
+                ? "mdi-checkbox-marked"
+                : getProjectState(project) === "partial"
+                  ? "mdi-minus-box-outline"
+                  : "mdi-checkbox-blank-outline"
+            }}
+          </v-icon>
+          <span class="add-to-project-item-name">{{ project.name }}</span>
+        </button>
+
+        <div v-if="statusMessage" class="add-to-project-status">
+          {{ statusMessage }}
+        </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -87,11 +106,13 @@ const props = defineProps({
   includeDeletedMembers: { type: Boolean, default: false },
   expandStacks: { type: Boolean, default: true },
   placement: { type: String, default: "bottom" },
+  forceDark: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["selected"]);
 
 const rootRef = ref(null);
+const menuRef = ref(null);
 const searchInputRef = ref(null);
 const menuOpen = ref(false);
 const searchQuery = ref("");
@@ -101,6 +122,28 @@ const statusMessage = ref("");
 const projectMembersByKey = ref({});
 const lastFetchKey = ref("");
 let statusTimer = null;
+
+const flyoutMenuStyle = ref({});
+
+function positionFlyout() {
+  if (props.placement !== "right" || !rootRef.value) return;
+  const rect = rootRef.value.getBoundingClientRect();
+  const menuW = 250;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const left =
+    rect.right + 4 + menuW <= vw - 8
+      ? rect.right + 4
+      : Math.max(8, rect.left - menuW - 4);
+  const top = Math.min(rect.top, vh - 32);
+  flyoutMenuStyle.value = {
+    position: "fixed",
+    top: `${top}px`,
+    left: `${left}px`,
+    maxHeight: `${vh - top - 16}px`,
+    overflowY: "auto",
+  };
+}
 
 const baseUrl = computed(() =>
   props.backendUrl ? String(props.backendUrl).replace(/\/$/, "") : "",
@@ -124,7 +167,6 @@ function projectKey(project) {
 
 const filteredProjects = computed(() => {
   const all = [
-    { id: null, key: "unassigned", name: "Unassigned" },
     ...projects.value.map((project) => ({
       id: project.id,
       key: `project-${project.id}`,
@@ -170,8 +212,12 @@ function toggleMenu() {
 function openMenu() {
   menuOpen.value = true;
   fetchProjects(true);
+  if (props.placement === "right") positionFlyout();
   nextTick(() => searchInputRef.value?.focus());
   document.addEventListener("pointerdown", handleOutsideClick, true);
+  if (props.placement === "right") {
+    window.addEventListener("resize", positionFlyout, { passive: true });
+  }
 }
 
 function closeMenu() {
@@ -179,12 +225,14 @@ function closeMenu() {
   searchQuery.value = "";
   searchInputRef.value?.blur();
   document.removeEventListener("pointerdown", handleOutsideClick, true);
+  window.removeEventListener("resize", positionFlyout);
 }
 
 function handleOutsideClick(event) {
   const target = event?.target;
   if (!target || !(target instanceof HTMLElement)) return;
-  if (!rootRef.value || rootRef.value.contains(target)) return;
+  if (rootRef.value?.contains(target)) return;
+  if (menuRef.value?.contains(target)) return;
   closeMenu();
 }
 
@@ -197,8 +245,11 @@ async function fetchProjects(force = false) {
   lastFetchKey.value = key;
   isLoading.value = true;
   try {
-    const res = await apiClient.get(resolveUrl("/projects"));
-    const data = Array.isArray(res.data) ? res.data : [];
+    const [projectsRes] = await Promise.all([
+      apiClient.get(resolveUrl("/projects")),
+      fetchProjectMembers(),
+    ]);
+    const data = Array.isArray(projectsRes.data) ? projectsRes.data : [];
     projects.value = data
       .map((row) => ({
         id: Number(row?.id),
@@ -206,7 +257,14 @@ async function fetchProjects(force = false) {
       }))
       .filter((row) => Number.isFinite(row.id) && row.id > 0)
       .sort((a, b) => a.name.localeCompare(b.name));
-    await fetchProjectMembers(projects.value);
+    // Ensure every known project has an entry so isProjectDisabled returns false.
+    const current = projectMembersByKey.value;
+    if (!("unassigned" in current)) current["unassigned"] = new Set();
+    projects.value.forEach((p) => {
+      const k = `project-${p.id}`;
+      if (!(k in current)) current[k] = new Set();
+    });
+    projectMembersByKey.value = { ...current };
   } catch (_e) {
     projects.value = [];
     projectMembersByKey.value = {};
@@ -215,43 +273,31 @@ async function fetchProjects(force = false) {
   }
 }
 
-async function fetchProjectMembers(list) {
+async function fetchProjectMembers() {
   const ids = normalisedPictureIds.value;
   if (!props.backendUrl || !ids.length) {
     projectMembersByKey.value = {};
     return;
   }
-  const all = [{ id: null, key: "unassigned", name: "Unassigned" }, ...list];
-  const entries = await Promise.all(
-    all.map(async (project) => {
-      try {
-        const params = new URLSearchParams();
-        ids.forEach((id) => params.append("id", String(id)));
-        params.append(
-          "project_id",
-          project.id == null ? "UNASSIGNED" : String(project.id),
-        );
-        if (props.includeDeletedMembers) {
-          params.append("include_deleted", "true");
-        }
-        const res = await apiClient.get(
-          resolveUrl(`/pictures?${params.toString()}`),
-        );
-        const rows = Array.isArray(res.data) ? res.data : [];
-        const memberIds = rows
-          .map((row) => String(row?.id ?? ""))
-          .filter((id) => id.length > 0);
-        return [projectKey(project), new Set(memberIds)];
-      } catch (_e) {
-        return [projectKey(project), new Set()];
-      }
-    }),
-  );
-  const next = {};
-  entries.forEach(([key, members]) => {
-    next[key] = members;
-  });
-  projectMembersByKey.value = next;
+  try {
+    const res = await apiClient.post(resolveUrl("/projects/membership"), {
+      picture_ids: ids,
+    });
+    const data = res.data ?? {};
+    const assignments = data.project_assignments ?? {};
+    const unassignedIds = data.unassigned_picture_ids ?? [];
+
+    const next = {};
+    // Unassigned bucket
+    next["unassigned"] = new Set(unassignedIds.map(String));
+    // Per-project buckets
+    Object.entries(assignments).forEach(([projectId, picIds]) => {
+      next[`project-${projectId}`] = new Set((picIds ?? []).map(String));
+    });
+    projectMembersByKey.value = next;
+  } catch (_e) {
+    projectMembersByKey.value = {};
+  }
 }
 
 async function toggleProjectMembership(project) {
@@ -346,6 +392,7 @@ function applyOptimisticMembershipUpdate(project, action, ids) {
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("pointerdown", handleOutsideClick, true);
+  window.removeEventListener("resize", positionFlyout);
 });
 
 watch(
@@ -368,8 +415,8 @@ watch(
 
 .add-to-project-btn {
   border: none;
-  background-color: rgba(var(--v-theme-dark-surface), 0.6);
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  background-color: rgba(var(--v-theme-surface), 0.85);
+  color: rgb(var(--v-theme-on-surface));
   padding: 2px 8px;
   border-radius: 3px;
   display: inline-flex;
@@ -378,6 +425,11 @@ watch(
   font-size: 0.85rem;
   line-height: 1.4;
   cursor: pointer;
+}
+
+.add-to-project--force-dark .add-to-project-btn {
+  background-color: rgba(var(--v-theme-dark-surface), 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
 }
 
 .add-to-project-btn:disabled {
@@ -401,8 +453,8 @@ watch(
   min-width: 220px;
   padding: 10px;
   border-radius: 10px;
-  background-color: rgba(var(--v-theme-dark-surface), 0.9);
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  background-color: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
   opacity: 0;
   transform: translateY(-6px);
@@ -413,7 +465,35 @@ watch(
   z-index: 6;
 }
 
-.add-to-project.open .add-to-project-menu {
+.add-to-project-menu.force-dark {
+  background-color: rgba(var(--v-theme-dark-surface), 0.9);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+
+  .add-to-project-search {
+    color: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .add-to-project-search input {
+    color: #fff;
+  }
+
+  .add-to-project-item {
+    color: rgba(var(--v-theme-on-dark-surface), 1);
+  }
+
+  .add-to-project-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .add-to-project-empty,
+  .add-to-project-status {
+    color: rgba(255, 255, 255, 0.6);
+  }
+}
+
+.add-to-project.open .add-to-project-menu,
+.add-to-project-menu.open {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
@@ -424,17 +504,17 @@ watch(
   align-items: center;
   gap: 6px;
   font-size: 0.72rem;
-  color: rgba(var(--v-theme-on-background), 0.7);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   padding: 6px 8px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   margin-bottom: 8px;
 }
 
 .add-to-project-search input {
   background: transparent;
   border: none;
-  color: #fff;
+  color: rgb(var(--v-theme-on-surface));
   width: 100%;
   font-size: 0.78rem;
   outline: none;
@@ -445,7 +525,7 @@ watch(
   padding: 6px 8px;
   border-radius: 6px;
   font-size: 0.78rem;
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  color: rgb(var(--v-theme-on-surface));
   background: transparent;
   border: none;
   text-align: left;
@@ -471,13 +551,13 @@ watch(
 }
 
 .add-to-project-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .add-to-project-empty,
 .add-to-project-status {
   font-size: 0.75rem;
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  color: rgba(var(--v-theme-on-surface), 0.7);
   padding: 6px 2px;
 }
 
@@ -506,13 +586,16 @@ watch(
   opacity: 0.7;
 }
 
-.add-to-project--flyout .add-to-project-menu {
-  top: 0;
-  left: calc(100% + 4px);
+.add-to-project--flyout .add-to-project-menu,
+.add-to-project-menu.flyout {
+  /* top/left set by JS positionFlyout() via inline style */
   transform: translateX(-6px);
+  z-index: 2500;
 }
 
-.add-to-project--flyout.open .add-to-project-menu {
+.add-to-project--flyout.open .add-to-project-menu,
+.add-to-project--flyout .add-to-project-menu.open,
+.add-to-project-menu.flyout.open {
   transform: translateX(0);
 }
 </style>

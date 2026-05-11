@@ -2,7 +2,12 @@
   <div
     ref="rootRef"
     class="add-to-character"
-    :class="{ open: menuOpen, disabled, 'add-to-character--flyout': placement === 'right' }"
+    :class="{
+      open: menuOpen,
+      disabled,
+      'add-to-character--flyout': placement === 'right',
+      'add-to-character--force-dark': forceDark,
+    }"
   >
     <button
       class="add-to-character-btn"
@@ -16,61 +21,76 @@
     >
       <v-icon size="18">mdi-account-plus</v-icon>
       <span class="add-to-character-label">{{ label }}</span>
-      <v-icon size="16" class="add-to-character-chevron">{{ placement === 'right' ? 'mdi-chevron-right' : 'mdi-chevron-down' }}</v-icon>
+      <v-icon size="16" class="add-to-character-chevron">{{
+        placement === "right" ? "mdi-chevron-right" : "mdi-chevron-down"
+      }}</v-icon>
     </button>
 
-    <div class="add-to-character-menu" role="menu">
-      <div class="add-to-character-search">
-        <v-icon size="14">mdi-magnify</v-icon>
-        <input
-          ref="searchInputRef"
-          v-model="searchQuery"
-          type="text"
-          placeholder="Search characters..."
-          @keydown.escape.stop.prevent="closeMenu"
-        />
-      </div>
-
-      <div v-if="isLoading" class="add-to-character-empty">
-        Loading characters...
-      </div>
+    <Teleport :disabled="placement !== 'right'" to="body">
       <div
-        v-else-if="filteredCharacters.length === 0"
-        class="add-to-character-empty"
+        ref="menuRef"
+        class="add-to-character-menu"
+        role="menu"
+        :style="placement === 'right' ? flyoutMenuStyle : {}"
+        :class="{
+          open: menuOpen,
+          flyout: placement === 'right',
+          'force-dark': forceDark,
+        }"
       >
-        No characters found
-      </div>
-      <button
-        v-for="character in filteredCharacters"
-        :key="character.id"
-        :class="[
-          'add-to-character-item',
-          {
-            'add-to-character-item--disabled': isCharacterDisabled(character),
-            'add-to-character-item--checked': getCharacterState(character) === 'checked',
-          },
-        ]"
-        type="button"
-        role="menuitem"
-        :disabled="isCharacterDisabled(character)"
-        @click.stop="toggleCharacterMembership(character)"
-      >
-        <v-icon size="16" class="add-to-character-item-check">
-          {{
-            getCharacterState(character) === "checked"
-              ? "mdi-checkbox-marked"
-              : getCharacterState(character) === "partial"
-                ? "mdi-minus-box-outline"
-                : "mdi-checkbox-blank-outline"
-          }}
-        </v-icon>
-        <span class="add-to-character-item-name">{{ character.name }}</span>
-      </button>
+        <div class="add-to-character-search">
+          <v-icon size="14">mdi-magnify</v-icon>
+          <input
+            ref="searchInputRef"
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search characters..."
+            @keydown.escape.stop.prevent="closeMenu"
+          />
+        </div>
 
-      <div v-if="statusMessage" class="add-to-character-status">
-        {{ statusMessage }}
+        <div v-if="isLoading" class="add-to-character-empty">
+          Loading characters...
+        </div>
+        <div
+          v-else-if="filteredCharacters.length === 0"
+          class="add-to-character-empty"
+        >
+          No characters found
+        </div>
+        <button
+          v-for="character in filteredCharacters"
+          :key="character.id"
+          :class="[
+            'add-to-character-item',
+            {
+              'add-to-character-item--disabled': isCharacterDisabled(character),
+              'add-to-character-item--checked':
+                getCharacterState(character) === 'checked',
+            },
+          ]"
+          type="button"
+          role="menuitem"
+          :disabled="isCharacterDisabled(character)"
+          @click.stop="toggleCharacterMembership(character)"
+        >
+          <v-icon size="16" class="add-to-character-item-check">
+            {{
+              getCharacterState(character) === "checked"
+                ? "mdi-checkbox-marked"
+                : getCharacterState(character) === "partial"
+                  ? "mdi-minus-box-outline"
+                  : "mdi-checkbox-blank-outline"
+            }}
+          </v-icon>
+          <span class="add-to-character-item-name">{{ character.name }}</span>
+        </button>
+
+        <div v-if="statusMessage" class="add-to-character-status">
+          {{ statusMessage }}
+        </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -84,11 +104,35 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   label: { type: String, default: "Person" },
   placement: { type: String, default: "bottom" },
+  forceDark: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["added", "removed"]);
 
 const rootRef = ref(null);
+const menuRef = ref(null);
+
+const flyoutMenuStyle = ref({});
+
+function positionFlyout() {
+  if (props.placement !== "right" || !rootRef.value) return;
+  const rect = rootRef.value.getBoundingClientRect();
+  const menuW = 250;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const left =
+    rect.right + 4 + menuW <= vw - 8
+      ? rect.right + 4
+      : Math.max(8, rect.left - menuW - 4);
+  const top = Math.min(rect.top, vh - 32);
+  flyoutMenuStyle.value = {
+    position: "fixed",
+    top: `${top}px`,
+    left: `${left}px`,
+    maxHeight: `${vh - top - 16}px`,
+    overflowY: "auto",
+  };
+}
 const searchInputRef = ref(null);
 const menuOpen = ref(false);
 const searchQuery = ref("");
@@ -113,10 +157,16 @@ function resolveUrl(path) {
   return baseUrl.value ? `${baseUrl.value}${path}` : path;
 }
 
+const sortedCharacters = computed(() =>
+  [...characters.value].sort((a, b) =>
+    String(a?.name || "").localeCompare(String(b?.name || "")),
+  ),
+);
+
 const filteredCharacters = computed(() => {
   const needle = searchQuery.value.trim().toLowerCase();
-  if (!needle) return characters.value;
-  return characters.value.filter((char) =>
+  if (!needle) return sortedCharacters.value;
+  return sortedCharacters.value.filter((char) =>
     String(char?.name || "")
       .toLowerCase()
       .includes(needle),
@@ -156,8 +206,12 @@ function toggleMenu() {
 function openMenu() {
   menuOpen.value = true;
   fetchCharacters();
+  if (props.placement === "right") positionFlyout();
   nextTick(() => searchInputRef.value?.focus());
   document.addEventListener("mousedown", handleOutsideClick);
+  if (props.placement === "right") {
+    window.addEventListener("resize", positionFlyout, { passive: true });
+  }
 }
 
 function closeMenu() {
@@ -165,12 +219,14 @@ function closeMenu() {
   searchQuery.value = "";
   searchInputRef.value?.blur();
   document.removeEventListener("mousedown", handleOutsideClick);
+  window.removeEventListener("resize", positionFlyout);
 }
 
 function handleOutsideClick(event) {
   const target = event?.target;
   if (!target || !(target instanceof HTMLElement)) return;
-  if (!rootRef.value || rootRef.value.contains(target)) return;
+  if (rootRef.value?.contains(target)) return;
+  if (menuRef.value?.contains(target)) return;
   closeMenu();
 }
 
@@ -178,10 +234,11 @@ async function fetchCharacters() {
   if (!props.backendUrl || isLoading.value) return;
   isLoading.value = true;
   try {
-    const res = await apiClient.get(resolveUrl("/characters"));
-    const data = await res.data;
-    characters.value = Array.isArray(data) ? data : [];
-    await fetchCharacterMembers(characters.value);
+    const [charsRes] = await Promise.all([
+      apiClient.get(resolveUrl("/characters")),
+      fetchCharacterMembers(),
+    ]);
+    characters.value = Array.isArray(charsRes.data) ? charsRes.data : [];
   } catch (e) {
     characters.value = [];
     characterMembersById.value = {};
@@ -190,51 +247,30 @@ async function fetchCharacters() {
   }
 }
 
-async function fetchCharacterMembers(list) {
+async function fetchCharacterMembers() {
   const ids = normalisedPictureIds.value;
   if (!props.backendUrl || !ids.length) {
     characterMembersById.value = {};
     picturesWithFaces.value = new Set();
     return;
   }
-  const pictureEntries = await Promise.all(
-    ids.map(async (id) => {
-      try {
-        const res = await apiClient.get(resolveUrl(`/pictures/${id}/faces`));
-        const data = await res.data;
-        const faces = Array.isArray(data?.faces)
-          ? data.faces
-          : Array.isArray(data)
-            ? data
-            : [];
-        return [String(id), faces];
-      } catch (e) {
-        return [String(id), []];
-      }
-    }),
-  );
-
-  const facePictures = new Set();
-
-  const next = {};
-  list.forEach((character) => {
-    next[character.id] = new Set();
-  });
-
-  pictureEntries.forEach(([pictureId, faces]) => {
-    if (faces.length > 0) facePictures.add(String(pictureId));
-    faces.forEach((face) => {
-      if (face?.character_id == null) return;
-      const key = face.character_id;
-      if (!next[key]) {
-        next[key] = new Set();
-      }
-      next[key].add(String(pictureId));
+  try {
+    const res = await apiClient.post(resolveUrl("/characters/membership"), {
+      picture_ids: ids,
     });
-  });
-
-  picturesWithFaces.value = facePictures;
-  characterMembersById.value = next;
+    const data = res.data ?? {};
+    const assignments = data.character_assignments ?? {};
+    const withFaces = data.pictures_with_faces ?? [];
+    picturesWithFaces.value = new Set(withFaces.map(String));
+    const next = {};
+    Object.entries(assignments).forEach(([charId, picIds]) => {
+      next[Number(charId)] = new Set(picIds.map(String));
+    });
+    characterMembersById.value = next;
+  } catch (e) {
+    characterMembersById.value = {};
+    picturesWithFaces.value = new Set();
+  }
 }
 
 async function toggleCharacterMembership(character) {
@@ -260,7 +296,9 @@ async function toggleCharacterMembership(character) {
     }
   } else {
     const members = characterMembersById.value?.[character.id];
-    const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
+    const idsToAdd = members
+      ? ids.filter((id) => !members.has(String(id)))
+      : ids;
     if (!idsToAdd.length) return;
     statusMessage.value = "Assigning...";
     try {
@@ -283,12 +321,15 @@ async function toggleCharacterMembership(character) {
     }
   }
   if (statusTimer) clearTimeout(statusTimer);
-  statusTimer = window.setTimeout(() => { statusMessage.value = ""; }, 2000);
+  statusTimer = window.setTimeout(() => {
+    statusMessage.value = "";
+  }, 2000);
 }
 
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("mousedown", handleOutsideClick);
+  window.removeEventListener("resize", positionFlyout);
 });
 
 watch(
@@ -312,8 +353,8 @@ watch(
 
 .add-to-character-btn {
   border: none;
-  background-color: rgba(var(--v-theme-dark-surface), 0.6);
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  background-color: rgba(var(--v-theme-surface), 0.85);
+  color: rgb(var(--v-theme-on-surface));
   padding: 2px 8px;
   border-radius: 3px;
   display: inline-flex;
@@ -322,6 +363,11 @@ watch(
   font-size: 0.85rem;
   line-height: 1.4;
   cursor: pointer;
+}
+
+.add-to-character--force-dark .add-to-character-btn {
+  background-color: rgba(var(--v-theme-dark-surface), 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
 }
 
 .add-to-character-btn:disabled {
@@ -345,8 +391,8 @@ watch(
   min-width: 220px;
   padding: 10px;
   border-radius: 10px;
-  background-color: rgba(var(--v-theme-dark-surface), 0.9);
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  background-color: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
 
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
   opacity: 0;
@@ -358,7 +404,38 @@ watch(
   z-index: 6;
 }
 
-.add-to-character.open .add-to-character-menu {
+.add-to-character-menu.force-dark {
+  background-color: rgba(var(--v-theme-dark-surface), 0.9);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+
+  .add-to-character-search {
+    color: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .add-to-character-search input {
+    color: #fff;
+  }
+
+  .add-to-character-item {
+    color: rgba(var(--v-theme-on-dark-surface), 1);
+  }
+
+  .add-to-character-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .add-to-character-empty {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .add-to-character-status {
+    color: rgba(255, 255, 255, 0.7);
+  }
+}
+
+.add-to-character.open .add-to-character-menu,
+.add-to-character-menu.open {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
@@ -369,17 +446,17 @@ watch(
   align-items: center;
   gap: 6px;
   font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   padding: 6px 8px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   margin-bottom: 8px;
 }
 
 .add-to-character-search input {
   background: transparent;
   border: none;
-  color: #fff;
+  color: rgb(var(--v-theme-on-surface));
   width: 100%;
   font-size: 0.78rem;
   outline: none;
@@ -391,7 +468,7 @@ watch(
   border-radius: 6px;
   font-size: 0.78rem;
   background-color: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 1);
+  color: rgb(var(--v-theme-on-surface));
   border: none;
   text-align: left;
   display: flex;
@@ -410,7 +487,7 @@ watch(
 }
 
 .add-to-character-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .add-to-character-item--disabled {
@@ -422,14 +499,14 @@ watch(
 .add-to-character-empty {
   padding: 6px 8px;
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .add-to-character-status {
   margin-top: 6px;
   padding: 6px 8px;
   font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 /* ── Flyout (right-placement) mode ──────────────────────────── */
@@ -457,13 +534,16 @@ watch(
   opacity: 0.7;
 }
 
-.add-to-character--flyout .add-to-character-menu {
-  top: 0;
-  left: calc(100% + 4px);
+.add-to-character--flyout .add-to-character-menu,
+.add-to-character-menu.flyout {
+  /* top/left set by JS positionFlyout() via inline style */
   transform: translateX(-6px);
+  z-index: 2500;
 }
 
-.add-to-character--flyout.open .add-to-character-menu {
+.add-to-character--flyout.open .add-to-character-menu,
+.add-to-character--flyout .add-to-character-menu.open,
+.add-to-character-menu.flyout.open {
   transform: translateX(0);
 }
 </style>

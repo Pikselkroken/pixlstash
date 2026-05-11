@@ -1150,6 +1150,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_above_filter: Optional[List[str]] = None,
         tags_confidence_below_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
         guest_token_id: Optional[int] = None,
     ):
@@ -1163,6 +1164,9 @@ class Picture(SQLModel, table=True):
             *unassigned_conditions,
             Picture.deleted.is_(False),
         )
+
+        if picture_ids is not None:
+            query = query.where(Picture.id.in_(picture_ids))
 
         project_membership_query = select(PictureProjectMember.picture_id).where(
             PictureProjectMember.picture_id == Picture.id

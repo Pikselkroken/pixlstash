@@ -365,7 +365,7 @@ def create_router(server) -> APIRouter:
         )
         return {"status": "success", "picture_set": set_dict}
 
-    @router.get(
+    @router.post(
         "/picture_sets/membership",
         summary="Batch set membership lookup",
         description=(
@@ -376,10 +376,10 @@ def create_router(server) -> APIRouter:
         ),
     )
     def get_batch_membership(
-        picture_id: list[int] = Query(default=[]),
-        include_deleted: bool = Query(False),
+        picture_ids: list[int] = Body(default=[]),
+        include_deleted: bool = Body(False),
     ):
-        if not picture_id:
+        if not picture_ids:
             return {}
 
         def fetch_membership(session, ids: list[int], include_deleted: bool):
@@ -415,7 +415,7 @@ def create_router(server) -> APIRouter:
             return result
 
         return server.vault.db.run_immediate_read_task(
-            fetch_membership, picture_id, include_deleted
+            fetch_membership, picture_ids, include_deleted
         )
 
     @router.get(
