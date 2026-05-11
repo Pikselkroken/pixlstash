@@ -1641,6 +1641,7 @@ provide("gridBarState", {
             v-model:exportUseOriginalFileNames="exportUseOriginalFileNames"
             @open-search-overlay="openSearchOverlay"
             :statsOpen="statsOpen"
+            :scrapheapActive="selectedCharacter === SCRAPHEAP_PICTURES_ID"
             @toggle-sidebar="sidebarVisible = !sidebarVisible"
             @toggle-stats="
               statsOpen = !statsOpen;
@@ -1652,6 +1653,8 @@ provide("gridBarState", {
             @clear-search-history="clearSearchHistory"
             @confirm-export-zip="confirmExportZip"
             @open-settings="openSettingsDialog"
+            @open-import="openImportDialog"
+            @open-scrapheap="handleSelectCharacter({ id: SCRAPHEAP_PICTURES_ID, label: 'Scrapheap' })"
             @comfyui-run-grid="handleComfyuiRunGrid"
           />
           <div
