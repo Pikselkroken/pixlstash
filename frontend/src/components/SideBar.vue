@@ -2464,7 +2464,10 @@ onMounted(() => {
     if (
       collapsedCharMenuRef.value &&
       !collapsedCharMenuRef.value.contains(e.target) &&
-      !(collapsedCharBtnRef.value && collapsedCharBtnRef.value.contains(e.target))
+      !(
+        collapsedCharBtnRef.value &&
+        collapsedCharBtnRef.value.contains(e.target)
+      )
     ) {
       collapsedCharMenuOpen.value = false;
     }
@@ -3010,20 +3013,6 @@ defineExpose({
           >
             <v-icon>mdi-image-multiple</v-icon>
           </div>
-          <div
-            :class="[
-              'sidebar-collapsed-item',
-              {
-                active: isUnassignedPicturesRowActive,
-              },
-            ]"
-            title="Unassigned Pictures"
-            @click="
-              selectCharacter(props.unassignedPicturesId, 'Unassigned Pictures')
-            "
-          >
-            <v-icon>mdi-account-off-outline</v-icon>
-          </div>
           <div class="sidebar-collapsed-divider"></div>
 
           <!-- Characters flyout button -->
@@ -3037,15 +3026,16 @@ defineExpose({
               },
             ]"
             :title="
-              selectedCharacterObj
-                ? selectedCharacterObj.name
-                : 'Characters'
+              selectedCharacterObj ? selectedCharacterObj.name : 'Characters'
             "
             ref="collapsedCharBtnRef"
             @click.stop="toggleCollapsedCharMenu"
           >
             <img
-              v-if="selectedCharacterObj && characterThumbnails[selectedCharacterObj.id]"
+              v-if="
+                selectedCharacterObj &&
+                characterThumbnails[selectedCharacterObj.id]
+              "
               :src="characterThumbnails[selectedCharacterObj.id]"
               alt=""
               :width="sidebarThumbnailSizeModel"
@@ -3599,29 +3589,6 @@ defineExpose({
                     : (projectCounts[
                         selectedProjectId ?? UNASSIGNED_PROJECT_KEY
                       ] ?? "")
-                }}</span>
-              </div>
-            </div>
-
-            <div v-if="!scopedResourceType">
-              <div
-                :class="[
-                  'sidebar-list-item',
-                  { active: isUnassignedPicturesRowActive },
-                ]"
-                @click="
-                  selectCharacter(
-                    props.unassignedPicturesId,
-                    'Unassigned Pictures',
-                  )
-                "
-              >
-                <span class="sidebar-list-icon">
-                  <v-icon size="44">mdi-account-off-outline</v-icon>
-                </span>
-                <span class="sidebar-list-label">Unassigned Pictures</span>
-                <span class="sidebar-list-count">{{
-                  categoryCounts[props.unassignedPicturesId] ?? ""
                 }}</span>
               </div>
             </div>

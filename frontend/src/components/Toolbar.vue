@@ -319,18 +319,31 @@
           class="toolbar-action-btn"
           @click="emit('open-scrapheap')"
         >
-          <v-icon :color="scrapheapActive ? 'on-error' : 'on-background'">mdi-trash-can-outline</v-icon>
+          <v-icon :color="scrapheapActive ? 'on-error' : 'on-background'"
+            >mdi-trash-can-outline</v-icon
+          >
         </v-btn>
 
-        <v-btn
-          icon
-          :color="statsOpen ? 'primary' : 'surface'"
-          title="Toggle stats sidebar"
-          class="toolbar-action-btn"
-          @click="emit('toggle-stats')"
+        <div
+          :class="[
+            'toolbar-stats-btn-wrap',
+            statsOpen ? 'toolbar-stats-btn-wrap--open' : '',
+          ]"
         >
-          <v-icon :color="'on-background'">mdi-chart-bar</v-icon>
-        </v-btn>
+          <v-btn
+            icon
+            :color="statsOpen ? 'primary' : 'surface'"
+            title="Toggle stats sidebar"
+            :class="[
+              'toolbar-action-btn',
+              'toolbar-stats-btn',
+              statsOpen ? 'toolbar-stats-btn--active' : '',
+            ]"
+            @click="emit('toggle-stats')"
+          >
+            <v-icon>mdi-chart-bar</v-icon>
+          </v-btn>
+        </div>
       </div>
     </div>
   </div>
@@ -401,7 +414,6 @@ const searchHistoryOpenModel = computed({
   get: () => props.isSearchHistoryOpen,
   set: (value) => emit("update:isSearchHistoryOpen", value),
 });
-
 
 const exportMenuOpenModel = computed({
   get: () => props.exportMenuOpen,
@@ -869,6 +881,28 @@ defineExpose({ blurSearchInput, focusSearchInput });
 
 .toolbar-search-field :deep(.v-field__clearable) {
   color: rgba(var(--v-theme-on-background), 0.6);
+}
+
+.toolbar-stats-btn-wrap {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+
+.toolbar-stats-btn-wrap--open::after {
+  content: none;
+}
+
+.toolbar-stats-btn--active,
+.toolbar-stats-btn--active:hover,
+.toolbar-stats-btn--active:focus-visible {
+  background-color: rgba(var(--v-theme-primary), 0.14) !important;
+}
+
+.toolbar-stats-btn--active :deep(.v-icon) {
+  color: rgb(var(--v-theme-primary)) !important;
+  opacity: 1;
 }
 
 .toolbar-action-btn {

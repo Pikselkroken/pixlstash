@@ -213,6 +213,7 @@ const tagConfidenceAboveFilter = ref([]);
 const tagConfidenceBelowFilter = ref([]);
 const faceBboxFilter = ref(null);
 const sharedOnlyFilter = ref(false);
+const unassignedOnlyFilter = ref(false);
 
 // null = undecided (show dialog), true/false = user's explicit choice
 const checkForUpdates = ref(null);
@@ -616,6 +617,9 @@ async function handleSelectCharacter(payload) {
   if (ids.length <= 1) {
     characterMultiMode.value = "union";
     saveMultiMode("pixlstash:characterMultiMode", "union");
+  }
+  if (charId !== ALL_PICTURES_ID) {
+    unassignedOnlyFilter.value = false;
   }
   if (charId === ALL_PICTURES_ID) {
     refreshGridVersion();
@@ -1475,6 +1479,7 @@ provide("gridBarState", {
   tagConfidenceBelowFilter,
   faceBboxFilter,
   sharedOnlyFilter,
+  unassignedOnlyFilter,
   comfyuiModelFilter,
   comfyuiLoraFilter,
   comfyuiConfigured,
@@ -1654,7 +1659,12 @@ provide("gridBarState", {
             @confirm-export-zip="confirmExportZip"
             @open-settings="openSettingsDialog"
             @open-import="openImportDialog"
-            @open-scrapheap="handleSelectCharacter({ id: SCRAPHEAP_PICTURES_ID, label: 'Scrapheap' })"
+            @open-scrapheap="
+              handleSelectCharacter({
+                id: SCRAPHEAP_PICTURES_ID,
+                label: 'Scrapheap',
+              })
+            "
             @comfyui-run-grid="handleComfyuiRunGrid"
           />
           <div
@@ -1706,6 +1716,7 @@ provide("gridBarState", {
                 :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
                 :faceBboxFilter="faceBboxFilter"
                 :sharedOnlyFilter="sharedOnlyFilter"
+                :unassignedOnlyFilter="unassignedOnlyFilter"
                 :showFaceBboxes="showFaceBboxes"
                 :showFormat="showFormat"
                 :showResolution="showResolution"
@@ -1792,6 +1803,7 @@ provide("gridBarState", {
               :resolutionBucketFilter="resolutionBucketFilter"
               :faceBboxFilter="faceBboxFilter"
               :sharedOnlyFilter="sharedOnlyFilter"
+              :unassignedOnlyFilter="unassignedOnlyFilter"
               :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
               :importSourceFolderFilter="
                 selectedFolderFilter?.importSourceFolder ?? null
