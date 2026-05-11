@@ -278,7 +278,7 @@
         @click="emit('clear-multi-selection')"
       >
         <v-icon size="16">mdi-selection-off</v-icon>
-        Clear
+        Deselect All
       </button>
     </div>
     <ProgressOverlay

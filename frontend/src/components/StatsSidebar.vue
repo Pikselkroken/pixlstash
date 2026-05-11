@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed, onMounted, onUnmounted } from "vue";
+import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
@@ -390,6 +390,8 @@ watch(
 onUnmounted(() => {
   clearTimeout(_wsTagUpdateTimer);
   tmStopPolling();
+  for (const { observer } of tmCanvasRefs.values()) observer.disconnect();
+  tmCanvasRefs.clear();
 });
 
 // ─── Tasks tab ────────────────────────────────────────────────────────────────
@@ -403,7 +405,107 @@ let tmPollTimer = null;
 let tmFetchInFlight = false;
 const TM_WORKER_REMOVE_GRACE_SECONDS = 10;
 const TM_RATE_AVERAGE_WINDOW_SECONDS = 8;
+const TM_WINDOW_SECONDS = 120;
 const tmNowSeconds = ref(Date.now() / 1000);
+const tmCanvasRefs = new Map(); // key → { el, observer }
+
+function tmRegisterCanvas(key, el) {
+  const existing = tmCanvasRefs.get(key);
+  if (existing) {
+    existing.observer.disconnect();
+    tmCanvasRefs.delete(key);
+  }
+  if (!el) return;
+  const observer = new ResizeObserver(() => {
+    tmDrawSparkline(el, tmSeries.value[key] || []);
+  });
+  observer.observe(el);
+  tmCanvasRefs.set(key, { el, observer });
+  requestAnimationFrame(() => tmDrawSparkline(el, tmSeries.value[key] || []));
+}
+
+function tmGetThemeRgb(name) {
+  if (typeof window === "undefined") return null;
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue(`--v-theme-${name}`)
+      .trim() || null
+  );
+}
+
+function tmThemeRgba(name, alpha, fallback = "0,0,0") {
+  const v = tmGetThemeRgb(name) || fallback;
+  return `rgba(${v}, ${alpha})`;
+}
+
+function tmGetMaxRate(key) {
+  const samples = tmSeries.value[key] || [];
+  return samples.length ? Math.max(...samples.map((s) => s.rate || 0)) : 0;
+}
+
+function tmFormatRate(value) {
+  const rate = Number(value || 0);
+  if (rate >= 10) return rate.toFixed(0);
+  if (rate >= 1) return rate.toFixed(1);
+  return rate.toFixed(2);
+}
+
+function tmDrawAll() {
+  for (const [key, { el }] of tmCanvasRefs.entries()) {
+    tmDrawSparkline(el, tmSeries.value[key] || []);
+  }
+}
+
+function tmDrawSparkline(canvas, samples) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(
+    4,
+    Math.floor(rect.width || canvas.parentElement?.clientWidth || 200),
+  );
+  const height = Math.max(4, Math.floor(rect.height || 28));
+  const tw = Math.floor(width * dpr);
+  const th = Math.floor(height * dpr);
+  if (canvas.width !== tw || canvas.height !== th) {
+    canvas.width = tw;
+    canvas.height = th;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, width, height);
+
+  const plotSamples = samples.length
+    ? samples
+    : [{ rate: 0, t: Date.now() / 1000 }];
+  const maxRate = Math.max(1, ...plotSamples.map((s) => s.rate || 0));
+  const pad = 2;
+  const plotW = width - pad * 2;
+  const plotH = height - pad * 2;
+  const tNow = Date.now() / 1000;
+  const tMin = tNow - TM_WINDOW_SECONDS;
+  const tRange = tNow - tMin;
+  const tToX = (t) => pad + ((t - tMin) / tRange) * plotW;
+
+  ctx.beginPath();
+  plotSamples.forEach((s, i) => {
+    const x = tToX(s.t ?? tNow);
+    const y = pad + plotH * (1 - (s.rate || 0) / maxRate);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = tmThemeRgba("tertiary", 0.85, "142,166,4");
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  const last = plotSamples[plotSamples.length - 1];
+  ctx.lineTo(tToX(last.t ?? tNow), pad + plotH);
+  ctx.lineTo(pad, pad + plotH);
+  ctx.closePath();
+  ctx.fillStyle = tmThemeRgba("tertiary", 0.18, "142,166,4");
+  ctx.fill();
+}
 
 const tmLabelMap = {
   quality_scored: "Quality",
@@ -581,6 +683,8 @@ async function tmFetchProgress() {
       if (!(key in workers)) tmLastProgressAtByWorker.delete(key);
     }
     tmSeries.value = nextSeries;
+    await nextTick();
+    requestAnimationFrame(tmDrawAll);
   } catch {
     // silent
   } finally {
@@ -1661,19 +1765,30 @@ function handleResolutionBarClick(label) {
             :key="entry.key"
             class="tm-worker-row"
           >
-            <span
-              class="tm-status-dot"
-              :class="{
-                'tm-status-dot--running':
-                  entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
-              }"
-            ></span>
-            <span class="tm-worker-label">{{
-              tmFormatLabel(entry.key, entry.snapshot.label)
-            }}</span>
-            <span class="tm-worker-progress">{{
-              tmFormatProgress(entry.snapshot)
-            }}</span>
+            <div class="tm-worker-row-top">
+              <span
+                class="tm-status-dot"
+                :class="{
+                  'tm-status-dot--running':
+                    entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
+                }"
+              ></span>
+              <span class="tm-worker-label">{{
+                tmFormatLabel(entry.key, entry.snapshot.label)
+              }}</span>
+              <span class="tm-worker-progress">{{
+                tmFormatProgress(entry.snapshot)
+              }}</span>
+            </div>
+            <div class="tm-worker-row-bottom">
+              <canvas
+                :ref="(el) => tmRegisterCanvas(entry.key, el)"
+                class="tm-sparkline"
+              ></canvas>
+              <span class="tm-worker-rate">
+                {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
+              </span>
+            </div>
           </div>
         </div>
         <div v-if="tmSystemItems.length" class="tm-system-bar">
@@ -1724,7 +1839,7 @@ function handleResolutionBarClick(label) {
 .stats-sidebar-content {
   flex: 1;
   min-width: 0;
-  padding: 8px 10px 12px 10px;
+  padding: 0 10px 12px 10px;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
@@ -1736,6 +1851,9 @@ function handleResolutionBarClick(label) {
   display: flex;
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   margin-bottom: 4px;
+  height: 30px;
+  flex-shrink: 0;
+  align-items: stretch;
 }
 
 .stats-header-icon {
@@ -2129,7 +2247,7 @@ function handleResolutionBarClick(label) {
   gap: 4px;
   font-size: 11px;
   font-weight: 500;
-  padding: 5px 6px;
+  padding: 0 6px;
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -2212,13 +2330,45 @@ function handleResolutionBarClick(label) {
 
 .tm-worker-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 3px;
   padding: 5px 8px;
   border-radius: 6px;
   background: rgba(var(--v-theme-on-surface), 0.04);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
   min-width: 0;
+}
+
+.tm-worker-row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tm-worker-row-bottom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tm-sparkline {
+  flex: 1;
+  height: 28px;
+  min-width: 0;
+  display: block;
+  border-radius: 2px;
+}
+
+.tm-worker-rate {
+  font-size: 10px;
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  min-width: 38px;
+  text-align: right;
 }
 
 .tm-status-dot {
