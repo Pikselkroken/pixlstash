@@ -2127,7 +2127,7 @@ defineExpose({ blurSearchInput, focusSearchInput });
   display: flex;
   align-items: center;
   vertical-align: top;
-  padding: 3px 4px;
+  padding: 2px 4px;
   z-index: 5;
   position: relative;
   --toolbar-control-height: 32px;

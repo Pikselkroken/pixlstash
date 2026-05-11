@@ -3218,7 +3218,7 @@ const isSelectionEmpty = computed(() => {
 const showScrapheapBar = computed(() => {
   return isScrapheapView.value && isSelectionEmpty.value;
 });
-const SCRAPHEAP_BAR_HEIGHT_PX = 36;
+const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const wrapperStyle = { position: "relative", height: "100%" };
 const scrollWrapperStyle = computed(() => {
   const offset =
@@ -7922,7 +7922,7 @@ function handleEmptyStateReset() {
   justify-content: start;
 }
 .compact-mode.image-grid {
-  padding-top: 10px !important;
+  padding-top: 2px !important;
   gap: 0px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar {
@@ -8107,7 +8107,7 @@ function handleEmptyStateReset() {
 }
 .compact-sticky-label,
 .compact-group-label {
-  transform: translateX(-50%) translateY(-38%);
+  transform: translateX(-50%) translateY(4px);
   background: rgba(var(--v-theme-surface), 0.82);
   color: rgb(var(--v-theme-accent));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.18);

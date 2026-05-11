@@ -408,12 +408,13 @@ defineExpose({ addToLastSet, lastUsedSet });
   background-color: rgba(var(--v-theme-dark-surface), 0.6);
   color: rgba(var(--v-theme-on-dark-surface), 1);
   border: none;
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 3px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 0.85rem;
+  line-height: 1.4;
   cursor: pointer;
 }
 
