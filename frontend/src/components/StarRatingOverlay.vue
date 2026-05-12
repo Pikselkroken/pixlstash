@@ -1,18 +1,31 @@
 <template>
   <div
     class="star-overlay"
-    :class="{ 'star-overlay--compact': compact, 'star-overlay--number': numberMode }"
+    :class="{
+      'star-overlay--compact': compact,
+      'star-overlay--number': numberMode,
+    }"
   >
     <template v-if="numberMode">
       <v-icon
         :size="iconSize"
-        :color="dScore > 0 ? 'rgba(var(--v-theme-accent))' : 'rgba(var(--v-theme-on-background), 0.25)'"
-        :title="dScore > 0 ? `Rated ${dScore} — click to change` : 'Click to rate'"
-        style="cursor: pointer; vertical-align: middle; display: flex;"
+        :color="
+          dScore > 0
+            ? 'rgba(var(--v-theme-accent))'
+            : 'rgba(var(--v-theme-on-background), 0.4)'
+        "
+        :title="
+          dScore > 0 ? `Rated ${dScore} — click to change` : 'Click to rate'
+        "
+        style="cursor: pointer; vertical-align: middle; display: flex"
         @click.stop="cycleRating()"
         >mdi-star</v-icon
       >
-      <span class="star-number-label" :style="{ opacity: dScore > 0 ? 1 : 0 }">{{ dScore > 0 ? dScore : 1 }}</span>
+      <span
+        class="star-number-label"
+        :style="{ opacity: dScore > 0 ? 1 : 0 }"
+        >{{ dScore > 0 ? dScore : 1 }}</span
+      >
     </template>
     <template v-else>
       <v-icon
@@ -22,7 +35,7 @@
         :color="
           n <= dScore
             ? 'rgba(var(--v-theme-accent))'
-            : 'rgba(var(--v-theme-on-background), 0.2)'
+            : 'rgba(var(--v-theme-on-background), 0.6)'
         "
         :title="`Set rating ${n} (${n})`"
         style="cursor: pointer"

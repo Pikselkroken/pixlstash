@@ -193,7 +193,7 @@ function saveStatsOpen(val) {
 }
 const statsOpen = ref(loadStatsOpen());
 const isMobile = ref(false);
-const MOBILE_BREAKPOINT = 1024;
+const MOBILE_BREAKPOINT = 900;
 
 // --- Media Type Filter State ---
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
@@ -825,7 +825,7 @@ async function fetchConfig() {
     sidebarThumbnailSize.value = 32;
     showProblemIcon.value = true;
     showFaceBboxes.value = false;
-    showStars.value = false;
+    showStars.value = true;
     return;
   }
   if (configLoading.value) return;
@@ -837,8 +837,6 @@ async function fetchConfig() {
     if (typeof sortValue === "string" && sortValue) {
       selectedSort.value = sortValue;
     }
-    if (typeof res.data.show_stars === "boolean")
-      showStars.value = res.data.show_stars;
     if (typeof res.data.show_keyboard_hint === "boolean")
       showKeyboardHint.value = res.data.show_keyboard_hint;
     if (typeof res.data.show_face_bboxes === "boolean") {
@@ -945,7 +943,6 @@ async function fetchConfig() {
         typeof sidebarThumbnailSize.value === "number"
           ? sidebarThumbnailSize.value
           : null,
-      show_stars: showStars.value,
       show_keyboard_hint: showKeyboardHint.value,
       show_face_bboxes: showFaceBboxes.value,
       show_problem_icon: showProblemIcon.value,
@@ -992,7 +989,6 @@ async function patchConfigUIOptions() {
   if (sidebarThumbnailSize.value) {
     patch.sidebar_thumbnail_size = sidebarThumbnailSize.value;
   }
-  if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
   if (typeof showKeyboardHint.value === "boolean")
     patch.show_keyboard_hint = showKeyboardHint.value;
   if (typeof showFaceBboxes.value === "boolean") {
@@ -1285,26 +1281,14 @@ watch(thumbnailSize, () => {
   updateMaxColumns();
 });
 
-watch(showStars, () => {
-  patchConfigUIOptions();
-});
-
 watch(showKeyboardHint, () => {
   if (!configLoaded.value) return;
   patchConfigUIOptions();
 });
 
-watch(
-  [
-    showFaceBboxes,
-    showProblemIcon,
-    showStacks,
-    compactMode,
-  ],
-  () => {
-    patchConfigUIOptions();
-  },
-);
+watch([showFaceBboxes, showProblemIcon, showStacks, compactMode], () => {
+  patchConfigUIOptions();
+});
 
 watch(
   [showFaceBboxes, showProblemIcon, showStacks],

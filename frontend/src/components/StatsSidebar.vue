@@ -404,7 +404,7 @@ const tmLastProgressAtByWorker = new Map();
 let tmPollTimer = null;
 let tmFetchInFlight = false;
 const TM_WORKER_REMOVE_GRACE_SECONDS = 10;
-const TM_RATE_AVERAGE_WINDOW_SECONDS = 8;
+const TM_RATE_AVERAGE_WINDOW_SECONDS = 20;
 const TM_WINDOW_SECONDS = 120;
 const tmNowSeconds = ref(Date.now() / 1000);
 const tmCanvasRefs = new Map(); // key → { el, observer }
@@ -593,8 +593,13 @@ function tmGetLatestRate(key) {
   const cutoff = latestTime - TM_RATE_AVERAGE_WINDOW_SECONDS;
   const windowSamples = samples.filter((s) => Number(s?.t || 0) >= cutoff);
   if (!windowSamples.length) return Number(latest?.rate || 0);
-  const sum = windowSamples.reduce((acc, s) => acc + Number(s?.rate || 0), 0);
-  return sum / windowSamples.length;
+  // Use only non-zero samples for the average to avoid stall artifacts from
+  // batch transitions dragging down the displayed rate. Fall back to the full
+  // window (including zeros) only when all samples in the window are zero.
+  const nonZero = windowSamples.filter((s) => Number(s?.rate || 0) > 0);
+  const activeSamples = nonZero.length ? nonZero : windowSamples;
+  const sum = activeSamples.reduce((acc, s) => acc + Number(s?.rate || 0), 0);
+  return sum / activeSamples.length;
 }
 
 const tmWorkerEntries = computed(() => {
@@ -1817,7 +1822,7 @@ function handleResolutionBarClick(label) {
   flex-direction: row;
   flex-shrink: 0;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  border-top: 2px solid rgb(var(--v-theme-primary));
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   background: rgba(var(--v-theme-surface), 1);
   transition:
     width 0.15s,
