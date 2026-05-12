@@ -42,7 +42,7 @@
     @import-cancelled="handleImportCancelled"
     @import-error="handleImportErrored"
   />
-  <div :style="wrapperStyle">
+  <div :style="wrapperStyle" class="grid-content-area">
     <SelectionBar
       ref="selectionBarRef"
       :selectedCount="selectedImageIds.length"
@@ -389,7 +389,13 @@
         </div>
       </div>
       <div
-        :class="['image-grid', { 'compact-mode': props.compactMode }]"
+        :class="[
+          'image-grid',
+          {
+            'compact-mode': props.compactMode,
+            'touch-select-mode': touchSelectMode,
+          },
+        ]"
         :style="{
           gridTemplateColumns: `repeat(${props.columns}, minmax(0, ${MAX_THUMBNAIL_SIZE}px))`,
           position: 'relative',
@@ -433,6 +439,9 @@
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
           @contextmenu.prevent="handleImageContextMenu(img, $event)"
+          @touchstart="handleTouchStart(img, img.idx, $event)"
+          @touchmove.passive="handleTouchMove"
+          @touchend.passive="handleTouchEnd"
         >
           <div
             :class="[
@@ -3249,7 +3258,7 @@ const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const wrapperStyle = { position: "relative", height: "100%" };
 const scrollWrapperStyle = computed(() => ({
   position: "absolute",
-  top: `${SCRAPHEAP_BAR_HEIGHT_PX}px`,
+  top: "var(--selbar-height, 30px)",
   left: "0",
   right: "0",
   bottom: "0",
@@ -3634,6 +3643,86 @@ let lastSelectedImageId = null;
 const cursorIdx = ref(null);
 const isImageSelected = (id) =>
   selectedImageIds.value && selectedImageIds.value.includes(id);
+
+// ============================================================
+// TOUCH SELECTION MODE
+// ============================================================
+const touchSelectMode = ref(false);
+let longPressTimer = null;
+let longPressMoved = false;
+let suppressTouchClickId = null; // img.id whose next synthesized click should be ignored
+let lastPointerWasTouch = false; // set in touchstart, used in click to detect touch taps
+let touchStartPayload = null; // { img, idx } captured in touchstart
+
+function handleTouchStart(img, idx, event) {
+  if (!img.id) return;
+  lastPointerWasTouch = true;
+  longPressMoved = false;
+  touchStartPayload = { img, idx };
+  if (touchSelectMode.value) {
+    // In select mode: tap handled in handleTouchEnd — no long-press timer needed
+    return;
+  }
+  longPressTimer = setTimeout(() => {
+    if (longPressMoved) return;
+    // Haptic feedback if available
+    if (navigator.vibrate) navigator.vibrate(30);
+    touchSelectMode.value = true;
+    selectedImageIds.value = [img.id];
+    lastSelectedImageId = img.id;
+    cursorIdx.value = idx;
+    touchStartPayload = null; // consumed by long-press
+    // Suppress the synthesized click that fires after the long-press touchend
+    suppressTouchClickId = img.id;
+  }, 500);
+}
+
+function handleTouchMove() {
+  longPressMoved = true;
+  clearTimeout(longPressTimer);
+  longPressTimer = null;
+  touchStartPayload = null;
+}
+
+function handleTouchEnd() {
+  const timerStillPending = longPressTimer !== null;
+  clearTimeout(longPressTimer);
+  longPressTimer = null;
+
+  // Short tap in select mode: toggle directly here so we never rely on
+  // synthesized click events, which are unreliable after touch interactions.
+  if (touchSelectMode.value && touchStartPayload && !longPressMoved) {
+    const { img, idx } = touchStartPayload;
+    const ids = [...selectedImageIds.value];
+    const pos = ids.indexOf(img.id);
+    if (pos >= 0) {
+      ids.splice(pos, 1);
+    } else {
+      ids.push(img.id);
+    }
+    selectedImageIds.value = ids;
+    lastSelectedImageId = img.id;
+    cursorIdx.value = idx;
+    if (ids.length === 0) exitTouchSelectMode();
+    // Suppress the synthesized click so it doesn't re-toggle
+    suppressTouchClickId = img.id;
+  }
+  touchStartPayload = null;
+}
+
+function exitTouchSelectMode() {
+  touchSelectMode.value = false;
+  selectedImageIds.value = [];
+  lastSelectedImageId = null;
+  cursorIdx.value = null;
+}
+
+// Auto-exit touch-select mode whenever selection is cleared by any code path
+watch(selectedImageIds, (ids) => {
+  if (touchSelectMode.value && ids.length === 0) {
+    touchSelectMode.value = false;
+  }
+});
 
 // ============================================================
 // OVERLAY FUNCTIONS
@@ -4689,6 +4778,10 @@ function setDragDataForImageIds(event, imageIds) {
 }
 
 function handleThumbnailNativeDragStart(img, event) {
+  if (touchSelectMode.value) {
+    event.preventDefault();
+    return;
+  }
   dragSource.value = "grid";
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) {
@@ -4714,6 +4807,10 @@ function handleDragEnd() {
 
 function handleContainerDragStart(img, event) {
   if (!img || !event?.dataTransfer) return;
+  if (touchSelectMode.value) {
+    event.preventDefault();
+    return;
+  }
   if (event.target && event.target.closest?.(".face-bbox-overlay")) {
     return;
   }
@@ -7012,6 +7109,11 @@ function scrollCursorIntoView(idx) {
 
 function handleImageCardClick(img, idx, event) {
   if (!img.id) return;
+  // Suppress the synthesized click that fires right after a long-press touchend
+  if (suppressTouchClickId === img.id) {
+    suppressTouchClickId = null;
+    return;
+  }
   cursorIdx.value = idx;
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
@@ -7055,11 +7157,35 @@ function handleImageCardClick(img, idx, event) {
 
 function handleThumbnailClick(img, idx, event) {
   if (!img.id) return;
+  // In touch-select mode, the toggle was already handled in handleTouchEnd.
+  // Just suppress any synthesized click that slipped through.
+  if (touchSelectMode.value) {
+    event.stopPropagation();
+    return;
+  }
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
   if (isCtrl || isShift) {
     return handleImageCardClick(img, idx, event);
   }
+  // Touch two-tap: first tap selects the image; second tap on the same
+  // already-selected image opens the overlay.
+  if (lastPointerWasTouch) {
+    lastPointerWasTouch = false;
+    const alreadySoleSelection =
+      selectedImageIds.value.length === 1 &&
+      selectedImageIds.value[0] === img.id;
+    if (alreadySoleSelection) {
+      openOverlay(img);
+    } else {
+      selectedImageIds.value = [img.id];
+      lastSelectedImageId = img.id;
+      cursorIdx.value = idx;
+    }
+    event.stopPropagation();
+    return;
+  }
+  // Desktop: open overlay directly
   openOverlay(img);
   event.stopPropagation();
 }
@@ -7067,9 +7193,13 @@ function handleThumbnailClick(img, idx, event) {
 // Clear selection when clicking grid background
 function handleGridBackgroundClick(e) {
   if (!e.target.closest(".image-card")) {
-    selectedImageIds.value = [];
-    lastSelectedImageId = null;
-    cursorIdx.value = null;
+    if (touchSelectMode.value) {
+      exitTouchSelectMode();
+    } else {
+      selectedImageIds.value = [];
+      lastSelectedImageId = null;
+      cursorIdx.value = null;
+    }
   }
 }
 
@@ -7946,6 +8076,16 @@ function handleEmptyStateReset() {
   display: block;
   z-index: 30;
 }
+.grid-content-area {
+  --selbar-height: 30px;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .grid-content-area {
+    --selbar-height: 44px;
+  }
+}
+
 .grid-scroll-wrapper {
   overflow-y: auto;
   overflow-x: hidden;
@@ -8071,6 +8211,60 @@ function handleEmptyStateReset() {
 .image-card:hover .selection-overlay,
 .stack-hover-active .selection-overlay {
   transform: scale(1.03);
+}
+
+/* Touch select mode: show a checkmark badge on each selected image */
+.touch-select-mode .image-card {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Suppress Safari's image save / link callout on all image cards */
+.image-card {
+  -webkit-touch-callout: none;
+}
+/* Suppress all hover-revealed elements in touch-select mode */
+.touch-select-mode .image-card:hover .resolution-hover-overlay,
+.touch-select-mode .image-card:hover .thumbnail-id-overlay,
+.touch-select-mode .image-card:hover .thumbnail-top-right-badges {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.touch-select-mode .image-card .selection-overlay::after {
+  content: "✓";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-info));
+  color: rgb(var(--v-theme-on-info));
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 26px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+/* Empty circle on unselected images in touch-select mode */
+.touch-select-mode .image-card::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 26;
+}
+.touch-select-mode .image-card:has(.selection-overlay)::after {
+  display: none;
 }
 .thumbnail-info-row {
   margin-top: 2px;

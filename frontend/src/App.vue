@@ -174,9 +174,10 @@ let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
 function loadStatsOpen() {
   try {
-    return (
-      window.localStorage?.getItem("pixlstash:statsSidebarOpen") !== "false"
-    );
+    const stored = window.localStorage?.getItem("pixlstash:statsSidebarOpen");
+    if (stored !== null) return stored !== "false";
+    // Default: closed on touch/mobile devices
+    return !window.matchMedia("(hover: none) and (pointer: coarse)").matches;
   } catch {
     return true;
   }
