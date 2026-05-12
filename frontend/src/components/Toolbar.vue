@@ -6,6 +6,20 @@
     ]"
   >
     <div class="toolbar-actions">
+      <v-btn
+        v-if="isMobile && !sidebarVisible"
+        icon
+        color="primary"
+        @click="emit('toggle-sidebar')"
+        title="Toggle sidebar"
+        :class="[
+          'toolbar-action-btn',
+          'toolbar-sidebar-btn',
+          !sidebarVisible ? 'toolbar-sidebar-btn--connected' : '',
+        ]"
+      >
+        <v-icon color="on-primary">mdi-dock-left</v-icon>
+      </v-btn>
       <div class="toolbar-search-slot">
         <v-menu
           v-if="!isMobile"
@@ -58,21 +72,6 @@
         <v-btn
           v-if="isMobile"
           icon
-          color="primary"
-          @click="emit('toggle-sidebar')"
-          title="Toggle sidebar"
-          :class="[
-            'toolbar-action-btn',
-            'toolbar-sidebar-btn',
-            !sidebarVisible ? 'toolbar-sidebar-btn--connected' : '',
-          ]"
-        >
-          <v-icon color="on-primary">mdi-dock-left</v-icon>
-        </v-btn>
-        <div v-if="isMobile" class="toolbar-mobile-spacer"></div>
-        <v-btn
-          v-if="isMobile"
-          icon
           :color="
             searchOverlayVisible
               ? 'primary'
@@ -85,7 +84,7 @@
           <v-icon>mdi-magnify</v-icon>
         </v-btn>
         <v-btn
-          v-if="!isMobile"
+          v-if="true"
           icon
           color="surface"
           title="Settings"
@@ -95,7 +94,7 @@
           <v-icon :color="'on-background'">mdi-cog-outline</v-icon>
         </v-btn>
         <v-btn
-          v-if="!isMobile && !isReadOnly"
+          v-if="!isReadOnly"
           icon
           color="surface"
           title="Import photos"

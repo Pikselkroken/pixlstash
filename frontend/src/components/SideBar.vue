@@ -3255,8 +3255,14 @@ defineExpose({
               Add folder
             </v-btn>
           </div>
-          <div v-else class="sidebar-folders-list"
-            :style="{ '--sidebar-folder-child-icon-size': sidebarFolderChildIconSize + 'px' }">
+          <div
+            v-else
+            class="sidebar-folders-list"
+            :style="{
+              '--sidebar-folder-child-icon-size':
+                sidebarFolderChildIconSize + 'px',
+            }"
+          >
             <div
               v-if="referenceFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--ref"
@@ -3278,7 +3284,8 @@ defineExpose({
                 class="sidebar-project-tree-expand-indicator"
                 :class="{ expanded: !referenceFoldersCollapsed }"
                 size="14"
-              >mdi-chevron-down</v-icon>
+                >mdi-chevron-down</v-icon
+              >
             </div>
             <div
               v-for="rf in referenceFolders"
@@ -3438,7 +3445,8 @@ defineExpose({
                 class="sidebar-project-tree-expand-indicator"
                 :class="{ expanded: !importFoldersCollapsed }"
                 size="14"
-              >mdi-chevron-down</v-icon>
+                >mdi-chevron-down</v-icon
+              >
             </div>
             <div
               v-for="importFolder in importFolders"
@@ -3817,7 +3825,9 @@ defineExpose({
                         @load="handleSetThumbnailLoad(pset.id)"
                         @error="handleSetThumbnailError(pset.id)"
                       />
-                      <v-icon v-else :size="sidebarThumbnailSizeLarge - 2">mdi-image-album</v-icon>
+                      <v-icon v-else :size="sidebarThumbnailSizeLarge - 2"
+                        >mdi-image-album</v-icon
+                      >
                     </span>
                     <span class="sidebar-list-label">
                       <v-tooltip
@@ -3902,7 +3912,10 @@ defineExpose({
                         !props.hasFolderFilter,
                     },
                   ]"
-                  @click="selectProjectNode(p); toggleProjectExpanded(p.id)"
+                  @click="
+                    selectProjectNode(p);
+                    toggleProjectExpanded(p.id);
+                  "
                   @contextmenu.prevent="
                     !isReadOnly && openSidebarCtxMenu('project', p, $event)
                   "
@@ -3963,7 +3976,10 @@ defineExpose({
                       @click.stop="toggleProjectTreePeople(p.id)"
                     >
                       <v-icon
-                        v-show="sortedCharacters.filter(c => c.project_id === p.id).length > 0"
+                        v-show="
+                          sortedCharacters.filter((c) => c.project_id === p.id)
+                            .length > 0
+                        "
                         size="14"
                         class="sidebar-project-tree-sub-chevron"
                         >{{
@@ -4159,7 +4175,10 @@ defineExpose({
                       @click.stop="toggleProjectTreeSets(p.id)"
                     >
                       <v-icon
-                        v-show="nonReferenceSets.filter(s => s.project_id === p.id).length > 0"
+                        v-show="
+                          nonReferenceSets.filter((s) => s.project_id === p.id)
+                            .length > 0
+                        "
                         size="14"
                         class="sidebar-project-tree-sub-chevron"
                         >{{
@@ -4293,7 +4312,9 @@ defineExpose({
                             @load="handleSetThumbnailLoad(pset.id)"
                             @error="handleSetThumbnailError(pset.id)"
                           />
-                          <v-icon v-else :size="sidebarThumbnailSizeLarge - 2">mdi-image-album</v-icon>
+                          <v-icon v-else :size="sidebarThumbnailSizeLarge - 2"
+                            >mdi-image-album</v-icon
+                          >
                         </span>
                         <span class="sidebar-list-label">
                           <v-tooltip
@@ -4331,7 +4352,10 @@ defineExpose({
                   <div
                     v-if="!isReadOnly || sessionContext?.include_attachments"
                     class="sidebar-project-tree-subsection sidebar-project-tree-files"
-                    :style="{ '--sidebar-tree-icon-size': sidebarThumbnailSizeModel + 'px' }"
+                    :style="{
+                      '--sidebar-tree-icon-size':
+                        sidebarThumbnailSizeModel + 'px',
+                    }"
                   >
                     <ProjectFiles
                       :projectId="p.id"
@@ -4579,7 +4603,9 @@ defineExpose({
             closeSidebarCtxMenu();
           "
         >
-          <v-icon size="15" class="sidebar-ctx-icon">mdi-trash-can-outline</v-icon>
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-trash-can-outline</v-icon
+          >
           Delete
         </button>
       </template>
@@ -4875,13 +4901,14 @@ defineExpose({
 .sidebar-view-tabs-row {
   display: flex;
   align-items: center;
-  padding: 0px 4px 2px 4px;
+  padding: 0px 4px 0px 4px;
   position: relative;
   z-index: 1;
   margin-top: 0;
   margin-bottom: 0;
   gap: 0;
   background: rgba(var(--v-theme-shadow), 0.44);
+  border-bottom: 1px solid rgba(var(--v-theme-sidebar-text), 0.1);
 }
 
 .sidebar-view-tabs-icon {
@@ -4918,7 +4945,7 @@ defineExpose({
   flex: 1;
   border-radius: 0;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-bottom: 2px solid rgba(var(--v-theme-sidebar-text), 0.15);
   font-size: 0.74rem;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -5071,7 +5098,12 @@ defineExpose({
 }
 
 .sidebar-project-tree-row:hover {
-  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-sidebar-text), 0.05);
+  background:
+    linear-gradient(
+      rgba(var(--v-theme-accent), 0.08),
+      rgba(var(--v-theme-accent), 0.08)
+    ),
+    rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgba(var(--v-theme-sidebar-text), 0.92);
 }
 
@@ -5083,7 +5115,12 @@ defineExpose({
 }
 
 .sidebar-project-tree-row.active:hover {
-  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-primary), 0.18);
+  background:
+    linear-gradient(
+      rgba(var(--v-theme-accent), 0.08),
+      rgba(var(--v-theme-accent), 0.08)
+    ),
+    rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-primary));
 }
 
@@ -5092,7 +5129,9 @@ defineExpose({
   opacity: 0.5;
   color: inherit;
   transform: rotate(-90deg);
-  transition: transform 0.15s, opacity 0.12s;
+  transition:
+    transform 0.15s,
+    opacity 0.12s;
 }
 
 .sidebar-project-tree-expand-indicator.expanded {
@@ -6006,7 +6045,12 @@ defineExpose({
 }
 
 .sidebar-list-item.active:hover {
-  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-primary), 0.18);
+  background:
+    linear-gradient(
+      rgba(var(--v-theme-accent), 0.08),
+      rgba(var(--v-theme-accent), 0.08)
+    ),
+    rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-primary));
 }
 
@@ -6168,8 +6212,7 @@ defineExpose({
   border: none;
   display: inline-block;
   filter: none;
-  transition:
-    transform 0.12s ease;
+  transition: transform 0.12s ease;
 }
 
 .sidebar-set-thumb-image {
@@ -6540,7 +6583,9 @@ defineExpose({
     min-height: 100%;
     height: 100%;
   }
+}
 
+@media (hover: none) and (pointer: coarse) {
   .sidebar-list-item,
   .sidebar-list-item.active {
     min-height: 56px;
@@ -6549,7 +6594,6 @@ defineExpose({
 
   .sidebar-section-header {
     min-height: 48px;
-    padding: 6px 8px;
   }
 
   .sidebar-list-icon {
@@ -6610,7 +6654,9 @@ defineExpose({
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
   border-left: 3px solid transparent;
   user-select: none;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .sidebar-folder-section-header:first-child {
@@ -6618,7 +6664,12 @@ defineExpose({
 }
 
 .sidebar-folder-section-header:hover {
-  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-sidebar-text), 0.05);
+  background:
+    linear-gradient(
+      rgba(var(--v-theme-accent), 0.08),
+      rgba(var(--v-theme-accent), 0.08)
+    ),
+    rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgba(var(--v-theme-sidebar-text), 0.92);
 }
 
@@ -6678,7 +6729,9 @@ defineExpose({
   user-select: none;
   min-height: 28px;
   border-left: 3px solid transparent;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .sidebar-folder-root-row {
@@ -6697,7 +6750,12 @@ defineExpose({
 }
 
 .sidebar-folder-row.active:hover {
-  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-primary), 0.18);
+  background:
+    linear-gradient(
+      rgba(var(--v-theme-accent), 0.08),
+      rgba(var(--v-theme-accent), 0.08)
+    ),
+    rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-primary));
 }
 

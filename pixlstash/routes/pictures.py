@@ -1147,6 +1147,12 @@ def _select_pictures_for_listing(
 
             if not picture_ids:
                 return []
+            existing_ids = query_params.get("id")
+            if existing_ids:
+                existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
+                picture_ids = [i for i in picture_ids if int(i) in existing_id_set]
+                if not picture_ids:
+                    return []
             query_params["id"] = picture_ids
         elif character_id_list:
 
@@ -1230,6 +1236,12 @@ def _select_pictures_for_listing(
 
             if not picture_ids:
                 return []
+            existing_ids = query_params.get("id")
+            if existing_ids:
+                existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
+                picture_ids = [i for i in picture_ids if int(i) in existing_id_set]
+                if not picture_ids:
+                    return []
             query_params["id"] = picture_ids
         elif project_id_raw is not None:
             # Project filter only applies when not already filtering by character/set.

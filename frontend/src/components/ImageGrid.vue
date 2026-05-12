@@ -454,32 +454,17 @@
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
             >
-              <!-- Top-left permanent badges: reference folder, share, problem -->
+              <!-- Top-left permanent badges (top→bottom): problem, reference folder, share -->
               <div
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
-                  (img.reference_folder_id ||
-                    (!isReadOnly && sharedPictureIds.has(img.id)) ||
-                    (props.showProblemIcon && hasPenalisedTags(img)))
+                  ((props.showProblemIcon && hasPenalisedTags(img)) ||
+                    img.reference_folder_id ||
+                    (!isReadOnly && sharedPictureIds.has(img.id)))
                 "
                 class="thumbnail-top-left-badges"
               >
-                <div
-                  v-if="img.reference_folder_id"
-                  class="thumbnail-reference-badge thumbnail-badge"
-                  :title="img.file_path || 'Reference picture'"
-                  @click.stop="openReferenceLocation(img.id)"
-                >
-                  <v-icon size="10">mdi-folder-outline</v-icon>
-                </div>
-                <div
-                  v-if="!isReadOnly && sharedPictureIds.has(img.id)"
-                  class="thumbnail-share-badge thumbnail-badge"
-                  title="Has active share link"
-                >
-                  <v-icon size="10">mdi-share-variant</v-icon>
-                </div>
                 <div
                   v-if="props.showProblemIcon && hasPenalisedTags(img)"
                   class="penalised-tag-indicator thumbnail-badge"
@@ -495,6 +480,23 @@
                         props.themeMode !== "light",
                       )
                     }}</v-icon
+                  >
+                </div>
+                <div
+                  v-if="img.reference_folder_id"
+                  class="thumbnail-reference-badge thumbnail-badge"
+                  :title="img.file_path || 'Reference picture'"
+                  @click.stop="openReferenceLocation(img.id)"
+                >
+                  <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
+                </div>
+                <div
+                  v-if="!isReadOnly && sharedPictureIds.has(img.id)"
+                  class="thumbnail-share-badge thumbnail-badge"
+                  title="Has active share link"
+                >
+                  <v-icon :size="badgeIconSizes.penalised"
+                    >mdi-link-variant</v-icon
                   >
                 </div>
               </div>
@@ -627,9 +629,7 @@
                   class="thumbnail-bottom-left-badges"
                 >
                   <!-- Format badge: hover-only -->
-                  <div
-                    class="thumbnail-id-overlay thumbnail-badge"
-                  >
+                  <div class="thumbnail-id-overlay thumbnail-badge">
                     {{ img.format.toUpperCase() }}
                   </div>
                 </div>
@@ -2389,13 +2389,19 @@ function getImageSortLabel(img) {
   const smartScore = getGridSmartScoreValue(img);
   if (sort.includes("SMART_SCORE") && smartScore !== null)
     return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
-  if (sort.includes("CHARACTER_LIKENESS") && typeof img.character_likeness === "number")
+  if (
+    sort.includes("CHARACTER_LIKENESS") &&
+    typeof img.character_likeness === "number"
+  )
     return `≈ ${(img.character_likeness * 100).toFixed(0)}%`;
   if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
     return `${(img.text_score * 100).toFixed(0)}%`;
   if (sort === "TAG_UNCERTAINTY" && typeof img.tag_uncertainty === "number")
     return `${(img.tag_uncertainty * 100).toFixed(0)}%`;
-  if (sort === "ANOMALY_TAG_UNCERTAINTY" && typeof img.anomaly_tag_uncertainty === "number")
+  if (
+    sort === "ANOMALY_TAG_UNCERTAINTY" &&
+    typeof img.anomaly_tag_uncertainty === "number"
+  )
     return `${(img.anomaly_tag_uncertainty * 100).toFixed(0)}%`;
   if (sort === "SCORE" && typeof img.score === "number")
     return `★ ${img.score}`;
@@ -2409,14 +2415,19 @@ const visibleRangeLabel = computed(() => {
   const lastImg = images[Math.max(0, (visibleEnd.value || 1) - 1)];
   const first = getImageSortLabel(firstImg);
   if (!first) return null;
-  const last = lastImg && lastImg !== firstImg ? getImageSortLabel(lastImg) : null;
+  const last =
+    lastImg && lastImg !== firstImg ? getImageSortLabel(lastImg) : null;
   if (!last || last === first) return first;
   return `${first} – ${last}`;
 });
 
-watch(visibleRangeLabel, (label) => {
-  emit("update:visible-range-label", label);
-}, { immediate: true });
+watch(
+  visibleRangeLabel,
+  (label) => {
+    emit("update:visible-range-label", label);
+  },
+  { immediate: true },
+);
 // ────────────────────────────────────────────────────────────────
 
 function prefetchFullImage(img) {
@@ -6172,6 +6183,16 @@ async function fetchAllGridImages(options = {}) {
     } else {
       allGridImages.value = newImages;
     }
+    // When the shared-only filter is active every returned image is shared by
+    // definition. Pre-seed sharedPictureIds immediately so badges appear
+    // without waiting for the async batch-check round trip.
+    if (props.sharedOnlyFilter && !isReadOnly.value) {
+      const next = new Set(sharedPictureIds.value);
+      for (const img of newImages) {
+        if (img.id) next.add(img.id);
+      }
+      sharedPictureIds.value = next;
+    }
     if (isSetOverlapView.value) {
       totalCurrentCategoryCount.value = newImages.length;
     }
@@ -7865,11 +7886,32 @@ function handleEmptyStateReset() {
 }
 
 .thumbnail-reference-badge {
-  opacity: 0.65;
-  padding: 1px 2px;
+  opacity: 1;
   display: flex;
   align-items: center;
   cursor: pointer;
+  padding-left: 2px;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.thumbnail-reference-badge .v-icon {
+  color: rgb(var(--v-theme-primary)) !important;
+}
+
+.thumbnail-share-badge .v-icon {
+  color: rgb(var(--v-theme-accent)) !important;
+}
+
+.thumbnail-share-badge {
+  opacity: 1;
+  display: flex;
+  align-items: center;
+  padding-left: 2px;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 .thumbnail-badge--bottom-right {

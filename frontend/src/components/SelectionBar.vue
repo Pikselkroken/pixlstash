@@ -28,7 +28,12 @@
               >
                 <span class="bar-btn-prefix">Sort:</span>
                 <v-icon size="13">{{ gbSortTypeIcon }}</v-icon>
-                <span class="bar-btn-label">{{ gbSortButtonLabel }}</span>
+                <span class="bar-btn-sort-type">{{ gbSortTypeName }}</span>
+                <span
+                  v-if="gbSortSecondaryLabel"
+                  class="bar-btn-sort-secondary"
+                  >{{ gbSortSecondaryLabel }}</span
+                >
                 <v-icon size="13">mdi-menu-down</v-icon>
               </button>
             </div>
@@ -188,7 +193,7 @@
               title="Filters"
             >
               <v-icon size="13">mdi-filter</v-icon>
-              <span class="bar-btn-label">Filter</span>
+              <span class="bar-btn-label bar-btn-label--filter">Filter</span>
               <span v-if="gbActiveFilterCount > 0" class="bar-filter-badge">{{
                 gbActiveFilterCount > 99 ? "99+" : gbActiveFilterCount
               }}</span>
@@ -754,7 +759,7 @@
               title="View options"
             >
               <v-icon size="13">mdi-view-grid</v-icon>
-              <span class="bar-btn-label">View</span>
+              <span class="bar-btn-label bar-btn-label--view">View</span>
               <v-icon size="13">mdi-menu-down</v-icon>
             </button>
           </template>
@@ -835,7 +840,8 @@
             v-if="gb?.visibleRangeLabel?.value"
             :key="gb.visibleRangeLabel.value"
             class="visible-range-pill"
-          >{{ gb.visibleRangeLabel.value }}</span>
+            >{{ gb.visibleRangeLabel.value }}</span
+          >
         </transition>
       </div>
       <div class="selection-bar-right">
@@ -1018,7 +1024,9 @@
               "
             >
               <v-icon size="15">mdi-image-multiple-outline</v-icon>
-              <span>Apply to ({{ selectedCount }})</span>
+              <span class="bar-btn-apply-label"
+                >Apply to ({{ selectedCount }})</span
+              >
               <v-icon size="16">mdi-menu-down</v-icon>
             </button>
           </template>
@@ -1401,7 +1409,7 @@
           title="Clear selection (ESC)"
         >
           <v-icon size="14" color="primary">mdi-close</v-icon>
-          Clear
+          <span class="bar-btn-clear-label">Clear</span>
         </button>
         <button
           v-if="!isReadOnly"
@@ -1411,7 +1419,7 @@
           title="Delete selected items (DEL)"
         >
           <v-icon size="14" color="error">mdi-delete</v-icon>
-          {{ deleteButtonLabel }}
+          <span class="bar-btn-delete-label">{{ deleteButtonLabel }}</span>
         </button>
       </div>
     </div>
@@ -1673,6 +1681,21 @@ const gbSortButtonLabel = computed(() => {
       ? `Groups: ${gbSelectedStackThresholdOption.value.label}`
       : "Groups";
   return gbSelectedSortOption.value?.label || "Sort";
+});
+
+const gbSortTypeName = computed(() => {
+  if (gb?.isSearchActive?.value) return "Search relevance";
+  if (gbSortModel.value === SIMILARITY_SORT_KEY_GB) return "Similarity";
+  if (gbSortModel.value === LIKENESS_GROUPS_SORT_KEY_GB) return "Groups";
+  return gbSelectedSortOption.value?.label || "Sort";
+});
+
+const gbSortSecondaryLabel = computed(() => {
+  if (gbSortModel.value === SIMILARITY_SORT_KEY_GB)
+    return gbSelectedSimilarityOption.value?.text || null;
+  if (gbSortModel.value === LIKENESS_GROUPS_SORT_KEY_GB)
+    return gbSelectedStackThresholdOption.value?.label || null;
+  return null;
 });
 
 const gbSortButtonIcon = computed(() =>
@@ -2078,12 +2101,6 @@ const gbCompactModeModel = computed({
     if (gb?.compactMode) gb.compactMode.value = Boolean(v);
   },
 });
-const gbShowStarsModel = computed({
-  get: () => gb?.showStars?.value ?? true,
-  set: (v) => {
-    if (gb?.showStars) gb.showStars.value = Boolean(v);
-  },
-});
 const gbShowFaceBboxesModel = computed({
   get: () => gb?.showFaceBboxes?.value ?? false,
   set: (v) => {
@@ -2098,19 +2115,6 @@ const gbShowProblemIconModel = computed({
 });
 
 const gbOverlayOptions = computed(() => [
-  {
-    key: "stars",
-    label: "Stars",
-    icon: "mdi-star",
-    model: {
-      get value() {
-        return gbShowStarsModel.value;
-      },
-      set value(v) {
-        gbShowStarsModel.value = v;
-      },
-    },
-  },
   {
     key: "faces",
     label: "Face boxes",
@@ -2995,6 +2999,8 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   box-sizing: border-box;
   display: flex;
   align-items: center;
+  container-type: inline-size;
+  container-name: selbar;
 }
 .selection-bar-content {
   display: flex;
@@ -4294,5 +4300,81 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   white-space: nowrap;
   line-height: 1.2;
   color: inherit;
+}
+
+.bar-btn-sort-type {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+  flex-shrink: 1;
+}
+
+.bar-btn-sort-secondary {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+  flex-shrink: 1;
+}
+
+.bar-btn-apply-label {
+  white-space: nowrap;
+  font-size: 0.92em;
+  flex-shrink: 1;
+}
+
+.bar-btn-clear-label {
+  white-space: nowrap;
+}
+
+.bar-btn-delete-label {
+  white-space: nowrap;
+}
+
+/* ── Responsive: progressive label dropping via container queries ─────────── */
+@container selbar (max-width: 960px) {
+  .bar-btn-prefix,
+  .bar-btn-sort-type {
+    display: none;
+  }
+}
+
+@container selbar (max-width: 840px) {
+  .bar-btn-label--filter {
+    display: none;
+  }
+}
+
+@container selbar (max-width: 740px) {
+  .bar-btn-label--view {
+    display: none;
+  }
+}
+
+@container selbar (max-width: 660px) {
+  .bar-btn-apply-label {
+    display: none;
+  }
+}
+
+@container selbar (max-width: 580px) {
+  .visible-range-pill {
+    display: none;
+  }
+}
+
+@container selbar (max-width: 500px) {
+  .bar-btn-clear-label {
+    display: none;
+  }
+}
+
+@container selbar (max-width: 420px) {
+  .bar-btn-delete-label {
+    display: none;
+  }
 }
 </style>
