@@ -16,7 +16,7 @@
       <span v-if="files.length > 0" class="pf-count">{{ files.length }}</span>
       <span class="pf-spacer"></span>
       <v-icon size="14" class="pf-chevron">
-        {{ expanded ? "mdi-chevron-up" : "mdi-chevron-down" }}
+        {{ expanded ? "mdi-chevron-down" : "mdi-chevron-right" }}
       </v-icon>
     </div>
 
