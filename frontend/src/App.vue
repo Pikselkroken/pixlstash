@@ -112,14 +112,13 @@ const filteredSearchHistory = computed(() => {
 const showStars = ref(!isReadOnly.value);
 const showKeyboardHint = ref(true);
 const showFaceBboxes = ref(false);
-const showFormat = ref(!isReadOnly.value);
-const showResolution = ref(!isReadOnly.value);
 const showProblemIcon = ref(true);
 const penalisedTagWeights = ref({});
 const showStacks = ref(true);
 const compactMode = ref(isReadOnly.value);
 const expandedStackCount = ref(0);
 const totalStackCount = ref(0);
+const visibleRangeLabel = ref(null);
 const dateFormat = ref("locale");
 const themeMode = ref(isReadOnly.value ? "dark" : "light");
 const theme = useTheme();
@@ -418,8 +417,6 @@ const config = reactive({
   sidebar_thumbnail_size: 64,
   show_stars: true,
   show_face_bboxes: false,
-  show_format: true,
-  show_resolution: true,
   show_problem_icon: true,
   expand_all_stacks: true,
   date_format: "locale",
@@ -829,8 +826,6 @@ async function fetchConfig() {
     showProblemIcon.value = true;
     showFaceBboxes.value = false;
     showStars.value = false;
-    showFormat.value = false;
-    showResolution.value = false;
     return;
   }
   if (configLoading.value) return;
@@ -848,12 +843,6 @@ async function fetchConfig() {
       showKeyboardHint.value = res.data.show_keyboard_hint;
     if (typeof res.data.show_face_bboxes === "boolean") {
       showFaceBboxes.value = res.data.show_face_bboxes;
-    }
-    if (typeof res.data.show_format === "boolean") {
-      showFormat.value = res.data.show_format;
-    }
-    if (typeof res.data.show_resolution === "boolean") {
-      showResolution.value = res.data.show_resolution;
     }
     if (typeof res.data.show_problem_icon === "boolean") {
       showProblemIcon.value = res.data.show_problem_icon;
@@ -899,14 +888,6 @@ async function fetchConfig() {
       typeof res.data.show_face_bboxes === "boolean"
         ? res.data.show_face_bboxes
         : showFaceBboxes.value;
-    config.show_format =
-      typeof res.data.show_format === "boolean"
-        ? res.data.show_format
-        : showFormat.value;
-    config.show_resolution =
-      typeof res.data.show_resolution === "boolean"
-        ? res.data.show_resolution
-        : showResolution.value;
     config.show_problem_icon =
       typeof res.data.show_problem_icon === "boolean"
         ? res.data.show_problem_icon
@@ -967,8 +948,6 @@ async function fetchConfig() {
       show_stars: showStars.value,
       show_keyboard_hint: showKeyboardHint.value,
       show_face_bboxes: showFaceBboxes.value,
-      show_format: showFormat.value,
-      show_resolution: showResolution.value,
       show_problem_icon: showProblemIcon.value,
       expand_all_stacks: showStacks.value,
       compact_mode: compactMode.value,
@@ -1018,12 +997,6 @@ async function patchConfigUIOptions() {
     patch.show_keyboard_hint = showKeyboardHint.value;
   if (typeof showFaceBboxes.value === "boolean") {
     patch.show_face_bboxes = showFaceBboxes.value;
-  }
-  if (typeof showFormat.value === "boolean") {
-    patch.show_format = showFormat.value;
-  }
-  if (typeof showResolution.value === "boolean") {
-    patch.show_resolution = showResolution.value;
   }
   if (typeof showProblemIcon.value === "boolean") {
     patch.show_problem_icon = showProblemIcon.value;
@@ -1324,8 +1297,6 @@ watch(showKeyboardHint, () => {
 watch(
   [
     showFaceBboxes,
-    showFormat,
-    showResolution,
     showProblemIcon,
     showStacks,
     compactMode,
@@ -1336,8 +1307,8 @@ watch(
 );
 
 watch(
-  [showFaceBboxes, showFormat, showResolution, showProblemIcon, showStacks],
-  ([face, format, resolution, problem, stacks]) => {},
+  [showFaceBboxes, showProblemIcon, showStacks],
+  ([face, problem, stacks]) => {},
   { immediate: true },
 );
 
@@ -1491,14 +1462,13 @@ provide("gridBarState", {
   compactMode,
   showStars,
   showFaceBboxes,
-  showFormat,
-  showResolution,
   showProblemIcon,
   showStacks,
   stackExpandedCount: expandedStackCount,
   stackTotalCount: totalStackCount,
   expandAllStacks: handleExpandAllStacks,
   collapseAllStacks: handleCollapseAllStacks,
+  visibleRangeLabel,
 });
 </script>
 <template>
@@ -1718,8 +1688,6 @@ provide("gridBarState", {
                 :sharedOnlyFilter="sharedOnlyFilter"
                 :unassignedOnlyFilter="unassignedOnlyFilter"
                 :showFaceBboxes="showFaceBboxes"
-                :showFormat="showFormat"
-                :showResolution="showResolution"
                 :showProblemIcon="showProblemIcon"
                 :penalisedTagWeights="penalisedTagWeights"
                 :showStacks="showStacks"
@@ -1780,6 +1748,7 @@ provide("gridBarState", {
                 "
                 @import-started="isUploadInProgress = true"
                 @import-ended="isUploadInProgress = false"
+                @update:visible-range-label="visibleRangeLabel = $event"
               />
             </div>
             <StatsSidebar

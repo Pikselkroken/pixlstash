@@ -6,7 +6,7 @@ const appVersion = __APP_VERSION__;
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  sidebarThumbnailSize: { type: Number, default: 48 },
+  sidebarThumbnailSize: { type: Number, default: 32 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
   checkForUpdates: { type: Boolean, default: null },
@@ -32,13 +32,13 @@ const dialogOpen = computed({
 });
 
 const sidebarThumbnailSizeModel = computed({
-  get: () => props.sidebarThumbnailSize ?? 48,
+  get: () => props.sidebarThumbnailSize ?? 32,
   set: (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
     const clamped = Math.min(64, Math.max(20, parsed));
     const snapped = Math.round(clamped / 4) * 4;
-    if (snapped === (props.sidebarThumbnailSize ?? 48)) return;
+    if (snapped === (props.sidebarThumbnailSize ?? 32)) return;
     emit("update:sidebar-thumbnail-size", snapped);
   },
 });

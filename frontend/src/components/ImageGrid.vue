@@ -344,13 +344,6 @@
       @drop.capture.prevent="handleGridDrop"
       :style="scrollWrapperStyle"
     >
-      <!-- Compact mode sticky current-group label -->
-      <div
-        v-if="props.compactMode && compactStickyLabel"
-        class="compact-sticky-label"
-      >
-        {{ compactStickyLabel }}
-      </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
       </div>
@@ -461,59 +454,53 @@
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
             >
+              <!-- Top-left permanent badges: reference folder, share, problem -->
               <div
                 v-if="
-                  shouldShowStackBadge(img) &&
                   isThumbnailReady(img.id) &&
-                  img.thumbnail
+                  img.thumbnail &&
+                  (img.reference_folder_id ||
+                    (!isReadOnly && sharedPictureIds.has(img.id)) ||
+                    (props.showProblemIcon && hasPenalisedTags(img)))
                 "
-                :class="[
-                  'stack-indicator',
-                  'thumbnail-badge',
-                  'thumbnail-badge--top-left',
-                ]"
-                :title="stackBadgeTitle(img)"
-                @click.stop="toggleStackExpand(img)"
-                @mouseenter.stop="prefetchStackMembers(img)"
+                class="thumbnail-top-left-badges"
               >
-                <v-icon
-                  :size="badgeIconSizes.stack"
-                  :style="getStackBadgeIconStyle(img)"
-                  >mdi-layers-outline</v-icon
+                <div
+                  v-if="img.reference_folder_id"
+                  class="thumbnail-reference-badge thumbnail-badge"
+                  :title="img.file_path || 'Reference picture'"
+                  @click.stop="openReferenceLocation(img.id)"
                 >
+                  <v-icon size="10">mdi-folder-outline</v-icon>
+                </div>
+                <div
+                  v-if="!isReadOnly && sharedPictureIds.has(img.id)"
+                  class="thumbnail-share-badge thumbnail-badge"
+                  title="Has active share link"
+                >
+                  <v-icon size="10">mdi-share-variant</v-icon>
+                </div>
+                <div
+                  v-if="props.showProblemIcon && hasPenalisedTags(img)"
+                  class="penalised-tag-indicator thumbnail-badge"
+                  :title="penalisedTagsTitle(img)"
+                >
+                  <v-icon
+                    :size="badgeIconSizes.penalised"
+                    :color="penalisedTagColor(img, props.penalisedTagWeights)"
+                    >{{
+                      penalisedTagIcon(
+                        img,
+                        props.penalisedTagWeights,
+                        props.themeMode !== "light",
+                      )
+                    }}</v-icon
+                  >
+                </div>
               </div>
+              <!-- Resolution overlay (always rendered, visible on hover) -->
               <div
                 v-if="
-                  props.showProblemIcon &&
-                  hasPenalisedTags(img) &&
-                  isThumbnailReady(img.id) &&
-                  img.thumbnail
-                "
-                :class="[
-                  'penalised-tag-indicator',
-                  'thumbnail-badge',
-                  shouldShowStackBadge(img)
-                    ? 'thumbnail-badge--top-left-stack'
-                    : 'thumbnail-badge--top-left',
-                ]"
-                :title="penalisedTagsTitle(img)"
-              >
-                <v-icon
-                  :size="badgeIconSizes.penalised"
-                  :color="penalisedTagColor(img, props.penalisedTagWeights)"
-                  >{{
-                    penalisedTagIcon(
-                      img,
-                      props.penalisedTagWeights,
-                      props.themeMode !== "light",
-                    )
-                  }}</v-icon
-                >
-              </div>
-              <!-- Resolution overlay -->
-              <div
-                v-if="
-                  props.showResolution &&
                   img.width &&
                   img.height &&
                   isThumbnailReady(img.id) &&
@@ -634,36 +621,16 @@
                   v-if="
                     isThumbnailReady(img.id) &&
                     img.thumbnail &&
-                    ((props.showFormat &&
-                      img.format &&
-                      img.format !== 'unknown') ||
-                      img.reference_folder_id ||
-                      (!isReadOnly && sharedPictureIds.has(img.id)))
+                    img.format &&
+                    img.format !== 'unknown'
                   "
                   class="thumbnail-bottom-left-badges"
                 >
+                  <!-- Format badge: hover-only -->
                   <div
-                    v-if="
-                      props.showFormat && img.format && img.format !== 'unknown'
-                    "
                     class="thumbnail-id-overlay thumbnail-badge"
                   >
                     {{ img.format.toUpperCase() }}
-                  </div>
-                  <div
-                    v-if="img.reference_folder_id"
-                    class="thumbnail-reference-badge thumbnail-badge"
-                    :title="img.file_path || 'Reference picture'"
-                    @click.stop="openReferenceLocation(img.id)"
-                  >
-                    <v-icon size="10">mdi-link-variant</v-icon>
-                  </div>
-                  <div
-                    v-if="!isReadOnly && sharedPictureIds.has(img.id)"
-                    class="thumbnail-share-badge thumbnail-badge"
-                    title="Has active share link"
-                  >
-                    <v-icon size="10">mdi-share-variant</v-icon>
                   </div>
                 </div>
               </template>
@@ -680,30 +647,36 @@
                 class="stack-band-overlay"
                 :style="getStackBandStyle(img)"
               ></div>
-              <!-- Score overlay -->
-              <StarRatingOverlay
-                v-if="
-                  props.showStars && isThumbnailReady(img.id) && img.thumbnail
-                "
-                :class="['thumbnail-badge', 'thumbnail-badge--top-right']"
-                :score="
-                  isReadOnly
-                    ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
-                    : img.score || 0
-                "
-                :icon-size="badgeIconSizes.star"
-                :compact="true"
-                @set-score="setScore(img, $event)"
-              />
-            </div>
-            <!-- Compact mode group pill, straddling top edge of this row -->
-            <div
-              v-if="
-                props.compactMode && getCompactGroupLabel(img, idx) !== null
-              "
-              class="compact-group-label"
-            >
-              {{ getCompactGroupLabel(img, idx) }}
+              <!-- Top-right hover badges: stars + stack indicator -->
+              <div
+                v-if="isThumbnailReady(img.id) && img.thumbnail"
+                class="thumbnail-top-right-badges"
+              >
+                <StarRatingOverlay
+                  v-if="props.showStars"
+                  :score="
+                    isReadOnly
+                      ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
+                      : img.score || 0
+                  "
+                  :icon-size="badgeIconSizes.star"
+                  :compact="true"
+                  @set-score="setScore(img, $event)"
+                />
+                <div
+                  v-if="shouldShowStackBadge(img)"
+                  class="stack-indicator"
+                  :title="stackBadgeTitle(img)"
+                  @click.stop="toggleStackExpand(img)"
+                  @mouseenter.stop="prefetchStackMembers(img)"
+                >
+                  <v-icon
+                    :size="badgeIconSizes.stack"
+                    :style="getStackBadgeIconStyle(img)"
+                    >mdi-layers-outline</v-icon
+                  >
+                </div>
+              </div>
             </div>
           </div>
           <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
@@ -866,6 +839,7 @@ const emit = defineEmits([
   "update:set-multi-mode",
   "update:set-difference-base-id",
   "update:embed-watermark",
+  "update:visible-range-label",
 ]);
 
 // Props
@@ -885,8 +859,6 @@ const props = defineProps({
   stackThreshold: { type: [String, Number, null], default: null },
   showStars: Boolean,
   showFaceBboxes: Boolean,
-  showFormat: Boolean,
-  showResolution: Boolean,
   showProblemIcon: Boolean,
   penalisedTagWeights: { type: Object, default: () => ({}) },
   showStacks: { type: Boolean, default: true },
@@ -2402,6 +2374,50 @@ const compactStickyLabel = computed(() => {
     return `⚠ ${(firstImg.anomaly_tag_uncertainty * 100).toFixed(0)}%`;
   return null;
 });
+
+// ── Visible range label (emitted to SelectionBar) ──────────────
+function getImageSortLabel(img) {
+  if (!img) return null;
+  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
+  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
+  if (isSearchMode && typeof img.likeness_score === "number")
+    return `≈ ${img.likeness_score.toFixed(2)}`;
+  if (sort === "IMPORTED_AT" && img.imported_at)
+    return formatCompactDatetime(img.imported_at);
+  if (sort.includes("DATE") && img.created_at)
+    return formatCompactDate(img.created_at);
+  const smartScore = getGridSmartScoreValue(img);
+  if (sort.includes("SMART_SCORE") && smartScore !== null)
+    return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
+  if (sort.includes("CHARACTER_LIKENESS") && typeof img.character_likeness === "number")
+    return `≈ ${(img.character_likeness * 100).toFixed(0)}%`;
+  if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
+    return `${(img.text_score * 100).toFixed(0)}%`;
+  if (sort === "TAG_UNCERTAINTY" && typeof img.tag_uncertainty === "number")
+    return `${(img.tag_uncertainty * 100).toFixed(0)}%`;
+  if (sort === "ANOMALY_TAG_UNCERTAINTY" && typeof img.anomaly_tag_uncertainty === "number")
+    return `${(img.anomaly_tag_uncertainty * 100).toFixed(0)}%`;
+  if (sort === "SCORE" && typeof img.score === "number")
+    return `★ ${img.score}`;
+  return null;
+}
+
+const visibleRangeLabel = computed(() => {
+  const images = allGridImages.value;
+  if (!images.length) return null;
+  const firstImg = images[visibleStart.value] ?? images[0];
+  const lastImg = images[Math.max(0, (visibleEnd.value || 1) - 1)];
+  const first = getImageSortLabel(firstImg);
+  if (!first) return null;
+  const last = lastImg && lastImg !== firstImg ? getImageSortLabel(lastImg) : null;
+  if (!last || last === first) return first;
+  return `${first} – ${last}`;
+});
+
+watch(visibleRangeLabel, (label) => {
+  emit("update:visible-range-label", label);
+}, { immediate: true });
+// ────────────────────────────────────────────────────────────────
 
 function prefetchFullImage(img) {
   if (!img || !img.id) return;
@@ -7836,6 +7852,18 @@ function handleEmptyStateReset() {
   max-width: 100%;
 }
 
+/* Format and resolution badges are hover-only */
+.resolution-hover-overlay,
+.thumbnail-id-overlay {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.image-card:hover .resolution-hover-overlay,
+.image-card:hover .thumbnail-id-overlay {
+  opacity: 1;
+}
+
 .thumbnail-reference-badge {
   opacity: 0.65;
   padding: 1px 2px;
@@ -7877,7 +7905,6 @@ function handleEmptyStateReset() {
   z-index: 30;
 }
 .grid-scroll-wrapper {
-  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   width: 100%;
@@ -8077,32 +8104,7 @@ function handleEmptyStateReset() {
 .compact-mode .thumbnail-card {
   padding: 0px 0px 0px 0px;
 }
-/* Accent border overlay on group-boundary cards (top + left, inset, no layout shift) */
-.compact-mode .thumbnail-card:has(.compact-group-label)::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(
-        to right,
-        rgba(var(--v-theme-accent), 0.95),
-        rgba(var(--v-theme-accent), 0) 65%
-      )
-      top / 100% 3px no-repeat,
-    linear-gradient(
-        to bottom,
-        rgba(var(--v-theme-accent), 0.95),
-        rgba(var(--v-theme-accent), 0) 65%
-      )
-      left / 3px 100% no-repeat;
-  pointer-events: none;
-  z-index: 200;
-  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1);
-}
-.compact-mode .thumbnail-card:has(.compact-group-label):hover::before {
-  transform: scale(1.05);
-  z-index: 20;
-}
+
 .compact-mode .thumbnail-img {
   border-radius: 0;
   box-shadow: none;
@@ -8214,10 +8216,37 @@ function handleEmptyStateReset() {
   border-radius: inherit;
 }
 
-.thumbnail-badge--top-left-stack {
+/* Top-left permanent badges column (reference, share, problem) */
+.thumbnail-top-left-badges {
   position: absolute;
-  top: 24px;
+  top: 2px;
   left: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  z-index: 30;
+  pointer-events: auto;
+}
+
+/* Top-right hover badges column (stars, stack) */
+.thumbnail-top-right-badges {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  z-index: 120;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.image-card:hover .thumbnail-top-right-badges {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .thumbnail-placeholder {
@@ -8253,7 +8282,7 @@ function handleEmptyStateReset() {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 6;
+  z-index: 300;
   display: flex;
   align-items: center;
   gap: 0;
