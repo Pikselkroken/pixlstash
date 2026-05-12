@@ -4974,6 +4974,13 @@ defineExpose({
   color: rgba(var(--v-theme-sidebar-text), 0.9);
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .sidebar-view-tab {
+    min-height: 44px;
+    padding: 8px 8px;
+  }
+}
+
 .sidebar-tab-panel {
   margin: 0;
   padding: 0;
@@ -6171,14 +6178,14 @@ defineExpose({
 
 /* For items that never have a thumbnail — keep the icon slot compact */
 .sidebar-list-icon--fixed {
-  width: min(var(--sidebar-thumb-size), 20px) !important;
-  height: min(var(--sidebar-thumb-size), 20px) !important;
+  width: min(var(--sidebar-thumb-size), 24px) !important;
+  height: min(var(--sidebar-thumb-size), 24px) !important;
 }
 
 /* Top-level nav rows (All Pictures, Scrapheap) — slightly larger than --fixed */
 .sidebar-list-icon--toplevel {
-  width: min(var(--sidebar-thumb-size), 22px) !important;
-  height: min(var(--sidebar-thumb-size), 22px) !important;
+  width: min(var(--sidebar-thumb-size), 26px) !important;
+  height: min(var(--sidebar-thumb-size), 26px) !important;
 }
 
 .sidebar-list-icon .v-icon,
@@ -6594,6 +6601,12 @@ defineExpose({
 
   .sidebar-section-header {
     min-height: 48px;
+  }
+
+  .sidebar-all-pictures-row .sidebar-list-item,
+  .sidebar-all-pictures-row .sidebar-list-item.active {
+    min-height: 48px;
+    padding: 6px 10px;
   }
 
   .sidebar-list-icon {

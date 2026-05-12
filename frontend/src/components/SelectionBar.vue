@@ -4302,6 +4302,26 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   color: inherit;
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .selection-bar-overlay {
+    height: 44px;
+    padding: 0 8px;
+  }
+
+  .bar-btn,
+  .bar-split-toggle,
+  .bar-split-menu,
+  .clear-btn,
+  .delete-btn,
+  .stack-btn {
+    min-height: 36px;
+  }
+
+  .bar-split-toggle {
+    min-width: 36px;
+  }
+}
+
 .bar-btn-sort-type {
   max-width: 100px;
   overflow: hidden;
