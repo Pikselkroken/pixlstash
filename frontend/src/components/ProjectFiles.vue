@@ -10,7 +10,7 @@
       @drop.prevent="onDrop"
     >
       <v-icon size="14" class="pf-header-icon"
-        >mdi-folder-multiple-outline</v-icon
+        >mdi-paperclip</v-icon
       >
       <span class="pf-title">Project Files</span>
       <span v-if="files.length > 0" class="pf-count">{{ files.length }}</span>

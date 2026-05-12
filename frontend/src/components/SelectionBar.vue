@@ -828,6 +828,16 @@
           </div>
         </v-menu>
       </div>
+      <!-- Centre: visible range label -->
+      <div class="selection-bar-center">
+        <transition name="range-label-fade" mode="out-in">
+          <span
+            v-if="gb?.visibleRangeLabel?.value"
+            :key="gb.visibleRangeLabel.value"
+            class="visible-range-pill"
+          >{{ gb.visibleRangeLabel.value }}</span>
+        </transition>
+      </div>
       <div class="selection-bar-right">
         <span
           v-if="visible && selectedFaceCount > 0"
@@ -2080,18 +2090,6 @@ const gbShowFaceBboxesModel = computed({
     if (gb?.showFaceBboxes) gb.showFaceBboxes.value = Boolean(v);
   },
 });
-const gbShowFormatModel = computed({
-  get: () => gb?.showFormat?.value ?? true,
-  set: (v) => {
-    if (gb?.showFormat) gb.showFormat.value = Boolean(v);
-  },
-});
-const gbShowResolutionModel = computed({
-  get: () => gb?.showResolution?.value ?? true,
-  set: (v) => {
-    if (gb?.showResolution) gb.showResolution.value = Boolean(v);
-  },
-});
 const gbShowProblemIconModel = computed({
   get: () => gb?.showProblemIcon?.value ?? true,
   set: (v) => {
@@ -2123,32 +2121,6 @@ const gbOverlayOptions = computed(() => [
       },
       set value(v) {
         gbShowFaceBboxesModel.value = v;
-      },
-    },
-  },
-  {
-    key: "format",
-    label: "Format",
-    icon: "mdi-file-image",
-    model: {
-      get value() {
-        return gbShowFormatModel.value;
-      },
-      set value(v) {
-        gbShowFormatModel.value = v;
-      },
-    },
-  },
-  {
-    key: "res",
-    label: "Resolution",
-    icon: "mdi-aspect-ratio",
-    model: {
-      get value() {
-        return gbShowResolutionModel.value;
-      },
-      set value(v) {
-        gbShowResolutionModel.value = v;
       },
     },
   },
@@ -3029,6 +3001,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  position: relative;
 }
 .selection-bar-left {
   display: flex;
@@ -3058,6 +3031,38 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
+}
+.selection-bar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.visible-range-pill {
+  background: rgba(var(--v-theme-surface), 0.88);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
+  border-radius: 999px;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 10px;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 1px 4px rgba(var(--v-theme-shadow), 0.2);
+  pointer-events: none;
+  user-select: none;
+}
+.range-label-fade-enter-active,
+.range-label-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+.range-label-fade-enter-from,
+.range-label-fade-leave-to {
+  opacity: 0;
 }
 .clear-btn {
   display: inline-flex;

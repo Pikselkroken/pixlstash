@@ -950,6 +950,21 @@ async function projectDeleted(deletedId) {
   await fetchSidebarData();
 }
 
+async function deleteProjectById(project) {
+  if (
+    !window.confirm(
+      `Delete project "${project.name}"? This will remove all its people, sets, and attachments.`,
+    )
+  )
+    return;
+  try {
+    await apiClient.delete(`${props.backendUrl}/projects/${project.id}`);
+    await projectDeleted(project.id);
+  } catch (e) {
+    alert("Failed to delete project: " + (e.message || e));
+  }
+}
+
 const sortedProjects = computed(() =>
   [...projects.value].sort((a, b) =>
     a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
@@ -1148,6 +1163,13 @@ const sidebarThumbnailSizeModel = computed({
     emit("update:sidebar-thumbnail-size", snapped);
   },
 });
+
+const sidebarFolderRootIconSize = computed(() =>
+  Math.round(sidebarThumbnailSizeModel.value * 0.75),
+);
+const sidebarFolderChildIconSize = computed(() =>
+  Math.round(sidebarThumbnailSizeModel.value * 0.5),
+);
 
 const dateFormatModel = computed({
   get: () => props.dateFormat ?? "locale",
@@ -3233,16 +3255,13 @@ defineExpose({
               Add folder
             </v-btn>
           </div>
-          <div v-else class="sidebar-folders-list">
+          <div v-else class="sidebar-folders-list"
+            :style="{ '--sidebar-folder-child-icon-size': sidebarFolderChildIconSize + 'px' }">
             <div
               v-if="referenceFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--ref"
               @click="referenceFoldersCollapsed = !referenceFoldersCollapsed"
             >
-              <v-icon size="14" class="sidebar-folder-section-chevron">{{
-                referenceFoldersCollapsed ? 'mdi-chevron-right' : 'mdi-chevron-down'
-              }}</v-icon>
-              <v-icon size="14" class="sidebar-folder-section-icon">mdi-folder-network-outline</v-icon>
               <div class="sidebar-folder-section-title">Reference folders</div>
               <v-icon
                 v-if="selectedReferenceFolderForHeader"
@@ -3255,6 +3274,11 @@ defineExpose({
               >
                 mdi-pencil-outline
               </v-icon>
+              <v-icon
+                class="sidebar-project-tree-expand-indicator"
+                :class="{ expanded: !referenceFoldersCollapsed }"
+                size="14"
+              >mdi-chevron-down</v-icon>
             </div>
             <div
               v-for="rf in referenceFolders"
@@ -3398,10 +3422,6 @@ defineExpose({
               class="sidebar-folder-section-header sidebar-folder-section-header--import"
               @click="importFoldersCollapsed = !importFoldersCollapsed"
             >
-              <v-icon size="14" class="sidebar-folder-section-chevron">{{
-                importFoldersCollapsed ? 'mdi-chevron-right' : 'mdi-chevron-down'
-              }}</v-icon>
-              <v-icon size="14" class="sidebar-folder-section-icon">mdi-folder-download-outline</v-icon>
               <div class="sidebar-folder-section-title">Import folders</div>
               <v-icon
                 v-if="selectedImportFolderForHeader"
@@ -3414,6 +3434,11 @@ defineExpose({
               >
                 mdi-pencil-outline
               </v-icon>
+              <v-icon
+                class="sidebar-project-tree-expand-indicator"
+                :class="{ expanded: !importFoldersCollapsed }"
+                size="14"
+              >mdi-chevron-down</v-icon>
             </div>
             <div
               v-for="importFolder in importFolders"
@@ -3877,25 +3902,21 @@ defineExpose({
                         !props.hasFolderFilter,
                     },
                   ]"
-                  @click="selectProjectNode(p)"
+                  @click="selectProjectNode(p); toggleProjectExpanded(p.id)"
                   @contextmenu.prevent="
                     !isReadOnly && openSidebarCtxMenu('project', p, $event)
                   "
                 >
-                  <v-icon
-                    class="sidebar-project-tree-chevron"
-                    size="14"
-                    @click.stop="toggleProjectExpanded(p.id)"
-                    >{{
-                      expandedProjectIds.has(p.id)
-                        ? "mdi-chevron-down"
-                        : "mdi-chevron-right"
-                    }}</v-icon
-                  >
-                  <v-icon size="14" class="sidebar-project-tree-icon"
-                    >mdi-folder-outline</v-icon
-                  >
-                  <span class="sidebar-project-tree-label">{{ p.name }}</span>
+                  <span class="sidebar-project-tree-name-group">
+                    <span class="sidebar-project-tree-label">{{ p.name }}</span>
+                    <v-icon
+                      class="sidebar-project-tree-expand-indicator"
+                      :class="{ expanded: expandedProjectIds.has(p.id) }"
+                      size="14"
+                      @click.stop="toggleProjectExpanded(p.id)"
+                      >mdi-chevron-down</v-icon
+                    >
+                  </span>
                   <v-icon
                     v-if="sharedProjectIds.has(p.id)"
                     size="11"
@@ -3918,6 +3939,14 @@ defineExpose({
                       @click.stop="exportProject(p)"
                       title="Export project as ZIP"
                       >mdi-download-outline</v-icon
+                    >
+                    <v-icon
+                      v-if="!isReadOnly"
+                      size="13"
+                      class="sidebar-project-tree-action-btn sidebar-project-tree-action-btn--danger"
+                      @click.stop="deleteProjectById(p)"
+                      title="Delete project"
+                      >mdi-trash-can-outline</v-icon
                     >
                   </span>
                   <span class="sidebar-list-count">{{
@@ -3943,7 +3972,6 @@ defineExpose({
                             : "mdi-chevron-down"
                         }}</v-icon
                       >
-                      <v-icon size="14" class="sidebar-project-tree-subheader-icon">mdi-account-multiple-outline</v-icon>
                       <span class="sidebar-project-tree-subheader-label"
                         >People</span
                       >
@@ -4140,7 +4168,6 @@ defineExpose({
                             : "mdi-chevron-down"
                         }}</v-icon
                       >
-                      <v-icon size="14" class="sidebar-project-tree-subheader-icon">mdi-layers-outline</v-icon>
                       <span class="sidebar-project-tree-subheader-label"
                         >Sets</span
                       >
@@ -4304,6 +4331,7 @@ defineExpose({
                   <div
                     v-if="!isReadOnly || sessionContext?.include_attachments"
                     class="sidebar-project-tree-subsection sidebar-project-tree-files"
+                    :style="{ '--sidebar-tree-icon-size': sidebarThumbnailSizeModel + 'px' }"
                   >
                     <ProjectFiles
                       :projectId="p.id"
@@ -4542,6 +4570,17 @@ defineExpose({
             >mdi-link-variant-off</v-icon
           >
           Remove all shares
+        </button>
+        <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="
+            deleteProjectById(sidebarCtxProject);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-trash-can-outline</v-icon>
+          Delete
         </button>
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
@@ -5006,12 +5045,10 @@ defineExpose({
   flex-direction: column;
   margin-bottom: 6px;
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
-  padding-top: 8px;
 }
 
 .sidebar-project-tree-node:first-child {
   border-top: none;
-  padding-top: 2px;
 }
 
 .sidebar-project-tree-row {
@@ -5019,20 +5056,22 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 0 var(--sidebar-right-edge, 8px) 0 8px;
-  min-height: 32px;
+  min-height: 28px;
   cursor: pointer;
   border-left: 3px solid transparent;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
   border-radius: 0;
+  background: rgba(var(--v-theme-sidebar-text), 0.05);
   transition:
     background 0.12s,
     color 0.12s,
     border-color 0.12s;
-  color: rgb(var(--v-theme-sidebar-text));
+  color: rgba(var(--v-theme-sidebar-text), 0.7);
   position: relative;
 }
 
 .sidebar-project-tree-row:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgba(var(--v-theme-sidebar-text), 0.92);
 }
 
@@ -5048,10 +5087,20 @@ defineExpose({
   color: rgb(var(--v-theme-on-primary));
 }
 
-.sidebar-project-tree-chevron {
+.sidebar-project-tree-expand-indicator {
   flex-shrink: 0;
-  opacity: 0.6;
+  opacity: 0.5;
   color: inherit;
+  transform: rotate(-90deg);
+  transition: transform 0.15s, opacity 0.12s;
+}
+
+.sidebar-project-tree-expand-indicator.expanded {
+  transform: rotate(0deg);
+}
+
+.sidebar-project-tree-row:hover .sidebar-project-tree-expand-indicator {
+  opacity: 0.9;
 }
 
 .sidebar-project-tree-icon {
@@ -5060,14 +5109,24 @@ defineExpose({
   color: inherit;
 }
 
-.sidebar-project-tree-label {
+.sidebar-project-tree-name-group {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.sidebar-project-tree-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.9rem;
+  font-size: 0.7rem;
   font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .sidebar-project-tree-actions {
@@ -5092,6 +5151,10 @@ defineExpose({
   opacity: 1;
 }
 
+.sidebar-project-tree-action-btn--danger:hover {
+  color: rgb(var(--v-theme-error));
+}
+
 /* Sub-sections under an expanded project */
 .sidebar-project-tree-subsection {
   display: flex;
@@ -5102,11 +5165,11 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 3px 0 3px 22px;
+  padding: 2px 0 2px 10px;
   padding-right: var(--sidebar-header-action-right-edge) !important;
-  min-height: 28px;
+  min-height: 24px;
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.8);
+  color: rgba(var(--v-theme-sidebar-text), 0.4);
   transition: color 0.12s;
   user-select: none;
 }
@@ -5130,25 +5193,26 @@ defineExpose({
 
 .sidebar-project-tree-subheader-icon {
   flex-shrink: 0;
-  opacity: 0.7;
+  opacity: 0.6;
   color: inherit;
 }
 
 .sidebar-project-tree-subheader-label {
-  font-size: 0.9rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: inherit;
   flex: 1;
 }
 
 /* Child items indented under a project sub-section */
 .sidebar-project-tree-child {
-  padding-left: 38px !important;
+  padding-left: 16px !important;
 }
 
 .sidebar-project-tree-empty {
-  padding: 2px 8px 2px 28px;
+  padding: 2px 8px 2px 20px;
   font-size: 0.72rem;
   color: rgba(var(--v-theme-sidebar-text), 0.35);
   font-style: italic;
@@ -5448,7 +5512,7 @@ defineExpose({
   --sidebar-thumb-size: 24px;
   --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 4px);
   --sidebar-space-y: 2px;
-  --sidebar-item-radius: 3px;
+  --sidebar-item-radius: 25%;
   color: rgb(var(--v-theme-sidebar-text));
   background: rgb(var(--v-theme-sidebar));
   padding: 0;
@@ -5790,6 +5854,10 @@ defineExpose({
   flex-shrink: 0;
   color: rgba(var(--v-theme-sidebar-text), 0.4);
   transition: transform 0.15s;
+}
+
+.sidebar-section-header-icon {
+  display: none;
 }
 
 .fade-enter-active,
@@ -6434,8 +6502,10 @@ defineExpose({
   min-height: calc(min(var(--sidebar-thumb-size), 22px) + 6px) !important;
   padding-top: 3px !important;
   padding-bottom: 3px !important;
-  font-weight: 500;
-  color: rgba(var(--v-theme-sidebar-text), 0.88);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: rgba(var(--v-theme-sidebar-text), 0.7);
 }
 
 .sidebar-all-pictures-row.drag-over-project {
@@ -6522,28 +6592,33 @@ defineExpose({
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
 }
 
+/* Add folder button in the folders tab needs no bottom divider — section headers do that job */
+.sidebar-tab-panel > .sidebar-project-tree-add {
+  border-bottom: none;
+}
+
 .sidebar-folder-section-header {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px var(--sidebar-right-edge, 8px) 4px 8px;
+  padding: 0 var(--sidebar-right-edge, 8px) 0 8px;
   min-height: 28px;
   cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
+  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  background: rgba(var(--v-theme-sidebar-text), 0.05);
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
-  margin-top: 6px;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
   border-left: 3px solid transparent;
   user-select: none;
   transition: background 0.12s, color 0.12s;
 }
 
 .sidebar-folder-section-header:first-child {
-  margin-top: 0;
   border-top: none;
 }
 
 .sidebar-folder-section-header:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgba(var(--v-theme-sidebar-text), 0.92);
 }
 
@@ -6561,8 +6636,13 @@ defineExpose({
 
 .sidebar-folder-section-title {
   flex: 1 1 auto;
-  font-size: 0.9rem;
+  font-size: 0.7rem;
   font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: inherit;
 }
 
@@ -6592,7 +6672,7 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px 3px 22px;
+  padding: 3px 8px 3px 10px;
   cursor: pointer;
   color: rgba(var(--v-theme-sidebar-text), 0.8);
   user-select: none;
@@ -6602,9 +6682,7 @@ defineExpose({
 }
 
 .sidebar-folder-root-row {
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
+  font-size: 0.82rem;
 }
 
 .sidebar-folder-row:hover {
@@ -6626,7 +6704,7 @@ defineExpose({
 .sidebar-folder-children {
   padding-left: 4px;
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: 30px;
+  margin-left: 18px;
 }
 
 .sidebar-folder-label {
@@ -6641,6 +6719,18 @@ defineExpose({
 .sidebar-folder-icon {
   flex-shrink: 0;
   opacity: 0.7;
+}
+
+/* All folder icons fixed at 16px regardless of thumbnail size */
+.sidebar-folders-list :deep(.sidebar-folder-icon) {
+  font-size: 16px !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+.sidebar-folders-list :deep(.sidebar-folder-chevron) {
+  font-size: 16px !important;
+  width: 16px !important;
+  height: 16px !important;
 }
 
 .sidebar-folder-status-badge {
@@ -6840,14 +6930,15 @@ defineExpose({
 
 /* Override ProjectFiles header inside the project tree to match subheader style */
 .sidebar-project-tree-files .pf-header {
-  min-height: 28px !important;
-  padding: 3px 0 3px 22px !important;
+  min-height: 24px !important;
+  padding: 2px 0 2px 10px !important;
   padding-right: var(--sidebar-header-action-right-edge) !important;
-  font-size: 0.9rem !important;
+  font-size: 0.68rem !important;
   font-weight: 700 !important;
-  letter-spacing: 0.03em !important;
+  letter-spacing: 0.07em !important;
   gap: 3px !important;
-  color: rgba(var(--v-theme-sidebar-text), 0.8) !important;
+  color: rgba(var(--v-theme-sidebar-text), 0.4) !important;
+  text-transform: uppercase !important;
   transition: color 0.12s !important;
   user-select: none !important;
 }
@@ -6858,17 +6949,14 @@ defineExpose({
 }
 
 .sidebar-project-tree-files .pf-header-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-  color: inherit !important;
-  font-size: 14px !important;
-  margin-right: 0 !important;
+  display: none !important;
 }
 
 .sidebar-project-tree-files .pf-title {
-  font-size: 0.9rem !important;
+  font-size: 0.68rem !important;
   font-weight: 700 !important;
-  letter-spacing: 0.03em !important;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase !important;
   flex: 1 !important;
 }
 
