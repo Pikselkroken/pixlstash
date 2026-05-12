@@ -119,7 +119,13 @@ function childImageCount() {
 }
 
 .sidebar-folder-row.active {
-  background: rgba(var(--v-theme-primary), 0.6);
+  background: rgba(var(--v-theme-primary), 0.18);
+  color: rgb(var(--v-theme-on-primary));
+  border-left: 3px solid rgb(var(--v-theme-primary));
+}
+
+.sidebar-folder-row.active:hover {
+  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-primary));
 }
 

@@ -311,19 +311,6 @@
           </div>
         </v-menu>
 
-        <v-btn
-          v-if="!isMobile && !isReadOnly"
-          icon
-          :color="scrapheapActive ? 'error' : 'surface'"
-          title="Scrapheap"
-          class="toolbar-action-btn"
-          @click="emit('open-scrapheap')"
-        >
-          <v-icon :color="scrapheapActive ? 'on-error' : 'on-background'"
-            >mdi-trash-can-outline</v-icon
-          >
-        </v-btn>
-
         <div
           :class="[
             'toolbar-stats-btn-wrap',
