@@ -1409,7 +1409,7 @@
           title="Clear selection (ESC)"
         >
           <v-icon size="14" color="primary">mdi-close</v-icon>
-          <span class="bar-btn-clear-label">Clear</span>
+          <span class="bar-btn-clear-label">Deselect</span>
         </button>
         <button
           v-if="!isReadOnly"
