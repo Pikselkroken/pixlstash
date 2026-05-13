@@ -14,7 +14,7 @@ import Root from './Root.vue'
 const pixlStashLight = {
   dark: false,
   colors: {
-    'sidebar': '#696f76',
+    'sidebar': '#595f66',
     'sidebar-text': '#f2f5fa',
     'toolbar': '#c0c3c5',
     'toolbar-text': '#393f46',

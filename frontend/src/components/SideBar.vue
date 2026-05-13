@@ -4901,14 +4901,14 @@ defineExpose({
 .sidebar-view-tabs-row {
   display: flex;
   align-items: center;
-  padding: 0px 4px 0px 4px;
+  padding: 0px 4px 2px 4px;
   position: relative;
   z-index: 1;
   margin-top: 0;
   margin-bottom: 0;
   gap: 0;
-  background: rgba(var(--v-theme-shadow), 0.44);
-  border-bottom: 1px solid rgba(var(--v-theme-sidebar-text), 0.1);
+  background: transparent;
+  border-bottom: none;
 }
 
 .sidebar-view-tabs-icon {
@@ -5095,7 +5095,7 @@ defineExpose({
   border-left: 3px solid transparent;
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
   border-radius: 0;
-  background: rgba(var(--v-theme-sidebar-text), 0.05);
+  background: transparent;
   transition:
     background 0.12s,
     color 0.12s,
@@ -5597,7 +5597,7 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   padding: 4px 4px 4px 2px;
-  background: rgba(var(--v-theme-shadow), 0.44);
+  background: transparent;
 }
 
 .sidebar-brand-left {
@@ -5952,7 +5952,7 @@ defineExpose({
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  background: rgba(var(--v-theme-shadow), 0.07);
+  background: transparent;
 }
 
 .sidebar-scroll::-webkit-scrollbar {
@@ -6662,7 +6662,7 @@ defineExpose({
   min-height: 28px;
   cursor: pointer;
   color: rgba(var(--v-theme-sidebar-text), 0.7);
-  background: rgba(var(--v-theme-sidebar-text), 0.05);
+  background: transparent;
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
   border-left: 3px solid transparent;
