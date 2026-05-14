@@ -20,7 +20,7 @@ from sqlmodel import (
     select,
     Session,
 )
-from typing import ClassVar, Optional, List, TYPE_CHECKING
+from typing import ClassVar, Optional, List, Union, TYPE_CHECKING
 
 from .character import Character
 from .face import Face
@@ -744,15 +744,19 @@ class Picture(SQLModel, table=True):
         file_path_prefix: Optional[str] = None,
         guest_session_id: Optional[str] = None,
         guest_token_id: Optional[int] = None,
+        count_only: bool = False,
         **search,
-    ) -> List["Picture"]:
+    ) -> Union[List["Picture"], int]:
         """
         Find pictures based on provided filters.
+
+        When count_only=True, returns the integer count of matching pictures
+        instead of the picture objects.  Sort, offset, and limit are ignored.
         """
-        query = select(cls)
+        query = select(func.count(cls.id)) if count_only else select(cls)
 
         logger.debug("Got search parameters: %s", search)
-        if select_fields:
+        if select_fields and not count_only:
             # Always include 'id' in select_fields
             select_fields = list(set(select_fields) | {"id"})
             # Use load_only for scalar fields
@@ -1000,7 +1004,7 @@ class Picture(SQLModel, table=True):
         elif comfyui_conditions:
             query = query.where(or_(*comfyui_conditions))
 
-        if sort_mech:
+        if sort_mech and not count_only:
             if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
                 # Sort by width * height
                 if sort_mech.descending:
@@ -1041,8 +1045,11 @@ class Picture(SQLModel, table=True):
                         query = query.order_by(field.desc(), cls.id.desc())
                     else:
                         query = query.order_by(field.asc(), cls.id.asc())
-        if offset > 0 or limit != sys.maxsize:
+        if not count_only and (offset > 0 or limit != sys.maxsize):
             query = query.offset(offset).limit(limit)
+
+        if count_only:
+            return session.execute(query).scalar_one()
 
         return session.exec(query).all()
 
