@@ -199,10 +199,6 @@ body {
     opacity: 0;
   }
 
-  .main-content {
-    height: calc(100dvh - 60px);
-  }
-
   .main-area.sidebar-hidden {
     border-left: 4px solid rgb(var(--v-theme-sidebar));
   }

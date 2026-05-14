@@ -22,7 +22,6 @@ import SideBar from "./components/SideBar.vue";
 import PhotosImportDialog from "./components/PhotosImportDialog.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import SearchOverlay from "./components/SearchOverlay.vue";
-import Toolbar from "./components/Toolbar.vue";
 import StatsSidebar from "./components/StatsSidebar.vue";
 
 const BACKEND_URL = API_BASE_URL;
@@ -1455,6 +1454,48 @@ provide("gridBarState", {
   collapseAllStacks: handleCollapseAllStacks,
   visibleRangeLabel,
 });
+
+// Toolbar state – shared with SelectionBar via provide/inject so toolbar items
+// can live in the combined bar without threading props through ImageGrid.
+// ---------------------------------------------------------------------------
+provide("toolbarState", {
+  sidebarVisible,
+  isMobile,
+  statsOpen,
+  searchInput,
+  isSearchHistoryOpen,
+  filteredSearchHistory,
+  searchOverlayVisible,
+  exportMenuOpen,
+  exportCount,
+  exportType,
+  exportCaptionMode,
+  exportTagFormat,
+  exportIncludeCharacterName,
+  exportUseOriginalFileNames,
+  exportResolution,
+  exportTypeLocksCaptions,
+  exportCaptionOptions,
+  exportTypeOptions,
+  exportResolutionOptions,
+  exportTagFormatOptions,
+  toggleSidebar: () => {
+    sidebarVisible.value = !sidebarVisible.value;
+  },
+  toggleStats: () => {
+    statsOpen.value = !statsOpen.value;
+    saveStatsOpen(statsOpen.value);
+  },
+  openSearchOverlay,
+  commitSearch,
+  clearSearch: handleClearSearch,
+  applySearchHistory,
+  clearSearchHistory,
+  openSettings: openSettingsDialog,
+  openImport: openImportDialog,
+  confirmExportZip,
+  comfyuiRunGrid: handleComfyuiRunGrid,
+});
 </script>
 <template>
   <v-app>
@@ -1575,53 +1616,6 @@ provide("gridBarState", {
           ]"
           ref="mainAreaRef"
         >
-          <Toolbar
-            ref="toolbarRef"
-            :isMobile="isMobile"
-            :sidebarVisible="sidebarVisible"
-            :searchOverlayVisible="searchOverlayVisible"
-            :isSearchActive="Boolean(searchQuery && searchQuery.trim())"
-            :filteredSearchHistory="filteredSearchHistory"
-            :exportCount="exportCount"
-            :exportCaptionOptions="exportCaptionOptions"
-            :exportTypeOptions="exportTypeOptions"
-            :exportResolutionOptions="exportResolutionOptions"
-            :exportTagFormatOptions="exportTagFormatOptions"
-            :exportTypeLocksCaptions="exportTypeLocksCaptions"
-            :backendUrl="BACKEND_URL"
-            :comfyuiConfigured="comfyuiConfigured"
-            v-model:searchInput="searchInput"
-            v-model:isSearchHistoryOpen="isSearchHistoryOpen"
-            v-model:exportMenuOpen="exportMenuOpen"
-            v-model:exportType="exportType"
-            v-model:exportCaptionMode="exportCaptionMode"
-            v-model:exportTagFormat="exportTagFormat"
-            v-model:exportResolution="exportResolution"
-            v-model:exportIncludeCharacterName="exportIncludeCharacterName"
-            v-model:exportUseOriginalFileNames="exportUseOriginalFileNames"
-            @open-search-overlay="openSearchOverlay"
-            :statsOpen="statsOpen"
-            :scrapheapActive="selectedCharacter === SCRAPHEAP_PICTURES_ID"
-            @toggle-sidebar="sidebarVisible = !sidebarVisible"
-            @toggle-stats="
-              statsOpen = !statsOpen;
-              saveStatsOpen(statsOpen);
-            "
-            @commit-search="commitSearch"
-            @clear-search="handleClearSearch"
-            @apply-search-history="applySearchHistory"
-            @clear-search-history="clearSearchHistory"
-            @confirm-export-zip="confirmExportZip"
-            @open-settings="openSettingsDialog"
-            @open-import="openImportDialog"
-            @open-scrapheap="
-              handleSelectCharacter({
-                id: SCRAPHEAP_PICTURES_ID,
-                label: 'Scrapheap',
-              })
-            "
-            @comfyui-run-grid="handleComfyuiRunGrid"
-          />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
             style="margin-top: 0; flex-direction: row; align-items: stretch"
@@ -1816,6 +1810,10 @@ provide("gridBarState", {
               "
               @update:resolutionBucketFilter="
                 (v) => (resolutionBucketFilter = v)
+              "
+              @toggle="
+                statsOpen = !statsOpen;
+                saveStatsOpen(statsOpen);
               "
             />
           </div>

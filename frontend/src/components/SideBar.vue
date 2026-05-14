@@ -2941,9 +2941,10 @@ defineExpose({
         </div>
       </div>
       <v-btn
+        v-if="!props.collapsed"
         icon
         class="sidebar-brand-toggle"
-        :title="props.collapsed ? 'Show sidebar' : 'Hide sidebar'"
+        :title="'Hide sidebar'"
         @click.stop="emit('toggle-sidebar')"
       >
         <v-icon>mdi-dock-left</v-icon>
