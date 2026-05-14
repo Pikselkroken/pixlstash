@@ -267,12 +267,35 @@ const sidebarCtxCharacter = ref(null); // { id, name } or null
 const sidebarCtxSet = ref(null); // { id, name, set_icon, set_color } or null
 const setCtxIconMenuOpen = ref(false);
 const setCtxColorMenuOpen = ref(false);
-const setCtxAppearanceMenuPos = ref({ top: 0, left: 0 });
+const setCtxAppearanceMenuPos = ref({ top: 0, left: 0, openUp: false });
 const sidebarCtxFolder = ref(null); // reference folder object or null
 const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
+
+// Computed style for the main context menu — opens upward when near the bottom.
+const sidebarCtxMenuStyle = computed(() => {
+  const MENU_W = 165;
+  const MENU_H = 190; // actual menu height estimate
+  const x = Math.min(sidebarCtxX.value, window.innerWidth - MENU_W - 8);
+  if (sidebarCtxY.value + MENU_H > window.innerHeight - 8) {
+    return {
+      left: x + "px",
+      bottom: window.innerHeight - sidebarCtxY.value + "px",
+    };
+  }
+  return { left: x + "px", top: sidebarCtxY.value + "px" };
+});
+
+// Computed style for the icon/color appearance sub-panels.
+const setCtxAppearanceStyle = computed(() => {
+  const pos = setCtxAppearanceMenuPos.value;
+  if (pos.openUp) {
+    return { left: pos.left + "px", bottom: pos.bottom + "px" };
+  }
+  return { left: pos.left + "px", top: pos.top + "px" };
+});
 const shareNotification = ref(null); // { message, ok } or null — kept for errors only
 let shareNotificationTimer = null;
 
@@ -1583,14 +1606,42 @@ function closeSidebarCtxMenu() {
 function openSetCtxIconMenu(event) {
   setCtxColorMenuOpen.value = false;
   const rect = event.currentTarget.getBoundingClientRect();
-  setCtxAppearanceMenuPos.value = { top: rect.top, left: rect.right + 4 };
+  const PANEL_W = 260;
+  const PANEL_H = 500;
+  const left = Math.max(
+    0,
+    Math.min(rect.right + 4, window.innerWidth - PANEL_W - 8),
+  );
+  if (rect.top + PANEL_H > window.innerHeight - 8) {
+    setCtxAppearanceMenuPos.value = {
+      left,
+      openUp: true,
+      bottom: window.innerHeight - rect.bottom,
+    };
+  } else {
+    setCtxAppearanceMenuPos.value = { left, openUp: false, top: rect.top };
+  }
   setCtxIconMenuOpen.value = true;
 }
 
 function openSetCtxColorMenu(event) {
   setCtxIconMenuOpen.value = false;
   const rect = event.currentTarget.getBoundingClientRect();
-  setCtxAppearanceMenuPos.value = { top: rect.top, left: rect.right + 4 };
+  const PANEL_W = 200;
+  const PANEL_H = 270;
+  const left = Math.max(
+    0,
+    Math.min(rect.right + 4, window.innerWidth - PANEL_W - 8),
+  );
+  if (rect.top + PANEL_H > window.innerHeight - 8) {
+    setCtxAppearanceMenuPos.value = {
+      left,
+      openUp: true,
+      bottom: window.innerHeight - rect.bottom,
+    };
+  } else {
+    setCtxAppearanceMenuPos.value = { left, openUp: false, top: rect.top };
+  }
   setCtxColorMenuOpen.value = true;
 }
 
@@ -4537,7 +4588,7 @@ defineExpose({
     <div
       v-if="sidebarCtxVisible"
       class="sidebar-ctx-menu"
-      :style="{ left: sidebarCtxX + 'px', top: sidebarCtxY + 'px' }"
+      :style="sidebarCtxMenuStyle"
       @contextmenu.prevent
       @mousedown.stop
     >
@@ -4663,10 +4714,7 @@ defineExpose({
           <div
             v-if="setCtxIconMenuOpen"
             class="sidebar-ctx-appearance-panel"
-            :style="{
-              top: setCtxAppearanceMenuPos.top + 'px',
-              left: setCtxAppearanceMenuPos.left + 'px',
-            }"
+            :style="setCtxAppearanceStyle"
             @click.stop
             @mousedown.stop
           >
@@ -4752,10 +4800,7 @@ defineExpose({
           <div
             v-if="setCtxColorMenuOpen"
             class="sidebar-ctx-appearance-panel"
-            :style="{
-              top: setCtxAppearanceMenuPos.top + 'px',
-              left: setCtxAppearanceMenuPos.left + 'px',
-            }"
+            :style="setCtxAppearanceStyle"
             @click.stop
             @mousedown.stop
           >
@@ -7198,6 +7243,8 @@ defineExpose({
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.28);
   padding: 6px 8px 8px;
   user-select: none;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .sidebar-ctx-appearance-label {
