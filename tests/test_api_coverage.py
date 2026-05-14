@@ -198,17 +198,19 @@ def _fake_vault_for_smart_score_completion(remaining_after_batch: int):
             return remaining_after_batch
 
     vault.db = _DB()
-    vault._notify_worker_ids_processed = lambda worker_type, changed: worker_notifications.append(
-        (worker_type, changed)
+    vault._notify_worker_ids_processed = lambda worker_type, changed: (
+        worker_notifications.append((worker_type, changed))
     )
-    vault.notify = lambda event_type, data=None: emitted_events.append((event_type, data))
+    vault.notify = lambda event_type, data=None: emitted_events.append(
+        (event_type, data)
+    )
 
     return vault, worker_notifications, emitted_events
 
 
 def test_smart_score_task_defers_picture_change_notify_until_queue_drains():
-    vault, worker_notifications, emitted_events = _fake_vault_for_smart_score_completion(
-        remaining_after_batch=5
+    vault, worker_notifications, emitted_events = (
+        _fake_vault_for_smart_score_completion(remaining_after_batch=5)
     )
 
     task = SimpleNamespace(
@@ -228,8 +230,8 @@ def test_smart_score_task_defers_picture_change_notify_until_queue_drains():
 
 
 def test_smart_score_task_notifies_picture_change_when_queue_drained():
-    vault, worker_notifications, emitted_events = _fake_vault_for_smart_score_completion(
-        remaining_after_batch=0
+    vault, worker_notifications, emitted_events = (
+        _fake_vault_for_smart_score_completion(remaining_after_batch=0)
     )
 
     task = SimpleNamespace(

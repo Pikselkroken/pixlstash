@@ -338,6 +338,101 @@ def create_router(server) -> APIRouter:
 
         return server.vault.db.run_immediate_read_task(fetch)
 
+    # Palette and icon list kept in sync with the frontend constants.
+    _SET_COLORS = [
+        "#e53935",
+        "#00acc1",
+        "#f4511e",
+        "#039be5",
+        "#ff7043",
+        "#546e7a",
+        "#fb8c00",
+        "#1e88e5",
+        "#fdd835",
+        "#3949ab",
+        "#c0ca33",
+        "#9c27b0",
+        "#7cb342",
+        "#8e24aa",
+        "#43a047",
+        "#d81b60",
+        "#00897b",
+        "#f06292",
+        "#00bfa5",
+        "#6d4c41",
+        "#ff5252",
+        "#00e5ff",
+        "#ff6d00",
+        "#2979ff",
+        "#ffd740",
+        "#651fff",
+        "#64dd17",
+        "#e040fb",
+        "#1de9b6",
+        "#f50057",
+        "#b71c1c",
+        "#006064",
+        "#e65100",
+        "#0d47a1",
+        "#827717",
+        "#4a148c",
+        "#1b5e20",
+        "#880e4f",
+        "#004d40",
+        "#37474f",
+        "#ce93d8",
+        "#ef9a9a",
+        "#81d4fa",
+        "#ff8a65",
+        "#ffb300",
+        "#80cbc4",
+        "#a1887f",
+        "#76ff03",
+    ]
+    _SET_ICONS = [
+        "mdi-star",
+        "mdi-heart",
+        "mdi-camera",
+        "mdi-music",
+        "mdi-run",
+        "mdi-bike",
+        "mdi-hiking",
+        "mdi-pine-tree",
+        "mdi-flower",
+        "mdi-beach",
+        "mdi-airplane",
+        "mdi-city-variant",
+        "mdi-food-apple",
+        "mdi-trophy",
+        "mdi-home",
+        "mdi-bookmark",
+        "mdi-crown",
+        "mdi-silverware-fork-knife",
+        "mdi-briefcase",
+        "mdi-gamepad-variant",
+    ]
+
+    def _auto_assign_icon_color(session, project_id):
+        """Return (icon, color) not already used by sibling sets."""
+        existing = session.exec(
+            select(PictureSet.set_icon, PictureSet.set_color).where(
+                PictureSet.project_id == project_id
+            )
+            if project_id is not None
+            else select(PictureSet.set_icon, PictureSet.set_color)
+        ).all()
+        used_icons = {row[0] for row in existing if row[0] and row[0] != "cards"}
+        used_colors = {row[1] for row in existing if row[1]}
+        icon = next(
+            (i for i in _SET_ICONS if i not in used_icons),
+            _SET_ICONS[len(existing) % len(_SET_ICONS)],
+        )
+        color = next(
+            (c for c in _SET_COLORS if c not in used_colors),
+            _SET_COLORS[len(existing) % len(_SET_COLORS)],
+        )
+        return icon, color
+
     @router.post(
         "/picture_sets",
         summary="Create picture set",
@@ -347,13 +442,20 @@ def create_router(server) -> APIRouter:
         name = payload.get("name")
         description = payload.get("description", "")
         project_id = payload.get("project_id") or None
+        set_icon = payload.get("set_icon", _UNSET)
+        set_color = payload.get("set_color", _UNSET)
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
 
-        def create_set(session, name, description, project_id):
+        def create_set(session, name, description, project_id, set_icon, set_color):
             _ensure_unique_set_name(session, name, project_id)
+            auto_icon, auto_color = _auto_assign_icon_color(session, project_id)
             picture_set = PictureSet(
-                name=name, description=description, project_id=project_id
+                name=name,
+                description=description,
+                project_id=project_id,
+                set_icon=set_icon if set_icon is not _UNSET else auto_icon,
+                set_color=set_color if set_color is not _UNSET else auto_color,
             )
             session.add(picture_set)
             session.commit()
@@ -361,7 +463,13 @@ def create_router(server) -> APIRouter:
             return picture_set.dict()
 
         set_dict = server.vault.db.run_task(
-            create_set, name, description, project_id, priority=DBPriority.IMMEDIATE
+            create_set,
+            name,
+            description,
+            project_id,
+            set_icon,
+            set_color,
+            priority=DBPriority.IMMEDIATE,
         )
         return {"status": "success", "picture_set": set_dict}
 
@@ -867,6 +975,8 @@ def create_router(server) -> APIRouter:
         name = payload.get("name")
         description = payload.get("description")
         raw_project_id = payload.get("project_id", _UNSET)
+        set_icon = payload.get("set_icon", _UNSET)
+        set_color = payload.get("set_color", _UNSET)
         project_id = raw_project_id
         if raw_project_id is not _UNSET:
             if raw_project_id is None:
@@ -879,7 +989,7 @@ def create_router(server) -> APIRouter:
                         status_code=400, detail="Invalid project_id"
                     ) from exc
 
-        def update_set(session, id, name, description, project_id):
+        def update_set(session, id, name, description, project_id, set_icon, set_color):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
@@ -918,6 +1028,10 @@ def create_router(server) -> APIRouter:
 
             if project_id_changed:
                 picture_set.project_id = project_id
+            if set_icon is not _UNSET:
+                picture_set.set_icon = set_icon
+            if set_color is not _UNSET:
+                picture_set.set_color = set_color
 
             # Always reconcile member picture memberships when an explicit
             # non-null project assignment is requested. This keeps set
@@ -963,7 +1077,14 @@ def create_router(server) -> APIRouter:
             return True, project_id_changed or pictures_changed
 
         success, project_changed = server.vault.db.run_task(
-            update_set, id, name, description, project_id, priority=DBPriority.IMMEDIATE
+            update_set,
+            id,
+            name,
+            description,
+            project_id,
+            set_icon,
+            set_color,
+            priority=DBPriority.IMMEDIATE,
         )
         if not success:
             raise HTTPException(status_code=404, detail="Picture set not found")
