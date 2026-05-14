@@ -27,6 +27,7 @@ const importServerStage = ref("");
 const cancelImport = ref(false);
 const currentImportController = ref(null);
 const uploadStallSeconds = ref(0); // seconds elapsed with no byte progress
+const isZipImport = ref(false);
 
 let hideTimerId = null;
 let _stallTimerId = null;
@@ -124,7 +125,13 @@ function finalizeError(message) {
   _stopStallTimer();
   importPhase.value = "error";
   importServerStage.value = "failed";
-  importInProgress.value = false;
+  // Keep the modal open so the user can read the error; auto-dismiss after 30 s.
+  // If the user starts a new import before then, the stale-state guard in
+  // startImport() will reset importInProgress and clear this timer.
+  hideTimerId = setTimeout(() => {
+    importInProgress.value = false;
+    hideTimerId = null;
+  }, 30000);
   importError.value = message;
   cancelImport.value = false;
   currentImportController.value = null;
@@ -175,6 +182,8 @@ async function startImport(files, options = {}) {
   importInProgress.value = true;
   importProgress.value = 0;
   importTotal.value = files.length;
+  isZipImport.value =
+    files.length === 1 && files[0].name.toLowerCase().endsWith(".zip");
   uploadBytesUploaded.value = 0;
   uploadBytesTotal.value = files.reduce((sum, f) => sum + (f.size || 0), 0);
   importError.value = null;
@@ -196,6 +205,9 @@ async function startImport(files, options = {}) {
   const MAX_RETRIES = 3;
   const MIN_TIMEOUT_MS = 60000;
   const TIMEOUT_PER_FILE_MS = 4000;
+  // 100 ms per MB = ~10 MB/s minimum upload speed assumption.
+  // This ensures a 16 GB zip gets ~27 minutes instead of the 60-second default.
+  const TIMEOUT_PER_MB_MS = 100;
   const NO_PROGRESS_ABORT_MS = 15000;
   const overrideTimeout =
     typeof options.timeoutMs === "number" && options.timeoutMs > 0
@@ -223,7 +235,11 @@ async function startImport(files, options = {}) {
       const batchBytes = batch.reduce((sum, f) => sum + (f.size || 0), 0);
       const batchTimeoutMs =
         overrideTimeout ??
-        Math.max(MIN_TIMEOUT_MS, batch.length * TIMEOUT_PER_FILE_MS);
+        Math.max(
+          MIN_TIMEOUT_MS,
+          batch.length * TIMEOUT_PER_FILE_MS,
+          Math.ceil(batchBytes / (1024 * 1024)) * TIMEOUT_PER_MB_MS,
+        );
       const batchIndex = Math.floor(i / BATCH_SIZE) + 1;
 
       logImportTrace("Uploading batch", {
@@ -409,7 +425,9 @@ async function startImport(files, options = {}) {
       });
 
       taskIds.push(taskId);
-      batchFileCounts.push(batch.length);
+      // Use the server-reported file count (e.g. files inside a zip) so the
+      // progress counter shows the real total instead of "1 archive".
+      batchFileCounts.push(res?.data?.file_count ?? batch.length);
     }
 
     // All bytes are now in flight on the server; mark upload complete.
@@ -418,7 +436,11 @@ async function startImport(files, options = {}) {
 
     // ── Phase 2: Poll all task IDs in parallel until every batch is done ──
     importPhase.value = "processing";
-    importTotal.value = files.length;
+    // Use the server-reported file counts (already set in batchFileCounts above
+    // from file_count in the upload response) rather than files.length, so a
+    // zip import shows the real image count instead of "1".
+    importTotal.value =
+      batchFileCounts.reduce((s, n) => s + n, 0) || files.length;
     importProgress.value = 0;
 
     // Per-task tracking state
@@ -574,7 +596,14 @@ defineExpose({ startImport });
       <div class="import-progress-bar-section">
         <div class="import-progress-bar-label">
           <template v-if="importTotal > 0">
-            Import {{ importProgress }} / {{ importTotal }} images
+            Import {{ importProgress }} / {{ importTotal }}
+            {{
+              importTotal === 1 && isZipImport && importPhase === "uploading"
+                ? "archive"
+                : importTotal === 1
+                  ? "image"
+                  : "images"
+            }}
           </template>
           <template v-else-if="importPhase === 'processing'">
             Waiting for server...
