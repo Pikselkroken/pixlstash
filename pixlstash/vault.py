@@ -517,8 +517,7 @@ class Vault:
                         smart_score_changes,
                     )
                 remaining = int(
-                    self.db.run_immediate_read_task(SmartScoreTask.count_remaining)
-                    or 0
+                    self.db.run_immediate_read_task(SmartScoreTask.count_remaining) or 0
                 )
                 if remaining == 0:
                     self.notify(EventType.CHANGED_PICTURES, picture_ids)

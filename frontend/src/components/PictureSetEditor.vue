@@ -39,6 +39,70 @@
             clearable
             clear-icon="mdi-close"
           />
+
+          <!-- Appearance row -->
+          <div class="appearance-row">
+            <div class="appearance-joint-header">Choose Icon or Thumbnail &amp; Color</div>
+            <div class="appearance-sections">
+              <div class="icon-thumb-box">
+                <!-- Icon grid (ICON_CARDS excluded) -->
+                <div class="icon-grid">
+                <template v-for="cat in SET_ICON_CATEGORIES" :key="cat.label">
+                  <div class="icon-cat-header">{{ cat.label }}</div>
+                  <template v-for="ic in cat.icons.filter(i => i.value !== ICON_CARDS)" :key="ic.value">
+                    <button
+                      class="icon-btn"
+                      :class="{ selected: localSet.set_icon === ic.value }"
+                      :title="ic.label"
+                      @click="localSet.set_icon = ic.value"
+                    >
+                      <v-icon size="22" :color="localSet.set_color || undefined">{{ ic.value }}</v-icon>
+                    </button>
+                  </template>
+                </template>
+              </div>
+              <!-- or divider -->
+              <div class="icon-or-divider">
+                <div class="icon-or-line"></div>
+                <span class="icon-or-text">or</span>
+                <div class="icon-or-line"></div>
+              </div>
+              <!-- Thumbnail aside -->
+              <div class="icon-cards-aside">
+                <div class="icon-cat-header">Thumbnail</div>
+                <button
+                  class="icon-btn--cards-large"
+                  :class="{ selected: localSet.set_icon === ICON_CARDS }"
+                  title="Thumbnail"
+                  @click="localSet.set_icon = ICON_CARDS"
+                >
+                  <img
+                    v-if="props.thumbnailUrl"
+                    :src="props.thumbnailUrl"
+                    class="icon-btn-thumb"
+                    alt="Thumbnail"
+                  />
+                  <v-icon v-else size="32" :color="localSet.set_color || undefined">mdi-layers-triple</v-icon>
+                </button>
+                </div>
+              </div>
+              <!-- Color box -->
+              <div class="color-aside">
+                <div class="icon-cat-header">Color</div>
+                <div class="color-grid">
+                  <button
+                    v-for="col in SET_COLORS"
+                    :key="col.value"
+                    class="color-swatch"
+                    :class="{ selected: localSet.set_color === col.value }"
+                    :style="{ background: col.value }"
+                    :title="col.label"
+                    @click="localSet.set_color = col.value"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </v-card-text>
         <v-card-actions class="editor-footer">
           <v-spacer></v-spacer>
@@ -68,10 +132,12 @@ import {
   VTextarea,
 } from "vuetify/components";
 import { apiClient } from "../utils/apiClient";
+import { SET_ICONS, SET_COLORS, SET_ICON_CATEGORIES, ICON_CARDS } from "../utils/setAppearance";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   set: { type: Object, default: null },
+  thumbnailUrl: { type: String, default: null },
   backendUrl: { type: String, required: true },
   projects: { type: Array, default: () => [] },
 });
@@ -88,6 +154,8 @@ const localSet = ref({
   name: "",
   description: "",
   project_id: null,
+  set_icon: ICON_CARDS,
+  set_color: SET_COLORS[0].value,
 });
 
 const nameInputRef = ref(null);
@@ -122,6 +190,8 @@ watch(
         name: newSet.name || "",
         description: newSet.description || "",
         project_id: newSet.project_id ?? null,
+        set_icon: newSet.set_icon ?? ICON_CARDS,
+        set_color: newSet.set_color ?? SET_COLORS[0].value,
       };
     } else {
       localSet.value = {
@@ -129,6 +199,8 @@ watch(
         name: "",
         description: "",
         project_id: null,
+        set_icon: ICON_CARDS,
+        set_color: SET_COLORS[0].value,
       };
     }
   },
@@ -218,6 +290,198 @@ watch(
   padding: 8px 16px 16px;
 }
 
+/* Appearance pickers */
+.appearance-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.appearance-joint-header {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  opacity: 0.55;
+  line-height: 1;
+}
+
+.appearance-sections {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.icon-thumb-box {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 4px 8px 8px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.color-aside {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 4px 8px 8px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.appearance-label {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.icon-or-divider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  align-self: stretch;
+  padding: 30px 2px;
+  gap: 4px;
+}
+
+.icon-or-line {
+  flex: 1;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.icon-or-text {
+  font-size: 0.6rem;
+  opacity: 0.35;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+
+.icon-section-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.icon-cards-aside {
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.icon-btn--cards-large {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: border-color 0.15s;
+}
+
+.icon-btn--cards-large:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.icon-btn--cards-large.selected {
+  border-color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 32px);
+  column-gap: 1px;
+  row-gap: 2px;
+}
+
+.icon-cat-header {
+  grid-column: 1 / -1;
+  font-size: 0.58rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  opacity: 0.45;
+  padding: 5px 0 2px;
+  line-height: 1;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: border-color 0.15s;
+}
+
+.icon-btn-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 3px;
+  display: block;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.icon-btn.selected {
+  border-color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.color-section-header {
+  display: none;
+}
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 36px);
+  gap: 8px;
+  align-items: start;
+  margin-top: 2px;
+}
+
+.color-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  outline: none;
+  padding: 0;
+  box-sizing: border-box;
+  aspect-ratio: 1 / 1;
+  position: relative;
+  transition: transform 0.12s, border-color 0.12s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.1);
+  z-index: 1;
+}
+
+.color-swatch.selected {
+  border-color: #fff;
+  transform: scale(1.1);
+  z-index: 1;
+}
+
 .btn {
   padding: 10px 24px;
   border: none;
@@ -257,3 +521,4 @@ watch(
   cursor: not-allowed;
 }
 </style>
+

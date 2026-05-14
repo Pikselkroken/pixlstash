@@ -224,7 +224,9 @@ def create_router(server) -> APIRouter:
 
         def fetch(session, ids: list[int]):
             rows = session.exec(
-                select(PictureProjectMember.project_id, PictureProjectMember.picture_id).where(
+                select(
+                    PictureProjectMember.project_id, PictureProjectMember.picture_id
+                ).where(
                     PictureProjectMember.picture_id.in_(ids),
                 )
             ).all()

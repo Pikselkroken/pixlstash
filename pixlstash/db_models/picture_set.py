@@ -47,6 +47,8 @@ class PictureSet(SQLModel, table=True):
     project_id: Optional[int] = Field(
         default=None, foreign_key="project.id", index=True
     )
+    set_icon: Optional[str] = Field(default=None)
+    set_color: Optional[str] = Field(default=None)
 
     # Relationships
     members: List["Picture"] = Relationship(
