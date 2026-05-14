@@ -3029,9 +3029,9 @@ def create_router(server) -> APIRouter:
         file: list[UploadFile] = File(None),
         project_id: int | None = Form(None),
     ):
-        _MAX_UPLOAD_BYTES = 5 * 1024**3  # 5 GB per uploaded file / zip
-        _MAX_ZIP_ENTRIES = 5_000  # max files inside a zip
-        _MAX_ZIP_DECOMPRESSED_BYTES = 10 * 1024**3  # 10 GB total decompressed
+        _MAX_UPLOAD_BYTES = 20 * 1024**3  # 20 GB per uploaded file / zip
+        _MAX_ZIP_ENTRIES = 50_000  # max files inside a zip
+        _MAX_ZIP_DECOMPRESSED_BYTES = 50 * 1024**3  # 50 GB total decompressed
 
         if not server.vault.is_worker_running(TaskType.FACE_EXTRACTION):
             raise HTTPException(
@@ -3068,18 +3068,27 @@ def create_router(server) -> APIRouter:
             for upload in file:
                 if not upload.filename:
                     continue
-                contents = await upload.read()
-                if not contents:
-                    continue
-                if len(contents) > _MAX_UPLOAD_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"Uploaded file '{upload.filename}' exceeds the 2 GB limit.",
-                    )
                 ext = os.path.splitext(upload.filename)[1].lower()
                 if ext == ".zip":
+                    # Work directly from the spooled temp file to avoid loading
+                    # the entire archive as a bytes object in memory (which would
+                    # require as much RAM as the zip is large, e.g. 16+ GB).
+                    upload_file = upload.file
+                    upload_file.seek(0, 2)
+                    upload_size = upload_file.tell()
+                    upload_file.seek(0)
+                    if upload_size == 0:
+                        continue
+                    if upload_size > _MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"Uploaded file '{upload.filename}' exceeds the "
+                                f"{_MAX_UPLOAD_BYTES // 1024 ** 3} GB limit."
+                            ),
+                        )
                     try:
-                        with zipfile.ZipFile(BytesIO(contents)) as zip_file:
+                        with zipfile.ZipFile(upload_file) as zip_file:
                             entries = [i for i in zip_file.infolist() if not i.is_dir()]
                             if len(entries) > _MAX_ZIP_ENTRIES:
                                 raise HTTPException(
@@ -3090,7 +3099,10 @@ def create_router(server) -> APIRouter:
                             if total_decompressed > _MAX_ZIP_DECOMPRESSED_BYTES:
                                 raise HTTPException(
                                     status_code=413,
-                                    detail=f"Zip '{upload.filename}' decompressed size exceeds the 10 GB limit.",
+                                    detail=(
+                                        f"Zip '{upload.filename}' decompressed size exceeds the "
+                                        f"{_MAX_ZIP_DECOMPRESSED_BYTES // 1024 ** 3} GB limit."
+                                    ),
                                 )
                             added = 0
                             for info in entries:
@@ -3127,6 +3139,18 @@ def create_router(server) -> APIRouter:
                             detail="Invalid zip file",
                         ) from exc
                 else:
+                    # Non-zip files are typically small; buffer normally.
+                    contents = await upload.read()
+                    if not contents:
+                        continue
+                    if len(contents) > _MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"Uploaded file '{upload.filename}' exceeds the "
+                                f"{_MAX_UPLOAD_BYTES // 1024 ** 3} GB limit."
+                            ),
+                        )
                     if ext in allowed_caption_exts:
                         stem = _normalise_sidecar_stem(upload.filename)
                         sidecar_text_by_stem.setdefault(
