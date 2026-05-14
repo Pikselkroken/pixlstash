@@ -45,7 +45,7 @@
                   class="bar-btn-sort-secondary"
                   >{{ gbSortSecondaryLabel }}</span
                 >
-                <v-icon size="18">mdi-menu-down</v-icon>
+                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
               </button>
             </div>
           </template>
@@ -207,7 +207,7 @@
               <span v-if="gbActiveFilterCount > 0" class="bar-filter-badge">{{
                 gbActiveFilterCount > 99 ? "99+" : gbActiveFilterCount
               }}</span>
-              <v-icon size="18">mdi-menu-down</v-icon>
+              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="gb-filter-panel">
@@ -769,7 +769,7 @@
               title="View options"
             >
               <v-icon size="19">mdi-view-grid</v-icon>
-              <v-icon size="18">mdi-menu-down</v-icon>
+              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="gb-view-panel">
@@ -865,7 +865,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon"
+              class="bar-btn bar-btn--icon tb-export-btn"
               type="button"
               title="Export current grid to zip"
             >
@@ -1209,186 +1209,13 @@
           </v-menu>
         </div>
         <!-- Selection ▾ dropdown — mirrors the right-click context menu exactly -->
-        <v-menu
-          v-model="selectionMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          transition="scale-transition"
+        <div
+          class="selection-ctx-bar"
+          :class="{ 'selection-ctx-bar--active': selectedCount > 0 }"
         >
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="stack-btn"
-              type="button"
-              :disabled="selectedCount === 0"
-              :title="
-                selectedCount === 0
-                  ? 'Select images to apply actions'
-                  : props.selectedExpandedCount > selectedCount
-                    ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
-                    : `Actions for ${selectedCount} selected`
-              "
-            >
-              <v-icon size="20">mdi-image-multiple-outline</v-icon>
-              <span class="bar-btn-apply-label">({{ selectedCount }})</span>
-              <v-icon size="18">mdi-menu-down</v-icon>
-            </button>
-          </template>
-          <div class="selection-menu-panel">
-            <!-- ── Set / Character / Project ─────────────────────── -->
-            <template v-if="!isScrapheapView && !isReadOnly">
-              <AddToSetControl
-                placement="right"
-                :backend-url="backendUrl"
-                :picture-ids="selectedImageIds"
-                :disabled="selectedCount === 0"
-                @added="$emit('added-to-set', $event)"
-              />
-              <AddToCharacterControl
-                placement="right"
-                :backend-url="backendUrl"
-                :picture-ids="selectedImageIds"
-                :disabled="selectedCount === 0"
-                @added="$emit('add-to-character', $event)"
-                @removed="$emit('remove-from-character', $event)"
-              />
-              <AddToProjectControl
-                placement="right"
-                :backend-url="backendUrl"
-                :picture-ids="selectedImageIds"
-                :disabled="selectedCount === 0"
-                @selected="$emit('set-project', $event)"
-              />
-              <div class="ctx-sep" />
-            </template>
-
-            <!-- ── Stack / Unstack ───────────────────────────────── -->
-            <template v-if="!isScrapheapView && !isReadOnly">
-              <button
-                v-if="showRemoveStackButton"
-                class="ctx-item"
-                title="Remove selected images from their stack"
-                @click="
-                  $emit('remove-from-stack');
-                  selectionMenuOpen = false;
-                "
-              >
-                <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
-                Unstack
-              </button>
-              <button
-                v-else-if="selectedCount > 1"
-                class="ctx-item"
-                title="Create a stack from the selected images"
-                @click="
-                  $emit('create-stack');
-                  selectionMenuOpen = false;
-                "
-              >
-                <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
-                Stack
-              </button>
-              <button
-                v-if="showUnstackMultipleButton"
-                class="ctx-item"
-                title="Dissolve all selected stacks"
-                @click="
-                  $emit('dissolve-stacks');
-                  selectionMenuOpen = false;
-                "
-              >
-                <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
-                Unstack all
-              </button>
-              <button
-                v-if="showGroupStackButton"
-                class="ctx-item"
-                title="Create stacks from selected likeness groups"
-                @click="
-                  $emit('create-stacks-from-groups');
-                  selectionMenuOpen = false;
-                "
-              >
-                <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
-                Stack groups
-              </button>
-              <div v-if="showAnyStackAction" class="ctx-sep" />
-            </template>
-
-            <!-- ── Tag / Filters / ComfyUI ───────────────────────── -->
-            <template v-if="!isScrapheapView && !isReadOnly">
-              <button
-                class="ctx-item"
-                :disabled="selectedCount === 0"
-                title="Tag selected (T)"
-                @click="
-                  openTagInput();
-                  selectionMenuOpen = false;
-                "
-              >
-                <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
-                Tag
-              </button>
-              <button
-                v-if="pluginOptions.length"
-                class="ctx-item"
-                :disabled="selectedCount === 0"
-                @click="
-                  openPluginPanel();
-                  selectionMenuOpen = false;
-                "
-              >
-                <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
-                Filters
-              </button>
-              <button
-                v-if="props.comfyuiConfigured"
-                class="ctx-item"
-                :disabled="selectedCount === 0"
-                @click="
-                  openComfyuiPanel();
-                  selectionMenuOpen = false;
-                "
-              >
-                <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
-                ComfyUI
-              </button>
-              <div class="ctx-sep" />
-            </template>
-
-            <!-- ── Remove / Delete (danger) ──────────────────────── -->
-            <button
-              v-if="showRemoveButton && !isReadOnly"
-              class="ctx-item ctx-item--danger"
-              :disabled="selectedCount === 0"
-              @click="
-                $emit('remove-from-group');
-                selectionMenuOpen = false;
-              "
-            >
-              {{ removeButtonLabel }}
-            </button>
-            <button
-              v-if="!isReadOnly"
-              class="ctx-item ctx-item--danger"
-              :disabled="selectedCount === 0"
-              title="Delete selected items (DEL)"
-              @click="
-                $emit('delete-selected');
-                selectionMenuOpen = false;
-              "
-            >
-              <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
-              {{ deleteButtonLabel }}
-            </button>
-          </div>
-        </v-menu>
-        <div v-if="!isScrapheapView && !isReadOnly" class="plugin-run-controls">
           <v-menu
-            v-model="tagMenuOpen"
+            v-model="selectionMenuOpen"
             :close-on-content-click="false"
-            location-strategy="connected"
             location="bottom end"
             origin="top end"
             transition="scale-transition"
@@ -1396,234 +1223,420 @@
             <template #activator="{ props: menuProps }">
               <button
                 v-bind="menuProps"
-                ref="tagBtnRef"
-                class="hidden-panel-activator"
+                class="stack-btn"
                 type="button"
-                tabindex="-1"
-                aria-hidden="true"
-              ></button>
+                :disabled="selectedCount === 0"
+                :title="
+                  selectedCount === 0
+                    ? 'Select images to apply actions'
+                    : props.selectedExpandedCount > selectedCount
+                      ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
+                      : `Actions for ${selectedCount} selected`
+                "
+              >
+                <v-icon size="20">mdi-image-multiple-outline</v-icon>
+                <span class="bar-btn-apply-label">({{ selectedCount }})</span>
+                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+              </button>
             </template>
-            <div class="plugin-menu-panel tag-panel-wide">
-              <div class="plugin-menu-header">
-                Tag {{ selectedCount }} Image{{
-                  selectedCount !== 1 ? "s" : ""
-                }}
-              </div>
-              <div class="tag-panel-columns">
-                <!-- ── Left column: mini-grid preview ── -->
-                <div
-                  v-if="previewImages.length"
-                  class="tag-preview-column"
-                  :class="[
-                    `tag-preview-column--cols-${previewColumns}`,
-                    previewImages.length === 2
-                      ? 'tag-preview-column--stacked'
-                      : '',
-                  ]"
+            <div class="selection-menu-panel">
+              <!-- ── Set / Character / Project ─────────────────────── -->
+              <template v-if="!isScrapheapView && !isReadOnly">
+                <AddToSetControl
+                  placement="right"
+                  :backend-url="backendUrl"
+                  :picture-ids="selectedImageIds"
+                  :disabled="selectedCount === 0"
+                  @added="$emit('added-to-set', $event)"
+                />
+                <AddToCharacterControl
+                  placement="right"
+                  :backend-url="backendUrl"
+                  :picture-ids="selectedImageIds"
+                  :disabled="selectedCount === 0"
+                  @added="$emit('add-to-character', $event)"
+                  @removed="$emit('remove-from-character', $event)"
+                />
+                <AddToProjectControl
+                  placement="right"
+                  :backend-url="backendUrl"
+                  :picture-ids="selectedImageIds"
+                  :disabled="selectedCount === 0"
+                  @selected="$emit('set-project', $event)"
+                />
+                <div class="ctx-sep" />
+              </template>
+
+              <!-- ── Stack / Unstack ───────────────────────────────── -->
+              <template v-if="!isScrapheapView && !isReadOnly">
+                <button
+                  v-if="showRemoveStackButton"
+                  class="ctx-item"
+                  title="Remove selected images from their stack"
+                  @click="
+                    $emit('remove-from-stack');
+                    selectionMenuOpen = false;
+                  "
                 >
-                  <div class="tag-preview-header">Selected images</div>
-                  <div
-                    class="tag-preview-grid"
-                    :class="[
-                      `tag-preview-grid--cols-${previewColumns}`,
-                      previewImages.length > 1 ? 'tag-preview-grid--multi' : '',
-                    ]"
-                  >
-                    <div
-                      v-for="img in previewImages"
-                      :key="img.id"
-                      class="tag-preview-tile"
-                    >
-                      <img
-                        v-if="img.fullUrl"
-                        :src="img.fullUrl"
-                        class="tag-preview-img"
-                        :alt="String(img.id)"
-                        draggable="false"
-                      />
-                      <div
-                        v-else
-                        class="tag-preview-img tag-preview-img--placeholder"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <!-- ── Right column: tag controls ── -->
-                <div class="plugin-menu-body">
-                  <div v-if="tagDataLoading" class="tag-data-loading">
-                    Loading tags...
-                  </div>
-                  <div
-                    v-else-if="tagsOnAll.length || tagsOnSome.length"
-                    class="tag-current-section"
-                  >
-                    <div class="tag-current-label">
-                      Current tags
-                      <span v-if="tagDataCapped" class="tag-data-capped">
-                        (first {{ MAX_TAG_FETCH }})
-                      </span>
-                    </div>
-                    <div class="tag-chips-row">
-                      <button
-                        v-for="t in tagsOnAll"
-                        :key="'all-' + t.name"
-                        :class="[
-                          'tag-chip',
-                          'tag-chip--all',
-                          { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
-                        ]"
-                        type="button"
-                        :disabled="tagActionLoading.includes(t.name)"
-                        :title="`On all ${totalWithTagData} selected — click to remove`"
-                        @click="removeTagFromAll(t)"
-                      >
-                        <span class="tag-chip-label">{{ t.name }}</span>
-                        <v-icon size="11" class="tag-chip-close"
-                          >mdi-close</v-icon
-                        >
-                      </button>
-                      <button
-                        v-for="t in tagsOnSome"
-                        :key="'some-' + t.name"
-                        :class="[
-                          'tag-chip',
-                          'tag-chip--some',
-                          { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
-                        ]"
-                        type="button"
-                        :disabled="tagActionLoading.includes(t.name)"
-                        :title="`On ${t.count} of ${totalWithTagData} — click to add to all`"
-                        @click="addTagToRemaining(t)"
-                      >
-                        <span class="tag-chip-label">{{ t.name }}</span>
-                        <span class="tag-chip-count"
-                          >{{ t.count }}/{{ totalWithTagData }}</span
-                        >
-                      </button>
-                    </div>
-                    <div class="tag-coverage-filter">
-                      <label class="tag-coverage-label">
-                        Min coverage:
-                        <input
-                          v-model.number="tagMinCoverage"
-                          type="range"
-                          min="1"
-                          :max="Math.max(1, totalWithTagData - 1)"
-                          class="tag-coverage-slider"
-                        />
-                        {{ tagMinCoverage }}/{{ totalWithTagData }}
-                      </label>
-                      <span
-                        v-if="tagsOnSomeHiddenCount"
-                        class="tag-coverage-hidden"
-                      >
-                        {{ tagsOnSomeHiddenCount }} hidden
-                      </span>
-                    </div>
-                  </div>
-                  <div
-                    v-if="aggregatedPredictions.length"
-                    class="tag-current-section"
-                  >
-                    <div class="tag-current-label tag-current-label--clickable">
-                      <button
-                        class="tag-current-toggle"
-                        type="button"
-                        @click="
-                          rejectedTagsCollapsedSB = !rejectedTagsCollapsedSB
-                        "
-                      >
-                        Rejected Tags
-                        <span class="rejected-threshold-label"
-                          >({{
-                            Object.keys(labelThresholdsSB).length
-                              ? "per-tag threshold"
-                              : `> ${(predictionAcceptanceThresholdSB * 100).toFixed(0)}%`
-                          }}
-                          to be auto-applied)</span
-                        >
-                        <v-icon size="12">{{
-                          rejectedTagsCollapsedSB
-                            ? "mdi-chevron-down"
-                            : "mdi-chevron-up"
-                        }}</v-icon>
-                      </button>
-                    </div>
-                    <div
-                      v-show="!rejectedTagsCollapsedSB"
-                      class="tag-chips-row"
-                    >
-                      <button
-                        v-for="p in aggregatedPredictions"
-                        :key="'pred-' + p.tag"
-                        :class="[
-                          'tag-chip',
-                          'tag-chip--prediction',
-                          { 'tag-chip--penalised': isPenalisedTagSB(p.tag) },
-                        ]"
-                        type="button"
-                        :disabled="predActionLoading.includes(p.tag)"
-                        :style="{ '--pred-confidence': p.avgConf }"
-                        :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all`"
-                        @click="confirmPredictionOnAll(p)"
-                      >
-                        <span class="tag-chip-label">{{ p.tag }}</span>
-                        <span class="tag-chip-count"
-                          >{{ p.count }}/{{
-                            fetchedPredictionData.length
-                          }}</span
-                        >
-                      </button>
-                    </div>
-                  </div>
-                  <div class="tag-new-label">New tag</div>
-                  <input
-                    ref="tagInputRef"
-                    v-model="tagInput"
-                    class="tag-menu-input"
-                    placeholder="Tag name..."
-                    autocomplete="off"
-                    @keydown.enter.prevent="applyTag"
-                    @keydown="handleTagKey"
-                  />
-                  <div class="plugin-menu-actions">
-                    <button
-                      class="stack-btn"
-                      type="button"
-                      :disabled="!tagInput.trim() || tagLoading"
-                      @click="applyTag"
-                    >
-                      {{ tagLoading ? "Applying..." : "Apply to All" }}
-                    </button>
-                  </div>
-                  <div v-if="tagError" class="plugin-menu-error">
-                    {{ tagError }}
-                  </div>
-                  <div v-if="tagSuccess" class="plugin-menu-success">
-                    {{ tagSuccess }}
-                  </div>
-                </div>
-              </div>
+                  <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+                  Unstack
+                </button>
+                <button
+                  v-else-if="selectedCount > 1"
+                  class="ctx-item"
+                  title="Create a stack from the selected images"
+                  @click="
+                    $emit('create-stack');
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
+                  Stack
+                </button>
+                <button
+                  v-if="showUnstackMultipleButton"
+                  class="ctx-item"
+                  title="Dissolve all selected stacks"
+                  @click="
+                    $emit('dissolve-stacks');
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+                  Unstack all
+                </button>
+                <button
+                  v-if="showGroupStackButton"
+                  class="ctx-item"
+                  title="Create stacks from selected likeness groups"
+                  @click="
+                    $emit('create-stacks-from-groups');
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
+                  Stack groups
+                </button>
+                <div v-if="showAnyStackAction" class="ctx-sep" />
+              </template>
+
+              <!-- ── Tag / Filters / ComfyUI ───────────────────────── -->
+              <template v-if="!isScrapheapView && !isReadOnly">
+                <button
+                  class="ctx-item"
+                  :disabled="selectedCount === 0"
+                  title="Tag selected (T)"
+                  @click="
+                    openTagInput();
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
+                  Tag
+                </button>
+                <button
+                  v-if="pluginOptions.length"
+                  class="ctx-item"
+                  :disabled="selectedCount === 0"
+                  @click="
+                    openPluginPanel();
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
+                  Filters
+                </button>
+                <button
+                  v-if="props.comfyuiConfigured"
+                  class="ctx-item"
+                  :disabled="selectedCount === 0"
+                  @click="
+                    openComfyuiPanel();
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
+                  ComfyUI
+                </button>
+                <div class="ctx-sep" />
+              </template>
+
+              <!-- ── Remove / Delete (danger) ──────────────────────── -->
+              <button
+                v-if="showRemoveButton && !isReadOnly"
+                class="ctx-item ctx-item--danger"
+                :disabled="selectedCount === 0"
+                @click="
+                  $emit('remove-from-group');
+                  selectionMenuOpen = false;
+                "
+              >
+                {{ removeButtonLabel }}
+              </button>
+              <button
+                v-if="!isReadOnly"
+                class="ctx-item ctx-item--danger"
+                :disabled="selectedCount === 0"
+                title="Delete selected items (DEL)"
+                @click="
+                  $emit('delete-selected');
+                  selectionMenuOpen = false;
+                "
+              >
+                <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
+                {{ deleteButtonLabel }}
+              </button>
             </div>
           </v-menu>
+          <div
+            v-if="!isScrapheapView && !isReadOnly"
+            class="plugin-run-controls"
+          >
+            <v-menu
+              v-model="tagMenuOpen"
+              :close-on-content-click="false"
+              location-strategy="connected"
+              location="bottom end"
+              origin="top end"
+              transition="scale-transition"
+            >
+              <template #activator="{ props: menuProps }">
+                <button
+                  v-bind="menuProps"
+                  ref="tagBtnRef"
+                  class="hidden-panel-activator"
+                  type="button"
+                  tabindex="-1"
+                  aria-hidden="true"
+                ></button>
+              </template>
+              <div class="plugin-menu-panel tag-panel-wide">
+                <div class="plugin-menu-header">
+                  Tag {{ selectedCount }} Image{{
+                    selectedCount !== 1 ? "s" : ""
+                  }}
+                </div>
+                <div class="tag-panel-columns">
+                  <!-- ── Left column: mini-grid preview ── -->
+                  <div
+                    v-if="previewImages.length"
+                    class="tag-preview-column"
+                    :class="[
+                      `tag-preview-column--cols-${previewColumns}`,
+                      previewImages.length === 2
+                        ? 'tag-preview-column--stacked'
+                        : '',
+                    ]"
+                  >
+                    <div class="tag-preview-header">Selected images</div>
+                    <div
+                      class="tag-preview-grid"
+                      :class="[
+                        `tag-preview-grid--cols-${previewColumns}`,
+                        previewImages.length > 1
+                          ? 'tag-preview-grid--multi'
+                          : '',
+                      ]"
+                    >
+                      <div
+                        v-for="img in previewImages"
+                        :key="img.id"
+                        class="tag-preview-tile"
+                      >
+                        <img
+                          v-if="img.fullUrl"
+                          :src="img.fullUrl"
+                          class="tag-preview-img"
+                          :alt="String(img.id)"
+                          draggable="false"
+                        />
+                        <div
+                          v-else
+                          class="tag-preview-img tag-preview-img--placeholder"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <!-- ── Right column: tag controls ── -->
+                  <div class="plugin-menu-body">
+                    <div v-if="tagDataLoading" class="tag-data-loading">
+                      Loading tags...
+                    </div>
+                    <div
+                      v-else-if="tagsOnAll.length || tagsOnSome.length"
+                      class="tag-current-section"
+                    >
+                      <div class="tag-current-label">
+                        Current tags
+                        <span v-if="tagDataCapped" class="tag-data-capped">
+                          (first {{ MAX_TAG_FETCH }})
+                        </span>
+                      </div>
+                      <div class="tag-chips-row">
+                        <button
+                          v-for="t in tagsOnAll"
+                          :key="'all-' + t.name"
+                          :class="[
+                            'tag-chip',
+                            'tag-chip--all',
+                            { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                          ]"
+                          type="button"
+                          :disabled="tagActionLoading.includes(t.name)"
+                          :title="`On all ${totalWithTagData} selected — click to remove`"
+                          @click="removeTagFromAll(t)"
+                        >
+                          <span class="tag-chip-label">{{ t.name }}</span>
+                          <v-icon size="11" class="tag-chip-close"
+                            >mdi-close</v-icon
+                          >
+                        </button>
+                        <button
+                          v-for="t in tagsOnSome"
+                          :key="'some-' + t.name"
+                          :class="[
+                            'tag-chip',
+                            'tag-chip--some',
+                            { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                          ]"
+                          type="button"
+                          :disabled="tagActionLoading.includes(t.name)"
+                          :title="`On ${t.count} of ${totalWithTagData} — click to add to all`"
+                          @click="addTagToRemaining(t)"
+                        >
+                          <span class="tag-chip-label">{{ t.name }}</span>
+                          <span class="tag-chip-count"
+                            >{{ t.count }}/{{ totalWithTagData }}</span
+                          >
+                        </button>
+                      </div>
+                      <div class="tag-coverage-filter">
+                        <label class="tag-coverage-label">
+                          Min coverage:
+                          <input
+                            v-model.number="tagMinCoverage"
+                            type="range"
+                            min="1"
+                            :max="Math.max(1, totalWithTagData - 1)"
+                            class="tag-coverage-slider"
+                          />
+                          {{ tagMinCoverage }}/{{ totalWithTagData }}
+                        </label>
+                        <span
+                          v-if="tagsOnSomeHiddenCount"
+                          class="tag-coverage-hidden"
+                        >
+                          {{ tagsOnSomeHiddenCount }} hidden
+                        </span>
+                      </div>
+                    </div>
+                    <div
+                      v-if="aggregatedPredictions.length"
+                      class="tag-current-section"
+                    >
+                      <div
+                        class="tag-current-label tag-current-label--clickable"
+                      >
+                        <button
+                          class="tag-current-toggle"
+                          type="button"
+                          @click="
+                            rejectedTagsCollapsedSB = !rejectedTagsCollapsedSB
+                          "
+                        >
+                          Rejected Tags
+                          <span class="rejected-threshold-label"
+                            >({{
+                              Object.keys(labelThresholdsSB).length
+                                ? "per-tag threshold"
+                                : `> ${(predictionAcceptanceThresholdSB * 100).toFixed(0)}%`
+                            }}
+                            to be auto-applied)</span
+                          >
+                          <v-icon size="12">{{
+                            rejectedTagsCollapsedSB
+                              ? "mdi-chevron-down"
+                              : "mdi-chevron-up"
+                          }}</v-icon>
+                        </button>
+                      </div>
+                      <div
+                        v-show="!rejectedTagsCollapsedSB"
+                        class="tag-chips-row"
+                      >
+                        <button
+                          v-for="p in aggregatedPredictions"
+                          :key="'pred-' + p.tag"
+                          :class="[
+                            'tag-chip',
+                            'tag-chip--prediction',
+                            { 'tag-chip--penalised': isPenalisedTagSB(p.tag) },
+                          ]"
+                          type="button"
+                          :disabled="predActionLoading.includes(p.tag)"
+                          :style="{ '--pred-confidence': p.avgConf }"
+                          :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all`"
+                          @click="confirmPredictionOnAll(p)"
+                        >
+                          <span class="tag-chip-label">{{ p.tag }}</span>
+                          <span class="tag-chip-count"
+                            >{{ p.count }}/{{
+                              fetchedPredictionData.length
+                            }}</span
+                          >
+                        </button>
+                      </div>
+                    </div>
+                    <div class="tag-new-label">New tag</div>
+                    <input
+                      ref="tagInputRef"
+                      v-model="tagInput"
+                      class="tag-menu-input"
+                      placeholder="Tag name..."
+                      autocomplete="off"
+                      @keydown.enter.prevent="applyTag"
+                      @keydown="handleTagKey"
+                    />
+                    <div class="plugin-menu-actions">
+                      <button
+                        class="stack-btn"
+                        type="button"
+                        :disabled="!tagInput.trim() || tagLoading"
+                        @click="applyTag"
+                      >
+                        {{ tagLoading ? "Applying..." : "Apply to All" }}
+                      </button>
+                    </div>
+                    <div v-if="tagError" class="plugin-menu-error">
+                      {{ tagError }}
+                    </div>
+                    <div v-if="tagSuccess" class="plugin-menu-success">
+                      {{ tagSuccess }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </v-menu>
+          </div>
+          <button
+            class="clear-btn"
+            :disabled="!visible"
+            @click="$emit('clear-selection')"
+            title="Clear selection (ESC)"
+          >
+            <v-icon size="20" color="primary">mdi-selection-off</v-icon>
+          </button>
+          <button
+            v-if="!isReadOnly"
+            class="delete-btn"
+            :disabled="!visible"
+            @click="$emit('delete-selected')"
+            title="Delete selected items (DEL)"
+          >
+            <v-icon size="20" color="error">mdi-delete</v-icon>
+          </button>
         </div>
-        <button
-          class="clear-btn"
-          :disabled="!visible"
-          @click="$emit('clear-selection')"
-          title="Clear selection (ESC)"
-        >
-          <v-icon size="20" color="primary">mdi-selection-off</v-icon>
-        </button>
-        <button
-          v-if="!isReadOnly"
-          class="delete-btn"
-          :disabled="!visible"
-          @click="$emit('delete-selected')"
-          title="Delete selected items (DEL)"
-        >
-          <v-icon size="20" color="error">mdi-delete</v-icon>
-        </button>
+        <!-- /selection-ctx-bar -->
         <!-- ── Separator: Delete | Settings ───────────────────────────── -->
         <div v-if="tb" class="bar-separator"></div>
         <!-- ── Toolbar: Settings ─────────────────────────────────────── -->
@@ -3386,6 +3399,47 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   margin-left: auto;
   flex-shrink: 0;
 }
+
+.selection-ctx-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 989px) {
+  .selection-ctx-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 64px;
+    background: rgba(var(--v-theme-background), 0.97);
+    border-top: 1px solid rgba(var(--v-theme-on-background), 0.08);
+    border-radius: 16px 16px 0 0;
+    z-index: 200;
+    justify-content: center;
+    gap: 20px;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(8px);
+    transform: translateY(110%);
+    transition: transform 0.25s ease;
+  }
+
+  .selection-ctx-bar.selection-ctx-bar--active {
+    transform: translateY(0);
+  }
+
+  .selection-ctx-bar .clear-btn,
+  .selection-ctx-bar .delete-btn {
+    width: 52px;
+    height: 52px;
+  }
+
+  .selection-ctx-bar .stack-btn {
+    height: 52px;
+    padding: 0 16px;
+  }
+}
 .clear-btn {
   display: inline-flex;
   align-items: center;
@@ -4772,11 +4826,10 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 @media (hover: none) and (pointer: coarse) {
   .selection-bar-overlay {
     height: 56px;
-    padding: 0 10px;
+    padding: 0 4px;
   }
 
   .bar-btn,
-  .bar-split-toggle,
   .bar-split-menu,
   .clear-btn,
   .delete-btn,
@@ -4789,8 +4842,16 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
     height: 46px;
   }
 
-  .bar-split-toggle {
-    min-width: 46px;
+  .bar-split-toggle,
+  .bar-separator,
+  .tb-export-btn,
+  .bar-btn-chevron {
+    display: none;
+  }
+
+  .bar-split-menu {
+    border-left: none;
+    border-radius: 5px;
   }
 }
 
