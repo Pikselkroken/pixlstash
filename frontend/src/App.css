@@ -148,33 +148,19 @@ body {
   background-color: transparent !important;
 }
 
-@media (max-width: 900px) {
-  body {
-    min-height: 100vh;
-    height: 100dvh;
+@media (min-width: 1000px) {
+  .sidebar-shell:not(.open) {
+    display: none;
   }
+}
 
-  .app-viewport {
-    height: 100dvh;
-  }
-
-  .file-manager {
-    flex-direction: column;
-    height: 100dvh;
-  }
-
-  .main-area {
-    height: 100dvh;
-    border-left: 4px solid transparent;
-    transition: border-color 0.2s;
-  }
-
+@media (max-width: 999px) {
   .sidebar-shell {
     position: fixed;
     left: 0;
-    top: 0;
-    height: 100dvh;
-    z-index: 200;
+    top: 49px;
+    bottom: 0;
+    z-index: 150;
     transform: translateX(-100%);
     transition: transform 0.3s ease;
   }
@@ -182,27 +168,8 @@ body {
   .sidebar-shell.open {
     transform: translateX(0);
   }
-
-  .sidebar-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 199;
-    background: rgba(var(--v-theme-scrim), 0.5);
-  }
-
-  .backdrop-fade-enter-active,
-  .backdrop-fade-leave-active {
-    transition: opacity 0.3s ease;
-  }
-  .backdrop-fade-enter-from,
-  .backdrop-fade-leave-to {
-    opacity: 0;
-  }
-
-  .main-area.sidebar-hidden {
-    border-left: 4px solid rgb(var(--v-theme-sidebar));
-  }
 }
+
 @font-face {
   font-family: "PressStart2P";
   src: url("/src/assets/fonts/PressStart2P-Regular.ttf") format("truetype");

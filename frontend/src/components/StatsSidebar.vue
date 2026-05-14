@@ -31,6 +31,7 @@ const props = defineProps({
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   open: { type: Boolean, default: true },
+  overlayMode: { type: Boolean, default: false },
   wsTagUpdate: { type: Object, default: null },
 });
 
@@ -959,52 +960,45 @@ function handleResolutionBarClick(label) {
 
 <template>
   <div class="stats-sidebar" :class="{ collapsed: !props.open }">
-    <button
-      v-if="!props.open"
-      class="stats-sidebar-edge-toggle"
-      type="button"
-      title="Show stats sidebar"
-      @click="$emit('toggle')"
-    >
-      <v-icon size="16">mdi-chart-bar</v-icon>
-    </button>
     <div v-if="props.open" class="stats-sidebar-content">
       <div class="stats-sidebar-header">
-        <button
-          class="stats-tab-btn stats-sidebar-close-btn"
-          type="button"
-          title="Hide stats sidebar"
-          @click="$emit('toggle')"
-        >
-          <v-icon size="14">mdi-chevron-right</v-icon>
-        </button>
-        <button
-          class="stats-tab-btn"
-          :class="{ active: activeTab === 'tags' }"
-          type="button"
-          @click="activeTab = 'tags'"
-        >
-          <v-icon size="12">mdi-tag-multiple-outline</v-icon>
-          Tags
-        </button>
-        <button
-          class="stats-tab-btn"
-          :class="{ active: activeTab === 'pictures' }"
-          type="button"
-          @click="activeTab = 'pictures'"
-        >
-          <v-icon size="12">mdi-image-multiple-outline</v-icon>
-          Pictures
-        </button>
-        <button
-          class="stats-tab-btn"
-          :class="{ active: activeTab === 'tasks' }"
-          type="button"
-          @click="activeTab = 'tasks'"
-        >
-          <v-icon size="12">mdi-timeline-clock-outline</v-icon>
-          Tasks
-        </button>
+        <div class="stats-sidebar-title-row">
+          <span class="stats-sidebar-title-text">
+            <v-icon size="13" class="stats-sidebar-title-icon"
+              >mdi-chart-bar</v-icon
+            >
+            Stats
+          </span>
+        </div>
+        <div class="stats-sidebar-tabs">
+          <button
+            class="stats-tab-btn"
+            :class="{ active: activeTab === 'tags' }"
+            type="button"
+            @click="activeTab = 'tags'"
+          >
+            <v-icon size="12">mdi-tag-multiple-outline</v-icon>
+            Tags
+          </button>
+          <button
+            class="stats-tab-btn"
+            :class="{ active: activeTab === 'pictures' }"
+            type="button"
+            @click="activeTab = 'pictures'"
+          >
+            <v-icon size="12">mdi-image-multiple-outline</v-icon>
+            Pictures
+          </button>
+          <button
+            class="stats-tab-btn"
+            :class="{ active: activeTab === 'tasks' }"
+            type="button"
+            @click="activeTab = 'tasks'"
+          >
+            <v-icon size="12">mdi-timeline-clock-outline</v-icon>
+            Tasks
+          </button>
+        </div>
       </div>
 
       <div v-if="loading && !stats" class="stats-loading">
@@ -1840,12 +1834,35 @@ function handleResolutionBarClick(label) {
   flex-direction: row;
   flex-shrink: 0;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  background: rgba(var(--v-theme-surface), 1);
+  background: rgba(var(--v-theme-background), 0.95);
   transition:
     width 0.15s,
     min-width 0.15s,
     border-color 0.15s;
   overflow: hidden;
+}
+
+@media (max-width: 1339px) {
+  .stats-sidebar {
+    position: fixed;
+    right: 0;
+    top: 49px;
+    bottom: 0;
+    height: auto;
+    z-index: 150;
+    transform: translateX(0);
+    transition: transform 0.3s ease;
+  }
+
+  .stats-sidebar.collapsed {
+    transform: translateX(100%);
+    width: 288px;
+    min-width: 288px;
+    max-width: 288px;
+    border-left-color: rgba(var(--v-theme-on-surface), 0.1);
+    overflow: hidden;
+    background: rgba(var(--v-theme-surface), 1);
+  }
 }
 
 .stats-sidebar.collapsed {
@@ -1881,8 +1898,21 @@ function handleResolutionBarClick(label) {
 }
 
 .stats-sidebar-close-btn {
-  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0 8px;
+  height: 100%;
+  cursor: pointer;
+  color: rgba(var(--v-theme-on-surface), 0.4);
+  transition: color 0.12s;
+  border-radius: 0;
+  flex-shrink: 0;
+}
+.stats-sidebar-close-btn:hover {
+  color: rgba(var(--v-theme-on-surface), 0.75);
 }
 
 .stats-sidebar-content {
@@ -1898,11 +1928,55 @@ function handleResolutionBarClick(label) {
 
 .stats-sidebar-header {
   display: flex;
+  flex-direction: column;
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   margin-bottom: 4px;
-  height: 30px;
+  height: 48px;
   flex-shrink: 0;
+}
+
+@media (max-width: 1339px) {
+  .stats-sidebar-header {
+    height: auto;
+    border-bottom: none;
+    margin-bottom: 0;
+  }
+}
+
+.stats-sidebar-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1;
+  padding: 0 4px 0 10px;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+}
+
+@media (max-width: 1339px) {
+  .stats-sidebar-title-row {
+    display: none;
+  }
+}
+
+.stats-sidebar-title-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+.stats-sidebar-title-icon {
+  color: rgba(var(--v-theme-on-surface), 0.4);
+}
+
+.stats-sidebar-tabs {
+  display: flex;
   align-items: stretch;
+  flex-shrink: 0;
 }
 
 .stats-header-icon {
