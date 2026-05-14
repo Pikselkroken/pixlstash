@@ -170,6 +170,12 @@ body {
   }
 }
 
+@media (max-width: 999px) and (hover: none) and (pointer: coarse) {
+  .sidebar-shell {
+    top: 57px;
+  }
+}
+
 @font-face {
   font-family: "PressStart2P";
   src: url("/src/assets/fonts/PressStart2P-Regular.ttf") format("truetype");
