@@ -7509,6 +7509,9 @@ function handleKeyDown(event) {
       lastSelectedImageId = null;
       cursorIdx.value = null;
       clearFaceSelection();
+    } else if (isMultiCharacterView.value || isSetOverlapView.value) {
+      // No images selected — ESC closes the union/intersect/overlap bar
+      emit("clear-multi-selection");
     } else if (props.searchQuery && props.searchQuery.trim()) {
       // No selection active — ESC also clears search
       clearSearchQuery();
@@ -8242,11 +8245,10 @@ function handleEmptyStateReset() {
   pointer-events: none;
   z-index: 25;
   border-radius: 8px;
-  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1);
+  transition: none;
 }
 .image-card:hover .selection-overlay,
 .stack-hover-active .selection-overlay {
-  transform: scale(1.03);
 }
 
 /* Touch select mode: show a checkmark badge on each selected image */
@@ -8331,6 +8333,24 @@ function handleEmptyStateReset() {
   position: relative;
   aspect-ratio: 1 / 1;
 }
+.thumbnail-container::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  box-shadow: inset 0 0 12px 4px rgba(var(--v-theme-accent), 0.3);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 22;
+  pointer-events: none;
+}
+.image-card:hover .thumbnail-container::after,
+.stack-hover-active .thumbnail-container::after {
+  opacity: 1;
+}
+.compact-mode .thumbnail-container::after {
+  border-radius: 0;
+}
 
 .thumbnail-container-drag-source .thumbnail-img,
 .thumbnail-container-drag-source .thumbnail-placeholder {
@@ -8350,18 +8370,18 @@ function handleEmptyStateReset() {
   left: 0;
   z-index: 1;
   box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
-  transition:
-    transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
-    box-shadow 0.18s;
+  transition: box-shadow 0.18s;
 }
 .thumbnail-img:hover {
-  box-shadow: 1px 1px 2px 2px rgba(var(--v-theme-shadow), 0.3);
-  transform: scale(1.03);
+  box-shadow:
+    1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
+    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
   z-index: 20;
 }
 .stack-hover-active .thumbnail-img {
-  box-shadow: 1px 1px 2px 2px rgba(var(--v-theme-shadow), 0.3);
-  transform: scale(1.03);
+  box-shadow:
+    1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
+    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
   z-index: 20;
 }
 .thumbnail-card {
@@ -8382,7 +8402,7 @@ function handleEmptyStateReset() {
   box-shadow: none;
 }
 .compact-mode .thumbnail-img:hover {
-  box-shadow: none;
+  box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
 }
 .compact-sticky-label,
 .compact-group-label {
