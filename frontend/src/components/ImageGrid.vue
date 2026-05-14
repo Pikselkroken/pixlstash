@@ -43,7 +43,7 @@
     @import-error="handleImportErrored"
   />
   <div :style="wrapperStyle" class="grid-content-area">
-    <SelectionBar
+    <Toolbar
       ref="selectionBarRef"
       :selectedCount="selectedImageIds.length"
       :selectedExpandedCount="selectedExpandedCount"
@@ -80,6 +80,12 @@
       @comfyui-run="handleComfyuiRun"
       @tags-applied="fetchAllGridImages({ force: true, showProgress: true })"
     />
+    <!-- ── Visible range pill ── -->
+    <transition name="grid-range-fade">
+      <span v-if="visibleRangeLabel" class="grid-range-pill">{{
+        visibleRangeLabel
+      }}</span>
+    </transition>
     <ImageGridContextMenu
       :visible="contextMenuVisible"
       :x="contextMenuX"
@@ -786,7 +792,7 @@ import {
 import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "./EmptyScrapHeap.vue";
-import SelectionBar from "./SelectionBar.vue";
+import Toolbar from "./Toolbar.vue";
 import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
@@ -3258,7 +3264,7 @@ const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const wrapperStyle = { position: "relative", height: "100%" };
 const scrollWrapperStyle = computed(() => ({
   position: "absolute",
-  top: "var(--selbar-height, 30px)",
+  top: "var(--selbar-height, 48px)",
   left: "0",
   right: "0",
   bottom: "0",
@@ -8077,13 +8083,43 @@ function handleEmptyStateReset() {
   z-index: 30;
 }
 .grid-content-area {
-  --selbar-height: 30px;
+  --selbar-height: 48px;
 }
 
 @media (hover: none) and (pointer: coarse) {
   .grid-content-area {
-    --selbar-height: 44px;
+    --selbar-height: 56px;
   }
+}
+
+/* ── Visible range pill overlay ── */
+.grid-range-pill {
+  position: absolute;
+  top: calc(var(--selbar-height, 48px) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(var(--v-theme-surface), 0.82);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  border-radius: 999px;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 12px;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  user-select: none;
+  z-index: 50;
+}
+.grid-range-fade-enter-active,
+.grid-range-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+.grid-range-fade-enter-from,
+.grid-range-fade-leave-to {
+  opacity: 0;
 }
 
 .grid-scroll-wrapper {

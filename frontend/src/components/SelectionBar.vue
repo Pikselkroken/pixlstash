@@ -2,6 +2,17 @@
   <div class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
+        <!-- ── Sidebar toggle (when sidebar is collapsed) ──────────── -->
+        <button
+          v-if="!tb?.sidebarVisible?.value"
+          class="bar-btn bar-btn--icon"
+          type="button"
+          title="Show sidebar"
+          @click="tb?.toggleSidebar?.()"
+        >
+          <v-icon size="20">mdi-dock-left</v-icon>
+        </button>
+        <div v-if="!tb?.sidebarVisible?.value" class="bar-separator"></div>
         <!-- ── Sort split-button ──────────────────────────────────── -->
         <v-menu
           v-model="gbSortMenuOpen"
@@ -18,7 +29,7 @@
                 :title="gbDescendingModel ? 'Descending' : 'Ascending'"
                 @click.stop="gbToggleSortDirection"
               >
-                <v-icon size="13">{{ gbSortButtonIcon }}</v-icon>
+                <v-icon size="19">{{ gbSortButtonIcon }}</v-icon>
               </button>
               <button
                 v-bind="menuProps"
@@ -27,14 +38,14 @@
                 :title="gbSortButtonLabel"
               >
                 <span class="bar-btn-prefix">Sort:</span>
-                <v-icon size="13">{{ gbSortTypeIcon }}</v-icon>
+                <v-icon size="19">{{ gbSortTypeIcon }}</v-icon>
                 <span class="bar-btn-sort-type">{{ gbSortTypeName }}</span>
                 <span
                   v-if="gbSortSecondaryLabel"
                   class="bar-btn-sort-secondary"
                   >{{ gbSortSecondaryLabel }}</span
                 >
-                <v-icon size="13">mdi-menu-down</v-icon>
+                <v-icon size="18">mdi-menu-down</v-icon>
               </button>
             </div>
           </template>
@@ -192,12 +203,12 @@
               type="button"
               title="Filters"
             >
-              <v-icon size="13">mdi-filter</v-icon>
+              <v-icon size="19">mdi-filter</v-icon>
               <span class="bar-btn-label bar-btn-label--filter">Filter</span>
               <span v-if="gbActiveFilterCount > 0" class="bar-filter-badge">{{
                 gbActiveFilterCount > 99 ? "99+" : gbActiveFilterCount
               }}</span>
-              <v-icon size="13">mdi-menu-down</v-icon>
+              <v-icon size="18">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="gb-filter-panel">
@@ -758,9 +769,9 @@
               type="button"
               title="View options"
             >
-              <v-icon size="13">mdi-view-grid</v-icon>
+              <v-icon size="19">mdi-view-grid</v-icon>
               <span class="bar-btn-label bar-btn-label--view">View</span>
-              <v-icon size="13">mdi-menu-down</v-icon>
+              <v-icon size="18">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="gb-view-panel">
@@ -832,17 +843,213 @@
             </div>
           </div>
         </v-menu>
-      </div>
-      <!-- Centre: visible range label -->
-      <div class="selection-bar-center">
-        <transition name="range-label-fade" mode="out-in">
-          <span
-            v-if="gb?.visibleRangeLabel?.value"
-            :key="gb.visibleRangeLabel.value"
-            class="visible-range-pill"
-            >{{ gb.visibleRangeLabel.value }}</span
-          >
-        </transition>
+        <!-- ── Toolbar: divider ─────────────────────────────────────── -->
+        <div class="bar-separator"></div>
+        <!-- ── Toolbar: Search ──────────────────────────────────────── -->
+        <button
+          class="bar-btn bar-btn--icon"
+          :class="{ 'bar-btn--active': gb?.isSearchActive?.value }"
+          type="button"
+          title="Search (F)"
+          @click="tb?.openSearchOverlay?.()"
+        >
+          <v-icon size="20">mdi-magnify</v-icon>
+        </button>
+        <!-- ── Toolbar: Export ───────────────────────────────────────── -->
+        <v-menu
+          v-if="!isReadOnly"
+          v-model="tbExportMenuOpen"
+          :close-on-content-click="false"
+          location="bottom start"
+          origin="top start"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--icon"
+              type="button"
+              title="Export current grid to zip"
+            >
+              <v-icon size="20">mdi-download</v-icon>
+            </button>
+          </template>
+          <div class="tb-export-panel">
+            <div class="tb-export-title">
+              Export {{ tb?.exportCount?.value ?? 0 }} picture{{
+                (tb?.exportCount?.value ?? 0) === 1 ? "" : "s"
+              }}
+            </div>
+            <v-select
+              v-model="tbExportTypeModel"
+              :items="tb?.exportTypeOptions ?? []"
+              item-title="title"
+              item-value="value"
+              label="Export type"
+              density="comfortable"
+            />
+            <v-select
+              v-model="tbExportCaptionModeModel"
+              :items="tb?.exportCaptionOptions ?? []"
+              item-title="title"
+              item-value="value"
+              label="Captions"
+              density="comfortable"
+              :disabled="tb?.exportTypeLocksCaptions?.value"
+            />
+            <v-select
+              v-model="tbExportResolutionModel"
+              :items="tb?.exportResolutionOptions ?? []"
+              item-title="title"
+              item-value="value"
+              label="Resolution"
+              density="comfortable"
+            />
+            <v-select
+              v-if="tbExportCaptionModeModel === 'tags'"
+              v-model="tbExportTagFormatModel"
+              :items="tb?.exportTagFormatOptions ?? []"
+              item-title="title"
+              item-value="value"
+              label="Tag format"
+              density="comfortable"
+            />
+            <v-switch
+              v-model="tbExportIncludeCharacterNameModel"
+              label="Include character name"
+              color="primary"
+              density="comfortable"
+              :disabled="
+                tbExportCaptionModeModel === 'none' ||
+                tb?.exportTypeLocksCaptions?.value
+              "
+            />
+            <v-switch
+              v-model="tbExportUseOriginalFileNamesModel"
+              label="Use original file names"
+              color="primary"
+              density="comfortable"
+            />
+            <v-btn
+              color="primary"
+              @click="
+                tb?.confirmExportZip?.();
+                tbExportMenuOpen = false;
+              "
+            >
+              Export
+            </v-btn>
+          </div>
+        </v-menu>
+        <!-- ── Toolbar: Import ───────────────────────────────────────── -->
+        <button
+          v-if="!isReadOnly && tb"
+          class="bar-btn bar-btn--icon"
+          type="button"
+          title="Import photos"
+          @click="tb?.openImport?.()"
+        >
+          <v-icon size="20">mdi-cloud-upload-outline</v-icon>
+        </button>
+        <!-- ── Toolbar: ComfyUI T2I ──────────────────────────────────── -->
+        <v-menu
+          v-if="gb?.comfyuiConfigured?.value && !isReadOnly"
+          v-model="tbComfyuiMenuOpen"
+          :close-on-content-click="false"
+          location="bottom start"
+          origin="top start"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--icon"
+              :class="{ 'bar-btn--active': tbComfyuiMenuOpen }"
+              type="button"
+              title="Generate with ComfyUI (T2I)"
+            >
+              <v-icon size="20">mdi-robot</v-icon>
+            </button>
+          </template>
+          <div class="tb-comfyui-panel">
+            <div class="tb-comfyui-header">Generate with ComfyUI (T2I)</div>
+            <div class="tb-comfyui-body">
+              <div v-if="tbComfyuiWorkflowLoading" class="tb-comfyui-note">
+                Loading workflows...
+              </div>
+              <div v-else>
+                <div v-if="tbComfyuiWorkflowError" class="tb-comfyui-error">
+                  {{ tbComfyuiWorkflowError }}
+                </div>
+                <template v-if="tbValidComfyWorkflows.length">
+                  <label class="tb-comfyui-label">Workflow</label>
+                  <select
+                    v-model="tbComfyuiSelectedWorkflow"
+                    class="tb-comfyui-select"
+                  >
+                    <option
+                      v-for="wf in tbValidComfyWorkflows"
+                      :key="wf.name"
+                      :value="wf.name"
+                    >
+                      {{ wf.display_name || wf.name }}
+                    </option>
+                  </select>
+                  <label class="tb-comfyui-label">Caption</label>
+                  <textarea
+                    v-model="tbComfyuiCaption"
+                    class="tb-comfyui-textarea"
+                    rows="4"
+                    placeholder="Optional caption for {{caption}}"
+                    @keydown.stop
+                  ></textarea>
+                  <label class="tb-comfyui-label">Seed</label>
+                  <div class="tb-comfyui-seed-row">
+                    <button
+                      type="button"
+                      class="tb-comfyui-seed-btn"
+                      :class="{ active: tbComfyuiSeedMode === 'random' }"
+                      @click="tbComfyuiSeedMode = 'random'"
+                    >
+                      Random
+                    </button>
+                    <button
+                      type="button"
+                      class="tb-comfyui-seed-btn"
+                      :class="{ active: tbComfyuiSeedMode === 'fixed' }"
+                      @click="tbComfyuiSeedMode = 'fixed'"
+                    >
+                      Fixed
+                    </button>
+                    <input
+                      v-if="tbComfyuiSeedMode === 'fixed'"
+                      v-model.number="tbComfyuiSeed"
+                      type="number"
+                      class="tb-comfyui-seed-input"
+                      min="0"
+                      max="4294967295"
+                      @keydown.stop
+                    />
+                    <button
+                      class="tb-comfyui-run-btn"
+                      type="button"
+                      :disabled="!tbCanRunComfyWorkflow"
+                      @click="tbRunComfyuiOnGrid"
+                    >
+                      <v-icon size="14">mdi-play</v-icon> Run
+                    </button>
+                  </div>
+                </template>
+                <div v-else class="tb-comfyui-note">
+                  No valid T2I workflows found.
+                </div>
+                <div v-if="tbComfyuiRunError" class="tb-comfyui-error">
+                  {{ tbComfyuiRunError }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </v-menu>
       </div>
       <div class="selection-bar-right">
         <span
@@ -1023,11 +1230,9 @@
                     : `Actions for ${selectedCount} selected`
               "
             >
-              <v-icon size="15">mdi-image-multiple-outline</v-icon>
-              <span class="bar-btn-apply-label"
-                >Apply to ({{ selectedCount }})</span
-              >
-              <v-icon size="16">mdi-menu-down</v-icon>
+              <v-icon size="20">mdi-image-multiple-outline</v-icon>
+              <span class="bar-btn-apply-label">({{ selectedCount }})</span>
+              <v-icon size="18">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="selection-menu-panel">
@@ -1408,8 +1613,7 @@
           @click="$emit('clear-selection')"
           title="Clear selection (ESC)"
         >
-          <v-icon size="14" color="primary">mdi-close</v-icon>
-          <span class="bar-btn-clear-label">Deselect</span>
+          <v-icon size="20" color="primary">mdi-selection-off</v-icon>
         </button>
         <button
           v-if="!isReadOnly"
@@ -1418,8 +1622,27 @@
           @click="$emit('delete-selected')"
           title="Delete selected items (DEL)"
         >
-          <v-icon size="14" color="error">mdi-delete</v-icon>
-          <span class="bar-btn-delete-label">{{ deleteButtonLabel }}</span>
+          <v-icon size="20" color="error">mdi-delete</v-icon>
+        </button>
+        <!-- ── Toolbar: Settings ─────────────────────────────────────── -->
+        <button
+          v-if="tb"
+          class="bar-btn bar-btn--icon"
+          type="button"
+          title="Settings"
+          @click="tb?.openSettings?.()"
+        >
+          <v-icon size="20">mdi-cog-outline</v-icon>
+        </button>
+        <!-- ── Toolbar: Stats toggle (when stats sidebar is closed) ──── -->
+        <button
+          v-if="tb && !tb?.statsOpen?.value"
+          class="bar-btn bar-btn--icon"
+          type="button"
+          title="Show stats sidebar"
+          @click="tb?.toggleStats?.()"
+        >
+          <v-icon size="20">mdi-chart-bar</v-icon>
         </button>
       </div>
     </div>
@@ -1513,6 +1736,126 @@ const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 // Grid Bar state (inject from App.vue via provide/inject)
 // ═══════════════════════════════════════════════════════════════════════════════
 const gb = inject("gridBarState", null);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Toolbar state (inject from App.vue via provide/inject)
+// ═══════════════════════════════════════════════════════════════════════════════
+const tb = inject("toolbarState", null);
+
+// ── Toolbar: export computed models ───────────────────────────────────────────
+const tbExportTypeModel = computed({
+  get: () => tb?.exportType?.value ?? "full",
+  set: (v) => {
+    if (tb?.exportType) tb.exportType.value = v;
+  },
+});
+const tbExportCaptionModeModel = computed({
+  get: () => tb?.exportCaptionMode?.value ?? "description",
+  set: (v) => {
+    if (tb?.exportCaptionMode) tb.exportCaptionMode.value = v;
+  },
+});
+const tbExportTagFormatModel = computed({
+  get: () => tb?.exportTagFormat?.value ?? "spaces",
+  set: (v) => {
+    if (tb?.exportTagFormat) tb.exportTagFormat.value = v;
+  },
+});
+const tbExportResolutionModel = computed({
+  get: () => tb?.exportResolution?.value ?? "original",
+  set: (v) => {
+    if (tb?.exportResolution) tb.exportResolution.value = v;
+  },
+});
+const tbExportIncludeCharacterNameModel = computed({
+  get: () => tb?.exportIncludeCharacterName?.value ?? true,
+  set: (v) => {
+    if (tb?.exportIncludeCharacterName) tb.exportIncludeCharacterName.value = v;
+  },
+});
+const tbExportUseOriginalFileNamesModel = computed({
+  get: () => tb?.exportUseOriginalFileNames?.value ?? false,
+  set: (v) => {
+    if (tb?.exportUseOriginalFileNames) tb.exportUseOriginalFileNames.value = v;
+  },
+});
+const tbExportMenuOpen = computed({
+  get: () => tb?.exportMenuOpen?.value ?? false,
+  set: (v) => {
+    if (tb?.exportMenuOpen) tb.exportMenuOpen.value = v;
+  },
+});
+
+// ── Toolbar: ComfyUI T2I ───────────────────────────────────────────────────────
+const tbComfyuiMenuOpen = ref(false);
+const tbComfyuiWorkflows = ref([]);
+const tbComfyuiWorkflowLoading = ref(false);
+const tbComfyuiWorkflowError = ref("");
+const tbComfyuiSelectedWorkflow = ref("");
+const tbComfyuiCaption = ref("");
+const tbComfyuiRunError = ref("");
+const tbComfyuiSeedMode = ref(
+  sessionStorage.getItem("comfyui_t2i_seed_mode") === "fixed"
+    ? "fixed"
+    : "random",
+);
+const _tbSavedSeed = Number(sessionStorage.getItem("comfyui_t2i_seed"));
+const tbComfyuiSeed = ref(
+  Number.isFinite(_tbSavedSeed) && _tbSavedSeed >= 0 ? _tbSavedSeed : 0,
+);
+watch(tbComfyuiSeedMode, (val) =>
+  sessionStorage.setItem("comfyui_t2i_seed_mode", val),
+);
+watch(tbComfyuiSeed, (val) =>
+  sessionStorage.setItem("comfyui_t2i_seed", String(val)),
+);
+
+const tbValidComfyWorkflows = computed(() => {
+  if (!Array.isArray(tbComfyuiWorkflows.value)) return [];
+  return tbComfyuiWorkflows.value.filter((w) => w?.workflow_type === "t2i");
+});
+const tbCanRunComfyWorkflow = computed(() => !!tbComfyuiSelectedWorkflow.value);
+
+watch(tbComfyuiMenuOpen, async (isOpen) => {
+  if (!isOpen) return;
+  tbComfyuiRunError.value = "";
+  await tbFetchComfyWorkflows();
+  if (!tbComfyuiSelectedWorkflow.value && tbValidComfyWorkflows.value.length) {
+    tbComfyuiSelectedWorkflow.value = String(
+      tbValidComfyWorkflows.value[0].name,
+    );
+  }
+});
+
+async function tbFetchComfyWorkflows() {
+  if (tbComfyuiWorkflowLoading.value) return;
+  const url = gb?.backendUrl?.value ?? props.backendUrl;
+  if (!url) return;
+  tbComfyuiWorkflowLoading.value = true;
+  tbComfyuiWorkflowError.value = "";
+  try {
+    const res = await apiClient.get(`${url}/comfyui/workflows`);
+    const workflows = res.data?.workflows;
+    tbComfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
+  } catch (err) {
+    tbComfyuiWorkflowError.value =
+      err?.response?.data?.detail || err?.message || String(err);
+    tbComfyuiWorkflows.value = [];
+  } finally {
+    tbComfyuiWorkflowLoading.value = false;
+  }
+}
+
+function tbRunComfyuiOnGrid() {
+  if (!tbCanRunComfyWorkflow.value) return;
+  tb?.comfyuiRunGrid?.({
+    workflowName: tbComfyuiSelectedWorkflow.value,
+    caption: tbComfyuiCaption.value || "",
+    seedMode: tbComfyuiSeedMode.value,
+    seed: tbComfyuiSeed.value,
+  });
+  tbComfyuiMenuOpen.value = false;
+}
 
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
 const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
@@ -2993,9 +3336,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 0 8px 4px;
+  padding: 0 10px;
   margin: 0;
-  height: 30px;
+  height: 48px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -3038,52 +3381,21 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   margin-left: auto;
   flex-shrink: 0;
 }
-.selection-bar-center {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  pointer-events: none;
-  white-space: nowrap;
-}
-.visible-range-pill {
-  background: rgba(var(--v-theme-surface), 0.88);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1;
-  padding: 3px 10px;
-  white-space: nowrap;
-  backdrop-filter: blur(4px);
-  box-shadow: 0 1px 4px rgba(var(--v-theme-shadow), 0.2);
-  pointer-events: none;
-  user-select: none;
-}
-.range-label-fade-enter-active,
-.range-label-fade-leave-active {
-  transition: opacity 0.15s ease;
-}
-.range-label-fade-enter-from,
-.range-label-fade-leave-to {
-  opacity: 0;
-}
 .clear-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  justify-content: center;
+  gap: 4px;
   background: rgba(var(--v-theme-on-background), 0.07);
   color: rgb(var(--v-theme-on-background));
   border: 1px solid rgba(var(--v-theme-on-background), 0.14);
-  padding: 0 8px;
-  border-radius: 4px;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 0.82em;
   font-family: inherit;
-  height: 22px;
-  white-space: nowrap;
+  flex-shrink: 0;
 }
 .clear-btn:hover:not(:disabled) {
   background: rgba(var(--v-theme-on-background), 0.12);
@@ -3111,17 +3423,18 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .delete-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  justify-content: center;
+  gap: 4px;
   background: rgba(var(--v-theme-on-background), 0.07);
   color: rgb(var(--v-theme-on-background));
   border: 1px solid rgba(var(--v-theme-on-background), 0.14);
-  padding: 0 8px;
-  border-radius: 4px;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 0.82em;
   font-family: inherit;
-  height: 22px;
-  white-space: nowrap;
+  flex-shrink: 0;
 }
 .delete-btn:hover:not(:disabled) {
   background: rgba(var(--v-theme-on-background), 0.12);
@@ -3136,16 +3449,16 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .stack-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   background: rgba(var(--v-theme-on-background), 0.07);
   color: rgb(var(--v-theme-on-background));
   border: 1px solid rgba(var(--v-theme-on-background), 0.14);
-  padding: 0 8px;
-  border-radius: 4px;
+  padding: 0 10px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 0.82em;
+  font-size: 0.88em;
   font-family: inherit;
-  height: 22px;
+  height: 40px;
   white-space: nowrap;
 }
 .stack-btn:hover:not(:disabled) {
@@ -3703,16 +4016,16 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .bar-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: 3px;
+  gap: 4px;
+  padding: 0 9px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 0.82em;
+  font-size: 0.88em;
   font-family: inherit;
   color: rgb(var(--v-theme-on-background));
   background: transparent;
   border: none;
-  height: 22px;
+  height: 40px;
   white-space: nowrap;
   position: relative;
 }
@@ -3731,6 +4044,146 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   border: 1px solid rgba(var(--v-theme-on-background), 0.14);
 }
 
+/* Icon-only bar button */
+.bar-btn--icon {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+/* Export panel */
+.tb-export-panel {
+  padding: 12px 14px;
+  min-width: 260px;
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 8px;
+  box-shadow: 2px 2px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tb-export-title {
+  font-size: 1em;
+  font-weight: 500;
+  padding-bottom: 4px;
+}
+
+/* ComfyUI T2I panel */
+.tb-comfyui-panel {
+  padding: 12px 14px;
+  min-width: 260px;
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 8px;
+  box-shadow: 2px 2px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tb-comfyui-header {
+  font-size: 1em;
+  font-weight: 500;
+}
+
+.tb-comfyui-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tb-comfyui-label {
+  font-size: 0.82em;
+  font-weight: 500;
+  color: rgba(var(--v-theme-on-background), 0.65);
+  margin-bottom: 2px;
+  display: block;
+}
+
+.tb-comfyui-select,
+.tb-comfyui-textarea,
+.tb-comfyui-seed-input {
+  width: 100%;
+  background: rgba(var(--v-theme-surface), 0.5);
+  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
+  border-radius: 4px;
+  color: rgb(var(--v-theme-on-background));
+  font-family: inherit;
+  font-size: 0.88em;
+  padding: 4px 8px;
+  box-sizing: border-box;
+}
+
+.tb-comfyui-seed-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.tb-comfyui-seed-btn {
+  background: rgba(var(--v-theme-surface), 0.3);
+  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
+  border-radius: 4px;
+  color: rgb(var(--v-theme-on-background));
+  cursor: pointer;
+  padding: 3px 9px;
+  font-family: inherit;
+  font-size: 0.82em;
+  transition: background 0.15s;
+}
+
+.tb-comfyui-seed-btn.active {
+  background: rgba(var(--v-theme-primary), 0.35);
+  border-color: rgba(var(--v-theme-primary), 0.6);
+}
+
+.tb-comfyui-seed-input {
+  flex: 1;
+  min-width: 70px;
+}
+
+.tb-comfyui-run-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-primary), 0.25);
+  border: 1px solid rgba(var(--v-theme-primary), 0.5);
+  color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85em;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.tb-comfyui-run-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tb-comfyui-note {
+  font-size: 0.85em;
+  opacity: 0.65;
+  padding: 2px 0;
+}
+
+.tb-comfyui-error {
+  font-size: 0.82em;
+  color: rgb(var(--v-theme-error));
+  padding: 2px 0;
+}
+
 .bar-btn-label {
   max-width: 130px;
   overflow: hidden;
@@ -3747,14 +4200,15 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 }
 
 .bar-split-toggle {
-  border-radius: 3px 0 0 3px;
-  padding-right: 4px;
+  border-radius: 5px 0 0 5px;
+  padding-right: 5px;
 }
 
 .bar-split-menu {
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 5px 5px 0;
   border-left: 1px solid rgba(var(--v-theme-on-background), 0.18);
-  padding-left: 5px;
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 .bar-filter-badge {
@@ -3772,7 +4226,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .bar-separator {
   width: 1px;
-  height: 16px;
+  height: 24px;
   background: rgba(var(--v-theme-on-background), 0.2);
   margin: 0 4px;
   align-self: center;
@@ -4304,8 +4758,8 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 @media (hover: none) and (pointer: coarse) {
   .selection-bar-overlay {
-    height: 44px;
-    padding: 0 8px;
+    height: 56px;
+    padding: 0 10px;
   }
 
   .bar-btn,
@@ -4314,11 +4768,16 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   .clear-btn,
   .delete-btn,
   .stack-btn {
-    min-height: 36px;
+    min-height: 46px;
+  }
+
+  .bar-btn--icon {
+    width: 46px;
+    height: 46px;
   }
 
   .bar-split-toggle {
-    min-width: 36px;
+    min-width: 46px;
   }
 }
 

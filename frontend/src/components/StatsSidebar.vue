@@ -35,6 +35,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
+  "toggle",
   "filter-tag",
   "filter-tags",
   "filter-confidence-above",
@@ -958,8 +959,25 @@ function handleResolutionBarClick(label) {
 
 <template>
   <div class="stats-sidebar" :class="{ collapsed: !props.open }">
+    <button
+      v-if="!props.open"
+      class="stats-sidebar-edge-toggle"
+      type="button"
+      title="Show stats sidebar"
+      @click="$emit('toggle')"
+    >
+      <v-icon size="16">mdi-chart-bar</v-icon>
+    </button>
     <div v-if="props.open" class="stats-sidebar-content">
       <div class="stats-sidebar-header">
+        <button
+          class="stats-tab-btn stats-sidebar-close-btn"
+          type="button"
+          title="Hide stats sidebar"
+          @click="$emit('toggle')"
+        >
+          <v-icon size="14">mdi-chevron-right</v-icon>
+        </button>
         <button
           class="stats-tab-btn"
           :class="{ active: activeTab === 'tags' }"
@@ -1822,7 +1840,6 @@ function handleResolutionBarClick(label) {
   flex-direction: row;
   flex-shrink: 0;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   background: rgba(var(--v-theme-surface), 1);
   transition:
     width 0.15s,
@@ -1836,9 +1853,36 @@ function handleResolutionBarClick(label) {
   min-width: 0;
   max-width: 0;
   border-left-color: transparent;
-  border-top-color: transparent;
   overflow: visible;
   background: transparent;
+}
+
+.stats-sidebar-edge-toggle {
+  position: absolute;
+  left: -28px;
+  top: 8px;
+  width: 28px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--v-theme-surface), 1);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  cursor: pointer;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  z-index: 1;
+}
+
+.stats-sidebar-edge-toggle:hover {
+  color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-surface), 1);
+}
+
+.stats-sidebar-close-btn {
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  padding: 0 6px;
 }
 
 .stats-sidebar-content {
