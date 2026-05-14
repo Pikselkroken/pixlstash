@@ -2,17 +2,17 @@
   <div class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
-        <!-- ── Sidebar toggle (when sidebar is collapsed) ──────────── -->
+        <!-- ── Sidebar toggle ──────────────────────────────────── -->
         <button
-          v-if="!tb?.sidebarVisible?.value"
           class="bar-btn bar-btn--icon"
+          :class="{ 'bar-btn--active': tb?.sidebarVisible?.value }"
           type="button"
-          title="Show sidebar"
+          :title="tb?.sidebarVisible?.value ? 'Hide sidebar' : 'Show sidebar'"
           @click="tb?.toggleSidebar?.()"
         >
           <v-icon size="20">mdi-dock-left</v-icon>
         </button>
-        <div v-if="!tb?.sidebarVisible?.value" class="bar-separator"></div>
+        <div class="bar-separator"></div>
         <!-- ── Sort split-button ──────────────────────────────────── -->
         <v-menu
           v-model="gbSortMenuOpen"
@@ -1636,12 +1636,15 @@
         >
           <v-icon size="20">mdi-cog-outline</v-icon>
         </button>
-        <!-- ── Toolbar: Stats toggle (when stats sidebar is closed) ──── -->
+        <!-- ── Toolbar: Stats toggle ──── -->
         <button
-          v-if="tb && !tb?.statsOpen?.value"
+          v-if="tb"
           class="bar-btn bar-btn--icon"
+          :class="{ 'bar-btn--active': tb?.statsOpen?.value }"
           type="button"
-          title="Show stats sidebar"
+          :title="
+            tb?.statsOpen?.value ? 'Hide stats sidebar' : 'Show stats sidebar'
+          "
           @click="tb?.toggleStats?.()"
         >
           <v-icon size="20">mdi-chart-bar</v-icon>

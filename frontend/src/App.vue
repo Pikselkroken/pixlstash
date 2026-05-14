@@ -170,6 +170,7 @@ const minColumns = ref(6);
 const maxColumns = ref(12);
 const mainAreaRef = ref(null);
 let mainAreaResizeObserver = null;
+const gridWrapperRef = ref(null);
 const sidebarVisible = ref(true);
 function loadStatsOpen() {
   try {
@@ -192,8 +193,28 @@ function saveStatsOpen(val) {
   }
 }
 const statsOpen = ref(loadStatsOpen());
-const isMobile = ref(false);
-const MOBILE_BREAKPOINT = 900;
+function loadSidebarDocked() {
+  try {
+    return window.localStorage?.getItem("pixlstash:sidebarDocked") === "true";
+  } catch {
+    return false;
+  }
+}
+function saveSidebarDocked(val) {
+  try {
+    window.localStorage?.setItem(
+      "pixlstash:sidebarDocked",
+      val ? "true" : "false",
+    );
+  } catch {
+    // ignore
+  }
+}
+const sidebarDocked = ref(loadSidebarDocked());
+const SIDEBAR_HIDE_BREAKPOINT = 1000;
+const STATS_HIDE_BREAKPOINT = 1280;
+const sidebarForcedHidden = ref(false);
+const statsForcedHidden = ref(false);
 
 // --- Media Type Filter State ---
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
@@ -525,11 +546,29 @@ function handleWindowPaste(event) {
   sidebarRef.value?.startLocalImport?.(mediaFiles, projectId);
 }
 
-function updateIsMobile() {
+const STATS_SIDEBAR_WIDTH = 288;
+
+function toolbarWidth() {
+  // gridWrapperRef is the flex:1 div that wraps ImageGrid — its clientWidth
+  // is exactly the toolbar width regardless of sidebar states.
+  return gridWrapperRef.value?.clientWidth ?? window.innerWidth ?? 0;
+}
+
+function updateSidebarBreakpoints() {
   if (typeof window !== "undefined") {
-    isMobile.value = window.innerWidth <= MOBILE_BREAKPOINT;
+    sidebarForcedHidden.value = window.innerWidth < SIDEBAR_HIDE_BREAKPOINT;
+    statsForcedHidden.value = window.innerWidth < STATS_HIDE_BREAKPOINT;
   }
+}
+
+function updateIsMobile() {
+  updateSidebarBreakpoints();
   updateMaxColumns();
+}
+
+function toggleDock() {
+  sidebarDocked.value = !sidebarDocked.value;
+  saveSidebarDocked(sidebarDocked.value);
 }
 
 function clampColumnsToBounds() {
@@ -564,7 +603,7 @@ function updateMaxColumns() {
 }
 
 function closeSidebarIfMobile() {
-  if (isMobile.value) {
+  if (sidebarForcedHidden.value) {
     sidebarVisible.value = false;
   }
 }
@@ -1242,11 +1281,7 @@ watch(searchQuery, (newVal, oldVal) => {
   }
 });
 
-watch([searchInput, searchHistory, isMobile], () => {
-  if (isMobile.value) {
-    isSearchHistoryOpen.value = false;
-    return;
-  }
+watch([searchInput, searchHistory], () => {
   const needle = (searchInput.value || "").trim();
   if (!needle) {
     isSearchHistoryOpen.value = false;
@@ -1376,8 +1411,12 @@ onMounted(async () => {
   if (typeof ResizeObserver !== "undefined" && mainAreaRef.value) {
     mainAreaResizeObserver = new ResizeObserver(() => {
       updateMaxColumns();
+      updateIsMobile();
     });
     mainAreaResizeObserver.observe(mainAreaRef.value);
+    if (gridWrapperRef.value) {
+      mainAreaResizeObserver.observe(gridWrapperRef.value);
+    }
   }
 });
 
@@ -1402,7 +1441,7 @@ onBeforeUnmount(() => {
   }
 });
 
-defineExpose({ sidebarVisible, mediaTypeFilter });
+defineExpose({ sidebarVisible, sidebarDocked, mediaTypeFilter });
 
 // ---------------------------------------------------------------------------
 // GridBar state – shared with SelectionBar via provide/inject so we don't need
@@ -1460,7 +1499,8 @@ provide("gridBarState", {
 // ---------------------------------------------------------------------------
 provide("toolbarState", {
   sidebarVisible,
-  isMobile,
+  sidebarForcedHidden,
+  statsForcedHidden,
   statsOpen,
   searchInput,
   isSearchHistoryOpen,
@@ -1485,6 +1525,7 @@ provide("toolbarState", {
   toggleStats: () => {
     statsOpen.value = !statsOpen.value;
     saveStatsOpen(statsOpen.value);
+    updateIsMobile();
   },
   openSearchOverlay,
   commitSearch,
@@ -1504,7 +1545,7 @@ provide("toolbarState", {
         <div class="sidebar-shell" :class="{ open: sidebarVisible }">
           <SideBar
             ref="sidebarRef"
-            :collapsed="!sidebarVisible && !isMobile"
+            :docked="sidebarDocked"
             :selectedCharacter="selectedCharacter"
             :selectedCharacterIds="selectedCharacterIds"
             :allPicturesId="ALL_PICTURES_ID"
@@ -1546,7 +1587,7 @@ provide("toolbarState", {
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMovedToSet"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
-            @toggle-sidebar="sidebarVisible = !sidebarVisible"
+            @toggle-dock="toggleDock"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @open-import-dialog="openImportDialog"
@@ -1557,7 +1598,7 @@ provide("toolbarState", {
         </div>
         <Transition name="backdrop-fade">
           <div
-            v-if="sidebarVisible && isMobile"
+            v-if="sidebarVisible && sidebarForcedHidden"
             class="sidebar-backdrop"
             @click="sidebarVisible = false"
           ></div>
@@ -1609,18 +1650,13 @@ provide("toolbarState", {
           @local-import="handleLocalImport"
           @project-created="refreshSidebar"
         />
-        <main
-          :class="[
-            'main-area',
-            !sidebarVisible && isMobile ? 'sidebar-hidden' : '',
-          ]"
-          ref="mainAreaRef"
-        >
+        <main :class="['main-area']" ref="mainAreaRef">
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
             style="margin-top: 0; flex-direction: row; align-items: stretch"
           >
             <div
+              ref="gridWrapperRef"
               style="
                 flex: 1;
                 min-width: 0;
@@ -1814,6 +1850,7 @@ provide("toolbarState", {
               @toggle="
                 statsOpen = !statsOpen;
                 saveStatsOpen(statsOpen);
+                updateIsMobile();
               "
             />
           </div>

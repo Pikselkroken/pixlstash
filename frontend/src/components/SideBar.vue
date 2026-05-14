@@ -24,7 +24,12 @@ import {
   sessionContext,
 } from "../utils/apiClient";
 import { extractSupportedImportFilesFromDataTransfer } from "../utils/media.js";
-import { SET_ICONS, SET_COLORS, SET_ICON_CATEGORIES, ICON_CARDS } from "../utils/setAppearance.js";
+import {
+  SET_ICONS,
+  SET_COLORS,
+  SET_ICON_CATEGORIES,
+  ICON_CARDS,
+} from "../utils/setAppearance.js";
 
 const appVersion = __APP_VERSION__;
 
@@ -82,7 +87,7 @@ const LATEST_VERSION_URL = "https://pixlstash.dev/latest-version.json";
 const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
 
 const props = defineProps({
-  collapsed: { type: Boolean, default: false },
+  docked: { type: Boolean, default: false },
   selectedCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
@@ -123,7 +128,7 @@ const emit = defineEmits([
   "update:sidebar-thumbnail-size",
   "update:date-format",
   "update:theme-mode",
-  "toggle-sidebar",
+  "toggle-dock",
   "update:sort-options",
   "update:hidden-tags",
   "update:apply-tag-filter",
@@ -865,15 +870,22 @@ function createSet() {
     projectViewMode.value === "project" ? selectedProjectId.value : null;
 
   // Pick an icon and color not already in use by sibling sets.
-  const siblingScope = defaultProjectId !== null
-    ? nonReferenceSets.value.filter(s => s.project_id === defaultProjectId)
-    : nonReferenceSets.value;
-  const usedIcons = new Set(siblingScope.map(s => s.set_icon).filter(Boolean));
-  const usedColors = new Set(siblingScope.map(s => s.set_color).filter(Boolean));
-  const autoIcon = SET_ICONS.find(i => !usedIcons.has(i.value))?.value
-    ?? SET_ICONS[siblingScope.length % SET_ICONS.length].value;
-  const autoColor = SET_COLORS.find(c => !usedColors.has(c.value))?.value
-    ?? SET_COLORS[siblingScope.length % SET_COLORS.length].value;
+  const siblingScope =
+    defaultProjectId !== null
+      ? nonReferenceSets.value.filter((s) => s.project_id === defaultProjectId)
+      : nonReferenceSets.value;
+  const usedIcons = new Set(
+    siblingScope.map((s) => s.set_icon).filter(Boolean),
+  );
+  const usedColors = new Set(
+    siblingScope.map((s) => s.set_color).filter(Boolean),
+  );
+  const autoIcon =
+    SET_ICONS.find((i) => !usedIcons.has(i.value))?.value ??
+    SET_ICONS[siblingScope.length % SET_ICONS.length].value;
+  const autoColor =
+    SET_COLORS.find((c) => !usedColors.has(c.value))?.value ??
+    SET_COLORS[siblingScope.length % SET_COLORS.length].value;
 
   setEditorSet.value = {
     ...(defaultProjectId !== null ? { project_id: defaultProjectId } : {}),
@@ -884,11 +896,7 @@ function createSet() {
 }
 
 function toggleProjectMenu() {
-  if (
-    !projectMenuOpen.value &&
-    props.collapsed &&
-    collapsedProjectBtnRef.value
-  ) {
+  if (!projectMenuOpen.value && props.docked && collapsedProjectBtnRef.value) {
     const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
     collapsedProjectMenuPos.value = { top: rect.top, left: rect.right + 4 };
   }
@@ -2870,7 +2878,9 @@ defineExpose({
   <PictureSetEditor
     :open="setEditorOpen"
     :set="setEditorSet"
-    :thumbnailUrl="setEditorSet ? (setThumbnails[setEditorSet.id] ?? null) : null"
+    :thumbnailUrl="
+      setEditorSet ? (setThumbnails[setEditorSet.id] ?? null) : null
+    "
     :backendUrl="props.backendUrl"
     :projects="projects"
     @close="closeSetEditor"
@@ -2965,13 +2975,12 @@ defineExpose({
   <aside
     ref="sidebarRootRef"
     class="sidebar"
-    :class="{ 'sidebar-collapsed': props.collapsed }"
+    :class="{ 'sidebar-docked': props.docked }"
     :style="sidebarThumbStyle"
   >
     <div class="sidebar-brand">
       <div class="sidebar-brand-left">
         <a
-          v-if="!props.collapsed"
           href="https://pikselkroken.github.io/pixlstash/"
           target="_blank"
           rel="noopener noreferrer"
@@ -2983,7 +2992,7 @@ defineExpose({
             class="sidebar-brand-logo"
           />
         </a>
-        <div v-if="!props.collapsed" class="sidebar-brand-text">
+        <div v-if="!props.docked" class="sidebar-brand-text">
           <span class="sidebar-brand-title">PixlStash</span>
           <a
             v-if="updateAvailable"
@@ -3000,17 +3009,18 @@ defineExpose({
         </div>
       </div>
       <v-btn
-        v-if="!props.collapsed"
         icon
         class="sidebar-brand-toggle"
-        :title="'Hide sidebar'"
-        @click.stop="emit('toggle-sidebar')"
+        :title="props.docked ? 'Switch to full sidebar' : 'Switch to dock'"
+        @click.stop="emit('toggle-dock')"
       >
-        <v-icon>mdi-dock-left</v-icon>
+        <v-icon>{{
+          props.docked ? "mdi-chevron-double-right" : "mdi-chevron-double-left"
+        }}</v-icon>
       </v-btn>
     </div>
     <div
-      v-if="props.collapsed"
+      v-if="props.docked"
       class="sidebar-collapsed-project-wrap"
       ref="projectMenuRef"
     >
@@ -3038,7 +3048,7 @@ defineExpose({
       </div>
       <Teleport to="body">
         <div
-          v-if="projectMenuOpen && props.collapsed"
+          v-if="projectMenuOpen && props.docked"
           ref="collapsedProjectMenuRef"
           class="sidebar-collapsed-project-menu"
           :style="{
@@ -3123,7 +3133,7 @@ defineExpose({
       </div>
     </div>
     <div class="sidebar-scroll">
-      <template v-if="props.collapsed">
+      <template v-if="props.docked">
         <div class="sidebar-collapsed-list">
           <div
             :class="[
@@ -3224,21 +3234,33 @@ defineExpose({
             ref="collapsedSetBtnRef"
             @click.stop="toggleCollapsedSetMenu"
           >
-<template v-if="selectedSetObj">
+            <template v-if="selectedSetObj">
               <v-icon
-                v-if="selectedSetObj.set_icon && selectedSetObj.set_icon !== ICON_CARDS"
+                v-if="
+                  selectedSetObj.set_icon &&
+                  selectedSetObj.set_icon !== ICON_CARDS
+                "
                 :color="selectedSetObj.set_color || undefined"
-              >{{ selectedSetObj.set_icon }}</v-icon>
+                >{{ selectedSetObj.set_icon }}</v-icon
+              >
               <img
                 v-else-if="hasSetThumbnail(selectedSetObj)"
                 :src="getSetThumbnail(selectedSetObj.id)"
                 alt=""
                 class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
-                :style="selectedSetObj.set_color ? { filter: `drop-shadow(0 0 3px ${selectedSetObj.set_color}) drop-shadow(0 0 8px ${selectedSetObj.set_color})` } : {}"
+                :style="
+                  selectedSetObj.set_color
+                    ? {
+                        filter: `drop-shadow(0 0 3px ${selectedSetObj.set_color}) drop-shadow(0 0 8px ${selectedSetObj.set_color})`,
+                      }
+                    : {}
+                "
                 :width="sidebarThumbnailSizeModel"
                 :height="sidebarThumbnailSizeModel"
               />
-              <v-icon v-else :color="selectedSetObj.set_color || undefined">mdi-image-album</v-icon>
+              <v-icon v-else :color="selectedSetObj.set_color || undefined"
+                >mdi-image-album</v-icon
+              >
             </template>
             <v-icon v-else>mdi-image-album</v-icon>
           </div>
@@ -3268,17 +3290,24 @@ defineExpose({
                   collapsedSetMenuOpen = false;
                 "
               >
-<v-icon
+                <v-icon
                   v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
                   size="28"
                   :color="pset.set_color || undefined"
-                >{{ pset.set_icon }}</v-icon>
+                  >{{ pset.set_icon }}</v-icon
+                >
                 <img
                   v-else-if="hasSetThumbnail(pset)"
                   :src="getSetThumbnail(pset.id)"
                   alt=""
                   class="sidebar-collapsed-flyout-thumb"
-                  :style="pset.set_color ? { filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})` } : {}"
+                  :style="
+                    pset.set_color
+                      ? {
+                          filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
+                        }
+                      : {}
+                  "
                   @load="handleSetThumbnailLoad(pset.id)"
                   @error="handleSetThumbnailError(pset.id)"
                 />
@@ -3895,7 +3924,8 @@ defineExpose({
                         v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
                         :size="sidebarThumbnailSizeLarge - 2"
                         :color="pset.set_color || undefined"
-                      >{{ pset.set_icon }}</v-icon>
+                        >{{ pset.set_icon }}</v-icon
+                      >
                       <img
                         v-else-if="hasSetThumbnail(pset)"
                         :src="getSetThumbnail(pset.id)"
@@ -3903,7 +3933,13 @@ defineExpose({
                         class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
                         :width="sidebarThumbnailSizeLarge"
                         :height="sidebarThumbnailSizeLarge"
-                        :style="pset.set_color ? { filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})` } : {}"
+                        :style="
+                          pset.set_color
+                            ? {
+                                filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
+                              }
+                            : {}
+                        "
                         @load="handleSetThumbnailLoad(pset.id)"
                         @error="handleSetThumbnailError(pset.id)"
                       />
@@ -4388,7 +4424,8 @@ defineExpose({
                             v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
                             :size="sidebarThumbnailSizeLarge - 2"
                             :color="pset.set_color || undefined"
-                          >{{ pset.set_icon }}</v-icon>
+                            >{{ pset.set_icon }}</v-icon
+                          >
                           <img
                             v-else-if="hasSetThumbnail(pset)"
                             :src="getSetThumbnail(pset.id)"
@@ -4396,7 +4433,13 @@ defineExpose({
                             class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
                             :width="sidebarThumbnailSizeLarge"
                             :height="sidebarThumbnailSizeLarge"
-                            :style="pset.set_color ? { filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})` } : {}"
+                            :style="
+                              pset.set_color
+                                ? {
+                                    filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
+                                  }
+                                : {}
+                            "
                             @load="handleSetThumbnailLoad(pset.id)"
                             @error="handleSetThumbnailError(pset.id)"
                           />
@@ -4602,8 +4645,16 @@ defineExpose({
           class="sidebar-ctx-item sidebar-ctx-item--has-arrow"
           @click.stop="openSetCtxIconMenu($event)"
         >
-          <v-icon size="15" class="sidebar-ctx-icon" :color="sidebarCtxSet.set_color || undefined">
-            {{ sidebarCtxSet.set_icon && sidebarCtxSet.set_icon !== ICON_CARDS ? sidebarCtxSet.set_icon : 'mdi-layers-triple' }}
+          <v-icon
+            size="15"
+            class="sidebar-ctx-icon"
+            :color="sidebarCtxSet.set_color || undefined"
+          >
+            {{
+              sidebarCtxSet.set_icon && sidebarCtxSet.set_icon !== ICON_CARDS
+                ? sidebarCtxSet.set_icon
+                : "mdi-layers-triple"
+            }}
           </v-icon>
           Icon
           <span class="sidebar-ctx-arrow">›</span>
@@ -4612,7 +4663,10 @@ defineExpose({
           <div
             v-if="setCtxIconMenuOpen"
             class="sidebar-ctx-appearance-panel"
-            :style="{ top: setCtxAppearanceMenuPos.top + 'px', left: setCtxAppearanceMenuPos.left + 'px' }"
+            :style="{
+              top: setCtxAppearanceMenuPos.top + 'px',
+              left: setCtxAppearanceMenuPos.left + 'px',
+            }"
             @click.stop
             @mousedown.stop
           >
@@ -4621,14 +4675,25 @@ defineExpose({
               <div class="sidebar-ctx-icon-grid">
                 <template v-for="cat in SET_ICON_CATEGORIES" :key="cat.label">
                   <div class="sidebar-ctx-cat-header">{{ cat.label }}</div>
-                  <template v-for="ic in cat.icons.filter(i => i.value !== ICON_CARDS)" :key="ic.value">
+                  <template
+                    v-for="ic in cat.icons.filter(
+                      (i) => i.value !== ICON_CARDS,
+                    )"
+                    :key="ic.value"
+                  >
                     <button
                       class="sidebar-ctx-icon-btn"
                       :class="{ selected: sidebarCtxSet.set_icon === ic.value }"
                       :title="ic.label"
-                      @click="applySetAppearance(sidebarCtxSet.id, ic.value, null)"
+                      @click="
+                        applySetAppearance(sidebarCtxSet.id, ic.value, null)
+                      "
                     >
-                      <v-icon size="18" :color="sidebarCtxSet.set_color || undefined">{{ ic.value }}</v-icon>
+                      <v-icon
+                        size="18"
+                        :color="sidebarCtxSet.set_color || undefined"
+                        >{{ ic.value }}</v-icon
+                      >
                     </button>
                   </template>
                 </template>
@@ -4644,9 +4709,15 @@ defineExpose({
                 <div class="sidebar-ctx-cat-header">Thumbnail</div>
                 <button
                   class="sidebar-ctx-icon-btn--cards-large"
-                  :class="{ selected: !sidebarCtxSet.set_icon || sidebarCtxSet.set_icon === ICON_CARDS }"
+                  :class="{
+                    selected:
+                      !sidebarCtxSet.set_icon ||
+                      sidebarCtxSet.set_icon === ICON_CARDS,
+                  }"
                   title="Thumbnail Stack"
-                  @click="applySetAppearance(sidebarCtxSet.id, ICON_CARDS, null)"
+                  @click="
+                    applySetAppearance(sidebarCtxSet.id, ICON_CARDS, null)
+                  "
                 >
                   <img
                     v-if="setThumbnails[sidebarCtxSet.id]"
@@ -4654,7 +4725,12 @@ defineExpose({
                     class="sidebar-ctx-icon-thumb"
                     alt="Thumbnail"
                   />
-                  <v-icon v-else size="32" :color="sidebarCtxSet.set_color || undefined">mdi-layers-triple</v-icon>
+                  <v-icon
+                    v-else
+                    size="32"
+                    :color="sidebarCtxSet.set_color || undefined"
+                    >mdi-layers-triple</v-icon
+                  >
                 </button>
               </div>
             </div>
@@ -4676,7 +4752,10 @@ defineExpose({
           <div
             v-if="setCtxColorMenuOpen"
             class="sidebar-ctx-appearance-panel"
-            :style="{ top: setCtxAppearanceMenuPos.top + 'px', left: setCtxAppearanceMenuPos.left + 'px' }"
+            :style="{
+              top: setCtxAppearanceMenuPos.top + 'px',
+              left: setCtxAppearanceMenuPos.left + 'px',
+            }"
             @click.stop
             @mousedown.stop
           >
@@ -5759,22 +5838,30 @@ defineExpose({
   box-sizing: border-box;
 }
 
-.sidebar.sidebar-collapsed {
+.sidebar.sidebar-docked {
   width: calc(var(--sidebar-thumb-size) + 20px);
   overflow: hidden;
 }
 
-.sidebar.sidebar-collapsed .sidebar-brand {
-  justify-content: center;
+.sidebar.sidebar-docked .sidebar-brand {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px 4px 4px;
+  gap: 4px;
 }
 
-.sidebar.sidebar-collapsed .sidebar-brand-toggle:hover {
-  justify-content: center;
+.sidebar.sidebar-docked .sidebar-brand-toggle:hover {
   background-color: rgba(var(--v-theme-accent), 0.4);
 }
 
-.sidebar.sidebar-collapsed .sidebar-brand-left {
-  display: none;
+.sidebar.sidebar-docked .sidebar-brand-left {
+  padding: 2px;
+}
+
+.sidebar.sidebar-docked .sidebar-brand-logo {
+  width: 28px;
+  height: 28px;
 }
 
 .sidebar-brand {
@@ -6044,15 +6131,9 @@ defineExpose({
   background: rgba(var(--v-theme-background), 0.3);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 999px) {
   .sidebar {
-    width: 240px !important;
-    height: 100dvh;
-    max-height: 100dvh;
-  }
-
-  .sidebar.sidebar-collapsed {
-    display: none;
+    height: 100%;
   }
 }
 
@@ -6769,14 +6850,6 @@ defineExpose({
   z-index: 1000 !important;
 }
 
-@media (max-width: 900px) {
-  .sidebar {
-    width: 100%;
-    min-height: 100%;
-    height: 100%;
-  }
-}
-
 @media (hover: none) and (pointer: coarse) {
   .sidebar-list-item,
   .sidebar-list-item.active {
@@ -7271,7 +7344,9 @@ defineExpose({
   box-sizing: border-box;
   aspect-ratio: 1 / 1;
   position: relative;
-  transition: transform 0.12s, border-color 0.12s;
+  transition:
+    transform 0.12s,
+    border-color 0.12s;
 }
 
 .sidebar-ctx-color-swatch:hover {
