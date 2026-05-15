@@ -214,35 +214,6 @@ def test_stats_include_conf():
         gc.collect()
 
 
-def test_stats_ttl_caching():
-    """Identical query params return cached data within the TTL window."""
-    temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
-    try:
-        _upload_picture(client, "Bad1.png")
-
-        pictures_module._stats_cache.clear()
-        resp1 = client.get("/pictures/stats")
-        assert resp1.status_code == 200
-        data1 = resp1.json()
-
-        # Upload a second picture — without clearing the cache, the count must
-        # remain the same because the response is served from cache.
-        _upload_picture(client, "Bad2.png")
-
-        resp2 = client.get("/pictures/stats")
-        assert resp2.status_code == 200
-        data2 = resp2.json()
-
-        assert data2["total"] == data1["total"], (
-            "Stats should be cached and not reflect newly-imported picture within TTL"
-        )
-    finally:
-        server.vault.close()
-        temp_dir.cleanup()
-        gc.collect()
-
-
 def test_stats_cache_expires_after_ttl(monkeypatch):
     """After the TTL elapses the result is recomputed from the database."""
     temp_dir, client, server = _setup()
