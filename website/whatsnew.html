@@ -6,7 +6,7 @@
     <title>What's New in PixlStash 1.2</title>
     <meta
       name="description"
-      content="Explore what's new in PixlStash 1.1 including reference folders, context menus, and a statistics sidebar."
+      content="Explore what's new in PixlStash 1.2 including picture sharing, a redesigned sidebar and toolbar, context menus, and faster background processing."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -90,13 +90,15 @@
       }
 
       .release-hero-media {
-        min-height: 320px;
+        height: 380px;
+        overflow: hidden;
       }
 
       .release-hero-media img {
         width: 100%;
         height: 100%;
         object-fit: cover;
+        object-position: top;
         display: block;
         cursor: zoom-in;
       }
@@ -291,6 +293,23 @@
         margin-top: 40px;
       }
 
+      .prev-release {
+        margin-top: 56px;
+        padding-top: 40px;
+        border-top: 1px solid rgba(34, 38, 44, 0.14);
+      }
+
+      .prev-release-label {
+        display: block;
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        font-weight: 700;
+        margin-bottom: 20px;
+        opacity: 0.7;
+      }
+
       @media (max-width: 980px) {
         .release-hero-inner {
           grid-template-columns: 1fr;
@@ -356,32 +375,120 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
+      <!-- ── PixlStash 1.2 ──────────────────────────────────────────── -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.1</span>
-            <h1>More control over your image folders</h1>
+            <span class="release-kicker">PixlStash 1.2</span>
+            <h1>A whole new look — and picture sharing</h1>
             <p>
-              This release adds reference folder support, letting you keep your
-              existing folder structure while still benefiting from PixlStash's
-              powerful organization and metadata features.
+              The biggest visual overhaul since launch: a redesigned sidebar,
+              new toolbar, and context menus throughout. Plus, share pictures,
+              sets, characters and projects with a single link.
             </p>
             <ul class="release-bullets">
+              <li>Share pictures and collections with read-only links</li>
+              <li>Redesigned sidebar and toolbar</li>
+              <li>Context menus across the grid and sidebar</li>
               <li>
-                Reference folders and import folders managed within the UI
+                Faster background processing — tagging &amp; face extraction
               </li>
-              <li>Context menus in image grid and main sidebar</li>
-              <li>Statistics sidebar for rapid overview</li>
             </ul>
           </div>
           <div class="release-hero-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotReferenceFolders.jpg"
-              alt="PixlStash screenshot with reference folders, context menu, and statistics sidebar"
+              src="assets/ScreenshotWhatsNew1_2.jpg"
+              alt="PixlStash 1.2 — redesigned sidebar and toolbar"
             />
           </div>
         </div>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card update-card--feature">
+          <div class="update-card-body">
+            <h2>Picture Sharing</h2>
+            <p>
+              Share individual pictures, sets, characters, and projects with
+              anyone using a read-only link — no account required for viewers.
+              Tokens are scoped, revocable, and never expose your full library.
+              Ideal for sharing work-in-progress with clients or collaborators.
+            </p>
+          </div>
+          <div class="update-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotShare1.jpg"
+              alt="Sharing dialog in PixlStash showing a generated share link"
+            />
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotShare2.jpg"
+            alt="Shared picture view as seen by a recipient"
+          />
+          <div class="update-card-body">
+            <h2>Recipient view</h2>
+            <p>
+              Recipients see a clean, read-only view of exactly what you shared.
+              No login, no noise — just the content you chose to share.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotToolbar.jpg"
+            alt="New PixlStash toolbar design"
+          />
+          <div class="update-card-body">
+            <h2>New Toolbar</h2>
+            <p>
+              The toolbar has been redesigned for clarity. Search, filters, and
+              sort controls are better organised, and the new layout scales more
+              naturally on smaller screens.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotContext.jpg"
+            alt="Context menu in the PixlStash image grid"
+          />
+          <div class="update-card-body">
+            <h2>Context Menus</h2>
+            <p>
+              Right-click anywhere in the grid or sidebar to access actions for
+              the item under the cursor. Rate, tag, assign, move, share, or
+              delete without leaving your current view.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotIconColor.jpg"
+            alt="Coloured icon picker for picture sets in PixlStash"
+          />
+          <div class="update-card-body">
+            <h2>Custom Icons for Sets</h2>
+            <p>
+              Give each picture set its own coloured icon instead of relying on
+              the automatic thumbnail. Instantly recognise your sets at a
+              glance, no matter how similar the contents look.
+            </p>
+          </div>
+        </article>
       </section>
 
       <section class="section-grid section-grid--stats">
@@ -389,16 +496,16 @@
           <div class="stats-card-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotTagStatistics.png"
-              alt="Tag distribution and confidence statistics sidebar in PixlStash"
+              src="assets/ScreenshotSidebar2.jpg"
+              alt="Redesigned PixlStash sidebar"
             />
           </div>
           <div class="update-card-body">
-            <h2>Tag Statistics</h2>
+            <h2>Redesigned Sidebar</h2>
             <p>
-              Get useful statistics about your picture sets. See tag
-              distribution and tag prediction confidence. A powerful way to
-              understand your training sets.
+              People, sets, projects, and folders are easier to navigate. The
+              new sidebar is more compact, loads faster, and shows more at a
+              glance.
             </p>
           </div>
         </article>
@@ -407,47 +514,32 @@
           <div class="stats-card-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotPictureStatistics.png"
-              alt="Picture statistics including image size and score distribution"
+              src="assets/ScreenshotTaskManager.jpg"
+              alt="Task manager in the statistics sidebar showing processing throughput"
             />
           </div>
           <div class="update-card-body">
-            <h2>Picture Statistics</h2>
+            <h2>Faster Background Processing</h2>
             <p>
-              See statistics about your pictures including size distribution and
-              score distribution. Filter image views by clicking on elements in
-              the sidebar. Quickly find outliers to review or delete.
+              Tagging and face extraction are significantly faster thanks to
+              bulk database operations and smarter grid update scheduling. Watch
+              real-time throughput in the statistics sidebar task manager.
             </p>
           </div>
         </article>
       </section>
 
-      <section class="section-grid">
-        <article class="update-card update-card--feature">
-          <div class="update-card-body">
-            <h2>Boolean Set Operations for People &amp; Sets</h2>
-            <p>
-              Hold <kbd>Ctrl</kbd> and click names in the People or Sets sidebar
-              to build a multi-selection, then choose how to combine them using
-              the toolbar at the bottom of the grid. <strong>Union</strong>
-              shows all pictures from any selected person or set.
-              <strong>Overlap</strong> finds pictures where every selected
-              person appears together. <strong>Difference</strong> subtracts one
-              set from another — useful for finding pictures unique to a base
-              set. <strong>Unique (XOR)</strong> returns pictures that belong to
-              exactly one of the selections, letting you quickly spot what each
-              person or set contributes exclusively.
-            </p>
-          </div>
-          <div class="update-card-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotOverlap.jpg"
-              alt="Multi-select with Overlap mode showing pictures containing both selected people"
-            />
-          </div>
-        </article>
-      </section>
+      <article class="update-card" style="margin-top: 20px">
+        <div class="update-card-body">
+          <h2>Security Vulnerability Notifications</h2>
+          <p>
+            PixlStash now checks for known security issues in the ChangeLog and
+            alerts you directly in the UI when a fix is available along with the
+            security level and affected versions. Stay informed and keep your
+            installation secure with ease.
+          </p>
+        </div>
+      </article>
 
       <section class="release-cta">
         <div>
@@ -466,6 +558,106 @@
           >
         </div>
       </section>
+
+      <!-- ── PixlStash 1.1 (previous release) ────────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release — PixlStash 1.1</span>
+
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.1</span>
+              <h1>More control over your image folders</h1>
+              <p>
+                This release adds reference folder support, letting you keep
+                your existing folder structure while still benefiting from
+                PixlStash's powerful organization and metadata features.
+              </p>
+              <ul class="release-bullets">
+                <li>
+                  Reference folders and import folders managed within the UI
+                </li>
+                <li>Context menus in image grid and main sidebar</li>
+                <li>Statistics sidebar for rapid overview</li>
+              </ul>
+            </div>
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotReferenceFolders.jpg"
+                alt="PixlStash screenshot with reference folders, context menu, and statistics sidebar"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid section-grid--stats">
+          <article class="update-card stats-card">
+            <div class="stats-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotTagStatistics.png"
+                alt="Tag distribution and confidence statistics sidebar in PixlStash"
+              />
+            </div>
+            <div class="update-card-body">
+              <h2>Tag Statistics</h2>
+              <p>
+                Get useful statistics about your picture sets. See tag
+                distribution and tag prediction confidence. A powerful way to
+                understand your training sets.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card stats-card">
+            <div class="stats-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotPictureStatistics.png"
+                alt="Picture statistics including image size and score distribution"
+              />
+            </div>
+            <div class="update-card-body">
+              <h2>Picture Statistics</h2>
+              <p>
+                See statistics about your pictures including size distribution
+                and score distribution. Filter image views by clicking on
+                elements in the sidebar. Quickly find outliers to review or
+                delete.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>Boolean Set Operations for People &amp; Sets</h2>
+              <p>
+                Hold <kbd>Ctrl</kbd> and click names in the People or Sets
+                sidebar to build a multi-selection, then choose how to combine
+                them using the toolbar at the bottom of the grid.
+                <strong>Union</strong> shows all pictures from any selected
+                person or set. <strong>Overlap</strong> finds pictures where
+                every selected person appears together.
+                <strong>Difference</strong> subtracts one set from another —
+                useful for finding pictures unique to a base set.
+                <strong>Unique (XOR)</strong> returns pictures that belong to
+                exactly one of the selections, letting you quickly spot what
+                each person or set contributes exclusively.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotOverlap.jpg"
+                alt="Multi-select with Overlap mode showing pictures containing both selected people"
+              />
+            </div>
+          </article>
+        </section>
+      </div>
 
       <div class="page-footer">
         <p>

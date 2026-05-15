@@ -62,9 +62,8 @@ def reset_smart_scores(cursor) -> None:
 
 
 def reset_features(cursor) -> None:
-    print("Clearing face and hand detections...")
+    print("Clearing face detections...")
     cursor.execute("DELETE FROM face")
-    cursor.execute("DELETE FROM hand")
 
 
 def reset_likeness_queue(cursor) -> None:
