@@ -35,7 +35,7 @@ const props = defineProps({
 .selection-bar-overlay {
   position: absolute !important;
   left: 0;
-  top: 0;
+  top: 48px;
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
