@@ -2,6 +2,7 @@
 - Improve GUI (Sidebar, Toolbars, Selection, context menus) on both Desktop and mobile
 - Fix large ZIP-file uploads
 - Make it possible for Picture sets to have icons and colors instead of thumbnails (which are a bit useless at small sizes)
+- Massively improved the dock sidebar.
 
 # [1.2.0b1]
 - Share picture sets, projects, characters and single pictures by easily creating read-tokens

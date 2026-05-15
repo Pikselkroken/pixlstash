@@ -2,9 +2,13 @@
 
 import subprocess
 
+# Hard upper bound for the VRAM budget setting. Applies both to the UI slider
+# maximum and to backend validation. Keep in sync with the frontend constant.
+MAX_VRAM_BUDGET_GB: float = 12.0
+
 
 def default_max_vram_gb() -> float:
-    """Return default VRAM budget in GB: min(4GB, 50% of available VRAM).
+    """Return default VRAM budget in GB: min(6GB, 50% of available VRAM).
 
     Falls back to 6GB when VRAM cannot be detected.
     """
@@ -28,6 +32,6 @@ def default_max_vram_gb() -> float:
         if total_mb <= 0:
             return 6.0
         half_gb = (total_mb / 1024.0) / 2.0
-        return round(min(4.0, half_gb), 2)
+        return round(min(6.0, half_gb), 2)
     except Exception:
         return 6.0

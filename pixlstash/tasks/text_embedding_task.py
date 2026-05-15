@@ -40,6 +40,11 @@ class TextEmbeddingTask(BaseTask):
     def queue_type(self) -> QueueType:
         return QueueType.GPU
 
+    def estimated_vram_mb(self) -> int:
+        # SBERT all-MiniLM-L6-v2: ~90 MB model weights on GPU.
+        # Per-text activation overhead is negligible.
+        return 90
+
     def _run_task(self):
         if not self._pictures:
             return {"changed_count": 0, "changed": []}

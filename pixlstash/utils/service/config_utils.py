@@ -2,7 +2,7 @@
 
 import json
 
-from pixlstash.utils.service.system_utils import default_max_vram_gb  # noqa: F401
+from pixlstash.utils.service.system_utils import default_max_vram_gb, MAX_VRAM_BUDGET_GB  # noqa: F401
 
 
 def _thumbnail_size(value):
@@ -259,6 +259,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = float(value)
                 if new_value <= 0:
                     raise ValueError("max_vram_gb must be greater than 0")
+                if new_value > MAX_VRAM_BUDGET_GB:
+                    raise ValueError(
+                        f"max_vram_gb must not exceed {MAX_VRAM_BUDGET_GB} GB"
+                    )
             if user.max_vram_gb != new_value:
                 user.max_vram_gb = new_value
                 updated = True

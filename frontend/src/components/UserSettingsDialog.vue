@@ -177,6 +177,7 @@ const labelThresholdsData = ref([]);
 const labelThresholdsLoading = ref(false);
 const VRAM_BUDGET_MIN_GB = 2;
 const VRAM_BUDGET_STEP_GB = 2;
+const VRAM_BUDGET_MAX_GB = 12;
 const maxVramGbValue = ref(VRAM_BUDGET_MIN_GB);
 const maxVramGbMax = ref(VRAM_BUDGET_MIN_GB);
 const maxVramGbLoading = ref(false);
@@ -378,7 +379,7 @@ function deriveMaxVramSliderMax(totalVramGb) {
   const available = total - 2;
   const stepped =
     Math.floor(available / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
-  return Math.max(VRAM_BUDGET_MIN_GB, stepped);
+  return Math.min(VRAM_BUDGET_MAX_GB, Math.max(VRAM_BUDGET_MIN_GB, stepped));
 }
 
 function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {

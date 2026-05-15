@@ -14,9 +14,7 @@ from pixlstash.db_models import Face, Picture, Tag, TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
-from pixlstash.utils.service.tag_prediction_utils import (
-    recompute_anomaly_tag_uncertainty,
-)
+from pixlstash.utils.service.tag_prediction_utils import _PENALISED_TAG_SET
 from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
@@ -635,6 +633,8 @@ class TagTask(BaseTask):
         Called from _tag_pictures_batch so CONFIRMED/REJECTED status is resolved
         immediately, without needing a separate TagPredictionTask pass.
 
+        Uses bulk queries to avoid per-row SELECTs across the batch.
+
         Args:
             session: Database session.
             label_scores_by_pic_id: Mapping of picture_id to {tag: confidence}.
@@ -645,28 +645,56 @@ class TagTask(BaseTask):
             Number of TagPrediction rows written or updated.
         """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+        picture_ids = [
+            pid for pid, scores in label_scores_by_pic_id.items() if scores
+        ]
+        if not picture_ids:
+            return 0
+
+        # --- Single bulk fetch of all existing TagPrediction rows for the batch ---
+        existing_rows = session.exec(
+            select(TagPrediction).where(TagPrediction.picture_id.in_(picture_ids))
+        ).all()
+        existing_map: dict[tuple[int, str], TagPrediction] = {
+            (row.picture_id, row.tag): row for row in existing_rows
+        }
+
+        # --- Bulk delete stale model-version rows ---
+        stale_ids = [
+            row.id
+            for row in existing_rows
+            if row.model_version != model_version and row.model_version != "manual"
+        ]
+        if stale_ids:
+            session.exec(
+                delete(TagPrediction).where(TagPrediction.id.in_(stale_ids))
+            )
+            # Remove from map so they are not treated as existing below.
+            for row in existing_rows:
+                if row.id in set(stale_ids):
+                    existing_map.pop((row.picture_id, row.tag), None)
+
+        # --- Bulk fetch applied tags for anomaly uncertainty computation ---
+        tag_rows = session.exec(
+            select(Tag.picture_id, Tag.tag).where(
+                Tag.picture_id.in_(picture_ids),
+                Tag.tag.is_not(None),
+                Tag.tag != TAG_EMPTY_SENTINEL,
+            )
+        ).all()
+        applied_tags_by_pic: dict[int, set[str]] = {}
+        for pid, tag in tag_rows:
+            applied_tags_by_pic.setdefault(pid, set()).add(tag)
+
         written = 0
         for picture_id, label_scores in label_scores_by_pic_id.items():
             if not label_scores:
                 continue
             applied_tags = tags_by_pic_id.get(picture_id, set())
 
-            # Remove predictions from older model versions.
-            session.exec(
-                delete(TagPrediction)
-                .where(TagPrediction.picture_id == picture_id)
-                .where(TagPrediction.model_version != model_version)
-                .where(TagPrediction.model_version != "manual")
-            )
-
             for tag, confidence in label_scores.items():
                 status = "CONFIRMED" if tag in applied_tags else "REJECTED"
-                existing = session.exec(
-                    select(TagPrediction).where(
-                        TagPrediction.picture_id == picture_id,
-                        TagPrediction.tag == tag,
-                    )
-                ).first()
+                existing = existing_map.get((picture_id, tag))
                 if existing is None:
                     session.add(
                         TagPrediction(
@@ -693,12 +721,7 @@ class TagTask(BaseTask):
             for tag in applied_tags:
                 if tag in label_score_tags:
                     continue
-                existing = session.exec(
-                    select(TagPrediction).where(
-                        TagPrediction.picture_id == picture_id,
-                        TagPrediction.tag == tag,
-                    )
-                ).first()
+                existing = existing_map.get((picture_id, tag))
                 if existing is None:
                     session.add(
                         TagPrediction(
@@ -712,12 +735,26 @@ class TagTask(BaseTask):
                     )
                     written += 1
 
+            # Compute tag_uncertainty from model confidences.
             confs = list(label_scores.values())
             uncertainty = float(max(min(c, 1.0 - c) for c in confs)) if confs else 0.0
-            recompute_anomaly_tag_uncertainty(session, picture_id)
             pic = session.get(Picture, picture_id)
             if pic is not None:
                 pic.tag_uncertainty = uncertainty
+
+            # Compute anomaly_tag_uncertainty using the already-fetched applied tags
+            # (avoids a redundant SELECT per picture inside recompute_anomaly_tag_uncertainty).
+            pic_applied = applied_tags_by_pic.get(picture_id, set())
+            anomaly_scores: list[float] = []
+            for tag, confidence in label_scores.items():
+                if tag is None or tag.strip().lower() not in _PENALISED_TAG_SET:
+                    continue
+                if tag in pic_applied:
+                    anomaly_scores.append(1.0 - float(confidence))
+                else:
+                    anomaly_scores.append(float(confidence))
+            if pic is not None:
+                pic.anomaly_tag_uncertainty = max(anomaly_scores) if anomaly_scores else 0.0
 
         session.commit()
         return written

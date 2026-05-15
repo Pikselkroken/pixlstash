@@ -320,7 +320,7 @@ def create_router(server) -> APIRouter:
                         used_bytes += used_gpu
                 vram_collected = _set_vram_payload(payload, used_bytes, total_bytes)
             except Exception as exc:
-                logger.warning("Failed to read VRAM usage: %s", exc)
+                logger.debug("Failed to read VRAM usage: %s", exc)
             finally:
                 try:
                     pynvml.nvmlShutdown()

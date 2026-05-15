@@ -557,7 +557,10 @@ class Vault:
             self._notify_worker_ids_processed(TaskType.FACE_EXTRACTION, changed)
             picture_ids = result.get("picture_ids") or []
             if picture_ids:
-                self.notify(EventType.CHANGED_FACES, picture_ids)
+                # Do NOT fire CHANGED_FACES here: newly-extracted faces always
+                # have character_id=None so no character sidebar data changes.
+                # _process_pending_character_assignments fires CHANGED_FACES
+                # itself only when it actually assigns a face to a character.
                 self._process_pending_character_assignments(picture_ids)
             return
 
