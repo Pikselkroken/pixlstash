@@ -4083,7 +4083,6 @@ defineExpose({
                   ]"
                   @click="
                     selectProjectNode(p);
-                    toggleProjectExpanded(p.id);
                   "
                   @contextmenu.prevent="
                     !isReadOnly && openSidebarCtxMenu('project', p, $event)
