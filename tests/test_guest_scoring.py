@@ -371,21 +371,28 @@ def test_get_returns_scores_after_post():
         server, owner_client, read_token = _setup(tmp)
         try:
             pic_id = _import_picture(owner_client)
-            # POST without cookie first so the session is created
+            # POST with set_cookie=True so a server-generated cookie_token is
+            # stored in the DB.  The middleware resolves cookie_token → session_id,
+            # so sending the raw session_id as the cookie no longer works.
             rc_no_cookie = _read_client(server, read_token)
             r = rc_no_cookie.post(
                 f"{API}/pictures/guest-scores",
                 json={
                     "session_id": _SID,
-                    "set_cookie": False,
+                    "set_cookie": True,
                     "scores": {str(pic_id): 3},
                 },
             )
             assert r.status_code == 200, r.text
+            # Capture the opaque cookie_token the server placed in the response.
+            cookie_token = r.cookies.get("guest_session")
+            assert cookie_token is not None, (
+                "Expected guest_session cookie in POST response"
+            )
 
-            # GET with the session cookie
+            # GET with the server-issued cookie token.
             rc_with_cookie = _read_client(
-                server, read_token, cookies={"guest_session": _SID}
+                server, read_token, cookies={"guest_session": cookie_token}
             )
             r = rc_with_cookie.get(f"{API}/pictures/guest-scores")
             assert r.status_code == 200, r.text
@@ -413,7 +420,9 @@ def test_cookies_set_when_requested():
             assert r.status_code == 200, r.text
             assert "guest_session" in r.cookies, "HttpOnly session cookie should be set"
             assert "guest_session_active" in r.cookies, "Sentinel cookie should be set"
-            assert r.cookies["guest_session"] == _SID
+            # Cookie value is the server-generated opaque token, not the session_id.
+            assert r.cookies["guest_session"] != _SID
+            assert len(r.cookies["guest_session"]) > 0
             assert r.cookies["guest_session_active"] == "1"
         finally:
             server.__exit__(None, None, None)
@@ -593,17 +602,24 @@ def test_score_sort_uses_guest_scores():
                 json={"scores": {str(id_a): 1, str(id_b): 5}, "only_unscored": False},
             )
 
-            # Guest scores: A=5, B=1 (reversed from owner)
-            rc = _read_client(server, read_token, cookies={"guest_session": _SID})
-            r = rc.post(
+            # Guest scores: A=5, B=1 (reversed from owner).
+            # Use set_cookie=True so a cookie_token is stored in the DB;
+            # the middleware resolves cookie_token → session_id for the GET.
+            rc_post = _read_client(server, read_token)
+            r = rc_post.post(
                 f"{API}/pictures/guest-scores",
                 json={
                     "session_id": _SID,
-                    "set_cookie": False,
+                    "set_cookie": True,
                     "scores": {str(id_a): 5, str(id_b): 1},
                 },
             )
             assert r.status_code == 200, r.text
+            cookie_token = r.cookies.get("guest_session")
+            assert cookie_token is not None
+            rc = _read_client(
+                server, read_token, cookies={"guest_session": cookie_token}
+            )
 
             # Fetch sorted by SCORE descending using the guest session cookie
             r = rc.get(
@@ -654,14 +670,19 @@ def test_score_sort_fallback_to_picture_score():
                 json={"scores": {str(id_x): 1, str(id_y): 5}, "only_unscored": False},
             )
 
-            # Guest has no scores → fallback to picture.score
-            rc = _read_client(server, read_token, cookies={"guest_session": _SID})
-            # Create an empty session so guest_session_id is valid in DB
-            r = rc.post(
+            # Guest has no scores → fallback to picture.score.
+            # Use set_cookie=True so the session is resolvable via cookie_token.
+            rc_post = _read_client(server, read_token)
+            r = rc_post.post(
                 f"{API}/pictures/guest-scores",
-                json={"session_id": _SID, "set_cookie": False, "scores": {}},
+                json={"session_id": _SID, "set_cookie": True, "scores": {}},
             )
             assert r.status_code == 200, r.text
+            cookie_token = r.cookies.get("guest_session")
+            assert cookie_token is not None
+            rc = _read_client(
+                server, read_token, cookies={"guest_session": cookie_token}
+            )
 
             r = rc.get(
                 f"{API}/pictures",
