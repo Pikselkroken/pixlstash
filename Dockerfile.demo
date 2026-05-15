@@ -125,7 +125,7 @@ COPY --chown=pixlstash:pixlstash demo-data/server-config.json \
 # regardless of how demo-data/server-config.json was configured locally.
 # disable_background_workers is forced to true so no models are loaded and no
 # background tasks run — the demo database is fully processed and read-only.
-RUN python3 -c "import json; path='/home/pixlstash/.config/pixlstash/server-config.json'; cfg=json.load(open(path)); cfg['image_root']='/home/pixlstash/images'; cfg['host']='0.0.0.0'; cfg['port']=8080; cfg['disable_password_auth']=True; cfg['disable_background_workers']=True; open(path,'w').write(json.dumps(cfg, indent=2))"
+RUN python3 -c "import json; path='/home/pixlstash/.config/pixlstash/server-config.json'; cfg=json.load(open(path)); cfg['image_root']='/home/pixlstash/images'; cfg['host']='0.0.0.0'; cfg['port']=8080; cfg['disable_password_auth']=True; cfg['disable_background_workers']=True; cfg['default_device']='cpu'; open(path,'w').write(json.dumps(cfg, indent=2))"
 
 COPY --chown=pixlstash:pixlstash demo-data/images/ \
     /home/pixlstash/images/
