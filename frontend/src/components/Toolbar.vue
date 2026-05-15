@@ -4067,7 +4067,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .bar-split-button {
   display: flex;
   align-items: center;
-  border-radius: 4px;
+  border-radius: 5px;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.07);
+  background: rgba(var(--v-theme-on-background), 0.02);
 }
 
 .bar-btn {
@@ -4261,7 +4263,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .bar-split-menu {
   border-radius: 0 5px 5px 0;
-  border-left: 1px solid rgba(var(--v-theme-on-background), 0.18);
+  border-left: 1px solid rgba(var(--v-theme-on-background), 0.07);
   padding-left: 6px;
   padding-right: 6px;
 }
