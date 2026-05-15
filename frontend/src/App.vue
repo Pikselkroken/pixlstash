@@ -1097,7 +1097,7 @@ function handleGlobalKeydown(e) {
   if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (!isEditable) {
       e.preventDefault();
-      toolbarRef.value?.focusSearchInput?.();
+      openSearchOverlay();
     }
   }
   if (
@@ -1892,7 +1892,7 @@ provide("toolbarState", {
               </tr>
               <tr>
                 <td><kbd>F</kbd></td>
-                <td>Focus search</td>
+                <td>Open search</td>
               </tr>
               <tr :class="{ 'shortcut-disabled': isReadOnly }">
                 <td><kbd>1</kbd> – <kbd>5</kbd></td>

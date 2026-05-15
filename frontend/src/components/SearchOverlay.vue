@@ -61,13 +61,12 @@ function emitSearch() {
     document.activeElement.blur();
   }
 
-  // 2. Hide the input entirely using CSS or v-if (via isClosing)
-  // This physically removes the input from the DOM *before* closing the overlay
-  // Wait a tick for this update to happen
+  // Remove the input from the DOM (via isClosing v-if) before closing the
+  // overlay to avoid focus-restoration side effects, then emit search before
+  // close so the parent handler runs while the component is still mounted.
   nextTick(() => {
+    emit("search", query);
     emit("close");
-    // Delay search slightly to allow overlay unmount to complete
-    setTimeout(() => emit("search", query), 10);
   });
 }
 
