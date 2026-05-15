@@ -1729,8 +1729,10 @@ watch(
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds
       : [];
+    // Only refresh the grid when a tag filter is active — without a filter,
+    // tagging doesn't change anything visible in the grid (thumbnails and sort
+    // order are unaffected), so refreshing just hammers the DB for no benefit.
     if (
-      !pictureIds.length &&
       !(props.tagFilter && props.tagFilter.length) &&
       !(props.tagRejectedFilter && props.tagRejectedFilter.length) &&
       !(

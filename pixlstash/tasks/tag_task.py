@@ -220,14 +220,30 @@ class TagTask(BaseTask):
             for update in (updates or [])
             if update.get("pic_id") is not None
         }
-        existing_picture_ids = set()
-        if candidate_ids:
-            existing_picture_ids = set(
-                session.exec(
-                    select(Picture.id).where(Picture.id.in_(list(candidate_ids)))
-                ).all()
-            )
+        if not candidate_ids:
+            return updated_ids
 
+        existing_picture_ids = set(
+            session.exec(
+                select(Picture.id).where(Picture.id.in_(list(candidate_ids)))
+            ).all()
+        )
+
+        # Bulk-fetch existing tags for all pictures in the batch at once.
+        existing_tags_rows = session.exec(
+            select(Tag.picture_id, Tag.tag).where(
+                Tag.picture_id.in_(list(existing_picture_ids))
+            )
+        ).all()
+        existing_tags_map: dict[int, set] = {}
+        for row in existing_tags_rows:
+            pid = row[0] if isinstance(row, tuple) else row.picture_id
+            tag_val = row[1] if isinstance(row, tuple) else row.tag
+            if tag_val is not None:
+                existing_tags_map.setdefault(pid, set()).add(tag_val)
+
+        # Determine which pictures need updating and their new effective tags.
+        pics_to_update: list[tuple[int, set]] = []
         for update in updates:
             pic_id = update.get("pic_id")
             if pic_id is None:
@@ -241,32 +257,44 @@ class TagTask(BaseTask):
             # so that TagPredictionTask can detect that TagTask has already run.
             effective_tags = set(tags) if tags else {TAG_EMPTY_SENTINEL}
 
-            existing_tags = session.exec(
-                select(Tag.tag).where(Tag.picture_id == pic_id)
-            ).all()
-            existing_tag_set = {
-                row[0] if isinstance(row, tuple) else row
-                for row in existing_tags
-                if (row[0] if isinstance(row, tuple) else row) is not None
-            }
-            if effective_tags == existing_tag_set:
+            if effective_tags == existing_tags_map.get(pic_id, set()):
                 continue
 
-            try:
-                session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+            pics_to_update.append((pic_id, effective_tags))
 
+        if not pics_to_update:
+            return updated_ids
+
+        # Bulk delete old tags and insert new ones in a single transaction.
+        update_pic_ids = [pid for pid, _ in pics_to_update]
+        try:
+            session.exec(delete(Tag).where(Tag.picture_id.in_(update_pic_ids)))
+            for pic_id, effective_tags in pics_to_update:
                 for tag_value in effective_tags:
                     session.add(Tag(picture_id=pic_id, tag=tag_value))
-
-                session.commit()
-                updated_ids.append(pic_id)
-            except IntegrityError as exc:
-                session.rollback()
-                logger.warning(
-                    "Skipping tag update for picture_id=%s due to concurrent delete or FK constraint: %s",
-                    pic_id,
-                    exc,
-                )
+            session.commit()
+            updated_ids.extend(update_pic_ids)
+        except IntegrityError as exc:
+            session.rollback()
+            logger.warning(
+                "Bulk tag write failed for %d pictures, falling back to per-picture: %s",
+                len(update_pic_ids),
+                exc,
+            )
+            for pic_id, effective_tags in pics_to_update:
+                try:
+                    session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+                    for tag_value in effective_tags:
+                        session.add(Tag(picture_id=pic_id, tag=tag_value))
+                    session.commit()
+                    updated_ids.append(pic_id)
+                except IntegrityError as inner_exc:
+                    session.rollback()
+                    logger.warning(
+                        "Skipping tag update for picture_id=%s due to concurrent delete or FK constraint: %s",
+                        pic_id,
+                        inner_exc,
+                    )
 
         return updated_ids
 
@@ -645,9 +673,7 @@ class TagTask(BaseTask):
             Number of TagPrediction rows written or updated.
         """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        picture_ids = [
-            pid for pid, scores in label_scores_by_pic_id.items() if scores
-        ]
+        picture_ids = [pid for pid, scores in label_scores_by_pic_id.items() if scores]
         if not picture_ids:
             return 0
 
@@ -666,9 +692,7 @@ class TagTask(BaseTask):
             if row.model_version != model_version and row.model_version != "manual"
         ]
         if stale_ids:
-            session.exec(
-                delete(TagPrediction).where(TagPrediction.id.in_(stale_ids))
-            )
+            session.exec(delete(TagPrediction).where(TagPrediction.id.in_(stale_ids)))
             # Remove from map so they are not treated as existing below.
             for row in existing_rows:
                 if row.id in set(stale_ids):
@@ -754,7 +778,9 @@ class TagTask(BaseTask):
                 else:
                     anomaly_scores.append(float(confidence))
             if pic is not None:
-                pic.anomaly_tag_uncertainty = max(anomaly_scores) if anomaly_scores else 0.0
+                pic.anomaly_tag_uncertainty = (
+                    max(anomaly_scores) if anomaly_scores else 0.0
+                )
 
         session.commit()
         return written
