@@ -3084,7 +3084,7 @@ def create_router(server) -> APIRouter:
                             status_code=413,
                             detail=(
                                 f"Uploaded file '{upload.filename}' exceeds the "
-                                f"{_MAX_UPLOAD_BYTES // 1024 ** 3} GB limit."
+                                f"{_MAX_UPLOAD_BYTES // 1024**3} GB limit."
                             ),
                         )
                     try:
@@ -3101,7 +3101,7 @@ def create_router(server) -> APIRouter:
                                     status_code=413,
                                     detail=(
                                         f"Zip '{upload.filename}' decompressed size exceeds the "
-                                        f"{_MAX_ZIP_DECOMPRESSED_BYTES // 1024 ** 3} GB limit."
+                                        f"{_MAX_ZIP_DECOMPRESSED_BYTES // 1024**3} GB limit."
                                     ),
                                 )
                             added = 0
@@ -3148,7 +3148,7 @@ def create_router(server) -> APIRouter:
                             status_code=413,
                             detail=(
                                 f"Uploaded file '{upload.filename}' exceeds the "
-                                f"{_MAX_UPLOAD_BYTES // 1024 ** 3} GB limit."
+                                f"{_MAX_UPLOAD_BYTES // 1024**3} GB limit."
                             ),
                         )
                     if ext in allowed_caption_exts:
