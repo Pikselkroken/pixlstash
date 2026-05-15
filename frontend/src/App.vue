@@ -85,6 +85,8 @@ const setDifferenceBaseId = ref(loadBaseId("pixlstash:setDifferenceBaseId"));
 const selectedSetNames = ref({});
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = unassigned in project mode
+const characterProjectIds = ref({}); // charId -> project_id for the current character selection
+const setProjectIds = ref({}); // setId -> project_id for the current set selection
 const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, importSourceFolder, label }
 const folderScanning = ref(false);
 const selectedSort = ref("");
@@ -619,9 +621,10 @@ function SelectionPayload(payload) {
       id: payload.id ?? payload.value ?? null,
       label: payload.label ?? payload.name ?? null,
       ids,
+      projectIds: payload.projectIds && typeof payload.projectIds === "object" ? payload.projectIds : {},
     };
   }
-  return { id: payload ?? null, label: null, ids: [] };
+  return { id: payload ?? null, label: null, ids: [], projectIds: {} };
 }
 
 function clearSearchForCategoryChange() {
@@ -632,7 +635,8 @@ function clearSearchForCategoryChange() {
 
 async function handleSelectCharacter(payload) {
   selectedFolderFilter.value = null;
-  const { id: charId, label, ids } = SelectionPayload(payload);
+  const { id: charId, label, ids, projectIds } = SelectionPayload(payload);
+  characterProjectIds.value = projectIds;
   clearSearchForCategoryChange();
   if (charId == null) {
     selectedCharacter.value = null;
@@ -668,7 +672,8 @@ async function handleSelectCharacter(payload) {
 
 async function handleSelectSet(payload) {
   selectedFolderFilter.value = null;
-  const { id: setId, label, ids } = SelectionPayload(payload);
+  const { id: setId, label, ids, projectIds } = SelectionPayload(payload);
+  setProjectIds.value = projectIds;
   const names = payload && payload.names ? payload.names : {};
   clearSearchForCategoryChange();
   const nextIds = ids.length
@@ -1716,6 +1721,8 @@ provide("toolbarState", {
                 :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
                 :projectViewMode="projectViewMode"
                 :selectedProjectId="selectedProjectId"
+                :characterProjectIds="characterProjectIds"
+                :setProjectIds="setProjectIds"
                 :setDifferenceBaseId="setDifferenceBaseId"
                 :selectedSetNames="selectedSetNames"
                 :referenceFolderIdFilter="

@@ -913,6 +913,8 @@ const props = defineProps({
   applyTagFilter: { type: Boolean, default: false },
   projectViewMode: { type: String, default: "global" },
   selectedProjectId: { type: Number, default: null },
+  characterProjectIds: { type: Object, default: () => ({}) },
+  setProjectIds: { type: Object, default: () => ({}) },
   referenceFolderIdFilter: { type: Number, default: null },
   filePathPrefixFilter: { type: String, default: null },
   importSourceFolderFilter: { type: String, default: null },
@@ -4956,16 +4958,28 @@ function _appendSelectionParams(params) {
       ) {
         params.append("base_set_id", String(props.setDifferenceBaseId));
       }
+      if (props.projectViewMode === "project") {
+        // Derive effective project_id from per-set data; skip when sets span multiple projects.
+        const pidSet = new Set(
+          normalizedSelectedSetIds.value.map(
+            (id) => props.setProjectIds?.[id] ?? null,
+          ),
+        );
+        if (pidSet.size === 1) {
+          const pid = [...pidSet][0];
+          params.append("project_id", pid != null ? pid : "UNASSIGNED");
+        }
+      }
     } else if (primarySelectedSetId.value != null) {
       params.append("set_id", String(primarySelectedSetId.value));
-    }
-    if (props.projectViewMode === "project") {
-      params.append(
-        "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
-          : "UNASSIGNED",
-      );
+      if (props.projectViewMode === "project") {
+        params.append(
+          "project_id",
+          props.selectedProjectId != null
+            ? props.selectedProjectId
+            : "UNASSIGNED",
+        );
+      }
     }
   } else if (isMultiCharacterView.value) {
     for (const charId of normalizedSelectedCharacterIds.value) {
@@ -4973,12 +4987,17 @@ function _appendSelectionParams(params) {
     }
     params.append("character_mode", props.characterMultiMode ?? "union");
     if (props.projectViewMode === "project") {
-      params.append(
-        "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
-          : "UNASSIGNED",
+      // Derive effective project_id from per-character data; if all chars share
+      // the same project use it, if they span multiple projects skip the filter.
+      const pidSet = new Set(
+        normalizedSelectedCharacterIds.value.map(
+          (id) => props.characterProjectIds?.[id] ?? null,
+        ),
       );
+      if (pidSet.size === 1) {
+        const pid = [...pidSet][0];
+        params.append("project_id", pid != null ? pid : "UNASSIGNED");
+      }
     }
   } else if (
     props.selectedCharacter !== undefined &&
@@ -8177,7 +8196,7 @@ function handleEmptyStateReset() {
   width: 100%;
   box-sizing: border-box;
   flex: 1 1 0%;
-  padding: 0 4px 2px 4px !important;
+  padding: 0 4px 2px 0 !important;
   align-content: start;
   justify-content: start;
 }

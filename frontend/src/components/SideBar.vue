@@ -235,10 +235,16 @@ const allPicturesLastProjectId = ref(null);
 const lastUsedProjectId = ref(null); // remembers last selected project for auto-select
 const projectEditorOpen = ref(false);
 const projectMenuOpen = ref(false);
+const projectMenuSection = ref(null); // 'projects' | 'folders' | null
+const projectMenuSubPos = ref({ top: 0, left: 0 });
 const projectMenuRef = ref(null);
 const collapsedProjectBtnRef = ref(null);
 const collapsedProjectMenuRef = ref(null);
+const collapsedProjectSubMenuRef = ref(null);
 const collapsedProjectMenuPos = ref({ top: 0, left: 0 });
+
+const dockedScrollRef = ref(null);
+const dockedScrollHeight = ref(0);
 
 const collapsedCharBtnRef = ref(null);
 const collapsedCharMenuRef = ref(null);
@@ -510,6 +516,26 @@ const selectedFolderScanning = computed(() => {
 
 watch(selectedFolderScanning, (val) => {
   emit("update:folder-scanning", val);
+});
+
+const collapsedProjectBtnTitle = computed(() => {
+  if (sidebarPrimaryTab.value === "folders") {
+    if (!selectedFolderKey.value) return "Folders";
+    if (selectedFolderKey.value.startsWith("rf-")) {
+      const id = Number(selectedFolderKey.value.slice(3));
+      const rf = referenceFolders.value.find((f) => f.id === id);
+      return rf ? (rf.label || rf.folder) : "Folder";
+    }
+    if (selectedFolderKey.value.startsWith("if-")) {
+      const id = Number(selectedFolderKey.value.slice(3));
+      const imf = importFolders.value.find((f) => Number(f.id) === id);
+      return imf ? (imf.label || imf.folder) : "Folder";
+    }
+    return "Folder";
+  }
+  if (projectViewMode.value === "global") return "Global (all projects)";
+  if (selectedProjectId.value === null) return "No project";
+  return selectedProjectObj.value?.name ?? "Project";
 });
 
 async function fetchReferenceFolders() {
@@ -921,25 +947,62 @@ function createSet() {
 function toggleProjectMenu() {
   if (!projectMenuOpen.value && props.docked && collapsedProjectBtnRef.value) {
     const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
-    collapsedProjectMenuPos.value = { top: rect.top, left: rect.right + 4 };
+    collapsedProjectMenuPos.value = _flyoutPos(rect);
+    if (referenceFolders.value.length === 0 && importFolders.value.length === 0) {
+      fetchReferenceFolders();
+      fetchImportFolders();
+    }
   }
+  projectMenuSection.value = null;
   projectMenuOpen.value = !projectMenuOpen.value;
+}
+
+let _projectSubCloseTimer = null;
+
+function openProjectSubMenu(section, event) {
+  clearTimeout(_projectSubCloseTimer);
+  const rect = event.currentTarget.getBoundingClientRect();
+  projectMenuSubPos.value = { top: rect.top - 4, left: rect.right + 4 };
+  projectMenuSection.value = section;
+}
+
+function scheduleCloseProjectSubMenu() {
+  _projectSubCloseTimer = setTimeout(() => {
+    projectMenuSection.value = null;
+  }, 180);
+}
+
+function cancelCloseProjectSubMenu() {
+  clearTimeout(_projectSubCloseTimer);
+}
+
+function _flyoutPos(rect) {
+  const menuMaxH = window.innerHeight * 0.6;
+  const menuMinW = 200;
+  const left = rect.right + 4;
+  // Clamp top so menu doesn't go below viewport
+  const top = Math.min(rect.top, window.innerHeight - menuMaxH - 8);
+  return { top: Math.max(8, top), left };
 }
 
 function toggleCollapsedCharMenu() {
   collapsedSetMenuOpen.value = false;
+  projectMenuOpen.value = false;
+  projectMenuSection.value = null;
   if (!collapsedCharMenuOpen.value && collapsedCharBtnRef.value) {
     const rect = collapsedCharBtnRef.value.getBoundingClientRect();
-    collapsedCharMenuPos.value = { top: rect.top, left: rect.right + 4 };
+    collapsedCharMenuPos.value = _flyoutPos(rect);
   }
   collapsedCharMenuOpen.value = !collapsedCharMenuOpen.value;
 }
 
 function toggleCollapsedSetMenu() {
   collapsedCharMenuOpen.value = false;
+  projectMenuOpen.value = false;
+  projectMenuSection.value = null;
   if (!collapsedSetMenuOpen.value && collapsedSetBtnRef.value) {
     const rect = collapsedSetBtnRef.value.getBoundingClientRect();
-    collapsedSetMenuPos.value = { top: rect.top, left: rect.right + 4 };
+    collapsedSetMenuPos.value = _flyoutPos(rect);
   }
   collapsedSetMenuOpen.value = !collapsedSetMenuOpen.value;
 }
@@ -1214,6 +1277,38 @@ const sidebarThumbnailSizeModel = computed({
   },
 });
 
+// Dock layout: how many rows of chars/sets can fit in the available scroll height.
+// setsCollapsed: collapse sets to a single flyout button first.
+// charsCollapsed: also collapse chars if sets-as-menu still doesn't free enough space.
+const _dockRowH = computed(() => sidebarThumbnailSizeModel.value + 4);
+const _DOCK_DIV = 3; // divider height (1px + 2px margins)
+const _addBtn = computed(() => isReadOnly.value ? 0 : 1); // extra [+] row when editable
+const setsCollapsed = computed(() => {
+  if (!props.docked || sidebarPrimaryTab.value === "folders") return false;
+  const h = _dockRowH.value;
+  const charCount = visibleCharacters.value.length;
+  const setCount = visibleSets.value.length;
+  if (!setCount || dockedScrollHeight.value === 0) return false;
+  const fixedH = 2 * h + _DOCK_DIV; // allPictures + scrapheap + divider after allPictures
+  const charH = (charCount + _addBtn.value) * h; // always include [+] row when editable
+  const setDividerH = _DOCK_DIV;
+  const allSetsH = (setCount + _addBtn.value) * h;
+  return fixedH + charH + setDividerH + allSetsH > dockedScrollHeight.value;
+});
+const charsCollapsed = computed(() => {
+  if (!props.docked || sidebarPrimaryTab.value === "folders") return false;
+  if (!setsCollapsed.value) return false;
+  const h = _dockRowH.value;
+  const charCount = visibleCharacters.value.length;
+  const setCount = visibleSets.value.length;
+  if (!charCount || dockedScrollHeight.value === 0) return false;
+  const fixedH = 2 * h + _DOCK_DIV;
+  const charH = (charCount + _addBtn.value) * h;
+  const setDividerH = setCount > 0 ? _DOCK_DIV : 0;
+  const collapsedSetH = setCount > 0 ? h : 0; // sets become 1 button
+  return fixedH + charH + setDividerH + collapsedSetH > dockedScrollHeight.value;
+});
+
 const sidebarFolderRootIconSize = computed(() =>
   Math.round(sidebarThumbnailSizeModel.value * 0.75),
 );
@@ -1321,8 +1416,21 @@ function selectCharacter(id, label = null, event = null) {
       allPicturesLastMode.value = projectViewMode.value;
       allPicturesLastProjectId.value = selectedProjectId.value;
     }
+    if (!isSpecial && projectViewMode.value === "project") {
+      const char = characters.value.find((c) => c.id === id);
+      if (char && char.project_id !== selectedProjectId.value) {
+        selectedProjectId.value = char.project_id;
+      }
+    }
+    const numId = Number(id);
+    const singleChar = isSpecial ? null : characters.value.find((c) => c.id === numId);
     emit("select-set", null);
-    emit("select-character", { id, label, ids: isSpecial ? [] : [Number(id)] });
+    emit("select-character", {
+      id,
+      label,
+      ids: isSpecial ? [] : [numId],
+      projectIds: singleChar ? { [numId]: singleChar.project_id ?? null } : {},
+    });
     return;
   }
 
@@ -1332,8 +1440,14 @@ function selectCharacter(id, label = null, event = null) {
 
   if (currentIds.size === 0) {
     // Nothing selected yet — treat as plain click
+    const singleChar0 = characters.value.find((c) => c.id === numericId);
     emit("select-set", null);
-    emit("select-character", { id, label, ids: [numericId] });
+    emit("select-character", {
+      id,
+      label,
+      ids: [numericId],
+      projectIds: singleChar0 ? { [numericId]: singleChar0.project_id ?? null } : {},
+    });
     return;
   }
 
@@ -1345,13 +1459,18 @@ function selectCharacter(id, label = null, event = null) {
 
   const nextIds = Array.from(currentIds).sort((a, b) => a - b);
   if (!nextIds.length) {
-    emit("select-character", { id: props.allPicturesId, label: null, ids: [] });
+    emit("select-character", { id: props.allPicturesId, label: null, ids: [], projectIds: {} });
     return;
   }
 
   // Keep the primary view unchanged on ctrl-click
   const primaryId = props.selectedCharacter ?? nextIds[0];
-  emit("select-character", { id: primaryId, label: null, ids: nextIds });
+  const multiProjectIds = {};
+  for (const cid of nextIds) {
+    const c = characters.value.find((ch) => ch.id === cid);
+    multiProjectIds[cid] = c?.project_id ?? null;
+  }
+  emit("select-character", { id: primaryId, label: null, ids: nextIds, projectIds: multiProjectIds });
 }
 
 function selectSet(setId, label = null, event = null) {
@@ -1364,11 +1483,19 @@ function selectSet(setId, label = null, event = null) {
 
   const isMultiToggle = Boolean(event?.ctrlKey || event?.metaKey);
   if (!isMultiToggle) {
+    if (projectViewMode.value === "project") {
+      const pset = nonReferenceSets.value.find((s) => s.id === numericSetId);
+      if (pset && pset.project_id !== selectedProjectId.value) {
+        selectedProjectId.value = pset.project_id;
+      }
+    }
+    const singleSet = pictureSets.value.find((s) => s.id === numericSetId);
     emit("select-set", {
       id: numericSetId,
       label,
       ids: [numericSetId],
       names: { [numericSetId]: label || String(numericSetId) },
+      projectIds: { [numericSetId]: singleSet?.project_id ?? null },
     });
     return;
   }
@@ -1386,15 +1513,20 @@ function selectSet(setId, label = null, event = null) {
   }
   const primarySet = pictureSets.value.find((pset) => pset.id === ids[0]);
   const setNames = {};
+  const setProjectIds = {};
   for (const sid of ids) {
     const found = pictureSets.value.find((p) => p.id === sid);
-    if (found) setNames[sid] = found.name;
+    if (found) {
+      setNames[sid] = found.name;
+      setProjectIds[sid] = found.project_id ?? null;
+    }
   }
   emit("select-set", {
     id: ids[0],
     label: primarySet?.name || label,
     ids,
     names: setNames,
+    projectIds: setProjectIds,
   });
 }
 
@@ -2020,9 +2152,7 @@ async function fetchSidebarData() {
           projectViewMode.value === "project"
             ? {
                 project_id:
-                  selectedProjectId.value != null
-                    ? selectedProjectId.value
-                    : "UNASSIGNED",
+                  char.project_id != null ? char.project_id : "UNASSIGNED",
               }
             : null;
         const res = await apiClient.get(
@@ -2611,6 +2741,16 @@ onMounted(() => {
     selectedProjectId.value = sessionContext.value.resource_id;
   }
 
+  // Track scroll area height for adaptive dock layout.
+  _dockedScrollObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      dockedScrollHeight.value = entry.contentRect.height;
+    }
+  });
+  if (dockedScrollRef.value) {
+    _dockedScrollObserver.observe(dockedScrollRef.value);
+  }
+
   // Fetch latest version directly from pixlstash.dev when the user has opted in.
   // Also handled by a watcher above for when the prop resolves after mount.
   if (props.checkForUpdates === true) {
@@ -2639,7 +2779,9 @@ onMounted(() => {
     if (
       (projectMenuRef.value && projectMenuRef.value.contains(e.target)) ||
       (collapsedProjectMenuRef.value &&
-        collapsedProjectMenuRef.value.contains(e.target))
+        collapsedProjectMenuRef.value.contains(e.target)) ||
+      (collapsedProjectSubMenuRef.value &&
+        collapsedProjectSubMenuRef.value.contains(e.target))
     ) {
       return;
     }
@@ -2703,6 +2845,7 @@ document.addEventListener("mousedown", onSidebarCtxOutside);
 document.addEventListener("keydown", onSidebarCtxKeydown, true);
 
 let sidebarNoticeCleanup = null;
+let _dockedScrollObserver = null;
 onBeforeUnmount(() => {
   stopVersionCheckInterval();
   document.removeEventListener("mousedown", onSidebarCtxOutside);
@@ -2720,6 +2863,18 @@ onBeforeUnmount(() => {
   }
   labelObservers.clear();
   labelRefs.clear();
+  if (_dockedScrollObserver) {
+    _dockedScrollObserver.disconnect();
+    _dockedScrollObserver = null;
+  }
+});
+
+// Close flyout menus when their section switches from menu to individual rows.
+watch(charsCollapsed, (collapsed) => {
+  if (!collapsed) collapsedCharMenuOpen.value = false;
+});
+watch(setsCollapsed, (collapsed) => {
+  if (!collapsed) collapsedSetMenuOpen.value = false;
 });
 
 watch(
@@ -3059,43 +3214,35 @@ defineExpose({
           >
         </div>
       </div>
-      <v-btn
-        icon
+      <button
         class="sidebar-brand-toggle"
         :title="props.docked ? 'Switch to full sidebar' : 'Switch to dock'"
         @click.stop="emit('toggle-dock')"
       >
         <v-icon>{{
-          props.docked ? "mdi-chevron-double-right" : "mdi-chevron-double-left"
+          props.docked ? "mdi-chevron-right" : "mdi-chevron-left"
         }}</v-icon>
-      </v-btn>
+      </button>
     </div>
+    <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
     <div
       v-if="props.docked"
       class="sidebar-collapsed-project-wrap"
       ref="projectMenuRef"
     >
-      <div
-        :class="[
-          'sidebar-collapsed-item',
-          {
-            active: projectViewMode === 'project' && selectedProjectId !== null,
-          },
-        ]"
-        style="margin: 0 auto"
-        :title="
-          projectViewMode === 'global'
-            ? 'Global (all projects)'
-            : selectedProjectId === null
-              ? 'No project'
-              : (selectedProjectObj?.name ?? 'Project')
-        "
-        ref="collapsedProjectBtnRef"
-        @click.stop="toggleProjectMenu"
-      >
+      <div class="sidebar-collapsed-row sidebar-collapsed-row--has-flyout sidebar-collapsed-row--project">
+        <div
+          class="sidebar-collapsed-item sidebar-collapsed-item--has-flyout"
+          style="margin: 0 auto"
+          :title="collapsedProjectBtnTitle"
+          ref="collapsedProjectBtnRef"
+          @click.stop="toggleProjectMenu"
+        >
         <v-icon size="20">{{
-          projectViewMode === "global" ? "mdi-earth" : "mdi-folder-outline"
+          sidebarPrimaryTab === 'folders' ? "mdi-folder-network-outline"
+          : projectViewMode === "global" ? "mdi-earth" : "mdi-folder-outline"
         }}</v-icon>
+        </div>
       </div>
       <Teleport to="body">
         <div
@@ -3106,48 +3253,136 @@ defineExpose({
             top: collapsedProjectMenuPos.top + 'px',
             left: collapsedProjectMenuPos.left + 'px',
           }"
+          @mouseleave="scheduleCloseProjectSubMenu"
         >
+          <!-- Global -->
           <div
             class="sidebar-project-menu-item"
-            :class="{ active: projectViewMode === 'global' }"
-            @click="
-              projectViewMode = 'global';
-              projectMenuOpen = false;
-            "
+            :class="{ active: projectViewMode === 'global' && sidebarPrimaryTab !== 'folders' }"
+            @mouseenter="scheduleCloseProjectSubMenu"
+            @click="selectLibraryTab('global'); selectCharacter(props.allPicturesId, 'All Pictures'); projectMenuOpen = false;"
           >
             <v-icon size="14">mdi-earth</v-icon>
             <span class="sidebar-project-menu-item-label">Global</span>
           </div>
+
+          <div class="sidebar-project-menu-separator"></div>
+
+          <!-- Projects row → flyout submenu on hover or click -->
           <div
-            v-for="p in sortedProjects"
-            :key="p.id"
-            class="sidebar-project-menu-item"
-            :class="{
-              active:
-                projectViewMode === 'project' && selectedProjectId === p.id,
-            }"
-            @click="
-              projectViewMode = 'project';
-              selectProject(p.id);
-            "
+            class="sidebar-project-menu-item sidebar-project-menu-has-sub"
+            :class="{ active: projectViewMode === 'project' && sidebarPrimaryTab !== 'folders', 'sub-open': projectMenuSection === 'projects' }"
+            @mouseenter="openProjectSubMenu('projects', $event)"
+            @click.stop="openProjectSubMenu('projects', $event)"
           >
-            <v-icon size="14">mdi-folder</v-icon>
-            <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
+            <v-icon size="14">mdi-folder-outline</v-icon>
+            <span class="sidebar-project-menu-item-label">Projects</span>
+            <v-icon size="12" class="sidebar-project-menu-chevron">mdi-chevron-right</v-icon>
           </div>
+
+          <!-- Folders row → flyout submenu on hover or click -->
           <div
-            v-if="!isReadOnly"
-            class="sidebar-project-menu-add"
-            @click="
-              createProject();
-              projectMenuOpen = false;
-            "
+            class="sidebar-project-menu-item sidebar-project-menu-has-sub"
+            :class="{ active: sidebarPrimaryTab === 'folders', 'sub-open': projectMenuSection === 'folders' }"
+            @mouseenter="openProjectSubMenu('folders', $event)"
+            @click.stop="openProjectSubMenu('folders', $event)"
           >
-            <v-icon size="14">mdi-plus</v-icon>
-            Add new project
+            <v-icon size="14">mdi-folder-network-outline</v-icon>
+            <span class="sidebar-project-menu-item-label">Folders</span>
+            <v-icon size="12" class="sidebar-project-menu-chevron">mdi-chevron-right</v-icon>
           </div>
         </div>
       </Teleport>
+
+      <!-- Flyout submenu -->
+      <Teleport to="body">
+        <div
+          v-if="projectMenuSection && projectMenuOpen && props.docked"
+          ref="collapsedProjectSubMenuRef"
+          class="sidebar-collapsed-project-submenu"
+          :style="{
+            top: projectMenuSubPos.top + 'px',
+            left: projectMenuSubPos.left + 'px',
+          }"
+          @mouseenter="cancelCloseProjectSubMenu"
+          @mouseleave="scheduleCloseProjectSubMenu"
+        >
+          <!-- Projects submenu -->
+          <template v-if="projectMenuSection === 'projects'">
+            <div
+              v-if="!isReadOnly"
+              class="sidebar-project-menu-item sidebar-project-menu-add"
+              @click="createProject(); projectMenuSection = null;"
+            >
+              <v-icon size="14">mdi-plus</v-icon>
+              <span class="sidebar-project-menu-item-label">Add new project</span>
+            </div>
+            <div
+              v-for="p in sortedProjects"
+              :key="p.id"
+              class="sidebar-project-menu-item"
+              :class="{ active: projectViewMode === 'project' && selectedProjectId === p.id }"
+              @click="selectLibraryTab('project'); selectProject(p.id); projectMenuSection = null;"
+            >
+              <v-icon size="14">mdi-folder</v-icon>
+              <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
+            </div>
+          </template>
+
+          <!-- Folders submenu -->
+          <template v-if="projectMenuSection === 'folders'">
+            <div
+              v-if="!isReadOnly"
+              class="sidebar-project-menu-item sidebar-project-menu-add"
+              @click="openAddFolderTypeDialog(); projectMenuOpen = false; projectMenuSection = null;"
+            >
+              <v-icon size="14">mdi-plus</v-icon>
+              <span class="sidebar-project-menu-item-label">Add folder</span>
+            </div>
+            <div v-if="referenceFolders.length" class="sidebar-project-menu-section-label">Reference Folders</div>
+            <div
+              v-for="rf in referenceFolders"
+              :key="'rf-' + rf.id"
+              class="sidebar-project-menu-item"
+              :class="{ active: sidebarPrimaryTab === 'folders' && selectedFolderKey === 'rf-' + rf.id }"
+              @click="
+                selectFoldersTab();
+                handleFolderNodeSelect('rf-' + rf.id, {
+                  referenceFolderId: rf.id,
+                  pathPrefix: rf.folder,
+                  label: rf.label || rf.folder,
+                });
+                projectMenuOpen = false;
+                projectMenuSection = null;
+              "
+            >
+              <v-icon size="14">mdi-folder-network-outline</v-icon>
+              <span class="sidebar-project-menu-item-label">{{ rf.label || rf.folder }}</span>
+            </div>
+            <div v-if="importFolders.length" class="sidebar-project-menu-section-label">Import Folders</div>
+            <div
+              v-for="imf in importFolders"
+              :key="'if-' + imf.id"
+              class="sidebar-project-menu-item"
+              :class="{ active: sidebarPrimaryTab === 'folders' && selectedFolderKey === 'if-' + imf.id }"
+              @click="
+                selectFoldersTab();
+                handleFolderNodeSelect('if-' + imf.id, {
+                  importSourceFolder: imf.folder,
+                  label: imf.label || imf.folder,
+                });
+                projectMenuOpen = false;
+                projectMenuSection = null;
+              "
+            >
+              <v-icon size="14">mdi-folder-open-outline</v-icon>
+              <span class="sidebar-project-menu-item-label">{{ imf.label || imf.folder }}</span>
+            </div>
+          </template>
+        </div>
+      </Teleport>
     </div>
+    <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
     <div v-else-if="!scopedResourceType" class="sidebar-view-tabs-row">
       <div class="sidebar-view-tabs">
         <button
@@ -3183,51 +3418,103 @@ defineExpose({
         </button>
       </div>
     </div>
-    <div class="sidebar-scroll">
+    <div class="sidebar-scroll" ref="dockedScrollRef">
       <template v-if="props.docked">
         <div class="sidebar-collapsed-list">
           <div
-            :class="[
-              'sidebar-collapsed-item',
-              {
-                active: isAllPicturesRowActive,
-              },
-            ]"
-            title="All Pictures"
-            @click="selectCharacter(props.allPicturesId, 'All Pictures')"
+            v-if="sidebarPrimaryTab !== 'folders'"
+            :class="['sidebar-collapsed-row', { active: isAllPicturesRowActive }]"
           >
-            <v-icon>mdi-image-multiple</v-icon>
+            <div
+              :class="['sidebar-collapsed-item', { active: isAllPicturesRowActive }]"
+              title="All Pictures"
+              @click="selectCharacter(props.allPicturesId, 'All Pictures')"
+            >
+              <v-icon>mdi-image-multiple</v-icon>
+            </div>
           </div>
-          <div class="sidebar-collapsed-divider"></div>
+          <div v-if="sidebarPrimaryTab !== 'folders'" class="sidebar-collapsed-divider"></div>
 
-          <!-- Characters flyout button -->
+          <!-- Characters: individual dock buttons when space allows, flyout menu when space is tight -->
+          <template v-if="visibleCharacters.length && sidebarPrimaryTab !== 'folders' && !charsCollapsed">
+            <div
+              v-for="char in visibleCharacters"
+              :key="char.id"
+              :class="['sidebar-collapsed-row', { active: props.selectedCharacter === char.id && !props.hasFolderFilter }]"
+            >
+              <div
+                :class="['sidebar-collapsed-item', { active: props.selectedCharacter === char.id && !props.hasFolderFilter }]"
+                :title="char.name || 'Character'"
+                @click="selectCharacter(char.id, char.name || 'Character')"
+                @contextmenu.prevent="openSidebarCtxMenu('character', char, $event)"
+              >
+                <img
+                  v-if="characterThumbnails[char.id]"
+                  :src="characterThumbnails[char.id]"
+                  alt=""
+                  :width="sidebarThumbnailSizeModel"
+                  :height="sidebarThumbnailSizeModel"
+                  class="sidebar-character-thumb"
+                />
+                <v-icon v-else>mdi-account</v-icon>
+              </div>
+            </div>
+            <div v-if="!isReadOnly" class="sidebar-collapsed-row">
+              <div
+                class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
+                title="Add person"
+                @click="createCharacter()"
+              >
+                <i class="mdi mdi-account sidebar-collapsed-item--add-bg-icon" aria-hidden="true"></i>
+                <v-icon class="sidebar-collapsed-item--add-plus">mdi-plus</v-icon>
+              </div>
+            </div>
+          </template>
           <div
-            v-if="visibleCharacters.length"
-            :class="[
-              'sidebar-collapsed-item',
-              {
-                active:
-                  selectedCharacterIdSet.size > 0 && !props.hasFolderFilter,
-              },
-            ]"
-            :title="
-              selectedCharacterObj ? selectedCharacterObj.name : 'Characters'
-            "
-            ref="collapsedCharBtnRef"
-            @click.stop="toggleCollapsedCharMenu"
+            v-else-if="!visibleCharacters.length && !isReadOnly && sidebarPrimaryTab !== 'folders'"
+            class="sidebar-collapsed-row"
           >
-            <img
-              v-if="
-                selectedCharacterObj &&
-                characterThumbnails[selectedCharacterObj.id]
+            <div
+              class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
+              title="Add person"
+              @click="createCharacter()"
+            >
+              <i class="mdi mdi-account sidebar-collapsed-item--add-bg-icon" aria-hidden="true"></i>
+              <v-icon class="sidebar-collapsed-item--add-plus">mdi-plus</v-icon>
+            </div>
+          </div>
+          <div
+            v-else-if="visibleCharacters.length && sidebarPrimaryTab !== 'folders'"
+            :class="['sidebar-collapsed-row', 'sidebar-collapsed-row--has-flyout', { active: selectedCharacterIdSet.size > 0 && !props.hasFolderFilter }]"
+          >
+            <div
+              :class="[
+                'sidebar-collapsed-item',
+                'sidebar-collapsed-item--has-flyout',
+                {
+                  active:
+                    selectedCharacterIdSet.size > 0 && !props.hasFolderFilter,
+                },
+              ]"
+              :title="
+                selectedCharacterObj ? selectedCharacterObj.name : 'People'
               "
-              :src="characterThumbnails[selectedCharacterObj.id]"
-              alt=""
-              :width="sidebarThumbnailSizeModel"
-              :height="sidebarThumbnailSizeModel"
-              class="sidebar-character-thumb"
-            />
-            <v-icon v-else>mdi-account-group</v-icon>
+              ref="collapsedCharBtnRef"
+              @click.stop="toggleCollapsedCharMenu"
+            >
+              <img
+                v-if="
+                  selectedCharacterObj &&
+                  characterThumbnails[selectedCharacterObj.id]
+                "
+                :src="characterThumbnails[selectedCharacterObj.id]"
+                alt=""
+                :width="sidebarThumbnailSizeModel"
+                :height="sidebarThumbnailSizeModel"
+                class="sidebar-character-thumb"
+              />
+              <v-icon v-else>mdi-account-group</v-icon>
+            </div>
           </div>
           <Teleport to="body">
             <div
@@ -3239,81 +3526,151 @@ defineExpose({
                 left: collapsedCharMenuPos.left + 'px',
               }"
             >
-              <div class="sidebar-collapsed-flyout-header">Characters</div>
-              <div
-                v-for="char in visibleCharacters"
-                :key="char.id"
-                :class="[
-                  'sidebar-collapsed-flyout-item',
-                  {
-                    active:
-                      props.selectedCharacter === char.id &&
-                      !props.hasFolderFilter,
-                  },
-                ]"
-                @click="
-                  selectCharacter(char.id, char.name || 'Character');
-                  collapsedCharMenuOpen = false;
-                "
-              >
-                <img
-                  :src="characterThumbnails[char.id] || unknownPerson"
-                  alt=""
-                  class="sidebar-collapsed-flyout-thumb"
-                />
-                <span class="sidebar-collapsed-flyout-label">{{
-                  char.name || "Character"
-                }}</span>
+              <div class="sidebar-collapsed-flyout-header">
+                <span>People</span>
+                <v-icon
+                  v-if="!isReadOnly"
+                  size="14"
+                  class="sidebar-collapsed-flyout-header-add"
+                  title="Add character"
+                  @click.stop="createCharacter(); collapsedCharMenuOpen = false;"
+                >mdi-plus</v-icon>
+              </div>
+              <div class="sidebar-collapsed-flyout-scroll">
+                <div
+                  v-for="char in visibleCharacters"
+                  :key="char.id"
+                  :class="[
+                    'sidebar-collapsed-flyout-item',
+                    {
+                      active:
+                        props.selectedCharacter === char.id &&
+                        !props.hasFolderFilter,
+                    },
+                  ]"
+                  @click="
+                    selectCharacter(char.id, char.name || 'Character');
+                    collapsedCharMenuOpen = false;
+                  "
+                  @contextmenu.prevent="openSidebarCtxMenu('character', char, $event)"
+                >
+                  <img
+                    :src="characterThumbnails[char.id] || unknownPerson"
+                    alt=""
+                    class="sidebar-collapsed-flyout-thumb"
+                  />
+                  <span class="sidebar-collapsed-flyout-label">{{
+                    char.name || "Character"
+                  }}</span>
+                  <div v-if="!isReadOnly" class="sidebar-collapsed-flyout-item-actions">
+                    <v-icon
+                      size="14"
+                      title="Edit"
+                      @click.stop="openCharacterEditor(char); collapsedCharMenuOpen = false;"
+                    >mdi-pencil-outline</v-icon>
+                    <v-icon
+                      size="14"
+                      title="More"
+                      @click.stop="openSidebarCtxMenu('character', char, $event)"
+                    >mdi-dots-vertical</v-icon>
+                  </div>
+                </div>
               </div>
             </div>
           </Teleport>
 
-          <!-- Picture Sets flyout button -->
+          <!-- Picture Sets: individual dock buttons when space allows, flyout menu when space is tight -->
           <div
-            v-if="visibleSets.length"
+            v-if="visibleSets.length && sidebarPrimaryTab !== 'folders'"
             class="sidebar-collapsed-divider"
           ></div>
+          <template v-if="visibleSets.length && sidebarPrimaryTab !== 'folders' && !setsCollapsed">
+            <div
+              v-for="pset in visibleSets"
+              :key="pset.id"
+              :class="['sidebar-collapsed-row', { active: selectedSetIdSet.has(pset.id) && !props.hasFolderFilter }]"
+            >
+              <div
+                :class="['sidebar-collapsed-item', { active: selectedSetIdSet.has(pset.id) && !props.hasFolderFilter }]"
+                :title="pset.name || 'Picture Set'"
+                @click="selectSet(pset.id, pset.name || 'Picture Set', $event)"
+                @contextmenu.prevent="openSidebarCtxMenu('set', pset, $event)"
+              >
+                <v-icon
+                  v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
+                  :color="pset.set_color || undefined"
+                >{{ pset.set_icon }}</v-icon>
+                <img
+                  v-else-if="hasSetThumbnail(pset)"
+                  :src="getSetThumbnail(pset.id)"
+                  alt=""
+                  class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
+                  :style="pset.set_color ? { filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})` } : {}"
+                  :width="sidebarThumbnailSizeModel"
+                  :height="sidebarThumbnailSizeModel"
+                  @load="handleSetThumbnailLoad(pset.id)"
+                  @error="handleSetThumbnailError(pset.id)"
+                />
+                <v-icon v-else :color="pset.set_color || undefined">mdi-image-album</v-icon>
+              </div>
+            </div>
+            <div v-if="!isReadOnly" class="sidebar-collapsed-row">
+              <div
+                class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
+                title="Add picture set"
+                @click="createSet()"
+              >
+                <i class="mdi mdi-image-album sidebar-collapsed-item--add-bg-icon" aria-hidden="true"></i>
+                <v-icon class="sidebar-collapsed-item--add-plus">mdi-plus</v-icon>
+              </div>
+            </div>
+          </template>
           <div
-            v-if="visibleSets.length"
-            :class="[
-              'sidebar-collapsed-item',
-              {
-                active: selectedSetIdSet.size > 0 && !props.hasFolderFilter,
-              },
-            ]"
-            :title="selectedSetObj ? selectedSetObj.name : 'Picture Sets'"
-            ref="collapsedSetBtnRef"
-            @click.stop="toggleCollapsedSetMenu"
+            v-else-if="visibleSets.length && sidebarPrimaryTab !== 'folders'"
+            :class="['sidebar-collapsed-row', 'sidebar-collapsed-row--has-flyout', { active: selectedSetIdSet.size > 0 && !props.hasFolderFilter }]"
           >
-            <template v-if="selectedSetObj">
-              <v-icon
-                v-if="
-                  selectedSetObj.set_icon &&
-                  selectedSetObj.set_icon !== ICON_CARDS
-                "
-                :color="selectedSetObj.set_color || undefined"
-                >{{ selectedSetObj.set_icon }}</v-icon
-              >
-              <img
-                v-else-if="hasSetThumbnail(selectedSetObj)"
-                :src="getSetThumbnail(selectedSetObj.id)"
-                alt=""
-                class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
-                :style="
-                  selectedSetObj.set_color
-                    ? {
-                        filter: `drop-shadow(0 0 3px ${selectedSetObj.set_color}) drop-shadow(0 0 8px ${selectedSetObj.set_color})`,
-                      }
-                    : {}
-                "
-                :width="sidebarThumbnailSizeModel"
-                :height="sidebarThumbnailSizeModel"
-              />
-              <v-icon v-else :color="selectedSetObj.set_color || undefined"
-                >mdi-image-album</v-icon
-              >
-            </template>
-            <v-icon v-else>mdi-image-album</v-icon>
+            <div
+              :class="[
+                'sidebar-collapsed-item',
+                'sidebar-collapsed-item--has-flyout',
+                {
+                  active: selectedSetIdSet.size > 0 && !props.hasFolderFilter,
+                },
+              ]"
+              :title="selectedSetObj ? selectedSetObj.name : 'Picture Sets'"
+              ref="collapsedSetBtnRef"
+              @click.stop="toggleCollapsedSetMenu"
+            >
+              <template v-if="selectedSetObj">
+                <v-icon
+                  v-if="
+                    selectedSetObj.set_icon &&
+                    selectedSetObj.set_icon !== ICON_CARDS
+                  "
+                  :color="selectedSetObj.set_color || undefined"
+                  >{{ selectedSetObj.set_icon }}</v-icon
+                >
+                <img
+                  v-else-if="hasSetThumbnail(selectedSetObj)"
+                  :src="getSetThumbnail(selectedSetObj.id)"
+                  alt=""
+                  class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
+                  :style="
+                    selectedSetObj.set_color
+                      ? {
+                          filter: `drop-shadow(0 0 3px ${selectedSetObj.set_color}) drop-shadow(0 0 8px ${selectedSetObj.set_color})`,
+                        }
+                      : {}
+                  "
+                  :width="sidebarThumbnailSizeModel"
+                  :height="sidebarThumbnailSizeModel"
+                />
+                <v-icon v-else :color="selectedSetObj.set_color || undefined"
+                  >mdi-image-album</v-icon
+                >
+              </template>
+              <v-icon v-else>mdi-image-album</v-icon>
+            </div>
           </div>
           <Teleport to="body">
             <div
@@ -3325,50 +3682,97 @@ defineExpose({
                 left: collapsedSetMenuPos.left + 'px',
               }"
             >
-              <div class="sidebar-collapsed-flyout-header">Picture Sets</div>
-              <div
-                v-for="pset in visibleSets"
-                :key="pset.id"
-                :class="[
-                  'sidebar-collapsed-flyout-item',
-                  {
-                    active:
-                      selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
-                  },
-                ]"
-                @click="
-                  selectSet(pset.id, pset.name || 'Picture Set', $event);
-                  collapsedSetMenuOpen = false;
-                "
-              >
+              <div class="sidebar-collapsed-flyout-header">
+                <span>Picture Sets</span>
                 <v-icon
-                  v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
-                  size="28"
-                  :color="pset.set_color || undefined"
-                  >{{ pset.set_icon }}</v-icon
-                >
-                <img
-                  v-else-if="hasSetThumbnail(pset)"
-                  :src="getSetThumbnail(pset.id)"
-                  alt=""
-                  class="sidebar-collapsed-flyout-thumb"
-                  :style="
-                    pset.set_color
-                      ? {
-                          filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
-                        }
-                      : {}
+                  v-if="!isReadOnly"
+                  size="14"
+                  class="sidebar-collapsed-flyout-header-add"
+                  title="Add picture set"
+                  @click.stop="createSet(); collapsedSetMenuOpen = false;"
+                >mdi-plus</v-icon>
+              </div>
+              <div class="sidebar-collapsed-flyout-scroll">
+                <div
+                  v-for="pset in visibleSets"
+                  :key="pset.id"
+                  :class="[
+                    'sidebar-collapsed-flyout-item',
+                    {
+                      active:
+                        selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                    },
+                  ]"
+                  @click="
+                    selectSet(pset.id, pset.name || 'Picture Set', $event);
+                    collapsedSetMenuOpen = false;
                   "
-                  @load="handleSetThumbnailLoad(pset.id)"
-                  @error="handleSetThumbnailError(pset.id)"
-                />
-                <v-icon v-else size="28">mdi-image-album</v-icon>
-                <span class="sidebar-collapsed-flyout-label">{{
-                  pset.name || "Picture Set"
-                }}</span>
+                  @contextmenu.prevent="openSidebarCtxMenu('set', pset, $event)"
+                >
+                  <v-icon
+                    v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
+                    size="28"
+                    :color="pset.set_color || undefined"
+                    >{{ pset.set_icon }}</v-icon
+                  >
+                  <img
+                    v-else-if="hasSetThumbnail(pset)"
+                    :src="getSetThumbnail(pset.id)"
+                    alt=""
+                    class="sidebar-collapsed-flyout-thumb"
+                    :style="
+                      pset.set_color
+                        ? {
+                            filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
+                          }
+                        : {}
+                    "
+                    @load="handleSetThumbnailLoad(pset.id)"
+                    @error="handleSetThumbnailError(pset.id)"
+                  />
+                  <v-icon v-else size="28">mdi-image-album</v-icon>
+                  <span class="sidebar-collapsed-flyout-label">{{
+                    pset.name || "Picture Set"
+                  }}</span>
+                  <div v-if="!isReadOnly" class="sidebar-collapsed-flyout-item-actions">
+                    <v-icon
+                      size="14"
+                      title="Edit"
+                      @click.stop="openSetEditor(pset); collapsedSetMenuOpen = false;"
+                    >mdi-pencil-outline</v-icon>
+                    <v-icon
+                      size="14"
+                      title="More"
+                      @click.stop="openSidebarCtxMenu('set', pset, $event)"
+                    >mdi-dots-vertical</v-icon>
+                  </div>
+                </div>
               </div>
             </div>
           </Teleport>
+
+          <!-- Scrap Heap at bottom of dock -->
+          <div v-if="!isReadOnly" class="sidebar-collapsed-spacer"></div>
+          <div
+            v-if="!isReadOnly"
+            :class="['sidebar-collapsed-row', { active: props.selectedCharacter === props.scrapheapPicturesId && !props.hasFolderFilter }]"
+          >
+            <div
+              :class="[
+                'sidebar-collapsed-item',
+                'sidebar-collapsed-item--scrapheap',
+                {
+                  active:
+                    props.selectedCharacter === props.scrapheapPicturesId &&
+                    !props.hasFolderFilter,
+                },
+              ]"
+              title="Scrapheap"
+              @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+            >
+              <v-icon>mdi-trash-can-outline</v-icon>
+            </div>
+          </div>
         </div>
       </template>
       <template v-else>
@@ -5602,8 +6006,68 @@ defineExpose({
 }
 
 .sidebar-collapsed-project-menu .sidebar-project-menu-item,
-.sidebar-collapsed-project-menu .sidebar-project-menu-add {
+.sidebar-collapsed-project-menu .sidebar-project-menu-add,
+.sidebar-collapsed-project-submenu .sidebar-project-menu-item,
+.sidebar-collapsed-project-submenu .sidebar-project-menu-add {
   color: rgb(var(--v-theme-on-surface));
+}
+
+.sidebar-collapsed-project-menu .sidebar-project-menu-item.active,
+.sidebar-collapsed-project-submenu .sidebar-project-menu-item.active {
+  background: rgba(var(--v-theme-primary), 0.18);
+  color: rgb(var(--v-theme-on-primary));
+  font-weight: 600;
+  border-left: 3px solid rgb(var(--v-theme-primary));
+  padding-left: 7px; /* compensate for the 3px border so text stays aligned */
+}
+
+.sidebar-collapsed-project-submenu {
+  position: fixed;
+  z-index: 301;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-border), 0.4);
+  border-radius: 6px;
+  overflow: hidden;
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+  white-space: nowrap;
+}
+
+.sidebar-project-menu-separator {
+  height: 1px;
+  background: rgba(var(--v-theme-border), 0.3);
+  margin: 2px 0;
+}
+
+.sidebar-project-menu-has-sub {
+  position: relative;
+}
+
+.sidebar-project-menu-has-sub.sub-open {
+  background: rgba(var(--v-theme-accent), 0.06);
+}
+
+.sidebar-project-menu-chevron {
+  margin-left: auto;
+  opacity: 0.45;
+  flex-shrink: 0;
+}
+
+.sidebar-collapsed-item--scrapheap {
+  opacity: 0.6;
+  transition:
+    opacity 0.15s,
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.sidebar-collapsed-item--scrapheap:hover {
+  opacity: 1;
+}
+
+.sidebar-collapsed-item--scrapheap.active {
+  opacity: 1;
 }
 
 .sidebar-collapsed-flyout-menu {
@@ -5612,13 +6076,20 @@ defineExpose({
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-border), 0.4);
   border-radius: 6px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   max-height: 60vh;
   min-width: 200px;
+  width: max-content;
   white-space: nowrap;
 }
 
 .sidebar-collapsed-flyout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
   padding: 6px 12px;
   font-size: 0.72rem;
   font-weight: 600;
@@ -5627,6 +6098,22 @@ defineExpose({
   color: rgba(var(--v-theme-sidebar-text), 0.55);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.4);
   background: rgba(var(--v-theme-tertiary), 0.2);
+}
+
+.sidebar-collapsed-flyout-header-add {
+  opacity: 0.6;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.12s;
+}
+
+.sidebar-collapsed-flyout-header-add:hover {
+  opacity: 1;
+}
+
+.sidebar-collapsed-flyout-scroll {
+  overflow-y: auto;
+  flex: 1;
 }
 
 .sidebar-collapsed-flyout-item {
@@ -5660,6 +6147,42 @@ defineExpose({
   font-size: 0.88rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+}
+
+.sidebar-collapsed-flyout-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+  visibility: hidden;
+}
+
+.sidebar-collapsed-flyout-item:hover .sidebar-collapsed-flyout-item-actions {
+  visibility: visible;
+}
+
+.sidebar-collapsed-flyout-item-actions .v-icon {
+  opacity: 0.55;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+  transition: opacity 0.1s, background 0.1s;
+}
+
+.sidebar-collapsed-flyout-item-actions .v-icon:hover {
+  opacity: 1;
+  background: rgba(var(--v-theme-tertiary), 0.35);
+}
+
+.sidebar-project-menu-section-label {
+  padding: 6px 10px 2px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(var(--v-theme-sidebar-text), 0.45);
 }
 
 .sidebar-project-menu-wrap {
@@ -5890,9 +6413,23 @@ defineExpose({
 .sidebar.sidebar-docked .sidebar-brand {
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
-  padding: 8px 4px 4px;
-  gap: 4px;
+  justify-content: center;
+  padding: 4px 0 2px;
+  gap: 1px;
+  position: static;
+}
+
+.sidebar.sidebar-docked .sidebar-brand-toggle {
+  position: static;
+  transform: none;
+  width: calc(var(--sidebar-thumb-size) * 0.65) !important;
+  height: calc(var(--sidebar-thumb-size) * 0.65) !important;
+  min-width: calc(var(--sidebar-thumb-size) * 0.65) !important;
+  min-height: calc(var(--sidebar-thumb-size) * 0.65) !important;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar.sidebar-docked .sidebar-brand-toggle:hover {
@@ -5900,12 +6437,15 @@ defineExpose({
 }
 
 .sidebar.sidebar-docked .sidebar-brand-left {
-  padding: 2px;
+  padding: 0;
+  justify-content: center;
 }
 
 .sidebar.sidebar-docked .sidebar-brand-logo {
-  width: 28px;
-  height: 28px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
+  padding-left: calc(var(--sidebar-thumb-size) * 0.1);
+  object-fit: contain;
 }
 
 .sidebar-brand {
@@ -6045,6 +6585,66 @@ defineExpose({
   min-height: 0;
 }
 
+.sidebar-collapsed-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.sidebar-collapsed-row::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  width: 3px;
+  height: 60%;
+  border-radius: 0 2px 2px 0;
+  background: rgb(var(--v-theme-primary));
+  transition: transform 0.18s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sidebar-collapsed-row.active::before {
+  transform: translateY(-50%) scaleY(1);
+}
+
+.sidebar-collapsed-row--has-flyout::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  border-left: 4px solid currentColor;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.sidebar-collapsed-row--has-flyout.active::after {
+  opacity: 0.8;
+}
+
+/* Prominent indicator for the main project/nav menu */
+.sidebar-collapsed-row--project::after {
+  right: 3px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid currentColor;
+  opacity: 0.7;
+}
+
+.sidebar-collapsed-row--project.active::after {
+  opacity: 1;
+}
+
 .sidebar-collapsed-spacer {
   flex: 1 1 auto;
   width: 100%;
@@ -6059,16 +6659,53 @@ defineExpose({
   border-radius: var(--sidebar-item-radius);
   cursor: pointer;
   color: rgba(var(--v-theme-sidebar-text), 0.84);
+  position: relative;
   transition:
     background-color 0.18s ease,
-    color 0.18s ease,
-    transform 0.18s ease;
+    color 0.18s ease;
 }
 
 .sidebar-collapsed-item.active {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
+  color: rgba(var(--v-theme-sidebar-text), 0.84);
+}
+
+.sidebar-collapsed-item--add {
+  background: rgba(var(--v-theme-sidebar-text), 0.07);
+  border: 1px dashed rgba(var(--v-theme-sidebar-text), 0.25);
+  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-collapsed-item--add-bg-icon {
+  position: absolute !important;
+  display: block !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  font-size: calc(var(--sidebar-thumb-size) * 1.0) !important;
+  width: calc(var(--sidebar-thumb-size) * 1.0) !important;
+  height: calc(var(--sidebar-thumb-size) * 1.0) !important;
+  line-height: 1 !important;
+  opacity: 0.18;
+  pointer-events: none;
+  color: currentColor !important;
+}
+
+.sidebar-collapsed-item--add-plus {
+  position: relative;
+  z-index: 1;
+  font-size: calc(var(--sidebar-thumb-size) * 0.42) !important;
+  width: calc(var(--sidebar-thumb-size) * 0.42) !important;
+  height: calc(var(--sidebar-thumb-size) * 0.42) !important;
+}
+
+.sidebar-collapsed-item--add:hover {
+  background: rgba(var(--v-theme-primary), 0.18) !important;
+  border-color: rgba(var(--v-theme-primary), 0.5) !important;
+  color: rgb(var(--v-theme-primary)) !important;
+  filter: none !important;
+  box-shadow: none !important;
 }
 
 .sidebar-collapsed-item.droppable {
@@ -6081,7 +6718,10 @@ defineExpose({
   filter: brightness(1.03);
   background-color: rgba(var(--v-theme-accent), 0.18);
   box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.22);
-  transform: translateY(-1px);
+}
+
+.sidebar-collapsed-item--has-flyout {
+  position: relative;
 }
 
 .sidebar-collapsed-thumb {
@@ -6168,11 +6808,10 @@ defineExpose({
 }
 
 .sidebar-collapsed-divider {
-  width: 100%;
+  width: 70%;
   height: 1px;
-  margin-top: 1px;
-  margin-bottom: 1px;
-  background: rgba(var(--v-theme-background), 0.3);
+  margin: 2px auto;
+  background: rgba(var(--v-theme-sidebar-text), 0.15);
 }
 
 @media (max-width: 999px) {
@@ -6498,11 +7137,23 @@ defineExpose({
   height: min(var(--sidebar-thumb-size), 26px) !important;
 }
 
+.sidebar.sidebar-docked .sidebar-brand-toggle .v-icon {
+  font-size: calc(var(--sidebar-thumb-size) * 0.50) !important;
+  width: calc(var(--sidebar-thumb-size) * 0.50) !important;
+  height: calc(var(--sidebar-thumb-size) * 0.50) !important;
+}
+
 .sidebar-list-icon .v-icon,
 .sidebar-collapsed-item .v-icon,
 .sidebar-brand-toggle .v-icon,
 .sidebar-brand-task-btn .v-icon {
   color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-collapsed-item .v-icon {
+  font-size: calc(var(--sidebar-thumb-size) * 0.65) !important;
+  width: calc(var(--sidebar-thumb-size) * 0.65) !important;
+  height: calc(var(--sidebar-thumb-size) * 0.65) !important;
 }
 
 .sidebar-list-label {
