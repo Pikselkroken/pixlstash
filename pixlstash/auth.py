@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from passlib.hash import bcrypt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_
 from sqlmodel import Session, select
 
@@ -37,6 +37,13 @@ class LoginRequest(BaseModel):
         default=None,
         description="API token for authentication",
     )
+
+    @field_validator("username", "password", mode="before")
+    @classmethod
+    def strip_whitespace(cls, v):
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
 
 # Paths and prefixes that bypass authentication — also used by rate limiting.
