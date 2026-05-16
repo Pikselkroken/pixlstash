@@ -2236,14 +2236,48 @@ def create_router(server) -> APIRouter:
             server.vault.image_root, pic.file_path
         )
         if thumb_path and os.path.exists(thumb_path):
-            elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
-            logger.debug(
-                "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
-                id,
-                thumb_path,
-                elapsed_ms,
-            )
-            return FileResponse(thumb_path, media_type="image/webp")
+            # For reference-folder pictures (absolute file_path) the source file
+            # can change when a Docker volume is remapped to a different host
+            # directory while the container path stays the same.  If the source
+            # file is newer than the cached thumbnail we treat it as stale and
+            # regenerate so the user always sees the correct image.
+            stale = False
+            if pic.file_path and os.path.isabs(pic.file_path):
+                source_path = ImageUtils.resolve_picture_path(
+                    server.vault.image_root, pic.file_path
+                )
+                if source_path and os.path.exists(source_path):
+                    try:
+                        source_mtime = os.path.getmtime(source_path)
+                        thumb_mtime = os.path.getmtime(thumb_path)
+                        if source_mtime > thumb_mtime:
+                            stale = True
+                            logger.debug(
+                                "Thumbnail stale (source newer): id=%s source=%s",
+                                id,
+                                source_path,
+                            )
+                            try:
+                                os.remove(thumb_path)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Failed to remove stale thumbnail %s: %s",
+                                    thumb_path,
+                                    exc,
+                                )
+                    except Exception as exc:
+                        logger.debug(
+                            "Could not compare thumbnail mtime for id=%s: %s", id, exc
+                        )
+            if not stale:
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.debug(
+                    "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
+                    id,
+                    thumb_path,
+                    elapsed_ms,
+                )
+                return FileResponse(thumb_path, media_type="image/webp")
 
         cached_bytes = get_cached_thumbnail_bytes(id)
         if cached_bytes:
@@ -2258,14 +2292,33 @@ def create_router(server) -> APIRouter:
         lock = get_thumbnail_lock(id)
         async with lock:
             if thumb_path and os.path.exists(thumb_path):
-                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
-                logger.debug(
-                    "Thumbnail GET cache-hit-after-wait: id=%s path=%s elapsed_ms=%.1f",
-                    id,
-                    thumb_path,
-                    elapsed_ms,
-                )
-                return FileResponse(thumb_path, media_type="image/webp")
+                # Re-check staleness inside the lock.
+                recheck_stale = False
+                if pic.file_path and os.path.isabs(pic.file_path):
+                    source_path = ImageUtils.resolve_picture_path(
+                        server.vault.image_root, pic.file_path
+                    )
+                    if source_path and os.path.exists(source_path):
+                        try:
+                            if os.path.getmtime(source_path) > os.path.getmtime(
+                                thumb_path
+                            ):
+                                recheck_stale = True
+                                try:
+                                    os.remove(thumb_path)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                if not recheck_stale:
+                    elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                    logger.debug(
+                        "Thumbnail GET cache-hit-after-wait: id=%s path=%s elapsed_ms=%.1f",
+                        id,
+                        thumb_path,
+                        elapsed_ms,
+                    )
+                    return FileResponse(thumb_path, media_type="image/webp")
 
             cached_bytes = get_cached_thumbnail_bytes(id)
             if cached_bytes:
