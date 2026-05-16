@@ -395,6 +395,11 @@ class TaskRunner:
         with self._active_task_lock:
             return any(t.type == task_type for t in self._active_tasks.values())
 
+    def get_active_tasks_of_type(self, task_type: str) -> list:
+        """Return a list of currently executing task instances of the given type."""
+        with self._active_task_lock:
+            return [t for t in self._active_tasks.values() if t.type == task_type]
+
     def start(self):
         with self._lock:
             self._threads = [t for t in self._threads if t.is_alive()]

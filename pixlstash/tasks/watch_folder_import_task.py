@@ -45,6 +45,7 @@ class WatchFolderImportTask(BaseTask):
             for folder_id, last_checked in (last_checked_updates or {}).items()
         }
         self._total_candidates = int(total_candidates or 0)
+        self._processed_count = 0
         self._stop_event = threading.Event()
 
     def on_cancel(self) -> None:
@@ -70,6 +71,7 @@ class WatchFolderImportTask(BaseTask):
                 pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
             except Exception as exc:
                 logger.warning("Failed to hash watched file %s: %s", file_path, exc)
+                self._processed_count += 1
                 continue
 
             def find_existing(session: Session, hash_value: str):
@@ -80,6 +82,7 @@ class WatchFolderImportTask(BaseTask):
             existing = self._db.run_task(find_existing, pixel_sha)
             if existing:
                 logger.debug("Already have picture with sha %s, skipping", pixel_sha)
+                self._processed_count += 1
                 continue
 
             try:
@@ -101,6 +104,8 @@ class WatchFolderImportTask(BaseTask):
                     delete_paths.append(file_path)
             except Exception as exc:
                 logger.warning("Failed to import watched file %s: %s", file_path, exc)
+            finally:
+                self._processed_count += 1
 
         changed = []
         imported_ids = []
