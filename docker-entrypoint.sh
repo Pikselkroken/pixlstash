@@ -10,6 +10,13 @@ PORT="${PIXLSTASH_PORT:-9537}"
 
 export PIXLSTASH_IN_DOCKER=1
 
+# PyTorch's inductor cache code calls getpass.getuser() at import time.
+# If the container is started with --user <uid> and that uid has no /etc/passwd
+# entry (e.g. the host user's UID), getpwuid() raises KeyError and the process
+# crashes before it even starts.  Setting USER ensures getpass.getuser() returns
+# a valid string without touching /etc/passwd.
+export USER="${USER:-pixlstash}"
+
 mkdir -p "$(dirname "$CONFIG_PATH")"
 
 # Write a default config on first run with Docker-appropriate settings

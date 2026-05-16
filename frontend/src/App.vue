@@ -241,6 +241,7 @@ const unassignedOnlyFilter = ref(false);
 const checkForUpdates = ref(null);
 const updateCheckDialogOpen = ref(false);
 const installType = ref("pip");
+const dockerVariant = ref("gpu");
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
@@ -1382,11 +1383,14 @@ watch(exportMenuOpen, async (isOpen) => {
 
 // --- Lifecycle ---
 onMounted(async () => {
-  apiClient
-    .get("/version")
-    .then((r) => {
-      if (typeof r.data?.install_type === "string") {
-        installType.value = r.data.install_type;
+  fetch("/version")
+    .then((r) => r.json())
+    .then((data) => {
+      if (typeof data?.install_type === "string") {
+        installType.value = data.install_type;
+      }
+      if (typeof data?.docker_variant === "string") {
+        dockerVariant.value = data.docker_variant;
       }
     })
     .catch(() => {});
@@ -1574,6 +1578,7 @@ provide("toolbarState", {
             :hasFolderFilter="selectedFolderFilter != null"
             :checkForUpdates="checkForUpdates"
             :installType="installType"
+            :dockerVariant="dockerVariant"
             :showKeyboardHint="showKeyboardHint"
             @update:show-keyboard-hint="showKeyboardHint = $event"
             @update:similarity-options="handleUpdateSimilarityOptions"

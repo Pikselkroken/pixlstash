@@ -886,10 +886,17 @@ class Server:
         async def read_version():
             version = self._get_version()
             install_type = "docker" if Server.running_in_docker() else "pip"
+            docker_variant = os.environ.get("PIXLSTASH_DOCKER_VARIANT", "gpu")
+            logger.info(
+                "[/version] PIXLSTASH_DOCKER_VARIANT=%r -> docker_variant=%r",
+                os.environ.get("PIXLSTASH_DOCKER_VARIANT"),
+                docker_variant,
+            )
             return {
                 "message": "PixlStash REST API",
                 "version": version,
                 "install_type": install_type,
+                "docker_variant": docker_variant,
             }
 
         @self.api.get("/favicon.ico")
