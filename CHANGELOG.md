@@ -1,3 +1,6 @@
+# [1.2.0]
+- Fix Docker commands and a few more bugfixes
+
 # [1.2.0b2]
 - Improve GUI (Sidebar, Toolbars, Selection, context menus) on both Desktop and mobile
 - Fix large ZIP-file uploads
