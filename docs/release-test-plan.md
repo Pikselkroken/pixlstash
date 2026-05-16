@@ -130,6 +130,58 @@ pixlstash-server
 
 ---
 
+### 0.6 Upgrade from 1.1.x
+
+Perform on a machine with an existing 1.1.2 or 1.1.3 `vault.db`. Do **not** wipe the database — the point is to verify the migration chain.
+
+#### 0.6.1 Database migration (migrations 0034 – 0044)
+
+Ten new migrations ship with 1.2. Run against a copy of a real 1.1.x `vault.db`:
+
+```bash
+cp vault.db vault.db.bak
+alembic upgrade head
+```
+
+| Check |  |
+|-------|--|
+| `alembic upgrade head` completes with exit code 0 and no Python traceback | |
+| Migration `0035_drop_face_quality` — server starts and face-quality column is absent (no column error in logs) | |
+| Migration `0039_drop_color_histogram` — server starts and color-histogram column is absent | |
+| Migration `0040_move_text_score_to_picture` — open a picture that previously had a text score; verify smart score still shows the correct value | |
+| Migration `0043_pictureset_icon_color` — existing picture sets appear in the sidebar with no errors; icon/color columns default to `null` (automatic thumbnail) | |
+| Migration `0044_add_grid_sort_indexes` — grid loads and sorts correctly; check server logs for any index-creation errors (large DBs may take a few seconds) | |
+| After all migrations: existing pictures, sets, characters, projects and tags are intact | |
+
+#### 0.6.2 New config keys on upgraded install
+
+These keys are new in 1.2 and may be absent from an existing `server-config.json`.
+
+| Check |  |
+|-------|--|
+| Start server with an existing config that does **not** contain `require_local_for_write` — server starts without error (defaults to `true`) | |
+| If `host` is `0.0.0.0` and `require_local_for_write` is explicitly set to `false` — startup log prints a **warning** (not a hard failure) about unrestricted write access | |
+| Start server with an existing config that does **not** contain `public_url` — sharing feature still works; share link uses the internal/relative URL | |
+| Start server with an existing config that does **not** contain `disable_background_workers` — background workers start normally (defaults to `false`) | |
+
+#### 0.6.3 CPU-only install with `--force-cpu`
+
+Covers the lazy ML library loading change introduced in 1.2.
+
+| Check |  |
+|-------|--|
+| `pixlstash-server --force-cpu` starts without error on a machine with no CUDA | |
+| Background tagging runs and uses CPU (no "CUDA unavailable" hard failure in logs) | |
+
+#### 0.6.4 Watch folders on Windows (upgrade)
+
+| Check | Windows |
+|-------|---------|
+| An existing watch folder configured with a Windows path (`C:\...`) is imported correctly after upgrade — no path-not-found errors in logs | |
+| A new file dropped into the watch folder is picked up and imported automatically | |
+
+---
+
 ## 1. Authentication
 
 ### 1.1 Login / Logout
