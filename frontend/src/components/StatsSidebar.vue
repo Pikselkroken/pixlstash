@@ -1846,7 +1846,7 @@ function handleResolutionBarClick(label) {
   .stats-sidebar {
     position: fixed;
     right: 0;
-    top: 49px;
+    top: 48px;
     bottom: 0;
     height: auto;
     z-index: 150;
