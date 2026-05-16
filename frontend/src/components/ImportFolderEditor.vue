@@ -921,8 +921,12 @@ async function save() {
 }
 
 async function copyToClipboard(value, successMessage) {
-  const text = String(value || "").trim();
+  let text = String(value || "").trim();
   if (!text) return;
+  // Normalize line endings to \r\n on Windows to avoid Firefox clipboard bugs
+  if (typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.includes('Windows')) {
+    text = text.replace(/(?<!\r)\n/g, '\r\n');
+  }
 
   const fallbackCopy = () => {
     try {
