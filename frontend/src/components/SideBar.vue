@@ -3144,6 +3144,7 @@ defineExpose({
     :docker-variant="props.dockerVariant"
     :registered-paths="registeredFolderPaths"
     :registered-folders="referenceFolders"
+    :registered-import-folders="importFolders"
     :image-root="referenceFoldersImageRoot"
     @close="closeReferenceFolderEditor"
     @saved="referenceFolderSaved"

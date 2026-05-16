@@ -148,9 +148,9 @@
                 v-if="hasExistingReferenceFolders"
                 class="editor-docker-note editor-docker-note--muted"
               >
-                Existing reference folder mounts are included from configured
-                container paths and use stored host paths when available.
-                Replace any remaining
+                Existing reference and import folder mounts are included from
+                configured container paths and use stored host paths when
+                available. Replace any remaining
                 <code>/absolute/host/path/for-*</code> placeholder values.
               </div>
               <div class="editor-docker-snippet-wrap">
@@ -486,6 +486,8 @@ const props = defineProps({
   registeredPaths: { type: Array, default: () => [] },
   /** Existing RF objects including optional host_path for Docker command generation */
   registeredFolders: { type: Array, default: () => [] },
+  /** Existing import folder objects including optional host_path for Docker command generation */
+  registeredImportFolders: { type: Array, default: () => [] },
   imageRoot: { type: String, default: null },
 });
 
@@ -544,13 +546,51 @@ const registeredHostPathByContainerPath = computed(() => {
 });
 
 const hasExistingReferenceFolders = computed(() => {
-  return normalizedRegisteredPathList.value.length > 0;
+  return (
+    normalizedRegisteredPathList.value.length > 0 ||
+    (props.registeredImportFolders || []).length > 0
+  );
 });
 
 function normalizeFolderPath(value) {
   return String(value || "")
     .trim()
     .replace(/\/+$/, "");
+}
+
+function padFolderIndex(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return String(Math.trunc(parsed)).padStart(3, "0");
+}
+
+function inferImportMount(folder, fallbackIndex = null) {
+  const rawFolder = normalizeFolderPath(folder?.folder);
+  if (!rawFolder) return null;
+
+  const storedHost = String(folder?.host_path || "").trim();
+  const hasCanonicalContainerPath = /^\/data\/import\/pictures-\d+$/.test(
+    rawFolder,
+  );
+
+  let containerPath = rawFolder;
+  let hostPath = storedHost;
+
+  if (!hasCanonicalContainerPath) {
+    if (!hostPath) {
+      hostPath = rawFolder;
+    }
+    const index = padFolderIndex(folder?.id) || fallbackIndex;
+    if (index) {
+      containerPath = `/data/import/pictures-${index}`;
+    }
+  }
+
+  if (!hostPath) {
+    hostPath = containerPath;
+  }
+
+  return { hostPath, containerPath };
 }
 
 function shellSingleQuote(value) {
@@ -655,6 +695,34 @@ const dockerAllRegisteredMountSnippets = computed(() => {
   });
 });
 
+const inferredImportMounts = computed(() => {
+  let fallback = 1;
+  return (props.registeredImportFolders || [])
+    .map((folder) => {
+      const inferred = inferImportMount(
+        folder,
+        String(fallback).padStart(3, "0"),
+      );
+      fallback += 1;
+      return inferred;
+    })
+    .filter(Boolean);
+});
+
+const dockerAllImportMountSnippets = computed(() => {
+  return inferredImportMounts.value.map((mount) =>
+    buildDockerVolumeFlag(
+      mount.hostPath,
+      mount.containerPath,
+      shellFormat.value,
+    ),
+  );
+});
+
+function dedupeMountSnippets(mounts) {
+  return Array.from(new Set(mounts));
+}
+
 const isGpuVariant = computed(() => {
   return (
     String(props.dockerVariant || "")
@@ -736,17 +804,24 @@ function buildDockerRestartCommand(referenceMounts, format = "linux") {
 }
 
 const dockerRestartCommandSnippet = computed(() => {
-  const allReferenceMounts = [
+  const allMounts = [
     ...dockerExistingMountSnippets.value,
     dockerMountSnippet.value,
+    ...dockerAllImportMountSnippets.value,
   ];
 
-  return buildDockerRestartCommand(allReferenceMounts, shellFormat.value);
+  return buildDockerRestartCommand(
+    dedupeMountSnippets(allMounts),
+    shellFormat.value,
+  );
 });
 
 const dockerEditRestartCommandSnippet = computed(() => {
   return buildDockerRestartCommand(
-    dockerAllRegisteredMountSnippets.value,
+    dedupeMountSnippets([
+      ...dockerAllRegisteredMountSnippets.value,
+      ...dockerAllImportMountSnippets.value,
+    ]),
     shellFormat.value,
   );
 });
