@@ -9,7 +9,7 @@
         <v-icon size="24px">mdi-close</v-icon>
       </v-btn>
       <v-card-title> Search </v-card-title>
-      <v-card-text style="display: flex; align-items: center">
+      <v-card-text style="display: flex; flex-direction: column; gap: 0">
         <v-text-field
           v-if="!isClosing"
           v-model="input"
@@ -23,28 +23,72 @@
           @click:append="emitSearch"
           ref="inputField"
         ></v-text-field>
+        <div v-if="tabSuggestion" class="search-tab-hint">
+          <kbd>Tab</kbd> → {{ tabSuggestion }}
+        </div>
+      </v-card-text>
+      <v-card-text
+        v-if="history && history.length"
+        class="search-history-section"
+      >
+        <div class="search-history-header">
+          <span class="search-history-label">Recent searches</span>
+          <button
+            class="search-history-clear"
+            type="button"
+            title="Clear search history"
+            @click="emit('clear-history')"
+          >
+            <v-icon size="14">mdi-close-circle-outline</v-icon>
+          </button>
+        </div>
+        <div class="search-history-chips">
+          <button
+            v-for="item in history"
+            :key="item"
+            class="search-history-chip"
+            type="button"
+            @click="applyHistory(item)"
+          >
+            <v-icon size="14" style="opacity: 0.5; margin-right: 4px"
+              >mdi-history</v-icon
+            >
+            {{ item }}
+          </button>
+        </div>
       </v-card-text>
     </v-card>
   </v-overlay>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, defineEmits, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import {
   VOverlay,
   VCard,
   VCardTitle,
   VCardText,
-  VCardActions,
   VBtn,
   VIcon,
   VTextField,
 } from "vuetify/components";
 
-const emit = defineEmits(["search", "close"]);
-const input = ref("");
-const inputField = ref(null); // Reference to the text field
+const props = defineProps({
+  modelValue: { type: String, default: "" },
+  history: { type: Array, default: () => [] },
+});
+const emit = defineEmits(["search", "close", "clear-history"]);
+const input = ref(props.modelValue || "");
+const inputField = ref(null);
 const isClosing = ref(false);
+
+const tabSuggestion = computed(() => {
+  const needle = (input.value || "").trim().toLowerCase();
+  if (!needle) return null;
+  return (
+    props.history.find((item) => item.toLowerCase().startsWith(needle)) ?? null
+  );
+});
 
 function emitSearch() {
   const query = input.value;
@@ -74,11 +118,21 @@ function clearInput() {
   input.value = "";
 }
 
+function applyHistory(item) {
+  input.value = item;
+  emitSearch();
+}
+
 function closeOverlay() {
   emit("close");
 }
 
 function handleKeydown(event) {
+  if (event.key === "Tab" && tabSuggestion.value) {
+    event.preventDefault();
+    input.value = tabSuggestion.value;
+    return;
+  }
   if (event.key === "Escape") {
     event.stopPropagation(); // Prevent event propagation
     event.preventDefault(); // Prevent default browser behavior
@@ -137,5 +191,83 @@ onUnmounted(() => {
 .v-overlay__scrim {
   background: rgba(0, 0, 0, 0.8) !important;
   opacity: 0.9 !important;
+}
+
+.search-history-section {
+  padding-top: 0 !important;
+}
+
+.search-tab-hint {
+  font-size: 0.8em;
+  opacity: 0.55;
+  margin-top: -12px;
+  margin-bottom: 4px;
+  padding-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-tab-hint kbd {
+  font-family: inherit;
+  font-size: 0.85em;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.3);
+  border-radius: 3px;
+  padding: 0 4px;
+  opacity: 0.8;
+}
+
+.search-history-header {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.search-history-label {
+  font-size: 0.78em;
+  opacity: 0.6;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.search-history-clear {
+  font-size: 0.78em;
+  opacity: 0.55;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  padding: 0;
+}
+
+.search-history-clear:hover {
+  opacity: 1;
+}
+
+.search-history-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.search-history-chip {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 999px;
+  padding: 3px 12px 3px 8px;
+  font-size: 0.85em;
+  cursor: pointer;
+  color: inherit;
+  transition: background 0.15s;
+}
+
+.search-history-chip:hover {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border-color: rgb(var(--v-theme-primary));
 }
 </style>
