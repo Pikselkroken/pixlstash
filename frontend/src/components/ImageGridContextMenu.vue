@@ -8,9 +8,7 @@
       tabindex="-1"
     >
       <!-- ── Set / Character / Project ─────────────────────────────── -->
-      <template
-        v-if="!isScrapheapView && !isReadOnly"
-      >
+      <template v-if="!isScrapheapView && !isReadOnly">
         <AddToSetControl
           placement="right"
           :backend-url="backendUrl"
@@ -79,7 +77,12 @@
 
       <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
       <template v-if="!isScrapheapView && !isReadOnly">
-        <button class="ctx-item" title="Tag selected (T)" :disabled="!selectedImageIds.length" @click="delegate('open-tag-panel')">
+        <button
+          class="ctx-item"
+          title="Tag selected (T)"
+          :disabled="!selectedImageIds.length"
+          @click="delegate('open-tag-panel')"
+        >
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
           Tag
         </button>
@@ -345,6 +348,10 @@ function onDocumentMousedown(event) {
   if (menuRef.value?.contains(event.target)) return;
   // Don't close when clicking inside a Vuetify overlay (e.g. AddToSet sub-menu)
   if (event.target.closest?.(".v-overlay-container")) return;
+  // Don't close when clicking inside teleported flyout menus from the Add-to controls
+  if (event.target.closest?.(".add-to-project-menu")) return;
+  if (event.target.closest?.(".add-to-set-menu")) return;
+  if (event.target.closest?.(".add-to-character-menu")) return;
   emit("close");
 }
 
