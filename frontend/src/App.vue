@@ -621,7 +621,10 @@ function SelectionPayload(payload) {
       id: payload.id ?? payload.value ?? null,
       label: payload.label ?? payload.name ?? null,
       ids,
-      projectIds: payload.projectIds && typeof payload.projectIds === "object" ? payload.projectIds : {},
+      projectIds:
+        payload.projectIds && typeof payload.projectIds === "object"
+          ? payload.projectIds
+          : {},
     };
   }
   return { id: payload ?? null, label: null, ids: [], projectIds: {} };
@@ -1866,8 +1869,10 @@ provide("toolbarState", {
       <SearchOverlay
         v-if="searchOverlayVisible"
         :modelValue="searchQuery"
+        :history="searchHistory"
         @search="handleUpdateSearchQuery"
         @close="closeSearchOverlay"
+        @clear-history="clearSearchHistory"
       />
     </div>
     <button
