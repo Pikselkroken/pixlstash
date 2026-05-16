@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref } from "vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../utils/apiClient";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
@@ -175,6 +175,12 @@ async function startImport(files, options = {}) {
       );
       return;
     }
+  }
+
+  if (isReadOnly.value) {
+    importInProgress.value = true;
+    finalizeError("Importing is not available with a read-only token.");
+    return;
   }
 
   clearHideTimer();
@@ -645,6 +651,14 @@ defineExpose({ startImport });
         @click="handleCancelImport"
       >
         Cancel
+      </button>
+      <button
+        v-if="importPhase === 'error'"
+        class="cancel-button"
+        type="button"
+        @click="importInProgress = false"
+      >
+        Dismiss
       </button>
     </div>
   </div>
