@@ -809,9 +809,23 @@ class Vault:
                 )
                 label = "likeness_pairs"
             elif worker_type == TaskType.WATCH_FOLDERS:
-                total = 0
-                missing = 0
                 label = "watch_folder_import"
+                active_wf_tasks = (
+                    self._task_runner.get_active_tasks_of_type("WatchFolderImportTask")
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_wf_tasks:
+                    total = sum(
+                        int(getattr(t, "_total_candidates", 0)) for t in active_wf_tasks
+                    )
+                    processed = sum(
+                        int(getattr(t, "_processed_count", 0)) for t in active_wf_tasks
+                    )
+                    missing = max(0, total - processed)
+                else:
+                    total = 0
+                    missing = 0
             elif worker_type == TaskType.COMFYUI_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(
