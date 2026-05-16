@@ -1078,6 +1078,7 @@ class Picture(SQLModel, table=True):
             "stack_position",
             "tag_uncertainty",
             "anomaly_tag_uncertainty",
+            "text_score",
             "reference_folder_id",
             "file_path",
         }
