@@ -65,7 +65,18 @@
               <div class="editor-docker-path-value">{{ localPath }}</div>
             </div>
 
-            <div class="editor-docker-title">Docker mount line</div>
+            <div class="editor-docker-format-row">
+              <div class="editor-docker-title">Docker mount line</div>
+              <v-btn-toggle
+                v-model="shellFormat"
+                mandatory
+                density="compact"
+                class="editor-docker-shell-btns"
+              >
+                <v-btn value="linux" size="small">Linux / Mac</v-btn>
+                <v-btn value="windows" size="small">Windows</v-btn>
+              </v-btn-toggle>
+            </div>
             <div class="editor-docker-note">
               Add this <code>-v</code> mount to your <code>docker run</code>
               command:
@@ -90,8 +101,7 @@
 
             <div class="editor-docker-title">Container restart helpers</div>
             <div class="editor-docker-note editor-docker-note--muted">
-              Replace <code>pixlstash-gpu</code> below if your container uses a
-              different name. This removes the old container, not the image.
+              This removes the old container, not the image.
             </div>
             <div class="editor-docker-snippet-wrap">
               <code class="editor-docker-snippet">{{
@@ -162,7 +172,18 @@
             v-if="isEditMode && props.inDocker"
             class="editor-docker-instructions"
           >
-            <div class="editor-docker-title">Docker restart command</div>
+            <div class="editor-docker-format-row">
+              <div class="editor-docker-title">Docker restart command</div>
+              <v-btn-toggle
+                v-model="shellFormat"
+                mandatory
+                density="compact"
+                class="editor-docker-shell-btns"
+              >
+                <v-btn value="linux" size="small">Linux / Mac</v-btn>
+                <v-btn value="windows" size="small">Windows</v-btn>
+              </v-btn-toggle>
+            </div>
             <div class="editor-docker-note">
               Copy this if you need to restart with the current folder mounts.
             </div>
@@ -387,6 +408,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import {
   VBtn,
+  VBtnToggle,
   VCard,
   VCardActions,
   VCardText,
@@ -405,6 +427,8 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   folder: { type: Object, default: null },
   inDocker: { type: Boolean, default: false },
+  /** "cpu" for the CPU-only Docker image; any other value (including "gpu") uses the GPU image. */
+  dockerVariant: { type: String, default: "gpu" },
   registeredPaths: { type: Array, default: () => [] },
   registeredFolders: { type: Array, default: () => [] },
   registeredReferenceFolders: { type: Array, default: () => [] },
@@ -428,6 +452,7 @@ const pathInputRef = ref(null);
 const copyStatus = ref("");
 
 let copyStatusTimer = null;
+const shellFormat = ref("linux");
 
 const browseOpen = ref(false);
 const browsePath = ref("");
@@ -493,7 +518,9 @@ function inferReferenceMount(folder, fallbackIndex = null) {
   if (!rawFolder) return null;
 
   const storedHost = String(folder?.host_path || "").trim();
-  const hasCanonicalContainerPath = /^\/data\/ref\/pictures-\d+$/.test(rawFolder);
+  const hasCanonicalContainerPath = /^\/data\/ref\/pictures-\d+$/.test(
+    rawFolder,
+  );
 
   let containerPath = rawFolder;
   let hostPath = storedHost;
@@ -519,7 +546,10 @@ const inferredImportMounts = computed(() => {
   let fallback = 1;
   return (props.registeredFolders || [])
     .map((folder) => {
-      const inferred = inferImportMount(folder, String(fallback).padStart(3, "0"));
+      const inferred = inferImportMount(
+        folder,
+        String(fallback).padStart(3, "0"),
+      );
       fallback += 1;
       return inferred;
     })
@@ -550,7 +580,8 @@ const importContainerPathSet = computed(() => {
 
 const hasExistingFolderMounts = computed(() => {
   return (
-    inferredReferenceMounts.value.length > 0 || inferredImportMounts.value.length > 0
+    inferredReferenceMounts.value.length > 0 ||
+    inferredImportMounts.value.length > 0
   );
 });
 
@@ -558,9 +589,12 @@ function shellSingleQuote(value) {
   return `'${String(value || "").replace(/'/g, `"'"'`)}'`;
 }
 
-function buildDockerVolumeFlag(hostPath, containerPath) {
+function buildDockerVolumeFlag(hostPath, containerPath, format = "linux") {
   const source = String(hostPath || "").trim();
   const target = String(containerPath || "").trim();
+  if (format === "windows") {
+    return `-v "${source}:${target}"`;
+  }
   return `-v ${shellSingleQuote(`${source}:${target}`)}`;
 }
 
@@ -603,7 +637,10 @@ const dockerSuggestedPath = computed(() => {
   while (true) {
     const suffix = String(index).padStart(3, "0");
     const candidate = `/data/import/pictures-${suffix}`;
-    if (!importContainerPathSet.value.has(candidate) && !usedIndices.has(index)) {
+    if (
+      !importContainerPathSet.value.has(candidate) &&
+      !usedIndices.has(index)
+    ) {
       return candidate;
     }
     index += 1;
@@ -612,25 +649,45 @@ const dockerSuggestedPath = computed(() => {
 
 const dockerMountSnippet = computed(() => {
   const hostPath = String(localHostPath.value || "").trim() || localPath.value;
-  return buildDockerVolumeFlag(hostPath, dockerSuggestedPath.value);
+  return buildDockerVolumeFlag(
+    hostPath,
+    dockerSuggestedPath.value,
+    shellFormat.value,
+  );
 });
 
 const dockerExistingImportMountSnippets = computed(() => {
   const newFolderPath = normalizeFolderPath(dockerSuggestedPath.value);
   return inferredImportMounts.value
-    .filter((mount) => normalizeFolderPath(mount.containerPath) !== newFolderPath)
-    .map((mount) => buildDockerVolumeFlag(mount.hostPath, mount.containerPath));
+    .filter(
+      (mount) => normalizeFolderPath(mount.containerPath) !== newFolderPath,
+    )
+    .map((mount) =>
+      buildDockerVolumeFlag(
+        mount.hostPath,
+        mount.containerPath,
+        shellFormat.value,
+      ),
+    );
 });
 
 const dockerAllImportMountSnippets = computed(() => {
   return inferredImportMounts.value.map((mount) =>
-    buildDockerVolumeFlag(mount.hostPath, mount.containerPath),
+    buildDockerVolumeFlag(
+      mount.hostPath,
+      mount.containerPath,
+      shellFormat.value,
+    ),
   );
 });
 
 const dockerAllReferenceMountSnippets = computed(() => {
   return inferredReferenceMounts.value.map((mount) =>
-    buildDockerVolumeFlag(mount.hostPath, mount.containerPath),
+    buildDockerVolumeFlag(
+      mount.hostPath,
+      mount.containerPath,
+      shellFormat.value,
+    ),
   );
 });
 
@@ -645,35 +702,84 @@ const dockerAllRegisteredMountSnippets = computed(() => {
   ]);
 });
 
-const dockerRemoveContainerSnippet = "docker rm -f pixlstash-gpu";
+const isGpuVariant = computed(() => {
+  return (
+    String(props.dockerVariant || "")
+      .trim()
+      .toLowerCase() !== "cpu"
+  );
+});
+
+const containerName = computed(() => {
+  return isGpuVariant.value ? "pixlstash-gpu" : "pixlstash-cpu";
+});
+
+const dockerRemoveContainerSnippet = computed(() => {
+  return `docker rm -f ${containerName.value}`;
+});
 
 const dockerImageReference = computed(() => {
   const version = String(appVersion || "").trim();
+  const suffix = isGpuVariant.value ? "gpu" : "cpu";
   if (!version) {
-    return "ghcr.io/pikselkroken/pixlstash:latest-gpu";
+    return `ghcr.io/pikselkroken/pixlstash:latest-${suffix}`;
   }
-  if (version.toLowerCase().endsWith("-gpu")) {
-    return `ghcr.io/pikselkroken/pixlstash:${version}`;
-  }
-  return `ghcr.io/pikselkroken/pixlstash:${version}-gpu`;
+  const baseVersion = version.replace(/-(gpu|cpu)$/i, "");
+  return `ghcr.io/pikselkroken/pixlstash:${baseVersion}-${suffix}`;
 });
 
-function buildDockerRestartCommand(importMounts) {
-  return [
-    "docker rm -f pixlstash-gpu 2>/dev/null || true",
+function buildDockerRestartCommand(importMounts, format = "linux") {
+  const name = containerName.value;
+  const image = dockerImageReference.value;
+  const isGpu = isGpuVariant.value;
+
+  if (format === "windows") {
+    const c = "`";
+    const lines = [`docker rm -f ${name} 2>$null`, `docker run -d ${c}`];
+    if (isGpu) {
+      lines.push(`  --runtime nvidia ${c}`);
+    }
+    lines.push(`  -e HOME=/home/pixlstash ${c}`);
+    if (isGpu) {
+      lines.push(`  -e NVIDIA_VISIBLE_DEVICES=all ${c}`);
+      lines.push(`  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility ${c}`);
+    }
+    lines.push(`  -e PIXLSTASH_HOST=0.0.0.0 ${c}`);
+    lines.push(`  -p 9537:9537 ${c}`);
+    lines.push(
+      `  -v "$env:USERPROFILE\\Pictures\\pixlstash:/home/pixlstash" ${c}`,
+    );
+    for (const mount of importMounts) {
+      lines.push(`  ${mount} ${c}`);
+    }
+    lines.push(`  --name ${name} ${c}`);
+    lines.push(`  ${image}`);
+    return lines.join("\n");
+  }
+
+  // bash (Linux / macOS)
+  const lines = [
+    `docker rm -f ${name} 2>/dev/null || true`,
     "docker run -d \\",
-    "  --runtime nvidia \\",
-    "  --user $(id -u):$(id -g) \\",
-    "  -e HOME=/home/pixlstash \\",
-    "  -e NVIDIA_VISIBLE_DEVICES=all \\",
-    "  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \\",
-    "  -e PIXLSTASH_HOST=0.0.0.0 \\",
-    "  -p 9537:9537 \\",
-    "  -v ~/Pictures/pixlstash:/home/pixlstash \\",
-    ...importMounts.map((mount) => `  ${mount} \\`),
-    "  --name pixlstash-gpu \\",
-    `  ${dockerImageReference.value}`,
-  ].join("\n");
+  ];
+  if (isGpu) {
+    lines.push("  --runtime nvidia \\");
+  }
+  lines.push("  --user $(id -u):$(id -g) \\");
+  lines.push("  -e HOME=/home/pixlstash \\");
+  if (isGpu) {
+    lines.push("  -e NVIDIA_VISIBLE_DEVICES=all \\");
+    lines.push("  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \\");
+  }
+  lines.push("  -e PIXLSTASH_HOST=0.0.0.0 \\");
+  lines.push("  -p 9537:9537 \\");
+  lines.push("  -v ~/Pictures/pixlstash:/home/pixlstash \\");
+  for (const mount of importMounts) {
+    lines.push(`  ${mount} \\`);
+  }
+  lines.push(`  --name ${name} \\`);
+  lines.push(`  ${image}`);
+  return lines.join("\n");
 }
 
 const dockerRestartCommandSnippet = computed(() => {
@@ -682,11 +788,17 @@ const dockerRestartCommandSnippet = computed(() => {
     ...dockerExistingImportMountSnippets.value,
     dockerMountSnippet.value,
   ];
-  return buildDockerRestartCommand(dedupeMountSnippets(allMounts));
+  return buildDockerRestartCommand(
+    dedupeMountSnippets(allMounts),
+    shellFormat.value,
+  );
 });
 
 const dockerEditRestartCommandSnippet = computed(() => {
-  return buildDockerRestartCommand(dockerAllRegisteredMountSnippets.value);
+  return buildDockerRestartCommand(
+    dockerAllRegisteredMountSnippets.value,
+    shellFormat.value,
+  );
 });
 
 const isValid = computed(() => {
@@ -705,6 +817,7 @@ watch(
     }
 
     if (!isOpen) return;
+    shellFormat.value = "linux";
     confirmingDelete.value = false;
     saveError.value = "";
     const editingFolder = activeFolder.value;
@@ -1023,6 +1136,22 @@ function selectBrowsedPath() {
   font-size: 0.8rem;
   font-weight: 600;
   opacity: 0.86;
+}
+
+.editor-docker-format-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.editor-docker-format-row .editor-docker-title {
+  margin-bottom: 0;
+}
+
+.editor-docker-shell-btns {
+  flex-shrink: 0;
 }
 
 .editor-docker-note {

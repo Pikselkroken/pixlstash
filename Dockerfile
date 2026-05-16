@@ -115,6 +115,7 @@ USER pixlstash
 # Ensure $HOME always points at the mounted volume regardless of which UID
 # --user maps to at runtime (the UID may match a different user in /etc/passwd).
 ENV HOME=/home/pixlstash
+ENV PIXLSTASH_DOCKER_VARIANT=cpu
 
 # Volume for persistent data
 VOLUME ["/home/pixlstash"]
