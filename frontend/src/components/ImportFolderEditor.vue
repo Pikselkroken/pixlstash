@@ -452,7 +452,10 @@ const pathInputRef = ref(null);
 const copyStatus = ref("");
 
 let copyStatusTimer = null;
-const shellFormat = ref("linux");
+const defaultShellFormat = navigator.userAgent.toLowerCase().includes("win")
+  ? "windows"
+  : "linux";
+const shellFormat = ref(defaultShellFormat);
 
 const browseOpen = ref(false);
 const browsePath = ref("");
@@ -817,7 +820,7 @@ watch(
     }
 
     if (!isOpen) return;
-    shellFormat.value = "linux";
+    shellFormat.value = defaultShellFormat;
     confirmingDelete.value = false;
     saveError.value = "";
     const editingFolder = activeFolder.value;
@@ -924,8 +927,12 @@ async function copyToClipboard(value, successMessage) {
   let text = String(value || "").trim();
   if (!text) return;
   // Normalize line endings to \r\n on Windows to avoid Firefox clipboard bugs
-  if (typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.includes('Windows')) {
-    text = text.replace(/(?<!\r)\n/g, '\r\n');
+  if (
+    typeof navigator !== "undefined" &&
+    navigator.userAgent &&
+    navigator.userAgent.includes("Windows")
+  ) {
+    text = text.replace(/(?<!\r)\n/g, "\r\n");
   }
 
   const fallbackCopy = () => {
