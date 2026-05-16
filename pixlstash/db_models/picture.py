@@ -660,15 +660,6 @@ class Picture(SQLModel, table=True):
                 "\n".join(lines),
             )
 
-        # Log tag contribution for each result
-        for result in results:
-            logger.debug(
-                f"Picture ID: {result.Picture.id}, "
-                f"Tag contribution: min_tag_dist={getattr(result, 'min_tag_dist', 'N/A')}, "
-                f"fuzzy_score={getattr(result, 'fuzzy_score', 'N/A')}, "
-                f"embedding_score={getattr(result, 'embedding_score', 'N/A')}, "
-                f"combined_score={getattr(result, 'combined_score', 'N/A')}"
-            )
         output = []
         for row in results:
             pic, combined_score, _, _ = (

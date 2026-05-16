@@ -158,6 +158,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "iso",
         "eu",
         "us",
+        "british",
         "ymd-slash",
         "ymd-dot",
         "ymd-jp",
