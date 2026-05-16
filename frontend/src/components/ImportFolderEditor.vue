@@ -926,30 +926,29 @@ async function copyToClipboard(value, successMessage) {
 
   const fallbackCopy = () => {
     try {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      const ok = document.execCommand("copy");
-      document.body.removeChild(textarea);
-      return ok;
+      let intercepted = false;
+      const handler = (e) => {
+        e.clipboardData.setData("text/plain", text);
+        e.preventDefault();
+        intercepted = true;
+      };
+      document.addEventListener("copy", handler);
+      document.execCommand("copy");
+      document.removeEventListener("copy", handler);
+      return intercepted;
     } catch {
       return false;
     }
   };
 
   let copied = false;
-  try {
-    if (navigator?.clipboard?.writeText) {
+  if (navigator?.clipboard?.writeText) {
+    try {
       await navigator.clipboard.writeText(text);
       copied = true;
+    } catch {
+      copied = false;
     }
-  } catch {
-    copied = false;
   }
 
   if (!copied) {

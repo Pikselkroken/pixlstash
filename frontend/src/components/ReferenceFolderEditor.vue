@@ -950,17 +950,16 @@ async function copyToClipboard(value, successMessage) {
   if (!text) return;
   const fallbackCopy = () => {
     try {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      const ok = document.execCommand("copy");
-      document.body.removeChild(textarea);
-      return ok;
+      let intercepted = false;
+      const handler = (e) => {
+        e.clipboardData.setData("text/plain", text);
+        e.preventDefault();
+        intercepted = true;
+      };
+      document.addEventListener("copy", handler);
+      document.execCommand("copy");
+      document.removeEventListener("copy", handler);
+      return intercepted;
     } catch {
       return false;
     }
@@ -982,20 +981,6 @@ async function copyToClipboard(value, successMessage) {
     copied = fallbackCopy();
     if (copied) {
       method = "fallback";
-    }
-  }
-
-  if (copied && navigator?.clipboard?.readText) {
-    try {
-      const readBack = await navigator.clipboard.readText();
-      copied = readBack === text;
-      if (!copied) {
-        method = "none";
-      }
-    } catch {
-      // Do not claim success when read-back verification is unavailable.
-      copied = false;
-      method = "none";
     }
   }
 
