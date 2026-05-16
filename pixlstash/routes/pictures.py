@@ -2306,10 +2306,18 @@ def create_router(server) -> APIRouter:
                                 recheck_stale = True
                                 try:
                                     os.remove(thumb_path)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Failed to remove stale thumbnail on recheck %s: %s",
+                                        thumb_path,
+                                        exc,
+                                    )
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to compare thumbnail mtime on recheck %s: %s",
+                                thumb_path,
+                                exc,
+                            )
                 if not recheck_stale:
                     elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                     logger.debug(
@@ -4012,8 +4020,10 @@ def create_router(server) -> APIRouter:
                         resp.headers["ETag"] = etag
                         resp.headers["Cache-Control"] = "public, max-age=86400"
                         return resp
-                except OSError:
-                    pass  # fall through to regenerate
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to access watermark cache for id=%s: %s", pic.id, exc
+                    )
         else:
             wm_cache_path = None
 
