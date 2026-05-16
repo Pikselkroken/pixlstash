@@ -677,6 +677,28 @@ class TagTask(BaseTask):
         if not picture_ids:
             return 0
 
+        # Filter to pictures that still exist — a reference folder removal can
+        # delete pictures while a tag task is already in flight, causing FK
+        # violations when TagPrediction rows are flushed for a gone picture.
+        existing_picture_ids: set[int] = set(
+            session.exec(
+                select(Picture.id).where(Picture.id.in_(picture_ids))
+            ).all()
+        )
+        picture_ids = [pid for pid in picture_ids if pid in existing_picture_ids]
+        if not picture_ids:
+            return 0
+        label_scores_by_pic_id = {
+            pid: scores
+            for pid, scores in label_scores_by_pic_id.items()
+            if pid in existing_picture_ids
+        }
+        tags_by_pic_id = {
+            pid: tags
+            for pid, tags in tags_by_pic_id.items()
+            if pid in existing_picture_ids
+        }
+
         # --- Single bulk fetch of all existing TagPrediction rows for the batch ---
         existing_rows = session.exec(
             select(TagPrediction).where(TagPrediction.picture_id.in_(picture_ids))
