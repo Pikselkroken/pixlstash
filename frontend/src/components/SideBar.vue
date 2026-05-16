@@ -440,6 +440,25 @@ async function importFolderSaved() {
   if (inDocker.value && createdNewFolder) {
     showDockerRestartPrompt();
   }
+
+  // If a new import folder was just created, navigate to it so the user
+  // sees the "scanning" state rather than whatever was previously shown.
+  if (createdNewFolder) {
+    const newFolder = importFolders.value.reduce(
+      (best, entry) => (!best || entry.id > best.id ? entry : best),
+      null,
+    );
+    if (newFolder) {
+      selectedFolderKey.value = `if-${newFolder.id}`;
+      emit("select-folder", {
+        importSourceFolder: newFolder.folder,
+        label: newFolder.label || newFolder.folder,
+      });
+      emit("update:folder-scanning", Boolean(newFolder.last_checked == null));
+      return;
+    }
+  }
+
   if (!selectedFolderKey.value?.startsWith("if-")) return;
   const selectedId = Number(selectedFolderKey.value.slice(3));
   if (!Number.isFinite(selectedId)) return;
