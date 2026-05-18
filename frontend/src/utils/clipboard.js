@@ -12,7 +12,7 @@ export async function copyText(text) {
     typeof navigator !== "undefined" &&
     navigator.userAgent?.includes("Windows")
   ) {
-    text = text.replace(/(?<!\r)\n/g, "\r\n");
+    text = text.replace(/\r?\n/g, "\r\n");
   }
 
   // Try the modern Clipboard API first (requires secure context or localhost)
