@@ -796,12 +796,20 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/characters",
         summary="List characters",
-        description="Lists characters, optionally filtered by exact name.",
+        description="Lists characters, optionally filtered by exact name or project. "
+        "Pass ``project_id`` as a numeric ID to restrict to one project, "
+        "or ``UNASSIGNED`` for characters with no project.",
     )
-    def get_characters(request: Request, name: str = Query(None)):
+    def get_characters(
+        request: Request,
+        name: str = Query(None),
+        project_id: str | None = Query(default=None),
+    ):
         token_scope = getattr(request.state, "token_scope", None)
         try:
-            logger.debug(f"Fetching characters with name: {name}")
+            logger.debug(
+                f"Fetching characters with name: {name}, project_id: {project_id}"
+            )
             if token_scope is not None and token_scope.resource_type == "character":
                 # Return only the single authorised character
                 scope_character_id = token_scope.resource_id
@@ -809,23 +817,29 @@ def create_router(server) -> APIRouter:
                     lambda session: Character.find(session, id=scope_character_id)
                 )
             elif token_scope is not None and token_scope.resource_type == "project":
-                # Return only characters that belong to the authorised project
-                scope_project_id = token_scope.resource_id
-
-                def fetch_project_chars(session: Session):
-                    return session.exec(
-                        select(Character)
-                        .where(Character.project_id == scope_project_id)
-                        .order_by(Character.name)
-                    ).all()
-
-                return server.vault.db.run_immediate_read_task(fetch_project_chars)
+                # Force project_id to the token's authorised project
+                project_id = str(token_scope.resource_id)
             elif token_scope is not None and token_scope.resource_type is not None:
                 # Any other scoped token (e.g. picture_set) has no access to characters
                 return []
-            return server.vault.db.run_immediate_read_task(
-                lambda session: Character.find(session, name=name)
-            )
+
+            def fetch(session: Session):
+                query = select(Character).order_by(Character.name)
+                if name is not None:
+                    query = query.where(Character.name == name)
+                if project_id is not None:
+                    if project_id == "UNASSIGNED":
+                        query = query.where(Character.project_id.is_(None))
+                    else:
+                        try:
+                            query = query.where(Character.project_id == int(project_id))
+                        except (TypeError, ValueError):
+                            raise HTTPException(
+                                status_code=400, detail="Invalid project_id"
+                            )
+                return session.exec(query).all()
+
+            return server.vault.db.run_immediate_read_task(fetch)
         except KeyError:
             logger.error("Character not found")
             raise HTTPException(status_code=404, detail="Character not found")
