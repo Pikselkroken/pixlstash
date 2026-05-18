@@ -128,3 +128,110 @@ def test_delete_nonexistent_character_returns_404():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_get_characters_filtered_by_numeric_project_id():
+    temp_dir, client, server = _setup()
+    try:
+        resp = client.post("/projects", json={"name": "CharFilter Project"})
+        assert resp.status_code == 200
+        project_id = resp.json()["id"]
+
+        resp = client.post("/characters", json={"name": "InProject", "project_id": project_id})
+        assert resp.status_code == 200
+
+        resp = client.post("/characters", json={"name": "NotInProject"})
+        assert resp.status_code == 200
+
+        resp = client.get(f"/characters?project_id={project_id}")
+        assert resp.status_code == 200
+        names = [c["name"] for c in resp.json()]
+        assert "InProject" in names
+        assert "NotInProject" not in names
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_get_characters_filtered_by_unassigned():
+    temp_dir, client, server = _setup()
+    try:
+        resp = client.post("/projects", json={"name": "UnassignedFilter Project"})
+        assert resp.status_code == 200
+        project_id = resp.json()["id"]
+
+        resp = client.post("/characters", json={"name": "Assigned", "project_id": project_id})
+        assert resp.status_code == 200
+
+        resp = client.post("/characters", json={"name": "Unassigned"})
+        assert resp.status_code == 200
+
+        resp = client.get("/characters?project_id=UNASSIGNED")
+        assert resp.status_code == 200
+        names = [c["name"] for c in resp.json()]
+        assert "Unassigned" in names
+        assert "Assigned" not in names
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_get_characters_invalid_project_id_returns_400():
+    temp_dir, client, server = _setup()
+    try:
+        resp = client.get("/characters?project_id=not-a-number")
+        assert resp.status_code == 400
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_character_scoped_token_respects_project_id_filter():
+    temp_dir, client, server = _setup()
+    try:
+        resp = client.post("/projects", json={"name": "ScopedTokenProject"})
+        assert resp.status_code == 200
+        project_id = resp.json()["id"]
+
+        resp = client.post("/characters", json={"name": "CharInProject", "project_id": project_id})
+        assert resp.status_code == 200
+        char_id = resp.json()["character"]["id"]
+
+        resp = client.post(
+            "/users/me/token",
+            json={
+                "description": "char token",
+                "scope": "READ",
+                "resource_type": "character",
+                "resource_id": char_id,
+            },
+        )
+        assert resp.status_code == 200
+        char_token = resp.json()["token"]
+
+        token_client = TestClient(server.api)
+
+        # Filter by the correct project: character should be returned
+        resp = token_client.get(
+            f"/characters?project_id={project_id}",
+            headers={"Authorization": f"Bearer {char_token}"},
+        )
+        assert resp.status_code == 200
+        ids = [c["id"] for c in resp.json()]
+        assert char_id in ids
+
+        # Filter by UNASSIGNED: character belongs to a project, so it must not appear
+        resp = token_client.get(
+            "/characters?project_id=UNASSIGNED",
+            headers={"Authorization": f"Bearer {char_token}"},
+        )
+        assert resp.status_code == 200
+        ids = [c["id"] for c in resp.json()]
+        assert char_id not in ids
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
