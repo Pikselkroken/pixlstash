@@ -57,10 +57,10 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 14px;
   background: var(--toolbar);
   color: var(--toolbar-text);
-  padding: 14px 18px;
+  padding: 10px 14px;
   border-radius: 16px;
   box-shadow: 0 16px 34px rgba(17, 20, 26, 0.12);
 }
@@ -68,15 +68,15 @@ a {
 .brand {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   font-weight: 600;
   font-size: 1.1rem;
   color: var(--toolbar-text);
 }
 
 .brand img {
-  width: 48px;
-  height: 48px;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
 }
 
@@ -90,13 +90,13 @@ a {
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 4px;
   font-size: 0.95rem;
   color: var(--toolbar-text);
 }
 
 .nav-links a {
-  padding: 4px 10px;
+  padding: 4px 8px;
   border-radius: 8px;
 }
 
@@ -126,13 +126,13 @@ a {
 .nav-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
 }
 
 .demo-btn,
 .download-btn {
   display: inline-block;
-  padding: 10px 16px;
+  padding: 8px 12px;
   border-radius: 10px;
   font-size: 0.9rem;
   font-weight: 600;
