@@ -420,6 +420,7 @@ import {
   VTextField,
 } from "vuetify/components";
 import { apiClient } from "../utils/apiClient";
+import { copyText } from "../utils/clipboard";
 
 const appVersion = __APP_VERSION__;
 
@@ -924,57 +925,13 @@ async function save() {
 }
 
 async function copyToClipboard(value, successMessage) {
-  let text = String(value || "").trim();
+  const text = String(value || "").trim();
   if (!text) return;
-  // Normalize line endings to \r\n on Windows to avoid Firefox clipboard bugs
-  if (
-    typeof navigator !== "undefined" &&
-    navigator.userAgent &&
-    navigator.userAgent.includes("Windows")
-  ) {
-    text = text.replace(/(?<!\r)\n/g, "\r\n");
-  }
-
-  const fallbackCopy = () => {
-    try {
-      let intercepted = false;
-      const handler = (e) => {
-        e.clipboardData.setData("text/plain", text);
-        e.preventDefault();
-        intercepted = true;
-      };
-      document.addEventListener("copy", handler);
-      document.execCommand("copy");
-      document.removeEventListener("copy", handler);
-      return intercepted;
-    } catch {
-      return false;
-    }
-  };
-
-  let copied = false;
-  if (navigator?.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      copied = true;
-    } catch {
-      copied = false;
-    }
-  }
-
-  if (!copied) {
-    copied = fallbackCopy();
-  }
-
-  if (copied) {
-    copyStatus.value = successMessage;
-  } else {
-    copyStatus.value = "Copy failed. Please select and copy manually.";
-  }
-
-  if (copyStatusTimer) {
-    clearTimeout(copyStatusTimer);
-  }
+  const copied = await copyText(text);
+  copyStatus.value = copied
+    ? successMessage
+    : "Copy failed. Please select and copy manually.";
+  if (copyStatusTimer) clearTimeout(copyStatusTimer);
   copyStatusTimer = setTimeout(() => {
     copyStatus.value = "";
     copyStatusTimer = null;

@@ -1181,6 +1181,7 @@ import {
   buildMediaUrl,
 } from "../utils/media.js";
 import { apiClient, appendShareToken, isReadOnly } from "../utils/apiClient";
+import { copyText } from "../utils/clipboard";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToProjectControl from "./AddToProjectControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
@@ -4598,22 +4599,9 @@ async function copyMetadataValue(value) {
     ? String(value)
     : stringifyMetadata(value);
   if (!text) return;
-  try {
-    if (navigator?.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-    }
-  } catch (err) {
-    console.warn("Failed to copy metadata value:", err);
+  const copied = await copyText(text);
+  if (!copied) {
+    console.warn("Failed to copy metadata value.");
   }
 }
 
@@ -4701,29 +4689,15 @@ async function copyDescription() {
     ? descriptionDraft.value
     : image.value?.description;
   if (!text) return;
-  try {
-    if (navigator?.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-    }
+  const copied = await copyText(text);
+  if (copied) {
     descriptionCopyState.value = "copied";
-    if (copyResetTimer) {
-      clearTimeout(copyResetTimer);
-    }
+    if (copyResetTimer) clearTimeout(copyResetTimer);
     copyResetTimer = window.setTimeout(() => {
       resetCopyState();
     }, 2000);
-  } catch (err) {
-    alert(`Unable to copy description: ${err?.message || err}`);
+  } else {
+    alert("Unable to copy description.");
   }
 }
 
@@ -4838,20 +4812,8 @@ function canvasToBlob(canvas, type) {
 }
 
 async function copyTextToClipboard(text) {
-  if (!text) return;
-  if (navigator?.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textarea);
+  const ok = await copyText(text);
+  if (!ok) throw new Error("Copy failed");
 }
 
 function resetCopyState() {
