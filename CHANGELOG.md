@@ -1,3 +1,9 @@
+# [1.2.1]
+- Fix some clipboard issues for copying tokens
+- Guard against the tagging of deleted pictures
+- Some import folder bug fixes
+- Add project id scoping for GET /characters
+
 # [1.2.0]
 - Fix Docker commands and a few more bugfixes
 
