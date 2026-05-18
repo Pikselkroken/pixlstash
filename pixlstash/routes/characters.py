@@ -810,12 +810,10 @@ def create_router(server) -> APIRouter:
             logger.debug(
                 f"Fetching characters with name: {name}, project_id: {project_id}"
             )
+            scope_character_id = None
             if token_scope is not None and token_scope.resource_type == "character":
-                # Return only the single authorised character
+                # Restrict to the single authorised character; project_id filter still applies
                 scope_character_id = token_scope.resource_id
-                return server.vault.db.run_immediate_read_task(
-                    lambda session: Character.find(session, id=scope_character_id)
-                )
             elif token_scope is not None and token_scope.resource_type == "project":
                 # Force project_id to the token's authorised project
                 project_id = str(token_scope.resource_id)
@@ -825,6 +823,8 @@ def create_router(server) -> APIRouter:
 
             def fetch(session: Session):
                 query = select(Character).order_by(Character.name)
+                if scope_character_id is not None:
+                    query = query.where(Character.id == scope_character_id)
                 if name is not None:
                     query = query.where(Character.name == name)
                 if project_id is not None:
@@ -840,6 +840,8 @@ def create_router(server) -> APIRouter:
                 return session.exec(query).all()
 
             return server.vault.db.run_immediate_read_task(fetch)
+        except HTTPException:
+            raise
         except KeyError:
             logger.error("Character not found")
             raise HTTPException(status_code=404, detail="Character not found")
