@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { apiClient, isReadOnly, logout } from "../utils/apiClient";
+import { copyText } from "../utils/clipboard";
 
 const appVersion = __APP_VERSION__;
 
@@ -1421,13 +1422,15 @@ async function fetchUserTokens() {
   }
 }
 
-function copyToken() {
-  if (!newlyCreatedToken.value) return;
-  navigator.clipboard.writeText(newlyCreatedToken.value);
-  tokenCopied.value = true;
-  setTimeout(() => {
-    tokenCopied.value = false;
-  }, 2000);
+async function copyToken() {
+  const text = newlyCreatedToken.value;
+  if (!text) return;
+  if (await copyText(text)) {
+    tokenCopied.value = true;
+    setTimeout(() => {
+      tokenCopied.value = false;
+    }, 2000);
+  }
 }
 
 async function loadShareResourceOptions(type) {
@@ -1472,14 +1475,11 @@ const shareUrl = computed(() => {
 
 async function copyShareLink() {
   if (!shareUrl.value) return;
-  try {
-    await navigator.clipboard.writeText(shareUrl.value);
+  if (await copyText(shareUrl.value)) {
     shareLinkCopied.value = true;
     setTimeout(() => {
       shareLinkCopied.value = false;
     }, 2000);
-  } catch {
-    // Clipboard not available
   }
 }
 
