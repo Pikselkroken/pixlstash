@@ -129,7 +129,7 @@ Once satisfied, stop the container with `Ctrl+C`.
 flyctl deploy --config fly.toml --image registry.fly.io/pixlstash-demo:latest
 ```
 
-Fly.io will pull the image from its own registry and roll it out. Because `auto_stop_machines = 'stop'` and `min_machines_running = 0`, the machine will spin down when idle and start again on the next request.
+Fly.io will pull the image from its own registry and roll it out. Because `auto_stop_machines = 'suspend'` and `min_machines_running = 0`, the machine will suspend when idle and resume in under a second on the next request.
 
 ## Configuration (`fly.toml`)
 
@@ -140,7 +140,7 @@ Fly.io will pull the image from its own registry and roll it out. Because `auto_
 | `PIXLSTASH_PORT` | `8080` | Must match `internal_port` |
 | `internal_port` | `8080` | Port the app listens on inside the container |
 | `memory` | `2gb` | Needed for model loading (even with workers disabled, image serving uses memory) |
-| `auto_stop_machines` | `stop` | Machine stops when idle to save cost |
+| `auto_stop_machines` | `suspend` | Machine suspends when idle; resumes in <1s on next request |
 | `min_machines_running` | `0` | No always-on machines |
 
 ## Updating the Demo Data
