@@ -1,7 +1,5 @@
 from typing import Callable
 
-from sqlmodel import Session
-
 from .base_task_finder import BaseTaskFinder
 from .image_embedding_task import ImageEmbeddingTask
 from pixlstash.worker_config import IMAGE_EMBEDDING_MAX_INFLIGHT
@@ -64,7 +62,3 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
             picture_tagger=picture_tagger,
             batch=selected,
         )
-
-    @staticmethod
-    def _count_remaining(session: Session) -> int:
-        return ImageEmbeddingTask.count_remaining(session)
