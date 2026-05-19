@@ -248,6 +248,7 @@ const wsUpdateKey = ref(0);
 const wsTagUpdate = ref({ key: 0, pictureIds: [] });
 const wsPluginProgress = ref({ key: 0, payload: null });
 const isUploadInProgress = ref(false);
+const pendingExternalImportCount = ref(0);
 const columnsMenuOpen = ref(false);
 const overlaysMenuOpen = ref(false);
 const configLoaded = ref(false);
@@ -268,6 +269,11 @@ const applyTagFilter = ref(false);
 
 function refreshGridVersion() {
   gridVersion.value++;
+}
+
+function loadPendingExternalImports() {
+  wsUpdateKey.value = Date.now();
+  refreshGridVersion();
 }
 
 function buildUpdatesSocketUrl() {
@@ -342,7 +348,10 @@ function connectUpdatesSocket() {
         wsTagUpdate.value = { key: nextKey, pictureIds };
         return;
       }
-      if (
+      if (payload?.type === "picture_imported" && !isUploadInProgress.value) {
+        // External import (ComfyUI, API, watch-folder): show pill, don't auto-refresh
+        pendingExternalImportCount.value += Math.max(1, pictureIds.length);
+      } else if (
         shouldRefreshForPictureChange() ||
         payload?.type === "picture_imported"
       ) {
@@ -1365,6 +1374,10 @@ watch(dateFormat, () => {
   refreshGridVersion();
 });
 
+watch(gridVersion, () => {
+  pendingExternalImportCount.value = 0;
+});
+
 watch(
   themeMode,
   (value) => {
@@ -1778,6 +1791,8 @@ provide("toolbarState", {
                 "
                 @import-started="isUploadInProgress = true"
                 @import-ended="isUploadInProgress = false"
+                :pendingExternalImportCount="pendingExternalImportCount"
+                @load-pending-imports="loadPendingExternalImports"
                 @update:visible-range-label="visibleRangeLabel = $event"
               />
             </div>

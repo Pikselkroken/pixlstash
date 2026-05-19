@@ -350,6 +350,23 @@
       @drop.capture.prevent="handleGridDrop"
       :style="scrollWrapperStyle"
     >
+      <div
+        v-if="props.pendingExternalImportCount > 0"
+        class="pending-imports-pill-anchor"
+      >
+        <button
+          class="pending-imports-pill"
+          @click="emit('load-pending-imports')"
+        >
+          ↑ {{ props.pendingExternalImportCount }}
+          {{
+            props.pendingExternalImportCount === 1
+              ? "new picture"
+              : "new pictures"
+          }}
+          — click to load
+        </button>
+      </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
       </div>
@@ -855,6 +872,7 @@ const emit = defineEmits([
   "update:set-difference-base-id",
   "update:embed-watermark",
   "update:visible-range-label",
+  "load-pending-imports",
 ]);
 
 // Props
@@ -926,6 +944,7 @@ const props = defineProps({
   selectedSetNames: { type: Object, default: () => ({}) },
   publicUrl: { type: String, default: null },
   embedWatermark: { type: Boolean, default: false },
+  pendingExternalImportCount: { type: Number, default: 0 },
 });
 
 // ============================================================
@@ -8144,6 +8163,42 @@ function handleEmptyStateReset() {
 .grid-range-fade-enter-from,
 .grid-range-fade-leave-to {
   opacity: 0;
+}
+
+.pending-imports-pill-anchor {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 0;
+  overflow: visible;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pending-imports-pill {
+  position: absolute;
+  top: 8px;
+  pointer-events: all;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(var(--v-theme-primary), 0.92);
+  color: #fff;
+  padding: 6px 18px;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  user-select: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.pending-imports-pill:hover {
+  opacity: 0.88;
 }
 
 .grid-scroll-wrapper {
