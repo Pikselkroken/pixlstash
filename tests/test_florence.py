@@ -25,7 +25,7 @@ def tagger(request):
 
     tagger = PictureTagger()
     try:
-        tagger._init_florence_captioning()
+        tagger._ensure_captioning_ready()
     except Exception as exc:
         exc_str = str(exc)
         # HuggingFace rate-limiting surfaces as an OSError or an HfHubHTTPError
@@ -80,7 +80,7 @@ def test_florence_caption_generation(tagger, image_files):
     dataset = image_files[:MAX_TEST_IMAGES]
 
     for image_path in dataset:
-        caption = tagger._generate_florence_caption(image_path)
+        caption = tagger._florence_service.generate_caption(image_path)
 
         if caption:
             success_count += 1
@@ -110,16 +110,16 @@ def test_florence_caption_performance(tagger, image_files):
         pytest.fail("No images available for Florence performance test")
 
     # Warm up once to avoid first-call setup costs skewing throughput.
-    warmup_caption = tagger._generate_florence_caption(test_images[0])
+    warmup_caption = tagger._florence_service.generate_caption(test_images[0])
     assert warmup_caption, "Florence warmup caption failed"
 
-    batch_size = max(1, int(getattr(tagger, "_florence_batch_size", 1) or 1))
+    batch_size = max(1, int(tagger._florence_service.description_batch_size() or 1))
 
     start_time = time.time()
     captions = []
     for offset in range(0, len(test_images), batch_size):
         chunk = test_images[offset : offset + batch_size]
-        chunk_captions = tagger._generate_florence_captions_batch(chunk)
+        chunk_captions = tagger._florence_service.generate_captions_batch(chunk)
         for image_path in chunk:
             captions.append(chunk_captions.get(image_path))
 
@@ -149,12 +149,12 @@ def test_florence_caption_performance(tagger, image_files):
     )
 
     # Relax requirements when running on CPU; Florence takes longer there.
-    device = getattr(tagger, "_florence_device", None)
+    device = tagger._florence_service._model_device
     expect_gpu = torch.cuda.is_available() and not PictureTagger.FORCE_CPU
     if expect_gpu and (device is None or getattr(device, "type", "cpu") != "cuda"):
         pytest.fail(
             "Florence expected to run on GPU but is on CPU. "
-            "This usually means an earlier CUDA failure triggered fallback via _reload_florence_on_cpu(), "
+            "This usually means an earlier CUDA failure triggered fallback via _reload_on_cpu(), "
             "often due to GPU memory pressure from previous tests."
         )
 
@@ -162,7 +162,7 @@ def test_florence_caption_performance(tagger, image_files):
         assert time_per_image < 2.5, (
             "Performance too slow on GPU: "
             f"{time_per_image:.3f}s per image; "
-            f"fallback_reason={getattr(tagger, '_last_florence_fallback_reason', None)}"
+            f"fallback_reason={tagger._florence_service._last_fallback_reason}"
         )
     else:
         # Increased timeout for slower CI runners (GitHub Actions, etc.)
@@ -178,7 +178,7 @@ def test_florence_caption_content(tagger, image_files):
     # Test all available images
     dataset = image_files[:MAX_TEST_IMAGES]
     for image_path in dataset:
-        caption = tagger._generate_florence_caption(image_path)
+        caption = tagger._florence_service.generate_caption(image_path)
 
         # Caption should be at least 10 characters
         assert len(caption) >= 10, f"Caption too short: {caption}"
@@ -196,7 +196,7 @@ def test_florence_caption_content(tagger, image_files):
 
 def test_florence_handles_missing_file(tagger):
     """Test that Florence-2 handles missing files gracefully."""
-    caption = tagger._generate_florence_caption("/nonexistent/file.jpg")
+    caption = tagger._florence_service.generate_caption("/nonexistent/file.jpg")
 
     # Should return None or empty string for missing files
     assert caption is None or caption == ""

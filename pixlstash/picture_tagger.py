@@ -3,181 +3,52 @@
 # Under the Apache 2.0 License                                  #
 # https://github.com/kohya-ss/sd-scripts/blob/main/LICENSE.md   #
 #################################################################
-from contextlib import contextmanager
 from typing import Optional
-import open_clip
-import csv
-import json
 import numpy as np
-import onnxruntime as ort
 import os
-import platform
-import re
-import subprocess
 import threading
-import time
 import torch
-from torchvision import transforms
-
-from tqdm import tqdm
-from sentence_transformers import SentenceTransformer
-
-try:
-    from transformers import logging as transformers_logging
-except Exception:  # pragma: no cover - optional dependency behaviour
-    transformers_logging = None
 
 from platformdirs import user_data_dir
 
 from .pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
-from pixlstash.utils.service.caption_utils import sanitise_tag
-from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
+from pixlstash.utils.model_utils import (
+    env_int,
+    env_float,
+    clean_asset_name,
+    trim_process_memory,
+)
+from pixlstash.utils.vram_utils import query_total_vram_mb, vram_limited_batch_cap
+from pixlstash.utils.service.caption_utils import (
+    merge_video_frame_tags,
+    filter_texts,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.tagger_plugins.clip_service import ClipService
+from pixlstash.tagger_plugins.sbert import SBertService
+from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
+from pixlstash.tagger_plugins.wd14 import WD14Service
+from pixlstash.tagger_plugins.florence2 import (
+    Florence2Service,
+    FLORENCE_BASE_VRAM_MB,
+    FLORENCE_PER_IMAGE_VRAM_MB,
+)
 
 logger = get_logger(__name__)
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-        return max(1, value)
-    except ValueError:
-        logger.warning(
-            "Invalid integer for %s=%r, using default=%s", name, raw, default
-        )
-        return default
-
-
-def _env_float(name: str, default: float | None) -> float | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-        if value <= 0:
-            return None
-        return value
-    except ValueError:
-        logger.warning("Invalid float for %s=%r, using default=%s", name, raw, default)
-        return default
-
-
-def _from_pretrained_local_first(cls, model_name, **kwargs):
-    """Load a HuggingFace model/processor from local cache when possible.
-
-    Tries ``local_files_only=True`` first so no network requests are made
-    when the model is already cached.  Falls back to a normal (online) load
-    only on the first run, when the files aren't present yet.
-    """
-    try:
-        return cls.from_pretrained(model_name, local_files_only=True, **kwargs)
-    except OSError:
-        logger.info("Downloading %s for the first time...", model_name)
-        return cls.from_pretrained(model_name, **kwargs)
-
-
-@contextmanager
-def _quiet_transformers_load_report():
-    """Temporarily suppress non-critical Transformers load-report warnings.
-
-    Some HF model loads (notably all-MiniLM-L6-v2) can emit a benign
-    "UNEXPECTED embeddings.position_ids" load report. Keep hard errors while
-    muting that warning noise during model initialization.
-    """
-    if transformers_logging is None:
-        yield
-        return
-
-    previous = transformers_logging.get_verbosity()
-    try:
-        transformers_logging.set_verbosity_error()
-        yield
-    finally:
-        transformers_logging.set_verbosity(previous)
-
-
-def _load_sentence_transformer(*args, **kwargs):
-    with _quiet_transformers_load_report():
-        return SentenceTransformer(*args, **kwargs)
-
-
-def _clean_asset_name(filename: str) -> str:
-    """Strip file extension and replace underscores/hyphens with spaces.
-
-    Used to produce human-readable model and LoRA names for text embedding.
-    Example: 'z_image_turbo_bf16.safetensors' -> 'z image turbo bf16'
-    """
-    name = os.path.basename(filename or "")
-    name = os.path.splitext(name)[0]
-    name = name.replace("_", " ").replace("-", " ")
-    return name.strip()
-
-
-DEFAULT_WD14_TAGGER_REPO = "SmilingWolf/wd-convnext-tagger-v3"
-FILES = ["keras_metadata.pb", "saved_model.pb", "selected_tags.csv"]
-FILES_ONNX = ["model.onnx"]
-SUB_DIR = "variables"
-SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
-CSV_FILE = FILES[-1]
 MODEL_DIR = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
-BATCH_SIZE = 1
-MAX_CONCURRENT_IMAGES_GPU = _env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU", 64)
-MAX_CONCURRENT_IMAGES_CPU = _env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU", 8)
-FLORENCE_BATCH_SIZE_GPU = _env_int("PIXLSTASH_FLORENCE_BATCH_GPU", 32)
-FLORENCE_BATCH_SIZE_CPU = _env_int("PIXLSTASH_FLORENCE_BATCH_CPU", 2)
-TAGGER_DATALOADER_TIMEOUT = 30
-GENERAL_THRESHOLD = 0.85
-UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
-CAPTION_SEPARATOR = ", "
-CUSTOM_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
-CUSTOM_TAGGER_FILENAME = "pixlstash-anomaly-tagger.safetensors"
-CUSTOM_TAGGER_META_FILENAME = "pixlstash-anomaly-tagger_meta.json"
-CUSTOM_TAGGER_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.safetensors")
-CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta.json")
-# Pin a specific HuggingFace git commit SHA for the custom tagger repo so that the
-# model is re-downloaded whenever this value is updated, even if the local file
-# already exists.  Set to "main" to always use the latest commit on the default branch.
-CUSTOM_TAGGER_REVISION = "d456616956954587e1a8c2d31c60c72f89a4ac3d"
-CUSTOM_TAGGER_REV_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.revision")
-CUSTOM_TAGGER_DEFAULT_THRESHOLD = 0.50
-# Threshold offset applied on top of each label's own threshold at inference time.
-# Negative values lower the effective threshold (more tags); positive values raise it.
-CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
-CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
-CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
-CUSTOM_TAGGER_BATCH = _env_int("PIXLSTASH_CUSTOM_TAGGER_BATCH", 16)
-CLIP_MODEL_NAME = "ViT-B-32"
-DEFAULT_MAX_VRAM_GB = _env_float("PIXLSTASH_MAX_VRAM_GB", None)
-EXPECTED_CONCURRENT_TAG_TASKS = _env_int("PIXLSTASH_EXPECTED_TAG_TASKS", 3)
+MAX_CONCURRENT_IMAGES_GPU = env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU", 64)
+MAX_CONCURRENT_IMAGES_CPU = env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU", 8)
+DEFAULT_MAX_VRAM_GB = env_float("PIXLSTASH_MAX_VRAM_GB", None)
 
 # Approximate VRAM footprints for non-tagging GPU pipelines
 INSIGHTFACE_VRAM_MB = 400  # RetinaFace + ArcFace models via CUDA provider
-FLORENCE_BASE_VRAM_MB = 900  # Florence-2-base model footprint (fp16 on GPU)
-FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-batch
-
-# Tags that require close-up face crops to detect reliably at full-image resolution.
-# These are collected from face-crop passes and merged into the picture's flat tag list.
-QUALITY_CROP_TAG_WHITELIST = frozenset(
-    {
-        "pixelated",
-        "blurry",
-        "jpeg artifacts",
-        "chromatic aberration",
-        "scan artifacts",
-        "film grain",
-        "malformed teeth",
-    }
-)
-CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
-FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"
-SENTENCE_TRANSFORMER_MODEL_NAME = "all-MiniLM-L6-v2"
-SENTENCE_TRANSFORMER_MODEL_REVISION = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
+# FLORENCE_BASE_VRAM_MB and FLORENCE_PER_IMAGE_VRAM_MB are imported from
+# pixlstash.tagger_plugins.florence2 (defined there alongside the service).
 
 
 class PictureTagger:
@@ -192,16 +63,12 @@ class PictureTagger:
 
     def __init__(
         self,
-        model_location=os.path.join(
-            MODEL_DIR, DEFAULT_WD14_TAGGER_REPO.replace("/", "_")
-        ),
         force_download=False,
         silent=True,
         device=None,
         image_root: str = None,
     ):
         logger.debug("Initializing PictureTagger...")
-        self._model_location = model_location
         self._silent = silent
         self._image_root = image_root
         self._model_init_lock = threading.Lock()
@@ -218,19 +85,6 @@ class PictureTagger:
             else:
                 self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        if self._device == "cuda":
-            providers = ort.get_available_providers()
-            if "CUDAExecutionProvider" not in providers:
-                # Only the WD14 ONNX tagger needs CUDAExecutionProvider; PyTorch
-                # models (Florence, CLIP, SentenceTransformer) work fine without
-                # it.  Log a note here but keep self._device as "cuda" — the ONNX
-                # loader at model-init time already has its own provider fallback.
-                logger.warning(
-                    "CUDAExecutionProvider unavailable for onnxruntime "
-                    "(WD14 tagger will use CPU; all PyTorch models still use CUDA). "
-                    "Fix with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
-                )
-
         if self._device == "cpu" and not PictureTagger.FORCE_CPU and not self._silent:
             if torch.cuda.is_available():
                 logger.warning(
@@ -243,98 +97,58 @@ class PictureTagger:
                 )
 
         logger.debug(f"PictureTagger initialised with device: {self._device}")
-        self._custom_tagger_path = CUSTOM_TAGGER_PATH
-        self._custom_tagger_meta_path = CUSTOM_TAGGER_META_PATH
         self._use_custom_tagger = True
         self._use_wd14_tagger = True
-        self._general_threshold = GENERAL_THRESHOLD
-        self._custom_tagger_threshold_offset = CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS
-        self._custom_label_thresholds: dict[str, float] = {}
-        self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
-        self._custom_tagger_image_size_quality_crop = (
-            CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP
-        )
-        self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
-        self._custom_device = self._device
+        self._custom_tagger_threshold_offset = 0.0
         self._max_vram_usage_mb: int | None = None
 
-        self._ensure_model_files(force_download=force_download)
+        self._clip_service = ClipService(device=self._device)
+        self._sbert_service = SBertService(device=self._device)
 
-        # Defer heavy model initialization until first use.
-        self.ort_sess = None
-        self.input_name = None
-        self._onnx_batch_capacity = 1
-        self._rating_tags = None
-        self._general_tags = None
-
-        self._clip_model = None
-        self._clip_preprocess = None
-        self._clip_tokenizer = None
-        self._clip_device = self._device
-
-        self._custom_model = None
-        self._custom_labels = None
-        self._custom_label_to_idx = None
-        self._custom_transform = None
-        self._custom_transform_cache = {}
-        if self._needs_custom_tagger_download():
-            self._download_custom_tagger()
-        if not os.path.isfile(self._custom_tagger_path) or not os.path.isfile(
-            self._custom_tagger_meta_path
+        self._custom_service = PixlStashTaggerService(
+            device=self._device,
+            model_dir=MODEL_DIR,
+            batch_size_fn=self._effective_custom_batch_size,
+        )
+        if self._custom_service.needs_download():
+            self._custom_service.download()
+        if not os.path.isfile(self._custom_service._model_path) or not os.path.isfile(
+            self._custom_service._meta_path
         ):
             logger.warning(
                 "Custom tagger not found at %s, skipping initialization.",
-                self._custom_tagger_path,
+                self._custom_service._model_path,
             )
             self._use_custom_tagger = False
         else:
             logger.info(
                 "Custom tagger loaded (version %d) from %s",
-                self.custom_tagger_version(),
-                self._custom_tagger_path,
+                self._custom_service.version(),
+                self._custom_service._model_path,
             )
 
-        # Initialize Florence-2 for captioning
-        logger.debug("Florence-2 captioning model is configured for lazy loading.")
-        self._florence_model = None
-        self._florence_processor = None
-
-        self._florence_device = None
-        self._florence_dtype = None
-        self._florence_model_name = "florence-community/Florence-2-base"
-        self._last_florence_fallback_reason = None
-        self._last_florence_fallback_at = None
-
-        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 120
-        self._florence_batch_size = (
-            FLORENCE_BATCH_SIZE_CPU
-            if self._device == "cpu"
-            else FLORENCE_BATCH_SIZE_GPU
+        self._wd14_service = WD14Service(
+            device=self._device,
+            model_dir=MODEL_DIR,
+            batch_size_fn=self._effective_wd14_batch_size,
+            silent=self._silent,
         )
-        self._expected_concurrent_tag_tasks = EXPECTED_CONCURRENT_TAG_TASKS
-        self.set_max_vram_usage_gb(DEFAULT_MAX_VRAM_GB)
+        if self._wd14_service.needs_download() or force_download:
+            self._wd14_service.download(force_download=force_download)
 
-    @staticmethod
-    def _query_total_vram_mb() -> int:
-        try:
-            output = subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "--query-gpu=memory.total",
-                    "--format=csv,noheader,nounits",
-                ],
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            totals = []
-            for line in output.splitlines():
-                value = line.strip()
-                if not value:
-                    continue
-                totals.append(int(float(value)))
-            return sum(totals)
-        except Exception:
-            return 0
+        # Initialize Florence-2 service for captioning (lazy-loaded on first use)
+        logger.debug("Florence-2 captioning model is configured for lazy loading.")
+        self._florence_service = Florence2Service(
+            device=self._device,
+            fast_captions=PictureTagger.FAST_CAPTIONS,
+            force_cpu_fn=lambda: PictureTagger.FORCE_CPU,
+            max_concurrent_fn=self.max_concurrent_images,
+            vram_cap_fn=lambda base_mb, per_item_mb: self._vram_limited_batch_cap(
+                base_mb, per_item_mb
+            ),
+        )
+
+        self.set_max_vram_usage_gb(DEFAULT_MAX_VRAM_GB)
 
     def set_max_vram_usage_gb(self, max_vram_gb: float | None):
         if self._device != "cuda":
@@ -357,7 +171,7 @@ class PictureTagger:
             self._max_vram_usage_mb = None
             return
         self._max_vram_usage_mb = requested_mb
-        total_mb = self._query_total_vram_mb()
+        total_mb = query_total_vram_mb()
         if total_mb > 0 and requested_mb > total_mb:
             logger.warning(
                 "Configured tagger VRAM budget %.2f GB exceeds detected GPU total %.2f GB; keeping configured budget as requested.",
@@ -382,20 +196,16 @@ class PictureTagger:
         )
 
     def _vram_limited_batch_cap(self, base_mb: int, per_item_mb: int) -> int:
-        budget_mb = self._max_vram_usage_mb
-        if self._device != "cuda" or not budget_mb:
-            return 10_000
-        expected_tasks = max(1, int(getattr(self, "_expected_concurrent_tag_tasks", 1)))
-        reserve_mb = max(256, int(budget_mb * 0.20))
-        distributable_mb = max(1, budget_mb - reserve_mb)
-        task_budget_mb = max(1, int(distributable_mb / expected_tasks))
-        if task_budget_mb <= base_mb:
-            return 1
-        return max(1, int((task_budget_mb - base_mb) / max(1, per_item_mb)))
+        return vram_limited_batch_cap(
+            self._max_vram_usage_mb,
+            self._device,
+            base_mb,
+            per_item_mb,
+        )
 
     def _effective_wd14_batch_size(self) -> int:
         max_concurrent = max(1, int(self.max_concurrent_images()))
-        onnx_cap = max(1, int(getattr(self, "_onnx_batch_capacity", 1)))
+        onnx_cap = self._wd14_service.batch_capacity()
         wd14_batch = min(max_concurrent, onnx_cap)
         if self._device == "cuda":
             wd14_batch = min(
@@ -500,9 +310,9 @@ class PictureTagger:
         """
         if self._device != "cuda":
             return 0
-        florence_batch = max(1, int(getattr(self, "_florence_batch_size", 4)))
+        florence_batch = max(1, int(self._florence_service.description_batch_size()))
         batch = min(max(1, int(image_count or 1)), florence_batch)
-        if self._florence_model is not None:
+        if self._florence_service.is_loaded():
             # Model already resident; only charge for per-image activation scratch.
             return int(FLORENCE_PER_IMAGE_VRAM_MB * batch)
         return int(FLORENCE_BASE_VRAM_MB + FLORENCE_PER_IMAGE_VRAM_MB * batch)
@@ -518,68 +328,32 @@ class PictureTagger:
         self.close()
 
     def close(self):
-        # Release ONNX/PyTorch resources here
-        # For ONNX: self.session = None
-        # For PyTorch: del self.model; torch.cuda.empty_cache()
         import gc
 
-        # Explicitly delete all large model objects and set to None
         try:
-            if hasattr(self, "_clip_model"):
-                del self._clip_model
-                self._clip_model = None
-                logger.debug("Deleted _clip_model.")
-            if hasattr(self, "ort_sess"):
-                del self.ort_sess
-                self.ort_sess = None
-                logger.debug("Deleted ort_sess.")
-            if hasattr(self, "_florence_model"):
-                del self._florence_model
-                self._florence_model = None
-                logger.debug("Deleted _florence_model.")
-            if hasattr(self, "_florence_processor"):
-                del self._florence_processor
-                self._florence_processor = None
-                logger.debug("Deleted _florence_processor.")
-            if hasattr(self, "_florence_device"):
-                del self._florence_device
-                self._florence_device = None
-                logger.debug("Deleted _florence_device.")
-            if hasattr(self, "_sbert_model"):
-                del self._sbert_model
-                self._sbert_model = None
-                logger.debug("Deleted _sbert_model.")
-
-            if hasattr(self, "_clip_preprocess"):
-                del self._clip_preprocess
-                self._clip_preprocess = None
-                logger.debug("Deleted _clip_preprocess.")
-            if hasattr(self, "_clip_tokenizer"):
-                del self._clip_tokenizer
-                self._clip_tokenizer = None
-                logger.debug("Deleted _clip_tokenizer.")
-            if hasattr(self, "_custom_model"):
-                del self._custom_model
-                self._custom_model = None
-                logger.debug("Deleted _custom_model.")
-            if hasattr(self, "_custom_labels"):
-                del self._custom_labels
-                self._custom_labels = None
-                logger.debug("Deleted _custom_labels.")
-            if hasattr(self, "_custom_label_to_idx"):
-                del self._custom_label_to_idx
-                self._custom_label_to_idx = None
-                logger.debug("Deleted _custom_label_to_idx.")
-            if hasattr(self, "_custom_transform"):
-                del self._custom_transform
-                self._custom_transform = None
-                logger.debug("Deleted _custom_transform.")
+            if hasattr(self, "_clip_service"):
+                self._clip_service.unload()
+                logger.debug("Released CLIP service models.")
+            if hasattr(self, "_wd14_service"):
+                self._wd14_service.unload()
+                logger.debug("Released WD14 service models.")
+            if hasattr(self, "_florence_service"):
+                self._florence_service._model = None
+                self._florence_service._processor = None
+                self._florence_service._model_device = None
+                logger.debug("Released Florence-2 service models.")
+            if hasattr(self, "_sbert_service"):
+                self._sbert_service.unload()
+                logger.debug("Released SBERT service models.")
+            if hasattr(self, "_custom_service"):
+                self._custom_service.unload()
+                logger.debug("Released custom tagger service models.")
         except Exception as cleanup_error:
             logger.warning(f"Exception during PictureTagger cleanup: {cleanup_error}")
 
         torch.cuda.empty_cache()
         gc.collect()
-        self._trim_process_memory()
+        trim_process_memory()
         self._models_ready = False
         logger.debug("PictureTagger.__exit__ called, all resources released.")
 
@@ -591,13 +365,12 @@ class PictureTagger:
         subsequent GPU pipelines (embeddings, descriptions) start with a clean
         VRAM budget.  The session is rebuilt lazily the next time tagging runs.
         """
-        if getattr(self, "ort_sess", None) is not None:
-            del self.ort_sess
-            self.ort_sess = None
-            logger.info("PictureTagger: WD14 ONNX session unloaded (CUDA arena freed).")
-            import gc as _gc
+        if self._wd14_service.is_loaded():
+            import gc
 
-            _gc.collect()
+            self._wd14_service.unload()
+            logger.info("PictureTagger: WD14 ONNX session unloaded (CUDA arena freed).")
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -618,46 +391,18 @@ class PictureTagger:
             "PictureTagger.safe_idle_unload() called, releasing non-captioning models..."
         )
         try:
-            if hasattr(self, "_clip_model"):
-                del self._clip_model
-                self._clip_model = None
-                logger.debug("Deleted _clip_model.")
-            if hasattr(self, "ort_sess"):
-                del self.ort_sess
-                self.ort_sess = None
-                logger.debug("Deleted ort_sess.")
-            if hasattr(self, "_sbert_model"):
-                del self._sbert_model
-                self._sbert_model = None
-                logger.debug("Deleted _sbert_model.")
-            if hasattr(self, "_clip_preprocess"):
-                del self._clip_preprocess
-                self._clip_preprocess = None
-                logger.debug("Deleted _clip_preprocess.")
-            if hasattr(self, "_clip_tokenizer"):
-                del self._clip_tokenizer
-                self._clip_tokenizer = None
-                logger.debug("Deleted _clip_tokenizer.")
-            if hasattr(self, "_custom_model"):
-                del self._custom_model
-                self._custom_model = None
-                logger.debug("Deleted _custom_model.")
-            if hasattr(self, "_custom_labels"):
-                del self._custom_labels
-                self._custom_labels = None
-                logger.debug("Deleted _custom_labels.")
-            if hasattr(self, "_custom_label_to_idx"):
-                del self._custom_label_to_idx
-                self._custom_label_to_idx = None
-                logger.debug("Deleted _custom_label_to_idx.")
-            if hasattr(self, "_custom_transform"):
-                del self._custom_transform
-                self._custom_transform = None
-                logger.debug("Deleted _custom_transform.")
-            if hasattr(self, "_custom_transform_cache"):
-                del self._custom_transform_cache
-                self._custom_transform_cache = None
-                logger.debug("Deleted _custom_transform_cache.")
+            if hasattr(self, "_clip_service"):
+                self._clip_service.unload()
+                logger.debug("Released CLIP service models.")
+            if hasattr(self, "_wd14_service"):
+                self._wd14_service.unload()
+                logger.debug("Released WD14 service models.")
+            if hasattr(self, "_sbert_service"):
+                self._sbert_service.unload()
+                logger.debug("Released SBERT service models.")
+            if hasattr(self, "_custom_service"):
+                self._custom_service.unload()
+                logger.debug("Released custom tagger service models.")
         except Exception as cleanup_error:
             logger.warning(
                 "Exception during PictureTagger safe idle cleanup: %s", cleanup_error
@@ -666,121 +411,29 @@ class PictureTagger:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
-        self._trim_process_memory()
+        trim_process_memory()
 
-        self._models_ready = bool(
-            getattr(self, "_florence_model", None) is not None
-            and getattr(self, "_florence_processor", None) is not None
-        )
-
-    @staticmethod
-    def _trim_process_memory():
-        """Best-effort RSS trim for Linux/glibc allocators."""
-        if not platform.system().lower().startswith("linux"):
-            return
-        try:
-            import ctypes
-
-            libc = ctypes.CDLL("libc.so.6")
-            trim = getattr(libc, "malloc_trim", None)
-            if trim is not None:
-                trim(0)
-        except Exception as exc:
-            logger.debug("malloc_trim call failed: %s", exc)
-
-    def _init_clip_model(self):
-        self._clip_model, _, self._clip_preprocess = (
-            open_clip.create_model_and_transforms(
-                CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
-            )
-        )
-        self._clip_device = self._device
-        self._clip_model = self._clip_model.to(self._clip_device)
-        if self._clip_device == "cuda":
-            self._clip_model = self._clip_model.half()
-        self._clip_tokenizer = open_clip.get_tokenizer(CLIP_MODEL_NAME)
-
-    def _ensure_clip_ready(self):
-        if (
-            getattr(self, "_clip_model", None) is not None
-            and getattr(self, "_clip_preprocess", None) is not None
-            and getattr(self, "_clip_tokenizer", None) is not None
-        ):
-            return
-        with self._model_init_lock:
-            if (
-                getattr(self, "_clip_model", None) is None
-                or getattr(self, "_clip_preprocess", None) is None
-                or getattr(self, "_clip_tokenizer", None) is None
-            ):
-                self._init_clip_model()
-                self._models_ready = True
+        self._models_ready = self._florence_service.is_loaded()
 
     def _ensure_tagging_ready(self):
         with self._model_init_lock:
             if self._use_wd14_tagger:
-                if getattr(self, "ort_sess", None) is None:
-                    self._init_onnx_session()
-                if (
-                    getattr(self, "_general_tags", None) is None
-                    or getattr(self, "_rating_tags", None) is None
-                ):
-                    self._load_and_preprocess_tags()
-            if self._use_custom_tagger:
-                missing_custom = (
-                    getattr(self, "_custom_model", None) is None
-                    or getattr(self, "_custom_labels", None) is None
-                    or getattr(self, "_custom_transform", None) is None
-                )
-                if missing_custom:
-                    try:
-                        self._init_custom_tagger()
-                    except Exception as exc:
-                        is_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                            "out of memory" in str(exc).lower()
-                        )
-                        if is_oom and str(self._custom_device) != "cpu":
-                            logger.warning(
-                                "Custom tagger GPU load failed (OOM); retrying on CPU: %s",
-                                exc,
-                            )
-                            self._custom_device = "cpu"
-                            try:
-                                self._init_custom_tagger()
-                                logger.info("Custom tagger loaded on CPU successfully.")
-                            except Exception as cpu_exc:
-                                logger.warning(
-                                    "Custom tagger CPU fallback also failed; disabling: %s",
-                                    cpu_exc,
-                                )
-                                self._use_custom_tagger = False
-                        else:
-                            logger.warning(
-                                "Custom tagger reinit failed; disabling custom tagger: %s",
-                                exc,
-                            )
-                            self._use_custom_tagger = False
+                self._wd14_service.init()
+            if self._use_custom_tagger and not self._custom_service.is_loaded():
+                if not self._custom_service.init_or_cpu_fallback():
+                    self._use_custom_tagger = False
             self._models_ready = True
 
     def _ensure_captioning_ready(self):
-        if (
-            getattr(self, "_florence_model", None) is not None
-            and getattr(self, "_florence_processor", None) is not None
-        ):
+        if self._florence_service.is_loaded():
             return
         with self._model_init_lock:
-            if (
-                getattr(self, "_florence_model", None) is None
-                or getattr(self, "_florence_processor", None) is None
-            ):
-                self._init_florence_captioning()
+            if not self._florence_service.is_loaded():
+                self._florence_service.ensure_ready()
                 self._models_ready = True
 
     def is_captioning_initialized(self) -> bool:
-        return bool(
-            getattr(self, "_florence_model", None) is not None
-            and getattr(self, "_florence_processor", None) is not None
-        )
+        return self._florence_service.is_loaded()
 
     @property
     def keep_models_in_memory(self) -> bool:
@@ -795,41 +448,31 @@ class PictureTagger:
     def set_custom_tagger_enabled(self, enabled: bool):
         if bool(enabled) and not self._use_custom_tagger:
             # Only enable if the model files are actually present
-            import os
-
-            if os.path.isfile(self._custom_tagger_path) and os.path.isfile(
-                self._custom_tagger_meta_path
+            if os.path.isfile(self._custom_service._model_path) and os.path.isfile(
+                self._custom_service._meta_path
             ):
                 self._use_custom_tagger = True
         elif not bool(enabled):
             self._use_custom_tagger = False
 
     def set_wd14_threshold(self, threshold: float):
-        self._general_threshold = float(threshold)
+        self._wd14_service.set_threshold(threshold)
 
     def set_custom_tagger_threshold_offset(self, offset: float):
         self._custom_tagger_threshold_offset = float(offset)
 
     def loaded_model_state(self) -> dict:
-        return {
-            "florence_loaded": bool(
-                getattr(self, "_florence_model", None) is not None
-                and getattr(self, "_florence_processor", None) is not None
-            ),
-            "florence_fallback_reason": getattr(
-                self, "_last_florence_fallback_reason", None
-            ),
-            "florence_fallback_at": getattr(self, "_last_florence_fallback_at", None),
-            "clip_loaded": bool(getattr(self, "_clip_model", None) is not None),
-            "wd14_onnx_loaded": bool(getattr(self, "ort_sess", None) is not None),
-            "sbert_loaded": bool(getattr(self, "_sbert_model", None) is not None),
-            "custom_tagger_loaded": bool(
-                getattr(self, "_custom_model", None) is not None
-                and getattr(self, "_custom_labels", None) is not None
-                and getattr(self, "_custom_transform", None) is not None
-            ),
-            "keep_models_in_memory": self.keep_models_in_memory,
-        }
+        state = self._florence_service.state_info()
+        state.update(
+            {
+                "clip_loaded": self._clip_service.is_loaded(),
+                "wd14_onnx_loaded": self._wd14_service.is_loaded(),
+                "sbert_loaded": self._sbert_service.is_loaded(),
+                "custom_tagger_loaded": self._custom_service.is_loaded(),
+                "keep_models_in_memory": self.keep_models_in_memory,
+            }
+        )
+        return state
 
     def max_concurrent_images(self):
         if self._device == "cpu":
@@ -837,845 +480,31 @@ class PictureTagger:
         return MAX_CONCURRENT_IMAGES_GPU
 
     def description_batch_size(self):
-        max_concurrent = max(1, int(self.max_concurrent_images()))
-        florence_batch = max(1, int(getattr(self, "_florence_batch_size", 1)))
-        base_batch = min(max_concurrent, florence_batch)
-        if self._device == "cuda":
-            base_batch = min(
-                base_batch,
-                self._vram_limited_batch_cap(
-                    base_mb=FLORENCE_BASE_VRAM_MB,
-                    per_item_mb=FLORENCE_PER_IMAGE_VRAM_MB,
-                ),
-            )
-        return max(1, base_batch)
-
-    def _init_florence_captioning(self):
-        """
-        Enable Florence-2 for natural language captioning instead of tag-based descriptions.
-        This will download the model on first use (~900MB).
-        """
-        if self._florence_model is not None:
-            logger.debug("Florence-2 already loaded")
-            return
-
-        try:
-            logger.debug("Loading Florence-2 model for captioning...")
-            import transformers
-
-            # Check transformers version
-            version = transformers.__version__
-            logger.debug(f"Transformers version: {version}")
-
-            # Check if device was explicitly set to CPU
-            device_str = str(self._device)
-            use_cpu = PictureTagger.FORCE_CPU or device_str == "cpu"
-
-            if use_cpu:
-                # Device explicitly set to CPU - respect that
-                logger.debug(
-                    "Device set to CPU, loading Florence-2 on CPU with FP32..."
-                )
-                self._load_florence_model(torch.device("cpu"), torch.float32)
-                self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
-                logger.debug("Florence-2 loaded successfully on CPU")
-            elif torch.cuda.is_available():
-                try:
-                    logger.debug("Attempting to load Florence-2 on GPU with FP16...")
-                    self._load_florence_model(torch.device("cuda"), torch.float16)
-                    self._florence_batch_size = FLORENCE_BATCH_SIZE_GPU
-                    logger.debug("Florence-2 loaded successfully on GPU (~500MB VRAM)")
-                except Exception as gpu_error:
-                    self._record_florence_fallback(
-                        "init_gpu_load_failed",
-                        gpu_error,
-                    )
-                    logger.warning(
-                        f"GPU loading failed, falling back to CPU: {gpu_error}"
-                    )
-                    self._load_florence_model(torch.device("cpu"), torch.float32)
-                    self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
-                    logger.debug("Florence-2 loaded successfully on CPU")
-            else:
-                # No GPU available, use CPU
-                logger.debug("No GPU available, loading Florence-2 on CPU with FP32...")
-                device = (
-                    self._device
-                    if isinstance(self._device, torch.device)
-                    else torch.device(self._device)
-                )
-                self._load_florence_model(device, torch.float32)
-                self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
-                logger.debug("Florence-2 loaded successfully on CPU")
-
-        except Exception as e:
-            logger.error(f"Failed to load Florence-2: {e}")
-            logger.error("Try: pip install --upgrade transformers")
-
-    def _load_florence_model(self, device, dtype):
-        from transformers import Florence2Processor, Florence2ForConditionalGeneration
-
-        if not isinstance(device, torch.device):
-            device = torch.device(device)
-
-        # device_map routes loading through Accelerate, which correctly handles
-        # Florence-2's tied weights (lm_head / embed_tokens) and places all
-        # tensors on the target device during from_pretrained — no post-load
-        # .to() call is needed, eliminating "Cannot copy out of meta tensor".
-        device_map = str(device)
-
-        self._florence_processor = _from_pretrained_local_first(
-            Florence2Processor,
-            self._florence_model_name,
-            revision=FLORENCE_MODEL_REVISION,
-        )
-
-        for attn_impl in ("sdpa", "eager"):
-            try:
-                model = _from_pretrained_local_first(
-                    Florence2ForConditionalGeneration,
-                    self._florence_model_name,
-                    torch_dtype=dtype,
-                    device_map=device_map,
-                    attn_implementation=attn_impl,
-                    revision=FLORENCE_MODEL_REVISION,
-                )
-                break
-            except (TypeError, AttributeError, NotImplementedError) as e:
-                if attn_impl == "eager":
-                    raise
-                logger.debug(
-                    f"SDPA not supported, falling back to eager attention: {e}"
-                )
-
-        # lm_head and embed_tokens are tied weights absent from the checkpoint.
-        # Accelerate leaves them on the meta device after dispatch; tie_weights()
-        # resolves their references to the already-materialised shared embedding.
-        model.tie_weights()
-
-        model.eval()
-        self._florence_model = model
-        self._florence_device = device
-        self._florence_dtype = dtype
-
-    def _record_florence_fallback(self, phase: str, error: Exception):
-        reason = f"{phase}: {type(error).__name__}: {error}"
-        self._last_florence_fallback_reason = reason
-        self._last_florence_fallback_at = time.time()
-        logger.warning("[FLORENCE_FALLBACK] %s", reason)
-
-    def _reload_florence_on_cpu(self, cause: Exception = None):
-        logger.warning(
-            "Florence-2 GPU inference failed; attempting to reload on CPU..."
-        )
-        if cause is not None:
-            self._record_florence_fallback("runtime_gpu_inference_failed", cause)
-        try:
-            self._florence_model = None
-            self._florence_processor = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            self._load_florence_model(torch.device("cpu"), torch.float32)
-            self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
-            logger.debug("Florence-2 reloaded on CPU")
-            return True
-        except Exception as cpu_error:
-            logger.error(
-                f"Failed to reload Florence-2 on CPU: {cpu_error}", exc_info=True
-            )
-            return False
-
-    def _generate_florence_caption(self, image_path, _retry_on_cpu=True):
-        """
-        Generate a natural language caption for an image using Florence-2.
-
-        Args:
-            image_path (str): Path to the image file
-
-        Returns:
-            str: Natural language caption
-        """
-        logger.debug(
-            f"_generate_florence_caption called: image_path={image_path}, _retry_on_cpu={_retry_on_cpu}"
-        )
-        if self._florence_model is None:
-            logger.error("Florence-2 model is not initialised")
-            return None
-
-        try:
-            import os
-
-            ext = os.path.splitext(image_path)[1].lower()
-            video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
-            from PIL import Image
-
-            caption = None
-            if ext in video_exts:
-                from pixlstash.utils.image_processing.video_utils import VideoUtils
-
-                frames = VideoUtils.extract_representative_video_frames(
-                    image_path, count=3
-                )
-                for idx, pil_img in enumerate(frames):
-                    # Resize large images to speed up processing
-                    MAX_DIM = 512
-                    if max(pil_img.size) > MAX_DIM:
-                        aspect_ratio = pil_img.width / pil_img.height
-                        if pil_img.width > pil_img.height:
-                            new_width = MAX_DIM
-                            new_height = int(MAX_DIM / aspect_ratio)
-                        else:
-                            new_height = MAX_DIM
-                            new_width = int(MAX_DIM * aspect_ratio)
-                        pil_img = pil_img.resize(
-                            (new_width, new_height), Image.Resampling.LANCZOS
-                        )
-                        logger.debug(
-                            f"Resized video frame to {new_width}x{new_height} for faster processing"
-                        )
-                    inputs = self._florence_processor(
-                        text="<MORE_DETAILED_CAPTION>",
-                        images=pil_img,
-                        return_tensors="pt",
-                    )
-                    florence_device = getattr(self, "_florence_device", self._device)
-                    target_dtype = self._florence_dtype
-                    inputs = {
-                        k: v.to(device=florence_device, dtype=target_dtype)
-                        if torch.is_tensor(v) and v.is_floating_point()
-                        else v.to(florence_device)
-                        if torch.is_tensor(v)
-                        else v
-                        for k, v in inputs.items()
-                    }
-                    logger.debug(f"Inputs moved to {florence_device}")
-                    with torch.inference_mode():
-                        generated_ids = self._florence_model.generate(
-                            input_ids=inputs["input_ids"],
-                            pixel_values=inputs["pixel_values"],
-                            max_new_tokens=self._florence_max_tokens,
-                            early_stopping=False,
-                            do_sample=False,
-                            num_beams=1,
-                            pad_token_id=self._florence_processor.tokenizer.pad_token_id,
-                        )
-                    generated_text = self._florence_processor.batch_decode(
-                        generated_ids, skip_special_tokens=False
-                    )[0]
-                    parsed = self._florence_processor.post_process_generation(
-                        generated_text, task="<MORE_DETAILED_CAPTION>"
-                    )
-                    caption = parsed.get("<MORE_DETAILED_CAPTION>", "").strip()
-                    # Ensure caption ends at last sentence-ending punctuation
-                    last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
-                    if last_punct != -1:
-                        caption = caption[: last_punct + 1].strip()
-                    if caption:
-                        logger.debug(f"Florence-2 caption (frame {idx}): {caption}")
-                        break
-            else:
-                image = Image.open(image_path).convert("RGB")
-                MAX_DIM = 640
-                if max(image.size) > MAX_DIM:
-                    aspect_ratio = image.width / image.height
-                    if image.width > image.height:
-                        new_width = MAX_DIM
-                        new_height = int(MAX_DIM / aspect_ratio)
-                    else:
-                        new_height = MAX_DIM
-                        new_width = int(MAX_DIM * aspect_ratio)
-                    image = image.resize(
-                        (new_width, new_height), Image.Resampling.LANCZOS
-                    )
-                    logger.debug(
-                        f"Resized image to {new_width}x{new_height} for faster processing"
-                    )
-                inputs = self._florence_processor(
-                    text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
-                )
-                florence_device = getattr(self, "_florence_device", self._device)
-                target_dtype = self._florence_dtype
-                inputs = {
-                    k: v.to(device=florence_device, dtype=target_dtype)
-                    if torch.is_tensor(v) and v.is_floating_point()
-                    else v.to(florence_device)
-                    if torch.is_tensor(v)
-                    else v
-                    for k, v in inputs.items()
-                }
-                logger.debug(f"Inputs moved to {florence_device}")
-                with torch.inference_mode():
-                    generated_ids = self._florence_model.generate(
-                        input_ids=inputs["input_ids"],
-                        pixel_values=inputs["pixel_values"],
-                        max_new_tokens=self._florence_max_tokens,
-                        early_stopping=False,
-                        do_sample=False,
-                        num_beams=1,
-                        pad_token_id=self._florence_processor.tokenizer.pad_token_id,
-                    )
-                generated_text = self._florence_processor.batch_decode(
-                    generated_ids, skip_special_tokens=False
-                )[0]
-                parsed = self._florence_processor.post_process_generation(
-                    generated_text, task="<MORE_DETAILED_CAPTION>"
-                )
-                caption = parsed.get("<MORE_DETAILED_CAPTION>", "").strip()
-                # Ensure caption ends at last sentence-ending punctuation
-                last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
-                if last_punct != -1:
-                    caption = caption[: last_punct + 1].strip()
-                if caption:
-                    logger.debug(f"Florence-2 caption: {caption}")
-
-            logger.debug(f"Final Florence-2 caption returned: {caption}")
-            return caption
-
-        except Exception as e:
-            import traceback
-
-            is_cuda_issue = "cuda" in str(e).lower()
-            using_cuda = (
-                getattr(self, "_florence_device", None) is not None
-                and getattr(self._florence_device, "type", "") == "cuda"
-            )
-
-            if _retry_on_cpu and using_cuda and is_cuda_issue:
-                logger.warning(
-                    "Florence-2 captioning failed on GPU (%s); retrying on CPU.", e
-                )
-                if self._reload_florence_on_cpu(cause=e):
-                    return self._generate_florence_caption(
-                        image_path, _retry_on_cpu=False
-                    )
-
-            logger.error(f"Florence-2 captioning failed for {image_path}: {e}")
-            logger.debug(traceback.format_exc())
-            return None
-
-    def _generate_florence_captions_batch(self, image_paths, _retry_on_cpu=True):
-        logger.debug(
-            "_generate_florence_captions_batch called: %d images", len(image_paths)
-        )
-        if self._florence_model is None:
-            logger.error("Florence-2 model is not initialised")
-            return {}
-
-        try:
-            from PIL import Image
-
-            valid_items = []
-            for image_path in image_paths:
-                try:
-                    image = Image.open(image_path).convert("RGB")
-                    MAX_DIM = 640
-                    if max(image.size) > MAX_DIM:
-                        aspect_ratio = image.width / image.height
-                        if image.width > image.height:
-                            new_width = MAX_DIM
-                            new_height = int(MAX_DIM / aspect_ratio)
-                        else:
-                            new_height = MAX_DIM
-                            new_width = int(MAX_DIM * aspect_ratio)
-                        image = image.resize(
-                            (new_width, new_height), Image.Resampling.LANCZOS
-                        )
-                        logger.debug(
-                            "Resized image to %dx%d for faster processing",
-                            new_width,
-                            new_height,
-                        )
-                    valid_items.append((image_path, image))
-                except Exception as image_error:
-                    logger.error(
-                        "Florence-2 failed to load image for batch %s: %s",
-                        image_path,
-                        image_error,
-                    )
-
-            if not valid_items:
-                return {}
-
-            images = [image for _, image in valid_items]
-            inputs = self._florence_processor(
-                text=["<MORE_DETAILED_CAPTION>"] * len(images),
-                images=images,
-                return_tensors="pt",
-                padding=True,
-            )
-            florence_device = getattr(self, "_florence_device", self._device)
-            target_dtype = self._florence_dtype
-            inputs = {
-                k: v.to(device=florence_device, dtype=target_dtype)
-                if torch.is_tensor(v) and v.is_floating_point()
-                else v.to(florence_device)
-                if torch.is_tensor(v)
-                else v
-                for k, v in inputs.items()
-            }
-            logger.debug("Batch inputs moved to %s", florence_device)
-            with torch.inference_mode():
-                generated_ids = self._florence_model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    max_new_tokens=self._florence_max_tokens,
-                    early_stopping=False,
-                    do_sample=False,
-                    num_beams=1,
-                    pad_token_id=self._florence_processor.tokenizer.pad_token_id,
-                )
-            generated_texts = self._florence_processor.batch_decode(
-                generated_ids, skip_special_tokens=False
-            )
-
-            captions = {}
-            for (image_path, _), generated_text in zip(valid_items, generated_texts):
-                parsed = self._florence_processor.post_process_generation(
-                    generated_text, task="<MORE_DETAILED_CAPTION>"
-                )
-                caption = parsed.get("<MORE_DETAILED_CAPTION>", "").strip()
-                last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
-                if last_punct != -1:
-                    caption = caption[: last_punct + 1].strip()
-                captions[image_path] = caption if caption else None
-            return captions
-
-        except Exception as e:
-            import traceback
-
-            is_cuda_issue = "cuda" in str(e).lower()
-            using_cuda = (
-                getattr(self, "_florence_device", None) is not None
-                and getattr(self._florence_device, "type", "") == "cuda"
-            )
-
-            if _retry_on_cpu and using_cuda and is_cuda_issue:
-                logger.warning(
-                    "Florence-2 batch captioning failed on GPU (%s); retrying on CPU.",
-                    e,
-                )
-                if self._reload_florence_on_cpu(cause=e):
-                    return self._generate_florence_captions_batch(
-                        image_paths, _retry_on_cpu=False
-                    )
-
-            logger.error("Florence-2 batch captioning failed: %s", e)
-            logger.debug(traceback.format_exc())
-            captions = {}
-            for image_path in image_paths:
-                captions[image_path] = self._generate_florence_caption(
-                    image_path, _retry_on_cpu=False
-                )
-            return captions
-
-    def _init_onnx_session(self):
-        onnx_path = f"{self._model_location}/model.onnx"
-        logger.debug("Running wd14 tagger with onnx")
-        logger.debug(f"loading onnx model: {onnx_path}")
-        if not os.path.exists(onnx_path):
-            raise Exception(
-                f"onnx model not found: {onnx_path}, please redownload the model with --force_download"
-            )
-
-        # Use CPU-only when device is set to "cpu" to coexist with LLMs and diffusion models
-        if self._device == "cpu":
-            logger.debug("initialising WD14 tagger with CPUExecutionProvider")
-            self.ort_sess = ort.InferenceSession(
-                onnx_path, providers=["CPUExecutionProvider"]
-            )
-        else:
-            # Allow GPU providers when not explicitly set to CPU
-            logger.debug(f"initialising WD14 tagger with device: {self._device}")
-            if "OpenVINOExecutionProvider" in ort.get_available_providers():
-                self.ort_sess = ort.InferenceSession(
-                    onnx_path,
-                    providers=["OpenVINOExecutionProvider"],
-                    provider_options=[{"device_type": "GPU", "precision": "FP32"}],
-                )
-            else:
-                self.ort_sess = ort.InferenceSession(
-                    onnx_path,
-                    providers=(
-                        [
-                            (
-                                "CUDAExecutionProvider",
-                                {
-                                    # Use same-as-requested arena growth so ORT does
-                                    # not round up allocations to the next power of two.
-                                    # This prevents the default "double on each growth"
-                                    # behaviour without imposing a hard memory cap that
-                                    # would OOM inference for larger models like WD14.
-                                    "arena_extend_strategy": "kSameAsRequested",
-                                },
-                            )
-                        ]
-                        if "CUDAExecutionProvider" in ort.get_available_providers()
-                        else [("ROCMExecutionProvider", {})]
-                        if "ROCMExecutionProvider" in ort.get_available_providers()
-                        else ["CPUExecutionProvider"]
-                    ),
-                )
-        self.input_name = self.ort_sess.get_inputs()[0].name
-        self._onnx_batch_capacity = self._resolve_onnx_batch_capacity()
-
-    def _resolve_onnx_batch_capacity(self) -> int:
-        if getattr(self, "ort_sess", None) is None:
-            return 1
-        try:
-            input_meta = self.ort_sess.get_inputs()[0]
-            input_shape = getattr(input_meta, "shape", None)
-            if not input_shape:
-                return 1
-            batch_dim = input_shape[0]
-            if isinstance(batch_dim, int):
-                return max(1, int(batch_dim))
-            if batch_dim is None or isinstance(batch_dim, str):
-                return max(1, int(self.max_concurrent_images()))
-        except Exception as exc:
-            logger.warning("Could not resolve ONNX batch capacity: %s", exc)
-        return 1
-
-    def _build_custom_tagger_model(self, arch: str, num_labels: int):
-        from torchvision.models import convnext_tiny, convnext_base
-
-        if arch == "convnext_tiny":
-            model = convnext_tiny(weights=None)
-            in_features = model.classifier[2].in_features
-            model.classifier[2] = torch.nn.Linear(in_features, num_labels)
-            return model
-        if arch == "convnext_base":
-            model = convnext_base(weights=None)
-            in_features = model.classifier[2].in_features
-            model.classifier[2] = torch.nn.Linear(in_features, num_labels)
-            return model
-        raise ValueError(f"Unsupported custom tagger arch: {arch}")
-
-    def _init_custom_tagger(self):
-        if not os.path.exists(self._custom_tagger_path):
-            raise FileNotFoundError(
-                f"Custom tagger checkpoint not found: {self._custom_tagger_path}"
-            )
-        if not os.path.exists(self._custom_tagger_meta_path):
-            raise FileNotFoundError(
-                f"Custom tagger metadata not found: {self._custom_tagger_meta_path}"
-            )
-        with open(self._custom_tagger_meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        labels = meta.get("labels")
-        arch = meta.get("arch", "convnext_base")
-        if not labels:
-            raise ValueError("Custom tagger metadata missing labels list.")
-        from safetensors.torch import load_file
-
-        state_dict = load_file(
-            self._custom_tagger_path, device=str(self._custom_device)
-        )
-        self._custom_labels = labels
-        self._custom_label_to_idx = {label: i for i, label in enumerate(labels)}
-        self._custom_label_thresholds = {
-            k: float(v) for k, v in meta.get("label_thresholds", {}).items()
-        }
-        if self._custom_label_thresholds:
-            logger.debug(
-                "Loaded per-label thresholds for %d labels from meta.json",
-                len(self._custom_label_thresholds),
-            )
-        self._custom_model = self._build_custom_tagger_model(arch, len(labels))
-        # Normalise dtype first: safetensors weights may be FP16 while the
-        # freshly-built classifier head is FP32.  Cast everything to FP32,
-        # load the state dict (now a consistent dtype), then promote to FP16
-        # on CUDA for faster inference.  CPU always stays FP32.
-        self._custom_model.float()
-        self._custom_model.load_state_dict(state_dict)
-        self._custom_model.to(self._custom_device)
-        if str(self._custom_device) == "cuda":
-            self._custom_model.half()
-            self._custom_tagger_dtype = torch.float16
-        else:
-            self._custom_tagger_dtype = torch.float32
-        self._custom_model.eval()
-        self._custom_transform_cache = {}
-        self._custom_transform = self._build_custom_transform(
-            self._custom_tagger_image_size_full
-        )
-
-    def _reload_custom_tagger_on_cpu(self) -> bool:
-        logger.warning("Custom tagger GPU inference failed; reloading on CPU...")
-        try:
-            if hasattr(self, "_custom_model") and self._custom_model is not None:
-                self._custom_model.float()
-                self._custom_model.to("cpu")
-            self._custom_device = "cpu"
-            self._custom_tagger_dtype = torch.float32
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            logger.debug("Custom tagger reloaded on CPU")
-            return True
-        except Exception as cpu_error:
-            logger.error(
-                "Failed to reload custom tagger on CPU: %s",
-                cpu_error,
-                exc_info=True,
-            )
-            return False
-
-    def _build_custom_transform(self, image_size: int):
-        return transforms.Compose(
-            [
-                transforms.Resize((image_size, image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225],
-                ),
-            ]
-        )
-
-    def _load_and_preprocess_tags(self):
-        with open(
-            os.path.join(self._model_location, CSV_FILE), "r", encoding="utf-8"
-        ) as f:
-            reader = csv.reader(f)
-            line = [row for row in reader]
-            header = line[0]  # tag_id,name,category,count
-            rows = line[1:]
-        assert (
-            header[0] == "tag_id" and header[1] == "name" and header[2] == "category"
-        ), f"unexpected csv format: {header}"
-
-        self._rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
-        self._general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
-
-    def _needs_custom_tagger_download(self) -> bool:
-        """Return True if the custom tagger files need to be (re-)downloaded.
-
-        Re-download is required when:
-        - The model or meta file is missing, OR
-        - The revision sidecar is absent or records a different revision than
-          ``CUSTOM_TAGGER_REVISION``, indicating the pinned version has changed.
-        """
-        if not os.path.isfile(self._custom_tagger_path) or not os.path.isfile(
-            self._custom_tagger_meta_path
-        ):
-            return True
-        # When pinned to a moving ref like "main" we can't compare meaningfully,
-        # so only enforce the sidecar check for explicit commit SHAs.
-        if CUSTOM_TAGGER_REVISION == "main":
-            return False
-        if not os.path.isfile(CUSTOM_TAGGER_REV_PATH):
-            return True
-        try:
-            with open(CUSTOM_TAGGER_REV_PATH, "r", encoding="utf-8") as f:
-                cached_rev = f.read().strip()
-            return cached_rev != CUSTOM_TAGGER_REVISION
-        except OSError:
-            return True
-
-    def _download_custom_tagger(self):
-        """Download the custom anomaly tagger weights and metadata from HuggingFace.
-
-        Always passes ``revision=CUSTOM_TAGGER_REVISION`` to pin the download to
-        a specific git commit SHA (or branch/tag).  After a successful download the
-        resolved revision is written to a small sidecar file so that future starts
-        can detect when the pinned revision has changed.
-        """
-        try:
-            from huggingface_hub import hf_hub_download
-
-            dest_dir = os.path.dirname(os.path.abspath(self._custom_tagger_path))
-            os.makedirs(dest_dir, exist_ok=True)
-            logger.info(
-                "Downloading custom tagger (revision=%s) from %s ...",
-                CUSTOM_TAGGER_REVISION,
-                CUSTOM_TAGGER_HF_REPO,
-            )
-            hf_hub_download(
-                repo_id=CUSTOM_TAGGER_HF_REPO,
-                filename=CUSTOM_TAGGER_FILENAME,
-                local_dir=dest_dir,
-                revision=CUSTOM_TAGGER_REVISION,
-                force_download=False,
-            )
-            hf_hub_download(
-                repo_id=CUSTOM_TAGGER_HF_REPO,
-                filename=CUSTOM_TAGGER_META_FILENAME,
-                local_dir=dest_dir,
-                revision=CUSTOM_TAGGER_REVISION,
-                force_download=False,
-            )
-            # Record the pinned revision so we can detect future changes.
-            try:
-                with open(CUSTOM_TAGGER_REV_PATH, "w", encoding="utf-8") as f:
-                    f.write(CUSTOM_TAGGER_REVISION)
-            except OSError as rev_err:
-                logger.warning("Could not write revision sidecar: %s", rev_err)
-            logger.info("Custom tagger downloaded to %s", self._custom_tagger_path)
-        except Exception as e:
-            logger.warning("Failed to download custom tagger: %s", e)
-
-    def _ensure_model_files(self, force_download):
-        # hf_hub_download
-
-        # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/issues/22
-        # Check for the actual model files, not just the directory. The directory may
-        # have been created by a previously failed download attempt, in which case we
-        # still need to download the files.
-        onnx_model_path = os.path.join(self._model_location, "model.onnx")
-        tags_csv_path = os.path.join(self._model_location, "selected_tags.csv")
-        files_present = os.path.exists(onnx_model_path) and os.path.exists(
-            tags_csv_path
-        )
-
-        if not files_present or force_download:
-            os.makedirs(self._model_location, exist_ok=True)
-            logger.debug(
-                f"downloading wd14 tagger model from hf_hub. id: {DEFAULT_WD14_TAGGER_REPO}"
-            )
-            from huggingface_hub import hf_hub_download
-
-            # Download ONNX model
-            logger.debug(f"Downloading ONNX model to {onnx_model_path}")
-            hf_hub_download(
-                repo_id=DEFAULT_WD14_TAGGER_REPO,
-                filename="model.onnx",
-                local_dir=self._model_location,
-                force_download=force_download,
-            )
-            logger.debug(f"Downloading selected_tags.csv to {tags_csv_path}")
-            hf_hub_download(
-                repo_id=DEFAULT_WD14_TAGGER_REPO,
-                filename="selected_tags.csv",
-                local_dir=self._model_location,
-                force_download=force_download,
-            )
-
-    def _collate_fn_remove_corrupted(self, batch):
-        """Collate function that allows to remove corrupted examples in the
-        dataloader. It expects that the dataloader returns 'None' when that occurs.
-        The 'None's in the batch are removed.
-        """
-        # Filter out all the Nones (corrupted examples)
-        return list(filter(lambda x: x is not None, batch))
-
-    def _run_batch(self, path_imgs, undesired_tags):
-        imgs = np.array([im for _, im in path_imgs])
-        try:
-            probs = self.ort_sess.run(None, {self.input_name: imgs})[
-                0
-            ]  # onnx output numpy
-        except Exception as e:
-            logger.error(f"Error occurred while running ONNX model: {e}")
-            logger.error(f"Images causing error: {[p for p, _ in path_imgs]}")
-            return None
-
-        probs = probs[: len(path_imgs)]
-        result = {}
-        for (image_path, _), prob in zip(path_imgs, probs):
-            # Build all tags with their probabilities
-            tag_probs = []
-            # General tags
-            for i, p in enumerate(prob[4 : 4 + len(self._general_tags)]):
-                tag_name = self._general_tags[i]
-                if p >= self._general_threshold and tag_name not in undesired_tags:
-                    tag_probs.append((tag_name, p))
-            # Sort all tags by probability
-            all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
-            combined_tags = [tag for tag, _ in all_tags_sorted]
-            # Instead of writing to file, store tags in result dict
-            result[image_path] = combined_tags
-            logger.debug("")
-            logger.debug(f"{image_path}:")
-            logger.debug(f"\tTags: {combined_tags}")
-        return result
-
-    @staticmethod
-    def _flatten_data_entry(data_entry):
-        flat_data = []
-        for item in data_entry:
-            if isinstance(item, list):
-                flat_data.extend(item)
-            else:
-                flat_data.append(item)
-        return flat_data
-
-    @staticmethod
-    def _naturalize_tags(batch_result):
-        # Naturalize tags for each image
-        for k, tags in batch_result.items():
-            tags = [sanitise_tag(tag) for tag in tags]
-            tags = [t for t in tags if t]
-            batch_result[k] = tags
-        return batch_result
-
-    @staticmethod
-    def _merge_video_frame_tags(frame_tags):
-        merged_results = {}
-        for path, tags in frame_tags.items():
-            if "#frame" in path:
-                base_path = path.split("#frame")[0]
-                if base_path not in merged_results:
-                    merged_results[base_path] = set()
-                merged_results[base_path].update(tags)
-            else:
-                merged_results[path] = set(tags)
-        # Convert sets back to sorted lists
-        return {k: sorted(list(v)) for k, v in merged_results.items()}
-
-    @staticmethod
-    def _filter_texts(texts):
-        # Remove duplicates, empty strings, UUIDs, and date strings
-        uuid_regex = re.compile(
-            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-        )
-        date_regex = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
-        return [
-            t
-            for t in texts
-            if t and not uuid_regex.match(t) and not date_regex.match(t)
-        ]
+        return self._florence_service.description_batch_size()
 
     def custom_tagger_ready(self) -> bool:
-        return bool(
-            self._use_custom_tagger
-            and self._custom_transform is not None
-            and self._custom_model is not None
-            and self._custom_labels is not None
-        )
+        return bool(self._use_custom_tagger and self._custom_service.is_loaded())
 
     def custom_tagger_threshold_offset(self) -> float:
         return float(self._custom_tagger_threshold_offset)
 
     def custom_tagger_version(self) -> int:
-        """Return the version integer from the loaded custom tagger meta.json.
+        """Return the version integer from the loaded custom tagger meta.json."""
+        return self._custom_service.version()
 
-        Reads the ``version`` field of the meta.json file that ships with the
-        custom (anomaly) tagger checkpoint.  Returns ``0`` if the file is
-        absent or lacks a ``version`` field, and logs a warning in that case.
-        """
-        if not os.path.isfile(self._custom_tagger_meta_path):
-            logger.warning(
-                "Custom tagger meta.json not found at %s; using version 0",
-                self._custom_tagger_meta_path,
-            )
-            return 0
-        try:
-            with open(self._custom_tagger_meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            version = meta.get("version")
-            if version is not None:
-                return int(version)
-        except Exception:
-            logger.debug(
-                "Custom tagger meta.json has no 'version' field; using version 0"
-            )
-        return 0
+    def custom_tagger_meta_path(self) -> str:
+        """Return the path to the custom tagger meta.json file."""
+        return self._custom_service.meta_path
 
     def custom_tagger_image_size_full(self) -> int:
-        return int(self._custom_tagger_image_size_full)
+        return int(self._custom_service._image_size_full)
 
     def custom_tagger_image_size_quality_crop(self) -> int:
-        return int(self._custom_tagger_image_size_quality_crop)
+        return int(self._custom_service._image_size_quality_crop)
+
+    def custom_tagger_batch_size(self) -> int:
+        """Return the current effective batch size for the custom tagger."""
+        return self._effective_custom_batch_size()
 
     @staticmethod
     def _expand_bbox_to_square(bbox, img_width, img_height, target_size):
@@ -1725,335 +554,15 @@ class PictureTagger:
         """
         if not items:
             return {}
-        if self._custom_model is None or self._custom_labels is None:
+        if not self._custom_service.is_loaded():
             logger.debug("Custom tagger not available; skipping quality crop pass.")
             return {}
-
-        if out_raw_scores is not None:
-            raw, scores_by_key = self._tag_and_score_custom_items(
-                items,
-                stop_event=stop_event,
-                threshold=None,
-                image_size=self._custom_tagger_image_size_quality_crop,
-                pass_name="quality_crops",
-            )
-            out_raw_scores.update(scores_by_key)
-        else:
-            raw = self._tag_custom_items(
-                items,
-                stop_event=stop_event,
-                threshold=None,
-                image_size=self._custom_tagger_image_size_quality_crop,
-                pass_name="quality_crops",
-            )
-        # Filter to only quality-relevant whitelist tags, as documented.
-        # Without this filter, non-quality tags (e.g. "flux chin") that happen
-        # to score above threshold on a zoomed-in face crop would be promoted
-        # to the Tag table via the crop pass, bypassing the full-image threshold
-        # and causing spurious confirmed predictions.
-        filtered = {}
-        for key, tags in raw.items():
-            quality_tags = [t for t in tags if t in QUALITY_CROP_TAG_WHITELIST]
-            if quality_tags:
-                filtered[key] = quality_tags
-        return filtered
-
-    def _tag_custom_items(
-        self,
-        items,
-        stop_event=None,
-        threshold=None,
-        image_size=None,
-        pass_name: str = "full_images",
-    ):
-        if not items:
-            return {}
-        if self._custom_model is None or self._custom_labels is None:
-            logger.warning("Custom tagger model is None; skipping _tag_custom_items.")
-            return {}
-
-        tag_threshold = (
-            float(threshold)
-            if threshold is not None and float(threshold) > 0
-            else CUSTOM_TAGGER_DEFAULT_THRESHOLD
+        return self._custom_service.tag_quality_crop_items(
+            items,
+            stop_event=stop_event,
+            threshold_offset=self._custom_tagger_threshold_offset,
+            out_raw_scores=out_raw_scores,
         )
-        if image_size is None:
-            image_size = self._custom_tagger_image_size_full
-        transform = self._custom_transform_cache.get(image_size)
-        if transform is None:
-            transform = self._build_custom_transform(image_size)
-            self._custom_transform_cache[image_size] = transform
-
-        logger.debug(
-            "Performing custom tagging (%s) on %d items...",
-            pass_name,
-            len(items),
-        )
-        batch_size = self._effective_custom_batch_size()
-        results = {}
-        for batch_start in range(0, len(items), batch_size):
-            if stop_event is not None and stop_event.is_set():
-                logger.info("Tagging interrupted by stop event.")
-                break
-            batch = items[batch_start : batch_start + batch_size]
-            batch_paths = []
-            batch_tensors = []
-            for path, image in batch:
-                try:
-                    batch_tensors.append(transform(image))
-                    batch_paths.append(path)
-                except Exception as e:
-                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
-            if not batch_tensors:
-                continue
-            inputs = torch.stack(batch_tensors)
-            custom_device = getattr(self, "_custom_device", self._device)
-            try:
-                inputs = inputs.to(custom_device).float()
-                with torch.inference_mode():
-                    logits = self._custom_model(inputs)
-                    probs = torch.sigmoid(logits).cpu().numpy()
-            except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and custom_device == "cuda":
-                    logger.warning(
-                        "Custom tagger CUDA OOM; falling back to CPU for this run."
-                    )
-                    if self._reload_custom_tagger_on_cpu():
-                        logger.warning("Custom tagger is now running on CPU.")
-                        inputs = inputs.to("cpu").float()
-                        with torch.inference_mode():
-                            logits = self._custom_model(inputs)
-                            probs = torch.sigmoid(logits).cpu().numpy()
-                    else:
-                        logger.error("Custom tagger CPU fallback failed.")
-                        break
-                else:
-                    logger.error("Custom tagger inference failed: %s", exc)
-                    break
-            for path, prob in zip(batch_paths, probs):
-                tag_probs = []
-                for label, p in zip(self._custom_labels, prob):
-                    base = self._custom_label_thresholds.get(label, tag_threshold)
-                    per_label_threshold = max(
-                        0.01, base + self._custom_tagger_threshold_offset
-                    )
-                    if p >= per_label_threshold:
-                        tag_probs.append((label, float(p)))
-                all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
-                results[path] = [tag for tag, _ in all_tags_sorted]
-
-        return self._naturalize_tags(results)
-
-    def _tag_and_score_custom_items(
-        self,
-        items,
-        stop_event=None,
-        threshold=None,
-        image_size=None,
-        pass_name: str = "full_images",
-        min_confidence: float = 0.05,
-    ) -> tuple:
-        """Run the custom tagger once and return both thresholded tags and raw scores.
-
-        Identical to calling ``_tag_custom_items`` followed by ``_score_custom_items``
-        on the same batch, but runs the GPU forward pass only once.
-
-        Args:
-            items: List of ``(key, PIL.Image)`` pairs.
-            stop_event: Optional threading.Event to interrupt.
-            threshold: Override per-label threshold base value.
-            image_size: Override image size for the transform.
-            pass_name: Logging label for debug output.
-            min_confidence: Floor for raw scores returned in the scores dict.
-
-        Returns:
-            Tuple ``(tags_by_key, scores_by_key)`` where:
-            - ``tags_by_key``: ``{key: [tag, ...]}`` thresholded and naturalized.
-            - ``scores_by_key``: ``{key: {natural_label: float}}`` raw scores.
-        """
-        if not items:
-            return {}, {}
-        if self._custom_model is None or self._custom_labels is None:
-            logger.warning(
-                "Custom tagger model is None; skipping _tag_and_score_custom_items."
-            )
-            return {}, {}
-
-        tag_threshold = (
-            float(threshold)
-            if threshold is not None and float(threshold) > 0
-            else CUSTOM_TAGGER_DEFAULT_THRESHOLD
-        )
-        if image_size is None:
-            image_size = self._custom_tagger_image_size_full
-        transform = self._custom_transform_cache.get(image_size)
-        if transform is None:
-            transform = self._build_custom_transform(image_size)
-            self._custom_transform_cache[image_size] = transform
-
-        logger.debug(
-            "Performing custom tagging+scoring (%s) on %d items...",
-            pass_name,
-            len(items),
-        )
-        batch_size = self._effective_custom_batch_size()
-        tags_results: dict = {}
-        scores_results: dict = {}
-
-        for batch_start in range(0, len(items), batch_size):
-            if stop_event is not None and stop_event.is_set():
-                logger.info("Tagging interrupted by stop event.")
-                break
-            batch = items[batch_start : batch_start + batch_size]
-            batch_paths = []
-            batch_tensors = []
-            for path, image in batch:
-                try:
-                    batch_tensors.append(transform(image))
-                    batch_paths.append(path)
-                except Exception as e:
-                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
-            if not batch_tensors:
-                continue
-            inputs = torch.stack(batch_tensors)
-            custom_device = getattr(self, "_custom_device", self._device)
-            custom_dtype = getattr(self, "_custom_tagger_dtype", torch.float32)
-            try:
-                inputs = inputs.to(device=custom_device, dtype=custom_dtype)
-                with torch.inference_mode():
-                    logits = self._custom_model(inputs)
-                    probs = torch.sigmoid(logits).float().cpu().numpy()
-            except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and custom_device == "cuda":
-                    logger.warning(
-                        "Custom tagger CUDA OOM; falling back to CPU for this run."
-                    )
-                    if self._reload_custom_tagger_on_cpu():
-                        logger.warning("Custom tagger is now running on CPU.")
-                        self._custom_tagger_dtype = torch.float32
-                        inputs = inputs.to(device="cpu", dtype=torch.float32)
-                        with torch.inference_mode():
-                            logits = self._custom_model(inputs)
-                            probs = torch.sigmoid(logits).float().cpu().numpy()
-                    else:
-                        logger.error("Custom tagger CPU fallback failed.")
-                        break
-                else:
-                    logger.error("Custom tagger inference failed: %s", exc)
-                    break
-            for path, prob in zip(batch_paths, probs):
-                tag_probs = []
-                scores: dict = {}
-                for label, p in zip(self._custom_labels, prob):
-                    p_f = float(p)
-                    base = self._custom_label_thresholds.get(label, tag_threshold)
-                    per_label_threshold = max(
-                        0.01, base + self._custom_tagger_threshold_offset
-                    )
-                    if p_f >= per_label_threshold:
-                        tag_probs.append((label, p_f))
-                    if p_f >= min_confidence:
-                        natural = sanitise_tag(label)
-                        if natural:
-                            scores[natural] = p_f
-                all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
-                tags_results[path] = [tag for tag, _ in all_tags_sorted]
-                scores_results[path] = scores
-
-        return self._naturalize_tags(tags_results), scores_results
-
-    def _score_custom_items(
-        self,
-        items,
-        stop_event=None,
-        image_size=None,
-        min_confidence: float = 0.05,
-    ) -> dict[str, dict[str, float]]:
-        """Run the custom tagger and return raw sigmoid scores for each label.
-
-        Unlike ``_tag_custom_items``, this method applies no threshold and
-        returns all labels whose confidence is >= ``min_confidence`` so that
-        the full probability distribution is available for writing to the
-        ``TagPrediction`` table.
-
-        Args:
-            items: List of ``(path, PIL.Image)`` pairs.
-            stop_event: Optional threading.Event to interrupt inference.
-            image_size: Override image size for the transform.
-            min_confidence: Discard labels below this floor to save storage.
-
-        Returns:
-            Dict mapping path to ``{label: confidence}`` for each kept label.
-        """
-        if not items:
-            return {}
-        if self._custom_model is None or self._custom_labels is None:
-            return {}
-        if image_size is None:
-            image_size = self._custom_tagger_image_size_full
-        transform = self._custom_transform_cache.get(image_size)
-        if transform is None:
-            transform = self._build_custom_transform(image_size)
-            self._custom_transform_cache[image_size] = transform
-
-        batch_size = self._effective_custom_batch_size()
-        results: dict[str, dict[str, float]] = {}
-        for batch_start in range(0, len(items), batch_size):
-            if stop_event is not None and stop_event.is_set():
-                break
-            batch = items[batch_start : batch_start + batch_size]
-            batch_paths = []
-            batch_tensors = []
-            for path, image in batch:
-                try:
-                    batch_tensors.append(transform(image))
-                    batch_paths.append(path)
-                except Exception as exc:
-                    logger.error("Custom scorer failed to preprocess %s: %s", path, exc)
-            if not batch_tensors:
-                continue
-            inputs = torch.stack(batch_tensors)
-            custom_device = getattr(self, "_custom_device", self._device)
-            try:
-                inputs = inputs.to(custom_device).float()
-                with torch.inference_mode():
-                    logits = self._custom_model(inputs)
-                    probs = torch.sigmoid(logits).cpu().numpy()
-            except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and custom_device == "cuda":
-                    logger.warning(
-                        "Custom scorer CUDA OOM; falling back to CPU for this batch."
-                    )
-                    if self._reload_custom_tagger_on_cpu():
-                        inputs = inputs.to("cpu").float()
-                        with torch.inference_mode():
-                            logits = self._custom_model(inputs)
-                            probs = torch.sigmoid(logits).cpu().numpy()
-                    else:
-                        logger.error("Custom scorer CPU fallback failed.")
-                        break
-                else:
-                    logger.error("Custom scorer inference failed: %s", exc)
-                    break
-            for path, prob in zip(batch_paths, probs):
-                scores: dict[str, float] = {}
-                for label, p in zip(self._custom_labels, prob):
-                    p_f = float(p)
-                    if p_f >= min_confidence:
-                        natural = sanitise_tag(label)
-                        if natural:
-                            scores[natural] = p_f
-                results[path] = scores
-        return results
 
     def score_images_custom(
         self,
@@ -2103,10 +612,10 @@ class PictureTagger:
                 logger.error("Could not load %s for scoring: %s", path, exc)
         if not items:
             return {}
-        return self._score_custom_items(
+        return self._custom_service.score_items(
             items,
             min_confidence=min_confidence,
-            image_size=self._custom_tagger_image_size_full,
+            image_size=self._custom_service._image_size_full,
         )
 
     def score_quality_crops_raw(
@@ -2135,11 +644,11 @@ class PictureTagger:
         if not self._use_custom_tagger:
             return {}
         self._ensure_tagging_ready()
-        return self._score_custom_items(
+        return self._custom_service.score_items(
             items,
             stop_event=stop_event,
             min_confidence=min_confidence,
-            image_size=self._custom_tagger_image_size_quality_crop,
+            image_size=self._custom_service._image_size_quality_crop,
         )
 
     def _tag_images_custom(
@@ -2151,11 +660,8 @@ class PictureTagger:
     ):
         from PIL import Image
 
-        if self._custom_transform is None:
-            logger.warning("Custom tagger not initialised; skipping custom tags.")
-            return {}
-        if self._custom_model is None or self._custom_labels is None:
-            logger.warning("Custom tagger model not available; skipping custom tags.")
+        if not self._custom_service.is_loaded():
+            logger.warning("Custom tagger not available; skipping custom tags.")
             return {}
 
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
@@ -2192,11 +698,12 @@ class PictureTagger:
             return {}
 
         if out_raw_scores is not None:
-            tags_by_key, scores_by_key = self._tag_and_score_custom_items(
+            tags_by_key, scores_by_key = self._custom_service.tag_and_score_items(
                 items,
                 stop_event=stop_event,
+                threshold_offset=self._custom_tagger_threshold_offset,
                 threshold=None,
-                image_size=self._custom_tagger_image_size_full,
+                image_size=self._custom_service._image_size_full,
                 pass_name="full_images",
             )
             # Merge video-frame raw scores back to the original path key.
@@ -2208,14 +715,15 @@ class PictureTagger:
                         existing[label] = conf
                 out_raw_scores[orig] = existing
         else:
-            tags_by_key = self._tag_custom_items(
+            tags_by_key = self._custom_service.tag_items(
                 items,
                 stop_event=stop_event,
+                threshold_offset=self._custom_tagger_threshold_offset,
                 threshold=None,
-                image_size=self._custom_tagger_image_size_full,
+                image_size=self._custom_service._image_size_full,
                 pass_name="full_images",
             )
-        return self._merge_video_frame_tags(tags_by_key)
+        return merge_video_frame_tags(tags_by_key)
 
     def tag_images(
         self,
@@ -2233,184 +741,17 @@ class PictureTagger:
         Returns:
             dict: A dictionary mapping image paths to their corresponding list of tags.
         """
-        undesired_tags = UNDESIRED_TAGS.split(CAPTION_SEPARATOR.strip())
-        undesired_tags = set(
-            [tag.strip() for tag in undesired_tags if tag.strip() != ""]
-        )
-        logger.debug("Removing tags: " + ", ".join(undesired_tags))
-
         self._ensure_tagging_ready()
 
         preloaded_map = preloaded_images or {}
-        remaining_paths = [p for p in image_paths if str(p) not in preloaded_map]
-        logger.debug(
-            "[TAG_PRELOAD] total=%s preloaded_hits=%s dataloader_misses=%s",
-            len(image_paths),
-            len(image_paths) - len(remaining_paths),
-            len(remaining_paths),
-        )
 
-        max_concurrent = self._effective_wd14_batch_size()
-        onnx_batch_capacity = max(1, int(getattr(self, "_onnx_batch_capacity", 1)))
-        inference_batch_size = min(max_concurrent, onnx_batch_capacity)
-
-        logger.debug(
-            "[TAG_BATCH] inference_batch_size=%s onnx_batch_capacity=%s max_concurrent=%s",
-            inference_batch_size,
-            onnx_batch_capacity,
-            max_concurrent,
-        )
-
-        # On macOS, multiprocessing uses 'spawn' which requires pickling.
-        # ONNX InferenceSession cannot be pickled, so disable workers on macOS.
-        if platform.system() == "Darwin":
-            worker_count = 0
-        else:
-            worker_count = min(
-                max_concurrent, os.cpu_count() // 2 or 1, max(1, len(remaining_paths))
-            )
-
-        def run_tagging(data_loader):
-            b_imgs_local = []
-            results_local = {}
-            tagging_failed_local = False
-            for data_entry in tqdm(data_loader, smoothing=0.0, disable=self._silent):
-                if stop_event is not None and stop_event.is_set():
-                    logger.info("Tagging interrupted by stop event.")
-                    break
-                if tagging_failed_local:
-                    break
-
-                flat_data = self._flatten_data_entry(data_entry)
-
-                for data in flat_data:
-                    if stop_event is not None and stop_event.is_set():
-                        logger.info("Tagging interrupted by stop event.")
-                        tagging_failed_local = True
-                        break
-                    if data is None:
-                        continue
-                    image, image_path = data
-                    b_imgs_local.append((image_path, image))
-                    if len(b_imgs_local) >= inference_batch_size:
-                        b_imgs_local = [
-                            (str(image_path), image)
-                            for image_path, image in b_imgs_local
-                        ]
-                        batch_result = self._run_batch(
-                            b_imgs_local,
-                            undesired_tags,
-                        )
-                        if batch_result is None:
-                            logger.error(
-                                "Tagging failed for batch: %s",
-                                [p for p, _ in b_imgs_local],
-                            )
-                            tagging_failed_local = True
-                            break
-
-                        results_local.update(self._naturalize_tags(batch_result))
-                        b_imgs_local.clear()
-            return tagging_failed_local, b_imgs_local, results_local
-
-        def run_preloaded_wd14(preloaded_map, results_local):
-            if not preloaded_map:
-                return
-            wd14_batch = []
-            for path in image_paths:
-                loaded_img = preloaded_map.get(str(path))
-                if loaded_img is None:
-                    continue
-                try:
-                    prepared = ImageLoadingDatasetPrepper._preprocess_image(loaded_img)
-                except Exception as exc:
-                    logger.error(
-                        "Could not preprocess preloaded image %s: %s", path, exc
-                    )
-                    continue
-                wd14_batch.append((str(path), prepared))
-                if len(wd14_batch) >= inference_batch_size:
-                    batch_result = self._run_batch(wd14_batch, undesired_tags)
-                    if batch_result is not None:
-                        results_local.update(self._naturalize_tags(batch_result))
-                    wd14_batch.clear()
-            if wd14_batch:
-                batch_result = self._run_batch(wd14_batch, undesired_tags)
-                if batch_result is not None:
-                    results_local.update(self._naturalize_tags(batch_result))
-
-        b_imgs = []
-        all_results = {}
+        wd14_results = {}
         if self._use_wd14_tagger:
-            run_preloaded_wd14(preloaded_map, all_results)
-        else:
-            remaining_paths = []
-        try:
-            if remaining_paths:
-                logger.debug(
-                    "Starting tagger dataloader with worker count: %s and dataset size: %s",
-                    worker_count,
-                    len(remaining_paths),
-                )
-                dataset = ImageLoadingDatasetPrepper(remaining_paths)
-                data = torch.utils.data.DataLoader(
-                    dataset,
-                    batch_size=inference_batch_size,
-                    shuffle=False,
-                    num_workers=worker_count,
-                    collate_fn=self._collate_fn_remove_corrupted,
-                    drop_last=False,
-                    timeout=(TAGGER_DATALOADER_TIMEOUT if worker_count > 0 else 0),
-                )
-                _tagging_failed, b_imgs, dataloader_results = run_tagging(data)
-                all_results.update(dataloader_results)
-            else:
-                _tagging_failed = False
-        except RuntimeError as exc:
-            logger.warning("Tagging dataloader stalled: %s", exc)
-            if (
-                worker_count > 0
-                and remaining_paths
-                and (stop_event is None or not stop_event.is_set())
-            ):
-                logger.warning(
-                    "Retrying tagger dataloader with num_workers=0 for %s items",
-                    len(remaining_paths),
-                )
-                dataset = ImageLoadingDatasetPrepper(remaining_paths)
-                data = torch.utils.data.DataLoader(
-                    dataset,
-                    batch_size=inference_batch_size,
-                    shuffle=False,
-                    num_workers=0,
-                    collate_fn=self._collate_fn_remove_corrupted,
-                    drop_last=False,
-                    timeout=0,
-                )
-                _tagging_failed, b_imgs, dataloader_results = run_tagging(data)
-                all_results.update(dataloader_results)
-            else:
-                _tagging_failed = True
-        if _tagging_failed:
-            logger.warning(
-                "Tagging failed due to dataloader issues; no tags will be returned."
+            wd14_results = self._wd14_service.tag_images(
+                image_paths, stop_event=stop_event, preloaded_map=preloaded_map
             )
-            return {}
+        wd14_results = merge_video_frame_tags(wd14_results)
 
-        if len(b_imgs) > 0 and not (stop_event is not None and stop_event.is_set()):
-            b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
-            batch_result = self._run_batch(b_imgs, undesired_tags)
-            if batch_result is None:
-                logger.warning(f"Tagging failed for batch: {[p for p, _ in b_imgs]}")
-            else:
-                for k, tags in batch_result.items():
-                    tags = [sanitise_tag(tag) for tag in tags]
-                    tags = [t for t in tags if t]
-                    batch_result[k] = tags
-                all_results.update(batch_result)
-
-        logger.debug(f"Completed tagging for {len(all_results)} images.")
-        wd14_results = self._merge_video_frame_tags(all_results)
         if not self._use_custom_tagger:
             return wd14_results
 
@@ -2434,7 +775,7 @@ class PictureTagger:
             f"generate_description: picture.file_path={getattr(picture, 'file_path', None)}"
         )
         picture_path = self._resolve_picture_path(getattr(picture, "file_path", None))
-        florence_caption = self._generate_florence_caption(
+        florence_caption = self._florence_service.generate_caption(
             picture_path,
             _retry_on_cpu=False,
         )
@@ -2455,8 +796,6 @@ class PictureTagger:
             return {}
         self._ensure_captioning_ready()
 
-        from os import path as os_path
-
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
         results = {}
         batch_items = []
@@ -2468,32 +807,30 @@ class PictureTagger:
             if not picture_path:
                 results[picture.id] = None
                 continue
-            ext = os_path.splitext(picture_path)[1].lower()
+            ext = os.path.splitext(picture_path)[1].lower()
             if ext in video_exts:
-                results[picture.id] = self._generate_florence_caption(
+                results[picture.id] = self._florence_service.generate_caption(
                     picture_path, _retry_on_cpu=False
                 )
             else:
                 batch_items.append((picture.id, picture_path))
 
-        batch_size = max(1, int(self._florence_batch_size))
+        batch_size = self._florence_service.description_batch_size()
         for idx in range(0, len(batch_items), batch_size):
             chunk = batch_items[idx : idx + batch_size]
             chunk_paths = [picture_path for _, picture_path in chunk]
-            captions = self._generate_florence_captions_batch(chunk_paths)
+            captions = self._florence_service.generate_captions_batch(chunk_paths)
             for picture_id, picture_path in chunk:
                 results[picture_id] = captions.get(picture_path)
 
         return results
 
-    # Naive flatten
     @classmethod
     def _flatten_texts(cls, texts):
         flat = []
 
         characters = texts.get("characters") or []
 
-        # Compose prefix
         prefix = ""
         if characters:
             if len(characters) == 1:
@@ -2514,10 +851,10 @@ class PictureTagger:
         comfyui = texts.get("comfyui") or {}
         if comfyui.get("positive_prompt"):
             flat.append(str(comfyui["positive_prompt"]))
-        models = [_clean_asset_name(m) for m in (comfyui.get("models") or []) if m]
+        models = [clean_asset_name(m) for m in (comfyui.get("models") or []) if m]
         if models:
             flat.append(", ".join(models))
-        loras = [_clean_asset_name(lf) for lf in (comfyui.get("loras") or []) if lf]
+        loras = [clean_asset_name(lf) for lf in (comfyui.get("loras") or []) if lf]
         if loras:
             flat.append(", ".join(loras))
 
@@ -2535,117 +872,34 @@ class PictureTagger:
 
         texts = []
         if query:
-            full_text = query.lower()
-            texts.append(full_text)
+            texts.append(query.lower())
         else:
             for picture in pictures or []:
                 text = picture.text_embedding_data()
                 flat_text = PictureTagger._flatten_texts(text)
-                filtered_text = self._filter_texts(flat_text)
-                full_text = ". ".join(filtered_text)
-                full_text = full_text.lower()
+                filtered_text = filter_texts(flat_text)
+                full_text = ". ".join(filtered_text).lower()
                 texts.append(full_text)
 
         if not texts:
             return []
 
-        # Generate text embedding using SBERT
-        sbert_model = getattr(self, "_sbert_model", None)
-        if sbert_model is None:
-            try:
-                sbert_model = _load_sentence_transformer(
-                    SENTENCE_TRANSFORMER_MODEL_NAME,
-                    device=self._device,
-                    local_files_only=True,
-                    revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
-                )
-            except OSError:
-                logger.info(
-                    "Downloading %s for the first time...",
-                    SENTENCE_TRANSFORMER_MODEL_NAME,
-                )
-                sbert_model = _load_sentence_transformer(
-                    SENTENCE_TRANSFORMER_MODEL_NAME,
-                    device=self._device,
-                    revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
-                )
-            self._sbert_model = sbert_model
-
-        logger.debug(
-            "Generating SBERT embeddings for %s texts on device: %s",
-            len(texts),
-            sbert_model.device,
-        )
-        text_embeddings = None
-        try:
-            text_embeddings = sbert_model.encode(texts, show_progress_bar=False)
-            logger.debug("Done generating SBERT embeddings.")
-        except RuntimeError as e:
-            if "CUDA" in str(e):
-                logger.warning(
-                    f"SBERT embedding failed on CUDA: {e}. Falling back to CPU."
-                )
-                try:
-                    sbert_model = _load_sentence_transformer(
-                        SENTENCE_TRANSFORMER_MODEL_NAME,
-                        device="cpu",
-                        local_files_only=True,
-                        revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
-                    )
-                except OSError:
-                    sbert_model = _load_sentence_transformer(
-                        SENTENCE_TRANSFORMER_MODEL_NAME,
-                        device="cpu",
-                        revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
-                    )
-                self._sbert_model = sbert_model
-                logger.info("Falling back to CPU for SBERT embeddings.")
-                text_embeddings = sbert_model.encode(texts, show_progress_bar=False)
-            else:
-                logger.error(f"Failed to generate text embedding: {e}")
-                raise
-
-        embeddings_array = np.asarray(text_embeddings)
-        return [embeddings_array[i] for i in range(len(texts))]
+        return self._sbert_service.encode(texts)
 
     def generate_clip_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
         Generate a CLIP text embedding for the provided query text.
         Returns a single embedding (np.ndarray) or None.
         """
-        if not query:
-            return None
-
-        self._ensure_clip_ready()
-
-        import torch
-
-        try:
-            if not hasattr(self, "_clip_model") or self._clip_model is None:
-                logger.warning(
-                    "PictureTagger: CLIP model not available for text embedding."
-                )
-                return None
-
-            with torch.no_grad():
-                text = self._clip_tokenizer([query]).to(self._clip_device)
-                text_features = self._clip_model.encode_text(text)
-                text_features /= text_features.norm(dim=-1, keepdim=True)
-                return text_features.cpu().float().numpy()[0]
-        except Exception as e:
-            logger.error(f"PictureTagger: Failed to generate CLIP text embedding: {e}")
-            return None
+        return self._clip_service.encode_text(query)
 
     def generate_facial_features(self, picture, face_bboxes):
         """
         Generate facial features for a list of face_bboxes in a picture.
         Returns a list of facial_features (np.ndarray or None) for each bbox.
         """
-        import os
-        import torch
+        import cv2
         from PIL import Image
-
-        self._ensure_clip_ready()
 
         file_path = (
             picture.file_path if hasattr(picture, "file_path") else picture["file_path"]
@@ -2653,18 +907,13 @@ class PictureTagger:
         file_path = self._resolve_picture_path(file_path)
         ext = os.path.splitext(file_path)[1].lower()
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
-        facial_features_list = []
         face_crops = []
 
-        # Load image or first frame for all crops
         if ext in video_exts:
-            import cv2
-
             cap = cv2.VideoCapture(file_path)
             ret, frame = cap.read()
             cap.release()
-            if not ret or frame is None:
-                frame = None
+            frame = frame if ret else None
             for bbox in face_bboxes:
                 if frame is not None:
                     crop = FaceUtils.crop_face_from_frame(frame, bbox)
@@ -2675,149 +924,9 @@ class PictureTagger:
                     face_crops.append(None)
         else:
             for bbox in face_bboxes:
-                crop = FaceUtils.load_and_crop_square_image_with_face(file_path, bbox)
-                face_crops.append(crop)
+                face_crops.append(
+                    FaceUtils.load_and_crop_square_image_with_face(file_path, bbox)
+                )
 
-        # Try to get a human-friendly description for logging
-        pic_desc = getattr(picture, "description", None)
-        if not pic_desc:
-            pic_desc = file_path
-
-        for i, crop in enumerate(face_crops):
-            if crop is None:
-                logger.warning(
-                    f"Face crop is None for picture '{pic_desc}', bbox={face_bboxes[i]}"
-                )
-                facial_features_list.append(None)
-                continue
-            logger.debug(
-                f"Face crop type for picture '{pic_desc}', bbox={face_bboxes[i]}: {type(crop)}"
-            )
-            if hasattr(crop, "size"):
-                logger.debug(f"Face crop size: {crop.size}")
-            try:
-                img_input = (
-                    self._clip_preprocess(crop).unsqueeze(0).to(self._clip_device)
-                )
-                with torch.no_grad():
-                    features = self._clip_model.encode_image(img_input).cpu().numpy()[0]
-                logger.debug(
-                    f"Extracted features for picture '{pic_desc}', bbox={face_bboxes[i]}: {features[:5]}... (shape: {features.shape})"
-                )
-                facial_features_list.append(features)
-            except RuntimeError as e:
-                logger.error(
-                    f"RuntimeError for picture '{pic_desc}', bbox={face_bboxes[i]}: {e}"
-                )
-                if (
-                    ("CUDA out of memory" in str(e))
-                    or ("not compatible" in str(e))
-                    or ("CUDA error" in str(e))
-                ):
-                    self._clip_device = "cpu"
-                    self._clip_model = self._clip_model.to(self._clip_device)
-                    try:
-                        img_input = (
-                            self._clip_preprocess(crop)
-                            .unsqueeze(0)
-                            .to(self._clip_device)
-                        )
-                        with torch.no_grad():
-                            features = (
-                                self._clip_model.encode_image(img_input)
-                                .cpu()
-                                .numpy()[0]
-                            )
-                        logger.debug(
-                            f"Extracted features (CPU fallback) for picture '{pic_desc}', bbox={face_bboxes[i]}: {features[:5]}... (shape: {features.shape})"
-                        )
-                        facial_features_list.append(features)
-                    except Exception as e2:
-                        logger.error(
-                            f"CPU fallback failed for picture '{pic_desc}', bbox={face_bboxes[i]}: {e2}"
-                        )
-                        facial_features_list.append(None)
-                else:
-                    facial_features_list.append(None)
-            except Exception as e:
-                logger.error(
-                    f"Exception for picture '{pic_desc}', bbox={face_bboxes[i]}: {e}"
-                )
-                facial_features_list.append(None)
-        return facial_features_list
-
-    def preprocess_query_words(self, words, top_k=3):
-        """
-        Preprocess a list of query words for semantic search:
-        - Expand with up to top_k ranked synonyms for each word (≥4 letters, single-word only)
-        - Add 'woman' if 'she' or 'her' is present, 'man' if 'he' or 'him' is present
-        Returns a list of deduplicated, relevant words.
-        """
-        # Remove prepositions and filter words
-        prepositions = {
-            "about",
-            "above",
-            "across",
-            "after",
-            "against",
-            "along",
-            "among",
-            "around",
-            "at",
-            "before",
-            "behind",
-            "below",
-            "beneath",
-            "beside",
-            "between",
-            "beyond",
-            "but",
-            "by",
-            "concerning",
-            "despite",
-            "down",
-            "during",
-            "except",
-            "for",
-            "from",
-            "in",
-            "inside",
-            "into",
-            "like",
-            "near",
-            "of",
-            "off",
-            "on",
-            "onto",
-            "out",
-            "outside",
-            "over",
-            "past",
-            "regarding",
-            "since",
-            "through",
-            "throughout",
-            "to",
-            "toward",
-            "under",
-            "underneath",
-            "until",
-            "up",
-            "upon",
-            "with",
-            "within",
-            "without",
-            "have",
-            "were",
-        }
-        cleaned = []
-        lower_words = [w.lower() for w in words]
-        for word in lower_words:
-            if word == "she" or word == "her":
-                cleaned.append("woman")
-            elif word == "he" or word == "him":
-                cleaned.append("man")
-            elif len(word) > 3 and word not in prepositions:
-                cleaned.append(word)
-
-        return cleaned
+        pic_desc = getattr(picture, "description", None) or file_path
+        return self._clip_service.encode_image_crops(face_crops, pic_desc=pic_desc)

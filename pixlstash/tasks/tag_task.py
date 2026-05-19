@@ -15,7 +15,8 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.tag_prediction_utils import _PENALISED_TAG_SET
-from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
+from pixlstash.picture_tagger import PictureTagger
+from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 

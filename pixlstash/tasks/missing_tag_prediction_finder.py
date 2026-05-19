@@ -37,7 +37,7 @@ class MissingTagPredictionFinder(BaseTaskFinder):
         epoch = tagger.custom_tagger_version()
         model_version = f"v{epoch}"
 
-        batch_limit = max(1, getattr(tagger, "_custom_tagger_batch", 16))
+        batch_limit = max(1, tagger.custom_tagger_batch_size())
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing(
                 session, batch_limit * self._BATCH_MULTIPLIER

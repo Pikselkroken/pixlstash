@@ -14,7 +14,8 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureLikenessQueue
-from pixlstash.picture_tagger import CLIP_MODEL_NAME, MODEL_DIR
+from pixlstash.picture_tagger import MODEL_DIR
+from pixlstash.tagger_plugins.clip_service import CLIP_MODEL_NAME
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
