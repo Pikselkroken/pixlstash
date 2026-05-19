@@ -8,10 +8,7 @@ from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
-from pixlstash.picture_tagger import (
-    CUSTOM_TAGGER_META_PATH,
-    CUSTOM_TAGGER_DEFAULT_THRESHOLD,
-)
+from pixlstash.tagger_plugins.pixlstash_tagger import CUSTOM_TAGGER_DEFAULT_THRESHOLD
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import sanitise_tag
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
@@ -22,15 +19,19 @@ from pixlstash.utils.service.tag_prediction_utils import (
 logger = get_logger(__name__)
 
 
-def _load_label_thresholds(bias: float = 0.0) -> dict[str, float]:
+def _load_label_thresholds(
+    meta_path: str | None, bias: float = 0.0
+) -> dict[str, float]:
     """Load per-label acceptance thresholds from the custom tagger meta JSON.
 
     Keys are naturalized to match the values stored in TagPrediction.tag.
     The bias is the user-configured offset added to each label's base threshold.
     Returns an empty dict if the file is missing or lacks label_thresholds.
     """
+    if not meta_path:
+        return {}
     try:
-        with open(CUSTOM_TAGGER_META_PATH, "r", encoding="utf-8") as f:
+        with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         raw = meta.get("label_thresholds", {})
         if not raw:
@@ -42,10 +43,12 @@ def _load_label_thresholds(bias: float = 0.0) -> dict[str, float]:
         return {}
 
 
-def _load_raw_label_thresholds() -> dict[str, float]:
+def _load_raw_label_thresholds(meta_path: str | None) -> dict[str, float]:
     """Load per-label thresholds from meta JSON without any offset applied."""
+    if not meta_path:
+        return {}
     try:
-        with open(CUSTOM_TAGGER_META_PATH, "r", encoding="utf-8") as f:
+        with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         raw = meta.get("label_thresholds", {})
         return {sanitise_tag(k) or k: float(v) for k, v in raw.items()}
@@ -97,13 +100,15 @@ def create_router(server) -> APIRouter:
         if not include_meta:
             return payload
         bias = getattr(server.vault, "_custom_tagger_threshold_offset", None) or 0.0
+        tagger = server.vault._picture_tagger
+        meta_path = tagger.custom_tagger_meta_path() if tagger is not None else None
         return {
             "tag_predictions": payload,
             "meta": {
                 "acceptance_threshold": max(
                     0.01, float(CUSTOM_TAGGER_DEFAULT_THRESHOLD) + bias
                 ),
-                "label_thresholds": _load_label_thresholds(bias),
+                "label_thresholds": _load_label_thresholds(meta_path, bias),
             },
         }
 
@@ -303,7 +308,9 @@ def create_router(server) -> APIRouter:
     )
     def get_label_thresholds():
         offset = getattr(server.vault, "_custom_tagger_threshold_offset", None) or 0.0
-        raw = _load_raw_label_thresholds()
+        tagger = server.vault._picture_tagger
+        meta_path = tagger.custom_tagger_meta_path() if tagger is not None else None
+        raw = _load_raw_label_thresholds(meta_path)
         sorted_labels = sorted(raw.items())
         return [
             {

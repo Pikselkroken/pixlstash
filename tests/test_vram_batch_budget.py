@@ -4,36 +4,39 @@ from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
 def _build_tagger_for_budget_tests(
     budget_mb: int = 4096,
-    expected_tasks: int = 2,
     max_concurrent: int = 64,
     onnx_capacity: int = 64,
     custom_batch: int = 16,
 ):
+    class _FakeWD14Service:
+        def __init__(self, capacity):
+            self._capacity = capacity
+
+        def batch_capacity(self):
+            return self._capacity
+
     tagger = PictureTagger.__new__(PictureTagger)
     tagger._device = "cuda"
     tagger._max_vram_usage_mb = budget_mb
-    tagger._expected_concurrent_tag_tasks = expected_tasks
-    tagger._onnx_batch_capacity = onnx_capacity
-    tagger._custom_tagger_batch = custom_batch
+    tagger._wd14_service = _FakeWD14Service(onnx_capacity)
     tagger.max_concurrent_images = lambda: max_concurrent
     return tagger
 
 
-def test_vram_batch_cap_is_queue_aware():
-    single_task = _build_tagger_for_budget_tests(expected_tasks=1)
-    two_tasks = _build_tagger_for_budget_tests(expected_tasks=2)
+def test_vram_batch_cap_constrains_by_budget():
+    small_budget = _build_tagger_for_budget_tests(budget_mb=2048)
+    large_budget = _build_tagger_for_budget_tests(budget_mb=8192)
 
-    cap_single = single_task._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
-    cap_two = two_tasks._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
+    cap_small = small_budget._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
+    cap_large = large_budget._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
 
-    assert cap_two < cap_single
-    assert cap_two <= 4
+    assert cap_large > cap_small
+    assert cap_small >= 1
 
 
 def test_estimated_task_vram_stays_within_budget_window():
     tagger = _build_tagger_for_budget_tests(
         budget_mb=4096,
-        expected_tasks=2,
         max_concurrent=64,
         onnx_capacity=64,
         custom_batch=32,
@@ -57,21 +60,19 @@ def test_vram_cap_noop_on_cpu_mode():
 def test_suggested_tag_task_size_tracks_effective_batch():
     tagger = _build_tagger_for_budget_tests(
         budget_mb=4096,
-        expected_tasks=2,
         max_concurrent=64,
         onnx_capacity=64,
         custom_batch=32,
     )
 
-    assert tagger._effective_wd14_batch_size() == 3
-    assert tagger._effective_custom_batch_size() == 3
-    assert tagger.suggested_tag_task_size() == 3
+    assert tagger._effective_wd14_batch_size() == 10
+    assert tagger._effective_custom_batch_size() == 10
+    assert tagger.suggested_tag_task_size() == 10
 
 
 def test_custom_and_wd14_use_same_effective_batch_size():
     tagger = _build_tagger_for_budget_tests(
         budget_mb=4096,
-        expected_tasks=2,
         max_concurrent=64,
         onnx_capacity=64,
         custom_batch=64,
@@ -83,7 +84,6 @@ def test_custom_and_wd14_use_same_effective_batch_size():
 def test_incremental_vram_estimate_is_below_full_estimate():
     tagger = _build_tagger_for_budget_tests(
         budget_mb=4096,
-        expected_tasks=2,
         max_concurrent=64,
         onnx_capacity=64,
         custom_batch=32,
@@ -129,14 +129,12 @@ def test_missing_tags_finder_uses_suggested_task_size():
 def test_larger_budget_gives_bigger_batch_than_smaller_budget():
     small_budget = _build_tagger_for_budget_tests(
         budget_mb=4096,
-        expected_tasks=2,
         max_concurrent=64,
         onnx_capacity=64,
         custom_batch=32,
     )
     large_budget = _build_tagger_for_budget_tests(
         budget_mb=8192,
-        expected_tasks=2,
         max_concurrent=64,
         onnx_capacity=64,
         custom_batch=32,

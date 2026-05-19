@@ -430,18 +430,6 @@ class Vault:
         """
         return self._picture_tagger.generate_clip_text_embedding(query=query)
 
-    def preprocess_query_words(self, words: list[str]) -> list[str]:
-        """
-        Preprocess a list of words using the PictureTagger.
-
-        Args:
-            words (list[str]): List of input words to preprocess.
-
-        Returns:
-            list[str]: Preprocessed list of words.
-        """
-        return self._picture_tagger.preprocess_query_words(words=words)
-
     def set_description(self, description: str):
         def op(session: Session):
             metadata = session.exec(

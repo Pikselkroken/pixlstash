@@ -36,10 +36,10 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from pixlstash.db_models.face import Face  # noqa: E402
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS  # noqa: E402
-from pixlstash.picture_tagger import (  # noqa: E402
-    CUSTOM_TAGGER_THRESHOLD_FULL,
+from pixlstash.picture_tagger import PictureTagger  # noqa: E402
+from pixlstash.tagger_plugins.pixlstash_tagger import (  # noqa: E402
+    CUSTOM_TAGGER_DEFAULT_THRESHOLD as CUSTOM_TAGGER_THRESHOLD_FULL,
     QUALITY_CROP_TAG_WHITELIST,
-    PictureTagger,
 )
 from pixlstash.utils.service.caption_utils import sanitise_tag  # noqa: E402
 from pixlstash.tasks.face_extraction_task import CROP_EXPAND_SCALE  # noqa: E402

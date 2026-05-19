@@ -11,7 +11,8 @@ from pixlstash.db_models.tag import (
     TAG_EMPTY_SENTINEL,
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
-from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
+from pixlstash.picture_tagger import PictureTagger
+from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils

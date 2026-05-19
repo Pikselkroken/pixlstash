@@ -1,6 +1,7 @@
 """Caption, tag, and hidden-tag processing utilities."""
 
 import json
+import re
 
 from sqlmodel import Session, select
 
@@ -59,10 +60,48 @@ class CaptionUtils:
                 character_names.append(name_value)
         return ", ".join(character_names)
 
+    @staticmethod
+    def naturalize_tags(batch_result: dict) -> dict:
+        """Sanitise all tags in a ``{path: [tag, ...]}`` batch result in-place."""
+        for k, tags in batch_result.items():
+            tags = [sanitise_tag(t) for t in tags]
+            batch_result[k] = [t for t in tags if t]
+        return batch_result
+
+    @staticmethod
+    def merge_video_frame_tags(frame_tags: dict) -> dict:
+        """Merge per-frame tags into per-video tag sets.
+
+        Frame paths are expected to contain a ``#frame`` marker that separates
+        the base video path from the frame identifier.
+        """
+        merged: dict = {}
+        for path, tags in frame_tags.items():
+            if "#frame" in path:
+                base_path = path.split("#frame")[0]
+                if base_path not in merged:
+                    merged[base_path] = set()
+                merged[base_path].update(tags)
+            else:
+                merged[path] = set(tags)
+        return {k: sorted(list(v)) for k, v in merged.items()}
+
+    @staticmethod
+    def filter_texts(texts: list) -> list:
+        """Remove duplicates, empty strings, UUIDs, and ISO date strings."""
+        uuid_re = re.compile(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        )
+        date_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
+        return [t for t in texts if t and not uuid_re.match(t) and not date_re.match(t)]
+
 
 # Module-level alias so existing `from ... import sanitise_tag` call sites work
 # without modification.
 sanitise_tag = CaptionUtils.sanitise_tag
+naturalize_tags = CaptionUtils.naturalize_tags
+merge_video_frame_tags = CaptionUtils.merge_video_frame_tags
+filter_texts = CaptionUtils.filter_texts
 
 
 def serialize_tag_objects(tags: list | None, empty_sentinel: str = "") -> list[dict]:
