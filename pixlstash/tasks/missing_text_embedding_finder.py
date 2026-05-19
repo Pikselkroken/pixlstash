@@ -5,11 +5,11 @@ from sqlalchemy.orm import load_only, selectinload
 
 from pixlstash.db_models import Character, Picture
 
-from .base_task_finder import BaseTaskFinder
+from .base_task_finder import SimpleMissingFinder
 from .text_embedding_task import TextEmbeddingTask
 
 
-class MissingTextEmbeddingFinder(BaseTaskFinder):
+class MissingTextEmbeddingFinder(SimpleMissingFinder):
     """Find a batch of pictures missing text embeddings and create a TextEmbeddingTask."""
 
     EMBEDDING_BATCH_SIZE = 32
@@ -19,8 +19,7 @@ class MissingTextEmbeddingFinder(BaseTaskFinder):
         database,
         picture_tagger_getter: Callable,
     ):
-        super().__init__()
-        self._db = database
+        super().__init__(database)
         self._picture_tagger_getter = picture_tagger_getter
 
     def finder_name(self) -> str:
@@ -36,32 +35,13 @@ class MissingTextEmbeddingFinder(BaseTaskFinder):
             "MissingDescriptionFinder",
         ]
 
-    def find_task(self):
-        picture_tagger = self._picture_tagger_getter()
-        if picture_tagger is None:
-            return None
+    def _guard(self) -> bool:
+        return self._picture_tagger_getter() is not None
 
-        pictures = self._db.run_immediate_read_task(
-            lambda session: self._fetch_missing_text_embeddings(
-                session,
-                self.EMBEDDING_BATCH_SIZE * 3,
-            )
-        )
-        if not pictures:
-            return None
+    def _batch_size(self) -> int:
+        return self.EMBEDDING_BATCH_SIZE
 
-        selected = self._filter_and_claim(pictures, self.EMBEDDING_BATCH_SIZE)
-        if not selected:
-            return None
-
-        return TextEmbeddingTask(
-            database=self._db,
-            picture_tagger=picture_tagger,
-            pictures=selected,
-        )
-
-    @staticmethod
-    def _fetch_missing_text_embeddings(session: Session, limit: int):
+    def _fetch_candidates(self, session: Session, limit: int):
         query = select(Picture)
         query = query.options(
             load_only(Picture.id, Picture.description, Picture.text_embedding),
@@ -77,3 +57,10 @@ class MissingTextEmbeddingFinder(BaseTaskFinder):
         query = query.order_by(Picture.id)
         query = query.limit(limit)
         return session.exec(query).all()
+
+    def _create_task(self, pictures: list):
+        return TextEmbeddingTask(
+            database=self._db,
+            picture_tagger=self._picture_tagger_getter(),
+            pictures=pictures,
+        )
