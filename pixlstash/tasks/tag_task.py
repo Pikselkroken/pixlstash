@@ -681,9 +681,7 @@ class TagTask(BaseTask):
         # delete pictures while a tag task is already in flight, causing FK
         # violations when TagPrediction rows are flushed for a gone picture.
         existing_picture_ids: set[int] = set(
-            session.exec(
-                select(Picture.id).where(Picture.id.in_(picture_ids))
-            ).all()
+            session.exec(select(Picture.id).where(Picture.id.in_(picture_ids))).all()
         )
         picture_ids = [pid for pid in picture_ids if pid in existing_picture_ids]
         if not picture_ids:

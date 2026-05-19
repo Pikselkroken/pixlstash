@@ -1024,16 +1024,16 @@ def create_router(server) -> APIRouter:
             priority=DBPriority.IMMEDIATE,
         )
         if not faces and len(existing_face_ids) > 0:
-            if len(existing_face_ids) == 1:
-                detail = (
-                    f"Face {existing_face_ids[0]} is already assigned to this character"
-                )
-            else:
-                detail = "All faces are already assigned to this character"
-            raise HTTPException(
-                status_code=403,
-                detail=detail,
-            )
+            # All requested faces are already assigned to this character — the
+            # desired state is already achieved.  Return success so callers
+            # (e.g. the ComfyUI node re-importing a duplicate picture) do not
+            # treat this as an error.
+            return {
+                "status": "success",
+                "face_ids": [],
+                "character_id": character_id,
+                "already_assigned_ids": existing_face_ids,
+            }
         server.vault.db.run_task(
             Picture.clear_field,
             [face["picture_id"] for face in faces],

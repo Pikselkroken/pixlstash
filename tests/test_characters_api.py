@@ -137,7 +137,9 @@ def test_get_characters_filtered_by_numeric_project_id():
         assert resp.status_code == 200
         project_id = resp.json()["id"]
 
-        resp = client.post("/characters", json={"name": "InProject", "project_id": project_id})
+        resp = client.post(
+            "/characters", json={"name": "InProject", "project_id": project_id}
+        )
         assert resp.status_code == 200
 
         resp = client.post("/characters", json={"name": "NotInProject"})
@@ -161,7 +163,9 @@ def test_get_characters_filtered_by_unassigned():
         assert resp.status_code == 200
         project_id = resp.json()["id"]
 
-        resp = client.post("/characters", json={"name": "Assigned", "project_id": project_id})
+        resp = client.post(
+            "/characters", json={"name": "Assigned", "project_id": project_id}
+        )
         assert resp.status_code == 200
 
         resp = client.post("/characters", json={"name": "Unassigned"})
@@ -196,7 +200,9 @@ def test_character_scoped_token_respects_project_id_filter():
         assert resp.status_code == 200
         project_id = resp.json()["id"]
 
-        resp = client.post("/characters", json={"name": "CharInProject", "project_id": project_id})
+        resp = client.post(
+            "/characters", json={"name": "CharInProject", "project_id": project_id}
+        )
         assert resp.status_code == 200
         char_id = resp.json()["character"]["id"]
 
