@@ -87,3 +87,45 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
         with self._claim_lock:
             for picture_id in picture_ids:
                 self._claimed_picture_ids.discard(picture_id)
+
+
+class SimpleMissingFinder(BaseTaskFinder, ABC):
+    """Base for finders that follow the fetch-claim-create pattern.
+
+    Subclasses implement three small methods and get a correct ``find_task``
+    for free.  The fetch multiplier is ``max_inflight_tasks() + 1`` so that
+    ``_filter_and_claim`` can always fill one full task even when all in-flight
+    slots are already claimed.
+
+    Subclasses must implement (in addition to ``finder_name``):
+
+    - ``_batch_size() -> int`` — number of pictures per task.
+    - ``_fetch_candidates(session, limit: int) -> list`` — DB query; called as
+      a bound method so it receives ``session`` as the first argument when
+      invoked through ``run_immediate_read_task``.
+    - ``_create_task(pictures: list)`` — construct and return the task.
+    """
+
+    def __init__(self, database):
+        super().__init__()
+        self._db = database
+
+    @abstractmethod
+    def _batch_size(self) -> int: ...
+
+    @abstractmethod
+    def _fetch_candidates(self, session, limit: int) -> list: ...
+
+    @abstractmethod
+    def _create_task(self, pictures: list): ...
+
+    def find_task(self):
+        batch = self._batch_size()
+        limit = batch * (max(1, self.max_inflight_tasks()) + 1)
+        pictures = self._db.run_immediate_read_task(self._fetch_candidates, limit)
+        if not pictures:
+            return None
+        selected = self._filter_and_claim(pictures, batch)
+        if not selected:
+            return None
+        return self._create_task(selected)

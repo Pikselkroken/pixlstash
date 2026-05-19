@@ -1,18 +1,10 @@
-from sqlmodel import Session
-
 from pixlstash.worker_config import SMART_SCORE_MAX_INFLIGHT
-from .base_task_finder import BaseTaskFinder
+from .base_task_finder import SimpleMissingFinder
 from .smart_score_task import SmartScoreTask
 
 
-class MissingSmartScoreFinder(BaseTaskFinder):
+class MissingSmartScoreFinder(SimpleMissingFinder):
     """Find pictures missing a stored smart score and create a SmartScoreTask."""
-
-    _FETCH_LIMIT = SmartScoreTask.BATCH_SIZE * 4
-
-    def __init__(self, database):
-        super().__init__()
-        self._db = database
 
     def finder_name(self) -> str:
         return "MissingSmartScoreFinder"
@@ -20,23 +12,11 @@ class MissingSmartScoreFinder(BaseTaskFinder):
     def max_inflight_tasks(self) -> int:
         return SMART_SCORE_MAX_INFLIGHT
 
-    def find_task(self):
-        pictures = self._db.run_immediate_read_task(
-            SmartScoreTask.find_pictures_missing_smart_score,
-            self._FETCH_LIMIT,
-        )
-        if not pictures:
-            return None
+    def _batch_size(self) -> int:
+        return SmartScoreTask.BATCH_SIZE
 
-        selected = self._filter_and_claim(pictures, SmartScoreTask.BATCH_SIZE)
-        if not selected:
-            return None
+    def _fetch_candidates(self, session, limit: int) -> list:
+        return SmartScoreTask.find_pictures_missing_smart_score(session, limit)
 
-        return SmartScoreTask(
-            database=self._db,
-            pictures=selected,
-        )
-
-    @staticmethod
-    def _count_remaining(session: Session) -> int:
-        return SmartScoreTask.count_remaining(session)
+    def _create_task(self, pictures: list):
+        return SmartScoreTask(database=self._db, pictures=pictures)
