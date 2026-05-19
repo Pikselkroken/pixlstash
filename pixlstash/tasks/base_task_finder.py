@@ -119,7 +119,13 @@ class SimpleMissingFinder(BaseTaskFinder, ABC):
     @abstractmethod
     def _create_task(self, pictures: list): ...
 
+    def _guard(self) -> bool:
+        """Return False to skip this planning cycle. Override to gate on external state."""
+        return True
+
     def find_task(self):
+        if not self._guard():
+            return None
         batch = self._batch_size()
         limit = batch * (max(1, self.max_inflight_tasks()) + 1)
         pictures = self._db.run_immediate_read_task(self._fetch_candidates, limit)
