@@ -2504,6 +2504,7 @@ def create_router(server) -> APIRouter:
                     "thumbnail_left",
                     "thumbnail_top",
                     "thumbnail_side",
+                    "imported_at",
                 ],
                 include_deleted=True,
                 include_unimported=True,
@@ -2567,7 +2568,9 @@ def create_router(server) -> APIRouter:
                     mapped_any = mapped_any or mapped
                     face_data.append({**entry, "bbox": mapped_bbox})
 
-                thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp"
+                imported_at = getattr(pic, "imported_at", None)
+                v = int(imported_at.timestamp()) if imported_at is not None else 0
+                thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
                 results[pic.id] = {
                     "thumbnail": thumbnail_url,
                     "faces": face_data,
