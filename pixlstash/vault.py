@@ -131,6 +131,7 @@ class Vault:
             self._work_planner = None
             self._ref_folder_watcher = None
             self._closed = False
+            self._started = False
             return
 
         self._task_runner = TaskRunner(
@@ -146,20 +147,16 @@ class Vault:
             task_runner=self._task_runner,
             task_finders=list(self._planner_work_finders.values()),
         )
-        self._closed = False
-
         self._task_runner.add_task_complete_callback(self._on_task_completed)
         self._task_runner.add_task_complete_callback(
             self._work_planner.on_task_complete
         )
-        self._task_runner.start()
-        self._work_planner.start()
 
         self._ref_folder_watcher = ReferenceFolderWatcher(
             on_folder_changed=self._on_reference_folder_fs_changed,
         )
-        self._ref_folder_watcher.start()
-        self._start_existing_folder_watches()
+        self._closed = False
+        self._started = False
 
     def ensure_ready(self):
         """Initialise the picture tagger so the planner can process work immediately.
@@ -182,6 +179,21 @@ class Vault:
                 or 0.0,
                 keep_models_in_memory=self._keep_models_in_memory,
             )
+
+    def start(self) -> None:
+        """Start background workers.
+
+        Must be called once after configuration is complete (e.g. from
+        ``Server.lifespan``).  Idempotent: subsequent calls are no-ops.
+        When ``disable_background_workers=True`` this method is a no-op.
+        """
+        if self._disable_background_workers or self._started:
+            return
+        self._task_runner.start()
+        self._work_planner.start()
+        self._ref_folder_watcher.start()
+        self._start_existing_folder_watches()
+        self._started = True
 
     def notify(self, event_type: EventType, data=None):
         """
@@ -337,18 +349,27 @@ class Vault:
         if self._closed:
             return
         self._closed = True
+        self.stop()
+
+    def stop(self) -> None:
+        """Stop background workers and release all resources.
+
+        Safe to call multiple times; subsequent calls after the first are no-ops.
+        Called automatically by ``close()``.
+        """
         with self._changed_tags_notify_lock:
             timer = self._changed_tags_flush_timer
             self._changed_tags_flush_timer = None
             self._changed_tags_pending_ids.clear()
         if timer is not None:
             timer.cancel()
-        if self._ref_folder_watcher is not None:
-            self._ref_folder_watcher.stop()
-        if self._work_planner is not None:
-            self._work_planner.stop()
-        if self._task_runner is not None:
-            self._task_runner.stop()
+        if self._started:
+            if self._ref_folder_watcher is not None:
+                self._ref_folder_watcher.stop()
+            if self._work_planner is not None:
+                self._work_planner.stop()
+            if self._task_runner is not None:
+                self._task_runner.stop()
         if not self._disable_background_workers:
             FaceExtractionTask.release_detection_models()
             ImageEmbeddingTask.release_models()
@@ -360,6 +381,7 @@ class Vault:
             self.db.close()
             del self.db
             self.db = None
+        self._started = False
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory

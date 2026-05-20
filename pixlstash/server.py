@@ -219,6 +219,7 @@ class Server:
         self._ws_clients_lock = threading.Lock()
         self._ws_loop = None
         self.vault.add_event_listener(self._handle_vault_event)
+        self.vault.start()
 
         self.auth = AuthService(
             self.vault.db,
@@ -574,6 +575,7 @@ class Server:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
         if self._server_config.get("generate_thumbnails_on_startup", True):
             await loop.run_in_executor(None, self._generate_missing_thumbnails)
+        self.vault.start()
         host = self._server_config.get("host", "127.0.0.1")
         port = self._server_config.get("port", 9537)
         scheme = "https" if self._server_config.get("require_ssl", False) else "http"
