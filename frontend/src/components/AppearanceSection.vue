@@ -1,0 +1,244 @@
+<script setup>
+import { computed, ref } from "vue";
+import { apiClient, isReadOnly } from "../utils/apiClient";
+
+const props = defineProps({
+  sidebarThumbnailSize: { type: Number, default: 32 },
+  themeMode: { type: String, default: "light" },
+  dateFormat: { type: String, default: "locale" },
+  showKeyboardHint: { type: Boolean, default: true },
+});
+
+const emit = defineEmits([
+  "update:sidebar-thumbnail-size",
+  "update:theme-mode",
+  "update:date-format",
+  "update:show-keyboard-hint",
+]);
+
+const sidebarThumbnailSizeModel = computed({
+  get: () => props.sidebarThumbnailSize ?? 32,
+  set: (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const clamped = Math.min(64, Math.max(20, parsed));
+    const snapped = Math.round(clamped / 4) * 4;
+    if (snapped === (props.sidebarThumbnailSize ?? 32)) return;
+    emit("update:sidebar-thumbnail-size", snapped);
+  },
+});
+
+const dateFormatModel = computed({
+  get: () => props.dateFormat ?? "locale",
+  set: (value) => {
+    const nextValue = value ?? "locale";
+    if (nextValue === (props.dateFormat ?? "locale")) return;
+    emit("update:date-format", nextValue);
+  },
+});
+
+const themeModeModel = computed({
+  get: () => props.themeMode ?? "light",
+  set: (value) => {
+    const nextValue = value ?? "light";
+    if (nextValue === (props.themeMode ?? "light")) return;
+    emit("update:theme-mode", nextValue);
+  },
+});
+
+const showKeyboardHintModel = computed({
+  get: () => props.showKeyboardHint ?? true,
+  set: (value) => {
+    if (value === (props.showKeyboardHint ?? true)) return;
+    emit("update:show-keyboard-hint", value);
+  },
+});
+
+const dateFormatOptions = [
+  { title: "Locale default", value: "locale" },
+  { title: "ISO (YYYY-MM-DD, 24h)", value: "iso" },
+  { title: "European (DD/MM/YYYY, 24h)", value: "eu" },
+  { title: "British (DD/MM/YYYY, AM/PM)", value: "british" },
+  { title: "American (MM/DD/YYYY, AM/PM)", value: "us" },
+  { title: "China (YYYY/MM/DD, 24h)", value: "ymd-slash" },
+  { title: "Korea (YYYY.MM.DD, 24h)", value: "ymd-dot" },
+  { title: "Japan (YYYY年MM月DD日, 24h)", value: "ymd-jp" },
+];
+
+const themeModeOptions = [
+  { title: "Light", value: "light" },
+  { title: "Dark", value: "dark" },
+];
+
+const clearingGuestSession = ref(false);
+const hasGuestSessionCookie = computed(() =>
+  document.cookie
+    .split(";")
+    .some((c) => c.trim().startsWith("guest_session_active=1")),
+);
+
+async function clearGuestSession() {
+  clearingGuestSession.value = true;
+  try {
+    await apiClient.delete("/pictures/guest-scores/session");
+  } catch (err) {
+    console.error("Failed to clear guest session:", err);
+  } finally {
+    clearingGuestSession.value = false;
+  }
+  localStorage.removeItem("guest_session_id");
+  // Reload so the in-memory guest state (guestScoreMap, guestConsentState)
+  // is fully reset and the page reflects the clean slate.
+  window.location.reload();
+}
+</script>
+
+<template>
+  <v-divider class="settings-section-divider" />
+  <div class="settings-section">
+    <div
+      class="settings-section-title"
+      title="Adjust the sidebar thumbnail size."
+    >
+      Sidebar Thumbnails
+    </div>
+    <div class="settings-slider-row">
+      <span class="settings-slider-value">
+        {{ sidebarThumbnailSizeModel }}px
+      </span>
+      <v-slider
+        v-model="sidebarThumbnailSizeModel"
+        :min="20"
+        :max="64"
+        :step="4"
+        hide-details
+        track-color="#666"
+        thumb-color="primary"
+        class="settings-slider"
+      />
+    </div>
+  </div>
+  <v-divider class="settings-section-divider" />
+  <div class="settings-section">
+    <div
+      class="settings-section-title"
+      title="Choose a light or dark theme."
+    >
+      Theme
+    </div>
+    <v-select
+      v-model="themeModeModel"
+      :items="themeModeOptions"
+      item-title="title"
+      item-value="value"
+      density="compact"
+      variant="filled"
+      class="settings-add-tag-input"
+      hide-details
+    />
+  </div>
+  <v-divider class="settings-section-divider" />
+  <div class="settings-section">
+    <div
+      class="settings-section-title"
+      title="Choose how dates are shown in the grid and overlays."
+    >
+      Date Format
+    </div>
+    <v-select
+      v-model="dateFormatModel"
+      :items="dateFormatOptions"
+      item-title="title"
+      item-value="value"
+      density="compact"
+      variant="filled"
+      class="settings-add-tag-input"
+      hide-details
+    />
+  </div>
+  <v-divider class="settings-section-divider" />
+  <div class="settings-section">
+    <v-checkbox
+      v-model="showKeyboardHintModel"
+      density="compact"
+      hide-details
+      label="Show keyboard shortcut (F1) indicator"
+    />
+  </div>
+  <template v-if="isReadOnly">
+    <v-divider class="settings-section-divider" />
+    <div class="settings-section">
+      <div class="settings-section-title">Privacy</div>
+      <div class="settings-section-desc">
+        If you previously accepted the ratings cookie, your scores
+        are remembered across visits. Clicking below clears the
+        cookie so your next visit starts fresh with no scores
+        retrieved.
+      </div>
+      <v-btn
+        variant="tonal"
+        size="small"
+        color="default"
+        style="margin-top: 10px"
+        :loading="clearingGuestSession"
+        :disabled="!hasGuestSessionCookie"
+        @click="clearGuestSession"
+      >
+        Clear ratings cookie
+      </v-btn>
+      <div
+        v-if="!hasGuestSessionCookie"
+        class="settings-section-desc"
+        style="margin-top: 6px; opacity: 0.6"
+      >
+        No ratings cookie is currently set.
+      </div>
+    </div>
+  </template>
+</template>
+
+<style scoped>
+.settings-section-divider {
+  margin: 4px 0 8px;
+}
+
+.settings-section {
+  display: flex;
+  line-height: 1;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-section-title {
+  font-weight: 600;
+}
+
+.settings-section-desc {
+  font-size: 0.92em;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.settings-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding-right: 8px;
+}
+
+.settings-slider-value {
+  min-width: 64px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.settings-slider {
+  flex: 1 1 auto;
+  margin-right: 6px;
+  overflow: visible;
+}
+
+.settings-add-tag-input {
+  flex: 1 1 auto;
+}
+</style>
