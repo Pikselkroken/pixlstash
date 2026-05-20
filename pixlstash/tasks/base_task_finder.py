@@ -111,13 +111,16 @@ class SimpleMissingFinder(BaseTaskFinder, ABC):
         self._db = database
 
     @abstractmethod
-    def _batch_size(self) -> int: ...
+    def _batch_size(self) -> int:
+        raise NotImplementedError
 
     @abstractmethod
-    def _fetch_candidates(self, session, limit: int) -> list: ...
+    def _fetch_candidates(self, session, limit: int) -> list:
+        raise NotImplementedError
 
     @abstractmethod
-    def _create_task(self, pictures: list): ...
+    def _create_task(self, pictures: list):
+        raise NotImplementedError
 
     def _guard(self) -> bool:
         """Return False to skip this planning cycle. Override to gate on external state."""
