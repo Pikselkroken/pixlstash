@@ -132,7 +132,7 @@ def create_router(server) -> APIRouter:
             "single-round-trip equivalent of calling tag_predictions/delete followed "
             "by DELETE tags — it avoids the intermediate state where predictions are "
             "gone but tags still exist, which otherwise tricks the background "
-            "MissingTagPredictionFinder into running a wasted inference pass."
+            "MissingTagFinder into running a wasted inference pass."
         ),
     )
     def reset_picture_tags(id: int):

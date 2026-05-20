@@ -1,5 +1,9 @@
 import threading
 from abc import ABC, ABCMeta, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pixlstash.tasks.task_type import TaskType
 
 
 class TaskFinderRegistry(ABCMeta):
@@ -63,8 +67,8 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
     def max_inflight_tasks(self) -> int:
         return 1
 
-    def depends_on(self) -> list[str]:
-        """Return names of finders whose inflight tasks must reach zero before this finder runs.
+    def depends_on(self) -> "list[TaskType]":
+        """Return TaskType values of finders whose in-flight tasks must reach zero before this finder runs.
 
         When any listed finder has in-flight tasks the WorkPlanner skips this
         finder for that planning cycle, so heavyweight upstream work is never

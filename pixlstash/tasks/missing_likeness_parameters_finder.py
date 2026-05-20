@@ -6,6 +6,7 @@ from pixlstash.worker_config import LIKENESS_PARAMETERS_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .likeness_parameters_task import LikenessParametersTask
 from .quality_task import QualityTask
+from .task_type import TaskType
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,12 +27,12 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
     def finder_name(self) -> str:
         return "MissingLikenessParametersFinder"
 
-    def depends_on(self) -> list[str]:
+    def depends_on(self) -> list[TaskType]:
         # Quality metrics are used as likeness parameters (brightness, contrast,
         # etc.).  Wait for all inflight quality tasks to drain before starting
         # parameter batches so every picture gets its real quality values written
         # atomically rather than sentinel-filled and needing a reset later.
-        return ["MissingQualityFinder"]
+        return [TaskType.QUALITY]
 
     def max_inflight_tasks(self) -> int:
         return LIKENESS_PARAMETERS_MAX_INFLIGHT

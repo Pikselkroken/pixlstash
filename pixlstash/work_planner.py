@@ -1,6 +1,10 @@
 import threading
+from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
+
+if TYPE_CHECKING:
+    from pixlstash.tasks.task_type import TaskType
 
 
 logger = get_logger(__name__)
@@ -112,11 +116,16 @@ class WorkPlanner:
             ),
         }
 
-    def __init__(self, task_runner, task_finders: list):
+    def __init__(self, task_runner, task_finders: "dict[TaskType, object]"):
         self._task_runner = task_runner
-        self._task_finders = task_finders or []
+        self._task_finders = list(task_finders.values())
         self._task_finders_by_name = {
             finder.finder_name(): finder for finder in self._task_finders
+        }
+        # Maps TaskType → finder_name string for resolving typed depends_on() values.
+        self._finder_name_by_task_type: dict = {
+            task_type: finder.finder_name()
+            for task_type, finder in task_finders.items()
         }
 
         self._stop = threading.Event()
@@ -236,11 +245,15 @@ class WorkPlanner:
 
             blocking_finders = finder.depends_on()
             if blocking_finders:
+                blocking_names = [
+                    self._finder_name_by_task_type.get(tt, str(tt))
+                    for tt in blocking_finders
+                ]
                 with self._lock:
                     if any(
                         self._inflight_by_finder.get(name, 0) > 0
                         or not self._finder_exhausted.get(name, False)
-                        for name in blocking_finders
+                        for name in blocking_names
                     ):
                         continue
 

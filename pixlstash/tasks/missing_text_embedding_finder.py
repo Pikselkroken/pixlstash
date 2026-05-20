@@ -6,6 +6,7 @@ from sqlalchemy.orm import load_only, selectinload
 from pixlstash.db_models import Character, Picture
 
 from .base_task_finder import SimpleMissingFinder
+from .task_type import TaskType
 from .text_embedding_task import TextEmbeddingTask
 
 
@@ -25,14 +26,14 @@ class MissingTextEmbeddingFinder(SimpleMissingFinder):
     def finder_name(self) -> str:
         return "MissingTextEmbeddingFinder"
 
-    def depends_on(self) -> list[str]:
+    def depends_on(self) -> list[TaskType]:
         # Defer text embeddings until face extraction, tagging and description
         # generation have all drained.  Face extraction has GPU priority;
         # tags and descriptions feed into the embedded text so must complete first.
         return [
-            "MissingFaceExtractionFinder",
-            "MissingTagFinder",
-            "MissingDescriptionFinder",
+            TaskType.FACE_EXTRACTION,
+            TaskType.TAGGER,
+            TaskType.DESCRIPTION,
         ]
 
     def _guard(self) -> bool:

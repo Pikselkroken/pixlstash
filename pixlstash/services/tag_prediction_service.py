@@ -14,7 +14,9 @@ from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import sanitise_tag
-from pixlstash.utils.service.tag_prediction_utils import recompute_anomaly_tag_uncertainty
+from pixlstash.utils.service.tag_prediction_utils import (
+    recompute_anomaly_tag_uncertainty,
+)
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault

@@ -145,7 +145,7 @@ class Vault:
         )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
-            task_finders=list(self._planner_work_finders.values()),
+            task_finders=self._planner_work_finders,
         )
         self._task_runner.add_task_complete_callback(self._on_task_completed)
         self._task_runner.add_task_complete_callback(
@@ -437,7 +437,9 @@ class Vault:
         return tagger.meta_path if tagger is not None else None
 
     def get_pixlstash_acceptance_threshold(self) -> float:
-        from pixlstash.tagger_plugins.pixlstash_tagger import PIXLSTASH_TAGGER_DEFAULT_THRESHOLD
+        from pixlstash.tagger_plugins.pixlstash_tagger import (
+            PIXLSTASH_TAGGER_DEFAULT_THRESHOLD,
+        )
 
         bias = self._pixlstash_tagger_threshold_offset or 0.0
         return max(0.01, float(PIXLSTASH_TAGGER_DEFAULT_THRESHOLD) + bias)

@@ -164,8 +164,8 @@ class TaggingWorkflow:
 
         Unlike :meth:`tag_images`, this method bypasses the normal threshold
         so that all labels with confidence ≥ *min_confidence* are returned.
-        Used by :class:`~pixlstash.tasks.tag_prediction_task.TagPredictionTask`
-        to populate the ``TagPrediction`` table.
+        Used by :class:`~pixlstash.tasks.tag_task.TagTask` to populate
+        the ``TagPrediction`` table inline during the tagging pass.
 
         Args:
             image_paths: Sequence of absolute image/video file paths.
@@ -217,8 +217,8 @@ class TaggingWorkflow:
 
         Mirrors :meth:`score_images_custom` but operates on pre-loaded face
         crops at quality-crop resolution.  Used by
-        :class:`~pixlstash.tasks.tag_prediction_task.TagPredictionTask` to
-        give quality-crop-detected tags a real confidence score.
+        :class:`~pixlstash.tasks.tag_task.TagTask` to give
+        quality-crop-detected tags a real confidence score.
 
         Args:
             items: List of ``(key, PIL.Image)`` pairs already cropped.

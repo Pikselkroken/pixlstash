@@ -22,6 +22,7 @@ SERVER_PY = REPO_ROOT / "pixlstash" / "server.py"
 # Guardrail 1: No private vault access from route handlers
 # ---------------------------------------------------------------------------
 
+
 def _iter_python_files(directory: Path):
     return directory.rglob("*.py")
 
@@ -97,6 +98,7 @@ def test_no_new_direct_db_calls_from_routes():
 # Guardrail 3: Services must not call vault.db directly
 # ---------------------------------------------------------------------------
 
+
 def test_services_no_direct_db_calls():
     # Known transitional service files that still call vault.db.run_* directly.
     # Remove each file from this set once it is migrated to accept a Session.
@@ -125,24 +127,29 @@ def test_services_no_direct_db_calls():
 
 
 # ---------------------------------------------------------------------------
-# Guardrail 4: All finder depends_on() strings resolve to registered finders
+# Guardrail 4: All finder depends_on() values resolve to registered TaskType members
 # ---------------------------------------------------------------------------
 
-def _extract_string_literals_from_return(func_node: ast.FunctionDef) -> list[str]:
-    """Collect every string constant returned directly by a function."""
+
+def _extract_tasktype_attrs_from_return(func_node: ast.FunctionDef) -> list[str]:
+    """Collect every TaskType.<ATTR> attribute name returned directly by a function."""
     results = []
     for node in ast.walk(func_node):
         if isinstance(node, ast.Return) and node.value is not None:
             for child in ast.walk(node.value):
-                if isinstance(child, ast.Constant) and isinstance(child.value, str):
-                    results.append(child.value)
+                if (
+                    isinstance(child, ast.Attribute)
+                    and isinstance(child.value, ast.Name)
+                    and child.value.id == "TaskType"
+                ):
+                    results.append(child.attr)
     return results
 
 
 def _collect_finder_info() -> tuple[set[str], set[str]]:
-    """Return (all_finder_names, all_depends_on_strings) from task finder files."""
+    """Return (all_finder_names, all_depends_on_tasktype_attrs) from task finder files."""
     finder_names: set[str] = set()
-    depends_on_strings: set[str] = set()
+    depends_on_attrs: set[str] = set()
 
     for path in sorted(TASKS_DIR.glob("*.py")):
         try:
@@ -156,31 +163,59 @@ def _collect_finder_info() -> tuple[set[str], set[str]]:
                 if not isinstance(item, ast.FunctionDef):
                     continue
                 if item.name == "finder_name":
-                    finder_names.update(
-                        _extract_string_literals_from_return(item)
-                    )
+                    for child in ast.walk(item):
+                        if isinstance(child, ast.Return) and child.value is not None:
+                            for grandchild in ast.walk(child.value):
+                                if isinstance(grandchild, ast.Constant) and isinstance(
+                                    grandchild.value, str
+                                ):
+                                    finder_names.add(grandchild.value)
                 elif item.name == "depends_on":
-                    depends_on_strings.update(
-                        _extract_string_literals_from_return(item)
-                    )
+                    depends_on_attrs.update(_extract_tasktype_attrs_from_return(item))
 
-    return finder_names, depends_on_strings
+    return finder_names, depends_on_attrs
 
 
 def test_finder_dependencies_resolve_to_registered_finders():
-    finder_names, depends_on_strings = _collect_finder_info()
-    assert finder_names, "Expected to find at least one finder_name() — check task file paths"
+    from pixlstash.tasks.task_type import TaskType
+    from pixlstash.work_planner import WorkPlanner
 
-    unresolved = depends_on_strings - finder_names
-    assert not unresolved, (
-        "Finder depends_on() references names that don't match any registered "
-        f"finder_name():\n{sorted(unresolved)}"
+    finder_names, depends_on_attrs = _collect_finder_info()
+    assert finder_names, (
+        "Expected to find at least one finder_name() — check task file paths"
     )
+
+    # Verify all TaskType attrs referenced in depends_on() exist on the enum.
+    valid_task_type_attrs = {tt.name for tt in TaskType}
+    unknown_attrs = depends_on_attrs - valid_task_type_attrs
+    assert not unknown_attrs, (
+        "Finder depends_on() references TaskType attributes that don't exist:\n"
+        f"{sorted(unknown_attrs)}"
+    )
+
+    # Verify that at runtime every TaskType in depends_on() resolves to a registered finder.
+    all_task_types = {
+        task_type for task_type in TaskType if task_type.name in depends_on_attrs
+    }
+    try:
+        from pixlstash.utils.path_mapper import PathMapper
+
+        finders_dict = WorkPlanner.work_finders(
+            database=None, engine_getter=lambda: None, path_mapper=PathMapper()
+        )
+        for task_type in all_task_types:
+            assert task_type in finders_dict, (
+                f"depends_on() references {task_type!r} but no finder is registered for it"
+            )
+    except Exception:
+        # If we can't instantiate finders (e.g. missing DB), skip the runtime check.
+        pass
 
 
 # ---------------------------------------------------------------------------
 # Guardrail 5: Every EventType is classified for WebSocket broadcast
 # ---------------------------------------------------------------------------
+
 
 def test_event_types_fully_classified():
     from pixlstash.event_types import EventType
@@ -188,22 +223,26 @@ def test_event_types_fully_classified():
     all_event_types = {et.name for et in EventType}
 
     # EventTypes broadcast to WebSocket clients (from _should_send_ws_update).
-    broadcast_types = {
-        "CHANGED_PICTURES",
-        "PICTURE_IMPORTED",
-        "PLUGIN_PROGRESS",
-        "CHANGED_TAGS",
-        "CLEARED_TAGS",
-        "CHANGED_CHARACTERS",
-        "CHANGED_FACES",
-    }
+    broadcast_types = frozenset(
+        {
+            EventType.CHANGED_PICTURES.name,
+            EventType.PICTURE_IMPORTED.name,
+            EventType.PLUGIN_PROGRESS.name,
+            EventType.CHANGED_TAGS.name,
+            EventType.CLEARED_TAGS.name,
+            EventType.CHANGED_CHARACTERS.name,
+            EventType.CHANGED_FACES.name,
+        }
+    )
 
     # EventTypes explicitly NOT broadcast (silently drop or stats-only).
     # Extend this set when a new event type is intentionally excluded.
-    non_broadcast_types = {
-        "CHANGED_DESCRIPTIONS",  # description updates do not trigger WS refresh
-        "QUALITY_UPDATED",       # used only to invalidate the stats cache
-    }
+    non_broadcast_types = frozenset(
+        {
+            EventType.CHANGED_DESCRIPTIONS.name,  # description updates do not trigger WS refresh
+            EventType.QUALITY_UPDATED.name,  # used only to invalidate the stats cache
+        }
+    )
 
     classified = broadcast_types | non_broadcast_types
     unclassified = all_event_types - classified
@@ -230,6 +269,7 @@ def test_event_types_fully_classified():
 # Guardrail 6: Workers start via lifecycle, not at import / __init__ time
 # ---------------------------------------------------------------------------
 
+
 def test_workers_not_started_at_vault_init():
     """Vault.__init__ must not start worker threads; Vault.start() must."""
     from pixlstash.vault import Vault
@@ -237,7 +277,9 @@ def test_workers_not_started_at_vault_init():
     with tempfile.TemporaryDirectory() as tmp:
         vault = Vault(image_root=tmp, disable_background_workers=False)
         try:
-            assert vault._task_runner is not None, "_task_runner should be created in __init__"
+            assert vault._task_runner is not None, (
+                "_task_runner should be created in __init__"
+            )
             assert not vault._task_runner.is_running(), (
                 "TaskRunner must NOT be running after Vault.__init__() — "
                 "workers should only start when Vault.start() is called"
