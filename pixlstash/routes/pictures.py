@@ -30,13 +30,8 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import (
-    Integer,
-    and_,
     case,
-    cast,
     delete,
-    desc,
-    exists,
     func,
     or_,
     text,
@@ -56,7 +51,6 @@ from pixlstash.db_models import (
     ReferenceFolder,
     SortMechanism,
     Tag,
-    TagPrediction,
 )
 from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user import User
@@ -85,6 +79,14 @@ from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
 from pixlstash.utils.watermark import apply_watermark, get_watermark_bytes
 from pixlstash.tasks import TaskType
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
+from pixlstash.services._filter_helpers import (
+    collect_set_filter_ids,
+    fetch_set_candidate_ids,
+    normalize_set_mode,
+    project_membership_exists_clause,
+    project_unassigned_clause,
+)
+from pixlstash.services.picture_stats import PictureStatsParams, compute_picture_stats
 
 logger = get_logger(__name__)
 
@@ -174,115 +176,14 @@ def _fetch_hidden_picture_ids(server, request: Request, picture_ids: list[int]):
     )
 
 
-def _project_membership_exists_clause(project_id: int, picture_model=Picture):
-    return exists(
-        select(PictureProjectMember.picture_id).where(
-            PictureProjectMember.picture_id == picture_model.id,
-            PictureProjectMember.project_id == project_id,
-        )
-    )
-
-
-def _project_unassigned_clause(picture_model=Picture):
-    return ~exists(
-        select(PictureProjectMember.picture_id).where(
-            PictureProjectMember.picture_id == picture_model.id
-        )
-    )
-
-
-def _normalize_set_mode(value: str | None) -> str:
-    mode = (value or "union").strip().lower()
-    if mode not in {"union", "intersection", "difference", "xor"}:
-        raise HTTPException(status_code=400, detail="Invalid set_mode")
-    return mode
-
-
-def _collect_set_filter_ids(
-    *,
-    set_id_value: int | str | None,
-    set_ids_values: list[int | str] | None,
-) -> list[int]:
-    raw_values: list[int | str] = []
-    if set_id_value is not None and str(set_id_value).strip() != "":
-        raw_values.append(set_id_value)
-    if set_ids_values:
-        raw_values.extend(set_ids_values)
-
-    normalized: list[int] = []
-    seen: set[int] = set()
-    for raw in raw_values:
-        try:
-            parsed = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if parsed <= 0 or parsed in seen:
-            continue
-        seen.add(parsed)
-        normalized.append(parsed)
-    return normalized
-
-
-def _fetch_set_candidate_ids(
-    session: Session,
-    *,
-    set_ids: list[int],
-    set_mode: str,
-    deleted_only: bool,
-) -> set[int]:
-    if not set_ids:
-        return set()
-
-    rows = session.exec(
-        select(PictureSetMember.set_id, PictureSetMember.picture_id)
-        .join(Picture, Picture.id == PictureSetMember.picture_id)
-        .where(PictureSetMember.set_id.in_(set_ids))
-        .where(
-            Picture.deleted.is_(True) if deleted_only else Picture.deleted.is_(False)
-        )
-    ).all()
-
-    members_by_set: dict[int, set[int]] = {sid: set() for sid in set_ids}
-    for set_id_row, picture_id_row in rows:
-        if picture_id_row is None:
-            continue
-        members_by_set.setdefault(int(set_id_row), set()).add(int(picture_id_row))
-
-    if set_mode == "intersection":
-        intersection: set[int] | None = None
-        for sid in set_ids:
-            current = members_by_set.get(sid, set())
-            if intersection is None:
-                intersection = set(current)
-            else:
-                intersection &= current
-        return intersection or set()
-
-    if set_mode == "difference":
-        if not set_ids:
-            return set()
-        first_set = members_by_set.get(set_ids[0], set())
-        rest: set[int] = set()
-        for sid in set_ids[1:]:
-            rest |= members_by_set.get(sid, set())
-        return first_set - rest
-
-    if set_mode == "xor":
-        xor_union: set[int] = set()
-        for sid in set_ids:
-            xor_union |= members_by_set.get(sid, set())
-        xor_intersection: set[int] | None = None
-        for sid in set_ids:
-            cur = members_by_set.get(sid, set())
-            xor_intersection = (
-                set(cur) if xor_intersection is None else xor_intersection & cur
-            )
-        return xor_union - (xor_intersection or set())
-
-    union_ids: set[int] = set()
-    for sid in set_ids:
-        union_ids |= members_by_set.get(sid, set())
-    return union_ids
+# These helpers were extracted to pixlstash/services/_filter_helpers.py.
+# The private-prefixed aliases below keep existing callers in this file working
+# without requiring a bulk rename in the same changeset.
+_project_membership_exists_clause = project_membership_exists_clause
+_project_unassigned_clause = project_unassigned_clause
+_normalize_set_mode = normalize_set_mode
+_collect_set_filter_ids = collect_set_filter_ids
+_fetch_set_candidate_ids = fetch_set_candidate_ids
 
 
 def _create_picture_imports(
@@ -4951,492 +4852,32 @@ def create_router(server) -> APIRouter:
                 detail="Invalid max_score: must be an integer",
             ) from exc
 
-        def compute(session):
-            def _empty():
-                return {
-                    "total": 0,
-                    "total_tags": 0,
-                    "tagged": 0,
-                    "untagged": 0,
-                    "avg_tags_per_image": 0.0,
-                    "top_tags": [],
-                    "top_cooccurrences": [],
-                    "confidence_histogram": [],
-                    "regular_tags": [],
-                    "score_distribution": [],
-                    "smart_score_distribution": [],
-                    "resolution_distribution": [],
-                }
-
-            deleted_clause = (
-                Picture.deleted.is_(True)
-                if only_deleted
-                else Picture.deleted.is_(False)
-            )
-            pic_q = select(Picture.id).where(deleted_clause)
-
-            if set_filter_ids:
-                candidate_ids = _fetch_set_candidate_ids(
-                    session,
-                    set_ids=set_filter_ids,
-                    set_mode=set_mode,
-                    deleted_only=only_deleted,
-                )
-                if not candidate_ids:
-                    return _empty()
-                pic_q = pic_q.where(Picture.id.in_(candidate_ids))
-            elif character_id_list:
-                rows = session.exec(
-                    select(Face.character_id, Face.picture_id).where(
-                        Face.character_id.in_(character_id_list)
-                    )
-                ).all()
-                members_by_char: dict[int, set[int]] = {
-                    cid: set() for cid in character_id_list
-                }
-                for cid, pid in rows:
-                    members_by_char.setdefault(int(cid), set()).add(int(pid))
-
-                candidate_ids: set[int]
-                if character_mode == "intersection":
-                    intersection: set[int] | None = None
-                    for cid in character_id_list:
-                        current = members_by_char.get(cid, set())
-                        intersection = (
-                            set(current)
-                            if intersection is None
-                            else intersection & current
-                        )
-                    candidate_ids = intersection or set()
-                elif character_mode == "difference":
-                    first = members_by_char.get(character_id_list[0], set())
-                    rest: set[int] = set()
-                    for cid in character_id_list[1:]:
-                        rest |= members_by_char.get(cid, set())
-                    candidate_ids = first - rest
-                elif character_mode == "xor":
-                    xor_union: set[int] = set()
-                    for cid in character_id_list:
-                        xor_union |= members_by_char.get(cid, set())
-                    xor_intersection: set[int] | None = None
-                    for cid in character_id_list:
-                        current = members_by_char.get(cid, set())
-                        xor_intersection = (
-                            set(current)
-                            if xor_intersection is None
-                            else xor_intersection & current
-                        )
-                    candidate_ids = xor_union - (xor_intersection or set())
-                else:
-                    candidate_ids = set()
-                    for cid in character_id_list:
-                        candidate_ids |= members_by_char.get(cid, set())
-
-                if not candidate_ids:
-                    return _empty()
-                pic_q = pic_q.where(Picture.id.in_(candidate_ids))
-            elif character_id_raw == "UNASSIGNED":
-                unassigned_conditions = Picture.build_unassigned_conditions(
-                    enforce_stack_assignment=True,
-                )
-                pic_q = pic_q.where(*unassigned_conditions)
-            elif character_id_raw is not None and character_id_raw not in ("", "ALL"):
-                try:
-                    char_id_int = int(character_id_raw)
-                except (TypeError, ValueError):
-                    raise HTTPException(status_code=400, detail="Invalid character_id")
-                pic_q = pic_q.where(
-                    exists(
-                        select(Face.id).where(
-                            Face.picture_id == Picture.id,
-                            Face.character_id == char_id_int,
-                        )
-                    )
-                )
-
-            if project_id_raw == "UNASSIGNED":
-                pic_q = pic_q.where(_project_unassigned_clause(Picture))
-            elif project_id_raw is not None:
-                try:
-                    pid_int = int(project_id_raw)
-                except (TypeError, ValueError):
-                    raise HTTPException(status_code=400, detail="Invalid project_id")
-                pic_q = pic_q.where(_project_membership_exists_clause(pid_int, Picture))
-
-            if format_filter:
-                pic_q = pic_q.where(
-                    Picture.format.in_([f.upper() for f in format_filter])
-                )
-            if min_score is not None:
-                pic_q = pic_q.where(Picture.score >= min_score)
-            if max_score is not None:
-                pic_q = pic_q.where(Picture.score <= max_score)
-
-            if smart_score_bucket == "unscored":
-                pic_q = pic_q.where(Picture.smart_score.is_(None))
-            elif smart_score_bucket == "1-2":
-                pic_q = pic_q.where(
-                    Picture.smart_score.is_not(None), Picture.smart_score < 2.0
-                )
-            elif smart_score_bucket == "2-3":
-                pic_q = pic_q.where(
-                    Picture.smart_score >= 2.0, Picture.smart_score < 3.0
-                )
-            elif smart_score_bucket == "3-4":
-                pic_q = pic_q.where(
-                    Picture.smart_score >= 3.0, Picture.smart_score < 4.0
-                )
-            elif smart_score_bucket == "4-5":
-                pic_q = pic_q.where(Picture.smart_score >= 4.0)
-
-            if resolution_bucket == "unknown":
-                pic_q = pic_q.where(
-                    or_(Picture.width.is_(None), Picture.height.is_(None))
-                )
-            elif resolution_bucket == "lt1mp":
-                pic_q = pic_q.where(
-                    Picture.width.is_not(None),
-                    Picture.height.is_not(None),
-                    Picture.width * Picture.height < 1_000_000,
-                )
-            elif resolution_bucket == "1-4mp":
-                pic_q = pic_q.where(
-                    Picture.width.is_not(None),
-                    Picture.height.is_not(None),
-                    Picture.width * Picture.height >= 1_000_000,
-                    Picture.width * Picture.height < 4_000_000,
-                )
-            elif resolution_bucket == "4-8mp":
-                pic_q = pic_q.where(
-                    Picture.width.is_not(None),
-                    Picture.height.is_not(None),
-                    Picture.width * Picture.height >= 4_000_000,
-                    Picture.width * Picture.height < 8_000_000,
-                )
-            elif resolution_bucket == "8-16mp":
-                pic_q = pic_q.where(
-                    Picture.width.is_not(None),
-                    Picture.height.is_not(None),
-                    Picture.width * Picture.height >= 8_000_000,
-                    Picture.width * Picture.height < 16_000_000,
-                )
-            elif resolution_bucket == "16plus":
-                pic_q = pic_q.where(
-                    Picture.width.is_not(None),
-                    Picture.height.is_not(None),
-                    Picture.width * Picture.height >= 16_000_000,
-                )
-
-            if file_path_prefix:
-                pic_q = pic_q.where(Picture.file_path.startswith(file_path_prefix))
-            if import_source_folder:
-                pic_q = pic_q.where(
-                    Picture.import_source_folder == import_source_folder
-                )
-            for tag in tags_filter:
-                pic_q = pic_q.where(
-                    exists(
-                        select(Tag.id).where(
-                            Tag.picture_id == Picture.id,
-                            Tag.tag == tag,
-                        )
-                    )
-                )
-            for tag in rejected_tags:
-                pic_q = pic_q.where(
-                    ~exists(
-                        select(Tag.id).where(
-                            Tag.picture_id == Picture.id,
-                            Tag.tag == tag,
-                        )
-                    )
-                )
-
-            if face_filter == "with_face":
-                pic_q = pic_q.where(
-                    exists(
-                        select(Face.id).where(
-                            Face.picture_id == Picture.id,
-                            Face.face_index != -1,
-                        )
-                    )
-                )
-            elif face_filter == "without_face":
-                pic_q = pic_q.where(
-                    ~exists(
-                        select(Face.id).where(
-                            Face.picture_id == Picture.id,
-                            Face.face_index != -1,
-                        )
-                    )
-                )
-            for i, entry in enumerate(confidence_above):
-                ca_tag, ca_thresh = entry.rsplit(":", 1)
-                pic_q = pic_q.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                    ).bindparams(
-                        **{f"ca_tag_{i}": ca_tag, f"ca_thresh_{i}": float(ca_thresh)}
-                    )
-                )
-            for i, entry in enumerate(confidence_below):
-                cb_tag, cb_thresh = entry.rsplit(":", 1)
-                pic_q = pic_q.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
-                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
-                    ).bindparams(
-                        **{f"cb_tag_{i}": cb_tag, f"cb_thresh_{i}": float(cb_thresh)}
-                    )
-                )
-
-            pic_subq = pic_q.subquery()
-
-            total = session.exec(select(func.count()).select_from(pic_subq)).one()
-
-            tagged_subq = (
-                select(Tag.picture_id)
-                .where(
-                    Tag.picture_id.in_(select(pic_subq.c.id)),
-                    Tag.tag != TAG_EMPTY_SENTINEL,
-                    Tag.tag.is_not(None),
-                )
-                .distinct()
-                .subquery()
-            )
-            tagged = session.exec(select(func.count()).select_from(tagged_subq)).one()
-
-            tag_count_subq = (
-                select(
-                    Tag.picture_id,
-                    func.count(Tag.id).label("cnt"),
-                )
-                .where(
-                    Tag.picture_id.in_(select(pic_subq.c.id)),
-                    Tag.tag != TAG_EMPTY_SENTINEL,
-                    Tag.tag.is_not(None),
-                )
-                .group_by(Tag.picture_id)
-                .subquery()
-            )
-            avg_row = session.exec(select(func.avg(tag_count_subq.c.cnt))).one()
-            avg_tags = float(avg_row) if avg_row is not None else 0.0
-            total_tags_row = session.exec(select(func.sum(tag_count_subq.c.cnt))).one()
-            total_tags = int(total_tags_row) if total_tags_row is not None else 0
-
-            top_tags_q = select(Tag.tag, func.count(Tag.id).label("cnt")).where(
-                Tag.picture_id.in_(select(pic_subq.c.id)),
-                Tag.tag != TAG_EMPTY_SENTINEL,
-                Tag.tag.is_not(None),
-            )
-            if penalised_tag_set:
-                top_tags_q = top_tags_q.where(
-                    func.lower(Tag.tag).in_(penalised_tag_set)
-                )
-            top_tags_rows = session.exec(
-                top_tags_q.group_by(Tag.tag).order_by(desc("cnt")).limit(20)
-            ).all()
-            top_tags = [{"tag": row[0], "count": row[1]} for row in top_tags_rows]
-
-            # ── Co-occurrences (expensive: only when requested) ───────────────
-            if "cooc" in include:
-                t1 = Tag.__table__.alias("t1")
-                t2 = Tag.__table__.alias("t2")
-                cooc_base = (
-                    select(
-                        t1.c.tag,
-                        t2.c.tag,
-                        func.count().label("cnt"),
-                    )
-                    .select_from(
-                        t1.join(
-                            t2,
-                            and_(
-                                t1.c.picture_id == t2.c.picture_id,
-                                t1.c.tag < t2.c.tag,
-                            ),
-                        )
-                    )
-                    .where(
-                        t1.c.picture_id.in_(select(pic_subq.c.id)),
-                        t1.c.tag != TAG_EMPTY_SENTINEL,
-                        t2.c.tag != TAG_EMPTY_SENTINEL,
-                    )
-                )
-                if penalised_tag_set:
-                    if penalised_cooc_both:
-                        cooc_base = cooc_base.where(
-                            and_(
-                                func.lower(t1.c.tag).in_(penalised_tag_set),
-                                func.lower(t2.c.tag).in_(penalised_tag_set),
-                            )
-                        )
-                    else:
-                        cooc_base = cooc_base.where(
-                            or_(
-                                func.lower(t1.c.tag).in_(penalised_tag_set),
-                                func.lower(t2.c.tag).in_(penalised_tag_set),
-                            )
-                        )
-                cooc_rows = session.execute(
-                    cooc_base.group_by(t1.c.tag, t2.c.tag)
-                    .order_by(desc("cnt"))
-                    .limit(10)
-                ).fetchall()
-                top_cooccurrences = [
-                    {"tags": [row[0], row[1]], "count": row[2]} for row in cooc_rows
-                ]
-            else:
-                top_cooccurrences = []
-
-            # ── Confidence histogram + tag lists (only when requested) ────────
-            if "conf" in include:
-                conf_raw_expr = cast(TagPrediction.confidence * 5, Integer)
-                conf_bucket_expr = case(
-                    (conf_raw_expr >= 5, 4),
-                    else_=conf_raw_expr,
-                )
-                conf_q = select(
-                    conf_bucket_expr.label("bkt"), func.count().label("n")
-                ).where(TagPrediction.picture_id.in_(select(pic_subq.c.id)))
-                if confidence_tag:
-                    conf_q = conf_q.where(TagPrediction.tag == confidence_tag)
-                ch_rows = session.execute(
-                    conf_q.group_by(conf_bucket_expr).order_by(conf_bucket_expr)
-                ).fetchall()
-                ch_map = {int(row[0]): int(row[1]) for row in ch_rows}
-                if confidence_tag:
-                    # Pictures with the tag label applied but no prediction row are
-                    # treated as having an implicit confidence of 0.0 → bucket 0
-                    labelled_no_pred_count = session.execute(
-                        select(func.count())
-                        .select_from(Tag)
-                        .where(
-                            Tag.picture_id.in_(select(pic_subq.c.id)),
-                            Tag.tag == confidence_tag,
-                            ~Tag.picture_id.in_(
-                                select(TagPrediction.picture_id).where(
-                                    TagPrediction.tag == confidence_tag
-                                )
-                            ),
-                        )
-                    ).scalar_one()
-                    ch_map[0] = ch_map.get(0, 0) + labelled_no_pred_count
-                confidence_histogram = [
-                    {"label": f"{b * 20}–{b * 20 + 20}%", "count": ch_map.get(b, 0)}
-                    for b in range(5)
-                ]
-                reg_tag_rows = session.execute(
-                    select(Tag.tag)
-                    .where(
-                        Tag.picture_id.in_(select(pic_subq.c.id)),
-                        Tag.tag != TAG_EMPTY_SENTINEL,
-                        Tag.tag.is_not(None),
-                    )
-                    .distinct()
-                    .order_by(Tag.tag)
-                ).fetchall()
-                regular_tags = [row[0] for row in reg_tag_rows]
-            else:
-                confidence_histogram = []
-                regular_tags = []
-
-            # ── Picture stats (only when requested) ─────────────────────────
-            if "picture" in include:
-                # Score distribution (null=unscored, 1-5)
-                score_rows = session.execute(
-                    select(Picture.score, func.count().label("n"))
-                    .where(Picture.id.in_(select(pic_subq.c.id)))
-                    .group_by(Picture.score)
-                    .order_by(Picture.score)
-                ).fetchall()
-                score_map = {
-                    (row[0] if row[0] is not None else -1): int(row[1])
-                    for row in score_rows
-                }
-                score_distribution = [
-                    {"label": "Unscored", "count": score_map.get(-1, 0)},
-                    {"label": "1", "count": score_map.get(1, 0)},
-                    {"label": "2", "count": score_map.get(2, 0)},
-                    {"label": "3", "count": score_map.get(3, 0)},
-                    {"label": "4", "count": score_map.get(4, 0)},
-                    {"label": "5", "count": score_map.get(5, 0)},
-                ]
-
-                # Smart score distribution (null=unscored, 1-2, 2-3, 3-4, 4-5)
-                ss_bkt = case(
-                    (Picture.smart_score.is_(None), -1),
-                    (Picture.smart_score < 2, 0),
-                    (Picture.smart_score < 3, 1),
-                    (Picture.smart_score < 4, 2),
-                    else_=3,
-                )
-                ss_rows = session.execute(
-                    select(ss_bkt.label("bkt"), func.count().label("n"))
-                    .where(Picture.id.in_(select(pic_subq.c.id)))
-                    .group_by(ss_bkt)
-                    .order_by(ss_bkt)
-                ).fetchall()
-                ss_map = {int(row[0]): int(row[1]) for row in ss_rows}
-                smart_score_distribution = [
-                    {"label": "Unscored", "count": ss_map.get(-1, 0)},
-                    {"label": "1–2", "count": ss_map.get(0, 0)},
-                    {"label": "2–3", "count": ss_map.get(1, 0)},
-                    {"label": "3–4", "count": ss_map.get(2, 0)},
-                    {"label": "4–5", "count": ss_map.get(3, 0)},
-                ]
-
-                # Resolution distribution (null + <1MP, 1–4MP, 4–8MP, 8–16MP, 16+MP)
-                res_bkt = case(
-                    (
-                        or_(Picture.width.is_(None), Picture.height.is_(None)),
-                        -1,
-                    ),
-                    (Picture.width * Picture.height < 1_000_000, 0),
-                    (Picture.width * Picture.height < 4_000_000, 1),
-                    (Picture.width * Picture.height < 8_000_000, 2),
-                    (Picture.width * Picture.height < 16_000_000, 3),
-                    else_=4,
-                )
-                res_rows = session.execute(
-                    select(res_bkt.label("bkt"), func.count().label("n"))
-                    .where(Picture.id.in_(select(pic_subq.c.id)))
-                    .group_by(res_bkt)
-                    .order_by(res_bkt)
-                ).fetchall()
-                res_map = {int(row[0]): int(row[1]) for row in res_rows}
-                resolution_distribution = [
-                    {"label": "Unknown", "count": res_map.get(-1, 0)},
-                    {"label": "<1 MP", "count": res_map.get(0, 0)},
-                    {"label": "1–4 MP", "count": res_map.get(1, 0)},
-                    {"label": "4–8 MP", "count": res_map.get(2, 0)},
-                    {"label": "8–16 MP", "count": res_map.get(3, 0)},
-                    {"label": "16+ MP", "count": res_map.get(4, 0)},
-                ]
-            else:
-                score_distribution = []
-                smart_score_distribution = []
-                resolution_distribution = []
-
-            return {
-                "total": int(total),
-                "total_tags": total_tags,
-                "tagged": int(tagged),
-                "untagged": int(total) - int(tagged),
-                "avg_tags_per_image": round(avg_tags, 2),
-                "top_tags": top_tags,
-                "top_cooccurrences": top_cooccurrences,
-                "confidence_histogram": confidence_histogram,
-                "regular_tags": regular_tags,
-                "score_distribution": score_distribution,
-                "smart_score_distribution": smart_score_distribution,
-                "resolution_distribution": resolution_distribution,
-            }
-
-        result = server.vault.db.run_immediate_read_task(compute)
+        params = PictureStatsParams(
+            only_deleted=only_deleted,
+            set_filter_ids=set_filter_ids,
+            set_mode=set_mode,
+            character_id_list=character_id_list,
+            character_mode=character_mode,
+            character_id_raw=character_id_raw,
+            project_id_raw=project_id_raw,
+            format_filter=format_filter,
+            min_score=min_score,
+            max_score=max_score,
+            smart_score_bucket=smart_score_bucket,
+            resolution_bucket=resolution_bucket,
+            file_path_prefix=file_path_prefix,
+            import_source_folder=import_source_folder,
+            tags_filter=tags_filter,
+            rejected_tags=rejected_tags,
+            face_filter=face_filter,
+            confidence_tag=confidence_tag,
+            confidence_above=confidence_above,
+            confidence_below=confidence_below,
+            include=include,
+            penalised_tag_set=penalised_tag_set,
+            penalised_cooc_both=penalised_cooc_both,
+        )
+        result = compute_picture_stats(server.vault, params)
         _stats_cache[cache_key] = (now, result)
         return result
 
