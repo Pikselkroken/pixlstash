@@ -27,13 +27,13 @@ _PREDICTION_MIN_CONFIDENCE = 0.05
 
 
 class TagPredictionTask(BaseTask):
-    """Run the custom tagger on a batch of pictures and persist raw confidence
+    """Run the PixlStash tagger on a batch of pictures and persist raw confidence
     scores to the ``TagPrediction`` table.
 
     This task is separate from ``TagTask`` so that the full probability
-    distribution from the custom model is captured without affecting the
+    distribution from the PixlStash model is captured without affecting the
     existing tag workflow.  Results are stored with a ``model_version`` of
-    ``"epoch-{N}"`` derived from the custom tagger's meta.json.
+    ``"epoch-{N}"`` derived from the PixlStash tagger's meta.json.
     """
 
     def __init__(
@@ -105,7 +105,7 @@ class TagPredictionTask(BaseTask):
                 return result
 
             faces_by_pic = self._db.run_task(_fetch_faces, priority=DBPriority.LOW)
-            target = self._workflow.custom_tagger_image_size_quality_crop()
+            target = self._workflow.pixlstash_tagger_image_size_quality_crop()
             quality_items = []
             key_to_pic_id: dict[str, int] = {}
             for pic in self._pictures:

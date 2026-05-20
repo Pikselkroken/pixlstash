@@ -22,14 +22,14 @@ def _build_workflow_for_budget_tests(
     budget_mb: int = 4096,
     onnx_capacity: int = 64,
     use_wd14: bool = True,
-    use_custom: bool = False,
+    use_pixlstash_tagger: bool = False,
     device: str = "cuda",
 ):
     vram_budget = VramBudget.__new__(VramBudget)
     vram_budget._device = device
     vram_budget._max_vram_usage_mb = budget_mb
     engine = _FakeEngine(vram_budget, _FakeWD14Service(onnx_capacity), device=device)
-    return TaggingWorkflow(engine=engine, use_wd14=use_wd14, use_custom=use_custom)
+    return TaggingWorkflow(engine=engine, use_wd14=use_wd14, use_pixlstash_tagger=use_pixlstash_tagger)
 
 
 def test_vram_batch_cap_constrains_by_budget():
@@ -70,17 +70,17 @@ def test_suggested_tag_task_size_tracks_effective_batch():
     )
 
     assert workflow._effective_wd14_batch_size() == 10
-    assert workflow._effective_custom_batch_size() == 10
+    assert workflow._effective_pixlstash_tagger_batch_size() == 10
     assert workflow.suggested_task_size() == 10
 
 
-def test_custom_and_wd14_use_same_effective_batch_size():
+def test_pixlstash_tagger_and_wd14_use_same_effective_batch_size():
     workflow = _build_workflow_for_budget_tests(
         budget_mb=4096,
         onnx_capacity=64,
     )
 
-    assert workflow._effective_custom_batch_size() == workflow._effective_wd14_batch_size()
+    assert workflow._effective_pixlstash_tagger_batch_size() == workflow._effective_wd14_batch_size()
 
 
 def test_incremental_vram_estimate_is_below_full_estimate():
@@ -103,7 +103,7 @@ def test_missing_tags_finder_uses_suggested_task_size():
 
     class FakeEngine:
         wd14_enabled = True
-        custom_enabled = False
+        pixlstash_tagger_enabled = False
         tagging_workflow = FakeTaggingWorkflow()
 
     class FakeDB:
@@ -142,5 +142,5 @@ def test_larger_budget_gives_bigger_batch_than_smaller_budget():
     large_batch = large_budget._effective_wd14_batch_size()
 
     assert large_batch > small_batch
-    assert large_budget._effective_custom_batch_size() == large_batch
+    assert large_budget._effective_pixlstash_tagger_batch_size() == large_batch
     assert large_budget.suggested_task_size() == large_batch

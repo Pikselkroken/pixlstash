@@ -49,8 +49,8 @@ class MissingTagFinder(BaseTaskFinder):
         if engine is None:
             return None
         wd14_enabled = engine.wd14_enabled
-        custom_enabled = engine.custom_enabled
-        if not wd14_enabled and not custom_enabled:
+        pixlstash_tagger_enabled = engine.pixlstash_tagger_enabled
+        if not wd14_enabled and not pixlstash_tagger_enabled:
             return None
 
         batch_limit = max(

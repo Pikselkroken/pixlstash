@@ -11,7 +11,7 @@ from .tag_prediction_task import TagPredictionTask
 
 
 class MissingTagPredictionFinder(BaseTaskFinder):
-    """Find pictures that have not yet been scored by the current custom tagger epoch."""
+    """Find pictures that have not yet been scored by the current PixlStash tagger epoch."""
 
     _BATCH_MULTIPLIER = 3
 
@@ -31,13 +31,13 @@ class MissingTagPredictionFinder(BaseTaskFinder):
         engine = self._engine_getter()
         if engine is None:
             return None
-        if not engine.custom_enabled:
+        if not engine.pixlstash_tagger_enabled:
             return None
 
-        epoch = engine.custom_tagger_version()
+        epoch = engine.pixlstash_tagger_version()
         model_version = f"v{epoch}"
 
-        batch_limit = max(1, engine.custom_tagger_batch_size())
+        batch_limit = max(1, engine.pixlstash_tagger_batch_size())
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing(
                 session, batch_limit * self._BATCH_MULTIPLIER

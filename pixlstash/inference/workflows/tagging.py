@@ -390,7 +390,7 @@ class TaggingWorkflow:
             wd14_batch = min(self._effective_wd14_batch_size(), image_count)
             candidates.append(900 + 220 * wd14_batch)
         if self._use_pixlstash_tagger:
-                custom_batch = min(self._effective_pixlstash_tagger_batch_size(), image_count)
+            custom_batch = min(self._effective_pixlstash_tagger_batch_size(), image_count)
             candidates.append(700 + 90 * custom_batch)
         return int(max(candidates))
 

@@ -18,16 +18,16 @@ from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 
 logger = logging.getLogger(__name__)
 
-CUSTOM_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
-CUSTOM_TAGGER_FILENAME = "pixlstash-anomaly-tagger.safetensors"
-CUSTOM_TAGGER_META_FILENAME = "pixlstash-anomaly-tagger_meta.json"
-CUSTOM_TAGGER_REV_FILENAME = "pixlstash-anomaly-tagger.revision"
+PIXLSTASH_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
+PIXLSTASH_TAGGER_FILENAME = "pixlstash-anomaly-tagger.safetensors"
+PIXLSTASH_TAGGER_META_FILENAME = "pixlstash-anomaly-tagger_meta.json"
+PIXLSTASH_TAGGER_REV_FILENAME = "pixlstash-anomaly-tagger.revision"
 # Pin a specific HuggingFace git commit SHA so the model is re-downloaded
 # whenever this value is updated, even if the local file already exists.
 # Set to "main" to always use the latest commit on the default branch.
-CUSTOM_TAGGER_REVISION = "d456616956954587e1a8c2d31c60c72f89a4ac3d"
-CUSTOM_TAGGER_DEFAULT_THRESHOLD = 0.50
-CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
+PIXLSTASH_TAGGER_REVISION = "d456616956954587e1a8c2d31c60c72f89a4ac3d"
+PIXLSTASH_TAGGER_DEFAULT_THRESHOLD = 0.50
+PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 
 # Tags that require close-up face crops to detect reliably at full-image resolution.
 # These are collected from face-crop passes and merged into the picture's flat tag list.
@@ -42,8 +42,8 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
         "malformed teeth",
     }
 )
-CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
-CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
+PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 448
+PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
 
 
 class PixlStashTaggerService:
@@ -67,11 +67,11 @@ class PixlStashTaggerService:
         batch_size_fn: Callable[[], int],
     ) -> None:
         self._device = device
-        self._model_path = os.path.join(model_dir, CUSTOM_TAGGER_FILENAME)
-        self._meta_path = os.path.join(model_dir, CUSTOM_TAGGER_META_FILENAME)
-        self._rev_path = os.path.join(model_dir, CUSTOM_TAGGER_REV_FILENAME)
-        self._image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
-        self._image_size_quality_crop = CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP
+        self._model_path = os.path.join(model_dir, PIXLSTASH_TAGGER_FILENAME)
+        self._meta_path = os.path.join(model_dir, PIXLSTASH_TAGGER_META_FILENAME)
+        self._rev_path = os.path.join(model_dir, PIXLSTASH_TAGGER_REV_FILENAME)
+        self._image_size_full = PIXLSTASH_TAGGER_IMAGE_SIZE_FULL
+        self._image_size_quality_crop = PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP
         self._batch_size_fn = batch_size_fn
         # Model state — populated by init()
         self._model = None
@@ -100,14 +100,14 @@ class PixlStashTaggerService:
         )
 
     def version(self) -> int:
-        """Return the version integer from the loaded custom tagger meta.json.
+        """Return the version integer from the loaded PixlStash tagger meta.json.
 
         Returns:
             Version integer, or 0 if the file is absent or lacks a version field.
         """
         if not os.path.isfile(self._meta_path):
             logger.warning(
-                "Custom tagger meta.json not found at %s; using version 0",
+                "PixlStash tagger meta.json not found at %s; using version 0",
                 self._meta_path,
             )
             return 0
@@ -119,7 +119,7 @@ class PixlStashTaggerService:
                 return int(version)
         except Exception:
             logger.debug(
-                "Custom tagger meta.json has no 'version' field; using version 0"
+                "PixlStash tagger meta.json has no 'version' field; using version 0"
             )
         return 0
 
@@ -129,19 +129,19 @@ class PixlStashTaggerService:
         Re-download is required when:
         - The model or meta file is missing, OR
         - The revision sidecar is absent or records a different revision than
-          ``CUSTOM_TAGGER_REVISION``, indicating the pinned version has changed.
+          ``PIXLSTASH_TAGGER_REVISION``, indicating the pinned version has changed.
         """
         if not os.path.isfile(self._model_path) or not os.path.isfile(self._meta_path):
             return True
         # Only enforce revision check for explicit commit SHAs.
-        if CUSTOM_TAGGER_REVISION == "main":
+        if PIXLSTASH_TAGGER_REVISION == "main":
             return False
         if not os.path.isfile(self._rev_path):
             return True
         try:
             with open(self._rev_path, "r", encoding="utf-8") as f:
                 cached_rev = f.read().strip()
-            return cached_rev != CUSTOM_TAGGER_REVISION
+            return cached_rev != PIXLSTASH_TAGGER_REVISION
         except OSError:
             return True
 
@@ -152,7 +152,7 @@ class PixlStashTaggerService:
     def download(self) -> None:
         """Download the model weights and metadata from HuggingFace.
 
-        Always passes ``revision=CUSTOM_TAGGER_REVISION`` to pin the download
+        Always passes ``revision=PIXLSTASH_TAGGER_REVISION`` to pin the download
         to a specific git commit SHA.  After a successful download the resolved
         revision is written to a sidecar file for future staleness checks.
         """
@@ -162,49 +162,49 @@ class PixlStashTaggerService:
             dest_dir = os.path.dirname(os.path.abspath(self._model_path))
             os.makedirs(dest_dir, exist_ok=True)
             logger.info(
-                "Downloading custom tagger (revision=%s) from %s ...",
-                CUSTOM_TAGGER_REVISION,
-                CUSTOM_TAGGER_HF_REPO,
+                "Downloading PixlStash tagger (revision=%s) from %s ...",
+                PIXLSTASH_TAGGER_REVISION,
+                PIXLSTASH_TAGGER_HF_REPO,
             )
             hf_hub_download(
-                repo_id=CUSTOM_TAGGER_HF_REPO,
-                filename=CUSTOM_TAGGER_FILENAME,
+                repo_id=PIXLSTASH_TAGGER_HF_REPO,
+                filename=PIXLSTASH_TAGGER_FILENAME,
                 local_dir=dest_dir,
-                revision=CUSTOM_TAGGER_REVISION,
+                revision=PIXLSTASH_TAGGER_REVISION,
                 force_download=False,
             )
             hf_hub_download(
-                repo_id=CUSTOM_TAGGER_HF_REPO,
-                filename=CUSTOM_TAGGER_META_FILENAME,
+                repo_id=PIXLSTASH_TAGGER_HF_REPO,
+                filename=PIXLSTASH_TAGGER_META_FILENAME,
                 local_dir=dest_dir,
-                revision=CUSTOM_TAGGER_REVISION,
+                revision=PIXLSTASH_TAGGER_REVISION,
                 force_download=False,
             )
             try:
                 with open(self._rev_path, "w", encoding="utf-8") as f:
-                    f.write(CUSTOM_TAGGER_REVISION)
+                    f.write(PIXLSTASH_TAGGER_REVISION)
             except OSError as rev_err:
                 logger.warning("Could not write revision sidecar: %s", rev_err)
-            logger.info("Custom tagger downloaded to %s", self._model_path)
+            logger.info("PixlStash tagger downloaded to %s", self._model_path)
         except Exception as e:
-            logger.warning("Failed to download custom tagger: %s", e)
+            logger.warning("Failed to download PixlStash tagger: %s", e)
 
     def init(self) -> None:
         """Load the model checkpoint and metadata from disk into memory."""
         if not os.path.exists(self._model_path):
             raise FileNotFoundError(
-                f"Custom tagger checkpoint not found: {self._model_path}"
+                f"PixlStash tagger checkpoint not found: {self._model_path}"
             )
         if not os.path.exists(self._meta_path):
             raise FileNotFoundError(
-                f"Custom tagger metadata not found: {self._meta_path}"
+                f"PixlStash tagger metadata not found: {self._meta_path}"
             )
         with open(self._meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         labels = meta.get("labels")
         arch = meta.get("arch", "convnext_base")
         if not labels:
-            raise ValueError("Custom tagger metadata missing labels list.")
+            raise ValueError("PixlStash tagger metadata missing labels list.")
         from safetensors.torch import load_file
 
         state_dict = load_file(self._model_path, device=str(self._device))
@@ -253,21 +253,21 @@ class PixlStashTaggerService:
             )
             if is_oom and self._device != "cpu":
                 logger.warning(
-                    "Custom tagger GPU load failed (OOM); retrying on CPU: %s", exc
+                    "PixlStash tagger GPU load failed (OOM); retrying on CPU: %s", exc
                 )
                 self._device = "cpu"
                 try:
                     self.init()
-                    logger.info("Custom tagger loaded on CPU successfully.")
+                    logger.info("PixlStash tagger loaded on CPU successfully.")
                     return True
                 except Exception as cpu_exc:
                     logger.warning(
-                        "Custom tagger CPU fallback also failed; disabling: %s",
+                        "PixlStash tagger CPU fallback also failed; disabling: %s",
                         cpu_exc,
                     )
                     return False
             logger.warning(
-                "Custom tagger reinit failed; disabling custom tagger: %s", exc
+                "PixlStash tagger reinit failed; disabling PixlStash tagger: %s", exc
             )
             return False
 
@@ -277,7 +277,7 @@ class PixlStashTaggerService:
         Returns:
             True on success, False if the move failed.
         """
-        logger.warning("Custom tagger GPU inference failed; reloading on CPU...")
+        logger.warning("PixlStash tagger GPU inference failed; reloading on CPU...")
         try:
             if self._model is not None:
                 self._model.float()
@@ -286,11 +286,11 @@ class PixlStashTaggerService:
             self._dtype = torch.float32
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            logger.debug("Custom tagger reloaded on CPU")
+            logger.debug("PixlStash tagger reloaded on CPU")
             return True
         except Exception as cpu_error:
             logger.error(
-                "Failed to reload custom tagger on CPU: %s",
+                "Failed to reload PixlStash tagger on CPU: %s",
                 cpu_error,
                 exc_info=True,
             )
@@ -317,7 +317,7 @@ class PixlStashTaggerService:
         image_size: int | None = None,
         pass_name: str = "full_images",
     ) -> dict:
-        """Run the custom tagger and return thresholded tags.
+        """Run the PixlStash tagger and return thresholded tags.
 
         Args:
             items: List of ``(key, PIL.Image)`` pairs.
@@ -333,13 +333,13 @@ class PixlStashTaggerService:
         if not items:
             return {}
         if self._model is None or self._labels is None:
-            logger.warning("Custom tagger model is None; skipping tag_items.")
+            logger.warning("PixlStash tagger model is None; skipping tag_items.")
             return {}
 
         tag_threshold = (
             float(threshold)
             if threshold is not None and float(threshold) > 0
-            else CUSTOM_TAGGER_DEFAULT_THRESHOLD
+            else PIXLSTASH_TAGGER_DEFAULT_THRESHOLD
         )
         if image_size is None:
             image_size = self._image_size_full
@@ -364,7 +364,7 @@ class PixlStashTaggerService:
                     batch_tensors.append(transform(image))
                     batch_paths.append(path)
                 except Exception as e:
-                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
+                    logger.error("PixlStash tagger failed to preprocess %s: %s", path, e)
             if not batch_tensors:
                 continue
             inputs = torch.stack(batch_tensors)
@@ -380,19 +380,19 @@ class PixlStashTaggerService:
                 )
                 if is_cuda_oom and device == "cuda":
                     logger.warning(
-                        "Custom tagger CUDA OOM; falling back to CPU for this run."
+                        "PixlStash tagger CUDA OOM; falling back to CPU for this run."
                     )
                     if self.reload_on_cpu():
-                        logger.warning("Custom tagger is now running on CPU.")
+                        logger.warning("PixlStash tagger is now running on CPU.")
                         inputs = inputs.to("cpu").float()
                         with torch.inference_mode():
                             logits = self._model(inputs)
                             probs = torch.sigmoid(logits).cpu().numpy()
                     else:
-                        logger.error("Custom tagger CPU fallback failed.")
+                        logger.error("PixlStash tagger CPU fallback failed.")
                         break
                 else:
-                    logger.error("Custom tagger inference failed: %s", exc)
+                    logger.error("PixlStash tagger inference failed: %s", exc)
                     break
             for path, prob in zip(batch_paths, probs):
                 tag_probs = []
@@ -416,7 +416,7 @@ class PixlStashTaggerService:
         pass_name: str = "full_images",
         min_confidence: float = 0.05,
     ) -> tuple:
-        """Run the custom tagger once and return both thresholded tags and raw scores.
+        """Run the PixlStash tagger once and return both thresholded tags and raw scores.
 
         Identical to calling ``tag_items`` followed by ``score_items`` on the
         same batch, but runs the GPU forward pass only once.
@@ -438,13 +438,13 @@ class PixlStashTaggerService:
         if not items:
             return {}, {}
         if self._model is None or self._labels is None:
-            logger.warning("Custom tagger model is None; skipping tag_and_score_items.")
+            logger.warning("PixlStash tagger model is None; skipping tag_and_score_items.")
             return {}, {}
 
         tag_threshold = (
             float(threshold)
             if threshold is not None and float(threshold) > 0
-            else CUSTOM_TAGGER_DEFAULT_THRESHOLD
+            else PIXLSTASH_TAGGER_DEFAULT_THRESHOLD
         )
         if image_size is None:
             image_size = self._image_size_full
@@ -471,7 +471,7 @@ class PixlStashTaggerService:
                     batch_tensors.append(transform(image))
                     batch_paths.append(path)
                 except Exception as e:
-                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
+                    logger.error("PixlStash tagger failed to preprocess %s: %s", path, e)
             if not batch_tensors:
                 continue
             inputs = torch.stack(batch_tensors)
@@ -488,20 +488,20 @@ class PixlStashTaggerService:
                 )
                 if is_cuda_oom and device == "cuda":
                     logger.warning(
-                        "Custom tagger CUDA OOM; falling back to CPU for this run."
+                        "PixlStash tagger CUDA OOM; falling back to CPU for this run."
                     )
                     if self.reload_on_cpu():
-                        logger.warning("Custom tagger is now running on CPU.")
+                        logger.warning("PixlStash tagger is now running on CPU.")
                         self._dtype = torch.float32
                         inputs = inputs.to(device="cpu", dtype=torch.float32)
                         with torch.inference_mode():
                             logits = self._model(inputs)
                             probs = torch.sigmoid(logits).float().cpu().numpy()
                     else:
-                        logger.error("Custom tagger CPU fallback failed.")
+                        logger.error("PixlStash tagger CPU fallback failed.")
                         break
                 else:
-                    logger.error("Custom tagger inference failed: %s", exc)
+                    logger.error("PixlStash tagger inference failed: %s", exc)
                     break
             for path, prob in zip(batch_paths, probs):
                 tag_probs = []
@@ -529,7 +529,7 @@ class PixlStashTaggerService:
         threshold_offset: float = 0.0,
         out_raw_scores: dict | None = None,
     ) -> dict:
-        """Run the custom tagger on quality-crop images and return only whitelist tags.
+        """Run the PixlStash tagger on quality-crop images and return only whitelist tags.
 
         Filters results to ``QUALITY_CROP_TAG_WHITELIST`` so that non-quality
         tags detected on zoomed-in face crops do not leak into the Tag table.
@@ -581,7 +581,7 @@ class PixlStashTaggerService:
         image_size: int | None = None,
         min_confidence: float = 0.05,
     ) -> dict[str, dict[str, float]]:
-        """Run the custom tagger and return raw sigmoid scores for each label.
+        """Run the PixlStash tagger and return raw sigmoid scores for each label.
 
         Unlike ``tag_items``, this method applies no threshold and returns all
         labels whose confidence is >= ``min_confidence`` so that the full
@@ -675,7 +675,7 @@ class PixlStashTaggerService:
             in_features = model.classifier[2].in_features
             model.classifier[2] = torch.nn.Linear(in_features, num_labels)
             return model
-        raise ValueError(f"Unsupported custom tagger arch: {arch}")
+        raise ValueError(f"Unsupported PixlStash tagger arch: {arch}")
 
     def _build_transform(self, image_size: int) -> transforms.Compose:
         return transforms.Compose(
