@@ -36,7 +36,7 @@ pixlstash/
 ├── __init__.py
 ├── app.py                            # CLI entry point
 ├── server.py                         # FastAPI app + lifespan
-├── database.py                       # VaultDatabase (async-wrapped SQLite)
+├── database.py                       # VaultDatabase (threaded queue over SQLite)
 ├── auth.py                           # AuthService, JWT, scoped tokens
 ├── task_runner.py                    # Threaded CPU/GPU task executor
 ├── work_planner.py                   # Polls finders, schedules work
@@ -156,16 +156,16 @@ pixlstash/
 
 ## 2. Architecture Overview
 
-PixlStash is a **single-process, async-first image vault** built on FastAPI. It combines:
+PixlStash is a **single-process image vault** built on FastAPI. Despite running on an ASGI server, most route handlers are synchronous and offload to background threads; "async" here means cooperative I/O for FastAPI/WebSockets, not an async stack end-to-end. It combines:
 
 - A **REST + WebSocket API** for the Vue 3 SPA
 - A **threaded task runner** with separate CPU and GPU queues
-- A **SQLite database** wrapped in an async work queue (`VaultDatabase`)
+- A **SQLite database** wrapped in a threaded work queue (`VaultDatabase`) — a single dedicated writer thread serialises mutations while reads can bypass the queue via `run_immediate_read_task`
 - A **ML pipeline** (CLIP, WD14, InsightFace, PixlStash tagger, SentenceTransformer)
 - A **plugin system** for image transformations
 - A **file vault** rooted at a configured `image_root` directory
 
-The runtime is organised around three orthogonal layers:
+The runtime is organised around four orthogonal layers:
 
 | Layer | Component | Responsibility |
 |-------|-----------|----------------|
@@ -241,7 +241,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 |------|----------------|
 | [pixlstash/app.py](../pixlstash/app.py) | CLI entry point (`pixlstash-server`). Parses arguments, runs startup checks, instantiates `Server`. |
 | [pixlstash/server.py](../pixlstash/server.py) | Builds the FastAPI app, mounts routers, attaches WebSocket, registers lifespan (thumbnail pre-gen, cleanup, graceful shutdown). |
-| [pixlstash/vault.py](../pixlstash/vault.py) | Top-level orchestrator. Owns `VaultDatabase`, `TaskRunner`, `InferenceEngine`. Bridges domain events to the WebSocket broadcaster. |
+| [pixlstash/vault.py](../pixlstash/vault.py) | Top-level orchestrator. Owns `VaultDatabase`, `TaskRunner`, and `WorkPlanner`; lazily creates `InferenceEngine` on demand. Bridges domain events to the WebSocket broadcaster. |
 | [pixlstash/database.py](../pixlstash/database.py) | `VaultDatabase`: queues DB work on a single writer thread; serialises writes via mutex, allows parallel reads. Exposes `run_task` / `run_immediate_read_task`. |
 | [pixlstash/auth.py](../pixlstash/auth.py) | `AuthService`: password + JWT + scoped tokens. Enforces resource-level permissions (picture / set / character / project). |
 | [pixlstash/task_runner.py](../pixlstash/task_runner.py) | Threaded executor with separate CPU and GPU pools. Monitors VRAM, gates GPU-heavy tasks, drains queues at shutdown. |
@@ -313,10 +313,19 @@ Public guest scoring and shared-link endpoints.
 |--------|------|---------|
 | GET | `/` | Vue SPA index |
 | GET | `/version` | Server version |
-| POST | `/login` | Login |
-| GET | `/logout` | Logout |
-| WS | `/ws` | Real-time event stream |
-| GET | `/pictures/shared/{token}` | Public file serving |
+| GET | `/favicon.ico` | SPA favicon |
+| POST | `/api/v1/login` | Login |
+| GET | `/api/v1/login` | Registration status check |
+| POST | `/api/v1/logout` | Logout |
+| GET | `/api/v1/check-session` | Session / scope discovery |
+| GET | `/api/v1/network/info` | LAN address info |
+| GET | `/api/v1/protected` | Auth probe |
+| WS  | `/api/v1/ws/updates` | Real-time event stream (broadcast) |
+| WS  | `/api/v1/ws/comfyui` | ComfyUI progress passthrough (in `routes/comfyui.py`) |
+| GET | `/share/{token_slug}` | Public token-embedded picture serving |
+| GET | `/{full_path:path}` | SPA fallback (serves `index.html`) |
+
+The legacy `/pictures/shared/` prefix is still listed in the auth exclusion table in [auth.py](../pixlstash/auth.py) for backwards compatibility but is no longer served by any router; all new share links go through `/share/{token_slug}`.
 
 ---
 
@@ -528,10 +537,7 @@ Selected milestones:
 
 ### Database
 
-- File-based **SQLite** at `{platform_config_dir}/pixlstash/pixlstash.db`
-  - Linux: `~/.config/pixlstash/`
-  - macOS: `~/Library/Application Support/pixlstash/`
-  - Windows: `%APPDATA%/pixlstash/`
+- File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
 
 ### Vector storage
@@ -556,15 +562,15 @@ Selected milestones:
 1. `app.py:main()` parses CLI args and loads/creates the server config.
 2. `StartupChecks().run()` validates disk space, VRAM, CUDA, SSL; may force CPU mode.
 3. `Server.__init__()`:
-   - Instantiates `Vault` (loads `image_root`, opens `VaultDatabase`, constructs `InferenceEngine` via `InferenceEngine.create(...)`).
-   - Creates `TaskRunner` and registers all finders on the `WorkPlanner`.
+    - Instantiates `Vault` (loads `image_root`, opens `VaultDatabase`, creates `TaskRunner`, registers finders, and starts `TaskRunner` + `WorkPlanner`).
+    - Applies user-configured model/runtime settings (`keep_models_in_memory`, VRAM cap, tagger toggles/thresholds) to `Vault`.
    - Builds the FastAPI app, attaches middleware (CORS, rate limiter, auth), mounts routers and the SPA.
 4. `uvicorn.run(api, …)` enters the **lifespan**:
    - Optional `_cleanup_missing_pictures()`.
    - Optional `_generate_missing_thumbnails()`.
-   - `TaskRunner.start()` spawns CPU/GPU worker threads.
-   - `WorkPlanner` begins polling finders.
-5. On shutdown:
+    - Logs server readiness and serves requests.
+5. `InferenceEngine` is created lazily (first task flow that needs it, e.g. via `Vault.get_worker_future(...)`, or explicitly via `Vault.ensure_ready()`).
+6. On shutdown:
    - `Vault.close()` stops the planner and drains workers.
    - `VaultDatabase` flushes pending writes and closes connections.
    - WebSocket clients are disconnected.
@@ -574,15 +580,11 @@ Selected milestones:
 ## 14. Frontend Integration
 
 - The built Vue SPA in [pixlstash/frontend/](../pixlstash/frontend/) is mounted at `/` via `StaticFiles`, with `index.html` as the SPA fallback for client-side routing.
-- The frontend talks to the backend via REST (`/api/v1/*`) and a single WebSocket at `/ws`.
-- WebSocket events come from [event_types.py](../pixlstash/event_types.py):
-  - `CHANGED_PICTURES`, `PICTURE_IMPORTED`
-  - `CHANGED_TAGS`, `CLEARED_TAGS`
-  - `CHANGED_CHARACTERS`, `CHANGED_FACES`
-  - `CHANGED_DESCRIPTIONS`
-  - `QUALITY_UPDATED`
-  - `PLUGIN_PROGRESS`
-- Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans them out to all connected clients.
+- The frontend talks to the backend via REST (`/api/v1/*`) and a primary WebSocket at `/api/v1/ws/updates`. A second WebSocket at `/api/v1/ws/comfyui` carries ComfyUI workflow progress.
+- All `EventType` values in [event_types.py](../pixlstash/event_types.py) are emitted internally by `Vault`, but only a subset is forwarded to WebSocket clients by the broadcaster in `server.py` (see `_should_send_ws_update`):
+  - Broadcast to clients: `CHANGED_PICTURES`, `PICTURE_IMPORTED`, `PLUGIN_PROGRESS`, `CHANGED_TAGS`, `CLEARED_TAGS`, `CHANGED_CHARACTERS`, `CHANGED_FACES`
+  - Internal only (used to invalidate server-side caches but not pushed to clients today): `CHANGED_DESCRIPTIONS`, `QUALITY_UPDATED`
+- Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to all connected clients.
 
 ---
 
@@ -597,14 +599,16 @@ Selected milestones:
   - Optional flags: `include_attachments`, `include_description`
 - **JWT** carried as `Authorization: Bearer <token>`.
 
-Public paths (no auth):
+Public paths (no auth) — defined as `AUTH_EXCLUDED_PATHS` / `AUTH_EXCLUDED_PREFIXES` in [auth.py](../pixlstash/auth.py) and matched both with and without the `/api/v1` prefix:
 
 ```
-/login, /logout, /check-session, /version,
-/docs, /redoc, /openapi.json,
-/assets/*, /favicon.ico, /Logo.png,
-/pictures/shared/{token}, /share/*
+Exact:    /, /login, /logout, /check-session, /version,
+          /docs, /redoc, /openapi.json, /docs/oauth2-redirect,
+          /favicon.ico, /Logo.png, /Empty.png, /EmptyTrash.png
+Prefix:   /assets/, /pictures/shared/ (legacy), /share/, /docs/, /redoc/
 ```
+
+In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
 
 ---
 
@@ -613,8 +617,8 @@ Public paths (no auth):
 1. **Import** — `POST /pictures/import` writes files to `{image_root}/YYYY/MM/DD/{uuid}.ext`, creates `Picture` rows, emits `PICTURE_IMPORTED`.
 2. **Discovery** — `WorkPlanner` polls finders; each finder queries for NULL work columns and claims picture IDs.
 3. **Face extraction** *(GPU)* — InsightFace populates `Face` rows.
-4. **Quality** *(CPU)* — OpenCV metrics → `Quality` row; emits `QUALITY_UPDATED`.
-5. **Description** *(GPU)* — Caption text written to sidecar `.txt`; emits `CHANGED_DESCRIPTIONS`.
+4. **Quality** *(CPU)* — OpenCV metrics → `Quality` row; emits `QUALITY_UPDATED` internally (used to invalidate server stats cache; not currently pushed to WS clients).
+5. **Description** *(GPU)* — Caption text written to sidecar `.txt`; emits `CHANGED_DESCRIPTIONS` internally (not currently pushed to WS clients).
 6. **Embeddings** *(GPU)* — CLIP image embedding + SentenceTransformer caption embedding stored as BLOBs on `Picture`.
 7. **Tagging** *(GPU)* — WD14 + PixlStash tagger write `TagPrediction` rows; emits `CHANGED_TAGS`.
 8. **Smart score** *(GPU)* — Combines image embedding, anchors, and penalised tags into `Picture.smart_score`.
@@ -639,7 +643,7 @@ flowchart LR
 
     subgraph API["FastAPI"]
         Routes[/"routes/*.py"/]
-        WS[("/ws WebSocket")]
+        WS[("/api/v1/ws/updates WebSocket")]
         Static[(Static SPA)]
     end
 
@@ -790,6 +794,7 @@ flowchart TB
     Tasks --> Scoring
 
     Routers --> VaultMod
+    Routers --> DBMod
     Routers --> Auth
     Routers --> Models
     Routers --> Plugins
@@ -819,10 +824,15 @@ sequenceDiagram
     U->>MW: dispatch
     MW->>MW: rate limit + JWT/token validation
     MW->>R: pass authorized request
-    R->>V: domain call (e.g. import / query)
-    V->>DB: run_task / run_immediate_read_task
-    DB-->>V: result
-    V-->>R: domain result
+    alt Route uses domain orchestration
+        R->>V: domain call (e.g. import / worker coordination)
+        V->>DB: run_task / run_immediate_read_task
+        DB-->>V: result
+        V-->>R: domain result
+    else Route performs direct persistence call
+        R->>DB: run_task / run_immediate_read_task
+        DB-->>R: result
+    end
     R-->>C: JSON response
 
     Note over WP,TR: Independent background loop
@@ -857,3 +867,9 @@ sequenceDiagram
 ---
 
 *Last updated: 2026-05-20. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+
+### Known drift / cleanup notes
+
+- `TaskType.TAG_PREDICTION` is still defined in [tasks/task_type.py](../pixlstash/tasks/task_type.py) but explicitly filtered out by `TaskType.all()`. The corresponding `TagPredictionTask`, `MissingTagPredictionFinder`, and `Vault._on_task_completed` branch are retained but not wired into `WorkPlanner.work_finders` — predictions are now written inline by `TagTask`. Either delete the dead code or re-register the finder; do not leave it half-removed.
+- `routes/pictures.py` is ~5.4k lines and mixes listing, search, import/export, plugin orchestration, media serving and token scoping. Treat new endpoints as candidates for a dedicated sub-router rather than appending to this file.
+- The legacy `/pictures/shared/` auth prefix has no live route handler; remove it from `AUTH_EXCLUDED_PREFIXES` once any deployed share URLs in the wild have expired.
