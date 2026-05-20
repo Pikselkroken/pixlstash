@@ -70,7 +70,9 @@ def shared_tagger():
     import gc
     import torch
 
-    tagger = InferenceEngine.create(device="cpu" if Server.DEFAULT_FORCE_CPU else "cuda")
+    tagger = InferenceEngine.create(
+        device="cpu" if Server.DEFAULT_FORCE_CPU else "cuda"
+    )
     tagger.ensure_clip_ready()
     yield tagger
     tagger.close()

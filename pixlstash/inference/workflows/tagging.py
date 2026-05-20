@@ -272,7 +272,9 @@ class TaggingWorkflow:
         from PIL import Image
 
         if not self._engine.pixlstash_tagger_service.is_loaded():
-            logger.warning("PixlStash tagger not available; skipping PixlStash tagger tags.")
+            logger.warning(
+                "PixlStash tagger not available; skipping PixlStash tagger tags."
+            )
             return {}
 
         preloaded_map = preloaded_images or {}
@@ -307,13 +309,15 @@ class TaggingWorkflow:
             return {}
 
         if out_raw_scores is not None:
-            tags_by_key, scores_by_key = self._engine.pixlstash_tagger_service.tag_and_score_items(
-                items,
-                stop_event=stop_event,
-                threshold_offset=self._threshold_offset,
-                threshold=None,
-                image_size=self._engine.pixlstash_tagger_service._image_size_full,
-                pass_name="full_images",
+            tags_by_key, scores_by_key = (
+                self._engine.pixlstash_tagger_service.tag_and_score_items(
+                    items,
+                    stop_event=stop_event,
+                    threshold_offset=self._threshold_offset,
+                    threshold=None,
+                    image_size=self._engine.pixlstash_tagger_service._image_size_full,
+                    pass_name="full_images",
+                )
             )
             for key, scores in scores_by_key.items():
                 orig = key.split("#frame")[0] if "#frame" in key else key
@@ -390,7 +394,9 @@ class TaggingWorkflow:
             wd14_batch = min(self._effective_wd14_batch_size(), image_count)
             candidates.append(900 + 220 * wd14_batch)
         if self._use_pixlstash_tagger:
-            custom_batch = min(self._effective_pixlstash_tagger_batch_size(), image_count)
+            custom_batch = min(
+                self._effective_pixlstash_tagger_batch_size(), image_count
+            )
             candidates.append(700 + 90 * custom_batch)
         return int(max(candidates))
 

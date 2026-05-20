@@ -364,7 +364,9 @@ class PixlStashTaggerService:
                     batch_tensors.append(transform(image))
                     batch_paths.append(path)
                 except Exception as e:
-                    logger.error("PixlStash tagger failed to preprocess %s: %s", path, e)
+                    logger.error(
+                        "PixlStash tagger failed to preprocess %s: %s", path, e
+                    )
             if not batch_tensors:
                 continue
             inputs = torch.stack(batch_tensors)
@@ -438,7 +440,9 @@ class PixlStashTaggerService:
         if not items:
             return {}, {}
         if self._model is None or self._labels is None:
-            logger.warning("PixlStash tagger model is None; skipping tag_and_score_items.")
+            logger.warning(
+                "PixlStash tagger model is None; skipping tag_and_score_items."
+            )
             return {}, {}
 
         tag_threshold = (
@@ -471,7 +475,9 @@ class PixlStashTaggerService:
                     batch_tensors.append(transform(image))
                     batch_paths.append(path)
                 except Exception as e:
-                    logger.error("PixlStash tagger failed to preprocess %s: %s", path, e)
+                    logger.error(
+                        "PixlStash tagger failed to preprocess %s: %s", path, e
+                    )
             if not batch_tensors:
                 continue
             inputs = torch.stack(batch_tensors)

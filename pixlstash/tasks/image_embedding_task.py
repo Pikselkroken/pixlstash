@@ -18,13 +18,14 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureLikenessQueue
 from pixlstash.tagger_plugins.clip_service import CLIP_MODEL_NAME
 
-_MODEL_DIR = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 
 logger = get_logger(__name__)
+
+_MODEL_DIR = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
 
 
 class ImageEmbeddingTask(BaseTask):
@@ -333,7 +334,9 @@ class ImageEmbeddingTask(BaseTask):
                     )
                     self._last_backend_error_log_at = now
 
-        clip_ready = bool(self._clip_workflow is not None and self._clip_workflow.is_ready())
+        clip_ready = bool(
+            self._clip_workflow is not None and self._clip_workflow.is_ready()
+        )
         fallback_ready = self.model is not None
 
         if clip_ready or fallback_ready:
@@ -453,7 +456,9 @@ class ImageEmbeddingTask(BaseTask):
             logger.error(
                 "ImageEmbeddingTask: No embeddings generated for batch of %s pictures (clip_ready=%s fallback_ready=%s).",
                 len(batch_pids),
-                bool(self._clip_workflow is not None and self._clip_workflow.is_ready()),
+                bool(
+                    self._clip_workflow is not None and self._clip_workflow.is_ready()
+                ),
                 bool(self.model),
             )
             return []

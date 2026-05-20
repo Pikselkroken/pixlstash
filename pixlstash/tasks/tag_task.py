@@ -402,7 +402,9 @@ class TagTask(BaseTask):
                 tag_results = active_workflow.tag_images(
                     image_paths,
                     preloaded_images=preloaded_images,
-                    out_raw_pixlstash_scores=full_scores_by_path if use_pixlstash_tagger else None,
+                    out_raw_pixlstash_scores=full_scores_by_path
+                    if use_pixlstash_tagger
+                    else None,
                 )
                 inference_s = time.perf_counter() - inference_start
                 logger.debug("Got tag results for %s images.", len(tag_results))
@@ -490,7 +492,9 @@ class TagTask(BaseTask):
                         crop_inf_start = time.perf_counter()
                         quality_results = active_workflow.tag_quality_crops(
                             quality_items,
-                            out_raw_scores=crop_raw_scores if use_pixlstash_tagger else None,
+                            out_raw_scores=crop_raw_scores
+                            if use_pixlstash_tagger
+                            else None,
                         )
                         crop_inference_s = time.perf_counter() - crop_inf_start
                         # Accumulate quality tags found across all crops per picture path.
@@ -592,7 +596,9 @@ class TagTask(BaseTask):
                             model_version = "unknown"
                             try:
                                 version_fn = getattr(
-                                    active_workflow._engine, "pixlstash_tagger_version", None
+                                    active_workflow._engine,
+                                    "pixlstash_tagger_version",
+                                    None,
                                 )
                                 if callable(version_fn):
                                     model_version = f"v{version_fn()}"

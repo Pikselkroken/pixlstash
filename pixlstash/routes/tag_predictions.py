@@ -100,7 +100,11 @@ def create_router(server) -> APIRouter:
         if not include_meta:
             return payload
         bias = server.vault._pixlstash_tagger_threshold_offset or 0.0
-        tagger = server.vault._engine.pixlstash_tagger_service if server.vault._engine else None
+        tagger = (
+            server.vault._engine.pixlstash_tagger_service
+            if server.vault._engine
+            else None
+        )
         meta_path = tagger.meta_path if tagger is not None else None
         return {
             "tag_predictions": payload,
@@ -308,7 +312,11 @@ def create_router(server) -> APIRouter:
     )
     def get_label_thresholds():
         offset = server.vault._pixlstash_tagger_threshold_offset or 0.0
-        tagger = server.vault._engine.pixlstash_tagger_service if server.vault._engine else None
+        tagger = (
+            server.vault._engine.pixlstash_tagger_service
+            if server.vault._engine
+            else None
+        )
         meta_path = tagger.meta_path if tagger is not None else None
         raw = _load_raw_label_thresholds(meta_path)
         sorted_labels = sorted(raw.items())

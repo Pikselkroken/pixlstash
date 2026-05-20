@@ -170,9 +170,9 @@ class InferenceEngine:
     def set_pixlstash_tagger_enabled(self, enabled: bool) -> None:
         """Enable or disable the PixlStash tagger (only if model files exist)."""
         if bool(enabled) and not self._pixlstash_tagger_enabled:
-            if os.path.isfile(self.pixlstash_tagger_service._model_path) and os.path.isfile(
-                self.pixlstash_tagger_service._meta_path
-            ):
+            if os.path.isfile(
+                self.pixlstash_tagger_service._model_path
+            ) and os.path.isfile(self.pixlstash_tagger_service._meta_path):
                 self._pixlstash_tagger_enabled = True
         elif not bool(enabled):
             self._pixlstash_tagger_enabled = False
@@ -240,7 +240,9 @@ class InferenceEngine:
 
     def pixlstash_tagger_ready(self) -> bool:
         """Return ``True`` if the PixlStash tagger is enabled and loaded."""
-        return bool(self._pixlstash_tagger_enabled and self.pixlstash_tagger_service.is_loaded())
+        return bool(
+            self._pixlstash_tagger_enabled and self.pixlstash_tagger_service.is_loaded()
+        )
 
     def ensure_clip_ready(self) -> None:
         """Load the CLIP model if not already loaded."""
@@ -348,9 +350,9 @@ class InferenceEngine:
         )
         if pixlstash_tagger_service.needs_download():
             pixlstash_tagger_service.download()
-        if not os.path.isfile(pixlstash_tagger_service._model_path) or not os.path.isfile(
-            pixlstash_tagger_service._meta_path
-        ):
+        if not os.path.isfile(
+            pixlstash_tagger_service._model_path
+        ) or not os.path.isfile(pixlstash_tagger_service._meta_path):
             logger.warning(
                 "PixlStash tagger not found at %s, disabling.",
                 pixlstash_tagger_service._model_path,
@@ -405,8 +407,8 @@ class InferenceEngine:
             fast_captions=fast_captions,
             force_cpu_fn=lambda: engine.force_cpu,
             max_concurrent_fn=engine.max_concurrent_images,
-            vram_cap_fn=lambda base_mb, per_item_mb: engine.vram_budget.limited_batch_cap(
-                base_mb, per_item_mb
+            vram_cap_fn=lambda base_mb, per_item_mb: (
+                engine.vram_budget.limited_batch_cap(base_mb, per_item_mb)
             ),
         )
         engine.florence_service = florence_service

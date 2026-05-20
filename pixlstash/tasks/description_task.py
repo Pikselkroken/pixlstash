@@ -72,6 +72,7 @@ class DescriptionTask(BaseTask):
         with cls._cpu_spillover_lock:
             if cls._cpu_spillover_engine is None:
                 from pixlstash.inference.engine import InferenceEngine
+
                 logger.debug("DescriptionTask: creating CPU spillover InferenceEngine.")
                 cls._cpu_spillover_engine = InferenceEngine.create(
                     device="cpu",
