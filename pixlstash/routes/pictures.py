@@ -56,8 +56,6 @@ from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user import User
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.event_types import EventType
-from pixlstash.image_plugins.registry import get_image_plugin_manager
-from pixlstash.image_plugins.service import apply_plugin_to_pictures
 from pixlstash.pixl_logging import get_logger
 from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
@@ -86,6 +84,7 @@ from pixlstash.services._filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
+from pixlstash.services import plugin_service
 from pixlstash.services.picture_stats import PictureStatsParams, compute_picture_stats
 
 logger = get_logger(__name__)
@@ -1368,16 +1367,7 @@ def create_router(server) -> APIRouter:
         description="Lists available image plugins and their parameter schemas.",
     )
     def list_picture_plugins():
-        manager = get_image_plugin_manager()
-        manager.reload()
-        return {
-            "plugins": manager.list_plugins(),
-            "plugin_errors": manager.list_errors(),
-            "plugin_dirs": {
-                "built_in": manager.built_in_dir,
-                "user": manager.user_dir,
-            },
-        }
+        return plugin_service.list_plugins(server.vault)
 
     @router.post(
         "/pictures/plugins/{name}",
@@ -1385,12 +1375,6 @@ def create_router(server) -> APIRouter:
         description="Runs a named image plugin on selected pictures and imports outputs into stacks.",
     )
     async def run_picture_plugin(name: str, payload: dict = Body(...)):
-        manager = get_image_plugin_manager()
-        manager.reload()
-        plugin = manager.get_plugin(name)
-        if plugin is None:
-            raise HTTPException(status_code=404, detail="Plugin not found")
-
         raw_picture_ids = payload.get("picture_ids")
         if not isinstance(raw_picture_ids, list) or not raw_picture_ids:
             raise HTTPException(
@@ -1425,107 +1409,14 @@ def create_router(server) -> APIRouter:
                 )
             captions = [str(c or "") for c in raw_captions]
 
-        plugin_run_id = str(uuid.uuid4())
-
-        def emit_plugin_progress(progress_payload: dict):
-            if not isinstance(progress_payload, dict):
-                return
-            server.vault.notify(
-                EventType.PLUGIN_PROGRESS,
-                {
-                    "run_id": plugin_run_id,
-                    "plugin": str(progress_payload.get("plugin") or name),
-                    "status": "running",
-                    **progress_payload,
-                },
-            )
-
-        def emit_plugin_error(error_payload: dict):
-            if not isinstance(error_payload, dict):
-                return
-            server.vault.notify(
-                EventType.PLUGIN_PROGRESS,
-                {
-                    "run_id": plugin_run_id,
-                    "plugin": str(error_payload.get("plugin") or name),
-                    "status": "error",
-                    "message": str(error_payload.get("message") or "Plugin error"),
-                    "error": error_payload,
-                },
-            )
-
-        server.vault.notify(
-            EventType.PLUGIN_PROGRESS,
-            {
-                "run_id": plugin_run_id,
-                "plugin": name,
-                "status": "started",
-                "current": 0,
-                "total": len(picture_ids),
-                "progress": 0.0,
-                "message": f"Starting plugin: {name}",
-            },
-        )
-
         try:
-            result = await asyncio.to_thread(
-                apply_plugin_to_pictures,
-                server,
-                plugin,
-                picture_ids,
-                parameters,
-                captions,
-                progress_reporter=emit_plugin_progress,
-                error_reporter=emit_plugin_error,
+            return await plugin_service.run_plugin_on_pictures(
+                server, name, picture_ids, parameters, captions
             )
         except ValueError as exc:
-            server.vault.notify(
-                EventType.PLUGIN_PROGRESS,
-                {
-                    "run_id": plugin_run_id,
-                    "plugin": name,
-                    "status": "failed",
-                    "message": str(exc),
-                },
-            )
-            raise HTTPException(status_code=400, detail=str(exc))
-        except Exception as exc:
-            logger.warning("Plugin run failed for '%s': %s", name, exc)
-            server.vault.notify(
-                EventType.PLUGIN_PROGRESS,
-                {
-                    "run_id": plugin_run_id,
-                    "plugin": name,
-                    "status": "failed",
-                    "message": str(exc),
-                },
-            )
+            raise HTTPException(status_code=404, detail=str(exc))
+        except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=f"Plugin failed: {exc}")
-
-        server.vault.notify(
-            EventType.PLUGIN_PROGRESS,
-            {
-                "run_id": plugin_run_id,
-                "plugin": name,
-                "status": "completed",
-                "current": len(picture_ids),
-                "total": len(picture_ids),
-                "progress": 100.0,
-                "message": f"Completed plugin: {name}",
-            },
-        )
-
-        created_ids = result.get("created_picture_ids") or []
-        output_ids = result.get("output_picture_ids") or []
-        if created_ids:
-            server.vault.notify(EventType.PICTURE_IMPORTED, created_ids)
-        if output_ids:
-            server.vault.notify(EventType.CHANGED_PICTURES, output_ids)
-
-        return {
-            "status": "success",
-            **result,
-        }
 
     @router.get(
         "/pictures/comfyui_models",

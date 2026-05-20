@@ -371,6 +371,21 @@ class AuthService:
                 json.dump(self._server_config, f, indent=2)
         return user
 
+    def token_from_value(self, token_value: str) -> Optional[UserToken]:
+        """Public wrapper for validating a raw token value.
+
+        Looks up and returns the matching UserToken, or None if the value is
+        invalid or expired.  Callers outside this module (e.g. share endpoints)
+        should use this method rather than the private ``_token_from_value``.
+
+        Args:
+            token_value: The raw token string to validate.
+
+        Returns:
+            Matching UserToken or None.
+        """
+        return self._token_from_value(token_value)
+
     def _token_from_value(self, token_value: str) -> Optional[UserToken]:
         """Validate a raw token value using prefix-indexed lookup; return the
         matching UserToken or None.  Legacy tokens without a token_prefix are

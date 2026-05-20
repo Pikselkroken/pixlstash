@@ -10,18 +10,16 @@ friendly URL that looks like a normal image link.  No session cookie or
 
 import logging
 import os
-from email.utils import formatdate
 from io import BytesIO
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from PIL import Image
 
-from pixlstash.db_models.picture import Picture
-from pixlstash.db_models.user import User
 from pixlstash.routes.pictures import MEDIA_TYPE_BY_FORMAT
+from pixlstash.services import share_service
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.watermark import apply_watermark, get_default_watermark_bytes
+from pixlstash.utils.watermark import apply_watermark
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +29,6 @@ def create_router(server) -> APIRouter:
 
     router = APIRouter()
     _not_found = HTMLResponse(content="404 Not Found", status_code=404)
-
-    def _get_watermark_bytes(user_id: int) -> bytes | None:
-        """Return user's custom watermark or the default, or None if neither exists."""
-        user = server.vault.db.run_immediate_read_task(
-            lambda session: session.get(User, user_id)
-        )
-        custom = getattr(user, "watermark_image", None) if user else None
-        if custom:
-            return custom
-        return get_default_watermark_bytes()
 
     @router.get(
         "/share/{token_slug}",
@@ -58,25 +46,14 @@ def create_router(server) -> APIRouter:
             return _not_found
         ext = dot_ext.lstrip(".").lower()
 
-        matched_token = server.auth._token_from_value(name)
+        matched_token = share_service.validate_picture_share_token(server.auth, name)
         if matched_token is None:
             return _not_found
 
-        if (
-            matched_token.scope != "READ"
-            or matched_token.resource_type != "picture"
-            or matched_token.resource_id is None
-        ):
-            return _not_found
-
         pic_id = matched_token.resource_id
-        pics = server.vault.db.run_immediate_read_task(
-            lambda session: Picture.find(session, id=pic_id, include_deleted=False)
-        )
-        if not pics:
+        pic = share_service.get_shared_picture(server.vault, pic_id)
+        if not pic:
             return _not_found
-
-        pic = pics[0]
         fmt_lower = pic.format.lower() if pic.format else ""
 
         if fmt_lower != ext:
@@ -97,7 +74,9 @@ def create_router(server) -> APIRouter:
             try:
                 with Image.open(file_path) as pil_img:
                     if apply_wm:
-                        wm_bytes = _get_watermark_bytes(matched_token.user_id)
+                        wm_bytes = share_service.get_user_watermark_bytes(
+                            server.vault, matched_token.user_id
+                        )
                         if wm_bytes:
                             pil_img = apply_watermark(pil_img, wm_bytes)
 
@@ -137,6 +116,8 @@ def create_router(server) -> APIRouter:
                 return HTMLResponse(
                     content="500 Internal Server Error", status_code=500
                 )
+
+        from email.utils import formatdate
 
         media_type = MEDIA_TYPE_BY_FORMAT.get(fmt_lower, "application/octet-stream")
         response = FileResponse(file_path, media_type=media_type)
