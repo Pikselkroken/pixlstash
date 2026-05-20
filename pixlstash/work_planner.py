@@ -116,16 +116,24 @@ class WorkPlanner:
             ),
         }
 
-    def __init__(self, task_runner, task_finders: "dict[TaskType, object]"):
+    def __init__(
+        self,
+        task_runner,
+        task_finders: "dict[TaskType, object] | list",
+    ):
         self._task_runner = task_runner
-        self._task_finders = list(task_finders.values())
+        if isinstance(task_finders, dict):
+            self._task_finders = list(task_finders.values())
+            # Maps TaskType → finder_name string for resolving typed depends_on() values.
+            self._finder_name_by_task_type: dict = {
+                task_type: finder.finder_name()
+                for task_type, finder in task_finders.items()
+            }
+        else:
+            self._task_finders = list(task_finders)
+            self._finder_name_by_task_type: dict = {}
         self._task_finders_by_name = {
             finder.finder_name(): finder for finder in self._task_finders
-        }
-        # Maps TaskType → finder_name string for resolving typed depends_on() values.
-        self._finder_name_by_task_type: dict = {
-            task_type: finder.finder_name()
-            for task_type, finder in task_finders.items()
         }
 
         self._stop = threading.Event()
