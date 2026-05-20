@@ -131,7 +131,8 @@ const activeCategoryLabel = computed(() => {
       ] || "Multi";
     return `People – ${modeLabel} (${selectionStore.selectedCharacterIds.length})`;
   }
-  if (selectionStore.selectedCharacter === ALL_PICTURES_ID) return "All Pictures";
+  if (selectionStore.selectedCharacter === ALL_PICTURES_ID)
+    return "All Pictures";
   if (selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID)
     return "Unassigned Pictures";
   if (selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID)
@@ -377,7 +378,8 @@ function toolbarWidth() {
 
 function updateSidebarBreakpoints() {
   if (typeof window !== "undefined") {
-    sidebarStore.sidebarForcedHidden = window.innerWidth < SIDEBAR_HIDE_BREAKPOINT;
+    sidebarStore.sidebarForcedHidden =
+      window.innerWidth < SIDEBAR_HIDE_BREAKPOINT;
     sidebarStore.statsForcedHidden = window.innerWidth < STATS_HIDE_BREAKPOINT;
   }
 }
@@ -449,7 +451,10 @@ function SelectionPayload(payload) {
 }
 
 function clearSearchForCategoryChange() {
-  if ((searchStore.searchQuery || "").trim() || (searchStore.searchInput || "").trim()) {
+  if (
+    (searchStore.searchQuery || "").trim() ||
+    (searchStore.searchInput || "").trim()
+  ) {
     handleClearSearch();
   }
 }
@@ -504,7 +509,9 @@ async function handleSelectSet(payload) {
 
   if (!nextIds.length) {
     const fallbackLabel =
-      projectStore.projectViewMode === "project" ? "Project Pictures" : "All Pictures";
+      projectStore.projectViewMode === "project"
+        ? "Project Pictures"
+        : "All Pictures";
     selectionStore.selectedCharacter = ALL_PICTURES_ID;
     selectionStore.selectedCharacterIds = [];
     selectionStore.lastSelectedCharacterLabel = fallbackLabel;
@@ -818,7 +825,8 @@ async function fetchConfig() {
     }
     userPrefsStore.embedWatermark = Boolean(res.data?.embed_watermark);
     const cfu = res.data?.check_for_updates;
-    userPrefsStore.checkForUpdates = cfu === true ? true : cfu === false ? false : null;
+    userPrefsStore.checkForUpdates =
+      cfu === true ? true : cfu === false ? false : null;
     if (userPrefsStore.checkForUpdates === null) {
       updateCheckDialogOpen.value = true;
     }
@@ -855,10 +863,16 @@ async function patchConfigUIOptions() {
   if (typeof gridStore.compactMode === "boolean") {
     patch.compact_mode = gridStore.compactMode;
   }
-  if (typeof userPrefsStore.dateFormat === "string" && userPrefsStore.dateFormat) {
+  if (
+    typeof userPrefsStore.dateFormat === "string" &&
+    userPrefsStore.dateFormat
+  ) {
     patch.date_format = userPrefsStore.dateFormat;
   }
-  if (typeof userPrefsStore.themeMode === "string" && userPrefsStore.themeMode) {
+  if (
+    typeof userPrefsStore.themeMode === "string" &&
+    userPrefsStore.themeMode
+  ) {
     patch.theme_mode = userPrefsStore.themeMode;
   }
   if (sortStore.selectedSimilarityCharacter != null) {
@@ -938,7 +952,10 @@ function resolveThemeName(mode) {
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
-  if (selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID || selectionStore.selectedSet) {
+  if (
+    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID ||
+    selectionStore.selectedSet
+  ) {
     return;
   }
   if (
@@ -950,7 +967,10 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
 }
 
 function handleImagesMovedToSet({ imageIds }) {
-  if (selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID || selectionStore.selectedSet) {
+  if (
+    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID ||
+    selectionStore.selectedSet
+  ) {
     return;
   }
   if (
@@ -1053,14 +1073,17 @@ function handleResetToAll() {
 }
 
 // --- Watchers ---
-watch(() => searchStore.searchQuery, (newVal, oldVal) => {
-  if (searchStore.searchInput !== newVal) {
-    searchStore.searchInput = newVal || "";
-  }
-  if (!newVal && oldVal) {
-    gridStore.refreshGridVersion();
-  }
-});
+watch(
+  () => searchStore.searchQuery,
+  (newVal, oldVal) => {
+    if (searchStore.searchInput !== newVal) {
+      searchStore.searchInput = newVal || "";
+    }
+    if (!newVal && oldVal) {
+      gridStore.refreshGridVersion();
+    }
+  },
+);
 
 watch([() => searchStore.searchInput, () => searchStore.searchHistory], () => {
   const needle = (searchStore.searchInput || "").trim();
@@ -1068,25 +1091,35 @@ watch([() => searchStore.searchInput, () => searchStore.searchHistory], () => {
     searchStore.isSearchHistoryOpen = false;
     return;
   }
-  searchStore.isSearchHistoryOpen = searchStore.filteredSearchHistory.length > 0;
+  searchStore.isSearchHistoryOpen =
+    searchStore.filteredSearchHistory.length > 0;
 });
 
-watch([() => sortStore.selectedSort, () => sortStore.selectedDescending], () => {
-  patchConfigUIOptions();
-  gridStore.refreshGridVersion();
-});
+watch(
+  [() => sortStore.selectedSort, () => sortStore.selectedDescending],
+  () => {
+    patchConfigUIOptions();
+    gridStore.refreshGridVersion();
+  },
+);
 
-watch(() => userPrefsStore.hiddenTags, () => {
-  gridStore.refreshGridVersion();
-  if (userPrefsStore.applyTagFilter) {
+watch(
+  () => userPrefsStore.hiddenTags,
+  () => {
+    gridStore.refreshGridVersion();
+    if (userPrefsStore.applyTagFilter) {
+      refreshSidebarDebounced();
+    }
+  },
+);
+
+watch(
+  () => userPrefsStore.applyTagFilter,
+  () => {
+    gridStore.refreshGridVersion();
     refreshSidebarDebounced();
-  }
-});
-
-watch(() => userPrefsStore.applyTagFilter, () => {
-  gridStore.refreshGridVersion();
-  refreshSidebarDebounced();
-});
+  },
+);
 
 watch(
   [
@@ -1100,15 +1133,21 @@ watch(
   },
 );
 
-watch(() => gridStore.thumbnailSize, () => {
-  patchConfigUIOptions();
-  updateMaxColumns();
-});
+watch(
+  () => gridStore.thumbnailSize,
+  () => {
+    patchConfigUIOptions();
+    updateMaxColumns();
+  },
+);
 
-watch(() => userPrefsStore.showKeyboardHint, () => {
-  if (!configLoaded.value) return;
-  patchConfigUIOptions();
-});
+watch(
+  () => userPrefsStore.showKeyboardHint,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
 
 watch(
   [
@@ -1132,34 +1171,52 @@ watch(
   { immediate: true },
 );
 
-watch(() => sortStore.selectedSimilarityCharacter, () => {
-  patchConfigUIOptions();
-});
+watch(
+  () => sortStore.selectedSimilarityCharacter,
+  () => {
+    patchConfigUIOptions();
+  },
+);
 
-watch(() => sortStore.stackThreshold, () => {
-  if (!configLoaded.value) return;
-  patchConfigUIOptions();
-});
+watch(
+  () => sortStore.stackThreshold,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
 
-watch(() => gridStore.columns, () => {
-  if (!configLoaded.value) return;
-  patchConfigUIOptions();
-});
+watch(
+  () => gridStore.columns,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
 
-watch(() => userPrefsStore.sidebarThumbnailSize, () => {
-  if (!configLoaded.value) return;
-  patchConfigUIOptions();
-});
+watch(
+  () => userPrefsStore.sidebarThumbnailSize,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
 
-watch(() => userPrefsStore.dateFormat, () => {
-  if (!configLoaded.value) return;
-  patchConfigUIOptions();
-  gridStore.refreshGridVersion();
-});
+watch(
+  () => userPrefsStore.dateFormat,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+    gridStore.refreshGridVersion();
+  },
+);
 
-watch(() => gridStore.gridVersion, () => {
-  wsStore.pendingExternalImportCount = 0;
-});
+watch(
+  () => gridStore.gridVersion,
+  () => {
+    wsStore.pendingExternalImportCount = 0;
+  },
+);
 
 watch(
   () => userPrefsStore.themeMode,
@@ -1171,15 +1228,21 @@ watch(
   { immediate: true },
 );
 
-watch(() => exportStore.exportMenuOpen, async (isOpen) => {
-  if (!isOpen) return;
-  await nextTick();
-  refreshExportCount();
-});
+watch(
+  () => exportStore.exportMenuOpen,
+  async (isOpen) => {
+    if (!isOpen) return;
+    await nextTick();
+    refreshExportCount();
+  },
+);
 
-watch(() => sidebarStore.statsOpen, () => {
-  updateIsMobile();
-});
+watch(
+  () => sidebarStore.statsOpen,
+  () => {
+    updateIsMobile();
+  },
+);
 
 // --- Lifecycle ---
 onMounted(async () => {
@@ -1254,16 +1317,25 @@ onBeforeUnmount(() => {
 });
 
 defineExpose({
-  get sidebarVisible() { return sidebarStore.sidebarVisible; },
-  get sidebarDocked() { return sidebarStore.sidebarDocked; },
-  get mediaTypeFilter() { return filterStore.mediaTypeFilter; },
+  get sidebarVisible() {
+    return sidebarStore.sidebarVisible;
+  },
+  get sidebarDocked() {
+    return sidebarStore.sidebarDocked;
+  },
+  get mediaTypeFilter() {
+    return filterStore.mediaTypeFilter;
+  },
 });
 </script>
 <template>
   <v-app>
     <div class="app-viewport">
       <div class="file-manager">
-        <div class="sidebar-shell" :class="{ open: sidebarStore.sidebarVisible }">
+        <div
+          class="sidebar-shell"
+          :class="{ open: sidebarStore.sidebarVisible }"
+        >
           <SideBar
             ref="sidebarRef"
             :docked="sidebarStore.sidebarDocked"
@@ -1289,7 +1361,9 @@ defineExpose({
             :installType="installType"
             :dockerVariant="dockerVariant"
             :showKeyboardHint="userPrefsStore.showKeyboardHint"
-            @update:show-keyboard-hint="userPrefsStore.showKeyboardHint = $event"
+            @update:show-keyboard-hint="
+              userPrefsStore.showKeyboardHint = $event
+            "
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
             @update:hidden-tags="handleUpdateHiddenTags"
@@ -1320,7 +1394,9 @@ defineExpose({
         </div>
         <Transition name="backdrop-fade">
           <div
-            v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarForcedHidden"
+            v-if="
+              sidebarStore.sidebarVisible && sidebarStore.sidebarForcedHidden
+            "
             class="sidebar-backdrop"
             @click="sidebarStore.sidebarVisible = false"
           ></div>
@@ -1374,7 +1450,10 @@ defineExpose({
         />
         <main :class="['main-area']" ref="mainAreaRef">
           <div
-            :class="['main-content', selectionStore.selectedCharacter ? 'accent-border' : '']"
+            :class="[
+              'main-content',
+              selectionStore.selectedCharacter ? 'accent-border' : '',
+            ]"
             style="margin-top: 0; flex-direction: row; align-items: stretch"
           >
             <div
@@ -1445,9 +1524,12 @@ defineExpose({
                 :referenceFolderIdFilter="
                   selectionStore.selectedFolderFilter?.referenceFolderId ?? null
                 "
-                :filePathPrefixFilter="selectionStore.selectedFolderFilter?.pathPrefix ?? null"
+                :filePathPrefixFilter="
+                  selectionStore.selectedFolderFilter?.pathPrefix ?? null
+                "
                 :importSourceFolderFilter="
-                  selectionStore.selectedFolderFilter?.importSourceFolder ?? null
+                  selectionStore.selectedFolderFilter?.importSourceFolder ??
+                  null
                 "
                 :publicUrl="userPrefsStore.publicUrl"
                 :embedWatermark="userPrefsStore.embedWatermark"
@@ -1464,7 +1546,8 @@ defineExpose({
                     selectionStore.selectedCharacterIds.length > 1
                       ? ((selectionStore.selectedCharacter = ALL_PICTURES_ID),
                         (selectionStore.selectedCharacterIds = []))
-                      : ((selectionStore.selectedSet = null), (selectionStore.selectedSetIds = []));
+                      : ((selectionStore.selectedSet = null),
+                        (selectionStore.selectedSetIds = []));
                   }
                 "
                 @update:character-multi-mode="
@@ -1486,7 +1569,9 @@ defineExpose({
                 @import-ended="wsStore.isUploadInProgress = false"
                 :pendingExternalImportCount="wsStore.pendingExternalImportCount"
                 @load-pending-imports="loadPendingExternalImports"
-                @update:visible-range-label="gridStore.visibleRangeLabel = $event"
+                @update:visible-range-label="
+                  gridStore.visibleRangeLabel = $event
+                "
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @confirm-export-zip="confirmExportZip"
@@ -1514,7 +1599,9 @@ defineExpose({
               :faceBboxFilter="filterStore.faceBboxFilter"
               :sharedOnlyFilter="filterStore.sharedOnlyFilter"
               :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
-              :filePathPrefixFilter="selectionStore.selectedFolderFilter?.pathPrefix ?? null"
+              :filePathPrefixFilter="
+                selectionStore.selectedFolderFilter?.pathPrefix ?? null
+              "
               :importSourceFolderFilter="
                 selectionStore.selectedFolderFilter?.importSourceFolder ?? null
               "
@@ -1528,24 +1615,34 @@ defineExpose({
               @filter-tag="
                 (tag) => {
                   if (filterStore.tagFilter.includes(tag))
-                    filterStore.tagFilter = filterStore.tagFilter.filter((t) => t !== tag);
+                    filterStore.tagFilter = filterStore.tagFilter.filter(
+                      (t) => t !== tag,
+                    );
                   else filterStore.tagFilter = [...filterStore.tagFilter, tag];
                 }
               "
               @filter-tags="
                 (tags) => {
-                  const allPresent = tags.every((t) => filterStore.tagFilter.includes(t));
+                  const allPresent = tags.every((t) =>
+                    filterStore.tagFilter.includes(t),
+                  );
                   if (allPresent)
-                    filterStore.tagFilter = filterStore.tagFilter.filter((t) => !tags.includes(t));
-                  else filterStore.tagFilter = [...new Set([...filterStore.tagFilter, ...tags])];
+                    filterStore.tagFilter = filterStore.tagFilter.filter(
+                      (t) => !tags.includes(t),
+                    );
+                  else
+                    filterStore.tagFilter = [
+                      ...new Set([...filterStore.tagFilter, ...tags]),
+                    ];
                 }
               "
               @filter-confidence-above="
                 (entry) => {
                   if (filterStore.tagConfidenceAboveFilter.includes(entry))
-                    filterStore.tagConfidenceAboveFilter = filterStore.tagConfidenceAboveFilter.filter(
-                      (e) => e !== entry,
-                    );
+                    filterStore.tagConfidenceAboveFilter =
+                      filterStore.tagConfidenceAboveFilter.filter(
+                        (e) => e !== entry,
+                      );
                   else
                     filterStore.tagConfidenceAboveFilter = [
                       ...filterStore.tagConfidenceAboveFilter,
@@ -1555,14 +1652,17 @@ defineExpose({
               "
               @clear-tag-filter="
                 (tags) => {
-                  filterStore.tagFilter = filterStore.tagFilter.filter((t) => !tags.includes(t));
+                  filterStore.tagFilter = filterStore.tagFilter.filter(
+                    (t) => !tags.includes(t),
+                  );
                 }
               "
               @clear-confidence-filter="
                 (entries) => {
-                  filterStore.tagConfidenceAboveFilter = filterStore.tagConfidenceAboveFilter.filter(
-                    (e) => !entries.includes(e),
-                  );
+                  filterStore.tagConfidenceAboveFilter =
+                    filterStore.tagConfidenceAboveFilter.filter(
+                      (e) => !entries.includes(e),
+                    );
                 }
               "
               @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
@@ -1573,7 +1673,10 @@ defineExpose({
               @update:resolutionBucketFilter="
                 (v) => (filterStore.resolutionBucketFilter = v)
               "
-              @toggle="sidebarStore.toggleStats(); updateIsMobile();"
+              @toggle="
+                sidebarStore.toggleStats();
+                updateIsMobile();
+              "
             />
           </div>
         </main>

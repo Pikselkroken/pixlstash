@@ -58,7 +58,11 @@
               <v-btn
                 class="gb-sort-direction"
                 variant="text"
-                :disabled="Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())"
+                :disabled="
+                  Boolean(
+                    searchStore.searchQuery && searchStore.searchQuery.trim(),
+                  )
+                "
                 @click="gbToggleSortDirection"
               >
                 <v-icon size="18">
@@ -73,7 +77,14 @@
                 }}</span>
               </v-btn>
             </div>
-            <div v-if="Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())" class="gb-sort-search-note">
+            <div
+              v-if="
+                Boolean(
+                  searchStore.searchQuery && searchStore.searchQuery.trim(),
+                )
+              "
+              class="gb-sort-search-note"
+            >
               Search relevance (fixed)
             </div>
             <v-btn-toggle
@@ -81,7 +92,11 @@
               @update:model-value="gbHandleSortModelUpdate"
               mandatory
               class="gb-sort-grid"
-              :disabled="Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())"
+              :disabled="
+                Boolean(
+                  searchStore.searchQuery && searchStore.searchQuery.trim(),
+                )
+              "
             >
               <v-btn
                 v-for="opt in sortStore.sortOptions ?? []"
@@ -1776,31 +1791,45 @@ const searchStore = useSearchStore();
 // ── Toolbar: export computed models ───────────────────────────────────────────
 const tbExportTypeModel = computed({
   get: () => exportStore.exportType,
-  set: (v) => { exportStore.exportType = v; },
+  set: (v) => {
+    exportStore.exportType = v;
+  },
 });
 const tbExportCaptionModeModel = computed({
   get: () => exportStore.exportCaptionMode,
-  set: (v) => { exportStore.exportCaptionMode = v; },
+  set: (v) => {
+    exportStore.exportCaptionMode = v;
+  },
 });
 const tbExportTagFormatModel = computed({
   get: () => exportStore.exportTagFormat,
-  set: (v) => { exportStore.exportTagFormat = v; },
+  set: (v) => {
+    exportStore.exportTagFormat = v;
+  },
 });
 const tbExportResolutionModel = computed({
   get: () => exportStore.exportResolution,
-  set: (v) => { exportStore.exportResolution = v; },
+  set: (v) => {
+    exportStore.exportResolution = v;
+  },
 });
 const tbExportIncludeCharacterNameModel = computed({
   get: () => exportStore.exportIncludeCharacterName,
-  set: (v) => { exportStore.exportIncludeCharacterName = v; },
+  set: (v) => {
+    exportStore.exportIncludeCharacterName = v;
+  },
 });
 const tbExportUseOriginalFileNamesModel = computed({
   get: () => exportStore.exportUseOriginalFileNames,
-  set: (v) => { exportStore.exportUseOriginalFileNames = v; },
+  set: (v) => {
+    exportStore.exportUseOriginalFileNames = v;
+  },
 });
 const tbExportMenuOpen = computed({
   get: () => exportStore.exportMenuOpen,
-  set: (v) => { exportStore.exportMenuOpen = v; },
+  set: (v) => {
+    exportStore.exportMenuOpen = v;
+  },
 });
 
 // ── Toolbar: ComfyUI T2I ───────────────────────────────────────────────────────
@@ -1889,7 +1918,9 @@ const gbSortModel = computed({
 
 const gbDescendingModel = computed({
   get: () => sortStore.selectedDescending ?? true,
-  set: (value) => { sortStore.selectedDescending = Boolean(value); },
+  set: (value) => {
+    sortStore.selectedDescending = Boolean(value);
+  },
 });
 
 const gbSortMenuModel = computed(
@@ -1932,7 +1963,9 @@ const gbHasSimilarityOptions = computed(
 
 const gbSimilarityCharacterModel = computed({
   get: () => sortStore.selectedSimilarityCharacter ?? null,
-  set: (value) => { sortStore.selectedSimilarityCharacter = value ?? null; },
+  set: (value) => {
+    sortStore.selectedSimilarityCharacter = value ?? null;
+  },
 });
 
 const gbStackThresholdOptions = [
@@ -1951,7 +1984,9 @@ const gbStackThresholdModel = computed({
     if (!Number.isFinite(parsed) || parsed <= 0) return "0.92";
     return String(v);
   },
-  set: (value) => { sortStore.stackThreshold = value; },
+  set: (value) => {
+    sortStore.stackThreshold = value;
+  },
 });
 
 const GB_SORT_ICON_MAP = {
@@ -1982,7 +2017,8 @@ function gbCommitSortSelection(sortValue) {
 }
 
 function gbHandleSortModelUpdate(sortValue) {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return;
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+    return;
   gbPendingSortSelection.value = sortValue != null ? String(sortValue) : "";
   if (!gbSortRequiresParameter(gbPendingSortSelection.value)) {
     gbCommitSortSelection(gbPendingSortSelection.value);
@@ -2028,7 +2064,8 @@ const gbSelectedStackThresholdOption = computed(() =>
 );
 
 const gbSortButtonLabel = computed(() => {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return "Search relevance";
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+    return "Search relevance";
   if (gbSortModel.value === SIMILARITY_SORT_KEY_GB)
     return gbSelectedSimilarityOption.value?.text
       ? `Similarity: ${gbSelectedSimilarityOption.value.text}`
@@ -2041,7 +2078,8 @@ const gbSortButtonLabel = computed(() => {
 });
 
 const gbSortTypeName = computed(() => {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return "Search relevance";
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+    return "Search relevance";
   if (gbSortModel.value === SIMILARITY_SORT_KEY_GB) return "Similarity";
   if (gbSortModel.value === LIKENESS_GROUPS_SORT_KEY_GB) return "Groups";
   return gbSelectedSortOption.value?.label || "Sort";
@@ -2060,7 +2098,8 @@ const gbSortButtonIcon = computed(() =>
 );
 
 const gbSortTypeIcon = computed(() => {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return "mdi-magnify";
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+    return "mdi-magnify";
   return gbGetSortIcon(gbSortModel.value);
 });
 
@@ -2069,43 +2108,63 @@ const gbFilterMenuOpen = ref(false);
 
 const gbMediaTypeFilter = computed({
   get: () => filterStore.mediaTypeFilter,
-  set: (v) => { filterStore.mediaTypeFilter = v; },
+  set: (v) => {
+    filterStore.mediaTypeFilter = v;
+  },
 });
 const gbMinScoreFilter = computed({
   get: () => filterStore.minScoreFilter,
-  set: (v) => { filterStore.minScoreFilter = v ?? null; },
+  set: (v) => {
+    filterStore.minScoreFilter = v ?? null;
+  },
 });
 const gbMaxScoreFilter = computed({
   get: () => filterStore.maxScoreFilter,
-  set: (v) => { filterStore.maxScoreFilter = v ?? null; },
+  set: (v) => {
+    filterStore.maxScoreFilter = v ?? null;
+  },
 });
 const gbFaceBboxFilter = computed({
   get: () => filterStore.faceBboxFilter,
-  set: (v) => { filterStore.faceBboxFilter = v; },
+  set: (v) => {
+    filterStore.faceBboxFilter = v;
+  },
 });
 const gbTagFilter = computed({
   get: () => filterStore.tagFilter,
-  set: (v) => { filterStore.tagFilter = v ?? []; },
+  set: (v) => {
+    filterStore.tagFilter = v ?? [];
+  },
 });
 const gbTagRejectedFilter = computed({
   get: () => filterStore.tagRejectedFilter,
-  set: (v) => { filterStore.tagRejectedFilter = v ?? []; },
+  set: (v) => {
+    filterStore.tagRejectedFilter = v ?? [];
+  },
 });
 const gbTagConfidenceAboveFilter = computed({
   get: () => filterStore.tagConfidenceAboveFilter,
-  set: (v) => { filterStore.tagConfidenceAboveFilter = v ?? []; },
+  set: (v) => {
+    filterStore.tagConfidenceAboveFilter = v ?? [];
+  },
 });
 const gbTagConfidenceBelowFilter = computed({
   get: () => filterStore.tagConfidenceBelowFilter,
-  set: (v) => { filterStore.tagConfidenceBelowFilter = v ?? []; },
+  set: (v) => {
+    filterStore.tagConfidenceBelowFilter = v ?? [];
+  },
 });
 const gbSharedOnlyFilter = computed({
   get: () => filterStore.sharedOnlyFilter,
-  set: (v) => { filterStore.sharedOnlyFilter = Boolean(v); },
+  set: (v) => {
+    filterStore.sharedOnlyFilter = Boolean(v);
+  },
 });
 const gbUnassignedOnlyFilter = computed({
   get: () => filterStore.unassignedOnlyFilter,
-  set: (v) => { filterStore.unassignedOnlyFilter = Boolean(v); },
+  set: (v) => {
+    filterStore.unassignedOnlyFilter = Boolean(v);
+  },
 });
 const isAllPicturesView = computed(
   () =>
@@ -2113,11 +2172,15 @@ const isAllPicturesView = computed(
 );
 const gbComfyuiModelFilter = computed({
   get: () => filterStore.comfyuiModelFilter,
-  set: (v) => { filterStore.comfyuiModelFilter = v ?? []; },
+  set: (v) => {
+    filterStore.comfyuiModelFilter = v ?? [];
+  },
 });
 const gbComfyuiLoraFilter = computed({
   get: () => filterStore.comfyuiLoraFilter,
-  set: (v) => { filterStore.comfyuiLoraFilter = v ?? []; },
+  set: (v) => {
+    filterStore.comfyuiLoraFilter = v ?? [];
+  },
 });
 
 const gbIsFilterActive = computed(
@@ -2127,12 +2190,18 @@ const gbIsFilterActive = computed(
     filterStore.maxScoreFilter != null ||
     filterStore.smartScoreBucketFilter != null ||
     filterStore.resolutionBucketFilter != null ||
-    (Array.isArray(filterStore.tagFilter) && filterStore.tagFilter.length > 0) ||
-    (Array.isArray(filterStore.tagRejectedFilter) && filterStore.tagRejectedFilter.length > 0) ||
-    (Array.isArray(filterStore.tagConfidenceAboveFilter) && filterStore.tagConfidenceAboveFilter.length > 0) ||
-    (Array.isArray(filterStore.tagConfidenceBelowFilter) && filterStore.tagConfidenceBelowFilter.length > 0) ||
-    (Array.isArray(filterStore.comfyuiModelFilter) && filterStore.comfyuiModelFilter.length > 0) ||
-    (Array.isArray(filterStore.comfyuiLoraFilter) && filterStore.comfyuiLoraFilter.length > 0) ||
+    (Array.isArray(filterStore.tagFilter) &&
+      filterStore.tagFilter.length > 0) ||
+    (Array.isArray(filterStore.tagRejectedFilter) &&
+      filterStore.tagRejectedFilter.length > 0) ||
+    (Array.isArray(filterStore.tagConfidenceAboveFilter) &&
+      filterStore.tagConfidenceAboveFilter.length > 0) ||
+    (Array.isArray(filterStore.tagConfidenceBelowFilter) &&
+      filterStore.tagConfidenceBelowFilter.length > 0) ||
+    (Array.isArray(filterStore.comfyuiModelFilter) &&
+      filterStore.comfyuiModelFilter.length > 0) ||
+    (Array.isArray(filterStore.comfyuiLoraFilter) &&
+      filterStore.comfyuiLoraFilter.length > 0) ||
     filterStore.faceBboxFilter != null ||
     filterStore.sharedOnlyFilter ||
     filterStore.unassignedOnlyFilter,
@@ -2145,12 +2214,18 @@ const gbActiveFilterCount = computed(() => {
   if (filterStore.maxScoreFilter != null) count++;
   if (filterStore.smartScoreBucketFilter != null) count++;
   if (filterStore.resolutionBucketFilter != null) count++;
-  if (Array.isArray(filterStore.tagFilter)) count += filterStore.tagFilter.length;
-  if (Array.isArray(filterStore.tagRejectedFilter)) count += filterStore.tagRejectedFilter.length;
-  if (Array.isArray(filterStore.tagConfidenceAboveFilter)) count += filterStore.tagConfidenceAboveFilter.length;
-  if (Array.isArray(filterStore.tagConfidenceBelowFilter)) count += filterStore.tagConfidenceBelowFilter.length;
-  if (Array.isArray(filterStore.comfyuiModelFilter)) count += filterStore.comfyuiModelFilter.length;
-  if (Array.isArray(filterStore.comfyuiLoraFilter)) count += filterStore.comfyuiLoraFilter.length;
+  if (Array.isArray(filterStore.tagFilter))
+    count += filterStore.tagFilter.length;
+  if (Array.isArray(filterStore.tagRejectedFilter))
+    count += filterStore.tagRejectedFilter.length;
+  if (Array.isArray(filterStore.tagConfidenceAboveFilter))
+    count += filterStore.tagConfidenceAboveFilter.length;
+  if (Array.isArray(filterStore.tagConfidenceBelowFilter))
+    count += filterStore.tagConfidenceBelowFilter.length;
+  if (Array.isArray(filterStore.comfyuiModelFilter))
+    count += filterStore.comfyuiModelFilter.length;
+  if (Array.isArray(filterStore.comfyuiLoraFilter))
+    count += filterStore.comfyuiLoraFilter.length;
   if (filterStore.faceBboxFilter != null) count++;
   if (filterStore.sharedOnlyFilter) count++;
   if (filterStore.unassignedOnlyFilter) count++;
@@ -2404,15 +2479,21 @@ function gbCommitColumns() {
 
 const gbCompactModeModel = computed({
   get: () => gridStore.compactMode,
-  set: (v) => { gridStore.compactMode = Boolean(v); },
+  set: (v) => {
+    gridStore.compactMode = Boolean(v);
+  },
 });
 const gbShowFaceBboxesModel = computed({
   get: () => gridStore.showFaceBboxes,
-  set: (v) => { gridStore.showFaceBboxes = Boolean(v); },
+  set: (v) => {
+    gridStore.showFaceBboxes = Boolean(v);
+  },
 });
 const gbShowProblemIconModel = computed({
   get: () => gridStore.showProblemIcon,
-  set: (v) => { gridStore.showProblemIcon = Boolean(v); },
+  set: (v) => {
+    gridStore.showProblemIcon = Boolean(v);
+  },
 });
 
 const gbOverlayOptions = computed(() => [

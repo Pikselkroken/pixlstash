@@ -751,15 +751,11 @@ import {
   onUnmounted,
 } from "vue";
 import {
-  extractSupportedImportFilesFromDataTransfer,
-  isFileDrag,
   isSupportedImageFile,
   isSupportedVideoFile,
   isVideo,
   getPictureId,
   buildMediaUrl,
-  PIL_IMAGE_EXTENSIONS,
-  VIDEO_EXTENSIONS,
 } from "../../utils/media.js";
 import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
@@ -773,13 +769,11 @@ import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
-  applyStackBackgroundAlpha,
   arraysEqualByString,
   faceBoxColor,
   formatUserDate,
   getInfoFont,
   getStackColor,
-  getStackColorIndexFromId,
   isRangeOverlap,
   normalizePluginProgressMessage,
   rangeCovers,
@@ -799,18 +793,18 @@ import {
   tagMatches,
 } from "../../utils/tags.js";
 import {
-  applyStackOrderToList,
-  buildStackLeaderMap,
-  buildStackReorderedMembers,
   getStackBadgeCount,
   getPictureStackId,
-  normalizeStackIdValue,
   selectNewestStackMember,
   shouldShowStackBadge,
-  sortStackMembers,
   stackBadgeTitle,
 } from "../../utils/stack.js";
-import { debounce } from "lodash-es";
+import { useVirtualScroll } from "../../composables/useVirtualScroll.js";
+import { useMultiSelect } from "../../composables/useMultiSelect.js";
+import { useGridDragDrop } from "../../composables/useGridDragDrop.js";
+import { useStackOrdering } from "../../composables/useStackOrdering.js";
+import { useGridFetch } from "../../composables/useGridFetch.js";
+import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
 
 const emit = defineEmits([
   "open-overlay",
@@ -1044,32 +1038,10 @@ const pendingGuestScoreIntent = ref(null);
 // ------------------------------------------------
 
 const lastFetchedGridImages = ref([]);
-// Maps stack_id → { index, row, col } where:
-//   index = sequential appearance order of the stack in the grid (drives hue)
-//   row   = grid row of the stack's first image (drives lightness)
-//   col   = grid column of the stack's first image (drives saturation slightly)
-const stackVisualOrderMap = computed(() => {
-  const images = allGridImages.value;
-  const cols = Math.max(1, props.columns || 1);
-
-  const result = new Map();
-  let stackAppearanceIndex = 0;
-  for (let i = 0; i < images.length; i++) {
-    const sid = getPictureStackId(images[i]);
-    if (sid != null && !result.has(sid)) {
-      const row = Math.floor(i / cols);
-      const col = i % cols;
-      result.set(sid, { index: stackAppearanceIndex, row, col });
-      stackAppearanceIndex++;
-    }
-  }
-  return result;
-});
-const expandedStackIds = ref(new Set());
-const expandedStackMembers = ref(new Map());
-const expandedStackLoading = ref(new Set());
-const expandedStackLoadPromises = new Map();
-const stackReorderDrag = ref(null);
+// Track loaded batch ranges to avoid duplicate requests (used by thumbnail
+// loading and stack composable)
+const loadedRanges = ref([]);
+let pendingRanges = [];
 
 // ============================================================
 // PLUGIN / EXPORT STATE
@@ -1211,11 +1183,6 @@ const smartScoreProgressPercent = computed(() => {
 const smartScoreProgressMessage = computed(
   () => smartScoreProgress.message || "Calculating smart scores",
 );
-
-function getActiveSortKey() {
-  if (typeof props.selectedSort !== "string") return "";
-  return props.selectedSort.trim().toUpperCase();
-}
 
 function getSortProgressLabel(sortKey) {
   const key = String(sortKey || "").toUpperCase();
@@ -1893,74 +1860,11 @@ function getVideoThumbnailSrc(img) {
   return `${props.backendUrl}/pictures/${img.id}.${img.format.toLowerCase()}`;
 }
 
-// --- Multi-face selection state ---
 // ============================================================
 // FACE BBOX FUNCTIONS
 // ============================================================
-const selectedFaceIds = ref([]); // Array of { imageId, faceIdx, faceId }
-
-function isFaceSelected(imageId, faceIdx) {
-  return selectedFaceIds.value.some(
-    (f) => f.imageId === imageId && f.faceIdx === faceIdx,
-  );
-}
-
-function toggleFaceSelection(imageId, faceIdx, faceId) {
-  const idx = selectedFaceIds.value.findIndex(
-    (f) => f.imageId === imageId && f.faceIdx === faceIdx,
-  );
-  if (idx !== -1) {
-    selectedFaceIds.value.splice(idx, 1);
-  } else {
-    selectedFaceIds.value.push({ imageId, faceIdx, faceId });
-  }
-}
-
-function clearFaceSelection() {
-  selectedFaceIds.value = [];
-}
-
-function onFaceBboxDragStart(event, img, faceIdx, faceId) {
-  // If this face is selected, drag all selected faces; else, drag just this one
-  let facesToDrag = [];
-  if (isFaceSelected(img.id, faceIdx) && selectedFaceIds.value.length > 0) {
-    facesToDrag = selectedFaceIds.value.map((f) => ({
-      imageId: f.imageId,
-      faceIdx: f.faceIdx,
-      faceId: f.faceId,
-    }));
-  } else {
-    const resolvedFaceId = faceId ?? (img.faces && img.faces[faceIdx]?.id);
-    if (!resolvedFaceId) {
-      return;
-    }
-    facesToDrag = [{ imageId: img.id, faceIdx, faceId: resolvedFaceId }];
-  }
-
-  // Ensure that additional data types are preserved in the dataTransfer object
-  const existingData = {};
-  for (const type of event.dataTransfer.types) {
-    existingData[type] = event.dataTransfer.getData(type);
-  }
-
-  // Set the application/json data
-  const dragDataStr = JSON.stringify({
-    type: "face-bbox",
-    faceIds: facesToDrag.map((f) => f.faceId),
-    imageIds: Array.from(new Set(facesToDrag.map((f) => f.imageId))),
-    faces: facesToDrag,
-  });
-  event.dataTransfer.setData("application/json", dragDataStr);
-
-  // Restore other data types
-  for (const [type, data] of Object.entries(existingData)) {
-    if (type !== "application/json") {
-      event.dataTransfer.setData(type, data);
-    }
-  }
-
-  event.dataTransfer.effectAllowed = "move";
-}
+// selectedFaceIds, isFaceSelected, toggleFaceSelection, clearFaceSelection,
+// onFaceBboxDragStart — moved to useMultiSelect composable.
 
 // Helper to calculate face bbox overlay style using object-fit: cover logic
 function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
@@ -2456,18 +2360,6 @@ function prefetchFullImage(img) {
 // ============================================================
 // SELECTION + DRAG HELPERS
 // ============================================================
-function getDragSelectionIds(img) {
-  if (
-    img &&
-    selectedImageIds.value &&
-    selectedImageIds.value.length > 1 &&
-    selectedImageIds.value.includes(img.id)
-  ) {
-    return selectedImageIds.value.slice();
-  }
-  return img && img.id ? [img.id] : [];
-}
-
 function handleImageError(event) {
   const imgEl = event?.target;
   if (imgEl instanceof HTMLImageElement) {
@@ -2488,37 +2380,8 @@ function handleImageError(event) {
   console.error("[ImageGrid] Image load error for", src);
 }
 
-function setupMultiExportDrag(event, ids) {
-  if (!event?.dataTransfer || !Array.isArray(ids) || ids.length < 2) return;
-
-  try {
-    const dragData = {
-      type: "image-ids",
-      imageIds: ids,
-    };
-    event.dataTransfer.setData("application/json", JSON.stringify(dragData));
-  } catch (err) {
-    console.error("[ERROR] Failed to set drag data:", err);
-  }
-}
-
-function prepareThumbnailNativeDrag(img, event) {
-  if (!img || !event) return;
-  const selectionIds = getDragSelectionIds(img);
-  if (selectionIds.length > 1) return;
-  prefetchFullImage(img);
-  if (event.pointerType === "mouse" && event.button !== 0) return;
-}
-
-function handleThumbnailPointerRelease(event) {
-  if (dragSource.value === "grid") return;
-}
-
-function clearSelection() {
-  selectedImageIds.value = [];
-  clearFaceSelection();
-  lastSelectedImageId = null;
-}
+// clearSelection — moved to useMultiSelect composable.
+// getDragSelectionIds/setupMultiExportDrag/prepareThumbnailNativeDrag/handleThumbnailPointerRelease — moved to useGridDragDrop composable.
 
 // Video refs for hover play/pause in grid
 // ============================================================
@@ -2577,7 +2440,7 @@ async function removeFromGroup() {
         );
         selectedImageIds.value = [];
         clearFaceSelection();
-        lastSelectedImageId = null;
+        lastSelectedImageId.value = null;
         fetchAllGridImages().then(() => {
           loadedRanges.value = [];
           updateVisibleThumbnails();
@@ -2628,7 +2491,7 @@ async function removeFromGroup() {
         }
         selectedImageIds.value = [];
         clearFaceSelection();
-        lastSelectedImageId = null;
+        lastSelectedImageId.value = null;
         fetchAllGridImages().then(() => {
           loadedRanges.value = [];
           updateVisibleThumbnails();
@@ -2744,7 +2607,7 @@ async function removeFromGroup() {
 
     selectedImageIds.value = [];
     clearFaceSelection();
-    lastSelectedImageId = null;
+    lastSelectedImageId.value = null;
     await fetchAllGridImages();
     loadedRanges.value = [];
     updateVisibleThumbnails();
@@ -2779,7 +2642,7 @@ function handleOverlayAddedToSet(payload) {
           (id) => !pictureIds.includes(id),
         );
         clearFaceSelection();
-        lastSelectedImageId = null;
+        lastSelectedImageId.value = null;
       }
     }
   } else if (
@@ -2821,7 +2684,7 @@ function handleAddToCharacter(payload) {
     removeImagesById(pictureIds);
     selectedImageIds.value = [];
     clearFaceSelection();
-    lastSelectedImageId = null;
+    lastSelectedImageId.value = null;
     updateVisibleThumbnails();
   }
   emit("refresh-sidebar");
@@ -2845,7 +2708,7 @@ function handleRemoveFromCharacter(payload) {
     removeImagesById(pictureIds);
     selectedImageIds.value = [];
     clearFaceSelection();
-    lastSelectedImageId = null;
+    lastSelectedImageId.value = null;
     updateVisibleThumbnails();
   }
   emit("refresh-sidebar");
@@ -2934,7 +2797,7 @@ async function deleteSelected() {
     }
     removeImagesById(idsToRemove);
     selectedImageIds.value = [];
-    lastSelectedImageId = null;
+    lastSelectedImageId.value = null;
     if (isScrapheapSelection) {
       updateVisibleThumbnails();
     }
@@ -3078,55 +2941,6 @@ const isScrapheapView = computed(() => {
   ).toUpperCase();
   const selected = String(props.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
-});
-const selectedStackId = computed(() => {
-  const ids = Array.isArray(selectedImageIds.value)
-    ? selectedImageIds.value
-    : [];
-  if (!ids.length) return null;
-  const images = Array.isArray(allGridImages.value) ? allGridImages.value : [];
-  if (!images.length) return null;
-  const imageById = new Map(
-    images
-      .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img]),
-  );
-  let stackId = null;
-  for (const id of ids) {
-    const img = imageById.get(String(id));
-    const currentStackId = getPictureStackId(img);
-    if (!currentStackId) return null;
-    if (stackId === null) {
-      stackId = currentStackId;
-      continue;
-    }
-    if (stackId !== currentStackId) return null;
-  }
-  return stackId;
-});
-const showRemoveFromStack = computed(() => {
-  return selectedStackId.value !== null;
-});
-
-// All unique stack IDs present among selected images (used for multi-stack unstack).
-const selectedMultipleStackIds = computed(() => {
-  const ids = Array.isArray(selectedImageIds.value)
-    ? selectedImageIds.value
-    : [];
-  if (!ids.length) return [];
-  const images = Array.isArray(allGridImages.value) ? allGridImages.value : [];
-  const imageById = new Map(
-    images
-      .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img]),
-  );
-  const stackIds = new Set();
-  for (const id of ids) {
-    const img = imageById.get(String(id));
-    const stackId = getPictureStackId(img);
-    if (stackId) stackIds.add(stackId);
-  }
-  return [...stackIds];
 });
 const selectedMediaSupport = computed(() => {
   const ids = Array.isArray(selectedImageIds.value)
@@ -3273,7 +3087,7 @@ async function confirmEmptyScrapheap() {
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
-    lastSelectedImageId = null;
+    lastSelectedImageId.value = null;
     updateVisibleThumbnails();
     emit("refresh-sidebar");
     fetchAllGridImages().then(() => {
@@ -3298,7 +3112,7 @@ async function confirmRestoreScrapheap() {
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
-    lastSelectedImageId = null;
+    lastSelectedImageId.value = null;
     updateVisibleThumbnails();
     emit("refresh-sidebar");
     fetchAllGridImages().then(() => {
@@ -3367,7 +3181,7 @@ async function handleImagesUploaded(payload) {
   resetThumbnailState();
   allGridImages.value = [];
   selectedImageIds.value = [];
-  lastSelectedImageId = null;
+  lastSelectedImageId.value = null;
   fetchAllGridImages({ force: true }).then(() => {
     updateVisibleThumbnails();
   });
@@ -3402,7 +3216,17 @@ function handleImportErrored() {
   runDeferredGridRefreshAfterImport();
 }
 
-const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
+// Lazy dispatch object resolved after useGridFetch + useStackOrdering are called.
+// useGridFetch is called before useStackOrdering (so it can return
+// debouncedFetchAllGridImages for use by useStackOrdering), but it needs
+// stack callbacks that only exist after useStackOrdering returns.  These
+// _stackOps wrappers are filled in immediately after useStackOrdering.
+const _stackOps = {
+  collapseStackImages: null,
+  mapGridImages: null,
+  syncExpandAllStacksFromFetchedImages: null,
+  refreshExpandedStacksAfterFetch: null,
+};
 const lastGridVersionRefreshAt = ref(0);
 const WS_TAG_FULL_REFRESH_MIN_INTERVAL_MS = 6000;
 const lastWsTagFullRefreshAt = ref(0);
@@ -3466,7 +3290,7 @@ watch(
     if (!preserveScrollOnNextFetch.value) {
       allGridImages.value = [];
       selectedImageIds.value = [];
-      lastSelectedImageId = null;
+      lastSelectedImageId.value = null;
     }
     // Force the refetch to bypass the 1200ms de-dup cache: if the grid was
     // just cleared we must not skip the fetch, otherwise the grid stays blank.
@@ -3479,19 +3303,55 @@ watch(
 );
 
 // ============================================================
+// SELECTION STATE + TOUCH SELECTION MODE
+// (moved to useMultiSelect composable)
+// ============================================================
+const {
+  selectedImageIds,
+  lastSelectedImageId,
+  cursorIdx,
+  isImageSelected,
+  touchSelectMode,
+  suppressTouchClickId,
+  lastPointerWasTouch,
+  handleTouchStart,
+  handleTouchMove,
+  handleTouchEnd,
+  exitTouchSelectMode,
+  selectedFaceIds,
+  isFaceSelected,
+  toggleFaceSelection,
+  clearFaceSelection,
+  onFaceBboxDragStart,
+  clearSelection,
+} = useMultiSelect();
+
+// ============================================================
 // VIEWPORT + RENDER
 // ============================================================
-const VIEW_WINDOW = 100;
+// VIEWPORT + RENDER
+// ============================================================
+const allGridImagesLength = computed(() => allGridImages.value?.length ?? 0);
 
-const divisibleViewWindow = computed(() => {
-  const cols = props.columns;
-  return Math.ceil(VIEW_WINDOW / cols) * cols;
+const {
+  initialRender,
+  divisibleViewWindow,
+  renderBuffer,
+  visibleStart,
+  visibleEnd,
+  rowHeight,
+  renderStart,
+  renderEnd,
+  topSpacerHeight,
+  bottomSpacerHeight,
+  getGridColumnWidth,
+  updateRowHeightFromGrid,
+  onGridScroll,
+  scrollCursorIntoView,
+} = useVirtualScroll(scrollWrapper, gridContainer, props, allGridImagesLength, {
+  onVisibleRangeChange: () => updateVisibleThumbnails(),
+  afterRowHeightUpdate: () => refreshAllThumbnailInfoDisplays(),
 });
-
-const initialRender = ref(true);
-const renderBuffer = computed(() =>
-  initialRender.value ? 0 : divisibleViewWindow.value,
-);
 
 // ============================================================
 // OVERLAY STATE
@@ -3523,49 +3383,194 @@ const pendingGridImages = ref(null);
 
 // ============================================================
 // DRAG & DROP STATE + SOURCE HELPERS
+// (moved to useGridDragDrop composable)
 // ============================================================
-const dragOverlayVisible = ref(false);
-const dragOverlayMessage = "Drop files here to import";
-const dragOverlayDepth = ref(0);
-const dragSource = ref(null);
-const dragSourceImageIds = ref(new Set());
-const stackReorderHoverId = ref(null);
-const stackReorderHoverSide = ref(null);
+const {
+  dragOverlayVisible,
+  dragOverlayMessage,
+  dragOverlayDepth,
+  dragSource,
+  dragSourceImageIds,
+  setDragSourceImageIds,
+  clearDragSourceImageIds,
+  isDragSourceImage,
+  stackReorderDrag,
+  stackReorderHoverId,
+  stackReorderHoverSide,
+  setStackReorderHoverId,
+  setStackReorderHoverSide,
+  isStackReorderTarget,
+  isStackReorderTargetSide,
+  prepareThumbnailNativeDrag,
+  handleThumbnailPointerRelease,
+  handleGridDragEnter,
+  handleGridDragOver,
+  handleGridDragLeave,
+  clearGridDragOverlay,
+  handleGridDrop,
+  handleThumbnailNativeDragStart,
+  handleDragEnd,
+  handleContainerDragStart,
+} = useGridDragDrop(
+  {
+    selectedImageIds,
+    touchSelectMode,
+    imageImporterRef,
+    thumbnailRefs,
+    dragPreviewRefs,
+    prefetchFullImage,
+  },
+  props,
+);
 
-function setDragSourceImageIds(ids) {
-  const next = new Set(
-    Array.isArray(ids) ? ids.map((id) => String(id)).filter(Boolean) : [],
-  );
-  dragSourceImageIds.value = next;
-}
+// ============================================================
+// GRID FETCH STATE + FETCH FUNCTIONS
+// (moved to useGridFetch composable)
+// useGridFetch is called before useStackOrdering so it can return
+// debouncedFetchAllGridImages for useStackOrdering to use.
+// Stack callbacks are lazy-dispatched via _stackOps (wired below).
+// ============================================================
+const {
+  imagesLoading,
+  imagesError,
+  totalAllPicturesCount,
+  totalCurrentCategoryCount,
+  gridReady,
+  gridLoadEpoch,
+  lastFetchKey,
+  lastFetchError,
+  lastFetchSuccess,
+  smartScoreLoadingVisible,
+  buildGridFetchKey,
+  buildPictureIdsQueryParams,
+  buildLikenessGroupQueryParams,
+  fetchAllGridImages,
+  fetchAllPicturesCount,
+  debouncedFetchAllGridImages,
+} = useGridFetch(
+  {
+    allGridImages,
+    lastFetchedGridImages,
+    scrollWrapper,
+    preserveScrollOnNextFetch,
+    pendingScrollTop,
+    overlayOpen,
+    pendingGridImages,
+    pendingOverlayGridRefresh,
+    visibleStart,
+    visibleEnd,
+    divisibleViewWindow,
+    initialRender,
+    sharedPictureIds,
+    guestConsentState,
+    guestSessionId,
+    highlightNextFetch,
+    hasLoadedOnce,
+    previousImageIds,
+    normalizedSelectedCharacterIds,
+    normalizedSelectedSetIds,
+    hasSetSelection,
+    isSetOverlapView,
+    isMultiCharacterView,
+    primarySelectedSetId,
+    smartScoreProgress,
+    exportProgress,
+  },
+  props,
+  {
+    collapseStackImages: (images) => _stackOps.collapseStackImages(images),
+    mapGridImages: (images) => _stackOps.mapGridImages(images),
+    syncExpandAllStacksFromFetchedImages: () =>
+      _stackOps.syncExpandAllStacksFromFetchedImages(),
+    refreshExpandedStacksAfterFetch: () =>
+      _stackOps.refreshExpandedStacksAfterFetch(),
+    resetThumbnailState,
+    triggerNewImageHighlight,
+    updateVisibleThumbnails,
+    fetchThumbnailsBatch,
+    maybeRefreshOverlayForComfyui,
+    startSmartScoreProgress,
+    completeSmartScoreProgress,
+  },
+);
 
-function clearDragSourceImageIds() {
-  dragSourceImageIds.value = new Set();
-}
+// ============================================================
+// STACK ORDERING + EXPAND / COLLAPSE + REORDER DRAG
+// (moved to useStackOrdering composable)
+// ============================================================
+const {
+  expandedStackIds,
+  expandedStackMembers,
+  expandedStackLoading,
+  stackVisualOrderMap,
+  selectedStackId,
+  selectedMultipleStackIds,
+  showRemoveFromStack,
+  mapGridImages,
+  getStackCardStyle,
+  getStackCardColor,
+  getStackBadgeIconStyle,
+  getStackBandStyle,
+  isStackExpandedForImage,
+  rebuildGridImagesFromLastFetch,
+  refreshExpandedStacksAfterFetch,
+  loadExpandedStacksInView,
+  expandAllStacks,
+  collapseAllStacks,
+  toggleStackExpand,
+  prefetchStackMembers,
+  emitStackStats,
+  syncExpandAllStacksFromFetchedImages,
+  collectExpandableStackIds,
+  handleStackReorderDragOver,
+  handleStackReorderDragLeave,
+  handleStackReorderDrop,
+  createStackFromSelection,
+  dissolveSelectedStacks,
+  removeSelectedFromStack,
+  getLikenessGroupId,
+  createStacksFromSelectedGroups,
+  collapseStackImages,
+} = useStackOrdering(
+  {
+    allGridImages,
+    lastFetchedGridImages,
+    loadedRanges,
+    visibleStart,
+    visibleEnd,
+    renderBuffer,
+    divisibleViewWindow,
+    stackReorderDrag,
+    stackReorderHoverId,
+    stackReorderHoverSide,
+    setStackReorderHoverId,
+    setStackReorderHoverSide,
+    selectedImageIds,
+    preserveScrollOnNextFetch,
+  },
+  props,
+  emit,
+  {
+    invalidateVisibleThumbnailRanges,
+    updateVisibleThumbnails,
+    debouncedFetchAllGridImages,
+    fetchThumbnailsForRangeNow,
+    maybeRefreshThumbnailsForRange,
+    markVisibleFetchSuppressedForExpand,
+    clearSelection,
+    getPendingRanges: () => pendingRanges,
+    setPendingRanges: (v) => {
+      pendingRanges = v;
+    },
+  },
+);
 
-function isDragSourceImage(img) {
-  if (!img?.id) return false;
-  return dragSourceImageIds.value.has(String(img.id));
-}
-
-function setStackReorderHoverId(value) {
-  stackReorderHoverId.value = value ? String(value) : null;
-}
-
-function setStackReorderHoverSide(value) {
-  stackReorderHoverSide.value =
-    value === "left" || value === "right" ? value : null;
-}
-
-function isStackReorderTarget(img) {
-  if (!img?.id) return false;
-  return stackReorderHoverId.value === String(img.id);
-}
-
-function isStackReorderTargetSide(img, side) {
-  if (!isStackReorderTarget(img)) return false;
-  return stackReorderHoverSide.value === side;
-}
+// Resolve circular dependency: wire _stackOps with the real functions now
+// that useStackOrdering has returned them.
+_stackOps.collapseStackImages = collapseStackImages;
+_stackOps.mapGridImages = mapGridImages;
+_stackOps.syncExpandAllStacksFromFetchedImages = syncExpandAllStacksFromFetchedImages;
+_stackOps.refreshExpandedStacksAfterFetch = refreshExpandedStacksAfterFetch;
 
 const selectedGroupName = ref("");
 
@@ -3617,94 +3622,37 @@ watch(
 );
 
 // ============================================================
-// SELECTION STATE
+// KEYBOARD NAVIGATION
+// (moved to useGridKeyboardNav composable)
 // ============================================================
-// Local selection state (mirrors parent prop)
-const selectedImageIds = ref([]);
-let lastSelectedImageId = null;
-const cursorIdx = ref(null);
-const isImageSelected = (id) =>
-  selectedImageIds.value && selectedImageIds.value.includes(id);
-
-// ============================================================
-// TOUCH SELECTION MODE
-// ============================================================
-const touchSelectMode = ref(false);
-let longPressTimer = null;
-let longPressMoved = false;
-let suppressTouchClickId = null; // img.id whose next synthesized click should be ignored
-let lastPointerWasTouch = false; // set in touchstart, used in click to detect touch taps
-let touchStartPayload = null; // { img, idx } captured in touchstart
-
-function handleTouchStart(img, idx, event) {
-  if (!img.id) return;
-  lastPointerWasTouch = true;
-  longPressMoved = false;
-  touchStartPayload = { img, idx };
-  if (touchSelectMode.value) {
-    // In select mode: tap handled in handleTouchEnd — no long-press timer needed
-    return;
-  }
-  longPressTimer = setTimeout(() => {
-    if (longPressMoved) return;
-    // Haptic feedback if available
-    if (navigator.vibrate) navigator.vibrate(30);
-    touchSelectMode.value = true;
-    selectedImageIds.value = [img.id];
-    lastSelectedImageId = img.id;
-    cursorIdx.value = idx;
-    touchStartPayload = null; // consumed by long-press
-    // Suppress the synthesized click that fires after the long-press touchend
-    suppressTouchClickId = img.id;
-  }, 500);
-}
-
-function handleTouchMove() {
-  longPressMoved = true;
-  clearTimeout(longPressTimer);
-  longPressTimer = null;
-  touchStartPayload = null;
-}
-
-function handleTouchEnd() {
-  const timerStillPending = longPressTimer !== null;
-  clearTimeout(longPressTimer);
-  longPressTimer = null;
-
-  // Short tap in select mode: toggle directly here so we never rely on
-  // synthesized click events, which are unreliable after touch interactions.
-  if (touchSelectMode.value && touchStartPayload && !longPressMoved) {
-    const { img, idx } = touchStartPayload;
-    const ids = [...selectedImageIds.value];
-    const pos = ids.indexOf(img.id);
-    if (pos >= 0) {
-      ids.splice(pos, 1);
-    } else {
-      ids.push(img.id);
-    }
-    selectedImageIds.value = ids;
-    lastSelectedImageId = img.id;
-    cursorIdx.value = idx;
-    if (ids.length === 0) exitTouchSelectMode();
-    // Suppress the synthesized click so it doesn't re-toggle
-    suppressTouchClickId = img.id;
-  }
-  touchStartPayload = null;
-}
-
-function exitTouchSelectMode() {
-  touchSelectMode.value = false;
-  selectedImageIds.value = [];
-  lastSelectedImageId = null;
-  cursorIdx.value = null;
-}
-
-// Auto-exit touch-select mode whenever selection is cleared by any code path
-watch(selectedImageIds, (ids) => {
-  if (touchSelectMode.value && ids.length === 0) {
-    touchSelectMode.value = false;
-  }
-});
+const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
+  {
+    scrollWrapper,
+    allGridImages,
+    rowHeight,
+    visibleStart,
+    overlayOpen,
+    showSelectionBar,
+    selectedImageIds,
+    lastSelectedImageId,
+    cursorIdx,
+    isMultiCharacterView,
+    isSetOverlapView,
+    hoveredImageIdx,
+  },
+  props,
+  emit,
+  {
+    clearFaceSelection,
+    clearSearchQuery,
+    scrollCursorIntoView,
+    openOverlay,
+    deleteSelected,
+    selectionBarRef,
+    applyScoresForSelection,
+    setScore,
+  },
+);
 
 // ============================================================
 // OVERLAY FUNCTIONS
@@ -3838,267 +3786,6 @@ function handleOverlayChange(payload) {
     return;
   }
   refreshGridImage(imageId);
-}
-
-// ============================================================
-// STACK MANAGEMENT ACTIONS
-// ============================================================
-async function createStackFromSelection() {
-  const ids = Array.isArray(selectedImageIds.value)
-    ? selectedImageIds.value
-    : [];
-  if (!ids.length) return;
-  // Sort by grid display order so the backend keeps the first-in-grid stack.
-  const gridImages = Array.isArray(allGridImages.value)
-    ? allGridImages.value
-    : [];
-  const gridIndexById = new Map(
-    gridImages.map((img, i) => [String(img?.id), i]),
-  );
-  const sortedIds = ids.slice().sort((a, b) => {
-    const ia = gridIndexById.get(String(a)) ?? Infinity;
-    const ib = gridIndexById.get(String(b)) ?? Infinity;
-    return ia - ib;
-  });
-  try {
-    await apiClient.post(`${props.backendUrl}/stacks`, {
-      picture_ids: sortedIds,
-    });
-    clearSelection();
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  } catch (e) {
-    console.error("Failed to create stack from selection:", e);
-  }
-}
-
-async function dissolveSelectedStacks() {
-  const stackIds = selectedMultipleStackIds.value;
-  if (!stackIds.length) return;
-  try {
-    await Promise.all(
-      stackIds.map(async (stackId) => {
-        let idsToRemove;
-        try {
-          const res = await apiClient.get(
-            `${props.backendUrl}/stacks/${stackId}`,
-          );
-          idsToRemove = res.data?.picture_ids;
-        } catch {
-          idsToRemove = null;
-        }
-        if (!Array.isArray(idsToRemove) || !idsToRemove.length) return;
-        await apiClient.delete(
-          `${props.backendUrl}/stacks/${stackId}/members`,
-          { data: { picture_ids: idsToRemove } },
-        );
-        const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
-        allGridImages.value = allGridImages.value.map((img) => {
-          if (!img || !removed.has(getPictureId(img.id))) return img;
-          return {
-            ...img,
-            stack_id: null,
-            stackId: null,
-            stack_index: null,
-            stackIndex: null,
-            stack_position: null,
-            stackPosition: null,
-            stack_count: null,
-            stackCount: null,
-          };
-        });
-        const nextMembers = new Map(expandedStackMembers.value);
-        nextMembers.delete(stackId);
-        expandedStackMembers.value = nextMembers;
-        const nextExpanded = new Set(expandedStackIds.value);
-        if (nextExpanded.delete(stackId)) expandedStackIds.value = nextExpanded;
-      }),
-    );
-    clearSelection();
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  } catch (e) {
-    console.error("Failed to dissolve selected stacks:", e);
-  }
-}
-
-async function removeSelectedFromStack() {
-  const stackId = selectedStackId.value;
-  const ids = Array.isArray(selectedImageIds.value)
-    ? selectedImageIds.value
-    : [];
-  if (!stackId || !ids.length) return;
-
-  // When the stack is collapsed the user sees (and has selected) only the
-  // leader card.  Removing just the leader leaves the next-best-scoring
-  // member as a new collapsed card — requiring repeated "unstack" clicks to
-  // dissolve the stack.  Instead, dissolve the entire stack in one go by
-  // fetching all member IDs from the server and removing them all.
-  // When the stack IS expanded the user has deliberately opened it and may
-  // want to remove only a specific subset, so respect the selection as-is.
-  let idsToRemove = ids;
-  if (!expandedStackIds.value.has(stackId)) {
-    try {
-      const stackRes = await apiClient.get(
-        `${props.backendUrl}/stacks/${stackId}`,
-      );
-      const allMemberIds = stackRes.data?.picture_ids;
-      if (Array.isArray(allMemberIds) && allMemberIds.length) {
-        idsToRemove = allMemberIds;
-      }
-    } catch (e) {
-      console.error(
-        "Failed to fetch all stack members for dissolve, falling back to selected ids:",
-        e,
-      );
-    }
-  }
-
-  try {
-    await apiClient.delete(`${props.backendUrl}/stacks/${stackId}/members`, {
-      data: { picture_ids: idsToRemove },
-    });
-    const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
-    allGridImages.value = allGridImages.value.map((img) => {
-      if (!img || !removed.has(getPictureId(img.id))) {
-        return img;
-      }
-      return {
-        ...img,
-        stack_id: null,
-        stackId: null,
-        stack_index: null,
-        stackIndex: null,
-        stack_position: null,
-        stackPosition: null,
-        stack_count: null,
-        stackCount: null,
-      };
-    });
-    const nextMembers = new Map(expandedStackMembers.value);
-    const entry = nextMembers.get(stackId);
-    if (entry) {
-      const nextIds = Array.isArray(entry.ids)
-        ? entry.ids.filter((id) => !removed.has(getPictureId(id)))
-        : [];
-      const nextImages = Array.isArray(entry.images)
-        ? entry.images.filter((img) => !removed.has(getPictureId(img?.id)))
-        : [];
-      if (nextIds.length || nextImages.length) {
-        nextMembers.set(stackId, { ids: nextIds, images: nextImages });
-      } else {
-        nextMembers.delete(stackId);
-        const nextExpanded = new Set(expandedStackIds.value);
-        if (nextExpanded.delete(stackId)) {
-          expandedStackIds.value = nextExpanded;
-        }
-      }
-      expandedStackMembers.value = nextMembers;
-    }
-    clearSelection();
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  } catch (e) {
-    console.error("Failed to remove selected images from stack:", e);
-  }
-}
-
-function getLikenessGroupId(img) {
-  if (!img) return null;
-  const raw = img.stackIndex ?? img.stack_index ?? null;
-  if (raw === null || raw === undefined) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-async function createStacksFromSelectedGroups() {
-  if (props.selectedSort !== LIKENESS_GROUPS_SORT_KEY) return;
-  const ids = Array.isArray(selectedImageIds.value)
-    ? selectedImageIds.value
-    : [];
-  if (!ids.length) return;
-
-  const source = Array.isArray(lastFetchedGridImages.value)
-    ? lastFetchedGridImages.value
-    : allGridImages.value;
-  const images = Array.isArray(source) ? source : [];
-  const imageById = new Map(
-    images
-      .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img]),
-  );
-
-  const groupIds = new Set();
-  for (const id of ids) {
-    const img = imageById.get(String(id));
-    const groupId = getLikenessGroupId(img);
-    if (groupId != null) {
-      groupIds.add(groupId);
-    }
-  }
-
-  if (!groupIds.size) return;
-
-  const groupsToStack = [];
-  const skippedGroups = [];
-  for (const groupId of groupIds) {
-    const members = images.filter(
-      (img) => getLikenessGroupId(img) === groupId && img?.id != null,
-    );
-    const memberIds = Array.from(
-      new Set(members.map((img) => Number(img.id)).filter(Number.isFinite)),
-    );
-    if (memberIds.length < 2) continue;
-    const membersByStack = new Map();
-    for (const member of members) {
-      const stackId = getPictureStackId(member);
-      if (!stackId) continue;
-      if (!membersByStack.has(stackId)) {
-        membersByStack.set(stackId, []);
-      }
-      membersByStack.get(stackId).push(member);
-    }
-    if (membersByStack.size > 1) {
-      skippedGroups.push(groupId);
-      continue;
-    }
-    if (membersByStack.size === 1) {
-      const [stackId, stackedMembers] = Array.from(membersByStack.entries())[0];
-      const stackedAnchorId = stackedMembers?.[0]?.id;
-      const unstackedIds = memberIds.filter(
-        (id) => !getPictureStackId(imageById.get(String(id))),
-      );
-      if (!unstackedIds.length) continue;
-      const payloadIds = [stackedAnchorId, ...unstackedIds]
-        .filter((id) => id != null)
-        .map((id) => Number(id))
-        .filter(Number.isFinite);
-      if (payloadIds.length < 2) continue;
-      groupsToStack.push(payloadIds);
-      continue;
-    }
-    groupsToStack.push(memberIds);
-  }
-
-  if (!groupsToStack.length) return;
-
-  try {
-    for (const memberIds of groupsToStack) {
-      await apiClient.post(`${props.backendUrl}/stacks`, {
-        picture_ids: memberIds,
-      });
-    }
-    if (skippedGroups.length) {
-      alert(
-        `Skipped ${skippedGroups.length} group(s) containing multiple stacks.`,
-      );
-    }
-    clearSelection();
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  } catch (e) {
-    console.error("Failed to create stacks from groups:", e);
-  }
 }
 
 async function openOverlay(img) {
@@ -4602,661 +4289,8 @@ async function applyScoresForSelection(imageIds, targetScore) {
 }
 
 // ============================================================
-// DRAG & DROP — GRID FILE IMPORT
-// ============================================================
-function handleGridDragEnter(e) {
-  // Ignore drags that originate from within the grid itself (e.g. reordering
-  // images). Chrome reports "Files" in dataTransfer.types for <img> element
-  // drags, which would otherwise trigger the import overlay incorrectly.
-  if (dragSource.value === "grid") return;
-  if (!e.dataTransfer) return;
-  const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
-  if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
-  dragOverlayDepth.value += 1;
-  dragOverlayVisible.value = true;
-  e.preventDefault();
-}
-
-function handleGridDragOver(e) {
-  if (dragSource.value === "grid") return;
-  if (!e.dataTransfer) return;
-  const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
-  if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
-  if (!dragOverlayVisible.value) {
-    dragOverlayVisible.value = true;
-  }
-  e.preventDefault();
-}
-
-function handleGridDragLeave(e) {
-  dragOverlayDepth.value = Math.max(0, dragOverlayDepth.value - 1);
-  if (dragOverlayDepth.value === 0) {
-    dragOverlayVisible.value = false;
-  }
-}
-
-function clearGridDragOverlay() {
-  dragOverlayDepth.value = 0;
-  dragOverlayVisible.value = false;
-}
-
-async function handleGridDrop(e) {
-  clearGridDragOverlay();
-
-  // Ignore drag-and-drop if the source is the grid itself
-  if (
-    dragSource.value === "grid" ||
-    e.dataTransfer.types.includes("application/json")
-  ) {
-    dragSource.value = null;
-    return;
-  }
-
-  if (!e.dataTransfer) return;
-  const files = await extractSupportedImportFilesFromDataTransfer(
-    e.dataTransfer,
-  );
-  if (!files.length) {
-    alert("No supported files found.");
-    return;
-  }
-
-  dragSource.value = null;
-  // Trigger import directly in ImageGrid
-  if (imageImporterRef.value && files.length) {
-    imageImporterRef.value.startImport(files, {
-      backendUrl: props.backendUrl,
-      selectedCharacterId: props.selectedCharacter,
-      allPicturesId: "ALL",
-      unassignedPicturesId: "UNASSIGNED",
-      projectId: props.selectedProjectId ?? null,
-    });
-  }
-}
-
-// ============================================================
-// DRAG & DROP — THUMBNAIL NATIVE
-// ============================================================
-function buildDragGhostElement(element) {
-  if (typeof document === "undefined" || !element) return null;
-  const rect = element.getBoundingClientRect?.();
-  const width = Math.max(
-    1,
-    Math.round(rect?.width || element.clientWidth || element.width || 160),
-  );
-  const height = Math.max(
-    1,
-    Math.round(rect?.height || element.clientHeight || element.height || 90),
-  );
-  const computed =
-    typeof window !== "undefined" && element instanceof Element
-      ? window.getComputedStyle(element)
-      : null;
-  const radius = computed?.borderRadius || "0px";
-  const ghost = document.createElement("div");
-  ghost.style.width = `${width}px`;
-  ghost.style.height = `${height}px`;
-  ghost.style.borderRadius = radius;
-  ghost.style.overflow = "hidden";
-  ghost.style.backgroundColor = "transparent";
-  ghost.style.opacity = "1";
-  ghost.style.filter = "none";
-  ghost.style.position = "fixed";
-  ghost.style.left = "-9999px";
-  ghost.style.top = "-9999px";
-  ghost.style.pointerEvents = "none";
-  ghost.style.zIndex = "9999";
-
-  if (element instanceof HTMLImageElement) {
-    const clone = element.cloneNode(true);
-    clone.style.width = "100%";
-    clone.style.height = "100%";
-    clone.style.objectFit = "cover";
-    clone.style.borderRadius = "inherit";
-    clone.style.opacity = "1";
-    clone.style.filter = "none";
-    ghost.appendChild(clone);
-  } else if (element instanceof HTMLVideoElement) {
-    const src = element.currentSrc || element.poster || "";
-    ghost.style.background = src
-      ? `url("${src}") center / cover no-repeat`
-      : "transparent";
-  }
-
-  document.body.appendChild(ghost);
-  return { ghost, width, height };
-}
-
-function setDragImageFromElement(event, element) {
-  if (!element || !event?.dataTransfer?.setDragImage) return;
-  const ghostData = buildDragGhostElement(element);
-  const width = ghostData?.width || element.clientWidth || element.width || 160;
-  const height =
-    ghostData?.height || element.clientHeight || element.height || 90;
-  const dragEl = ghostData?.ghost || element;
-  event.dataTransfer.setDragImage(
-    dragEl,
-    Math.max(1, width / 2),
-    Math.max(1, height / 2),
-  );
-  if (ghostData?.ghost) {
-    requestAnimationFrame(() => {
-      if (ghostData.ghost?.parentNode) {
-        ghostData.ghost.parentNode.removeChild(ghostData.ghost);
-      }
-    });
-  }
-}
-
-function setDragDataForImageIds(event, imageIds) {
-  if (!event?.dataTransfer) return;
-  event.dataTransfer.setData(
-    "application/json",
-    JSON.stringify({
-      type: "image-ids",
-      imageIds,
-    }),
-  );
-}
-
-function handleThumbnailNativeDragStart(img, event) {
-  if (touchSelectMode.value) {
-    event.preventDefault();
-    return;
-  }
-  dragSource.value = "grid";
-  const selectionIds = getDragSelectionIds(img);
-  if (selectionIds.length > 1) {
-    setDragSourceImageIds(selectionIds);
-    setupMultiExportDrag(event, selectionIds);
-    return;
-  }
-  setDragSourceImageIds([img.id]);
-  const target = event?.target;
-  if (target instanceof HTMLImageElement) {
-    setDragImageFromElement(event, target);
-  }
-  setDragDataForImageIds(event, [img.id]);
-}
-
-function handleDragEnd() {
-  dragSource.value = null;
-  stackReorderDrag.value = null;
-  clearDragSourceImageIds();
-  setStackReorderHoverId(null);
-  setStackReorderHoverSide(null);
-}
-
-function handleContainerDragStart(img, event) {
-  if (!img || !event?.dataTransfer) return;
-  if (touchSelectMode.value) {
-    event.preventDefault();
-    return;
-  }
-  if (event.target && event.target.closest?.(".face-bbox-overlay")) {
-    return;
-  }
-  const existing = event.dataTransfer.getData("application/json");
-  if (existing) return;
-  dragSource.value = "grid";
-  const selectionIds = getDragSelectionIds(img);
-  if (selectionIds.length > 1) {
-    setDragSourceImageIds(selectionIds);
-    setupMultiExportDrag(event, selectionIds);
-    return;
-  }
-  setDragSourceImageIds([img.id]);
-  const thumbEl = thumbnailRefs[img.id];
-  if (thumbEl instanceof HTMLImageElement) {
-    setDragImageFromElement(event, thumbEl);
-  }
-  if (isVideo(img)) {
-    const previewEl = dragPreviewRefs[img.id];
-    if (previewEl instanceof HTMLImageElement) {
-      setDragImageFromElement(event, previewEl);
-    }
-  }
-  setDragDataForImageIds(event, [img.id]);
-}
-
-// ============================================================
-// KEYBOARD
-// ============================================================
-function onGlobalKeyPress(key, event) {
-  if (scrollWrapper.value) {
-    let newScrollTop = scrollWrapper.value.scrollTop;
-    const total = allGridImages.value.length;
-    const cols = Math.max(1, props.columns || 1);
-    const totalRows = Math.ceil(total / cols);
-    const totalHeight = totalRows * rowHeight.value;
-    const maxScroll = Math.max(
-      0,
-      totalHeight - scrollWrapper.value.clientHeight,
-    );
-    if (key === "Home") {
-      newScrollTop = 0;
-    } else if (key === "End") {
-      newScrollTop = maxScroll;
-    } else if (key === "PageUp") {
-      newScrollTop = Math.max(
-        0,
-        newScrollTop - scrollWrapper.value.clientHeight,
-      );
-    } else if (key === "PageDown") {
-      newScrollTop = Math.min(
-        maxScroll,
-        newScrollTop + scrollWrapper.value.clientHeight,
-      );
-    }
-    // Only update if changed
-    if (scrollWrapper.value.scrollTop !== newScrollTop) {
-      scrollWrapper.value.scrollTop = newScrollTop;
-    }
-  }
-}
-
-// ============================================================
-// GRID FETCH STATE
-// ============================================================
-const imagesLoading = ref(false);
-const imagesError = ref(null);
-const totalAllPicturesCount = ref(0);
-const totalCurrentCategoryCount = ref(0);
-const gridReady = ref(false);
-const gridLoadEpoch = ref(0);
-const lastFetchKey = ref("");
-const lastFetchError = ref({ key: "", at: 0 });
-const lastFetchSuccess = ref({ key: "", at: 0 });
-const smartScoreLoadingVisible = computed(
-  () =>
-    !!getActiveSortKey() &&
-    smartScoreProgress.visible &&
-    !exportProgress.visible,
-);
-
-// ============================================================
 // GRID FETCH FUNCTIONS
 // ============================================================
-function buildGridFetchKey() {
-  const selectedSetIds = Array.isArray(props.selectedSetIds)
-    ? props.selectedSetIds
-        .map((id) => Number(id))
-        .filter((id) => Number.isFinite(id) && id > 0)
-        .sort((a, b) => a - b)
-    : [];
-  const selectedCharacterIds = normalizedSelectedCharacterIds.value;
-  return JSON.stringify({
-    selectedCharacter: props.selectedCharacter ?? null,
-    selectedCharacterIds,
-    isMultiCharacterView: selectedCharacterIds.length > 1,
-    characterMultiMode:
-      selectedCharacterIds.length > 1
-        ? (props.characterMultiMode ?? "union")
-        : null,
-    selectedSet: props.selectedSet ?? null,
-    selectedSetIds,
-    isSetOverlapView: selectedSetIds.length > 1,
-    setMultiMode:
-      selectedSetIds.length > 1 ? (props.setMultiMode ?? "intersection") : null,
-    setDifferenceBaseId:
-      selectedSetIds.length > 1 && props.setMultiMode === "difference"
-        ? (props.setDifferenceBaseId ?? null)
-        : null,
-    projectViewMode: props.projectViewMode ?? "global",
-    selectedProjectId: props.selectedProjectId ?? null,
-    searchQuery: props.searchQuery ?? "",
-    selectedSort: props.selectedSort ?? "",
-    selectedDescending: props.selectedDescending ?? null,
-    stackThreshold: props.stackThreshold ?? null,
-    mediaTypeFilter: props.mediaTypeFilter ?? "all",
-    similarityCharacter: props.similarityCharacter ?? null,
-    comfyuiModelFilter: props.comfyuiModelFilter ?? [],
-    comfyuiLoraFilter: props.comfyuiLoraFilter ?? [],
-    referenceFolderIdFilter: props.referenceFolderIdFilter ?? null,
-    filePathPrefixFilter: props.filePathPrefixFilter ?? null,
-    importSourceFolderFilter: props.importSourceFolderFilter ?? null,
-    unassignedOnlyFilter: props.unassignedOnlyFilter ?? false,
-  });
-}
-
-function _appendSelectionParams(params) {
-  if (hasSetSelection.value) {
-    if (isSetOverlapView.value) {
-      for (const setId of normalizedSelectedSetIds.value) {
-        params.append("set_ids", String(setId));
-      }
-      params.append("set_mode", props.setMultiMode ?? "intersection");
-      if (
-        props.setMultiMode === "difference" &&
-        props.setDifferenceBaseId != null
-      ) {
-        params.append("base_set_id", String(props.setDifferenceBaseId));
-      }
-      if (props.projectViewMode === "project") {
-        // Derive effective project_id from per-set data; skip when sets span multiple projects.
-        const pidSet = new Set(
-          normalizedSelectedSetIds.value.map(
-            (id) => props.setProjectIds?.[id] ?? null,
-          ),
-        );
-        if (pidSet.size === 1) {
-          const pid = [...pidSet][0];
-          params.append("project_id", pid != null ? pid : "UNASSIGNED");
-        }
-      }
-    } else if (primarySelectedSetId.value != null) {
-      params.append("set_id", String(primarySelectedSetId.value));
-      if (props.projectViewMode === "project") {
-        params.append(
-          "project_id",
-          props.selectedProjectId != null
-            ? props.selectedProjectId
-            : "UNASSIGNED",
-        );
-      }
-    }
-  } else if (isMultiCharacterView.value) {
-    for (const charId of normalizedSelectedCharacterIds.value) {
-      params.append("character_ids", String(charId));
-    }
-    params.append("character_mode", props.characterMultiMode ?? "union");
-    if (props.projectViewMode === "project") {
-      // Derive effective project_id from per-character data; if all chars share
-      // the same project use it, if they span multiple projects skip the filter.
-      const pidSet = new Set(
-        normalizedSelectedCharacterIds.value.map(
-          (id) => props.characterProjectIds?.[id] ?? null,
-        ),
-      );
-      if (pidSet.size === 1) {
-        const pid = [...pidSet][0];
-        params.append("project_id", pid != null ? pid : "UNASSIGNED");
-      }
-    }
-  } else if (
-    props.selectedCharacter !== undefined &&
-    props.selectedCharacter !== null &&
-    props.selectedCharacter !== "" &&
-    props.selectedCharacter !== props.allPicturesId
-  ) {
-    params.append("character_id", props.selectedCharacter);
-    if (props.projectViewMode === "project") {
-      params.append(
-        "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
-          : "UNASSIGNED",
-      );
-    }
-  } else if (
-    props.selectedCharacter === props.allPicturesId &&
-    props.unassignedOnlyFilter
-  ) {
-    params.append("character_id", props.unassignedPicturesId);
-    if (props.projectViewMode === "project") {
-      params.append(
-        "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
-          : "UNASSIGNED",
-      );
-    }
-  } else if (
-    props.selectedCharacter === props.allPicturesId &&
-    props.projectViewMode === "project"
-  ) {
-    params.append(
-      "project_id",
-      props.selectedProjectId != null ? props.selectedProjectId : "UNASSIGNED",
-    );
-  }
-}
-
-function _appendMediaTypeParams(params) {
-  if (props.mediaTypeFilter === "images") {
-    for (const ext of PIL_IMAGE_EXTENSIONS) {
-      params.append("format", ext.toUpperCase());
-    }
-  } else if (props.mediaTypeFilter === "videos") {
-    for (const ext of VIDEO_EXTENSIONS) {
-      params.append("format", ext.toUpperCase());
-    }
-  }
-}
-
-function buildPictureIdsQueryParams() {
-  const params = new URLSearchParams();
-  _appendSelectionParams(params);
-  if (
-    props.selectedSort === "CHARACTER_LIKENESS" &&
-    props.similarityCharacter
-  ) {
-    params.append("reference_character_id", props.similarityCharacter);
-  }
-  if (props.searchQuery && props.searchQuery.trim()) {
-    params.append("query", props.searchQuery.trim());
-  } else {
-    if (props.selectedSort && props.selectedSort.trim()) {
-      params.append("sort", props.selectedSort.trim());
-    }
-    if (typeof props.selectedDescending === "boolean") {
-      params.append("descending", props.selectedDescending ? "true" : "false");
-    } else {
-      console.warn(
-        "[ImageGrid.vue] selectedDescending is not boolean, skipping param. Type:",
-        typeof props.selectedDescending,
-      );
-    }
-  }
-  params.append("fields", "grid");
-  _appendMediaTypeParams(params);
-  (props.comfyuiModelFilter || []).forEach((m) =>
-    params.append("comfyui_model", m),
-  );
-  (props.comfyuiLoraFilter || []).forEach((l) =>
-    params.append("comfyui_lora", l),
-  );
-  if (props.minScoreFilter != null) {
-    params.append("min_score", props.minScoreFilter);
-  }
-  if (props.maxScoreFilter != null) {
-    params.append("max_score", props.maxScoreFilter);
-  }
-  if (props.smartScoreBucketFilter != null) {
-    params.append("smart_score_bucket", props.smartScoreBucketFilter);
-  }
-  if (props.resolutionBucketFilter != null) {
-    params.append("resolution_bucket", props.resolutionBucketFilter);
-  }
-  (props.tagFilter || []).forEach((t) => params.append("tag", t));
-  (props.tagRejectedFilter || []).forEach((t) =>
-    params.append("rejected_tag", t),
-  );
-  (props.tagConfidenceAboveFilter || []).forEach((e) =>
-    params.append("tag_confidence_above", e),
-  );
-  (props.tagConfidenceBelowFilter || []).forEach((e) =>
-    params.append("tag_confidence_below", e),
-  );
-  if (props.applyTagFilter) {
-    params.append("apply_tag_filter", "true");
-  }
-  if (props.referenceFolderIdFilter != null) {
-    params.append("reference_folder_id", String(props.referenceFolderIdFilter));
-  }
-  if (props.filePathPrefixFilter != null) {
-    params.append("file_path_prefix", props.filePathPrefixFilter);
-  }
-  if (props.importSourceFolderFilter != null) {
-    params.append("import_source_folder", props.importSourceFolderFilter);
-  }
-  if (props.faceBboxFilter != null) {
-    params.append("face_filter", props.faceBboxFilter);
-  }
-  if (props.sharedOnlyFilter) {
-    params.append("shared_only", "true");
-  }
-  // For rejected-consent guests: pass the in-memory session ID so the backend
-  // can overlay their scores for the current page session (no cookie available).
-  if (
-    isReadOnly.value &&
-    guestConsentState.value === "rejected" &&
-    guestSessionId.value
-  ) {
-    params.append("guest_session_id", guestSessionId.value);
-  }
-  return params.toString();
-}
-
-function buildLikenessGroupQueryParams() {
-  const params = new URLSearchParams();
-  _appendSelectionParams(params);
-  _appendMediaTypeParams(params);
-  (props.comfyuiModelFilter || []).forEach((m) =>
-    params.append("comfyui_model", m),
-  );
-  (props.comfyuiLoraFilter || []).forEach((l) =>
-    params.append("comfyui_lora", l),
-  );
-  if (props.minScoreFilter != null) {
-    params.append("min_score", props.minScoreFilter);
-  }
-  if (props.maxScoreFilter != null) {
-    params.append("max_score", props.maxScoreFilter);
-  }
-  if (props.smartScoreBucketFilter != null) {
-    params.append("smart_score_bucket", props.smartScoreBucketFilter);
-  }
-  if (props.resolutionBucketFilter != null) {
-    params.append("resolution_bucket", props.resolutionBucketFilter);
-  }
-  (props.tagFilter || []).forEach((t) => params.append("tag", t));
-  (props.tagRejectedFilter || []).forEach((t) =>
-    params.append("rejected_tag", t),
-  );
-  (props.tagConfidenceAboveFilter || []).forEach((e) =>
-    params.append("tag_confidence_above", e),
-  );
-  (props.tagConfidenceBelowFilter || []).forEach((e) =>
-    params.append("tag_confidence_below", e),
-  );
-  if (props.faceBboxFilter != null) {
-    params.append("face_filter", props.faceBboxFilter);
-  }
-  if (props.applyTagFilter) {
-    params.append("apply_tag_filter", "true");
-  }
-  if (props.sharedOnlyFilter) {
-    params.append("shared_only", "true");
-  }
-  return params.toString();
-}
-
-// ============================================================
-// GRID DATA MAPPING
-// ============================================================
-function collapseStackImages(images) {
-  if (!Array.isArray(images) || images.length === 0) return [];
-  const counts = new Map();
-  for (const img of images) {
-    const stackId = getPictureStackId(img);
-    if (!stackId) continue;
-    counts.set(stackId, (counts.get(stackId) || 0) + 1);
-  }
-  if (!counts.size) return images;
-  const leaders = buildStackLeaderMap(images);
-  const seen = new Set();
-  const collapsed = [];
-  for (const img of images) {
-    const stackId = getPictureStackId(img);
-    if (!stackId) {
-      collapsed.push(img);
-      continue;
-    }
-    const leaderId = leaders.get(stackId);
-    if (leaderId && img?.id != null && String(img.id) !== leaderId) {
-      continue;
-    }
-    if (seen.has(stackId)) continue;
-    seen.add(stackId);
-    const localCount = counts.get(stackId) || 1;
-    const serverCount = Number(img?.stack_count ?? img?.stackCount ?? 0);
-    const stackCount = Math.max(localCount, serverCount) || 1;
-    if (expandedStackIds.value.has(stackId)) {
-      const expanded = buildExpandedStackImages(stackId, img, stackCount);
-      if (expanded.length) {
-        collapsed.push(...expanded);
-        continue;
-      }
-    }
-    collapsed.push({
-      ...img,
-      stackCount,
-    });
-  }
-  return collapsed;
-}
-
-function mapGridImages(images) {
-  const existingById = new Map(
-    allGridImages.value
-      .filter((img) => img && img.id != null)
-      .map((img) => [getPictureId(img.id), img]),
-  );
-  const uniqueImages = Array.isArray(images)
-    ? (() => {
-        const seen = new Set();
-        return images.filter((img) => {
-          const id = getPictureId(img?.id);
-          if (id == null) return true;
-          if (seen.has(id)) return false;
-          seen.add(id);
-          return true;
-        });
-      })()
-    : [];
-  return uniqueImages.map((img, i) => {
-    return hydrateGridImage(img, i, existingById);
-  });
-}
-
-function hydrateGridImage(img, idx, existingById) {
-  const existing = img?.id ? existingById.get(getPictureId(img.id)) : null;
-  return {
-    ...img,
-    idx,
-    thumbnail: existing?.thumbnail ?? null,
-    penalised_tags: Array.isArray(existing?.penalised_tags)
-      ? existing.penalised_tags
-      : [],
-    faces: Array.isArray(existing?.faces) ? existing.faces : [],
-    hands: Array.isArray(existing?.hands) ? existing.hands : [],
-    thumbnail_width: existing?.thumbnail_width ?? img?.thumbnail_width,
-    thumbnail_height: existing?.thumbnail_height ?? img?.thumbnail_height,
-  };
-}
-
-function setGridIndices(items) {
-  for (let i = 0; i < items.length; i += 1) {
-    items[i].idx = i;
-  }
-}
-
-function adjustScrollWindowForDelta(changeIndex, delta, totalLength) {
-  if (!Number.isFinite(delta) || delta === 0) return;
-  if (changeIndex < visibleStart.value) {
-    visibleStart.value = Math.max(0, visibleStart.value + delta);
-  }
-  if (changeIndex < visibleEnd.value) {
-    visibleEnd.value = Math.max(0, visibleEnd.value + delta);
-  }
-  const maxEnd = Math.max(0, totalLength);
-  if (visibleEnd.value > maxEnd) visibleEnd.value = maxEnd;
-  if (visibleStart.value > visibleEnd.value) {
-    visibleStart.value = Math.max(0, visibleEnd.value - 1);
-  }
-}
-
 function maybeRefreshThumbnailsForRange(start, end) {
   const renderStartValue = renderStart.value;
   const renderEndValue = renderEnd.value;
@@ -5273,1186 +4307,6 @@ function fetchThumbnailsForRangeNow(start, end, reason = "manual-now") {
   void fetchThumbnailsBatch(safeStart, safeEnd, { reason, force: true });
 }
 
-// ============================================================
-// STACK — VISUAL
-// ============================================================
-function getStackCardStyle(img) {
-  if (!img) return {};
-  if (!isStackExpandedForImage(img)) {
-    return {};
-  }
-  const color = applyStackBackgroundAlpha(getStackCardColor(img));
-  if (!color) return {};
-  return {
-    backgroundColor: color,
-    borderRadius: "0px",
-    boxShadow: "none",
-  };
-}
-
-function getStackCardColor(img) {
-  if (!img) return null;
-  if (typeof img.stackColor === "string" && img.stackColor) {
-    return img.stackColor;
-  }
-  const stackIndex =
-    typeof img.stackIndex === "number"
-      ? img.stackIndex
-      : typeof img.stack_index === "number"
-        ? img.stack_index
-        : null;
-  if (typeof stackIndex === "number") {
-    return getStackColor(stackIndex);
-  }
-  const stackId = getPictureStackId(img);
-  if (stackId == null) return null;
-  // Use visual order entry: index drives hue, row drives lightness, col drives saturation.
-  const visualEntry = stackVisualOrderMap.value.get(stackId);
-  if (visualEntry != null) {
-    return getStackColor(visualEntry.index, visualEntry.row, visualEntry.col);
-  }
-  const index = getStackColorIndexFromId(stackId);
-  if (index === null) return null;
-  return getStackColor(index);
-}
-
-function getStackBadgeIconStyle(img) {
-  const color = getStackCardColor(img);
-  if (!color) return {};
-  return {
-    color,
-  };
-}
-
-function getStackBandStyle(img) {
-  if (!img || !getPictureStackId(img)) return null;
-  if (!isStackExpandedForImage(img)) return null;
-  const color = getStackCardColor(img);
-  if (!color) return null;
-  return {
-    borderBottom: `8px solid ${color}`,
-  };
-}
-
-// ============================================================
-// STACK — EXPAND / COLLAPSE
-// ============================================================
-function getRenderedStackMemberIds(stackId) {
-  if (!stackId) return [];
-  return allGridImages.value
-    .filter((item) => getPictureStackId(item) === stackId && item?.id != null)
-    .map((item) => String(item.id));
-}
-
-function rebuildGridImagesFromLastFetch() {
-  const source = Array.isArray(lastFetchedGridImages.value)
-    ? lastFetchedGridImages.value
-    : [];
-  syncExpandAllStacksFromFetchedImages();
-  const collapsed = collapseStackImages(source);
-  const newImages = mapGridImages(collapsed);
-  allGridImages.value = newImages;
-  if (visibleStart.value >= newImages.length) {
-    const cols = Math.max(1, props.columns || 1);
-    const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
-    visibleStart.value = 0;
-    visibleEnd.value = Math.min(newImages.length, windowCount);
-  } else if (visibleEnd.value > newImages.length) {
-    visibleEnd.value = newImages.length;
-  }
-  invalidateVisibleThumbnailRanges();
-  updateVisibleThumbnails();
-}
-
-async function refreshExpandedStacksAfterFetch() {
-  const expanded = Array.from(expandedStackIds.value || []);
-  if (!expanded.length) return;
-
-  // Only eagerly load members for stacks whose header is within the strict
-  // visible window. Do NOT use renderBuffer here — the buffer zone is handled
-  // lazily by loadExpandedStacksInView as the user scrolls. Using the full
-  // buffer on "expand all" would fire one API call per stack in the entire
-  // gallery (e.g. all 156 pictures) even though most are off-screen.
-  const fetchStart = visibleStart.value;
-  const fetchEnd = visibleEnd.value;
-
-  const nextExpanded = new Set(expandedStackIds.value);
-
-  // Remove all expanded member rows first so header indices are stable for
-  // the in-window check below.
-  for (const stackId of expanded) {
-    removeExpandedStackMembers(stackId);
-  }
-
-  // Collect only the stacks whose header falls within the visible window.
-  const toLoad = [];
-  for (const stackId of expanded) {
-    const headerIndex = allGridImages.value.findIndex(
-      (item) => getPictureStackId(item) === stackId,
-    );
-    if (headerIndex === -1) {
-      nextExpanded.delete(stackId);
-      continue;
-    }
-    if (headerIndex < fetchStart || headerIndex >= fetchEnd) {
-      // Out-of-viewport: leave in expandedStackIds so badge renders and
-      // loadExpandedStacksInView picks it up lazily when scrolled into view.
-      continue;
-    }
-    const header = allGridImages.value[headerIndex];
-    const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
-    toLoad.push({ stackId, fallbackCount });
-  }
-
-  // Fetch all visible stacks in parallel — ensureStackMembersLoaded already
-  // deduplicates concurrent requests for the same stack via expandedStackLoadPromises.
-  const fetchResults = await Promise.all(
-    toLoad.map(({ stackId, fallbackCount }) =>
-      ensureStackMembersLoaded(stackId, fallbackCount).then((loaded) => ({
-        stackId,
-        fallbackCount,
-        loaded,
-      })),
-    ),
-  );
-
-  // Apply DOM mutations sequentially so grid indices stay consistent.
-  for (const { stackId, fallbackCount, loaded } of fetchResults) {
-    if (loaded !== false) {
-      const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
-      if (insertedCount <= 0) {
-        nextExpanded.delete(stackId);
-      }
-    } else {
-      nextExpanded.delete(stackId);
-    }
-  }
-
-  if (nextExpanded.size !== expandedStackIds.value.size) {
-    expandedStackIds.value = nextExpanded;
-  }
-}
-
-// Load members for expanded stacks that are now in the visible+buffer window
-// but haven't been fetched yet. Called from updateVisibleThumbnails so it
-// triggers automatically as the user scrolls.
-async function loadExpandedStacksInView() {
-  if (!expandedStackIds.value.size) return;
-  const start = Math.max(0, visibleStart.value - renderBuffer.value);
-  const end = Math.min(
-    allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value,
-  );
-  const slice = allGridImages.value.slice(start, end);
-  const seen = new Set();
-  const pending = [];
-  for (const img of slice) {
-    const stackId = getPictureStackId(img);
-    if (!stackId || seen.has(stackId)) continue;
-    seen.add(stackId);
-    if (!expandedStackIds.value.has(stackId)) continue;
-    const entry = expandedStackMembers.value.get(stackId);
-    if (entry && Array.isArray(entry.images) && entry.images.length > 0)
-      continue;
-    pending.push(stackId);
-  }
-  if (!pending.length) return;
-  for (const stackId of pending) {
-    if (!expandedStackIds.value.has(stackId)) continue;
-    const headerIndex = allGridImages.value.findIndex(
-      (item) => getPictureStackId(item) === stackId,
-    );
-    if (headerIndex === -1) continue;
-    const header = allGridImages.value[headerIndex];
-    const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
-    const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
-    if (loaded !== false && expandedStackIds.value.has(stackId)) {
-      removeExpandedStackMembers(stackId);
-      const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
-      if (insertedCount <= 0) {
-        const nextExpanded = new Set(expandedStackIds.value);
-        nextExpanded.delete(stackId);
-        expandedStackIds.value = nextExpanded;
-      }
-    }
-  }
-}
-
-function getLocalStackMembers(stackId) {
-  if (!stackId) return [];
-  const source = Array.isArray(lastFetchedGridImages.value)
-    ? lastFetchedGridImages.value
-    : [];
-  if (!source.length) return [];
-  const members = source.filter((img) => getPictureStackId(img) === stackId);
-  const activeSort = String(props.selectedSort || "").toUpperCase();
-  const useBackendOrder =
-    !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
-  return useBackendOrder ? members : sortStackMembers(members);
-}
-
-function cacheExpandedStackMembers(stackId, members) {
-  if (!stackId || !Array.isArray(members) || members.length === 0) return false;
-  const activeSort = String(props.selectedSort || "").toUpperCase();
-  const useBackendOrder =
-    !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
-  const sorted = useBackendOrder ? members.slice() : sortStackMembers(members);
-  const ordered = sorted
-    .filter((img) => img && img.id != null)
-    .map((img) =>
-      img.stack_id !== undefined || img.stackId !== undefined
-        ? img
-        : { ...img, stack_id: normalizeStackIdValue(stackId) },
-    );
-  if (!ordered.length) return false;
-  const nextMembers = new Map(expandedStackMembers.value);
-  nextMembers.set(stackId, {
-    ids: ordered.map((img) => String(img.id)),
-    images: ordered,
-  });
-  expandedStackMembers.value = nextMembers;
-  return true;
-}
-
-function getExpandedStackCount(stackId, fallbackCount) {
-  const entry = expandedStackMembers.value.get(stackId);
-  const ids = Array.isArray(entry?.ids) ? entry.ids : [];
-  if (ids.length) return ids.length;
-  const images = Array.isArray(entry?.images) ? entry.images : [];
-  if (images.length) return images.length;
-  const fallback = Number(fallbackCount ?? 0);
-  return Number.isFinite(fallback) && fallback > 0 ? fallback : 1;
-}
-
-function buildExpandedStackImages(stackId, fallbackImg, stackCount) {
-  const entry = expandedStackMembers.value.get(stackId);
-  const ids = Array.isArray(entry?.ids) ? entry.ids : [];
-  const images = Array.isArray(entry?.images) ? entry.images : [];
-  const activeSort = String(props.selectedSort || "").toUpperCase();
-  const useBackendOrder =
-    !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
-  const sourceImages = ids.length
-    ? images
-    : useBackendOrder
-      ? images.slice()
-      : sortStackMembers(images);
-  const imageById = new Map(
-    sourceImages
-      .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img]),
-  );
-  const ordered = [];
-  const seen = new Set();
-  const stackValue = normalizeStackIdValue(stackId);
-  const addImage = (img) => {
-    if (!img || img.id == null) return;
-    const key = String(img.id);
-    if (seen.has(key)) return;
-    seen.add(key);
-    const withStack =
-      img.stack_id !== undefined || img.stackId !== undefined
-        ? img
-        : { ...img, stack_id: stackValue };
-    ordered.push(withStack);
-  };
-
-  if (ids.length) {
-    for (const id of ids) {
-      addImage(imageById.get(String(id)));
-    }
-  } else {
-    for (const img of sourceImages) {
-      addImage(img);
-    }
-  }
-
-  if (fallbackImg?.id != null && !seen.has(String(fallbackImg.id))) {
-    addImage(fallbackImg);
-  }
-
-  // Inject stackCount only onto the item whose id matches the fallback (header)
-  // image.  Do NOT blindly set it on ordered[0]: the API orders members by
-  // stack_position+id while the grid leader is chosen by score/date, so
-  // ordered[0] may be a *different* picture than the header.  Putting
-  // stackCount on a non-header member causes it to render a spurious stack
-  // badge inside the expanded stack view.
-  const fallbackIdStr = fallbackImg?.id != null ? String(fallbackImg.id) : null;
-  if (fallbackIdStr) {
-    const headerIdx = ordered.findIndex(
-      (img) => String(img?.id) === fallbackIdStr,
-    );
-    if (headerIdx !== -1) {
-      ordered[headerIdx] = { ...ordered[headerIdx], stackCount };
-    }
-  } else if (ordered.length) {
-    ordered[0] = { ...ordered[0], stackCount };
-  }
-  return ordered;
-}
-
-function insertExpandedStackMembers(stackId, fallbackCount) {
-  if (!stackId) return 0;
-  const items = allGridImages.value.slice();
-  if (!items.length) return 0;
-  const headerIndex = items.findIndex(
-    (item) => getPictureStackId(item) === stackId,
-  );
-  if (headerIndex === -1) return 0;
-  const header = items[headerIndex];
-  const stackCount = getExpandedStackCount(
-    stackId,
-    fallbackCount ?? header?.stackCount,
-  );
-  const expanded = buildExpandedStackImages(stackId, header, stackCount);
-  if (!expanded.length) return 0;
-  const headerId = header?.id != null ? String(header.id) : null;
-  const filtered = items.filter((item) => {
-    if (getPictureStackId(item) !== stackId) return true;
-    if (headerId && item?.id != null) {
-      return String(item.id) === headerId;
-    }
-    return false;
-  });
-  const filteredHeaderIndex = filtered.findIndex(
-    (item) => getPictureStackId(item) === stackId,
-  );
-  if (filteredHeaderIndex === -1) return 0;
-  const existingById = new Map(
-    allGridImages.value
-      .filter((img) => img && img.id != null)
-      .map((img) => [getPictureId(img.id), img]),
-  );
-  // Keep the existing grid header image as slot-0: it already has the right
-  // thumbnail and idx. The backend may return a different first member
-  // depending on the active sort (e.g. SCORE ASC returns the lowest-score
-  // member first, not the leader shown in the collapsed grid). Spreading header
-  // last ensures its id/thumbnail are never overwritten by the backend response.
-  const expandedHeader = expanded[0];
-  const mergedHeader = hydrateGridImage(
-    { ...expandedHeader, ...header, stackCount },
-    0,
-    existingById,
-  );
-  const insertItems = expanded
-    .filter((img) => img && img.id != null)
-    .filter((img) => String(img.id) !== headerId)
-    .map((img) => hydrateGridImage(img, 0, existingById));
-  const insertIndex = filteredHeaderIndex + 1;
-  const before = filtered.slice(0, filteredHeaderIndex);
-  const after = filtered.slice(filteredHeaderIndex + 1);
-  const result = [...before, mergedHeader, ...insertItems, ...after];
-  setGridIndices(result);
-  allGridImages.value = result;
-  const insertCount = insertItems.length;
-  // Track how many existing member rows were displaced by the implicit remove
-  // inside filtered. This happens when insertExpandedStackMembers is called
-  // while members are already present (e.g. loadExpandedStacksInView and
-  // refreshExpandedStacksAfterFetch running concurrently). The net change to
-  // the grid length is insertCount minus the displaced rows, not insertCount
-  // alone. Using the wrong delta over-shifts loadedRanges and visibleEnd,
-  // causing subsequent thumbnail fetches to target the wrong indices.
-  const removedExistingCount = items.length - filtered.length;
-  const netDelta = insertCount - removedExistingCount;
-  // The affected zone spans the displaced old members and the newly inserted
-  // ones. Drop all loadedRanges / pendingRanges that overlap it (those slots
-  // now contain different images) and shift everything that lies beyond it by
-  // netDelta (may be 0, positive, or negative).
-  const affectedEnd = insertIndex + Math.max(insertCount, removedExistingCount);
-  if (netDelta !== 0 || removedExistingCount > 0) {
-    loadedRanges.value = shiftRangesForDelta(
-      loadedRanges.value,
-      insertIndex,
-      netDelta,
-      affectedEnd,
-    );
-    pendingRanges = shiftRangesForDelta(
-      pendingRanges,
-      insertIndex,
-      netDelta,
-      affectedEnd,
-    );
-    adjustScrollWindowForDelta(insertIndex, netDelta, result.length);
-  }
-  if (insertCount > 0) {
-    markVisibleFetchSuppressedForExpand(
-      insertIndex,
-      insertIndex + insertCount + 1,
-    );
-    fetchThumbnailsForRangeNow(
-      insertIndex,
-      insertIndex + insertCount + 1,
-      "stack-expand-insert",
-    );
-  } else {
-    maybeRefreshThumbnailsForRange(insertIndex, insertIndex + 1);
-  }
-  return insertCount;
-}
-
-function removeExpandedStackMembers(stackId) {
-  if (!stackId) return;
-  const items = allGridImages.value.slice();
-  if (!items.length) return;
-  const headerIndex = items.findIndex(
-    (item) => getPictureStackId(item) === stackId,
-  );
-  if (headerIndex === -1) return;
-  let removedCount = 0;
-  let keptHeader = false;
-  const filtered = items.filter((item) => {
-    if (getPictureStackId(item) !== stackId) return true;
-    if (!keptHeader) {
-      keptHeader = true;
-      return true;
-    }
-    removedCount += 1;
-    return false;
-  });
-  if (filtered.length === items.length) return;
-  setGridIndices(filtered);
-  allGridImages.value = filtered;
-  if (removedCount > 0) {
-    const removeStart = headerIndex + 1;
-    const removeEnd = headerIndex + 1 + removedCount;
-    loadedRanges.value = shiftRangesForDelta(
-      loadedRanges.value,
-      removeStart,
-      -removedCount,
-      removeEnd,
-    );
-    pendingRanges = shiftRangesForDelta(
-      pendingRanges,
-      removeStart,
-      -removedCount,
-      removeEnd,
-    );
-    adjustScrollWindowForDelta(removeStart, -removedCount, filtered.length);
-    maybeRefreshThumbnailsForRange(removeStart, removeStart + 1);
-  }
-}
-
-function isStackExpandedForImage(img) {
-  const stackId = getPictureStackId(img);
-  if (!stackId) return false;
-  return expandedStackIds.value.has(stackId);
-}
-
-function collectExpandableStackIds(images) {
-  if (!Array.isArray(images) || images.length === 0) return [];
-  const counts = new Map();
-  for (const img of images) {
-    const stackId = getPictureStackId(img);
-    if (!stackId) continue;
-    counts.set(stackId, (counts.get(stackId) || 0) + 1);
-  }
-
-  const expandable = new Set();
-  for (const img of images) {
-    const stackId = getPictureStackId(img);
-    if (!stackId) continue;
-    const countFromImage = Number(img?.stackCount ?? img?.stack_count ?? 0);
-    const countFromPresence = counts.get(stackId) || 0;
-    if (countFromImage > 1 || countFromPresence > 1) {
-      expandable.add(stackId);
-    }
-  }
-  return Array.from(expandable);
-}
-
-function emitStackStats() {
-  const expandable = collectExpandableStackIds(lastFetchedGridImages.value);
-  const expandableSet = new Set(expandable);
-  let expanded = 0;
-  for (const stackId of expandedStackIds.value || []) {
-    if (expandableSet.has(stackId)) {
-      expanded += 1;
-    }
-  }
-  emit("update:stack-stats", {
-    expanded,
-    total: expandable.length,
-  });
-}
-
-function syncExpandAllStacksFromFetchedImages() {
-  const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
-  const autoIdSet = new Set(autoIds);
-  const currentIds = Array.from(expandedStackIds.value || []);
-  const nextIds = new Set(currentIds.filter((id) => autoIdSet.has(id)));
-  let changed = false;
-  for (const stackId of currentIds) {
-    if (!nextIds.has(stackId)) {
-      changed = true;
-      break;
-    }
-  }
-  if (changed) {
-    expandedStackIds.value = nextIds;
-  }
-}
-
-async function expandAllStacks() {
-  const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
-  expandedStackIds.value = new Set(autoIds);
-  rebuildGridImagesFromLastFetch();
-  await refreshExpandedStacksAfterFetch();
-}
-
-async function collapseAllStacks() {
-  expandedStackIds.value = new Set();
-  rebuildGridImagesFromLastFetch();
-  await refreshExpandedStacksAfterFetch();
-}
-
-async function ensureStackMembersLoaded(stackId, expectedCount = null) {
-  if (!stackId) return false;
-  const expected = Number(expectedCount ?? 0);
-  const minExpected = Number.isFinite(expected) && expected > 0 ? expected : 0;
-  const localMembers = getLocalStackMembers(stackId);
-  if (
-    localMembers.length &&
-    (minExpected <= 0 || localMembers.length >= minExpected)
-  ) {
-    cacheExpandedStackMembers(stackId, localMembers);
-    return true;
-  }
-  const existing = expandedStackMembers.value.get(stackId);
-  if (existing && Array.isArray(existing.images) && existing.images.length) {
-    if (minExpected <= 0 || existing.images.length >= minExpected) {
-      return true;
-    }
-  }
-  const inFlight = expandedStackLoadPromises.get(stackId);
-  if (inFlight) {
-    await inFlight;
-    const afterWait = expandedStackMembers.value.get(stackId);
-    return !!(
-      afterWait &&
-      Array.isArray(afterWait.images) &&
-      afterWait.images.length
-    );
-  }
-
-  const loadPromise = (async () => {
-    const nextLoading = new Set(expandedStackLoading.value);
-    nextLoading.add(stackId);
-    expandedStackLoading.value = nextLoading;
-    try {
-      const stackUrl = new URL(
-        `${props.backendUrl}/stacks/${stackId}/pictures`,
-      );
-      stackUrl.searchParams.set("fields", "grid");
-      const activeSort = props.selectedSort ?? "";
-      const isStackSort =
-        !activeSort || activeSort === LIKENESS_GROUPS_SORT_KEY;
-      if (activeSort) {
-        stackUrl.searchParams.set("sort", activeSort);
-      }
-      if (typeof props.selectedDescending === "boolean") {
-        stackUrl.searchParams.set(
-          "descending",
-          props.selectedDescending ? "true" : "false",
-        );
-      }
-      const picsRes = await apiClient.get(stackUrl.toString());
-      const picsData = await picsRes.data;
-      const pics = Array.isArray(picsData) ? picsData : [];
-      // When a real sort is active the backend already ordered the members;
-      // only fall back to client-side stack-order sorting for LIKENESS_GROUPS
-      // or when no sort is selected.
-      const sorted = isStackSort ? sortStackMembers(pics) : pics;
-      const ordered = sorted
-        .filter((img) => img && img.id != null)
-        .map((img) =>
-          img.stack_id !== undefined || img.stackId !== undefined
-            ? img
-            : { ...img, stack_id: normalizeStackIdValue(stackId) },
-        );
-      const pictureIds = ordered.map((img) => String(img.id));
-      const nextMembers = new Map(expandedStackMembers.value);
-      nextMembers.set(stackId, {
-        ids: pictureIds,
-        images: ordered,
-      });
-      expandedStackMembers.value = nextMembers;
-      return true;
-    } catch (e) {
-      console.error("Failed to load stack members:", e);
-      return false;
-    } finally {
-      const cleared = new Set(expandedStackLoading.value);
-      cleared.delete(stackId);
-      expandedStackLoading.value = cleared;
-      expandedStackLoadPromises.delete(stackId);
-    }
-  })();
-
-  expandedStackLoadPromises.set(stackId, loadPromise);
-  return await loadPromise;
-}
-
-async function toggleStackExpand(img) {
-  const stackId = getPictureStackId(img);
-  if (!stackId) return;
-  if (expandedStackIds.value.has(stackId)) {
-    const nextIds = new Set(expandedStackIds.value);
-    nextIds.delete(stackId);
-    expandedStackIds.value = nextIds;
-    removeExpandedStackMembers(stackId);
-    return;
-  }
-  const nextIds = new Set(expandedStackIds.value);
-  nextIds.add(stackId);
-  expandedStackIds.value = nextIds;
-  const stackCount = getStackBadgeCount(img);
-  let insertedCount = 0;
-  const localMembers = getLocalStackMembers(stackId);
-  if (localMembers.length > 1) {
-    cacheExpandedStackMembers(stackId, localMembers);
-    insertedCount = insertExpandedStackMembers(stackId, stackCount);
-  }
-
-  const loaded = await ensureStackMembersLoaded(stackId, stackCount);
-  if (!expandedStackIds.value.has(stackId)) {
-    return;
-  }
-  if (loaded !== false) {
-    const renderedIds = getRenderedStackMemberIds(stackId);
-    const latestEntry = expandedStackMembers.value.get(stackId);
-    const latestIds = Array.isArray(latestEntry?.ids) ? latestEntry.ids : [];
-    if (
-      insertedCount > 0 &&
-      latestIds.length &&
-      arraysEqualByString(renderedIds, latestIds)
-    ) {
-      return;
-    }
-    removeExpandedStackMembers(stackId);
-    insertedCount = insertExpandedStackMembers(stackId, stackCount);
-    if (insertedCount <= 0) {
-      const resetExpanded = new Set(expandedStackIds.value);
-      resetExpanded.delete(stackId);
-      expandedStackIds.value = resetExpanded;
-      removeExpandedStackMembers(stackId);
-    }
-    return;
-  }
-
-  if (insertedCount <= 0) {
-    const resetExpanded = new Set(expandedStackIds.value);
-    resetExpanded.delete(stackId);
-    expandedStackIds.value = resetExpanded;
-    removeExpandedStackMembers(stackId);
-  }
-}
-
-function prefetchStackMembers(img) {
-  const stackId = getPictureStackId(img);
-  if (!stackId) return;
-  void ensureStackMembersLoaded(stackId, getStackBadgeCount(img));
-}
-
-// ============================================================
-// STACK — REORDER DRAG
-// ============================================================
-function getStackReorderCount(stackId, fallbackCount) {
-  if (!stackId) return 0;
-  const entry = expandedStackMembers.value.get(stackId);
-  const ids = Array.isArray(entry?.ids) ? entry.ids : [];
-  if (ids.length) return ids.length;
-  const images = Array.isArray(entry?.images) ? entry.images : [];
-  if (images.length) return images.length;
-  const fallback = Number(fallbackCount ?? 0);
-  return Number.isFinite(fallback) ? fallback : 0;
-}
-
-function getDragImageIdFromEvent(event) {
-  const raw = event?.dataTransfer?.getData("application/json");
-  if (!raw) return null;
-  try {
-    const payload = JSON.parse(raw);
-    if (payload?.type === "image-ids") {
-      const ids = Array.isArray(payload.imageIds) ? payload.imageIds : [];
-      if (ids.length === 1) return String(ids[0]);
-    }
-  } catch (err) {
-    return null;
-  }
-  return null;
-}
-
-function buildStackReorderDragState(sourceId) {
-  if (!sourceId) return null;
-  const source = allGridImages.value.find(
-    (item) => item?.id != null && String(item.id) === String(sourceId),
-  );
-  if (!source) return null;
-  const stackId = getPictureStackId(source);
-  if (!stackId || !expandedStackIds.value.has(stackId)) return null;
-  const count = getStackReorderCount(stackId, getStackBadgeCount(source));
-  if (count <= 1) return null;
-  return { stackId, imageId: String(sourceId) };
-}
-
-function handleStackReorderDragOver(img, event) {
-  let drag = stackReorderDrag.value;
-  if (!drag) {
-    const sourceId = getDragImageIdFromEvent(event);
-    drag = buildStackReorderDragState(sourceId);
-    if (drag) {
-      stackReorderDrag.value = drag;
-    }
-  }
-  if (!drag || !img?.id) return;
-  const stackId = getPictureStackId(img);
-  if (!stackId || stackId !== drag.stackId) return;
-  event.preventDefault();
-  event.stopPropagation();
-  setStackReorderHoverId(img.id);
-  const bounds = event?.currentTarget?.getBoundingClientRect?.();
-  if (bounds && Number.isFinite(bounds.left) && Number.isFinite(bounds.width)) {
-    const mid = bounds.left + bounds.width / 2;
-    const side = event.clientX <= mid ? "left" : "right";
-    setStackReorderHoverSide(side);
-  }
-  if (event?.dataTransfer) {
-    event.dataTransfer.dropEffect = "move";
-  }
-}
-
-function handleStackReorderDragLeave(img, event) {
-  if (!stackReorderHoverId.value || !img?.id) return;
-  if (String(img.id) !== stackReorderHoverId.value) return;
-  const nextTarget = event?.relatedTarget;
-  if (nextTarget && event?.currentTarget?.contains?.(nextTarget)) return;
-  setStackReorderHoverId(null);
-  setStackReorderHoverSide(null);
-}
-
-function applyStackOrderLocal(stackId, orderedIds) {
-  const items = allGridImages.value.slice();
-  const stackItems = items.filter(
-    (item) => getPictureStackId(item) === stackId && item?.id != null,
-  );
-  if (stackItems.length <= 1) return;
-  const stackCount = getStackReorderCount(
-    stackId,
-    getStackBadgeCount(stackItems[0]),
-  );
-  const orderedMembers = buildStackReorderedMembers(
-    stackItems,
-    orderedIds,
-    stackCount,
-  );
-  if (!orderedMembers.length) return;
-  const nextGrid = applyStackOrderToList(items, stackId, orderedMembers);
-  setGridIndices(nextGrid);
-  allGridImages.value = nextGrid;
-
-  const nextMembers = new Map(expandedStackMembers.value);
-  nextMembers.set(stackId, {
-    ids: orderedMembers.map((item) => String(item.id)),
-    images: orderedMembers,
-  });
-  expandedStackMembers.value = nextMembers;
-
-  const nextFetched = applyStackOrderToList(
-    Array.isArray(lastFetchedGridImages.value)
-      ? lastFetchedGridImages.value.slice()
-      : [],
-    stackId,
-    orderedMembers,
-  );
-  lastFetchedGridImages.value = nextFetched;
-}
-
-async function persistStackOrder(stackId, orderedIds, previousIds) {
-  if (!stackId || !orderedIds.length) return;
-  try {
-    await apiClient.patch(`${props.backendUrl}/stacks/${stackId}/order`, {
-      picture_ids: orderedIds.map((id) => Number(id)).filter(Number.isFinite),
-    });
-  } catch (err) {
-    alert(`Failed to save stack order: ${err?.message || err}`);
-    if (Array.isArray(previousIds) && previousIds.length) {
-      applyStackOrderLocal(stackId, previousIds);
-    }
-  }
-}
-
-function handleStackReorderDrop(img, event) {
-  let drag = stackReorderDrag.value;
-  stackReorderDrag.value = null;
-  const hoverSide = stackReorderHoverSide.value;
-  setStackReorderHoverId(null);
-  setStackReorderHoverSide(null);
-  if (!drag) {
-    const sourceId = getDragImageIdFromEvent(event);
-    drag = buildStackReorderDragState(sourceId);
-  }
-  if (!drag || !img?.id) return;
-  const stackId = getPictureStackId(img);
-  if (!stackId || stackId !== drag.stackId) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const sourceId = String(drag.imageId);
-  const targetId = String(img.id);
-  if (sourceId === targetId) return;
-
-  const stackItems = allGridImages.value.filter(
-    (item) => getPictureStackId(item) === stackId && item?.id != null,
-  );
-  const currentIds = stackItems.map((item) => String(item.id));
-  const fromIndex = currentIds.indexOf(sourceId);
-  const toIndex = currentIds.indexOf(targetId);
-  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
-
-  const nextIds = currentIds.slice();
-  const [moved] = nextIds.splice(fromIndex, 1);
-  const targetIndex = nextIds.indexOf(targetId);
-  let insertIndex = targetIndex;
-  if (hoverSide === "right") {
-    insertIndex = targetIndex + 1;
-  }
-  if (insertIndex < 0) insertIndex = 0;
-  if (insertIndex > nextIds.length) insertIndex = nextIds.length;
-  nextIds.splice(insertIndex, 0, moved);
-
-  applyStackOrderLocal(stackId, nextIds);
-  void persistStackOrder(stackId, nextIds, currentIds);
-}
-
-// Fetch total image count for current filters
-// ============================================================
-// GRID FETCH
-// ============================================================
-async function fetchAllGridImages(options = {}) {
-  const force = options?.force === true;
-  const activeSortKey = getActiveSortKey();
-  const isSortedFetch = !!activeSortKey;
-  let sortedFetchStartedAt = 0;
-  // Capture scroll-preservation intent *synchronously* before any await so
-  // that it is not affected by the gridVersion watcher clearing it later.
-  const fetchStartedWithPreserveScroll = preserveScrollOnNextFetch.value;
-  if (
-    fetchStartedWithPreserveScroll &&
-    pendingScrollTop.value === null &&
-    scrollWrapper.value
-  ) {
-    pendingScrollTop.value = scrollWrapper.value.scrollTop;
-  }
-  const fetchKey = buildGridFetchKey();
-  const now = Date.now();
-  if (!force && imagesLoading.value && lastFetchKey.value === fetchKey) {
-    const lastActivity = Math.max(
-      lastFetchSuccess.value.at || 0,
-      lastFetchError.value.at || 0,
-    );
-    if (now - lastActivity < 2500) {
-      return;
-    }
-    imagesLoading.value = false;
-  }
-  if (
-    !force &&
-    lastFetchSuccess.value.key === fetchKey &&
-    now - lastFetchSuccess.value.at < 1200
-  ) {
-    return;
-  }
-  if (
-    !force &&
-    lastFetchError.value.key === fetchKey &&
-    now - lastFetchError.value.at < 2500
-  ) {
-    return;
-  }
-  lastFetchKey.value = fetchKey;
-  const loadId = (gridLoadEpoch.value += 1);
-  gridReady.value = false;
-  imagesLoading.value = true;
-  imagesError.value = null;
-  if (isSortedFetch && options?.showProgress === true) {
-    sortedFetchStartedAt = getNowMs();
-    startSmartScoreProgress(loadId, activeSortKey);
-  }
-  const requestId = Date.now();
-  fetchAllGridImages.lastRequestId = requestId;
-  try {
-    let images = [];
-    if (props.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
-      const threshold = getStackThreshold(props.stackThreshold);
-      const likenessGroupParams = buildLikenessGroupQueryParams();
-      const url = `${
-        props.backendUrl
-      }/pictures/likeness-groups?threshold=${encodeURIComponent(threshold)}${
-        likenessGroupParams ? `&${likenessGroupParams}` : ""
-      }`;
-      const res = await apiClient.get(url);
-      const data = await res.data;
-      if (fetchAllGridImages.lastRequestId !== requestId) {
-        if (isSortedFetch && options?.showProgress === true)
-          completeSmartScoreProgress(loadId, 0, false);
-        return;
-      }
-      const likenessGroupImages = Array.isArray(data) ? data : [];
-      images = likenessGroupImages.map((img) => {
-        const stackIndex =
-          typeof img.stack_index === "number"
-            ? img.stack_index
-            : typeof img.stackIndex === "number"
-              ? img.stackIndex
-              : null;
-        return {
-          ...img,
-          stackIndex,
-          stackColor:
-            typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
-        };
-      });
-    } else if (props.searchQuery && props.searchQuery.trim()) {
-      // Use /pictures/search endpoint for text search
-      const params = buildPictureIdsQueryParams();
-      const url = `${
-        props.backendUrl
-      }/pictures/search?query=${encodeURIComponent(
-        props.searchQuery.trim(),
-      )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
-      const res = await apiClient.get(url);
-      const data = await res.data;
-      images = data;
-    } else if (hasSetSelection.value && !isSetOverlapView.value) {
-      const params = buildPictureIdsQueryParams();
-      const url = `${props.backendUrl}/picture_sets/${primarySelectedSetId.value}${
-        params ? `?${params}` : ""
-      }`;
-      const res = await apiClient.get(url);
-      const data = await res.data;
-      images = data.pictures || [];
-    } else {
-      const params = buildPictureIdsQueryParams();
-      // Only use allowed parameters: sort, offset, limit, threshold
-      const url = `${props.backendUrl}/pictures?offset=0${
-        params ? `&${params}` : ""
-      }`;
-      const res = await apiClient.get(url);
-      const data = await res.data;
-      images = data;
-    }
-    if (fetchAllGridImages.lastRequestId !== requestId) {
-      if (isSortedFetch && options?.showProgress === true)
-        completeSmartScoreProgress(loadId, 0, false);
-      return;
-    }
-    lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
-    syncExpandAllStacksFromFetchedImages();
-    images = collapseStackImages(images);
-    const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
-    const nextIdSet = new Set(
-      Array.isArray(images)
-        ? images.map((img) => getPictureId(img?.id)).filter((id) => id !== null)
-        : [],
-    );
-    if (shouldHighlight) {
-      const newIds = [];
-      nextIdSet.forEach((id) => {
-        if (!previousImageIds.has(id)) {
-          newIds.push(id);
-        }
-      });
-      if (newIds.length) {
-        triggerNewImageHighlight(newIds);
-      }
-    }
-    previousImageIds.clear();
-    nextIdSet.forEach((id) => previousImageIds.add(id));
-    highlightNextFetch.value = false;
-    hasLoadedOnce.value = true;
-    const newImages = mapGridImages(images);
-    resetThumbnailState();
-    if (overlayOpen.value) {
-      // Don't replace allGridImages while the overlay is open — the filmstrip
-      // and prev/next navigation read from it directly. Store the fetched
-      // result and apply it once the overlay closes.
-      pendingGridImages.value = newImages;
-      pendingOverlayGridRefresh.value = true;
-    } else {
-      allGridImages.value = newImages;
-    }
-    // When the shared-only filter is active every returned image is shared by
-    // definition. Pre-seed sharedPictureIds immediately so badges appear
-    // without waiting for the async batch-check round trip.
-    if (props.sharedOnlyFilter && !isReadOnly.value) {
-      const next = new Set(sharedPictureIds.value);
-      for (const img of newImages) {
-        if (img.id) next.add(img.id);
-      }
-      sharedPictureIds.value = next;
-    }
-    if (isSetOverlapView.value) {
-      totalCurrentCategoryCount.value = newImages.length;
-    }
-    const cols = props.columns || 1;
-    const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
-    if (!fetchStartedWithPreserveScroll) {
-      // Normal (non-preserve) fetch: jump to top so thumbnails load from index 0.
-      visibleStart.value = 0;
-      visibleEnd.value = Math.min(newImages.length, windowCount);
-    } else {
-      // Scroll-preserving fetch: keep visibleStart/End as-is so
-      // updateVisibleThumbnails loads the range the user is actually viewing.
-      visibleEnd.value = Math.min(visibleEnd.value, newImages.length);
-      if (visibleStart.value > visibleEnd.value)
-        visibleStart.value = Math.max(0, visibleEnd.value - 1);
-    }
-    if (initialRender.value) {
-      const prefetchEnd = Math.min(
-        newImages.length,
-        visibleEnd.value + divisibleViewWindow.value,
-      );
-      fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
-    }
-    await refreshExpandedStacksAfterFetch();
-    await maybeRefreshOverlayForComfyui();
-    requestAnimationFrame(() => {
-      if (initialRender.value) {
-        initialRender.value = false;
-        updateVisibleThumbnails();
-      }
-    });
-    lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
-    if (isSortedFetch) {
-      const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
-      completeSmartScoreProgress(loadId, elapsedMs, true);
-    }
-  } catch (e) {
-    if (fetchAllGridImages.lastRequestId !== requestId) {
-      if (isSortedFetch && options?.showProgress === true)
-        completeSmartScoreProgress(loadId, 0, false);
-      return;
-    }
-    imagesError.value = e.message;
-    // Don't wipe the grid on a transient error while the overlay is open —
-    // the user would see the grid flash empty behind the overlay.
-    if (!overlayOpen.value) {
-      allGridImages.value = [];
-    }
-    lastFetchError.value = { key: fetchKey, at: Date.now() };
-    if (isSortedFetch) {
-      const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
-      completeSmartScoreProgress(loadId, elapsedMs, false);
-    }
-  } finally {
-    if (loadId === gridLoadEpoch.value) {
-      imagesLoading.value = false;
-      gridReady.value = true;
-    }
-  }
-  if (!initialRender.value) {
-    updateVisibleThumbnails();
-  }
-  if (pendingScrollTop.value !== null && scrollWrapper.value) {
-    const targetTop = pendingScrollTop.value;
-    pendingScrollTop.value = null;
-    nextTick(() => {
-      if (!scrollWrapper.value) return;
-      const maxScroll =
-        scrollWrapper.value.scrollHeight - scrollWrapper.value.clientHeight;
-      const clamped = Math.max(0, Math.min(targetTop, maxScroll));
-      scrollWrapper.value.scrollTop = clamped;
-      updateVisibleThumbnails();
-    });
-  }
-}
-
-async function fetchAllPicturesCount() {
-  try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/characters/${props.allPicturesId}/summary${props.applyTagFilter ? "?apply_tag_filter=true" : ""}`,
-    );
-    const data = await res.data;
-    totalAllPicturesCount.value = Number(data.image_count) || 0;
-  } catch (e) {
-    console.warn("[ImageGrid.vue] Failed to fetch all pictures count:", e);
-  }
-
-  try {
-    let url = `${props.backendUrl}/characters/${props.allPicturesId}/summary`;
-    const selectedCharacter = String(props.selectedCharacter ?? "");
-    if (isSetOverlapView.value) {
-      totalCurrentCategoryCount.value = Number(allGridImages.value.length) || 0;
-      return;
-    }
-    const selectedSetId = primarySelectedSetId.value;
-    if (
-      selectedSetId !== null &&
-      selectedSetId !== undefined &&
-      String(selectedSetId) !== ""
-    ) {
-      const setRes = await apiClient.get(`${props.backendUrl}/picture_sets`);
-      const setList = await setRes.data;
-      const selectedSetNumericId = Number(selectedSetId);
-      const selectedSet = Array.isArray(setList)
-        ? setList.find((item) => {
-            const itemId = Number(item?.id);
-            if (Number.isFinite(selectedSetNumericId)) {
-              return Number.isFinite(itemId) && itemId === selectedSetNumericId;
-            }
-            return String(item?.id) === String(selectedSetId);
-          })
-        : null;
-      totalCurrentCategoryCount.value = Number(selectedSet?.picture_count) || 0;
-      return;
-    }
-    if (selectedCharacter === String(props.allPicturesId)) {
-      if (props.projectViewMode === "project") {
-        const pid =
-          props.selectedProjectId != null
-            ? props.selectedProjectId
-            : "UNASSIGNED";
-        url = `${props.backendUrl}/projects/${pid}/summary`;
-      }
-    } else if (selectedCharacter === String(props.unassignedPicturesId)) {
-      if (props.projectViewMode === "project") {
-        const pid =
-          props.selectedProjectId != null
-            ? props.selectedProjectId
-            : "UNASSIGNED";
-        url = `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary?project_id=${pid}`;
-      } else {
-        url = `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`;
-      }
-    } else if (selectedCharacter === String(props.scrapheapPicturesId)) {
-      url = `${props.backendUrl}/characters/${props.scrapheapPicturesId}/summary`;
-    } else if (
-      selectedCharacter &&
-      !hasSetSelection.value &&
-      selectedCharacter !== String(props.allPicturesId)
-    ) {
-      if (props.projectViewMode === "project") {
-        const pid =
-          props.selectedProjectId != null
-            ? props.selectedProjectId
-            : "UNASSIGNED";
-        url = `${props.backendUrl}/characters/${selectedCharacter}/summary?project_id=${pid}`;
-      } else {
-        url = `${props.backendUrl}/characters/${selectedCharacter}/summary`;
-      }
-    }
-
-    if (props.applyTagFilter) {
-      url += (url.includes("?") ? "&" : "?") + "apply_tag_filter=true";
-    }
-
-    const scopedRes = await apiClient.get(url);
-    const scopedData = await scopedRes.data;
-    totalCurrentCategoryCount.value = Number(scopedData.image_count) || 0;
-  } catch (e) {
-    console.warn("[ImageGrid.vue] Failed to fetch scoped category count:", e);
-    totalCurrentCategoryCount.value = 0;
-  }
-}
-
 function _resetGridState() {
   gridReady.value = false;
   emptyStateDelayPassed.value = false;
@@ -6463,7 +4317,7 @@ function _resetGridState() {
   expandedStackMembers.value = new Map();
   expandedStackLoading.value = new Set();
   selectedImageIds.value = [];
-  lastSelectedImageId = null;
+  lastSelectedImageId.value = null;
   initialRender.value = true;
 }
 
@@ -6554,11 +4408,8 @@ watch(
 // ============================================================
 // THUMBNAIL TRACKING STATE
 // ============================================================
-// Track loaded batch ranges to avoid duplicate requests
-const loadedRanges = ref([]);
 // Debounce timer for scroll-triggered fetches
 let thumbFetchTimeout = null;
-let pendingRanges = [];
 const thumbnailRequestEpoch = ref(0);
 const suppressVisibleThumbFetch = ref({
   until: 0,
@@ -6616,80 +4467,6 @@ function resetThumbnailState() {
     delete thumbnailRetryCounts[key];
   }
 }
-
-// ============================================================
-// VIEWPORT STATE
-// ============================================================
-
-const visibleStart = ref(0);
-const visibleEnd = ref(0);
-
-const rowHeight = ref(
-  Math.round(
-    Math.min(
-      MAX_THUMBNAIL_SIZE,
-      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
-    ) + (props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT),
-  ),
-);
-
-function getGridColumnWidth() {
-  const cols = Math.max(1, props.columns || 1);
-  const gridWidth =
-    gridContainer.value?.clientWidth ?? scrollWrapper.value?.clientWidth ?? 0;
-  if (!gridWidth) {
-    return Math.min(
-      MAX_THUMBNAIL_SIZE,
-      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
-    );
-  }
-  const availableWidth = Math.max(0, gridWidth - 4);
-  const rawWidth = availableWidth / cols;
-  return Math.min(
-    MAX_THUMBNAIL_SIZE,
-    Math.max(1, rawWidth || MIN_THUMBNAIL_SIZE),
-  );
-}
-
-function updateRowHeightFromGrid() {
-  const columnWidth = getGridColumnWidth();
-  const infoHeight = props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT;
-  rowHeight.value = Math.round(columnWidth + infoHeight);
-  refreshAllThumbnailInfoDisplays();
-}
-
-// columns is now controlled by prop
-
-const renderStart = computed(() => {
-  const cols = props.columns;
-  let start = Math.max(0, visibleStart.value - renderBuffer.value);
-  return start;
-});
-
-const renderEnd = computed(() => {
-  const cols = props.columns;
-  let end = Math.min(
-    allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value,
-  );
-  return end;
-});
-
-const topSpacerHeight = computed(() => {
-  const cols = props.columns;
-  const rowsAbove = Math.floor(renderStart.value / cols);
-  const height = rowsAbove > 0 ? rowsAbove * rowHeight.value : 1;
-  return height;
-});
-
-const bottomSpacerHeight = computed(() => {
-  const cols = props.columns;
-  const lastRenderedRow = Math.floor((renderEnd.value - 1) / cols) + 1;
-  const totalRows = Math.ceil(allGridImages.value.length / cols);
-  const rowsBelow = totalRows - lastRenderedRow;
-  const height = rowsBelow > 0 ? rowsBelow * rowHeight.value : 0;
-  return height;
-});
 
 watch(
   [() => expandedStackIds.value, () => lastFetchedGridImages.value],
@@ -7055,62 +4832,14 @@ function updateVisibleThumbnails() {
   scheduleSharedPictureFetch();
 }
 
-function onGridScroll(e) {
-  // Debounce scroll handler to prevent runaway feedback
-  if (!window._scrollDebounceTimeout) window._scrollDebounceTimeout = null;
-  if (window._scrollDebounceTimeout)
-    clearTimeout(window._scrollDebounceTimeout);
-  window._scrollDebounceTimeout = setTimeout(() => {
-    const el = scrollWrapper.value;
-    if (!el) return;
-    let cardHeight = rowHeight.value;
-    const scrollTop = el.scrollTop;
-    const cols = props.columns;
-    // First visible row (may be partially visible)
-    const firstVisibleRow = scrollTop / cardHeight;
-    // Last visible row (may be partially visible)
-    const lastVisibleRow = (scrollTop + el.clientHeight - 1) / cardHeight;
-
-    const newVisibleStart = Math.floor(firstVisibleRow) * cols;
-    const newVisibleEnd = Math.ceil(lastVisibleRow) * cols;
-
-    // Only update if changed
-    if (
-      visibleStart.value !== newVisibleStart ||
-      visibleEnd.value !== newVisibleEnd
-    ) {
-      visibleStart.value = newVisibleStart;
-      visibleEnd.value = newVisibleEnd;
-      // Only trigger buffer expansion/fetch if user is near buffer end
-      // Always fetch thumbnails for the current visible window
-      updateVisibleThumbnails();
-    }
-  }, 50);
-}
-
 // ============================================================
 // CLICK HANDLERS
 // ============================================================
-function scrollCursorIntoView(idx) {
-  if (!scrollWrapper.value) return;
-  const cols = Math.max(1, props.columns || 1);
-  const row = Math.floor(idx / cols);
-  const itemTop = row * rowHeight.value;
-  const itemBottom = itemTop + rowHeight.value;
-  const scrollTop = scrollWrapper.value.scrollTop;
-  const clientHeight = scrollWrapper.value.clientHeight;
-  if (itemTop < scrollTop) {
-    scrollWrapper.value.scrollTop = itemTop;
-  } else if (itemBottom > scrollTop + clientHeight) {
-    scrollWrapper.value.scrollTop = itemBottom - clientHeight;
-  }
-}
-
 function handleImageCardClick(img, idx, event) {
   if (!img.id) return;
   // Suppress the synthesized click that fires right after a long-press touchend
-  if (suppressTouchClickId === img.id) {
-    suppressTouchClickId = null;
+  if (suppressTouchClickId.value === img.id) {
+    suppressTouchClickId.value = null;
     return;
   }
   cursorIdx.value = idx;
@@ -7119,10 +4848,10 @@ function handleImageCardClick(img, idx, event) {
   let newSelection = [];
   const allGrid = allGridImages.value;
   const anchorIndex =
-    lastSelectedImageId != null
+    lastSelectedImageId.value != null
       ? allGrid.findIndex(
           (item) =>
-            getPictureId(item?.id) === getPictureId(lastSelectedImageId),
+            getPictureId(item?.id) === getPictureId(lastSelectedImageId.value),
         )
       : -1;
   if (isCtrl) {
@@ -7133,7 +4862,7 @@ function handleImageCardClick(img, idx, event) {
     } else {
       newSelection.push(img.id);
     }
-    lastSelectedImageId = img.id;
+    lastSelectedImageId.value = img.id;
   } else if (isShift && anchorIndex >= 0) {
     // Range select: select only the contiguous range between anchor and clicked item
     const start = Math.min(anchorIndex, idx);
@@ -7145,11 +4874,11 @@ function handleImageCardClick(img, idx, event) {
     // Do NOT merge with previous selection; replace it
   } else if (isShift && anchorIndex < 0) {
     newSelection = [img.id];
-    lastSelectedImageId = img.id;
+    lastSelectedImageId.value = img.id;
   } else {
     // Single click (no ctrl/shift): select only this image
     newSelection = [img.id];
-    lastSelectedImageId = img.id;
+    lastSelectedImageId.value = img.id;
   }
   selectedImageIds.value = newSelection;
 }
@@ -7169,8 +4898,8 @@ function handleThumbnailClick(img, idx, event) {
   }
   // Touch two-tap: first tap selects the image; second tap on the same
   // already-selected image opens the overlay.
-  if (lastPointerWasTouch) {
-    lastPointerWasTouch = false;
+  if (lastPointerWasTouch.value) {
+    lastPointerWasTouch.value = false;
     const alreadySoleSelection =
       selectedImageIds.value.length === 1 &&
       selectedImageIds.value[0] === img.id;
@@ -7178,7 +4907,7 @@ function handleThumbnailClick(img, idx, event) {
       openOverlay(img);
     } else {
       selectedImageIds.value = [img.id];
-      lastSelectedImageId = img.id;
+      lastSelectedImageId.value = img.id;
       cursorIdx.value = idx;
     }
     event.stopPropagation();
@@ -7196,7 +4925,7 @@ function handleGridBackgroundClick(e) {
       exitTouchSelectMode();
     } else {
       selectedImageIds.value = [];
-      lastSelectedImageId = null;
+      lastSelectedImageId.value = null;
       cursorIdx.value = null;
     }
   }
@@ -7209,7 +4938,7 @@ function handleImageContextMenu(img, event) {
   if (isReadOnly.value) return;
   if (!selectedImageIds.value.includes(img.id)) {
     selectedImageIds.value = [img.id];
-    lastSelectedImageId = img.id;
+    lastSelectedImageId.value = img.id;
   }
   contextMenuImage.value = img;
   contextMenuX.value = event.clientX;
@@ -7414,218 +5143,6 @@ function updateDescriptionForImage(imageId, description) {
 // LIFECYCLE
 // ============================================================
 
-// Clear selection on ESC key
-function handleKeyDown(event) {
-  const isEditableElement = (element) => {
-    if (!(element instanceof HTMLElement)) return false;
-    if (element.isContentEditable) return true;
-    const tagName = element.tagName;
-    if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
-      return true;
-    }
-    if (element.getAttribute("role") === "textbox") return true;
-    return false;
-  };
-
-  const target = event.target;
-  if (isEditableElement(target)) {
-    return;
-  }
-  if (
-    typeof document !== "undefined" &&
-    isEditableElement(document.activeElement)
-  ) {
-    return;
-  }
-  if (overlayOpen.value) return; // Ignore if overlay is open
-  if (event.key === "Escape") {
-    if (showSelectionBar.value) {
-      // First ESC clears selection only
-      selectedImageIds.value = [];
-      lastSelectedImageId = null;
-      cursorIdx.value = null;
-      clearFaceSelection();
-    } else if (isMultiCharacterView.value || isSetOverlapView.value) {
-      // No images selected — ESC closes the union/intersect/overlap bar
-      emit("clear-multi-selection");
-    } else if (props.searchQuery && props.searchQuery.trim()) {
-      // No selection active — ESC also clears search
-      clearSearchQuery();
-    } else {
-      selectedImageIds.value = [];
-      lastSelectedImageId = null;
-      cursorIdx.value = null;
-      clearFaceSelection();
-    }
-  } else if (
-    ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
-  ) {
-    event.preventDefault();
-    const total = allGridImages.value.length;
-    if (total === 0) return;
-    const cols = Math.max(1, props.columns || 1);
-    let newIdx = cursorIdx.value;
-    if (newIdx === null) {
-      if (selectedImageIds.value.length > 0) {
-        const firstSel = allGridImages.value.findIndex(
-          (img) => img && selectedImageIds.value.includes(img.id),
-        );
-        newIdx = firstSel >= 0 ? firstSel : 0;
-      } else {
-        newIdx = 0;
-      }
-    } else {
-      if (event.key === "ArrowLeft") newIdx = Math.max(0, newIdx - 1);
-      else if (event.key === "ArrowRight")
-        newIdx = Math.min(total - 1, newIdx + 1);
-      else if (event.key === "ArrowUp") newIdx = Math.max(0, newIdx - cols);
-      else if (event.key === "ArrowDown")
-        newIdx = Math.min(total - 1, newIdx + cols);
-    }
-    cursorIdx.value = newIdx;
-    const cursorImg = allGridImages.value[newIdx];
-    if (cursorImg && cursorImg.id) {
-      if (event.shiftKey) {
-        const anchorIndex =
-          lastSelectedImageId != null
-            ? allGridImages.value.findIndex(
-                (item) =>
-                  getPictureId(item?.id) === getPictureId(lastSelectedImageId),
-              )
-            : newIdx;
-        const start = Math.min(anchorIndex, newIdx);
-        const end = Math.max(anchorIndex, newIdx);
-        selectedImageIds.value = allGridImages.value
-          .slice(start, end + 1)
-          .map((i) => i.id)
-          .filter(Boolean);
-      } else if (!event.ctrlKey && !event.metaKey) {
-        // Plain arrow: move cursor and select only this image
-        selectedImageIds.value = [cursorImg.id];
-        lastSelectedImageId = cursorImg.id;
-      }
-      // Ctrl+Arrow: move cursor without changing selection
-    }
-    scrollCursorIntoView(newIdx);
-  } else if (
-    (event.key === "PageDown" || event.key === "PageUp") &&
-    event.shiftKey &&
-    cursorIdx.value !== null
-  ) {
-    // Shift+PageDown/Up: extend selection by a viewport's worth of rows
-    event.preventDefault();
-    const total = allGridImages.value.length;
-    if (total === 0) return;
-    const cols = Math.max(1, props.columns || 1);
-    const rowsPerPage = scrollWrapper.value
-      ? Math.max(
-          1,
-          Math.floor(scrollWrapper.value.clientHeight / rowHeight.value),
-        )
-      : 5;
-    const delta = rowsPerPage * cols;
-    const newIdx =
-      event.key === "PageDown"
-        ? Math.min(total - 1, cursorIdx.value + delta)
-        : Math.max(0, cursorIdx.value - delta);
-    cursorIdx.value = newIdx;
-    const anchorIndex =
-      lastSelectedImageId != null
-        ? allGridImages.value.findIndex(
-            (item) =>
-              getPictureId(item?.id) === getPictureId(lastSelectedImageId),
-          )
-        : newIdx;
-    const start = Math.min(anchorIndex, newIdx);
-    const end = Math.max(anchorIndex, newIdx);
-    selectedImageIds.value = allGridImages.value
-      .slice(start, end + 1)
-      .map((i) => i.id)
-      .filter(Boolean);
-    scrollCursorIntoView(newIdx);
-  } else if (event.key === " ") {
-    // Space: toggle selection at cursor
-    if (cursorIdx.value !== null) {
-      event.preventDefault();
-      const cursorImg = allGridImages.value[cursorIdx.value];
-      if (cursorImg && cursorImg.id) {
-        const newSelection = [...selectedImageIds.value];
-        if (newSelection.includes(cursorImg.id)) {
-          selectedImageIds.value = newSelection.filter(
-            (id) => id !== cursorImg.id,
-          );
-        } else {
-          newSelection.push(cursorImg.id);
-          selectedImageIds.value = newSelection;
-          lastSelectedImageId = cursorImg.id;
-        }
-      }
-    }
-  } else if (event.key === "Enter") {
-    // Enter: open overlay for cursor image
-    if (cursorIdx.value !== null) {
-      event.preventDefault();
-      const cursorImg = allGridImages.value[cursorIdx.value];
-      if (cursorImg && cursorImg.id) {
-        openOverlay(cursorImg);
-      }
-    }
-  } else if (event.key === "g" || event.key === "G") {
-    // Focus the first visible image in the grid
-    event.preventDefault();
-    const idx = visibleStart.value;
-    const img = allGridImages.value[idx];
-    if (img && img.id) {
-      cursorIdx.value = idx;
-      selectedImageIds.value = [img.id];
-      lastSelectedImageId = img.id;
-    }
-  } else if (event.key === "Delete" || event.key === "Backspace") {
-    if (selectedImageIds.value.length > 0 && !isReadOnly.value) {
-      deleteSelected();
-    }
-  } else if ((event.ctrlKey || event.metaKey) && event.key === "a") {
-    event.preventDefault();
-    // Instrumentation: log allGridImages and selection
-    const ids = allGridImages.value.map((img) => img && img.id);
-    const validIds = ids.filter((id) => !!id);
-    const placeholderCount = ids.length - validIds.length;
-    // Select all images with valid IDs from allGridImages (not just visible)
-    const allIds = allGridImages.value
-      .filter((img) => img && img.id)
-      .map((img) => img.id);
-    selectedImageIds.value = Array.from(allIds);
-    lastSelectedImageId = null;
-  } else if (
-    (event.key === "t" || event.key === "T") &&
-    selectedImageIds.value.length > 0 &&
-    !isReadOnly.value
-  ) {
-    event.preventDefault();
-    selectionBarRef.value?.openTagInput();
-  } else if (
-    (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
-    !overlayOpen.value &&
-    !isReadOnly.value &&
-    /^[1-5]$|^0$/.test(event.key)
-  ) {
-    // Number key pressed, set score for hovered image
-    if (selectedImageIds.value.length > 0) {
-      const score = parseInt(event.key, 10);
-      const ids = selectedImageIds.value.slice();
-      applyScoresForSelection(ids, score);
-      event.preventDefault();
-      return;
-    }
-    const idx = hoveredImageIdx.value;
-    const img = allGridImages.value[idx];
-    if (img && img.id) {
-      let score = parseInt(event.key, 10);
-      setScore(img, score);
-      event.preventDefault();
-    }
-  }
-}
 
 watch(
   () => props.thumbnailSize,
