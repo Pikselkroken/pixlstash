@@ -14,8 +14,7 @@ import ProjectEditor from "./ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import FolderTreeNode from "./FolderTreeNode.vue";
-import ReferenceFolderEditor from "./ReferenceFolderEditor.vue";
-import ImportFolderEditor from "./ImportFolderEditor.vue";
+import FolderEditor from "./FolderEditor.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
   apiClient,
@@ -3156,27 +3155,29 @@ defineExpose({
       (value) => emit('update:check-for-updates', value)
     "
   />
-  <ReferenceFolderEditor
+  <FolderEditor
+    type="reference"
     :open="referenceFolderEditorOpen"
     :folder="referenceFolderEditorFolder"
     :in-docker="inDocker"
     :docker-variant="props.dockerVariant"
     :registered-paths="registeredFolderPaths"
     :registered-folders="referenceFolders"
-    :registered-import-folders="importFolders"
+    :registered-sibling-folders="importFolders"
     :image-root="referenceFoldersImageRoot"
     @close="closeReferenceFolderEditor"
     @saved="referenceFolderSaved"
     @deleted="referenceFolderDeleted"
   />
-  <ImportFolderEditor
+  <FolderEditor
+    type="import"
     :open="importFolderEditorOpen"
     :folder="importFolderEditorFolder"
     :in-docker="inDocker"
     :docker-variant="props.dockerVariant"
     :registered-paths="registeredImportFolderPaths"
     :registered-folders="importFolders"
-    :registered-reference-folders="referenceFolders"
+    :registered-sibling-folders="referenceFolders"
     :image-root="referenceFoldersImageRoot"
     @close="closeImportFolderEditor"
     @saved="importFolderSaved"
