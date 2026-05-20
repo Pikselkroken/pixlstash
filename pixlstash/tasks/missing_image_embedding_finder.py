@@ -32,17 +32,15 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
             return None
 
         batch_size = ImageEmbeddingTask.BATCH_SIZE
-        suggest_fn = getattr(
-            picture_tagger, "suggested_image_embedding_batch_size", None
-        )
-        if callable(suggest_fn):
-            try:
-                batch_size = max(1, int(suggest_fn()))
-            except Exception:
-                logger.warning(
-                    "suggested_image_embedding_batch_size() failed, using default batch size",
-                    exc_info=True,
-                )
+        try:
+            batch_size = max(
+                1, int(picture_tagger.clip_embedding_workflow.suggested_batch_size())
+            )
+        except Exception:
+            logger.warning(
+                "clip_embedding_workflow.suggested_batch_size() failed, using default batch size",
+                exc_info=True,
+            )
 
         # Fetch more than one task worth so _filter_and_claim can skip claimed IDs.
         candidates = self._db.run_immediate_read_task(
@@ -59,6 +57,6 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
 
         return ImageEmbeddingTask(
             database=self._db,
-            picture_tagger=picture_tagger,
+            clip_workflow=picture_tagger.clip_embedding_workflow,
             batch=selected,
         )

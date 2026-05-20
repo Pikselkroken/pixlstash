@@ -12,10 +12,13 @@ from PIL import Image
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
+from platformdirs import user_data_dir
+
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureLikenessQueue
-from pixlstash.picture_tagger import MODEL_DIR
 from pixlstash.tagger_plugins.clip_service import CLIP_MODEL_NAME
+
+_MODEL_DIR = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
@@ -33,12 +36,12 @@ class ImageEmbeddingTask(BaseTask):
     AESTHETIC_MODELS = {
         "ViT-L-14": {
             "url": "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth",
-            "path": os.path.join(MODEL_DIR, "sac+logos+ava1-l14-linearMSE.pth"),
+            "path": os.path.join(_MODEL_DIR, "sac+logos+ava1-l14-linearMSE.pth"),
             "dim": 768,
         },
         "ViT-B-32": {
             "url": "https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_32_linear.pth",
-            "path": os.path.join(MODEL_DIR, "sa_0_4_vit_b_32_linear.pth"),
+            "path": os.path.join(_MODEL_DIR, "sa_0_4_vit_b_32_linear.pth"),
             "dim": 512,
         },
     }
@@ -47,9 +50,12 @@ class ImageEmbeddingTask(BaseTask):
     _aesthetic_model = None
     _aesthetic_disabled: Optional[bool] = None
 
-    def __init__(self, database, picture_tagger, batch: list):
+    def __init__(self, database, clip_workflow, batch: list):
         """
         Args:
+            clip_workflow: A :class:`~pixlstash.inference.workflows.clip_embedding.ClipEmbeddingWorkflow`
+                instance used for CLIP inference, or ``None`` when no tagger is
+                available.
             batch: List of ``(picture_id, file_path)`` pairs pre-fetched by the
                 finder.  Images are loaded from disk in ``on_queued()`` so that
                 I/O overlaps with the previous task's GPU inference.
@@ -63,7 +69,7 @@ class ImageEmbeddingTask(BaseTask):
             },
         )
         self._db = database
-        self._picture_tagger = picture_tagger
+        self._clip_workflow = clip_workflow
         self._batch = batch or []
         self.model = None
         self._last_backend_error_log_at = 0.0
@@ -137,13 +143,12 @@ class ImageEmbeddingTask(BaseTask):
         return QueueType.GPU
 
     def estimated_vram_mb(self) -> int:
-        fn = getattr(self._picture_tagger, "estimate_image_embedding_vram_mb", None)
-        if callable(fn):
-            try:
-                return max(0, int(fn(len(self._batch))))
-            except Exception:
-                pass
-        return 0
+        if self._clip_workflow is None:
+            return 0
+        try:
+            return max(0, self._clip_workflow.estimated_vram_mb(len(self._batch)))
+        except Exception:
+            return 0
 
     @classmethod
     def _aesthetic_config(cls):
@@ -235,16 +240,16 @@ class ImageEmbeddingTask(BaseTask):
             return None
 
     def _ensure_clip_ready(self) -> bool:
-        if self._picture_tagger is None:
+        if self._clip_workflow is None:
             logger.error(
-                "ImageEmbeddingTask: PictureTagger not available for CLIP embeddings."
+                "ImageEmbeddingTask: ClipEmbeddingWorkflow not available for CLIP embeddings."
             )
             return False
 
         for attempt in range(1, 4):
             try:
-                self._picture_tagger.ensure_clip_ready()
-                if self._picture_tagger.clip_service.is_loaded():
+                self._clip_workflow.ensure_ready()
+                if self._clip_workflow.is_ready():
                     return True
             except Exception as exc:
                 logger.warning(
@@ -301,8 +306,8 @@ class ImageEmbeddingTask(BaseTask):
             model.load_state_dict(state_dict)
             model.eval()
 
-            if self._picture_tagger:
-                model = model.to(self._picture_tagger.clip_service.device)
+            if self._clip_workflow is not None:
+                model = model.to(self._clip_workflow.device)
 
             ImageEmbeddingTask._aesthetic_model = model
             logger.info("ImageEmbeddingTask: Aesthetic model loaded.")
@@ -313,11 +318,9 @@ class ImageEmbeddingTask(BaseTask):
             ImageEmbeddingTask._aesthetic_disabled = True
 
     def _ensure_embedding_backend(self) -> bool:
-        clip_service = getattr(self._picture_tagger, "clip_service", None)
-
-        if self._picture_tagger and clip_service is not None and not clip_service.is_loaded():
+        if self._clip_workflow is not None and not self._clip_workflow.is_ready():
             try:
-                self._picture_tagger.ensure_clip_ready()
+                self._clip_workflow.ensure_ready()
             except Exception as exc:
                 now = time.time()
                 if (
@@ -330,9 +333,7 @@ class ImageEmbeddingTask(BaseTask):
                     )
                     self._last_backend_error_log_at = now
 
-        clip_ready = bool(
-            clip_service is not None and clip_service.is_loaded()
-        )
+        clip_ready = bool(self._clip_workflow is not None and self._clip_workflow.is_ready())
         fallback_ready = self.model is not None
 
         if clip_ready or fallback_ready:
@@ -406,12 +407,10 @@ class ImageEmbeddingTask(BaseTask):
 
         if clip_ready:
             try:
-                embeddings = self._picture_tagger.clip_service.encode_image_batch(
-                    flat_images
-                )
+                embeddings = self._clip_workflow.encode_images(flat_images)
             except Exception as exc:
                 logger.error(
-                    "ImageEmbeddingTask: Failed to use PictureTagger CLIP model: %s",
+                    "ImageEmbeddingTask: Failed to use CLIP workflow model: %s",
                     exc,
                 )
                 embeddings = None
@@ -454,10 +453,7 @@ class ImageEmbeddingTask(BaseTask):
             logger.error(
                 "ImageEmbeddingTask: No embeddings generated for batch of %s pictures (clip_ready=%s fallback_ready=%s).",
                 len(batch_pids),
-                bool(
-                    getattr(self._picture_tagger, "clip_service", None) is not None
-                    and self._picture_tagger.clip_service.is_loaded()
-                ),
+                bool(self._clip_workflow is not None and self._clip_workflow.is_ready()),
                 bool(self.model),
             )
             return []
