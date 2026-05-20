@@ -9,7 +9,7 @@
 1. [Project Source Tree](#1-project-source-tree)
 2. [Architecture Overview](#2-architecture-overview)
 3. [Entry Points](#3-entry-points)
-4. [State Management — No Pinia](#4-state-management--no-pinia)
+4. [State Management — Pinia](#4-state-management--pinia)
 5. [Component Catalogue](#5-component-catalogue)
 6. [Utility Modules](#6-utility-modules)
 7. [Theming and Styling](#7-theming-and-styling)
@@ -25,9 +25,9 @@
 
 ```
 frontend/src/
-├── main.js                      # App bootstrap: Vuetify setup, theme registration, mount
+├── main.js                      # App bootstrap: Vuetify + Pinia setup, theme registration, mount
 ├── Root.vue                     # Auth gate: LoginScreen or App
-├── App.vue                      # Root application shell: all global state + layout
+├── App.vue                      # Root application shell: layout + WebSocket + sidebar/stats state
 ├── App.css                      # App-scoped CSS overrides
 ├── style.css                    # Global CSS reset and base rules
 │
@@ -38,6 +38,26 @@ frontend/src/
 │
 ├── styles/
 │   └── context-menu.css         # Shared CSS for native-style context menus
+│
+├── stores/                      # Pinia stores (cross-component shared state)
+│   ├── useSelectionStore.js
+│   ├── useFilterStore.js
+│   ├── useSortStore.js
+│   ├── useGridStore.js
+│   ├── useExportStore.js
+│   ├── useWsStore.js
+│   ├── useUserPrefsStore.js
+│   ├── useProjectStore.js
+│   ├── useSidebarStore.js
+│   └── useSearchStore.js
+│
+├── composables/                 # Extracted logic composables (Phase 8.1 — complete)
+│   ├── useVirtualScroll.js      # Virtualised scroll window calculation for ImageGrid
+│   ├── useMultiSelect.js        # Image multi-selection (shift-click, range, touch mode)
+│   ├── useGridDragDrop.js       # Drag-and-drop reordering and import in ImageGrid
+│   ├── useStackOrdering.js      # Stack expand/collapse, reorder, visual mapping in ImageGrid
+│   ├── useGridFetch.js          # Grid image fetch state + all fetch/query-param functions
+│   └── useGridKeyboardNav.js    # Keyboard navigation and keyboard-driven actions for ImageGrid
 │
 ├── utils/
 │   ├── apiClient.js             # Axios instance, auth state, session/token helpers
@@ -50,35 +70,12 @@ frontend/src/
 │   └── utils.js                 # Date formatting, score toggle, stack colours, ComfyUI error parsing
 │
 └── components/
-    ├── AccountSection.vue        # Settings: account auth, API tokens, public URL, watermark
-    ├── AddToEntityControl.vue    # Reusable add/remove control for characters and sets
-    ├── AppearanceSection.vue     # Settings: theme, thumbnail size, date format, keyboard hint
-    ├── CharacterEditor.vue       # Create/edit/delete a character (person) entity
-    ├── ComfyUiRunner.vue         # ComfyUI workflow execution and progress UI
-    ├── EmptyScrapHeap.vue        # Empty-state illustration for scrapheap view
-    ├── FolderBrowser.vue         # Server-side folder picker dialog
-    ├── FolderEditor.vue          # Import/reference folder configuration dialog
-    ├── FolderTreeNode.vue        # Recursive tree node for folder hierarchy display
-    ├── ImageGrid.vue             # Core image grid (virtualised scroll, stacks, overlays, scoring)
-    ├── ImageGridContextMenu.vue  # Right-click context menu for grid cells
-    ├── ImageImporter.vue         # File upload engine (drag-drop, paste, folder import)
-    ├── ImageOverlay.vue          # Full-screen image lightbox with tags, description, metadata
-    ├── LoginScreen.vue           # Authentication form (login + first-run registration)
-    ├── PhotosImportDialog.vue    # Import dialog: source selection (local, Google Photos, etc.)
-    ├── PictureSetEditor.vue      # Create/edit/delete a picture set with icon/colour picker
-    ├── PluginParametersUI.vue    # Dynamic form renderer for plugin parameter schemas
-    ├── ProgressOverlay.vue       # Generic task progress overlay (percent bar + abort button)
-    ├── ProjectEditor.vue         # Create/rename/delete a project
-    ├── ProjectFiles.vue          # Expandable project file-tree panel inside SideBar
-    ├── SearchOverlay.vue         # Full-screen search input with history dropdown
-    ├── SearchResultBar.vue       # Dismissable banner summarising an active search
-    ├── ShareDialog.vue           # Share-link creation dialog (expiry, watermark toggle)
-    ├── SideBar.vue               # Left navigation panel (people, sets, folders, projects, settings)
-    ├── SmartScoreSection.vue     # Settings: penalised-tag configuration for smart score
-    ├── StarRatingOverlay.vue     # 5-star score input widget (hover + click)
-    ├── StatsSidebar.vue          # Right-side statistics panel (tag counts, histograms, filters)
-    ├── Toolbar.vue               # Selection action bar + export menu + search/filter controls
-    └── UserSettingsDialog.vue    # Settings dialog (appearance, behaviour, smart-score, account)
+    ├── views/       # Full-page / full-screen UI surfaces
+    ├── panels/      # Large structural panels that form the app shell
+    ├── editors/     # Entity create / edit / delete dialogs
+    ├── settings/    # Settings dialog and its section sub-components
+    ├── io/          # Import / export / external-service connection
+    └── widgets/     # Reusable primitives used across multiple domains
 ```
 
 ---
@@ -89,7 +86,7 @@ frontend/src/
 |---------|--------|
 | Framework | Vue 3 (Composition API, `<script setup>`) |
 | UI component library | Vuetify 3 |
-| State management | Local `ref`/`reactive` in `App.vue`, shared via `provide/inject` — **no Pinia, no Vuex** |
+| State management | **Pinia** — 10 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
 | Routing | **No Vue Router.** Navigation is pure conditional rendering (`Root.vue` gates on `isAuthenticated`; sub-views are toggled by sidebar selection state in `App.vue`) |
 | Build tool | Vite 5 |
@@ -98,9 +95,9 @@ frontend/src/
 
 ### Key Design Principles
 
-- **Single reactive root.** All cross-component state lives in `App.vue`. Child components receive state as props and report changes via `$emit` — never mutating parent state directly.
-- **Provide/inject for deep subtrees.** Rather than threading dozens of props through `ImageGrid` → `Toolbar`, two context objects are provided at `App.vue` level and injected by `Toolbar.vue`: `gridBarState` (sort, filter, column, view options) and `toolbarState` (sidebar visibility, search, export, settings actions).
-- **Flat component structure.** All components sit directly in `src/components/` — no sub-folders. Shared presentational sub-components (e.g. `StarRatingOverlay`, `ProgressOverlay`) are standalone files imported where needed.
+- **Pinia for cross-component state.** All state shared across more than one component lives in a Pinia store in `src/stores/`. `App.vue` owns only layout-shell state (sidebar/stats visibility, pending import counts) that is not consumed anywhere else.
+- **Composables for reusable logic.** Complex logic extracted from mega-components lives in `src/composables/` as `useX()` functions. Composables accept dependencies as parameters and are independently unit-testable.
+- **Flat component structure.** All components sit directly in `src/components/` with sub-directories by domain (`views/`, `panels/`, `editors/`, `settings/`, `io/`, `widgets/`). Shared presentational sub-components (e.g. `StarRatingOverlay`, `ProgressOverlay`) live in `widgets/`.
 - **Utilities are pure functions.** Every file in `src/utils/` exports only plain functions and constants; none hold reactive state themselves (except `apiClient.js`, which holds `isAuthenticated`, `sessionContext`, and `isReadOnly`).
 - **`<script setup>` everywhere.** All components use the Composition API with `<script setup>` syntax. Options API is not used anywhere.
 
@@ -125,78 +122,44 @@ Authentication gate rendered before `App`. On mount:
 
 ### `App.vue`
 
-The application shell (~1 600+ lines). Responsibilities:
-- Owns **all global reactive state**: selected character/set, search query, sort, columns, filters, export options, WebSocket connection, sidebar state, theme.
+The application shell. Responsibilities:
+- Owns **layout-shell state** only: sidebar/stats visibility, pending import pill count. All domain state has moved to Pinia stores.
 - Renders the three-panel layout: `SideBar` | `ImageGrid` (+ `Toolbar`) | `StatsSidebar`.
 - Manages the `PhotosImportDialog`.
 - Handles global keyboard shortcuts, window drag/drop, paste events.
-- Fetches user config on startup (`GET /users/me/config`) and applies persisted preferences.
-- Provides `gridBarState` and `toolbarState` injection contexts.
-- Persists sidebar/stats open state to `localStorage`; character/set multi-mode and selection to `sessionStorage`.
+- Fetches user config on startup (`GET /users/me/config`) and applies persisted preferences via the relevant stores.
+- Persists sidebar/stats open state to `localStorage`.
 
 ---
 
-## 4. State Management — No Pinia
+## 4. State Management — Pinia
 
-PixlStash uses **no external state library**. State is managed at three tiers:
+PixlStash uses **Pinia** for cross-component state. State is managed at three tiers:
 
-### Tier 1: `App.vue` — global application state
+### Tier 1: Pinia stores — cross-component shared state
 
-All cross-component shared state is declared in `App.vue` as `ref`/`reactive` values. State is passed down via props; child changes propagate back up via `emit`.
+All state consumed by more than one component lives in a Pinia store. Ten stores are defined in `frontend/src/stores/`:
 
-Key state groups in `App.vue`:
+| Store | File | Key State |
+|-------|------|-----------|
+| `useSelectionStore` | `useSelectionStore.js` | `selectedCharacter`, `selectedCharacterIds`, `selectedSet`, `selectedSetIds`, `selectedFolderFilter` |
+| `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, etc. |
+| `useSortStore` | `useSortStore.js` | `selectedSort`, `selectedDescending`, `sortOptions`, `similarityCharacterOptions`, `selectedSimilarityCharacter` |
+| `useGridStore` | `useGridStore.js` | `columns`, `thumbnailSize`, `sidebarThumbnailSize`, `gridVersion`, `wsUpdateKey`, `showStars`, `showFaceBboxes`, `showProblemIcon`, `showStacks`, `stackThreshold`, `expandedStackCount`, `totalStackCount`, `compactMode`, `visibleRangeLabel` |
+| `useExportStore` | `useExportStore.js` | `exportType`, `exportCaptionMode`, `exportResolution`, `exportTagFormat`, `exportIncludeCharacterName`, `exportUseOriginalFileNames`, etc. |
+| `useWsStore` | `useWsStore.js` | `wsTagUpdate`, `wsPluginProgress`, `pendingExternalImportCount`, `updatesSocket` |
+| `useUserPrefsStore` | `useUserPrefsStore.js` | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights`, `dateFormat`, `themeMode` |
+| `useProjectStore` | `useProjectStore.js` | `projectViewMode`, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
+| `useSidebarStore` | `useSidebarStore.js` | `sidebarVisible`, `sidebarDocked`, `statsOpen`, `sidebarForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId` |
+| `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
 
-| Group | Key Refs |
-|-------|----------|
-| Selection | `selectedCharacter`, `selectedCharacterIds`, `selectedSet`, `selectedSetIds`, `selectedFolderFilter` |
-| Multi-select modes | `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId` |
-| Search | `searchQuery`, `searchInput`, `searchHistory` |
-| Sort | `selectedSort`, `selectedDescending`, `sortOptions` |
-| Grid | `columns`, `thumbnailSize`, `sidebarThumbnailSize`, `gridVersion`, `wsUpdateKey` |
-| Filters | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `tagFilter`, `tagRejectedFilter`, etc. |
-| Display | `showStars`, `showFaceBboxes`, `showProblemIcon`, `showStacks`, `dateFormat`, `themeMode` |
-| Stacks | `stackThreshold`, `expandedStackCount`, `totalStackCount` |
-| Export | `exportType`, `exportCaptionMode`, `exportResolution`, etc. |
-| Sidebar / panels | `sidebarVisible`, `sidebarDocked`, `statsOpen`, `sidebarForcedHidden` |
-| Real-time | `wsTagUpdate`, `wsPluginProgress`, `pendingExternalImportCount`, `updatesSocket` |
-| User preferences | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights` |
-| Project view | `projectViewMode`, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
+Components import stores directly (`import { useFilterStore } from '../../stores/useFilterStore'`) — no prop drilling required.
 
-### Tier 2: `provide/inject` — avoiding prop-drilling
-
-Two large context objects are provided by `App.vue` and consumed deep in the component tree:
-
-**`gridBarState`** — consumed by `Toolbar.vue` to render the grid-bar (sort controls, filter chips, column slider, stack expand/collapse):
-```
-sortOptions, selectedSort, selectedDescending, isSearchActive,
-similarityCharacterOptions, selectedSimilarityCharacter, stackThreshold,
-mediaTypeFilter, minScoreFilter, maxScoreFilter, smartScoreBucketFilter,
-resolutionBucketFilter, tagFilter, tagRejectedFilter, tagConfidenceAboveFilter,
-tagConfidenceBelowFilter, faceBboxFilter, sharedOnlyFilter, unassignedOnlyFilter,
-comfyuiModelFilter, comfyuiLoraFilter, comfyuiConfigured, backendUrl,
-columns, minColumns, maxColumns, compactMode, showStars, showFaceBboxes,
-showProblemIcon, showStacks, stackExpandedCount, stackTotalCount,
-expandAllStacks(), collapseAllStacks(), visibleRangeLabel
-```
-
-**`toolbarState`** — consumed by `Toolbar.vue` to render the top toolbar (search, export, sidebar toggles):
-```
-sidebarVisible, sidebarForcedHidden, statsForcedHidden, statsOpen,
-searchInput, isSearchHistoryOpen, filteredSearchHistory, searchOverlayVisible,
-exportMenuOpen, exportCount, exportType, exportCaptionMode, exportTagFormat,
-exportIncludeCharacterName, exportUseOriginalFileNames, exportResolution,
-exportTypeLocksCaptions, exportCaptionOptions, exportTypeOptions,
-exportResolutionOptions, exportTagFormatOptions,
-toggleSidebar(), toggleStats(), openSearchOverlay(), commitSearch(),
-clearSearch(), applySearchHistory(), clearSearchHistory(),
-openSettings(), openImport(), confirmExportZip(), comfyuiRunGrid()
-```
-
-### Tier 3: Component-local state
+### Tier 2: Component-local state
 
 Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreSection`, `StatsSidebar`) own their own refs and fetch their own data. They receive an `open: Boolean` prop (or equivalent) and trigger data loads via `watch(() => props.open, ...)`.
 
-### Template-ref imperative API
+### Tier 3: Template-ref imperative API
 
 `App.vue` holds refs to `SideBar` (via `sidebarRef`) and `ImageGrid` (via `gridContainer`) and calls `defineExpose`'d methods on them:
 
@@ -222,12 +185,12 @@ Application shell. Owns all global state. Renders `SideBar` + `ImageGrid` + `Sta
 
 #### `ImageGrid.vue` (~8 670 lines)
 The core image display engine. Responsibilities:
-- Virtualised grid scroll with dynamic thumbnail sizes.
+- Virtualised grid scroll with dynamic thumbnail sizes (via `useVirtualScroll`).
 - Fetches images from `GET /pictures` with all filter params as query args.
-- Manages stacks: collapsing/expanding, leader-map calculation, inline stack drag-sort.
-- Multi-selection (shift-click, keyboard navigation with arrow keys).
+- Manages stacks: collapsing/expanding, leader-map calculation, inline stack drag-sort (via `useStackOrdering`).
+- Multi-selection (shift-click, keyboard navigation with arrow keys) (via `useMultiSelect`).
 - Image scoring (guest and authenticated star rating).
-- Drag-and-drop reordering within sets.
+- Drag-and-drop reordering within sets (via `useGridDragDrop`).
 - Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `ComfyUiRunner`.
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
@@ -260,7 +223,7 @@ Full-screen image lightbox. Responsibilities:
 - Emits: `close`, `apply-score`, `set-guest-score`, `add-tag`, `remove-tag`, `update-description`, `overlay-change`, `added-to-set`, `set-project`, `comfyui-run`, `run-plugin`
 
 #### `Toolbar.vue` (~4 890 lines)
-Combined selection bar + top toolbar. Uses `inject("gridBarState")` and `inject("toolbarState")` — receives no filter/sort props directly.
+Combined selection bar + top toolbar. Imports state directly from Pinia stores (`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`, `useExportStore`, `useSidebarStore`) — no `inject` or prop drilling.
 
 Responsibilities:
 - Selection action bar: count display, bulk-delete, move, add to set/character, stack operations, ComfyUI/plugin run.
