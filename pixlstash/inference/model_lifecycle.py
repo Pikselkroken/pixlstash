@@ -23,9 +23,7 @@ class ModelLifecycleManager:
 
     The key policy encoded here is that Florence-2 stays resident across
     ``safe_idle_unload`` because its reload is expensive and fragile.
-    CLIP, WD14, SBERT, and the custom tagger are released on idle.
-
-    Args:
+        CLIP, WD14, SBERT, and the PixlStash tagger are released on idle.
         device: Inference device (``"cuda"`` or ``"cpu"``).
     """
 
@@ -43,28 +41,28 @@ class ModelLifecycleManager:
         wd14_service,
         custom_service,
         use_wd14: bool,
-        use_custom: bool,
+        use_pixlstash_tagger: bool,
     ) -> bool:
-        """Load WD14 and/or the custom tagger under the init lock.
+        """Load WD14 and/or the PixlStash tagger under the init lock.
 
         Args:
             wd14_service: :class:`WD14Service` instance.
             custom_service: :class:`PixlStashTaggerService` instance.
             use_wd14: Whether WD14 should be loaded.
-            use_custom: Whether the custom tagger should be loaded.
+            use_pixlstash_tagger: Whether the PixlStash tagger should be loaded.
 
         Returns:
-            ``True`` on success; ``False`` if the custom tagger failed to load
-            (caller should set ``use_custom_tagger = False``).
+            ``True`` on success; ``False`` if the PixlStash tagger failed to
+            load (caller should set ``use_pixlstash_tagger = False``).
         """
-        custom_failed = False
+        pixlstash_tagger_failed = False
         with self._init_lock:
             if use_wd14:
                 wd14_service.init()
-            if use_custom and not custom_service.is_loaded():
+            if use_pixlstash_tagger and not custom_service.is_loaded():
                 if not custom_service.init_or_cpu_fallback():
-                    custom_failed = True
-        return not custom_failed
+                    pixlstash_tagger_failed = True
+        return not pixlstash_tagger_failed
 
     def ensure_captioning_ready(self, florence_service) -> None:
         """Load Florence-2 under the init lock if not already loaded.
@@ -151,7 +149,7 @@ class ModelLifecycleManager:
                 logger.debug("Released SBERT service models.")
             if custom_service is not None:
                 custom_service.unload()
-                logger.debug("Released custom tagger service models.")
+                logger.debug("Released PixlStash tagger service models.")
         except Exception as exc:
             logger.warning("Exception during safe idle unload: %s", exc)
 

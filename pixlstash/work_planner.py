@@ -16,7 +16,7 @@ class WorkPlanner:
     @staticmethod
     def work_finders(
         database,
-        picture_tagger_getter,
+        engine_getter,
         image_root=None,
         path_mapper=None,
     ):
@@ -60,26 +60,26 @@ class WorkPlanner:
         return {
             TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
                 database=database,
-                picture_tagger_getter=picture_tagger_getter,
+                engine_getter=engine_getter,
             ),
             TaskType.QUALITY: MissingQualityFinder(
                 database=database,
             ),
             TaskType.TAGGER: MissingTagFinder(
                 database=database,
-                picture_tagger_getter=picture_tagger_getter,
+                engine_getter=engine_getter,
             ),
             TaskType.DESCRIPTION: MissingDescriptionFinder(
                 database=database,
-                picture_tagger_getter=picture_tagger_getter,
+                engine_getter=engine_getter,
             ),
             TaskType.TEXT_EMBEDDING: MissingTextEmbeddingFinder(
                 database=database,
-                picture_tagger_getter=picture_tagger_getter,
+                engine_getter=engine_getter,
             ),
             TaskType.IMAGE_EMBEDDING: MissingImageEmbeddingFinder(
                 database=database,
-                picture_tagger_getter=picture_tagger_getter,
+                engine_getter=engine_getter,
             ),
             TaskType.LIKENESS_PARAMETERS: MissingLikenessParametersFinder(
                 database=database,

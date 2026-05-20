@@ -10,20 +10,21 @@ import pytest
 import time
 import torch
 from pathlib import Path
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.engine import InferenceEngine
+from pixlstash.server import Server
 
 MAX_TEST_IMAGES = 3 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 
 
 @pytest.fixture(scope="module")
 def tagger(request):
-    """Create a PictureTagger instance with Florence-2 enabled."""
+    """Create an InferenceEngine instance with Florence-2 enabled."""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
-    tagger = PictureTagger()
+    tagger = InferenceEngine.create(fast_captions=Server.DEFAULT_FAST_CAPTIONS)
     try:
         tagger._ensure_captioning_ready()
     except Exception as exc:
@@ -80,7 +81,7 @@ def test_florence_caption_generation(tagger, image_files):
     dataset = image_files[:MAX_TEST_IMAGES]
 
     for image_path in dataset:
-        caption = tagger._florence_service.generate_caption(image_path)
+        caption = tagger.florence_service.generate_caption(image_path)
 
         if caption:
             success_count += 1
@@ -110,16 +111,16 @@ def test_florence_caption_performance(tagger, image_files):
         pytest.fail("No images available for Florence performance test")
 
     # Warm up once to avoid first-call setup costs skewing throughput.
-    warmup_caption = tagger._florence_service.generate_caption(test_images[0])
+    warmup_caption = tagger.florence_service.generate_caption(test_images[0])
     assert warmup_caption, "Florence warmup caption failed"
 
-    batch_size = max(1, int(tagger._florence_service.description_batch_size() or 1))
+    batch_size = max(1, int(tagger.florence_service.description_batch_size() or 1))
 
     start_time = time.time()
     captions = []
     for offset in range(0, len(test_images), batch_size):
         chunk = test_images[offset : offset + batch_size]
-        chunk_captions = tagger._florence_service.generate_captions_batch(chunk)
+        chunk_captions = tagger.florence_service.generate_captions_batch(chunk)
         for image_path in chunk:
             captions.append(chunk_captions.get(image_path))
 
@@ -149,8 +150,8 @@ def test_florence_caption_performance(tagger, image_files):
     )
 
     # Relax requirements when running on CPU; Florence takes longer there.
-    device = tagger._florence_service._model_device
-    expect_gpu = torch.cuda.is_available() and not PictureTagger.FORCE_CPU
+    device = tagger.florence_service._model_device
+    expect_gpu = torch.cuda.is_available() and not Server.DEFAULT_FORCE_CPU
     if expect_gpu and (device is None or getattr(device, "type", "cpu") != "cuda"):
         pytest.fail(
             "Florence expected to run on GPU but is on CPU. "
@@ -162,7 +163,7 @@ def test_florence_caption_performance(tagger, image_files):
         assert time_per_image < 2.5, (
             "Performance too slow on GPU: "
             f"{time_per_image:.3f}s per image; "
-            f"fallback_reason={tagger._florence_service._last_fallback_reason}"
+            f"fallback_reason={tagger.florence_service._last_fallback_reason}"
         )
     else:
         # Increased timeout for slower CI runners (GitHub Actions, etc.)
@@ -178,7 +179,7 @@ def test_florence_caption_content(tagger, image_files):
     # Test all available images
     dataset = image_files[:MAX_TEST_IMAGES]
     for image_path in dataset:
-        caption = tagger._florence_service.generate_caption(image_path)
+        caption = tagger.florence_service.generate_caption(image_path)
 
         # Caption should be at least 10 characters
         assert len(caption) >= 10, f"Caption too short: {caption}"
@@ -196,7 +197,7 @@ def test_florence_caption_content(tagger, image_files):
 
 def test_florence_handles_missing_file(tagger):
     """Test that Florence-2 handles missing files gracefully."""
-    caption = tagger._florence_service.generate_caption("/nonexistent/file.jpg")
+    caption = tagger.florence_service.generate_caption("/nonexistent/file.jpg")
 
     # Should return None or empty string for missing files
     assert caption is None or caption == ""

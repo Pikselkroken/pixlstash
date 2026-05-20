@@ -32,7 +32,7 @@ class WD14Service:
 
     Manages ONNX session lifecycle, tag CSV parsing, model downloading,
     and batched image inference.  Designed as a stateful service object
-    owned by ``PictureTagger``.
+    owned by ``InferenceEngine``.
 
     Args:
         device: Inference device string (``"cuda"`` or ``"cpu"``).

@@ -14,10 +14,10 @@ FACE_EXTRACTION_BATCH_LIMIT = 100
 class MissingFaceExtractionFinder(BaseTaskFinder):
     """Find pictures missing faces and create a feature extraction task."""
 
-    def __init__(self, database, picture_tagger_getter: Callable):
+    def __init__(self, database, engine_getter: Callable):
         super().__init__()
         self._db = database
-        self._picture_tagger_getter = picture_tagger_getter
+        self._engine_getter = engine_getter
 
     def finder_name(self) -> str:
         return "MissingFaceExtractionFinder"
@@ -26,8 +26,8 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
         return 3
 
     def find_task(self):
-        picture_tagger = self._picture_tagger_getter()
-        if picture_tagger is None:
+        engine = self._engine_getter()
+        if engine is None:
             return None
 
         pictures = self._db.run_immediate_read_task(
@@ -42,7 +42,7 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
 
         return FaceExtractionTask(
             database=self._db,
-            picture_tagger=picture_tagger,
+            engine=engine,
             pictures=selected,
         )
 

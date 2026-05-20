@@ -6,7 +6,6 @@ import gc
 import socket
 
 from fastapi.testclient import TestClient
-from pixlstash.picture_tagger import PictureTagger
 from pixlstash.server import Server
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
@@ -79,17 +78,16 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    """Set static attributes on PictureTagger from command line options."""
+    """Set static attributes on Server from command line options."""
     # Pick a free port for the test session so Server instances don't collide
     # with the production app when it is already running on the default port.
     Server.DEFAULT_PORT = _find_free_port()
     force_cpu = config.getoption("--force-cpu")
-    PictureTagger.FORCE_CPU = force_cpu
     # Persist force-cpu as a Server-level override so startup checks cannot
-    # clobber the flag after conftest sets it (startup checks set FORCE_CPU
+    # clobber the flag after conftest sets it (startup checks set forced_cpu
     # based on the server config's default_device value).
     Server.DEFAULT_FORCE_CPU = True if force_cpu else None
-    PictureTagger.FAST_CAPTIONS = config.getoption("--fast-captions")
+    Server.DEFAULT_FAST_CAPTIONS = config.getoption("--fast-captions")
     Server.DEFAULT_MAX_VRAM_GB = config.getoption("--max-vram-gb")
 
 
@@ -97,7 +95,7 @@ def pytest_sessionfinish(session, exitstatus):
     """Release native model/session resources before interpreter teardown."""
     try:
         # Drain optional CPU spillover tagger if one was created by tag tasks.
-        TagTask._release_idle_cpu_spillover_tagger(force=True)
+        TagTask._release_idle_cpu_spillover_engine(force=True)
     except Exception:
         # Best-effort teardown: ignore spillover tagger cleanup failures.
         pass

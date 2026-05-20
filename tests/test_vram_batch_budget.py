@@ -97,12 +97,14 @@ def test_incremental_vram_estimate_is_below_full_estimate():
 
 
 def test_missing_tags_finder_uses_suggested_task_size():
-    class FakeTagger:
-        def suggested_tag_task_size(self):
+    class FakeTaggingWorkflow:
+        def suggested_task_size(self):
             return 3
 
-        def max_concurrent_images(self):
-            return 64
+    class FakeEngine:
+        wd14_enabled = True
+        custom_enabled = False
+        tagging_workflow = FakeTaggingWorkflow()
 
     class FakeDB:
         def __init__(self):
@@ -117,7 +119,7 @@ def test_missing_tags_finder_uses_suggested_task_size():
 
     finder = MissingTagFinder(
         database=FakeDB(),
-        picture_tagger_getter=lambda: FakeTagger(),
+        engine_getter=lambda: FakeEngine(),
     )
 
     task = finder.find_task()

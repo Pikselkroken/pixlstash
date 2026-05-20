@@ -147,6 +147,7 @@ class Server:
 
     DEFAULT_MAX_VRAM_GB: float | None = None
     DEFAULT_FORCE_CPU: bool | None = None
+    DEFAULT_FAST_CAPTIONS: bool = False
     DEFAULT_PORT: int | None = None
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
 
@@ -182,15 +183,6 @@ class Server:
             server_config_path=self._server_config_path,
             logger=logger,
         ).run()
-        # Re-apply any test-level FORCE_CPU override that startup checks may have clobbered.
-        # Skip when workers are disabled — importing PictureTagger loads the entire
-        # torch/open_clip/onnxruntime stack which consumes ~700 MB on a demo machine.
-        if Server.DEFAULT_FORCE_CPU is not None and not self._server_config.get(
-            "disable_background_workers", False
-        ):
-            from pixlstash.picture_tagger import PictureTagger  # deferred: heavy ML
-
-            PictureTagger.FORCE_CPU = Server.DEFAULT_FORCE_CPU
         with open(server_config_path, "w") as f:
             json.dump(self._server_config, f, indent=2)
 
@@ -205,6 +197,12 @@ class Server:
 
         register_heif_opener()
 
+        _startup_forced_cpu = self._startup_check_report.get("forced_cpu", False)
+        _force_cpu = (
+            Server.DEFAULT_FORCE_CPU
+            if Server.DEFAULT_FORCE_CPU is not None
+            else _startup_forced_cpu
+        )
         self.vault = Vault(
             image_root=self._server_config["image_root"],
             description=User().description,
@@ -213,6 +211,8 @@ class Server:
             disable_background_workers=self._server_config.get(
                 "disable_background_workers", False
             ),
+            force_cpu=bool(_force_cpu),
+            fast_captions=Server.DEFAULT_FAST_CAPTIONS,
         )
 
         self._ws_clients = []
@@ -241,11 +241,11 @@ class Server:
         self.vault.set_wd14_tagger_enabled(
             getattr(self._user, "wd14_tagger_enabled", False)
         )
-        self.vault.set_custom_tagger_enabled(
+        self.vault.set_pixlstash_tagger_enabled(
             getattr(self._user, "custom_tagger_enabled", True)
         )
         self.vault.set_wd14_threshold(getattr(self._user, "wd14_threshold", None))
-        self.vault.set_custom_tagger_threshold_offset(
+        self.vault.set_pixlstash_tagger_threshold_offset(
             getattr(self._user, "custom_tagger_threshold_offset", None)
         )
 

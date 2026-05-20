@@ -17,7 +17,8 @@
 7. [Task System](#7-task-system)
 8. [Image Plugins](#8-image-plugins)
 9. [Tagger Plugins](#9-tagger-plugins)
-10. [Utility Modules](#10-utility-modules)
+10. [Inference Package](#9b-inference-package)
+11. [Utility Modules](#10-utility-modules)
 11. [Alembic Migrations](#11-alembic-migrations)
 12. [Storage Architecture](#12-storage-architecture)
 13. [Server Lifecycle](#13-server-lifecycle)
@@ -41,7 +42,7 @@ pixlstash/
 ├── task_runner.py                    # Threaded CPU/GPU task executor
 ├── work_planner.py                   # Polls finders, schedules work
 ├── vault.py                          # Top-level orchestrator
-├── picture_tagger.py                 # WD14 + custom anomaly tagger
+├── picture_tagger.py                 # Thin PictureTagger coordinator (facade over InferenceEngine)
 ├── picture_scoring.py                # Smart score, character likeness
 ├── stacking.py                       # Picture stacking
 ├── worker_config.py                  # Concurrency / batch tuning
@@ -122,7 +123,23 @@ pixlstash/
 │       ├── scaling.py
 │       └── plugin_template.py
 │
-├── tagger_plugins/                   # (Reserved; taggers live in picture_tagger.py)
+├── tagger_plugins/                   # ML service objects (extracted from picture_tagger.py)
+│   ├── clip_service.py               # ClipService — CLIP ViT-B-32 load/encode
+│   ├── sbert.py                      # SBertService — SentenceTransformer load/encode
+│   ├── wd14.py                       # WD14Service — WD14 ONNX session + tagging loop
+│   ├── florence2.py                  # Florence2Service — Florence-2 captioning
+│   └── pixlstash_tagger.py           # PixlStashTaggerService — custom anomaly tagger
+│
+├── inference/                        # Inference abstraction layer
+│   ├── engine.py                     # InferenceEngine — assembles all service objects
+│   ├── model_lifecycle.py            # ModelLifecycleManager — load/unload orchestration
+│   ├── vram_budget.py                # VramBudget — VRAM tracking + batch sizing
+│   └── workflows/
+│       ├── tagging.py                # TaggingWorkflow
+│       ├── description.py            # DescriptionWorkflow
+│       ├── text_embedding.py         # TextEmbeddingWorkflow
+│       ├── face_embedding.py         # FaceEmbeddingWorkflow
+│       └── clip_embedding.py         # ClipEmbeddingWorkflow
 │
 ├── utils/
 │   ├── watermark.py
@@ -135,6 +152,8 @@ pixlstash/
 │   ├── rate_limiter.py
 │   ├── comfyui_utilities.py
 │   ├── insightface_batched.py
+│   ├── vram_utils.py                 # VRAM query + batch-cap helpers
+│   ├── model_utils.py                # Model loading helpers (env_int, env_float, from_pretrained_local_first, …)
 │   ├── image_processing/             # image_utils, face_utils, video_utils
 │   ├── likeness/                     # likeness_utils, likeness_parameter_utils
 │   ├── quality/                      # quality_utils, smart_score_utils
@@ -166,12 +185,13 @@ PixlStash is a **single-process, async-first image vault** built on FastAPI. It 
 - A **plugin system** for image transformations
 - A **file vault** rooted at a configured `image_root` directory
 
-The runtime is organised around three orthogonal layers:
+The runtime is organised around four orthogonal layers:
 
 | Layer | Component | Responsibility |
 |-------|-----------|----------------|
 | **API** | `server.py`, `routes/*` | HTTP / WebSocket handlers, request validation |
 | **Domain** | `vault.py`, `picture_tagger.py`, `picture_scoring.py`, `stacking.py` | Business logic, ML orchestration |
+| **Inference** | `inference/`, `tagger_plugins/` | Model loading, VRAM management, workflow execution |
 | **Workers** | `task_runner.py`, `work_planner.py`, `tasks/*` | Async background processing of new pictures |
 | **Persistence** | `database.py`, `db_models/*`, `migrations/*` | Schema, queries, transactions |
 
@@ -247,7 +267,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | [pixlstash/auth.py](../pixlstash/auth.py) | `AuthService`: password + JWT + scoped tokens. Enforces resource-level permissions (picture / set / character / project). |
 | [pixlstash/task_runner.py](../pixlstash/task_runner.py) | Threaded executor with separate CPU and GPU pools. Monitors VRAM, gates GPU-heavy tasks, drains queues at shutdown. |
 | [pixlstash/work_planner.py](../pixlstash/work_planner.py) | Registers all `BaseTaskFinder`s, polls them in round-robin, enforces inflight limits and adaptive backoff. |
-| [pixlstash/picture_tagger.py](../pixlstash/picture_tagger.py) | Loads and runs both tagging models (WD14 + custom anomaly tagger). Manages lazy load + VRAM unload. |
+| [pixlstash/picture_tagger.py](../pixlstash/picture_tagger.py) | Thin `PictureTagger` coordinator. Owns `InferenceEngine` and all service objects. Exposes named workflow properties (`tagging_workflow`, `description_workflow`, `text_embedding_workflow`, `face_embedding_workflow`, `clip_embedding_workflow`) for tasks to call into. |
 | [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation, anchor embeddings, character likeness scoring. |
 | [pixlstash/worker_config.py](../pixlstash/worker_config.py) | Global constants — `NUM_WORKERS`, per-task `*_MAX_INFLIGHT`, batch sizes. |
 | [pixlstash/startup_checks.py](../pixlstash/startup_checks.py) | Preflight: disk space, VRAM, CUDA, SSL. May force CPU mode. |
@@ -398,6 +418,7 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 
 - **`BaseTask`** (`tasks/base_task.py`) — abstract task. Declares `task_type`, `queue_type` (CPU/GPU), `priority`, `run()`.
 - **`BaseTaskFinder`** (`tasks/base_task_finder.py`) — queries DB for missing work, claims picture IDs, builds task instances, releases claims in `on_task_complete()`.
+- **`SimpleMissingFinder`** (`tasks/base_task_finder.py`) — concrete base extending `BaseTaskFinder`. Subclasses implement only `_batch_size()`, `_fetch_candidates()`, and `_create_task()`; the fetch-claim-create loop is provided for free. Most finders now extend `SimpleMissingFinder` rather than `BaseTaskFinder` directly.
 - **`TaskType`** (`tasks/task_type.py`) — enum of all task types.
 - **`TaskRunner`** — executes tasks from CPU and GPU queues. CPU queue is multi-threaded (`NUM_WORKERS` per `worker_config.py`); GPU queue is serialised to avoid CUDA contention.
 - **`WorkPlanner`** — polls each finder, respects `*_MAX_INFLIGHT` limits, applies adaptive backoff when no work is found.
@@ -440,14 +461,43 @@ Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixel
 
 ## 9. Tagger Plugins
 
-Although the directory `tagger_plugins/` is reserved, tagging is currently implemented inline in [pixlstash/picture_tagger.py](../pixlstash/picture_tagger.py).
+Located in [pixlstash/tagger_plugins/](../pixlstash/tagger_plugins/). Each module is a standalone service object responsible for loading, running, and unloading one ML model. They are instantiated by `PictureTagger` and wired into an `InferenceEngine`.
 
-| Tagger | Model | Toggle | Threshold |
-|--------|-------|--------|-----------|
-| WD14 | `SmilingWolf/wd-convnext-tagger-v3` (HF) | `User.wd14_tagger_enabled` | `User.wd14_threshold` |
-| Custom anomaly tagger | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned commit) | `User.custom_tagger_enabled` | `User.custom_tagger_threshold_offset` |
+| Service | Class | Model / backend | Toggle |
+|---------|-------|-----------------|--------|
+| `clip_service.py` | `ClipService` | `open_clip` ViT-B-32 | Always on |
+| `sbert.py` | `SBertService` | `sentence_transformers` `all-MiniLM-L6-v2` | Always on |
+| `wd14.py` | `WD14Service` | `SmilingWolf/wd-convnext-tagger-v3` (ONNX, HF) | `User.wd14_tagger_enabled` |
+| `florence2.py` | `Florence2Service` | `microsoft/Florence-2-base-ft` (HF) | Always on |
+| `pixlstash_tagger.py` | `PixlStashTaggerService` | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned commit) | `User.custom_tagger_enabled` |
 
-Both models support CUDA and CPU. Models are lazily loaded on first use and can be unloaded after idle to free VRAM unless `keep_models_in_memory` is set.
+All services share the same interface pattern: `is_loaded()`, `ensure_ready()`, `unload()`, plus the main inference method(s).  Models are lazily loaded on first use and can be unloaded after idle to free VRAM unless `keep_models_in_memory` is set.
+
+---
+
+## 9b. Inference Package
+
+Located in [pixlstash/inference/](../pixlstash/inference/).
+
+### Core classes
+
+| Module | Class | Responsibility |
+|--------|-------|----------------|
+| `engine.py` | `InferenceEngine` | Holds references to all service objects plus `VramBudget` and `ModelLifecycleManager`. Provides the `force_cpu` flag. |
+| `model_lifecycle.py` | `ModelLifecycleManager` | Orchestrates `ensure_tagging_ready()`, `ensure_captioning_ready()`, `safe_idle_unload()`, `aggressive_unload()`, and `unload_wd14_session()`. |
+| `vram_budget.py` | `VramBudget` | Tracks the user-configured VRAM cap, queries free VRAM via `nvidia-ml-py`, and computes `limited_batch_cap()` for any base+per-item formula. |
+
+### Workflow classes (`inference/workflows/`)
+
+Workflows are thin, task-facing objects. They hold a reference to the `InferenceEngine` and expose a clean, high-level API. Tasks receive a workflow instance from `PictureTagger` and never access service internals directly.
+
+| Module | Class | Key methods |
+|--------|-------|-------------|
+| `tagging.py` | `TaggingWorkflow` | `tag_images()`, `tag_quality_crops()`, `score_images_custom()`, `suggested_task_size()`, `estimated_vram_mb()`, `estimated_incremental_vram_mb()` |
+| `description.py` | `DescriptionWorkflow` | `generate_batch()`, `estimate_vram_mb()` |
+| `text_embedding.py` | `TextEmbeddingWorkflow` | `encode()`, `encode_query()`, `encode_clip_query()` |
+| `face_embedding.py` | `FaceEmbeddingWorkflow` | `encode_face_crops()`, `estimated_vram_mb()` |
+| `clip_embedding.py` | `ClipEmbeddingWorkflow` | `encode_images()`, `suggested_batch_size()`, `estimated_vram_mb()` |
 
 ---
 
@@ -465,7 +515,9 @@ Both models support CUDA and CPU. Models are lazily loaded on first use and can 
 | [utils/rate_limiter.py](../pixlstash/utils/rate_limiter.py) | IP-based rate-limit middleware |
 | [utils/comfyui_utilities.py](../pixlstash/utils/comfyui_utilities.py) | ComfyUI workflow parsing |
 | [utils/insightface_batched.py](../pixlstash/utils/insightface_batched.py) | Batched InsightFace wrapper |
-| utils/image_processing/ | `image_utils`, `face_utils`, `video_utils` |
+| [utils/vram_utils.py](../pixlstash/utils/vram_utils.py) | `query_total_vram_mb()`, `vram_limited_batch_cap()` |
+| [utils/model_utils.py](../pixlstash/utils/model_utils.py) | `env_int()`, `env_float()`, `from_pretrained_local_first()`, `quiet_transformers_load_report()`, `load_sentence_transformer()`, `clean_asset_name()`, `trim_process_memory()` |
+| utils/image_processing/ | `image_utils`, `face_utils` (incl. `expand_bbox_to_square()`), `video_utils` |
 | utils/likeness/ | `likeness_utils`, `likeness_parameter_utils` |
 | utils/quality/ | `quality_utils`, `smart_score_utils` |
 | utils/stack/ | `stack_utils` |
@@ -637,7 +689,7 @@ flowchart LR
 
     subgraph Domain["Domain Layer"]
         Vault[Vault]
-        Tagger[PictureTagger]
+        Tagger[PictureTagger → InferenceEngine]
         Scoring[picture_scoring]
         Stacking[stacking]
         Plugins[Image Plugins]
@@ -656,12 +708,13 @@ flowchart LR
         Cache[(Thumb / Watermark / Model Cache)]
     end
 
-    subgraph ML["ML Models"]
-        CLIP[CLIP ViT-B-32]
-        WD14[WD14 Tagger]
-        Custom[Anomaly Tagger]
-        Insight[InsightFace]
-        ST[SentenceTransformer]
+    subgraph ML["ML Models (via tagger_plugins/)"]
+        CLIP[ClipService — CLIP ViT-B-32]
+        WD14[WD14Service]
+        Custom[PixlStashTaggerService]
+        Insight[InsightFace (insightface_batched)]
+        ST[SBertService]
+        FLO[Florence2Service]
     end
 
     UI -->|REST| Routes
@@ -689,6 +742,7 @@ flowchart LR
     Tasks --> ML
     Tagger --> WD14
     Tagger --> Custom
+    Tagger --> FLO
     Scoring --> CLIP
     Tasks --> CLIP
     Tasks --> Insight
@@ -754,11 +808,33 @@ flowchart TB
         U4[stack/]
         U5[service/]
         U6[watermark / caption / face_tags / path_mapper / rate_limiter / comfyui_utilities / insightface_batched]
+        U7[vram_utils / model_utils]
     end
 
     subgraph Plugins["image_plugins/"]
         P1[base + registry + service]
         P2[built-in/*]
+    end
+
+    subgraph InferencePkg["inference/"]
+        IE[engine.py — InferenceEngine]
+        ML[model_lifecycle.py]
+        VB[vram_budget.py]
+        subgraph Workflows["workflows/"]
+            WF1[tagging.py]
+            WF2[description.py]
+            WF3[text_embedding.py]
+            WF4[face_embedding.py]
+            WF5[clip_embedding.py]
+        end
+    end
+
+    subgraph TaggerPlugins["tagger_plugins/"]
+        TP1[clip_service.py]
+        TP2[sbert.py]
+        TP3[wd14.py]
+        TP4[florence2.py]
+        TP5[pixlstash_tagger.py]
     end
 
     App --> StartCheck
@@ -774,12 +850,16 @@ flowchart TB
     VaultMod --> Tagger
     VaultMod --> Scoring
 
+    Tagger --> InferencePkg
+    Tagger --> TaggerPlugins
+    InferencePkg --> TaggerPlugins
+    InferencePkg --> Utils
+
     Planner --> Tasks
     Runner --> Tasks
     Tasks --> Models
     Tasks --> Utils
-    Tasks --> Tagger
-    Tasks --> Scoring
+    Tasks --> Workflows
 
     Routers --> VaultMod
     Routers --> Auth
@@ -836,15 +916,17 @@ sequenceDiagram
 ## 18. Architectural Patterns
 
 1. **Task + Finder pattern** — every async work item has a paired finder that queries the DB for missing data and claims rows; results are written back and claims released.
-2. **DB write serialisation** — `VaultDatabase` funnels all writes through a single task queue; reads run in parallel for throughput.
-3. **CPU / GPU queue separation** — `TaskRunner` keeps GPU work single-threaded to avoid CUDA contention while keeping CPU work parallel.
-4. **VRAM gating** — GPU-heavy tasks are blocked when free VRAM is below a threshold (`User.max_vram_gb`).
-5. **Lazy ML loading** — models are loaded on first use and may be unloaded after idle, controlled by `keep_models_in_memory`.
-6. **Event bus** — `EventType`-tagged broadcasts let the frontend stay reactive without polling.
-7. **Embeddings in-database** — all vectors live in SQLite as `BLOB`s; similarity search is in-process NumPy.
-8. **Plugin extensibility** — image plugins are discovered through `PluginRegistry`; new transformations drop into `image_plugins/built-in/` (or a user directory) and become available automatically.
-9. **Conditional migrations** — Alembic migrations are safe on fresh DBs (column existence checks) and trigger data regeneration solely via `NULL` resets.
-10. **Path mapping** — host vs. container paths are normalised through `path_mapper` / `host_path_utils`, allowing Docker deployments without changing the DB.
+2. **SimpleMissingFinder shorthand** — most finders extend `SimpleMissingFinder` instead of `BaseTaskFinder` directly, implementing only `_batch_size()`, `_fetch_candidates()`, and `_create_task()`; the fetch-claim-create loop is inherited.
+3. **Workflow abstraction** — ML tasks interact exclusively with typed workflow objects (`TaggingWorkflow`, `ClipEmbeddingWorkflow`, …) obtained from `PictureTagger`. Workflows encapsulate VRAM estimation, batch sizing, and model readiness so tasks contain no service-level code.
+4. **DB write serialisation** — `VaultDatabase` funnels all writes through a single task queue; reads run in parallel for throughput.
+5. **CPU / GPU queue separation** — `TaskRunner` keeps GPU work single-threaded to avoid CUDA contention while keeping CPU work parallel.
+6. **VRAM gating** — GPU-heavy tasks are blocked when free VRAM is below a threshold (`User.max_vram_gb`). `VramBudget.limited_batch_cap()` centralises the VRAM-to-batch-count formula used by all workflows.
+7. **Lazy ML loading** — models are loaded on first use and may be unloaded after idle, controlled by `keep_models_in_memory`. `ModelLifecycleManager` owns all load/unload sequences.
+8. **Event bus** — `EventType`-tagged broadcasts let the frontend stay reactive without polling.
+9. **Embeddings in-database** — all vectors live in SQLite as `BLOB`s; similarity search is in-process NumPy.
+10. **Plugin extensibility** — image plugins are discovered through `PluginRegistry`; new transformations drop into `image_plugins/built-in/` (or a user directory) and become available automatically.
+11. **Conditional migrations** — Alembic migrations are safe on fresh DBs (column existence checks) and trigger data regeneration solely via `NULL` resets.
+12. **Path mapping** — host vs. container paths are normalised through `path_mapper` / `host_path_utils`, allowing Docker deployments without changing the DB.
 
 ---
 

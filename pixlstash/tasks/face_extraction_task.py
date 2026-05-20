@@ -18,7 +18,7 @@ from sqlmodel import select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.engine import InferenceEngine
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.insightface_batched import BatchedFaceRunner
@@ -52,7 +52,8 @@ class FaceExtractionTask(BaseTask):
 
     Args:
         database: Vault database instance.
-        picture_tagger: PictureTagger used for model settings.
+        engine: :class:`~pixlstash.inference.engine.InferenceEngine` used for
+            model settings.
         pictures: Pictures included in this extraction batch.
     """
 
@@ -76,7 +77,7 @@ class FaceExtractionTask(BaseTask):
     _last_preload_s: float = 0.0
     _last_batch_size: int = 0
 
-    def __init__(self, database, picture_tagger, pictures: list):
+    def __init__(self, database, engine: InferenceEngine, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
             task_type="FaceExtractionTask",
@@ -86,7 +87,7 @@ class FaceExtractionTask(BaseTask):
             },
         )
         self._db = database
-        self._picture_tagger = picture_tagger
+        self._engine = engine
         self._pictures = pictures or []
         self._insightface_app = None
         self._cpu_spillover_enabled = False
@@ -248,14 +249,14 @@ class FaceExtractionTask(BaseTask):
         }
 
     def _should_keep_models_in_memory(self) -> bool:
-        return bool(getattr(self._picture_tagger, "keep_models_in_memory", True))
+        return self._engine.keep_models_in_memory
 
     def estimated_vram_mb(self) -> int:
         if FaceExtractionTask._global_insightface_app is not None:
             # InsightFace models are already resident in VRAM; only charge for
             # the inference activation scratch, not the cold model-load cost.
             return INSIGHTFACE_INFERENCE_SCRATCH_MB
-        fn = getattr(self._picture_tagger, "estimate_face_extraction_vram_mb", None)
+        fn = getattr(self._engine.face_embedding_workflow, "estimated_vram_mb", None)
         if callable(fn):
             try:
                 return max(0, int(fn()))
@@ -311,7 +312,7 @@ class FaceExtractionTask(BaseTask):
             self._insightface_app = FaceExtractionTask._global_insightface_app
             return
 
-        use_cuda = not self._picture_tagger.force_cpu and torch.cuda.is_available()
+        use_cuda = not self._engine.force_cpu and torch.cuda.is_available()
         if use_cuda:
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         else:
