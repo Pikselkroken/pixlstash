@@ -15,11 +15,11 @@ class MissingDescriptionFinder(BaseTaskFinder):
     def __init__(
         self,
         database,
-        picture_tagger_getter: Callable,
+        engine_getter: Callable,
     ):
         super().__init__()
         self._db = database
-        self._picture_tagger_getter = picture_tagger_getter
+        self._engine_getter = engine_getter
 
     def finder_name(self) -> str:
         return "MissingDescriptionFinder"
@@ -28,17 +28,13 @@ class MissingDescriptionFinder(BaseTaskFinder):
         return ["MissingFaceExtractionFinder", "MissingTagFinder"]
 
     def find_task(self):
-        picture_tagger = self._picture_tagger_getter()
-        if picture_tagger is None:
+        engine = self._engine_getter()
+        if engine is None:
             return None
 
         batch_limit = max(
             1,
-            int(
-                picture_tagger.description_batch_size()
-                if hasattr(picture_tagger, "description_batch_size")
-                else picture_tagger.max_concurrent_images()
-            ),
+            int(engine.description_batch_size()),
         )
 
         pictures = self._db.run_immediate_read_task(
@@ -53,7 +49,7 @@ class MissingDescriptionFinder(BaseTaskFinder):
 
         return DescriptionTask(
             database=self._db,
-            workflow=picture_tagger.description_workflow,
+            workflow=engine.description_workflow,
             pictures=selected,
         )
 

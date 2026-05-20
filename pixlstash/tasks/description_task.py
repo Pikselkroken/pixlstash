@@ -13,7 +13,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 if TYPE_CHECKING:
-    from pixlstash.picture_tagger import PictureTagger
+    from pixlstash.inference.engine import InferenceEngine
 
 
 logger = get_logger(__name__)
@@ -30,7 +30,7 @@ class DescriptionTask(BaseTask):
     """
 
     CPU_SPILLOVER_REUSE_GRACE_S = 8.0
-    _cpu_spillover_tagger: "PictureTagger | None" = None
+    _cpu_spillover_engine: "InferenceEngine | None" = None
     _cpu_spillover_last_used_at: float = 0.0
     _cpu_spillover_lock = threading.Lock()
 
@@ -68,33 +68,33 @@ class DescriptionTask(BaseTask):
         self._cpu_spillover_enabled = True
 
     @classmethod
-    def _acquire_cpu_spillover_tagger(cls, image_root: str) -> PictureTagger:
+    def _acquire_cpu_spillover_engine(cls, image_root: str) -> "InferenceEngine":
         with cls._cpu_spillover_lock:
-            if cls._cpu_spillover_tagger is None:
-                logger.debug("DescriptionTask: creating CPU spillover PictureTagger.")
-                cls._cpu_spillover_tagger = PictureTagger(
-                    silent=True,
+            if cls._cpu_spillover_engine is None:
+                from pixlstash.inference.engine import InferenceEngine
+                logger.debug("DescriptionTask: creating CPU spillover InferenceEngine.")
+                cls._cpu_spillover_engine = InferenceEngine.create(
                     device="cpu",
                     image_root=image_root,
                 )
             cls._cpu_spillover_last_used_at = time.perf_counter()
-            return cls._cpu_spillover_tagger
+            return cls._cpu_spillover_engine
 
     @classmethod
-    def _release_idle_cpu_spillover_tagger(cls, force: bool = False) -> None:
+    def _release_idle_cpu_spillover_engine(cls, force: bool = False) -> None:
         with cls._cpu_spillover_lock:
-            tagger = cls._cpu_spillover_tagger
-            if tagger is None:
+            engine = cls._cpu_spillover_engine
+            if engine is None:
                 return
             if not force:
                 idle_s = time.perf_counter() - cls._cpu_spillover_last_used_at
                 if idle_s < cls.CPU_SPILLOVER_REUSE_GRACE_S:
                     return
-            cls._cpu_spillover_tagger = None
+            cls._cpu_spillover_engine = None
         try:
-            tagger.close()
+            engine.close()
         except Exception as exc:
-            logger.debug("DescriptionTask CPU spillover tagger close failed: %s", exc)
+            logger.debug("DescriptionTask CPU spillover engine close failed: %s", exc)
 
     def estimated_vram_mb(self) -> int:
         try:
@@ -140,19 +140,19 @@ class DescriptionTask(BaseTask):
             picture_ids,
         )
 
-        self._release_idle_cpu_spillover_tagger(force=False)
+        self._release_idle_cpu_spillover_engine(force=False)
         active_workflow = self._workflow
-        cpu_spillover_tagger = None
+        cpu_spillover_engine = None
         if self._cpu_spillover_enabled:
             logger.debug(
                 "DescriptionTask %s: using CPU spillover for ids=%s",
                 self.id,
                 picture_ids,
             )
-            cpu_spillover_tagger = self._acquire_cpu_spillover_tagger(
+            cpu_spillover_engine = self._acquire_cpu_spillover_engine(
                 self._db.image_root
             )
-            active_workflow = cpu_spillover_tagger.description_workflow
+            active_workflow = cpu_spillover_engine.description_workflow
 
         descriptions_generated = []
         try:
@@ -168,10 +168,10 @@ class DescriptionTask(BaseTask):
             )
             batch_results = None
         finally:
-            if cpu_spillover_tagger is not None:
+            if cpu_spillover_engine is not None:
                 with self._cpu_spillover_lock:
                     self._cpu_spillover_last_used_at = time.perf_counter()
-                self._release_idle_cpu_spillover_tagger(force=False)
+                self._release_idle_cpu_spillover_engine(force=False)
 
         if not batch_results:
             for pic in pictures:

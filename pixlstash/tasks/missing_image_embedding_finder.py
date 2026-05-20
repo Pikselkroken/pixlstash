@@ -12,10 +12,10 @@ logger = get_logger(__name__)
 class MissingImageEmbeddingFinder(BaseTaskFinder):
     """Find pending image embedding work and create an ImageEmbeddingTask."""
 
-    def __init__(self, database, picture_tagger_getter: Callable):
+    def __init__(self, database, engine_getter: Callable):
         super().__init__()
         self._db = database
-        self._picture_tagger_getter = picture_tagger_getter
+        self._engine_getter = engine_getter
 
     def finder_name(self) -> str:
         return "MissingImageEmbeddingFinder"
@@ -27,14 +27,14 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
         return ["MissingFaceExtractionFinder", "MissingTagFinder"]
 
     def find_task(self):
-        picture_tagger = self._picture_tagger_getter()
-        if picture_tagger is None:
+        engine = self._engine_getter()
+        if engine is None:
             return None
 
         batch_size = ImageEmbeddingTask.BATCH_SIZE
         try:
             batch_size = max(
-                1, int(picture_tagger.clip_embedding_workflow.suggested_batch_size())
+                1, int(engine.clip_embedding_workflow.suggested_batch_size())
             )
         except Exception:
             logger.warning(
@@ -57,6 +57,6 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
 
         return ImageEmbeddingTask(
             database=self._db,
-            clip_workflow=picture_tagger.clip_embedding_workflow,
+            clip_workflow=engine.clip_embedding_workflow,
             batch=selected,
         )

@@ -15,10 +15,10 @@ class MissingTagPredictionFinder(BaseTaskFinder):
 
     _BATCH_MULTIPLIER = 3
 
-    def __init__(self, database, picture_tagger_getter: Callable):
+    def __init__(self, database, engine_getter: Callable):
         super().__init__()
         self._db = database
-        self._picture_tagger_getter = picture_tagger_getter
+        self._engine_getter = engine_getter
 
     def finder_name(self) -> str:
         return "MissingTagPredictionFinder"
@@ -28,16 +28,16 @@ class MissingTagPredictionFinder(BaseTaskFinder):
         return ["MissingTagFinder"]
 
     def find_task(self):
-        tagger = self._picture_tagger_getter()
-        if tagger is None:
+        engine = self._engine_getter()
+        if engine is None:
             return None
-        if not getattr(tagger, "_use_custom_tagger", False):
+        if not engine.custom_enabled:
             return None
 
-        epoch = tagger.custom_tagger_version()
+        epoch = engine.custom_tagger_version()
         model_version = f"v{epoch}"
 
-        batch_limit = max(1, tagger.custom_tagger_batch_size())
+        batch_limit = max(1, engine.custom_tagger_batch_size())
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing(
                 session, batch_limit * self._BATCH_MULTIPLIER
@@ -52,7 +52,7 @@ class MissingTagPredictionFinder(BaseTaskFinder):
 
         return TagPredictionTask(
             database=self._db,
-            picture_tagger=tagger,
+            tagging_workflow=engine.tagging_workflow,
             pictures=selected,
             model_version=model_version,
         )

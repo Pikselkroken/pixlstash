@@ -17,10 +17,10 @@ class MissingTextEmbeddingFinder(SimpleMissingFinder):
     def __init__(
         self,
         database,
-        picture_tagger_getter: Callable,
+        engine_getter: Callable,
     ):
         super().__init__(database)
-        self._picture_tagger_getter = picture_tagger_getter
+        self._engine_getter = engine_getter
 
     def finder_name(self) -> str:
         return "MissingTextEmbeddingFinder"
@@ -36,7 +36,7 @@ class MissingTextEmbeddingFinder(SimpleMissingFinder):
         ]
 
     def _guard(self) -> bool:
-        return self._picture_tagger_getter() is not None
+        return self._engine_getter() is not None
 
     def _batch_size(self) -> int:
         return self.EMBEDDING_BATCH_SIZE
@@ -61,6 +61,6 @@ class MissingTextEmbeddingFinder(SimpleMissingFinder):
     def _create_task(self, pictures: list):
         return TextEmbeddingTask(
             database=self._db,
-            workflow=self._picture_tagger_getter().text_embedding_workflow,
+            workflow=self._engine_getter().text_embedding_workflow,
             pictures=pictures,
         )

@@ -17,7 +17,7 @@ from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
 from pixlstash.utils.service.tag_prediction_utils import _PENALISED_TAG_SET
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.engine import InferenceEngine
 from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
@@ -30,7 +30,7 @@ class TagTask(BaseTask):
     """Task that tags a batch of pictures and persists tag updates."""
 
     CPU_SPILLOVER_REUSE_GRACE_S = 8.0
-    _cpu_spillover_tagger: PictureTagger | None = None
+    _cpu_spillover_engine: InferenceEngine | None = None
     _cpu_spillover_last_used_at: float = 0.0
     _cpu_spillover_lock = threading.Lock()
 
@@ -41,7 +41,7 @@ class TagTask(BaseTask):
     def __init__(
         self,
         database,
-        picture_tagger,
+        tagging_workflow: TaggingWorkflow,
         pictures: list,
         interactive: bool = False,
     ):
@@ -54,7 +54,7 @@ class TagTask(BaseTask):
             },
         )
         self._db = database
-        self._picture_tagger = picture_tagger
+        self._tagging_workflow = tagging_workflow
         self._pictures = pictures or []
         self._interactive = interactive
         self._preloaded_images: dict[str, PILImage.Image] = {}
@@ -156,7 +156,7 @@ class TagTask(BaseTask):
         try:
             return max(
                 0,
-                self._picture_tagger.tagging_workflow.estimated_incremental_vram_mb(
+                self._tagging_workflow.estimated_incremental_vram_mb(
                     len(self._pictures)
                 ),
             )
@@ -180,32 +180,31 @@ class TagTask(BaseTask):
         self._cpu_spillover_enabled = True
 
     @classmethod
-    def _acquire_cpu_spillover_tagger(cls, image_root: str):
+    def _acquire_cpu_spillover_engine(cls, image_root: str) -> InferenceEngine:
         with cls._cpu_spillover_lock:
-            if cls._cpu_spillover_tagger is None:
-                cls._cpu_spillover_tagger = PictureTagger(
-                    silent=True,
+            if cls._cpu_spillover_engine is None:
+                cls._cpu_spillover_engine = InferenceEngine.create(
                     device="cpu",
                     image_root=image_root,
                 )
             cls._cpu_spillover_last_used_at = time.perf_counter()
-            return cls._cpu_spillover_tagger
+            return cls._cpu_spillover_engine
 
     @classmethod
-    def _release_idle_cpu_spillover_tagger(cls, force: bool = False) -> None:
+    def _release_idle_cpu_spillover_engine(cls, force: bool = False) -> None:
         with cls._cpu_spillover_lock:
-            tagger = cls._cpu_spillover_tagger
-            if tagger is None:
+            engine = cls._cpu_spillover_engine
+            if engine is None:
                 return
             if not force:
                 idle_s = time.perf_counter() - cls._cpu_spillover_last_used_at
                 if idle_s < cls.CPU_SPILLOVER_REUSE_GRACE_S:
                     return
-            cls._cpu_spillover_tagger = None
+            cls._cpu_spillover_engine = None
         try:
-            tagger.close()
+            engine.close()
         except Exception as exc:
-            logger.debug("CPU spillover tagger close failed: %s", exc)
+            logger.debug("CPU spillover engine close failed: %s", exc)
 
     @staticmethod
     def _add_tags_bulk(session: Session, updates: list[dict]):
@@ -382,15 +381,15 @@ class TagTask(BaseTask):
             pic_by_path[file_path] = pic
 
         tagged_pictures = []
-        self._release_idle_cpu_spillover_tagger(force=False)
-        active_tagger = self._picture_tagger
-        cpu_spillover_tagger = None
+        self._release_idle_cpu_spillover_engine(force=False)
+        active_workflow: TaggingWorkflow = self._tagging_workflow
+        cpu_spillover_engine = None
         if self._cpu_spillover_enabled:
             logger.debug("TagTask %s using CPU spillover mode", self.id)
-            cpu_spillover_tagger = self._acquire_cpu_spillover_tagger(
+            cpu_spillover_engine = self._acquire_cpu_spillover_engine(
                 self._db.image_root
             )
-            active_tagger = cpu_spillover_tagger
+            active_workflow = cpu_spillover_engine.tagging_workflow
 
         try:
             if image_paths:
@@ -398,7 +397,6 @@ class TagTask(BaseTask):
                 logger.debug("Tagging image paths: %s", image_paths)
                 # Collect raw confidence scores in the same GPU pass as tagging.
                 full_scores_by_path: dict = {}
-                active_workflow: TaggingWorkflow = active_tagger.tagging_workflow
                 use_custom = active_workflow.is_custom_enabled
                 inference_start = time.perf_counter()
                 tag_results = active_workflow.tag_images(
@@ -594,7 +592,7 @@ class TagTask(BaseTask):
                             model_version = "unknown"
                             try:
                                 version_fn = getattr(
-                                    active_tagger, "custom_tagger_version", None
+                                    active_workflow._engine, "custom_tagger_version", None
                                 )
                                 if callable(version_fn):
                                     model_version = f"v{version_fn()}"
@@ -638,10 +636,10 @@ class TagTask(BaseTask):
                         wall_throughput,
                     )
         finally:
-            if cpu_spillover_tagger is not None:
+            if cpu_spillover_engine is not None:
                 with self._cpu_spillover_lock:
                     self._cpu_spillover_last_used_at = time.perf_counter()
-                self._release_idle_cpu_spillover_tagger(force=False)
+                self._release_idle_cpu_spillover_engine(force=False)
 
         return tagged_pictures
 

@@ -11,7 +11,7 @@ import os
 from sentence_transformers import SentenceTransformer, util
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import Tag
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.engine import InferenceEngine
 from pixlstash.server import Server
 
 
@@ -64,13 +64,13 @@ descriptions = [
 ]
 
 
-# Shared fixture for PictureTagger to avoid repeated model loading
+# Shared fixture for InferenceEngine to avoid repeated model loading
 @pytest.fixture(scope="module")
 def shared_tagger():
     import gc
     import torch
 
-    tagger = PictureTagger("cuda" if not PictureTagger.FORCE_CPU else "cpu")
+    tagger = InferenceEngine.create(device="cpu" if Server.DEFAULT_FORCE_CPU else "cuda")
     tagger.ensure_clip_ready()
     yield tagger
     tagger.close()

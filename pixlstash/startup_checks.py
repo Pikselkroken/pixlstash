@@ -19,8 +19,6 @@ try:
 except Exception:
     torch = None
 
-from pixlstash.picture_tagger import PictureTagger
-
 
 class StartupCheckError(Exception):
     def __init__(self, failures: list[str]):
@@ -278,10 +276,10 @@ class StartupChecks:
         is_explicit_gpu = device_value == "cuda"
 
         if device_value == "cpu":
-            PictureTagger.FORCE_CPU = True
             outcome.notes.append(
                 "default_device is set to cpu in config; using CPU inference."
             )
+            outcome.forced_cpu = True
             return
 
         if torch is None:
@@ -378,9 +376,6 @@ class StartupChecks:
             )
             return
 
-        PictureTagger.FORCE_CPU = False
-        if device_value == "auto":
-            self._server_config["default_device"] = "auto"
         outcome.notes.append(
             f"GPU check passed ({free_mb:.0f} MB free VRAM); using CUDA inference."
         )
@@ -391,7 +386,6 @@ class StartupChecks:
         warning: str,
         is_auto_mode: bool = False,
     ) -> None:
-        PictureTagger.FORCE_CPU = True
         # Only persist "cpu" when it was an explicit user choice.  When in auto
         # mode we keep "auto" in the config so that the next startup re-evaluates
         # CUDA availability (e.g. after upgrading the CUDA runtime or drivers).

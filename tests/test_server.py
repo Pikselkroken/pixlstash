@@ -29,7 +29,6 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from pixlstash.tasks.task_type import TaskType
-from pixlstash.picture_tagger import PictureTagger
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait, wait_for_faces
 
@@ -2694,7 +2693,7 @@ def test_semantic_search(request):
                 ),
             }
 
-            device_tag = "cpu" if PictureTagger.FORCE_CPU else "gpu"
+            device_tag = "cpu" if Server.DEFAULT_FORCE_CPU else "gpu"
             regression_payload = {
                 "meta": {
                     "device": device_tag,

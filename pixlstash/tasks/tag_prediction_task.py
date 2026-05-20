@@ -11,7 +11,7 @@ from pixlstash.db_models.tag import (
     TAG_EMPTY_SENTINEL,
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
@@ -39,7 +39,7 @@ class TagPredictionTask(BaseTask):
     def __init__(
         self,
         database,
-        picture_tagger: PictureTagger,
+        tagging_workflow: TaggingWorkflow,
         pictures: list,
         model_version: str,
     ):
@@ -49,7 +49,7 @@ class TagPredictionTask(BaseTask):
             params={"picture_ids": picture_ids, "model_version": model_version},
         )
         self._db = database
-        self._workflow = picture_tagger.tagging_workflow
+        self._workflow = tagging_workflow
         self._pictures = pictures or []
         self._model_version = model_version
 

@@ -15,11 +15,11 @@ class MissingTagFinder(BaseTaskFinder):
     def __init__(
         self,
         database,
-        picture_tagger_getter: Callable,
+        engine_getter: Callable,
     ):
         super().__init__()
         self._db = database
-        self._picture_tagger_getter = picture_tagger_getter
+        self._engine_getter = engine_getter
 
     def finder_name(self) -> str:
         return "MissingTagFinder"
@@ -40,26 +40,22 @@ class MissingTagFinder(BaseTaskFinder):
         GB for large batches) so the next GPU pipeline stage starts with a clean
         VRAM budget.  The session is rebuilt lazily on the next tagging cycle.
         """
-        tagger = self._picture_tagger_getter()
-        if tagger is not None and hasattr(tagger, "unload_tagger_session"):
+        tagger = self._engine_getter()
+        if tagger is not None:
             tagger.unload_tagger_session()
 
     def find_task(self):
-        picture_tagger = self._picture_tagger_getter()
-        if picture_tagger is None:
+        engine = self._engine_getter()
+        if engine is None:
             return None
-        wd14_enabled = getattr(picture_tagger, "_use_wd14_tagger", True)
-        custom_enabled = getattr(picture_tagger, "_use_custom_tagger", False)
+        wd14_enabled = engine.wd14_enabled
+        custom_enabled = engine.custom_enabled
         if not wd14_enabled and not custom_enabled:
             return None
 
         batch_limit = max(
             1,
-            int(
-                picture_tagger.suggested_tag_task_size()
-                if hasattr(picture_tagger, "suggested_tag_task_size")
-                else picture_tagger.max_concurrent_images()
-            ),
+            int(engine.tagging_workflow.suggested_task_size()),
         )
         # Fetch enough candidates that _filter_and_claim can always fill one
         # additional task even when all max_inflight slots are already in-flight.
@@ -84,7 +80,7 @@ class MissingTagFinder(BaseTaskFinder):
 
         return TagTask(
             database=self._db,
-            picture_tagger=picture_tagger,
+            tagging_workflow=engine.tagging_workflow,
             pictures=selected,
         )
 
