@@ -1,57 +1,11 @@
-import json
-
 from fastapi import APIRouter, HTTPException
-from sqlmodel import Session, delete, or_, select
 
-from pixlstash.db_models import Tag
-from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
-from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.caption_utils import sanitise_tag
+from pixlstash.services import tag_prediction_service
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
-from pixlstash.utils.service.tag_prediction_utils import (
-    recompute_anomaly_tag_uncertainty,
-)
 
 logger = get_logger(__name__)
-
-
-def _load_label_thresholds(
-    meta_path: str | None, bias: float = 0.0
-) -> dict[str, float]:
-    """Load per-label acceptance thresholds from the custom tagger meta JSON.
-
-    Keys are naturalized to match the values stored in TagPrediction.tag.
-    The bias is the user-configured offset added to each label's base threshold.
-    Returns an empty dict if the file is missing or lacks label_thresholds.
-    """
-    if not meta_path:
-        return {}
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        raw = meta.get("label_thresholds", {})
-        if not raw:
-            return {}
-        return {
-            sanitise_tag(k) or k: max(0.01, float(v) + bias) for k, v in raw.items()
-        }
-    except Exception:
-        return {}
-
-
-def _load_raw_label_thresholds(meta_path: str | None) -> dict[str, float]:
-    """Load per-label thresholds from meta JSON without any offset applied."""
-    if not meta_path:
-        return {}
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        raw = meta.get("label_thresholds", {})
-        return {sanitise_tag(k) or k: float(v) for k, v in raw.items()}
-    except Exception:
-        return {}
 
 
 def create_router(server) -> APIRouter:
@@ -76,14 +30,9 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        def _fetch(session: Session):
-            q = select(TagPrediction).where(TagPrediction.picture_id == pic_id)
-            if status:
-                q = q.where(TagPrediction.status == status.upper())
-            q = q.order_by(TagPrediction.confidence.desc())
-            return session.exec(q).all()
-
-        predictions = server.vault.db.run_immediate_read_task(_fetch)
+        predictions = tag_prediction_service.get_predictions(
+            server.vault, pic_id, status
+        )
         payload = [
             {
                 "id": p.id,
@@ -103,7 +52,9 @@ def create_router(server) -> APIRouter:
             "tag_predictions": payload,
             "meta": {
                 "acceptance_threshold": server.vault.get_pixlstash_acceptance_threshold(),
-                "label_thresholds": _load_label_thresholds(meta_path, offset),
+                "label_thresholds": tag_prediction_service.load_label_thresholds(
+                    meta_path, offset
+                ),
             },
         }
 
@@ -121,29 +72,10 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        def _confirm(session: Session):
-            prediction = session.exec(
-                select(TagPrediction).where(
-                    TagPrediction.picture_id == pic_id,
-                    TagPrediction.tag == tag,
-                )
-            ).first()
-            if prediction is None:
-                raise HTTPException(status_code=404, detail="Prediction not found")
-            prediction.status = "CONFIRMED"
-
-            # Ensure the Tag row exists
-            existing_tag = session.exec(
-                select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
-            ).first()
-            if existing_tag is None:
-                session.add(Tag(picture_id=pic_id, tag=tag))
-
-            session.flush()
-            recompute_anomaly_tag_uncertainty(session, pic_id)
-            session.commit()
-
-        server.vault.db.run_task(_confirm)
+        try:
+            tag_prediction_service.confirm_tag_prediction(server.vault, pic_id, tag)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Prediction not found")
         server._handle_vault_event(
             EventType.CHANGED_PICTURES,
             {"picture_ids": [pic_id]},
@@ -162,31 +94,7 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        def _reject(session: Session):
-            prediction = session.exec(
-                select(TagPrediction).where(
-                    TagPrediction.picture_id == pic_id,
-                    TagPrediction.tag == tag,
-                )
-            ).first()
-            if prediction is None:
-                # Tag was added manually — create a synthetic REJECTED prediction
-                # so it persists through fetches.
-                session.add(
-                    TagPrediction(
-                        picture_id=pic_id,
-                        tag=tag,
-                        confidence=1.0,
-                        model_version="manual",
-                        status="REJECTED",
-                    )
-                )
-            else:
-                prediction.status = "REJECTED"
-            recompute_anomaly_tag_uncertainty(session, pic_id)
-            session.commit()
-
-        server.vault.db.run_task(_reject)
+        tag_prediction_service.reject_tag_prediction(server.vault, pic_id, tag)
         server._handle_vault_event(
             EventType.CHANGED_PICTURES,
             {"picture_ids": [pic_id]},
@@ -208,26 +116,7 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        def _delete(session: Session):
-            # Use a direct bulk DELETE statement — avoid loading ORM objects,
-            # which triggers the Picture.tag_predictions cascade="all, delete-orphan"
-            # relationship and can corrupt rows across unrelated pictures.
-            # Explicitly include NULL model_version (SQL != does not match NULLs).
-            stmt = (
-                delete(TagPrediction)
-                .where(TagPrediction.picture_id == pic_id)
-                .where(
-                    or_(
-                        TagPrediction.model_version != "manual",
-                        TagPrediction.model_version.is_(None),
-                    )
-                )
-            )
-            result = session.exec(stmt)
-            session.commit()
-            return result.rowcount
-
-        count = server.vault.db.run_task(_delete)
+        count = tag_prediction_service.delete_tag_predictions(server.vault, pic_id)
         server._handle_vault_event(
             EventType.CHANGED_PICTURES,
             {"picture_ids": [pic_id]},
@@ -252,24 +141,7 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        def _reset(session: Session):
-            # Delete non-manual predictions first (same logic as tag_predictions/delete)
-            session.exec(
-                delete(TagPrediction)
-                .where(TagPrediction.picture_id == pic_id)
-                .where(
-                    or_(
-                        TagPrediction.model_version != "manual",
-                        TagPrediction.model_version.is_(None),
-                    )
-                )
-            )
-            # Clear all tags and restore the empty sentinel
-            session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-            session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
-            session.commit()
-
-        server.vault.db.run_task(_reset)
+        tag_prediction_service.reset_picture_tags(server.vault, pic_id)
         server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
         server.vault.retag_picture_interactive(pic_id)
         return {"status": "reset"}
@@ -285,7 +157,7 @@ def create_router(server) -> APIRouter:
     def get_label_thresholds():
         offset = server.vault.get_pixlstash_tagger_threshold_offset()
         meta_path = server.vault.get_pixlstash_tagger_meta_path()
-        raw = _load_raw_label_thresholds(meta_path)
+        raw = tag_prediction_service.load_raw_label_thresholds(meta_path)
         sorted_labels = sorted(raw.items())
         return [
             {

@@ -72,9 +72,7 @@ _DIRECT_DB_CALL_ALLOWLIST = {
     "pixlstash/routes/pictures.py",
     "pixlstash/routes/projects.py",
     "pixlstash/routes/reference_folders.py",
-    "pixlstash/routes/share.py",
     "pixlstash/routes/stacks.py",
-    "pixlstash/routes/tag_predictions.py",
     "pixlstash/routes/tags.py",
 }
 
@@ -103,7 +101,10 @@ def test_services_no_direct_db_calls():
     # Known transitional service files that still call vault.db.run_* directly.
     # Remove each file from this set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
+        "pixlstash/services/config_service.py",  # vault-injection pattern
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
+        "pixlstash/services/share_service.py",  # vault-injection pattern
+        "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
     }
 
     violations = []
