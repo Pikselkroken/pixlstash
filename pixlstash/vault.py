@@ -25,7 +25,6 @@ from .db_models import (
     Tag,
     TAG_EMPTY_SENTINEL,
 )
-from .db_models.tag_prediction import TagPrediction
 from .pixl_logging import get_logger
 from pixlstash.inference.engine import InferenceEngine
 from .utils.image_processing.image_utils import ImageUtils
@@ -406,6 +405,39 @@ class Vault:
             value = offset if offset is not None else 0.0
             self._engine.set_pixlstash_tagger_threshold_offset(value)
 
+    def get_pixlstash_tagger_threshold_offset(self) -> float:
+        return self._pixlstash_tagger_threshold_offset or 0.0
+
+    def get_pixlstash_tagger_meta_path(self):
+        if self._engine is None:
+            return None
+        tagger = self._engine.pixlstash_tagger_service
+        return tagger.meta_path if tagger is not None else None
+
+    def get_pixlstash_acceptance_threshold(self) -> float:
+        from pixlstash.tagger_plugins.pixlstash_tagger import PIXLSTASH_TAGGER_DEFAULT_THRESHOLD
+
+        bias = self._pixlstash_tagger_threshold_offset or 0.0
+        return max(0.01, float(PIXLSTASH_TAGGER_DEFAULT_THRESHOLD) + bias)
+
+    def retag_picture_interactive(self, picture_id: int) -> None:
+        if self._engine is None:
+            return
+        from pixlstash.tasks.tag_task import TagTask
+
+        def _fetch_pic(session: Session):
+            return session.get(Picture, picture_id)
+
+        pic = self.db.run_immediate_read_task(_fetch_pic)
+        if pic is not None:
+            task = TagTask(
+                database=self.db,
+                tagging_workflow=self._engine.tagging_workflow,
+                pictures=[pic],
+                interactive=True,
+            )
+            self.submit_task(task)
+
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
         Generate a text embedding using InferenceEngine.
@@ -468,12 +500,6 @@ class Vault:
             return
 
         result = task.result if isinstance(task.result, dict) else {}
-
-        if task.type == "TagPredictionTask":
-            picture_ids = result.get("picture_ids") or []
-            if picture_ids:
-                self._queue_changed_tags_notification(picture_ids)
-            return
 
         if task.type == "ReferenceFolderScanTask":
             imported_ids = result.get("imported_picture_ids") or []
@@ -842,50 +868,6 @@ class Vault:
                 "active": worker_active,
             }
         return progress
-
-    @staticmethod
-    def _count_missing_tag_predictions(session: Session, model_version: str) -> int:
-        # Only pictures that have at least one real (non-sentinel) tag are
-        # eligible for prediction scoring — sentinel-only pictures are waiting
-        # for the tagger worker, not the prediction worker.
-        from sqlalchemy import exists as sa_exists
-
-        eligible_subq = (
-            select(Tag.picture_id)
-            .where(
-                Tag.picture_id == Picture.id,
-                Tag.tag.is_not(None),
-                Tag.tag != TAG_EMPTY_SENTINEL,
-            )
-            .correlate(Picture)
-        )
-        total_result = session.exec(
-            select(func.count())
-            .select_from(Picture)
-            .where(
-                Picture.deleted.is_(False),
-                Picture.file_path.is_not(None),
-                sa_exists(eligible_subq),
-            )
-        ).one()
-        total = (
-            total_result[0]
-            if isinstance(total_result, (tuple, list))
-            else (total_result or 0)
-        )
-
-        scored_result = session.exec(
-            select(func.count(func.distinct(TagPrediction.picture_id))).where(
-                TagPrediction.model_version == model_version
-            )
-        ).one()
-        scored = (
-            scored_result[0]
-            if isinstance(scored_result, (tuple, list))
-            else (scored_result or 0)
-        )
-
-        return max(0, int(total) - int(scored))
 
     @staticmethod
     def _count_total_pictures(session: Session) -> int:
