@@ -3558,45 +3558,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   padding: 4px 0;
 }
 
-.ctx-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 14px;
-  background: none;
-  border: none;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.85rem;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-}
-
-.ctx-item:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-.ctx-item:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.ctx-item--danger {
-  color: rgb(var(--v-theme-error));
-}
-
-.ctx-icon {
-  flex-shrink: 0;
-  opacity: 0.8;
-}
-
-.ctx-sep {
-  height: 1px;
-  margin: 4px 0;
-  background: rgba(var(--v-theme-on-surface), 0.12);
-}
-
 .plugin-run-controls {
   display: inline-flex;
   align-items: center;
@@ -3900,8 +3861,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .selection-count-explanation {
   opacity: 0.75;
-  color: red;
-
+  color: rgb(var(--v-theme-error));
   cursor: default;
 }
 
@@ -4064,8 +4024,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
    Grid Bar – Sort / Filter / View buttons and panels
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Bar buttons ──────────────────────────────────────────────────────────── */
-.bar-split-button {
+/* ── Bar buttons ──────────────────────────────────────────────────────────── */.bar-split-button {
   display: flex;
   align-items: center;
   border-radius: 5px;
@@ -4114,26 +4073,8 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   flex-shrink: 0;
 }
 
-/* Export panel */
-.tb-export-panel {
-  padding: 12px 14px;
-  min-width: 260px;
-  background: rgb(var(--v-theme-background));
-  color: rgb(var(--v-theme-on-background));
-  border-radius: 8px;
-  box-shadow: 2px 2px 16px rgba(0, 0, 0, 0.4);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.tb-export-title {
-  font-size: 1em;
-  font-weight: 500;
-  padding-bottom: 4px;
-}
-
-/* ComfyUI T2I panel */
+/* Export panel + ComfyUI T2I panel — shared base */
+.tb-export-panel,
 .tb-comfyui-panel {
   padding: 12px 14px;
   min-width: 260px;
@@ -4143,8 +4084,17 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   box-shadow: 2px 2px 16px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
+.tb-export-panel { gap: 8px; }
+.tb-comfyui-panel { gap: 10px; }
+
+.tb-export-title {
+  font-size: 1em;
+  font-weight: 500;
+  padding-bottom: 4px;
+}
+
+/* ComfyUI T2I panel — see group rule above with .tb-export-panel */
 
 .tb-comfyui-header {
   font-size: 1em;
@@ -4313,7 +4263,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   border-radius: 8px;
   box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
 }
-
 .gb-sort-header {
   display: flex;
   justify-content: space-between;

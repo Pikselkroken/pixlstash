@@ -15,6 +15,7 @@ import ProjectFiles from "./ProjectFiles.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import FolderTreeNode from "./FolderTreeNode.vue";
 import FolderEditor from "./FolderEditor.vue";
+import ShareDialog from "./ShareDialog.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
   apiClient,
@@ -302,9 +303,6 @@ const setCtxAppearanceStyle = computed(() => {
   }
   return { left: pos.left + "px", top: pos.top + "px" };
 });
-const shareNotification = ref(null); // { message, ok } or null — kept for errors only
-let shareNotificationTimer = null;
-
 // Shared resource IDs — drives the share-link icon overlay on sidebar items
 const sharedCharacterIds = ref(new Set());
 const sharedSetIds = ref(new Set());
@@ -317,14 +315,6 @@ const revokeSharesPending = ref(null); // { resourceType, resourceId, label }
 // Share dialog state
 const shareDialogOpen = ref(false);
 const shareDialogPending = ref(null); // { resourceType, resourceId, label }
-const shareDialogExpiresAt = ref(null); // YYYY-MM-DD string or null
-const shareDialogExpiryError = ref("");
-const shareDialogLoading = ref(false);
-const shareDialogToken = ref(""); // set after creation
-const shareDialogUrl = ref("");
-const shareDialogCopied = ref(false);
-const shareDialogIncludeAttachments = ref(false);
-const shareDialogWatermark = ref(false);
 
 function openCharacterMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
@@ -1833,103 +1823,7 @@ async function applySetAppearance(setId, icon, color) {
 async function shareResource(resourceType, resourceId, label) {
   closeSidebarCtxMenu();
   shareDialogPending.value = { resourceType, resourceId, label };
-  shareDialogExpiresAt.value = null;
-  shareDialogExpiryError.value = "";
-  shareDialogToken.value = "";
-  shareDialogUrl.value = "";
-  shareDialogCopied.value = false;
-  shareDialogLoading.value = false;
-  shareDialogIncludeAttachments.value = false;
-  shareDialogWatermark.value = props.embedWatermark;
   shareDialogOpen.value = true;
-}
-
-function shareDialogExpiryMin() {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
-function shareDialogExpiryMax() {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
-async function confirmShareCreate() {
-  shareDialogExpiryError.value = "";
-  if (shareDialogExpiresAt.value) {
-    const chosen = new Date(shareDialogExpiresAt.value);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (chosen < today) {
-      shareDialogExpiryError.value = "Expiry date must be in the future.";
-      return;
-    }
-    const maxDate = new Date();
-    maxDate.setFullYear(maxDate.getFullYear() + 1);
-    if (chosen > maxDate) {
-      shareDialogExpiryError.value =
-        "Expiry date cannot be more than 1 year from now.";
-      return;
-    }
-  }
-  shareDialogLoading.value = true;
-  const { resourceType, resourceId, label } = shareDialogPending.value;
-  try {
-    const res = await apiClient.post("/users/me/token", {
-      description: `Share – ${label}`,
-      scope: "READ",
-      resource_type: resourceType,
-      resource_id: resourceId,
-      expires_at: shareDialogExpiresAt.value || null,
-      include_attachments:
-        resourceType === "project"
-          ? shareDialogIncludeAttachments.value
-          : false,
-      watermark: shareDialogWatermark.value,
-    });
-    const token = res.data?.token;
-    if (!token) throw new Error("No token returned");
-    const origin = props.publicUrl || window.location.origin;
-    const base = origin + window.location.pathname;
-    shareDialogToken.value = token;
-    shareDialogUrl.value = `${base}?token=${token}`;
-    // Persist watermark preference
-    if (shareDialogWatermark.value !== props.embedWatermark) {
-      apiClient
-        .patch("/users/me/config", {
-          embed_watermark: shareDialogWatermark.value,
-        })
-        .catch(() => {});
-      emit("update:embed-watermark", shareDialogWatermark.value);
-    }
-  } catch {
-    showShareNotification("Failed to create share link", false);
-    shareDialogOpen.value = false;
-  } finally {
-    shareDialogLoading.value = false;
-  }
-}
-
-async function copyShareDialogUrl() {
-  try {
-    await navigator.clipboard.writeText(shareDialogUrl.value);
-    shareDialogCopied.value = true;
-    setTimeout(() => {
-      shareDialogCopied.value = false;
-    }, 2000);
-  } catch {
-    // clipboard not available
-  }
-}
-
-function showShareNotification(message, ok) {
-  clearTimeout(shareNotificationTimer);
-  shareNotification.value = { message, ok };
-  shareNotificationTimer = setTimeout(() => {
-    shareNotification.value = null;
-  }, 3000);
 }
 
 function createCharacter() {
@@ -5598,107 +5492,17 @@ defineExpose({
     </div>
   </Teleport>
 
-  <!-- Share notification toast (errors only) -->
-  <Teleport to="body">
-    <Transition name="share-toast">
-      <div
-        v-if="shareNotification"
-        class="sidebar-share-toast sidebar-share-toast--err"
-      >
-        <v-icon size="16">mdi-alert-circle-outline</v-icon>
-        {{ shareNotification.message }}
-      </div>
-    </Transition>
-  </Teleport>
-
   <!-- Share dialog -->
-  <v-dialog v-model="shareDialogOpen" max-width="460">
-    <v-card class="share-dialog-card">
-      <v-card-title class="share-dialog-title">
-        <v-icon size="18" class="share-dialog-title-icon"
-          >mdi-share-variant-outline</v-icon
-        >
-        Share &ldquo;{{ shareDialogPending?.label }}&rdquo;
-      </v-card-title>
-
-      <v-card-text class="share-dialog-body">
-        <!-- Step 1: pick expiry -->
-        <template v-if="!shareDialogToken">
-          <p class="share-dialog-hint">
-            This will create a sharable read-only link that can be emailed or
-            posted online.
-          </p>
-          <p class="share-dialog-hint">Optionally set an expiry date.</p>
-          <v-text-field
-            v-model="shareDialogExpiresAt"
-            label="Expires on (optional)"
-            type="date"
-            :min="shareDialogExpiryMin()"
-            :max="shareDialogExpiryMax()"
-            density="compact"
-            variant="outlined"
-            hide-details="auto"
-            :error-messages="
-              shareDialogExpiryError ? [shareDialogExpiryError] : []
-            "
-            class="share-dialog-date"
-          />
-          <v-checkbox
-            v-if="shareDialogPending?.resourceType === 'project'"
-            v-model="shareDialogIncludeAttachments"
-            label="Include project attachments"
-            density="compact"
-            hide-details
-            class="share-dialog-attachments-cb"
-          />
-          <v-checkbox
-            v-model="shareDialogWatermark"
-            label="Embed watermark"
-            density="compact"
-            hide-details
-            class="share-dialog-attachments-cb"
-          />
-        </template>
-
-        <!-- Step 2: show link -->
-        <template v-else>
-          <p class="share-dialog-hint">
-            Copy this link. Anyone with it gets read-only access.
-          </p>
-          <div class="share-dialog-url-row">
-            <div class="share-dialog-url">{{ shareDialogUrl }}</div>
-            <v-btn
-              icon
-              variant="text"
-              size="small"
-              :title="shareDialogCopied ? 'Copied!' : 'Copy link'"
-              @click="copyShareDialogUrl"
-            >
-              <v-icon size="18">{{
-                shareDialogCopied ? "mdi-check" : "mdi-content-copy"
-              }}</v-icon>
-            </v-btn>
-          </div>
-        </template>
-      </v-card-text>
-
-      <v-card-actions class="share-dialog-actions">
-        <v-spacer />
-        <v-btn variant="text" @click="shareDialogOpen = false">
-          {{ shareDialogToken ? "Close" : "Cancel" }}
-        </v-btn>
-        <v-btn
-          v-if="!shareDialogToken"
-          variant="flat"
-          color="primary"
-          :loading="shareDialogLoading"
-          @click="confirmShareCreate"
-        >
-          Create Link
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+  <ShareDialog
+    v-model="shareDialogOpen"
+    :resource-type="shareDialogPending?.resourceType"
+    :resource-id="shareDialogPending?.resourceId"
+    :resource-label="shareDialogPending?.label"
+    :embed-watermark="props.embedWatermark"
+    :backend-url="props.backendUrl"
+    :public-url="props.publicUrl"
+    @update:embed-watermark="emit('update:embed-watermark', $event)"
+  />
 
   <!-- ── Revoke all shares confirm dialog ──────────────────────── -->
   <v-dialog v-model="revokeSharesDialogOpen" max-width="400">
@@ -5730,86 +5534,6 @@ defineExpose({
 </template>
 
 <style scoped>
-.sidebar-share-toast {
-  position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 18px;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  z-index: 9999;
-  pointer-events: none;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-}
-.sidebar-share-toast--ok {
-  background: rgba(30, 120, 60, 0.92);
-  color: #d0ffd8;
-}
-.sidebar-share-toast--err {
-  background: rgba(160, 30, 30, 0.92);
-  color: #ffd0d0;
-}
-.share-toast-enter-active,
-.share-toast-leave-active {
-  transition:
-    opacity 0.25s,
-    transform 0.25s;
-}
-.share-toast-enter-from,
-.share-toast-leave-to {
-  opacity: 0;
-  transform: translateX(-50%) translateY(12px);
-}
-
-.share-dialog-card {
-  background: rgb(var(--v-theme-surface));
-}
-.share-dialog-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 1rem;
-  font-weight: 600;
-  padding: 16px 20px 8px;
-}
-.share-dialog-title-icon {
-  opacity: 0.8;
-}
-.share-dialog-body {
-  padding: 8px 20px 4px;
-}
-.share-dialog-hint {
-  font-size: 0.85rem;
-  opacity: 0.75;
-  margin-bottom: 14px;
-}
-.share-dialog-date {
-  margin-bottom: 4px;
-}
-.share-dialog-url-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-.share-dialog-url {
-  flex: 1;
-  font-size: 11px;
-  word-break: break-all;
-  opacity: 0.9;
-  font-family: monospace;
-}
-.share-dialog-actions {
-  padding: 8px 16px 16px;
-}
-
 .sidebar-project-header {
   padding-top: 4px;
   padding-bottom: 4px;

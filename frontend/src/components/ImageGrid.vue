@@ -125,11 +125,6 @@
       @share-picture="sharePicture"
       @remove-picture-shares="openRevokeSharesDialog"
     />
-    <Transition name="share-toast">
-      <div v-if="shareToast.visible" class="grid-share-toast">
-        {{ shareToast.message }}
-      </div>
-    </Transition>
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
     <v-dialog v-model="revokeSharesDialogOpen" max-width="380">
@@ -163,63 +158,17 @@
     </v-dialog>
 
     <!-- ── Share picture dialog ──────────────────────────────── -->
-    <v-dialog v-model="sharePicDialogOpen" max-width="420">
-      <v-card class="share-dialog-card">
-        <v-card-title class="share-dialog-title">
-          <v-icon size="18" style="margin-right: 6px; opacity: 0.7"
-            >mdi-share-variant-outline</v-icon
-          >
-          Share image
-        </v-card-title>
-        <v-card-text class="share-dialog-body">
-          <template v-if="!sharePicToken">
-            <p class="share-dialog-hint">
-              Creates a direct image link. Anyone with the link can view the
-              full-resolution file.
-            </p>
-            <v-checkbox
-              v-model="sharePicWatermark"
-              label="Embed watermark"
-              density="compact"
-              hide-details
-              style="margin-top: 4px"
-            />
-          </template>
-          <template v-else>
-            <p class="share-dialog-hint">Copy this link to share the image.</p>
-            <div class="share-dialog-url-row">
-              <div class="share-dialog-url">{{ sharePicUrl }}</div>
-              <v-btn
-                icon
-                variant="text"
-                size="small"
-                :title="sharePicCopied ? 'Copied!' : 'Copy link'"
-                @click="copySharePicUrl"
-              >
-                <v-icon size="18">{{
-                  sharePicCopied ? "mdi-check" : "mdi-content-copy"
-                }}</v-icon>
-              </v-btn>
-            </div>
-          </template>
-        </v-card-text>
-        <v-card-actions class="share-dialog-actions">
-          <v-spacer />
-          <v-btn variant="text" @click="sharePicDialogOpen = false">
-            {{ sharePicToken ? "Close" : "Cancel" }}
-          </v-btn>
-          <v-btn
-            v-if="!sharePicToken"
-            variant="flat"
-            color="primary"
-            :loading="sharePicLoading"
-            @click="confirmSharePicture"
-          >
-            Create Link
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+    <ShareDialog
+      v-model="sharePicDialogOpen"
+      resource-type="picture"
+      :resource-id="contextMenuImage?.id"
+      :resource-format="contextMenuImage?.format"
+      :embed-watermark="props.embedWatermark"
+      :backend-url="props.backendUrl"
+      :public-url="props.publicUrl"
+      @update:embed-watermark="emit('update:embed-watermark', $event)"
+      @created="onSharePicCreated"
+    />
     <EmptyScrapHeap
       v-if="showScrapheapBar"
       :visible="showScrapheapBar"
@@ -815,6 +764,7 @@ import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import ComfyUiRunner from "./ComfyUiRunner.vue";
 import ProgressOverlay from "./ProgressOverlay.vue";
+import ShareDialog from "./ShareDialog.vue";
 import { apiClient, appendShareToken, isReadOnly } from "../utils/apiClient";
 import {
   applyStackBackgroundAlpha,
@@ -1036,17 +986,11 @@ const contextMenuVisible = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuImage = ref(null);
-const shareToast = ref({ visible: false, message: "" });
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
 // Share picture dialog
 const sharePicDialogOpen = ref(false);
-const sharePicWatermark = ref(false);
-const sharePicLoading = ref(false);
-const sharePicToken = ref("");
-const sharePicUrl = ref("");
-const sharePicCopied = ref(false);
 
 // ============================================================
 // GRID DATA STATE
@@ -7277,71 +7221,14 @@ function handleContextMenuOpenComfyuiPanel() {
 }
 
 function sharePicture() {
-  const img = contextMenuImage.value;
-  if (!img?.id || !img?.format) return;
-  sharePicWatermark.value = props.embedWatermark;
-  sharePicToken.value = "";
-  sharePicUrl.value = "";
-  sharePicCopied.value = false;
-  sharePicLoading.value = false;
+  if (!contextMenuImage.value?.id || !contextMenuImage.value?.format) return;
   sharePicDialogOpen.value = true;
 }
 
-async function confirmSharePicture() {
-  const img = contextMenuImage.value;
-  if (!img?.id || !img?.format) return;
-  sharePicLoading.value = true;
-  try {
-    const res = await apiClient.post(`${props.backendUrl}/users/me/token`, {
-      description: `Shared picture #${img.id}`,
-      scope: "READ",
-      resource_type: "picture",
-      resource_id: img.id,
-      expires_at: null,
-      include_attachments: false,
-      watermark: sharePicWatermark.value,
-    });
-    const token = res.data?.token;
-    if (!token) throw new Error("No token returned");
-    const ext = img.format.toLowerCase();
-    const origin = props.publicUrl || window.location.origin;
-    const url = `${origin}/share/${token}.${ext}`;
-    sharePicToken.value = token;
-    sharePicUrl.value = url;
-    // Mark this picture as now shared
-    sharedPictureIds.value = new Set([...sharedPictureIds.value, img.id]);
-    // Persist watermark preference if it changed
-    if (sharePicWatermark.value !== props.embedWatermark) {
-      apiClient
-        .patch(`${props.backendUrl}/users/me/config`, {
-          embed_watermark: sharePicWatermark.value,
-        })
-        .then(() => {
-          emit("update:embed-watermark", sharePicWatermark.value);
-        })
-        .catch(() => {});
-    }
-  } catch (e) {
-    console.error("[ImageGrid] Failed to create picture share link", e);
-    sharePicDialogOpen.value = false;
-    shareToast.value = { visible: true, message: "Failed to create link" };
-    setTimeout(() => {
-      shareToast.value.visible = false;
-    }, 2500);
-  } finally {
-    sharePicLoading.value = false;
-  }
-}
-
-async function copySharePicUrl() {
-  try {
-    await navigator.clipboard.writeText(sharePicUrl.value);
-    sharePicCopied.value = true;
-    setTimeout(() => {
-      sharePicCopied.value = false;
-    }, 2000);
-  } catch {
-    // clipboard not available
+function onSharePicCreated() {
+  const imgId = contextMenuImage.value?.id;
+  if (imgId) {
+    sharedPictureIds.value = new Set([...sharedPictureIds.value, imgId]);
   }
 }
 
@@ -8748,30 +8635,6 @@ function handleEmptyStateReset() {
   }
 }
 
-/* ── Picture share toast ─────────────────────────────────────────────── */
-.grid-share-toast {
-  position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(30, 30, 30, 0.92);
-  color: #fff;
-  padding: 8px 18px;
-  border-radius: 20px;
-  font-size: 13px;
-  pointer-events: none;
-  z-index: 9999;
-  white-space: nowrap;
-}
-.share-toast-enter-active,
-.share-toast-leave-active {
-  transition: opacity 0.2s ease;
-}
-.share-toast-enter-from,
-.share-toast-leave-to {
-  opacity: 0;
-}
-
 /* ── Shared-link indicator on thumbnail ──────────────────────────────── */
 .thumbnail-share-badge {
   opacity: 0.65;
@@ -8779,44 +8642,6 @@ function handleEmptyStateReset() {
   display: flex;
   align-items: center;
   color: rgb(var(--v-theme-primary));
-}
-
-/* ── Share picture dialog ────────────────────────────────────── */
-.share-dialog-card {
-  border-radius: 12px !important;
-}
-.share-dialog-title {
-  font-size: 1rem;
-  font-weight: 600;
-  padding: 16px 20px 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.share-dialog-body {
-  padding: 4px 20px 8px;
-}
-.share-dialog-hint {
-  font-size: 0.875rem;
-  opacity: 0.8;
-  margin-bottom: 8px;
-}
-.share-dialog-url-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  border-radius: 6px;
-  padding: 6px 10px;
-}
-.share-dialog-url {
-  flex: 1;
-  font-size: 0.78rem;
-  word-break: break-all;
-  opacity: 0.85;
-}
-.share-dialog-actions {
-  padding: 8px 16px 16px;
 }
 </style>
 
@@ -8837,9 +8662,6 @@ function handleEmptyStateReset() {
   border-radius: 8px !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: rgba(var(--v-theme-shadow), 0.15) !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-track:hover {
   background: rgba(var(--v-theme-shadow), 0.15) !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-corner {
