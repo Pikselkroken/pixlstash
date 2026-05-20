@@ -397,12 +397,12 @@ class TagTask(BaseTask):
                 logger.debug("Tagging image paths: %s", image_paths)
                 # Collect raw confidence scores in the same GPU pass as tagging.
                 full_scores_by_path: dict = {}
-                use_custom = active_workflow.is_custom_enabled
+                use_pixlstash_tagger = active_workflow.is_pixlstash_tagger_enabled
                 inference_start = time.perf_counter()
                 tag_results = active_workflow.tag_images(
                     image_paths,
                     preloaded_images=preloaded_images,
-                    out_raw_custom_scores=full_scores_by_path if use_custom else None,
+                    out_raw_pixlstash_scores=full_scores_by_path if use_pixlstash_tagger else None,
                 )
                 inference_s = time.perf_counter() - inference_start
                 logger.debug("Got tag results for %s images.", len(tag_results))
@@ -422,7 +422,7 @@ class TagTask(BaseTask):
                         ),
                     )
                     crop_fetch_s = time.perf_counter() - crop_fetch_start
-                    target = active_workflow.custom_tagger_image_size_quality_crop()
+                    target = active_workflow.pixlstash_tagger_image_size_quality_crop()
                     quality_items = []
                     key_to_path = {}
                     for pic in batch:
@@ -490,7 +490,7 @@ class TagTask(BaseTask):
                         crop_inf_start = time.perf_counter()
                         quality_results = active_workflow.tag_quality_crops(
                             quality_items,
-                            out_raw_scores=crop_raw_scores if use_custom else None,
+                            out_raw_scores=crop_raw_scores if use_pixlstash_tagger else None,
                         )
                         crop_inference_s = time.perf_counter() - crop_inf_start
                         # Accumulate quality tags found across all crops per picture path.
@@ -592,13 +592,13 @@ class TagTask(BaseTask):
                             model_version = "unknown"
                             try:
                                 version_fn = getattr(
-                                    active_workflow._engine, "custom_tagger_version", None
+                                    active_workflow._engine, "pixlstash_tagger_version", None
                                 )
                                 if callable(version_fn):
                                     model_version = f"v{version_fn()}"
                             except Exception:
                                 logger.warning(
-                                    "custom_tagger_version() failed, using 'unknown' model version",
+                                    "pixlstash_tagger_version() failed, using 'unknown' model version",
                                     exc_info=True,
                                 )
                             db_pred_start = time.perf_counter()

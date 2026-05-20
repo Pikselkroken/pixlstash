@@ -432,13 +432,13 @@ def create_router(server) -> APIRouter:
                 getattr(user, "wd14_tagger_enabled", False)
             )
         if "custom_tagger_enabled" in patch_data:
-            server.vault.set_custom_tagger_enabled(
+            server.vault.set_pixlstash_tagger_enabled(
                 getattr(user, "custom_tagger_enabled", True)
             )
         if "wd14_threshold" in patch_data:
             server.vault.set_wd14_threshold(getattr(user, "wd14_threshold", None))
         if "custom_tagger_threshold_offset" in patch_data:
-            server.vault.set_custom_tagger_threshold_offset(
+            server.vault.set_pixlstash_tagger_threshold_offset(
                 getattr(user, "custom_tagger_threshold_offset", None)
             )
         elapsed = time.time() - start_time

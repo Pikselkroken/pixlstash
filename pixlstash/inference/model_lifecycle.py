@@ -39,7 +39,7 @@ class ModelLifecycleManager:
     def ensure_tagging_ready(
         self,
         wd14_service,
-        custom_service,
+        pixlstash_tagger_service,
         use_wd14: bool,
         use_pixlstash_tagger: bool,
     ) -> bool:
@@ -47,7 +47,7 @@ class ModelLifecycleManager:
 
         Args:
             wd14_service: :class:`WD14Service` instance.
-            custom_service: :class:`PixlStashTaggerService` instance.
+            pixlstash_tagger_service: :class:`PixlStashTaggerService` instance.
             use_wd14: Whether WD14 should be loaded.
             use_pixlstash_tagger: Whether the PixlStash tagger should be loaded.
 
@@ -59,8 +59,8 @@ class ModelLifecycleManager:
         with self._init_lock:
             if use_wd14:
                 wd14_service.init()
-            if use_pixlstash_tagger and not custom_service.is_loaded():
-                if not custom_service.init_or_cpu_fallback():
+            if use_pixlstash_tagger and not pixlstash_tagger_service.is_loaded():
+                if not pixlstash_tagger_service.init_or_cpu_fallback():
                     pixlstash_tagger_failed = True
         return not pixlstash_tagger_failed
 
@@ -81,7 +81,7 @@ class ModelLifecycleManager:
         clip_service=None,
         wd14_service=None,
         sbert_service=None,
-        custom_service=None,
+        pixlstash_tagger_service=None,
         florence_service=None,
     ) -> None:
         """Unload all models and release all GPU/CPU memory.
@@ -90,7 +90,7 @@ class ModelLifecycleManager:
             clip_service: Optional :class:`ClipService` to unload.
             wd14_service: Optional :class:`WD14Service` to unload.
             sbert_service: Optional :class:`SBertService` to unload.
-            custom_service: Optional :class:`PixlStashTaggerService` to unload.
+            pixlstash_tagger_service: Optional :class:`PixlStashTaggerService` to unload.
             florence_service: Optional :class:`Florence2Service` to unload.
         """
         logger.warning("ModelLifecycleManager.aggressive_unload() called.")
@@ -101,8 +101,8 @@ class ModelLifecycleManager:
                 wd14_service.unload()
             if sbert_service is not None:
                 sbert_service.unload()
-            if custom_service is not None:
-                custom_service.unload()
+            if pixlstash_tagger_service is not None:
+                pixlstash_tagger_service.unload()
             if florence_service is not None:
                 florence_service._model = None
                 florence_service._processor = None
@@ -120,19 +120,19 @@ class ModelLifecycleManager:
         clip_service=None,
         wd14_service=None,
         sbert_service=None,
-        custom_service=None,
+        pixlstash_tagger_service=None,
     ) -> None:
         """Release non-captioning models during idle periods.
 
         Florence-2 is intentionally kept resident because reloading it is
         expensive and can be fragile on some CUDA setups.  CLIP, WD14,
-        SBERT, and the custom tagger are released.
+        SBERT, and the PixlStash tagger are released.
 
         Args:
             clip_service: Optional :class:`ClipService` to unload.
             wd14_service: Optional :class:`WD14Service` to unload.
             sbert_service: Optional :class:`SBertService` to unload.
-            custom_service: Optional :class:`PixlStashTaggerService` to unload.
+            pixlstash_tagger_service: Optional :class:`PixlStashTaggerService` to unload.
         """
         logger.warning(
             "ModelLifecycleManager.safe_idle_unload() called, releasing non-captioning models."
@@ -147,8 +147,8 @@ class ModelLifecycleManager:
             if sbert_service is not None:
                 sbert_service.unload()
                 logger.debug("Released SBERT service models.")
-            if custom_service is not None:
-                custom_service.unload()
+            if pixlstash_tagger_service is not None:
+                pixlstash_tagger_service.unload()
                 logger.debug("Released PixlStash tagger service models.")
         except Exception as exc:
             logger.warning("Exception during safe idle unload: %s", exc)

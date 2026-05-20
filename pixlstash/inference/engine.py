@@ -195,7 +195,7 @@ class InferenceEngine:
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
             sbert_service=self.sbert_service,
-            custom_service=self.pixlstash_tagger_service,
+            pixlstash_tagger_service=self.pixlstash_tagger_service,
             florence_service=self.florence_service,
         )
 
@@ -209,7 +209,7 @@ class InferenceEngine:
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
             sbert_service=self.sbert_service,
-            custom_service=self.pixlstash_tagger_service,
+            pixlstash_tagger_service=self.pixlstash_tagger_service,
         )
 
     def unload_tagger_session(self) -> None:
