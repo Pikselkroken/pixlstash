@@ -73,7 +73,7 @@ pixlstash/
 │   └── metadata.py                   # Vault-level metadata
 │
 ├── routes/                           # FastAPI routers
-│   ├── pictures.py                   # CRUD, search, thumbnails, export/import
+│   ├── pictures/                     # CRUD, search, thumbnails, export/import
 │   ├── characters.py                 # Character management + face assignment
 │   ├── tags.py                       # Tags + bulk operations
 │   ├── tag_predictions.py            # Confirm / reject predictions
@@ -174,13 +174,13 @@ PixlStash is a **single-process image vault** built on FastAPI. Despite running 
 - A **plugin system** for image transformations
 - A **file vault** rooted at a configured `image_root` directory
 
-The runtime is organised around four orthogonal layers:
+The runtime is organised around five layers:
 
 | Layer | Component | Responsibility |
 |-------|-----------|----------------|
 | **API** | `server.py`, `routes/*` | HTTP / WebSocket handlers, request validation |
-| **Services** | `services/*` | Business logic extracted from route handlers; keeps handlers thin |
-| **Domain** | `vault.py`, `inference/engine.py`, `picture_scoring.py`, `stacking.py` | Business logic, ML orchestration |
+| **Services** | `services/*` | Focused business-logic modules extracted from route handlers when they grew too large; not a formal service tier — `vault.py`, `picture_scoring.py`, and `stacking.py` are the real domain layer |
+| **Domain** | `vault.py`, `inference/engine.py`, `picture_scoring.py`, `stacking.py` | Core orchestration: vault lifecycle, ML engine, scoring, stacking |
 | **Workers** | `task_runner.py`, `work_planner.py`, `tasks/*` | Async background processing of new pictures |
 | **Persistence** | `database.py`, `db_models/*`, `migrations/*` | Schema, queries, transactions |
 
@@ -256,7 +256,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | [pixlstash/auth.py](../pixlstash/auth.py) | `AuthService`: password + JWT + scoped tokens. Enforces resource-level permissions (picture / set / character / project). |
 | [pixlstash/task_runner.py](../pixlstash/task_runner.py) | Threaded executor with separate CPU and GPU pools. Monitors VRAM, gates GPU-heavy tasks, drains queues at shutdown. |
 | [pixlstash/work_planner.py](../pixlstash/work_planner.py) | Registers all `BaseTaskFinder`s, polls them in round-robin, enforces inflight limits and adaptive backoff. |
-| [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation, anchor embeddings, character likeness scoring. |
+| [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors and penalised tags) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These are distinct features sharing one module; candidates for future separation. |
 | [pixlstash/worker_config.py](../pixlstash/worker_config.py) | Global constants — `NUM_WORKERS`, per-task `*_MAX_INFLIGHT`, batch sizes. |
 | [pixlstash/startup_checks.py](../pixlstash/startup_checks.py) | Preflight: disk space, VRAM, CUDA, SSL. May force CPU mode. |
 | [pixlstash/event_types.py](../pixlstash/event_types.py) | `EventType` enum used by WebSocket event bus. |
@@ -270,7 +270,10 @@ Background processing is **data-driven**: each task type has a *finder* that que
 
 All routers are mounted under `/api/v1/` unless stated otherwise. Routers live in [pixlstash/routes/](../pixlstash/routes/).
 
-### `pictures.py`
+### `pictures/` package
+
+Key endpoints (see the auto-generated index below for the full set):
+
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/pictures` | Filtered/paginated picture listing |
@@ -634,10 +637,10 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 
 | Module | Role |
 |--------|------|
-| [services/_filter_helpers.py](../pixlstash/services/_filter_helpers.py) | Shared SQL filter helpers (`normalize_set_mode`, `collect_set_filter_ids`, `project_membership_exists_clause`) used by both `picture_stats.py` and route handlers to avoid circular imports |
+| [services/_filter_helpers.py](../pixlstash/services/_filter_helpers.py) | Shared SQL filter helpers (`normalize_set_mode`, `collect_set_filter_ids`, `project_membership_exists_clause`). Lives in `services/` to avoid a circular import between `routes/pictures/` and `services/picture_stats.py`; it is a utility module, not a service in the domain sense |
 | [services/config_service.py](../pixlstash/services/config_service.py) | Hardware monitoring (CPU, RAM, GPU via `psutil` / `pynvml`) and import-folder path resolution; extracted from `routes/config.py` |
-| [services/picture_stats.py](../pixlstash/services/picture_stats.py) | Aggregation queries for `GET /pictures/stats`; accepts a `PictureStatsParams` dataclass and returns the stats dict; extracted from `routes/pictures.py` |
-| [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; extracted from `routes/pictures.py` |
+| [services/picture_stats.py](../pixlstash/services/picture_stats.py) | Aggregation queries for `GET /pictures/stats`; accepts a `PictureStatsParams` dataclass and returns the stats dict; used by `routes/pictures/_misc.py` |
+| [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
 | [services/share_service.py](../pixlstash/services/share_service.py) | Validates picture share tokens (`UserToken`), resolves shared pictures, and returns the correct watermark bytes (custom or default) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
 
@@ -820,7 +823,7 @@ Failure handling: if a task raises, its work column stays `NULL` so the correspo
 
 ## 18. Mermaid Diagrams
 
-### 17.1 Full backend data-flow
+### 18.1 Full backend data-flow
 
 ```mermaid
 flowchart LR
@@ -900,7 +903,7 @@ flowchart LR
     Static --> UI
 ```
 
-### 17.2 Module relationship
+### 18.2 Module relationship
 
 ```mermaid
 flowchart TB
@@ -917,7 +920,7 @@ flowchart TB
     Events[event_types.py]
 
     subgraph Routers["routes/"]
-        R1[pictures.py]
+        R1[pictures/]
         R2[characters.py]
         R3[tags.py / tag_predictions.py]
         R4[projects.py]
@@ -992,7 +995,7 @@ flowchart TB
     Plugins --> Utils
 ```
 
-### 17.3 Request lifecycle
+### 18.3 Request lifecycle
 
 ```mermaid
 sequenceDiagram
@@ -1051,12 +1054,12 @@ sequenceDiagram
 8. **Plugin extensibility** — image plugins are discovered through `PluginRegistry`; new transformations drop into `image_plugins/built-in/` (or a user directory) and become available automatically.
 9. **Conditional migrations** — Alembic migrations are safe on fresh DBs (column existence checks) and trigger data regeneration solely via `NULL` resets.
 10. **Path mapping** — host vs. container paths are normalised through `path_mapper` / `host_path_utils`, allowing Docker deployments without changing the DB.
+11. **Router factory / server closure** — every route module exports `create_router(server) -> APIRouter`. Route handlers are closures defined inside this factory, capturing `server` (and thus `vault`, `db`, auth, etc.) from the outer scope. This avoids global state and makes the dependency graph explicit. New route modules must follow this pattern.
 
 ---
 
-*Last updated: 2026-05-20. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+*Last updated: 2026-05-21. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
 
-- `routes/pictures.py` is ~5.4k lines and mixes listing, search, import/export, plugin orchestration, media serving and token scoping. Treat new endpoints as candidates for a dedicated sub-router rather than appending to this file.
 - The legacy `/pictures/shared/` auth prefix has no live route handler; remove it from `AUTH_EXCLUDED_PREFIXES` once any deployed share URLs in the wild have expired.
