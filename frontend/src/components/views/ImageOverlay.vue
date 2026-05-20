@@ -646,94 +646,12 @@
           class="overlay-sidebar"
           :class="{ open: sidebarOpen, hidden: chromeHidden }"
         >
-          <div
-            class="sidebar-section sidebar-section--description"
-            :class="{ 'sidebar-section--collapsed': descriptionCollapsed }"
-          >
-            <div
-              class="section-header section-header--collapsible"
-              @click="
-                descriptionCollapsed = !descriptionCollapsed;
-                descriptionCollapsed && cancelEditDescription();
-              "
-            >
-              <span>Description</span>
-              <span class="section-meta-group">
-                <button
-                  class="section-meta-btn"
-                  type="button"
-                  title="Copy description"
-                  :disabled="!canCopyDescription"
-                  @click.stop="copyDescription"
-                >
-                  <v-icon size="16">
-                    {{
-                      descriptionCopyState === "copied"
-                        ? "mdi-check-bold"
-                        : "mdi-content-copy"
-                    }}
-                  </v-icon>
-                </button>
-                <span class="section-meta">
-                  {{ descriptionDraft.length }}
-                </span>
-                <v-icon size="16" style="opacity: 0.6">{{
-                  descriptionCollapsed
-                    ? "mdi-chevron-right"
-                    : "mdi-chevron-down"
-                }}</v-icon>
-              </span>
-            </div>
-            <template v-if="!descriptionCollapsed">
-              <div class="description-editor">
-                <textarea
-                  ref="descriptionEditorRef"
-                  v-model="descriptionDraft"
-                  :readonly="!isEditingDescription || isReadOnly"
-                  @focus="!isReadOnly && startEditDescription()"
-                  @click="!isReadOnly && startEditDescription()"
-                  @keydown.enter.prevent="
-                    isEditingDescription &&
-                    !$event.shiftKey &&
-                    saveDescription()
-                  "
-                  @keydown="handleDescriptionEditorKey"
-                  @blur="cancelEditDescription"
-                ></textarea>
-                <div class="description-actions">
-                  <template v-if="isEditingDescription">
-                    <button
-                      class="overlay-icon-btn"
-                      type="button"
-                      title="Save description"
-                      :disabled="isSavingDescription"
-                      @click.stop="saveDescription"
-                    >
-                      <v-icon
-                        size="18"
-                        :class="{ 'mdi-spin': isSavingDescription }"
-                      >
-                        {{
-                          isSavingDescription
-                            ? "mdi-loading"
-                            : "mdi-content-save"
-                        }}
-                      </v-icon>
-                    </button>
-                    <button
-                      class="overlay-icon-btn"
-                      type="button"
-                      title="Cancel editing"
-                      :disabled="isSavingDescription"
-                      @click.stop="cancelEditDescription"
-                    >
-                      <v-icon size="18">mdi-close</v-icon>
-                    </button>
-                  </template>
-                </div>
-              </div>
-            </template>
-          </div>
+          <OverlayDescriptionPanel
+            ref="descriptionPanelRef"
+            :image="image"
+            :backend-url="backendUrl"
+            @update-description="handleDescriptionUpdate"
+          />
 
           <div class="sidebar-section sidebar-section--faces">
             <div
@@ -969,167 +887,13 @@
             </div>
           </div>
 
-          <div class="sidebar-section">
-            <div
-              class="section-header section-header--collapsible"
-              @click="metadataCollapsed = !metadataCollapsed"
-            >
-              <span>Metadata</span>
-              <v-icon size="16" style="opacity: 0.6">{{
-                metadataCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-              }}</v-icon>
-            </div>
-            <template v-if="!metadataCollapsed">
-              <div
-                v-if="
-                  !metadataEntries.length &&
-                  !comfyMetadata &&
-                  !pictureInfoEntries.length
-                "
-                class="metadata-empty"
-              >
-                No metadata available
-              </div>
-              <div v-else class="metadata-tabbox">
-                <div class="metadata-tab-strip">
-                  <button
-                    v-if="pictureInfoEntries.length"
-                    class="metadata-tab-btn"
-                    :class="{ active: metadataTab === 'info' }"
-                    @click="metadataTab = 'info'"
-                  >
-                    {{ infoHeaderLabel }}
-                  </button>
-                  <button
-                    v-if="comfyMetadata"
-                    class="metadata-tab-btn"
-                    :class="{ active: metadataTab === 'comfy' }"
-                    @click="metadataTab = 'comfy'"
-                  >
-                    ComfyUI
-                  </button>
-                </div>
-                <div
-                  v-if="metadataTab === 'info' && pictureInfoEntries.length"
-                  class="metadata-tab-panel"
-                >
-                  <div class="metadata-info-grid">
-                    <div
-                      v-for="entry in pictureInfoEntries"
-                      :key="entry.label"
-                      :class="[
-                        'metadata-info-item',
-                        entry.fullWidth && 'metadata-info-item--full-width',
-                        entry.clickable && 'metadata-info-item--clickable',
-                      ]"
-                      :title="entry.fullWidth ? entry.value : undefined"
-                      @click="
-                        entry.clickable ? openSourceFileLocation() : undefined
-                      "
-                    >
-                      <div class="metadata-info-label">{{ entry.label }}</div>
-                      <div class="metadata-info-value">{{ entry.value }}</div>
-                    </div>
-                  </div>
-                </div>
-                <div
-                  v-if="metadataTab === 'comfy' && comfyMetadata"
-                  class="metadata-tab-panel metadata-comfy-panel"
-                >
-                  <div class="metadata-comfy-subtitle">
-                    {{ comfyMetadata.summary }}
-                  </div>
-                  <div
-                    v-if="comfyMetadata.positive_prompt"
-                    class="metadata-comfy-field-group"
-                  >
-                    <div class="metadata-comfy-field-label">Prompt</div>
-                    <textarea
-                      class="metadata-comfy-textarea metadata-comfy-prompt"
-                      readonly
-                      :value="comfyMetadata.positive_prompt"
-                    ></textarea>
-                  </div>
-                  <div
-                    v-if="
-                      comfyMetadata.models?.length ||
-                      comfyMetadata.loras?.length
-                    "
-                    class="metadata-comfy-chips-block"
-                  >
-                    <div
-                      v-if="comfyMetadata.models?.length"
-                      class="metadata-comfy-field-group"
-                    >
-                      <div class="metadata-comfy-field-label">Models</div>
-                      <div class="metadata-comfy-chip-row">
-                        <span
-                          v-for="m in comfyMetadata.models"
-                          :key="m"
-                          class="metadata-comfy-chip"
-                          :title="m"
-                          >{{ m }}</span
-                        >
-                      </div>
-                    </div>
-                    <div
-                      v-if="comfyMetadata.loras?.length"
-                      class="metadata-comfy-field-group"
-                    >
-                      <div class="metadata-comfy-field-label">LoRAs</div>
-                      <div class="metadata-comfy-chip-row">
-                        <span
-                          v-for="l in comfyMetadata.loras"
-                          :key="l"
-                          class="metadata-comfy-chip"
-                          :title="l"
-                          >{{ l }}</span
-                        >
-                      </div>
-                    </div>
-                  </div>
-                  <details
-                    v-if="comfyMetadata.workflow"
-                    class="metadata-comfy-details"
-                  >
-                    <summary class="metadata-comfy-summary">
-                      <span class="metadata-comfy-summary-left">
-                        <span style="font-weight: 500; color: #fff">{{
-                          comfyMetadata.isApiFormat
-                            ? "API Workflow JSON"
-                            : "Workflow JSON"
-                        }}</span>
-                      </span>
-                      <button
-                        v-if="!comfyMetadata.isApiFormat"
-                        class="metadata-comfy-workflow-action"
-                        type="button"
-                        @click.stop="copyMetadataValue(comfyMetadata.workflow)"
-                      >
-                        <v-icon size="14">mdi-content-copy</v-icon>
-                        Copy
-                      </button>
-                      <button
-                        class="metadata-comfy-workflow-action"
-                        type="button"
-                        @click.stop="
-                          downloadComfyWorkflow(comfyMetadata.workflow)
-                        "
-                      >
-                        <v-icon size="14">mdi-download</v-icon>
-                        Download
-                      </button>
-                    </summary>
-                    <textarea
-                      class="metadata-comfy-textarea"
-                      readonly
-                      :value="stringifyMetadata(comfyMetadata.workflow)"
-                    ></textarea>
-                  </details>
-                </div>
-              </div>
-            </template>
-          </div>
+          <OverlayMetadataPanel
+            :image="image"
+            :comfy-metadata="comfyMetadata"
+            :date-format="dateFormat"
+            :backend-url="backendUrl"
+            :video-duration="videoMeta.duration"
+          />
         </aside>
       </div>
     </div>
@@ -1185,6 +949,8 @@ import {
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
+import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import {
@@ -1383,20 +1149,13 @@ const emit = defineEmits([
   "run-plugin",
 ]);
 
-const isEditingDescription = ref(false);
-const isSavingDescription = ref(false);
-const descriptionDraft = ref("");
-const descriptionEditorRef = ref(null);
-const descriptionCopyState = ref("idle");
+const descriptionPanelRef = ref(null);
+const isDescriptionEditing = computed(
+  () => descriptionPanelRef.value?.isEditingDescription ?? false,
+);
 const overlayCopyState = ref("idle");
 const imagePlaceholderLabel = "{{image_path}}";
 const captionPlaceholderLabel = "{{caption}}";
-const canCopyDescription = computed(() => {
-  const source = isEditingDescription.value
-    ? descriptionDraft.value
-    : image.value?.description;
-  return !!(source && source.length);
-});
 const canCopyOverlay = computed(() => !!image.value);
 const descriptionTeaser = computed(() => {
   const desc = image.value?.description || "";
@@ -1405,7 +1164,6 @@ const descriptionTeaser = computed(() => {
   const match = trimmed.match(/[^.!?]+[.!?]?/);
   return match ? match[0].trim() : trimmed;
 });
-let copyResetTimer = null;
 
 const addingTag = ref(false);
 const tagSuggestionIndex = ref(-1);
@@ -2383,7 +2141,7 @@ watch(
     // Don't disturb the DOM while the user is actively typing — the reactive
     // update to image.value causes a DOM patch that can blur the focused input.
     // Set a flag so we apply the update as soon as editing finishes.
-    if (addingTag.value || isEditingDescription.value) {
+    if (addingTag.value || isDescriptionEditing.value) {
       pendingAllImagesUpdate.value = true;
       return;
     }
@@ -2393,7 +2151,7 @@ watch(
 
 // Flush any deferred allImages update as soon as the user finishes editing.
 watch(
-  () => addingTag.value || isEditingDescription.value,
+  () => addingTag.value || isDescriptionEditing.value,
   async (isEditing) => {
     if (!isEditing && pendingAllImagesUpdate.value) {
       pendingAllImagesUpdate.value = false;
@@ -2416,7 +2174,6 @@ watch(showStacks, (value) => {
 watch(image, (newImage, oldImage) => {
   if (newImage?.id === oldImage?.id) return;
   resetTagInput();
-  syncDescriptionDraft();
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
   resetOverlayCopyState();
@@ -2425,8 +2182,8 @@ watch(image, (newImage, oldImage) => {
 
 watch(open, (isOpen) => {
   if (!isOpen) {
-    cancelEditDescription();
-    resetCopyState();
+    descriptionPanelRef.value?.cancelEditDescription();
+    descriptionPanelRef.value?.resetCopyState();
     resetOverlayCopyState();
   }
 });
@@ -2435,10 +2192,6 @@ function resetTagInput() {
   addingTag.value = false;
   newTag.value = "";
   tagSuggestionIndex.value = -1;
-}
-
-function syncDescriptionDraft() {
-  descriptionDraft.value = image.value?.description || "";
 }
 
 function resetComfyState() {
@@ -2641,10 +2394,10 @@ function handleKeydown(e) {
     return;
   }
 
-  if (isEditingDescription.value || addingTag.value) {
+  if (isDescriptionEditing.value || addingTag.value) {
     if (e.key === "Escape") {
-      if (isEditingDescription.value) {
-        cancelEditDescription();
+      if (isDescriptionEditing.value) {
+        descriptionPanelRef.value?.cancelEditDescription();
       } else if (addingTag.value) {
         cancelAddTag();
       }
@@ -2890,7 +2643,7 @@ function openSidebarFromTeaser() {
   if (!image.value) return;
   sidebarOpen.value = true;
   chromeHidden.value = false;
-  startEditDescription();
+  descriptionPanelRef.value?.startEditDescription();
 }
 
 function toggleZoom(event = null) {
@@ -3431,7 +3184,6 @@ onUnmounted(() => {
     clearTimeout(swipeHintTimer);
     swipeHintTimer = null;
   }
-  resetCopyState();
   resetOverlayCopyState();
   clearCharacterThumbnails();
 });
@@ -4086,9 +3838,6 @@ function preloadAdjacentImages() {
 }
 
 const comfyMetadata = ref(null);
-const metadataTab = ref("info");
-const metadataCollapsed = ref(false);
-const descriptionCollapsed = ref(false);
 const facesCollapsed = ref(false);
 const tagsCollapsed = ref(false);
 
@@ -4237,12 +3986,6 @@ function handleTagInputKey(event) {
   }
 }
 
-const metadataEntries = computed(() => {
-  const base = Metadata(image.value?.metadata);
-  const entries = Object.entries(stripComfyMetadata(base));
-  return entries.map(([key, value]) => ({ key, value }));
-});
-
 const faceAssignItems = computed(() => {
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
   return faces.map((face, idx) => ({
@@ -4350,262 +4093,6 @@ const sortedCharacters = computed(() => {
     }));
 });
 
-const infoHeaderLabel = computed(() => {
-  const format = image.value ? getOverlayFormat(image.value) : "";
-  const isVideo = format ? isSupportedVideoFile(format) : false;
-  return isVideo ? "Video information" : "Picture information";
-});
-
-const pictureInfoEntries = computed(() => {
-  if (!image.value) return [];
-  const entries = [];
-  const { width, height } = getDisplayDimensions();
-  if (width && height) {
-    entries.push({ label: "Size", value: `${width}×${height}` });
-    const aspect = formatAspectRatio(width, height);
-    if (aspect) entries.push({ label: "Aspect", value: aspect });
-  }
-
-  const sizeBytes =
-    image.value.size_bytes ||
-    image.value.sizeBytes ||
-    image.value.file_size ||
-    image.value.fileSize ||
-    image.value.metadata?.size_bytes ||
-    image.value.metadata?.file_size ||
-    null;
-  if (sizeBytes) {
-    entries.push({ label: "MB", value: formatMegabytes(sizeBytes) });
-  }
-
-  const smartScoreValue =
-    typeof image.value.smartScore === "number"
-      ? image.value.smartScore
-      : typeof image.value.smart_score === "number"
-        ? image.value.smart_score
-        : null;
-  if (smartScoreValue != null) {
-    entries.push({
-      label: "Smart score",
-      value: smartScoreValue.toFixed(2),
-    });
-  }
-
-  const createdAt = image.value.created_at || image.value.createdAt;
-  if (createdAt) {
-    entries.push({
-      label: "Created",
-      value: formatUserDate(createdAt, props.dateFormat),
-    });
-  }
-
-  const format = getOverlayFormat(image.value);
-  if (format) {
-    const isVideo = isSupportedVideoFile(format);
-    entries.push({
-      label: "Type",
-      value: `${isVideo ? "Video" : "Image"} · ${format.toUpperCase()}`,
-    });
-
-    if (isVideo) {
-      const frameCount =
-        image.value.frame_count ||
-        image.value.frames ||
-        image.value.metadata?.frame_count ||
-        image.value.metadata?.frames ||
-        null;
-      if (frameCount) {
-        entries.push({ label: "Frames", value: String(frameCount) });
-      }
-
-      const durationSeconds =
-        videoMeta.value.duration ||
-        image.value.duration ||
-        image.value.runtime ||
-        image.value.metadata?.duration ||
-        image.value.metadata?.runtime ||
-        null;
-      if (durationSeconds) {
-        entries.push({
-          label: "Runtime",
-          value: formatDuration(durationSeconds),
-        });
-      }
-    }
-  }
-
-  if (image.value.reference_folder_id && image.value.file_path) {
-    entries.push({
-      label: "Source file",
-      value: image.value.file_path,
-      fullWidth: true,
-      clickable: true,
-    });
-  }
-
-  return entries;
-});
-
-async function openSourceFileLocation() {
-  if (!image.value?.id) return;
-  try {
-    await apiClient.post(
-      `${backendUrl.value}/pictures/${image.value.id}/open-location`,
-    );
-  } catch {
-    // silently ignore
-  }
-}
-
-watch(
-  [() => !!comfyMetadata.value, () => !!pictureInfoEntries.value?.length],
-  ([hasComfy, hasInfo]) => {
-    if (metadataTab.value === "comfy" && !hasComfy) metadataTab.value = "info";
-    if (metadataTab.value === "info" && !hasInfo && hasComfy)
-      metadataTab.value = "comfy";
-  },
-);
-
-function Metadata(input) {
-  if (!input || typeof input !== "object") return {};
-  const output = {};
-  Object.entries(input).forEach(([key, value]) => {
-    output[key] = parseMetadataValue(value);
-  });
-  return output;
-}
-
-function stripComfyMetadata(input) {
-  if (!input || typeof input !== "object") return {};
-  const output = {};
-  Object.entries(input).forEach(([key, value]) => {
-    if (
-      key === "workflow" ||
-      key === "prompt" ||
-      key === "comfyui_workflow" ||
-      key === "comfyui_prompt"
-    ) {
-      return;
-    }
-    if (key === "png" && value && typeof value === "object") {
-      const { workflow, prompt, ...rest } = value;
-      if (Object.keys(rest).length) {
-        output[key] = rest;
-      }
-      return;
-    }
-    if (key === "comfyui" && value && typeof value === "object") {
-      const { workflow, prompt, ...rest } = value;
-      if (Object.keys(rest).length) {
-        output[key] = rest;
-      }
-      return;
-    }
-    output[key] = value;
-  });
-  return output;
-}
-
-function parseMetadataValue(value) {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) return value;
-    if (
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    ) {
-      try {
-        return JSON.parse(trimmed);
-      } catch (e) {
-        return value;
-      }
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => parseMetadataValue(item));
-  }
-  if (value && typeof value === "object") {
-    const nested = {};
-    Object.entries(value).forEach(([k, v]) => {
-      nested[k] = parseMetadataValue(v);
-    });
-    return nested;
-  }
-  return value;
-}
-
-function getDisplayDimensions() {
-  const w = Number(overlayDims.value.naturalWidth);
-  const h = Number(overlayDims.value.naturalHeight);
-  if (Number.isFinite(w) && Number.isFinite(h) && w > 1 && h > 1) {
-    return { width: Math.round(w), height: Math.round(h) };
-  }
-  const fallbackW = Number(image.value?.width || 0);
-  const fallbackH = Number(image.value?.height || 0);
-  return {
-    width: fallbackW > 0 ? fallbackW : null,
-    height: fallbackH > 0 ? fallbackH : null,
-  };
-}
-
-function formatAspectRatio(width, height) {
-  const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
-  const divisor = gcd(width, height);
-  const ratioW = Math.round(width / divisor);
-  const ratioH = Math.round(height / divisor);
-  return `${ratioW}:${ratioH}`;
-}
-
-function formatMegabytes(bytes) {
-  const value = Number(bytes);
-  if (!Number.isFinite(value) || value <= 0) return "";
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDuration(seconds) {
-  const value = Number(seconds);
-  if (!Number.isFinite(value) || value <= 0) return "";
-  const total = Math.round(value);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  const padded = (num) => String(num).padStart(2, "0");
-  if (hours > 0) {
-    return `${hours}:${padded(minutes)}:${padded(secs)}`;
-  }
-  return `${minutes}:${padded(secs)}`;
-}
-
-function stringifyMetadata(value) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch (e) {
-    return String(value);
-  }
-}
-
-function isPrimitiveValue(value) {
-  return (
-    value === null ||
-    value === undefined ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
-}
-
-async function copyMetadataValue(value) {
-  const text = isPrimitiveValue(value)
-    ? String(value)
-    : stringifyMetadata(value);
-  if (!text) return;
-  const copied = await copyText(text);
-  if (!copied) {
-    console.warn("Failed to copy metadata value.");
-  }
-}
-
 function isValidOverlayBBox(bbox) {
   return Array.isArray(bbox) && bbox.length === 4;
 }
@@ -4633,73 +4120,20 @@ function getOverlayBoxStyle(bbox, color) {
   };
 }
 
-function startEditDescription() {
-  if (!image.value) return;
-  syncDescriptionDraft();
-  isEditingDescription.value = true;
-  nextTick(() => {
-    if (descriptionEditorRef.value) {
-      descriptionEditorRef.value.focus();
-    }
-  });
-}
-
-function cancelEditDescription() {
-  isEditingDescription.value = false;
-  isSavingDescription.value = false;
-  syncDescriptionDraft();
-}
-
-async function saveDescription() {
-  if (!image.value || isSavingDescription.value) return;
-  isSavingDescription.value = true;
-  // Capture before any await in case image.value is nulled by ESC during the request
-  const capturedImageId = image.value.id;
-  const newDescription = descriptionDraft.value.trim();
-  const payload = { description: newDescription || null };
-  try {
-    await apiClient.patch(
-      `${backendUrl.value}/pictures/${capturedImageId}`,
-      payload,
-    );
-    if (image.value) {
-      image.value = { ...image.value, description: newDescription };
-    }
-    if (Array.isArray(allImages.value)) {
-      const idx = allImages.value.findIndex(
-        (img) => img && img.id === capturedImageId,
-      );
-      if (idx !== -1) {
-        allImages.value[idx] = {
-          ...allImages.value[idx],
-          description: newDescription,
-        };
-      }
-    }
-    emit("update-description", capturedImageId, newDescription);
-    isEditingDescription.value = false;
-  } catch (err) {
-    alert(`Failed to update description: ${err?.message || err}`);
-  } finally {
-    isSavingDescription.value = false;
+function handleDescriptionUpdate(imageId, newDescription) {
+  if (image.value && image.value.id === imageId) {
+    image.value = { ...image.value, description: newDescription };
   }
-}
-
-async function copyDescription() {
-  const text = isEditingDescription.value
-    ? descriptionDraft.value
-    : image.value?.description;
-  if (!text) return;
-  const copied = await copyText(text);
-  if (copied) {
-    descriptionCopyState.value = "copied";
-    if (copyResetTimer) clearTimeout(copyResetTimer);
-    copyResetTimer = window.setTimeout(() => {
-      resetCopyState();
-    }, 2000);
-  } else {
-    alert("Unable to copy description.");
+  if (Array.isArray(allImages.value)) {
+    const idx = allImages.value.findIndex((img) => img && img.id === imageId);
+    if (idx !== -1) {
+      allImages.value[idx] = {
+        ...allImages.value[idx],
+        description: newDescription,
+      };
+    }
   }
+  emit("update-description", imageId, newDescription);
 }
 
 async function copyOverlayImage() {
@@ -4817,14 +4251,6 @@ async function copyTextToClipboard(text) {
   if (!ok) throw new Error("Copy failed");
 }
 
-function resetCopyState() {
-  if (copyResetTimer) {
-    clearTimeout(copyResetTimer);
-    copyResetTimer = null;
-  }
-  descriptionCopyState.value = "idle";
-}
-
 let overlayCopyResetTimer = null;
 function resetOverlayCopyState() {
   if (overlayCopyResetTimer) {
@@ -4832,18 +4258,6 @@ function resetOverlayCopyState() {
     overlayCopyResetTimer = null;
   }
   overlayCopyState.value = "idle";
-}
-
-function handleDescriptionEditorKey(event) {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    cancelEditDescription();
-    return;
-  }
-  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-    event.preventDefault();
-    saveDescription();
-  }
 }
 
 async function removeAllTag(tag) {
@@ -4940,22 +4354,6 @@ function removeTag(tag) {
   const next = current.filter((entry) => entry.tag !== label);
   image.value.tags = next;
   emit("remove-tag", image.value.id, tag);
-}
-
-function downloadComfyWorkflow(workflow) {
-  if (!workflow) return;
-  const payload = stringifyMetadata(workflow);
-  const blob = new Blob([payload], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "comfyui_workflow.json";
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 100);
 }
 </script>
 
