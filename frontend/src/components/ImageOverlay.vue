@@ -221,8 +221,9 @@
               </div>
             </v-menu>
           </div>
-          <AddToSetControl
+          <AddToEntityControl
             v-if="image && !isReadOnly"
+            type="set"
             ref="addToSetControlRef"
             :key="addToSetControlKey"
             :backend-url="backendUrl"
@@ -232,8 +233,9 @@
             :class="{ hidden: chromeHidden }"
             @added="(payload) => emit('added-to-set', payload)"
           />
-          <AddToProjectControl
+          <AddToEntityControl
             v-if="image && !isReadOnly"
+            type="project"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
             :include-deleted-members="true"
@@ -1182,8 +1184,7 @@ import {
 } from "../utils/media.js";
 import { apiClient, appendShareToken, isReadOnly } from "../utils/apiClient";
 import { copyText } from "../utils/clipboard";
-import AddToSetControl from "./AddToSetControl.vue";
-import AddToProjectControl from "./AddToProjectControl.vue";
+import AddToEntityControl from "./AddToEntityControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import {

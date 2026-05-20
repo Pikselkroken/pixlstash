@@ -1242,14 +1242,16 @@
             <div class="selection-menu-panel">
               <!-- ── Set / Character / Project ─────────────────────── -->
               <template v-if="!isScrapheapView && !isReadOnly">
-                <AddToSetControl
+                <AddToEntityControl
+                  type="set"
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
                   :disabled="selectedCount === 0"
                   @added="$emit('added-to-set', $event)"
                 />
-                <AddToCharacterControl
+                <AddToEntityControl
+                  type="character"
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
@@ -1257,7 +1259,8 @@
                   @added="$emit('add-to-character', $event)"
                   @removed="$emit('remove-from-character', $event)"
                 />
-                <AddToProjectControl
+                <AddToEntityControl
+                  type="project"
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
@@ -1698,9 +1701,7 @@
 <script setup>
 import { computed, inject, nextTick, ref, watch } from "vue";
 import { apiClient, isReadOnly } from "../utils/apiClient";
-import AddToSetControl from "./AddToSetControl.vue";
-import AddToCharacterControl from "./AddToCharacterControl.vue";
-import AddToProjectControl from "./AddToProjectControl.vue";
+import AddToEntityControl from "./AddToEntityControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
 const props = defineProps({
   selectedCount: Number,
