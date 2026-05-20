@@ -7,6 +7,7 @@ from pixlstash.db_models import Picture, Tag, TAG_EMPTY_SENTINEL
 from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask
+from .task_type import TaskType
 
 
 class MissingTagFinder(BaseTaskFinder):
@@ -27,10 +28,10 @@ class MissingTagFinder(BaseTaskFinder):
     def max_inflight_tasks(self) -> int:
         return TAGGER_MAX_INFLIGHT
 
-    def depends_on(self) -> list[str]:
+    def depends_on(self) -> list[TaskType]:
         # Never submit tag tasks while face extraction is inflight — face
         # extraction has GPU priority and must not be starved by queued tagging.
-        return ["MissingFaceExtractionFinder"]
+        return [TaskType.FACE_EXTRACTION]
 
     def on_all_tasks_complete(self) -> None:
         """Unload the WD14 ONNX session once all tagging work is done.

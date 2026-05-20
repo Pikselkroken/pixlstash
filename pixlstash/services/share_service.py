@@ -75,9 +75,7 @@ def get_user_watermark_bytes(vault: "Vault", user_id: int) -> bytes | None:
     Returns:
         Watermark image bytes, or None if no watermark is configured.
     """
-    user = vault.db.run_immediate_read_task(
-        lambda session: session.get(User, user_id)
-    )
+    user = vault.db.run_immediate_read_task(lambda session: session.get(User, user_id))
     custom = getattr(user, "watermark_image", None) if user else None
     if custom:
         return custom

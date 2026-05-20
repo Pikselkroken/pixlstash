@@ -248,7 +248,7 @@ class TagTask(BaseTask):
             tags = update.get("tags") or []
 
             # When the tagger found no applicable tags, write the empty sentinel
-            # so that TagPredictionTask can detect that TagTask has already run.
+            # so that MissingTagFinder knows this picture has already been processed.
             effective_tags = set(tags) if tags else {TAG_EMPTY_SENTINEL}
 
             if effective_tags == existing_tags_map.get(pic_id, set()):
@@ -303,9 +303,7 @@ class TagTask(BaseTask):
     @staticmethod
     def _resolve_pending_predictions(session: Session, picture_ids: list) -> None:
         """Flip any PENDING tag predictions to CONFIRMED or REJECTED based on
-        the tags that TagTask wrote for these pictures.
-        Also reconciles CONFIRMED/REJECTED rows whose status no longer matches
-        the current Tag table (e.g. TagPredictionTask ran before TagTask)."""
+        the tags that TagTask wrote for these pictures."""
         if not picture_ids:
             return
         for picture_id in picture_ids:

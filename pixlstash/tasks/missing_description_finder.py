@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture
 
 from .description_task import DescriptionTask
-
+from .task_type import TaskType
 from .base_task_finder import BaseTaskFinder
 
 
@@ -24,8 +24,8 @@ class MissingDescriptionFinder(BaseTaskFinder):
     def finder_name(self) -> str:
         return "MissingDescriptionFinder"
 
-    def depends_on(self) -> list[str]:
-        return ["MissingFaceExtractionFinder", "MissingTagFinder"]
+    def depends_on(self) -> list[TaskType]:
+        return [TaskType.FACE_EXTRACTION, TaskType.TAGGER]
 
     def find_task(self):
         engine = self._engine_getter()

@@ -80,6 +80,10 @@ jobs:
         run: |
           ruff check pixlstash
 
+      - name: Check backend_architecture.md is up to date
+        run: |
+          python scripts/render_backend_architecture.py --check
+
       - name: Test Frontend Utilities
         run: |
           cd frontend

@@ -2,6 +2,7 @@ from typing import Callable
 
 from .base_task_finder import BaseTaskFinder
 from .image_embedding_task import ImageEmbeddingTask
+from .task_type import TaskType
 from pixlstash.worker_config import IMAGE_EMBEDDING_MAX_INFLIGHT
 
 from pixlstash.pixl_logging import get_logger
@@ -23,8 +24,8 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
     def max_inflight_tasks(self) -> int:
         return IMAGE_EMBEDDING_MAX_INFLIGHT
 
-    def depends_on(self) -> list[str]:
-        return ["MissingFaceExtractionFinder", "MissingTagFinder"]
+    def depends_on(self) -> list[TaskType]:
+        return [TaskType.FACE_EXTRACTION, TaskType.TAGGER]
 
     def find_task(self):
         engine = self._engine_getter()
