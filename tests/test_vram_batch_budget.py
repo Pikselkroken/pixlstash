@@ -29,7 +29,9 @@ def _build_workflow_for_budget_tests(
     vram_budget._device = device
     vram_budget._max_vram_usage_mb = budget_mb
     engine = _FakeEngine(vram_budget, _FakeWD14Service(onnx_capacity), device=device)
-    return TaggingWorkflow(engine=engine, use_wd14=use_wd14, use_pixlstash_tagger=use_pixlstash_tagger)
+    return TaggingWorkflow(
+        engine=engine, use_wd14=use_wd14, use_pixlstash_tagger=use_pixlstash_tagger
+    )
 
 
 def test_vram_batch_cap_constrains_by_budget():
@@ -80,7 +82,10 @@ def test_pixlstash_tagger_and_wd14_use_same_effective_batch_size():
         onnx_capacity=64,
     )
 
-    assert workflow._effective_pixlstash_tagger_batch_size() == workflow._effective_wd14_batch_size()
+    assert (
+        workflow._effective_pixlstash_tagger_batch_size()
+        == workflow._effective_wd14_batch_size()
+    )
 
 
 def test_incremental_vram_estimate_is_below_full_estimate():

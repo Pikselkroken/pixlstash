@@ -71,7 +71,7 @@ class ClipService:
 
     @property
     def device(self) -> str:
-        """Current inference device (``"cuda"`` or ``"cpu"``).""" 
+        """Current inference device (``"cuda"`` or ``"cpu"``)."""
         return self._device
 
     @property
@@ -100,9 +100,9 @@ class ClipService:
             return None
         self.ensure_ready()
         try:
-            tensors = torch.stack(
-                [self._preprocess(img) for img in images]
-            ).to(self._device)
+            tensors = torch.stack([self._preprocess(img) for img in images]).to(
+                self._device
+            )
             if self._device == "cuda":
                 tensors = tensors.half()
             with torch.no_grad():
@@ -123,9 +123,9 @@ class ClipService:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 try:
-                    tensors = torch.stack(
-                        [self._preprocess(img) for img in images]
-                    ).to("cpu")
+                    tensors = torch.stack([self._preprocess(img) for img in images]).to(
+                        "cpu"
+                    )
                     with torch.no_grad():
                         features = self._model.encode_image(tensors)
                         features = features / features.norm(dim=-1, keepdim=True)

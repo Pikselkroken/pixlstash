@@ -179,7 +179,8 @@ class Vault:
                 wd14_enabled=self._wd14_tagger_enabled,
                 pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
                 wd14_threshold=self._wd14_threshold,
-                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset or 0.0,
+                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
+                or 0.0,
                 keep_models_in_memory=self._keep_models_in_memory,
             )
 
@@ -682,7 +683,8 @@ class Vault:
                 wd14_enabled=self._wd14_tagger_enabled,
                 pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
                 wd14_threshold=self._wd14_threshold,
-                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset or 0.0,
+                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
+                or 0.0,
                 keep_models_in_memory=self._keep_models_in_memory,
             )
 

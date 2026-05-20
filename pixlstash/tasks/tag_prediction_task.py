@@ -131,9 +131,7 @@ class TagPredictionTask(BaseTask):
                             * (float(f.bbox[3]) - float(f.bbox[1])),
                         ),
                     )
-                    expanded = expand_bbox_to_square(
-                        largest_face.bbox, w, h, target
-                    )
+                    expanded = expand_bbox_to_square(largest_face.bbox, w, h, target)
                     crop = img.crop(expanded)
                     key = f"{file_path}#face{largest_face.id}"
                     quality_items.append((key, crop))
@@ -145,9 +143,7 @@ class TagPredictionTask(BaseTask):
                         exc,
                     )
             if quality_items:
-                crop_scores = self._workflow.score_quality_crops_raw(
-                    quality_items
-                )
+                crop_scores = self._workflow.score_quality_crops_raw(quality_items)
                 for key, tag_scores in crop_scores.items():
                     pic_id = key_to_pic_id.get(key)
                     if pic_id is None:
