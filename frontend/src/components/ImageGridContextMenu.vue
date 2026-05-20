@@ -389,45 +389,4 @@ onBeforeUnmount(() => {
   user-select: none;
   outline: none;
 }
-
-.ctx-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 14px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: rgb(var(--v-theme-on-surface));
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-  transition: background 0.1s;
-}
-
-.ctx-item:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-.ctx-item:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.ctx-item--danger {
-  color: rgb(var(--v-theme-error));
-}
-
-.ctx-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.ctx-sep {
-  height: 1px;
-  margin: 3px 0;
-  background: rgba(var(--v-theme-on-surface), 0.1);
-}
 </style>

@@ -2,6 +2,7 @@
 import 'vuetify/styles'
 import '@mdi/font/css/materialdesignicons.css'
 import './style.css'
+import './styles/context-menu.css'
 
 import {createApp} from 'vue'
 import {createVuetify} from 'vuetify'

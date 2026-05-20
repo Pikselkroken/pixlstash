@@ -1958,15 +1958,19 @@ function handleResolutionBarClick(label) {
   }
 }
 
+.stats-sidebar-title,
 .stats-sidebar-title-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+.stats-sidebar-title-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .stats-sidebar-title-icon {
@@ -1981,14 +1985,6 @@ function handleResolutionBarClick(label) {
 
 .stats-header-icon {
   color: rgba(var(--v-theme-on-surface), 0.4);
-}
-
-.stats-sidebar-title {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
 .stats-loading {
