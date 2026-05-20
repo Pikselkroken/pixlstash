@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { apiClient } from '../utils/apiClient'
+import { apiClient } from '../../utils/apiClient'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },

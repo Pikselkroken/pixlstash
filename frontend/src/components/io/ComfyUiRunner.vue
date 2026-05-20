@@ -64,8 +64,8 @@
  *   progressPercent                    - Computed clamped percentage (0-100).
  */
 import { ref, reactive, computed, onUnmounted, watch } from "vue";
-import { apiClient } from "../utils/apiClient";
-import { formatComfyuiExecutionErrorMessage } from "../utils/utils.js";
+import { apiClient } from "../../utils/apiClient";
+import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 
 const props = defineProps({
   backendUrl: { type: String, default: "" },

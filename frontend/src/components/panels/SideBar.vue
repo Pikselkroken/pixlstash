@@ -7,29 +7,29 @@ import {
   watch,
   nextTick,
 } from "vue";
-import ImageImporter from "./ImageImporter.vue";
-import CharacterEditor from "./CharacterEditor.vue";
-import PictureSetEditor from "./PictureSetEditor.vue";
-import ProjectEditor from "./ProjectEditor.vue";
+import ImageImporter from "../io/ImageImporter.vue";
+import CharacterEditor from "../editors/CharacterEditor.vue";
+import PictureSetEditor from "../editors/PictureSetEditor.vue";
+import ProjectEditor from "../editors/ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
-import UserSettingsDialog from "./UserSettingsDialog.vue";
-import FolderTreeNode from "./FolderTreeNode.vue";
-import FolderEditor from "./FolderEditor.vue";
-import ShareDialog from "./ShareDialog.vue";
-import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
+import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
+import FolderTreeNode from "../editors/FolderTreeNode.vue";
+import FolderEditor from "../editors/FolderEditor.vue";
+import ShareDialog from "../io/ShareDialog.vue";
+import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
   apiClient,
   appendShareToken,
   isReadOnly,
   sessionContext,
-} from "../utils/apiClient";
-import { extractSupportedImportFilesFromDataTransfer } from "../utils/media.js";
+} from "../../utils/apiClient";
+import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
 import {
   SET_ICONS,
   SET_COLORS,
   SET_ICON_CATEGORIES,
   ICON_CARDS,
-} from "../utils/setAppearance.js";
+} from "../../utils/setAppearance.js";
 
 const appVersion = __APP_VERSION__;
 

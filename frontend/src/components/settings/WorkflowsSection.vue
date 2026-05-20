@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient, isReadOnly } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

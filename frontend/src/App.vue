@@ -1,11 +1,9 @@
 <script setup>
-import nlp from "compromise";
 import {
   computed,
   nextTick,
   onBeforeUnmount,
   onMounted,
-  provide,
   reactive,
   ref,
   watch,
@@ -17,265 +15,134 @@ import {
   isReadOnly,
   sessionContext,
 } from "./utils/apiClient";
+import { useSelectionStore } from "./stores/useSelectionStore";
+import { useFilterStore } from "./stores/useFilterStore";
+import { useSortStore } from "./stores/useSortStore";
+import { useGridStore } from "./stores/useGridStore";
+import { useExportStore } from "./stores/useExportStore";
+import { useSidebarStore } from "./stores/useSidebarStore";
+import { useUserPrefsStore } from "./stores/useUserPrefsStore";
+import { useProjectStore } from "./stores/useProjectStore";
+import { useWsStore } from "./stores/useWsStore";
+import { useSearchStore } from "./stores/useSearchStore";
 
-import SideBar from "./components/SideBar.vue";
-import PhotosImportDialog from "./components/PhotosImportDialog.vue";
-import ImageGrid from "./components/ImageGrid.vue";
-import SearchOverlay from "./components/SearchOverlay.vue";
-import StatsSidebar from "./components/StatsSidebar.vue";
+import SideBar from "./components/panels/SideBar.vue";
+import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
+import ImageGrid from "./components/views/ImageGrid.vue";
+import SearchOverlay from "./components/views/SearchOverlay.vue";
+import StatsSidebar from "./components/panels/StatsSidebar.vue";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
 const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
-// --- Template & Component Refs ---
-const gridContainer = ref(null);
-const selectedImageIds = ref([]);
-let lastSelectedIndex = null;
-const sidebarRef = ref(null);
-const shortcutsDialogOpen = ref(false);
-const toolbarRef = ref(null);
+// --- Stores ---
+const selectionStore = useSelectionStore();
+const filterStore = useFilterStore();
+const sortStore = useSortStore();
+const gridStore = useGridStore();
+const exportStore = useExportStore();
+const sidebarStore = useSidebarStore();
+const userPrefsStore = useUserPrefsStore();
+const projectStore = useProjectStore();
+const wsStore = useWsStore();
+const searchStore = useSearchStore();
 
-const selectedCharacter = ref(ALL_PICTURES_ID);
-const selectedCharacterIds = ref([]);
-const selectedSet = ref(null);
-const selectedSetIds = ref([]);
-function loadMultiMode(key, fallback) {
-  try {
-    const v = window.sessionStorage?.getItem(key);
-    return ["union", "intersection", "difference", "xor"].includes(v)
-      ? v
-      : fallback;
-  } catch {
-    return fallback;
-  }
-}
-function saveMultiMode(key, val) {
-  try {
-    window.sessionStorage?.setItem(key, val);
-  } catch {
-    // ignore
-  }
-}
-function loadBaseId(key) {
-  try {
-    const v = window.sessionStorage?.getItem(key);
-    if (!v) return null;
-    const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  } catch {
-    return null;
-  }
-}
-function saveBaseId(key, val) {
-  try {
-    window.sessionStorage?.setItem(key, val != null ? String(val) : "");
-  } catch {
-    // ignore
-  }
-}
-const characterMultiMode = ref(
-  loadMultiMode("pixlstash:characterMultiMode", "union"),
-);
-const setMultiMode = ref(
-  loadMultiMode("pixlstash:setMultiMode", "intersection"),
-);
-const setDifferenceBaseId = ref(loadBaseId("pixlstash:setDifferenceBaseId"));
-const selectedSetNames = ref({});
-const projectViewMode = ref("global"); // 'global' | 'project'
-const selectedProjectId = ref(null); // null = unassigned in project mode
-const characterProjectIds = ref({}); // charId -> project_id for the current character selection
-const setProjectIds = ref({}); // setId -> project_id for the current set selection
-const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, importSourceFolder, label }
-const folderScanning = ref(false);
-const selectedSort = ref("");
-const selectedDescending = ref(true);
-const stackThreshold = ref(null);
-const sortOptions = ref([]);
-// --- Search & Filtering State ---
-const searchQuery = ref("");
-const searchInput = ref("");
-const lastSelectedCharacterLabel = ref("All Pictures");
-const lastSelectedSetLabel = ref("Picture Set");
-const searchHistory = ref([]);
-const isSearchHistoryOpen = ref(false);
-const MAX_SEARCH_HISTORY = 8;
-const filteredSearchHistory = computed(() => {
-  const needle = (searchInput.value || "").trim().toLowerCase();
-  if (!needle) {
-    return searchHistory.value;
-  }
-  return searchHistory.value.filter((item) =>
-    item.toLowerCase().startsWith(needle),
-  );
-});
-const showStars = ref(!isReadOnly.value);
-const showKeyboardHint = ref(true);
-const showFaceBboxes = ref(false);
-const showProblemIcon = ref(true);
-const penalisedTagWeights = ref({});
-const showStacks = ref(true);
-const compactMode = ref(isReadOnly.value);
-const expandedStackCount = ref(0);
-const totalStackCount = ref(0);
-const visibleRangeLabel = ref(null);
-const dateFormat = ref("locale");
-const themeMode = ref(isReadOnly.value ? "dark" : "light");
+// --- Theme ---
 const theme = useTheme();
 
-const activeCategoryLabel = computed(() => {
-  if (selectedFolderFilter.value) {
-    return selectedFolderFilter.value.label || "Folder";
-  }
-  if (selectedSetIds.value.length > 1) {
-    const modeLabel =
-      { union: "Union", intersection: "Overlap", difference: "Difference" }[
-        setMultiMode.value
-      ] || "Multi";
-    return `Sets – ${modeLabel} (${selectedSetIds.value.length})`;
-  }
-  if (selectedSet.value) {
-    return lastSelectedSetLabel.value || "Picture Set";
-  }
-  if (selectedCharacterIds.value.length > 1) {
-    const modeLabel =
-      { union: "Union", intersection: "Overlap", difference: "Difference" }[
-        characterMultiMode.value
-      ] || "Multi";
-    return `People – ${modeLabel} (${selectedCharacterIds.value.length})`;
-  }
-  if (selectedCharacter.value === ALL_PICTURES_ID) return "All Pictures";
-  if (selectedCharacter.value === UNASSIGNED_PICTURES_ID)
-    return "Unassigned Pictures";
-  if (selectedCharacter.value === SCRAPHEAP_PICTURES_ID) return "Scrapheap";
-  if (selectedCharacter.value) {
-    return lastSelectedCharacterLabel.value || "Category";
-  }
-  return "All Pictures";
+// --- Component & DOM refs ---
+const gridContainer = ref(null);
+const sidebarRef = ref(null);
+const toolbarRef = ref(null);
+const mainAreaRef = ref(null);
+const gridWrapperRef = ref(null);
+
+// --- Local UI state ---
+const shortcutsDialogOpen = ref(false);
+const updateCheckDialogOpen = ref(false);
+const photosDialogOpen = ref(false);
+const folderScanning = ref(false);
+const installType = ref("pip");
+const dockerVariant = ref("gpu");
+const columnsMenuOpen = ref(false);
+const overlaysMenuOpen = ref(false);
+const loading = ref(null);
+const error = ref(null);
+
+// --- Config tracking ---
+const configLoaded = ref(false);
+const configLoading = ref(false);
+const configApplying = ref(false);
+const configSnapshot = ref({});
+const config = reactive({
+  sort: "",
+  thumbnail: 256,
+  sidebar_thumbnail_size: 64,
+  show_stars: true,
+  show_face_bboxes: false,
+  show_problem_icon: true,
+  expand_all_stacks: true,
+  date_format: "locale",
+  theme_mode: "light",
+  stack_strictness: 0.92,
 });
 
-const isAllPicturesActive = computed(
-  () =>
-    !selectedSetIds.value.length && selectedCharacter.value === ALL_PICTURES_ID,
-);
-
-const thumbnailSize = ref(256);
-const sidebarThumbnailSize = ref(isReadOnly.value ? 32 : 48);
-const photosDialogOpen = ref(false);
-const columns = ref(isReadOnly.value ? 5 : 4); // Default columns
+// --- Layout constants ---
 const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
 const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 14;
-const minColumns = ref(6);
-const maxColumns = ref(12);
-const mainAreaRef = ref(null);
-let mainAreaResizeObserver = null;
-const gridWrapperRef = ref(null);
-const sidebarVisible = ref(true);
-function loadStatsOpen() {
-  try {
-    const stored = window.localStorage?.getItem("pixlstash:statsSidebarOpen");
-    if (stored !== null) return stored !== "false";
-    // Default: closed on touch/mobile devices
-    return !window.matchMedia("(hover: none) and (pointer: coarse)").matches;
-  } catch {
-    return true;
-  }
-}
-function saveStatsOpen(val) {
-  try {
-    window.localStorage?.setItem(
-      "pixlstash:statsSidebarOpen",
-      val ? "true" : "false",
-    );
-  } catch {
-    // ignore
-  }
-}
-const statsOpen = ref(loadStatsOpen());
-function loadSidebarDocked() {
-  try {
-    return window.localStorage?.getItem("pixlstash:sidebarDocked") === "true";
-  } catch {
-    return false;
-  }
-}
-function saveSidebarDocked(val) {
-  try {
-    window.localStorage?.setItem(
-      "pixlstash:sidebarDocked",
-      val ? "true" : "false",
-    );
-  } catch {
-    // ignore
-  }
-}
-const sidebarDocked = ref(loadSidebarDocked());
 const SIDEBAR_HIDE_BREAKPOINT = 1000;
 const STATS_HIDE_BREAKPOINT = 1280;
-const sidebarForcedHidden = ref(false);
-const statsForcedHidden = ref(false);
-
-// --- Media Type Filter State ---
-const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
-const comfyuiModelFilter = ref([]);
-const comfyuiLoraFilter = ref([]);
-const comfyuiConfigured = ref(false);
-const publicUrl = ref(null);
-const embedWatermark = ref(false);
-const minScoreFilter = ref(null);
-const maxScoreFilter = ref(null);
-const smartScoreBucketFilter = ref(null);
-const resolutionBucketFilter = ref(null);
-const tagFilter = ref([]);
-const tagRejectedFilter = ref([]);
-const tagConfidenceAboveFilter = ref([]);
-const tagConfidenceBelowFilter = ref([]);
-const faceBboxFilter = ref(null);
-const sharedOnlyFilter = ref(false);
-const unassignedOnlyFilter = ref(false);
-
-// null = undecided (show dialog), true/false = user's explicit choice
-const checkForUpdates = ref(null);
-const updateCheckDialogOpen = ref(false);
-const installType = ref("pip");
-const dockerVariant = ref("gpu");
-
-const gridVersion = ref(0);
-const wsUpdateKey = ref(0);
-const wsTagUpdate = ref({ key: 0, pictureIds: [] });
-const wsPluginProgress = ref({ key: 0, payload: null });
-const isUploadInProgress = ref(false);
-const pendingExternalImportCount = ref(0);
-const columnsMenuOpen = ref(false);
-const overlaysMenuOpen = ref(false);
-const configLoaded = ref(false);
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
 const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
+
+// --- Non-reactive internals ---
+let mainAreaResizeObserver = null;
+let updatesSocket = null;
+let updatesReconnectTimer = null;
 let columnsMenuCloseTimeout = null;
 let sidebarRefreshDebounceTimeout = null;
 let sidebarRefreshPicturesDebounceTimeout = null;
 let sidebarRefreshPicturesFlash = false;
-const updatesSocket = ref(null);
-let updatesReconnectTimer = null;
-const configLoading = ref(false);
-const configApplying = ref(false);
-const configSnapshot = ref({});
-const hiddenTags = ref([]);
-const applyTagFilter = ref(false);
 
-function refreshGridVersion() {
-  gridVersion.value++;
-}
+// --- Computed ---
+const activeCategoryLabel = computed(() => {
+  if (selectionStore.selectedFolderFilter) {
+    return selectionStore.selectedFolderFilter.label || "Folder";
+  }
+  if (selectionStore.selectedSetIds.length > 1) {
+    const modeLabel =
+      { union: "Union", intersection: "Overlap", difference: "Difference" }[
+        selectionStore.setMultiMode
+      ] || "Multi";
+    return `Sets – ${modeLabel} (${selectionStore.selectedSetIds.length})`;
+  }
+  if (selectionStore.selectedSet) {
+    return selectionStore.lastSelectedSetLabel || "Picture Set";
+  }
+  if (selectionStore.selectedCharacterIds.length > 1) {
+    const modeLabel =
+      { union: "Union", intersection: "Overlap", difference: "Difference" }[
+        selectionStore.characterMultiMode
+      ] || "Multi";
+    return `People – ${modeLabel} (${selectionStore.selectedCharacterIds.length})`;
+  }
+  if (selectionStore.selectedCharacter === ALL_PICTURES_ID) return "All Pictures";
+  if (selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID)
+    return "Unassigned Pictures";
+  if (selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID)
+    return "Scrapheap";
+  if (selectionStore.selectedCharacter) {
+    return selectionStore.lastSelectedCharacterLabel || "Category";
+  }
+  return "All Pictures";
+});
 
-function loadPendingExternalImports() {
-  wsUpdateKey.value = Date.now();
-  refreshGridVersion();
-}
-
+// --- WebSocket ---
 function buildUpdatesSocketUrl() {
   if (!BACKEND_URL) return "";
   const wsBase = BACKEND_URL.replace(/^http/i, "ws");
@@ -283,8 +150,8 @@ function buildUpdatesSocketUrl() {
 }
 
 function shouldRefreshForPictureChange() {
-  if (selectedSetIds.value.length) return false;
-  const selectedChar = selectedCharacter.value;
+  if (selectionStore.selectedSetIds.length) return false;
+  const selectedChar = selectionStore.selectedCharacter;
   if (
     selectedChar &&
     selectedChar !== ALL_PICTURES_ID &&
@@ -293,30 +160,30 @@ function shouldRefreshForPictureChange() {
   ) {
     return false;
   }
-  if ((searchQuery.value || "").trim()) return false;
+  if ((searchStore.searchQuery || "").trim()) return false;
   return true;
 }
 
 function sendUpdatesFilters() {
-  if (!updatesSocket.value) return;
-  if (updatesSocket.value.readyState !== WebSocket.OPEN) return;
-  updatesSocket.value.send(
+  if (!updatesSocket) return;
+  if (updatesSocket.readyState !== WebSocket.OPEN) return;
+  updatesSocket.send(
     JSON.stringify({
       type: "set_filters",
-      selected_character: selectedCharacter.value,
-      selected_set: selectedSet.value,
-      selected_sets: selectedSetIds.value,
-      search_query: searchQuery.value,
+      selected_character: selectionStore.selectedCharacter,
+      selected_set: selectionStore.selectedSet,
+      selected_sets: selectionStore.selectedSetIds,
+      search_query: searchStore.searchQuery,
     }),
   );
 }
 
 function connectUpdatesSocket() {
-  if (updatesSocket.value) return;
+  if (updatesSocket) return;
   const url = buildUpdatesSocketUrl();
   if (!url) return;
   const ws = new WebSocket(url);
-  updatesSocket.value = ws;
+  updatesSocket = ws;
 
   ws.onopen = () => {
     sendUpdatesFilters();
@@ -333,7 +200,7 @@ function connectUpdatesSocket() {
       payload?.type === "pictures_changed" ||
       payload?.type === "picture_imported";
     if (isPictureChange) {
-      if (!isUploadInProgress.value) {
+      if (!wsStore.isUploadInProgress) {
         refreshSidebarPicturesDebounced(true);
       }
       const pictureIds = Array.isArray(payload.picture_ids)
@@ -341,22 +208,22 @@ function connectUpdatesSocket() {
         : [];
       if (
         pictureIds.length > 0 &&
-        selectedSort.value === "LIKENESS_GROUPS" &&
+        sortStore.selectedSort === "LIKENESS_GROUPS" &&
         payload?.type !== "picture_imported"
       ) {
-        const nextKey = (wsTagUpdate.value?.key || 0) + 1;
-        wsTagUpdate.value = { key: nextKey, pictureIds };
+        const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
+        wsStore.wsTagUpdate = { key: nextKey, pictureIds };
         return;
       }
-      if (payload?.type === "picture_imported" && !isUploadInProgress.value) {
+      if (payload?.type === "picture_imported" && !wsStore.isUploadInProgress) {
         // External import (ComfyUI, API, watch-folder): show pill, don't auto-refresh
-        pendingExternalImportCount.value += Math.max(1, pictureIds.length);
+        wsStore.pendingExternalImportCount += Math.max(1, pictureIds.length);
       } else if (
         shouldRefreshForPictureChange() ||
         payload?.type === "picture_imported"
       ) {
-        wsUpdateKey.value = Date.now();
-        refreshGridVersion();
+        gridStore.wsUpdateKey = Date.now();
+        gridStore.refreshGridVersion();
       }
     } else if (payload?.type === "characters_changed") {
       refreshSidebar();
@@ -364,10 +231,10 @@ function connectUpdatesSocket() {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
-      const nextKey = (wsTagUpdate.value?.key || 0) + 1;
-      wsTagUpdate.value = { key: nextKey, pictureIds };
+      const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
+      wsStore.wsTagUpdate = { key: nextKey, pictureIds };
     } else if (payload?.type === "plugin_progress") {
-      wsPluginProgress.value = {
+      wsStore.wsPluginProgress = {
         key: Date.now(),
         payload,
       };
@@ -375,7 +242,7 @@ function connectUpdatesSocket() {
   };
 
   ws.onclose = () => {
-    updatesSocket.value = null;
+    updatesSocket = null;
     if (updatesReconnectTimer) {
       clearTimeout(updatesReconnectTimer);
     }
@@ -391,74 +258,16 @@ function disconnectUpdatesSocket() {
     clearTimeout(updatesReconnectTimer);
     updatesReconnectTimer = null;
   }
-  if (updatesSocket.value) {
-    updatesSocket.value.close();
-    updatesSocket.value = null;
+  if (updatesSocket) {
+    updatesSocket.close();
+    updatesSocket = null;
   }
 }
 
-// --- Export Menu State ---
-const exportMenuOpen = ref(false);
-const exportType = ref("full");
-const exportCaptionMode = ref("description");
-const exportTagFormat = ref("spaces");
-const exportIncludeCharacterName = ref(true);
-const exportUseOriginalFileNames = ref(false);
-const exportResolution = ref("original");
-const exportSelectedCount = ref(0);
-const exportTotalCount = ref(0);
-const exportCount = computed(() =>
-  exportSelectedCount.value > 0
-    ? exportSelectedCount.value
-    : exportTotalCount.value,
-);
-const exportCaptionOptions = [
-  { title: "No Captions", value: "none" },
-  { title: "Description", value: "description" },
-  { title: "Tags", value: "tags" },
-];
-const exportTypeOptions = [
-  { title: "Full images", value: "full" },
-  { title: "Face crops", value: "face" },
-];
-const exportResolutionOptions = [
-  { title: "Original", value: "original" },
-  { title: "Half Size", value: "half" },
-  { title: "Quarter Size", value: "quarter" },
-];
-const exportTagFormatOptions = [
-  { title: "Spaces", value: "spaces" },
-  { title: "Underscores", value: "underscores" },
-];
-const exportTypeLocksCaptions = computed(() => exportType.value !== "full");
-
-watch(
-  exportType,
-  (value) => {
-    if (value !== "full") {
-      exportCaptionMode.value = "tags";
-      exportIncludeCharacterName.value = false;
-    }
-  },
-  { immediate: true },
-);
-
-// --- Config Dialog State ---.
-const config = reactive({
-  sort: "",
-  thumbnail: 256,
-  sidebar_thumbnail_size: 64,
-  show_stars: true,
-  show_face_bboxes: false,
-  show_problem_icon: true,
-  expand_all_stacks: true,
-  date_format: "locale",
-  theme_mode: "light",
-  stack_strictness: 0.92,
-});
-
-const loading = ref(false);
-const error = ref(null);
+function loadPendingExternalImports() {
+  gridStore.wsUpdateKey = Date.now();
+  gridStore.refreshGridVersion();
+}
 
 function refreshSidebar(options = {}) {
   sidebarRef.value?.refreshSidebar(options);
@@ -568,8 +377,8 @@ function toolbarWidth() {
 
 function updateSidebarBreakpoints() {
   if (typeof window !== "undefined") {
-    sidebarForcedHidden.value = window.innerWidth < SIDEBAR_HIDE_BREAKPOINT;
-    statsForcedHidden.value = window.innerWidth < STATS_HIDE_BREAKPOINT;
+    sidebarStore.sidebarForcedHidden = window.innerWidth < SIDEBAR_HIDE_BREAKPOINT;
+    sidebarStore.statsForcedHidden = window.innerWidth < STATS_HIDE_BREAKPOINT;
   }
 }
 
@@ -579,24 +388,23 @@ function updateIsMobile() {
 }
 
 function toggleDock() {
-  sidebarDocked.value = !sidebarDocked.value;
-  saveSidebarDocked(sidebarDocked.value);
+  sidebarStore.persistSidebarDocked(!sidebarStore.sidebarDocked);
 }
 
 function clampColumnsToBounds() {
-  if (columns.value > maxColumns.value) {
-    columns.value = maxColumns.value;
+  if (gridStore.columns > gridStore.maxColumns) {
+    gridStore.columns = gridStore.maxColumns;
   }
-  if (columns.value < minColumns.value) {
-    columns.value = minColumns.value;
+  if (gridStore.columns < gridStore.minColumns) {
+    gridStore.columns = gridStore.minColumns;
   }
 }
 
 function updateMaxColumns() {
   const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
   if (!width) {
-    minColumns.value = MIN_COLUMNS;
-    maxColumns.value = MAX_COLUMNS;
+    gridStore.minColumns = MIN_COLUMNS;
+    gridStore.maxColumns = MAX_COLUMNS;
     clampColumnsToBounds();
     return;
   }
@@ -609,14 +417,14 @@ function updateMaxColumns() {
     computedMin,
     Math.floor(availableWidth / MIN_THUMBNAIL_SIZE),
   );
-  minColumns.value = Math.max(MIN_COLUMNS, computedMin);
-  maxColumns.value = Math.min(MAX_COLUMNS, computedMax);
+  gridStore.minColumns = Math.max(MIN_COLUMNS, computedMin);
+  gridStore.maxColumns = Math.min(MAX_COLUMNS, computedMax);
   clampColumnsToBounds();
 }
 
 function closeSidebarIfMobile() {
-  if (sidebarForcedHidden.value) {
-    sidebarVisible.value = false;
+  if (sidebarStore.sidebarForcedHidden) {
+    sidebarStore.sidebarVisible = false;
   }
 }
 
@@ -641,52 +449,51 @@ function SelectionPayload(payload) {
 }
 
 function clearSearchForCategoryChange() {
-  if ((searchQuery.value || "").trim() || (searchInput.value || "").trim()) {
+  if ((searchStore.searchQuery || "").trim() || (searchStore.searchInput || "").trim()) {
     handleClearSearch();
   }
 }
 
 async function handleSelectCharacter(payload) {
-  selectedFolderFilter.value = null;
+  selectionStore.selectedFolderFilter = null;
   const { id: charId, label, ids, projectIds } = SelectionPayload(payload);
-  characterProjectIds.value = projectIds;
+  projectStore.characterProjectIds = projectIds;
   clearSearchForCategoryChange();
   if (charId == null) {
-    selectedCharacter.value = null;
+    selectionStore.selectedCharacter = null;
     await nextTick();
     return;
   }
   if (label) {
-    lastSelectedCharacterLabel.value = label;
+    selectionStore.lastSelectedCharacterLabel = label;
   } else if (charId === ALL_PICTURES_ID) {
-    lastSelectedCharacterLabel.value = "All Pictures";
+    selectionStore.lastSelectedCharacterLabel = "All Pictures";
   } else if (charId === UNASSIGNED_PICTURES_ID) {
-    lastSelectedCharacterLabel.value = "Unassigned Pictures";
+    selectionStore.lastSelectedCharacterLabel = "Unassigned Pictures";
   } else if (charId === SCRAPHEAP_PICTURES_ID) {
-    lastSelectedCharacterLabel.value = "Scrapheap";
+    selectionStore.lastSelectedCharacterLabel = "Scrapheap";
   }
-  selectedCharacter.value = charId;
-  selectedCharacterIds.value = ids.length ? ids : [];
+  selectionStore.selectedCharacter = charId;
+  selectionStore.selectedCharacterIds = ids.length ? ids : [];
   if (ids.length <= 1) {
-    characterMultiMode.value = "union";
-    saveMultiMode("pixlstash:characterMultiMode", "union");
+    selectionStore.setCharacterMultiMode("union");
   }
   if (charId !== ALL_PICTURES_ID) {
-    unassignedOnlyFilter.value = false;
+    filterStore.unassignedOnlyFilter = false;
   }
   if (charId === ALL_PICTURES_ID) {
-    refreshGridVersion();
+    gridStore.refreshGridVersion();
   }
-  selectedSet.value = null; // Clear set selection
-  selectedSetIds.value = [];
-  await nextTick(); // Ensure reactivity propagates the change
+  selectionStore.selectedSet = null;
+  selectionStore.selectedSetIds = [];
+  await nextTick();
   closeSidebarIfMobile();
 }
 
 async function handleSelectSet(payload) {
-  selectedFolderFilter.value = null;
+  selectionStore.selectedFolderFilter = null;
   const { id: setId, label, ids, projectIds } = SelectionPayload(payload);
-  setProjectIds.value = projectIds;
+  projectStore.setProjectIds = projectIds;
   const names = payload && payload.names ? payload.names : {};
   clearSearchForCategoryChange();
   const nextIds = ids.length
@@ -697,99 +504,96 @@ async function handleSelectSet(payload) {
 
   if (!nextIds.length) {
     const fallbackLabel =
-      projectViewMode.value === "project" ? "Project Pictures" : "All Pictures";
-    selectedCharacter.value = ALL_PICTURES_ID;
-    selectedCharacterIds.value = [];
-    lastSelectedCharacterLabel.value = fallbackLabel;
-    selectedSet.value = null;
-    selectedSetIds.value = [];
+      projectStore.projectViewMode === "project" ? "Project Pictures" : "All Pictures";
+    selectionStore.selectedCharacter = ALL_PICTURES_ID;
+    selectionStore.selectedCharacterIds = [];
+    selectionStore.lastSelectedCharacterLabel = fallbackLabel;
+    selectionStore.selectedSet = null;
+    selectionStore.selectedSetIds = [];
     await nextTick();
     closeSidebarIfMobile();
     return;
   }
   if (label && nextIds.length === 1) {
-    lastSelectedSetLabel.value = label;
+    selectionStore.lastSelectedSetLabel = label;
   } else if (nextIds.length > 1) {
-    lastSelectedSetLabel.value = `Set Overlap (${nextIds.length})`;
+    selectionStore.lastSelectedSetLabel = `Set Overlap (${nextIds.length})`;
   }
-  selectedSetIds.value = nextIds;
-  selectedSet.value = nextIds[0];
-  selectedCharacter.value = null; // Clear character selection
-  selectedCharacterIds.value = [];
-  selectedSetNames.value = names;
+  selectionStore.selectedSetIds = nextIds;
+  selectionStore.selectedSet = nextIds[0];
+  selectionStore.selectedCharacter = null;
+  selectionStore.selectedCharacterIds = [];
+  selectionStore.selectedSetNames = names;
   if (
-    setDifferenceBaseId.value !== null &&
-    !nextIds.includes(setDifferenceBaseId.value)
+    selectionStore.setDifferenceBaseId !== null &&
+    !nextIds.includes(selectionStore.setDifferenceBaseId)
   ) {
-    setDifferenceBaseId.value = null;
-    saveBaseId("pixlstash:setDifferenceBaseId", null);
+    selectionStore.setSetDifferenceBaseId(null);
   }
   if (nextIds.length === 1) {
-    setMultiMode.value = "intersection";
-    saveMultiMode("pixlstash:setMultiMode", "intersection");
-    setDifferenceBaseId.value = null;
-    saveBaseId("pixlstash:setDifferenceBaseId", null);
+    selectionStore.setSetMultiMode("intersection");
+    selectionStore.setSetDifferenceBaseId(null);
   }
   closeSidebarIfMobile();
 }
 
 function handleSearchAllPictures() {
-  selectedCharacter.value = ALL_PICTURES_ID;
-  selectedCharacterIds.value = [];
-  selectedSet.value = null;
-  selectedSetIds.value = [];
-  selectedFolderFilter.value = null;
-  lastSelectedCharacterLabel.value = "All Pictures";
+  selectionStore.selectedCharacter = ALL_PICTURES_ID;
+  selectionStore.selectedCharacterIds = [];
+  selectionStore.selectedSet = null;
+  selectionStore.selectedSetIds = [];
+  selectionStore.selectedFolderFilter = null;
+  selectionStore.lastSelectedCharacterLabel = "All Pictures";
 }
 
 function handleSelectFolder(payload) {
   if (!payload) {
-    selectedFolderFilter.value = null;
+    selectionStore.selectedFolderFilter = null;
     return;
   }
-  selectedFolderFilter.value = payload;
-  selectedCharacter.value = ALL_PICTURES_ID;
-  selectedCharacterIds.value = [];
-  selectedSet.value = null;
-  selectedSetIds.value = [];
+  selectionStore.selectedFolderFilter = payload;
+  selectionStore.selectedCharacter = ALL_PICTURES_ID;
+  selectionStore.selectedCharacterIds = [];
+  selectionStore.selectedSet = null;
+  selectionStore.selectedSetIds = [];
 }
 
 async function handleUpdateSearchQuery(value) {
   const nextQuery = typeof value === "string" ? value.trim() : "";
-  searchInput.value = nextQuery;
-  searchQuery.value = nextQuery; // Ensure searchQuery is always a string
-  addToSearchHistory(nextQuery);
+  searchStore.searchInput = nextQuery;
+  searchStore.searchQuery = nextQuery;
+  searchStore.addToSearchHistory(nextQuery);
 }
 
 function handleUpdateProjectViewMode(mode) {
-  projectViewMode.value = mode;
+  projectStore.projectViewMode = mode;
 }
 
 function handleUpdateSelectedProjectId(id) {
-  selectedProjectId.value = id;
+  projectStore.selectedProjectId = id;
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
-  selectedSort.value = sort;
-  selectedDescending.value = descending;
+  sortStore.selectedSort = sort;
+  sortStore.selectedDescending = descending;
   closeSidebarIfMobile();
 }
 
 function handleUpdateSortOptions(options) {
-  sortOptions.value = Array.isArray(options) ? options : [];
+  sortStore.sortOptions = Array.isArray(options) ? options : [];
 }
 
 function handleUpdateStackThreshold(value) {
-  stackThreshold.value = value;
+  sortStore.stackThreshold = value;
 }
 
 function handleStackStatsUpdate(payload) {
   const expanded = Number(payload?.expanded ?? 0);
   const total = Number(payload?.total ?? 0);
-  expandedStackCount.value = Number.isFinite(expanded)
+  gridStore.expandedStackCount = Number.isFinite(expanded)
     ? Math.max(0, expanded)
     : 0;
-  totalStackCount.value = Number.isFinite(total) ? Math.max(0, total) : 0;
+  gridStore.totalStackCount = Number.isFinite(total) ? Math.max(0, total) : 0;
 }
 
 function handleExpandAllStacks() {
@@ -808,50 +612,47 @@ function handleComfyuiRunGrid(payload) {
   gridContainer.value?.runComfyuiOnGridImages(payload);
 }
 
-const selectedSimilarityCharacter = ref(null);
-const similarityCharacterOptions = ref([]);
 function handleUpdateSimilarityCharacter(val) {
-  selectedSimilarityCharacter.value = val;
-  refreshGridVersion();
+  sortStore.selectedSimilarityCharacter = val;
+  gridStore.refreshGridVersion();
   closeSidebarIfMobile();
 }
 
 function handleUpdateSimilarityOptions(options) {
-  similarityCharacterOptions.value = Array.isArray(options) ? options : [];
+  sortStore.similarityCharacterOptions = Array.isArray(options) ? options : [];
 }
 
 function handleUpdateHiddenTags(tags) {
   const nextTags = Array.isArray(tags) ? tags : [];
   if (
-    hiddenTags.value.length === nextTags.length &&
-    hiddenTags.value.every((tag, index) => tag === nextTags[index])
+    userPrefsStore.hiddenTags.length === nextTags.length &&
+    userPrefsStore.hiddenTags.every((tag, index) => tag === nextTags[index])
   ) {
     return;
   }
-  hiddenTags.value = nextTags;
+  userPrefsStore.hiddenTags = nextTags;
 }
 
 function handleUpdateApplyTagFilter(value) {
   const nextValue = Boolean(value);
-  if (applyTagFilter.value === nextValue) return;
-  applyTagFilter.value = nextValue;
+  if (userPrefsStore.applyTagFilter === nextValue) return;
+  userPrefsStore.applyTagFilter = nextValue;
 }
 
 function handleUpdateDateFormat(value) {
   if (value == null) return;
   const nextValue = String(value);
-  if (nextValue === dateFormat.value) return;
-  dateFormat.value = nextValue;
+  if (nextValue === userPrefsStore.dateFormat) return;
+  userPrefsStore.dateFormat = nextValue;
 }
 
 function handleUpdateThemeMode(value) {
   if (value == null) return;
-  themeMode.value = String(value);
+  userPrefsStore.themeMode = String(value);
 }
 
 async function handleUpdateCheckForUpdates(value) {
-  // value is true, false, or null (reset to undecided)
-  checkForUpdates.value = value;
+  userPrefsStore.checkForUpdates = value;
   try {
     await apiClient.patch("/users/me/config", { check_for_updates: value });
   } catch (e) {
@@ -862,7 +663,7 @@ async function handleUpdateCheckForUpdates(value) {
 function handleUpdateSidebarThumbnailSize(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
-  sidebarThumbnailSize.value = nextValue;
+  userPrefsStore.sidebarThumbnailSize = nextValue;
 }
 
 function handleColumnsEnd() {
@@ -877,12 +678,11 @@ function handleColumnsEnd() {
 
 async function fetchConfig() {
   if (isReadOnly.value) {
-    // Apply read-only defaults: dark mode, compact sidebar, problem icon only.
-    themeMode.value = "dark";
-    sidebarThumbnailSize.value = 32;
-    showProblemIcon.value = true;
-    showFaceBboxes.value = false;
-    showStars.value = true;
+    userPrefsStore.themeMode = "dark";
+    userPrefsStore.sidebarThumbnailSize = 32;
+    gridStore.showProblemIcon = true;
+    gridStore.showFaceBboxes = false;
+    gridStore.showStars = true;
     return;
   }
   if (configLoading.value) return;
@@ -892,95 +692,92 @@ async function fetchConfig() {
     const res = await apiClient.get("/users/me/config");
     const sortValue = res.data.sort_order ?? res.data.sort;
     if (typeof sortValue === "string" && sortValue) {
-      selectedSort.value = sortValue;
+      sortStore.selectedSort = sortValue;
     }
     if (typeof res.data.show_keyboard_hint === "boolean")
-      showKeyboardHint.value = res.data.show_keyboard_hint;
+      userPrefsStore.showKeyboardHint = res.data.show_keyboard_hint;
     if (typeof res.data.show_face_bboxes === "boolean") {
-      showFaceBboxes.value = res.data.show_face_bboxes;
+      gridStore.showFaceBboxes = res.data.show_face_bboxes;
     }
     if (typeof res.data.show_problem_icon === "boolean") {
-      showProblemIcon.value = res.data.show_problem_icon;
+      gridStore.showProblemIcon = res.data.show_problem_icon;
     }
     if (typeof res.data.expand_all_stacks === "boolean") {
-      showStacks.value = res.data.expand_all_stacks;
+      gridStore.showStacks = res.data.expand_all_stacks;
     } else if (typeof res.data.show_stacks === "boolean") {
-      showStacks.value = res.data.show_stacks;
+      gridStore.showStacks = res.data.show_stacks;
     }
     if (typeof res.data.compact_mode === "boolean") {
-      compactMode.value = res.data.compact_mode;
+      gridStore.compactMode = res.data.compact_mode;
     }
     if (typeof res.data.date_format === "string" && res.data.date_format) {
-      dateFormat.value = res.data.date_format;
+      userPrefsStore.dateFormat = res.data.date_format;
     }
     if (typeof res.data.theme_mode === "string" && res.data.theme_mode) {
-      themeMode.value = res.data.theme_mode;
-    }
-    if (typeof res.data.date_format === "string" && res.data.date_format) {
-      dateFormat.value = res.data.date_format;
+      userPrefsStore.themeMode = res.data.theme_mode;
     }
     if (typeof res.data.descending === "boolean") {
-      selectedDescending.value = res.data.descending;
+      sortStore.selectedDescending = res.data.descending;
     }
     if (typeof res.data.columns === "number") {
-      columns.value = res.data.columns;
+      gridStore.columns = res.data.columns;
     }
     if (typeof res.data.sidebar_thumbnail_size === "number") {
-      sidebarThumbnailSize.value = res.data.sidebar_thumbnail_size;
+      userPrefsStore.sidebarThumbnailSize = res.data.sidebar_thumbnail_size;
     }
     if (res.data.stack_strictness != null) {
-      stackThreshold.value = String(res.data.stack_strictness);
+      sortStore.stackThreshold = String(res.data.stack_strictness);
     }
-    config.sort_order = sortValue || selectedSort.value;
-    config.descending = selectedDescending.value;
-    config.columns = columns.value;
-    config.sidebar_thumbnail_size = sidebarThumbnailSize.value;
+    config.sort_order = sortValue || sortStore.selectedSort;
+    config.descending = sortStore.selectedDescending;
+    config.columns = gridStore.columns;
+    config.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
-        : showStars.value;
+        : gridStore.showStars;
     config.show_face_bboxes =
       typeof res.data.show_face_bboxes === "boolean"
         ? res.data.show_face_bboxes
-        : showFaceBboxes.value;
+        : gridStore.showFaceBboxes;
     config.show_problem_icon =
       typeof res.data.show_problem_icon === "boolean"
         ? res.data.show_problem_icon
-        : showProblemIcon.value;
+        : gridStore.showProblemIcon;
     config.expand_all_stacks =
       typeof res.data.expand_all_stacks === "boolean"
         ? res.data.expand_all_stacks
         : typeof res.data.show_stacks === "boolean"
           ? res.data.show_stacks
-          : showStacks.value;
+          : gridStore.showStacks;
     config.compact_mode =
       typeof res.data.compact_mode === "boolean"
         ? res.data.compact_mode
-        : compactMode.value;
-    config.date_format = dateFormat.value;
-    config.theme_mode = themeMode.value;
+        : gridStore.compactMode;
+    config.date_format = userPrefsStore.dateFormat;
+    config.theme_mode = userPrefsStore.themeMode;
     config.stack_strictness =
       res.data.stack_strictness != null
         ? res.data.stack_strictness
         : config.stack_strictness;
     const similarityValue =
       res.data.similarity_character ?? res.data.selected_similarity_character;
-    selectedSimilarityCharacter.value =
-      similarityValue ?? selectedSimilarityCharacter.value ?? null;
-    hiddenTags.value = Array.isArray(res.data.hidden_tags)
+    sortStore.selectedSimilarityCharacter =
+      similarityValue ?? sortStore.selectedSimilarityCharacter ?? null;
+    userPrefsStore.hiddenTags = Array.isArray(res.data.hidden_tags)
       ? res.data.hidden_tags
       : [];
-    applyTagFilter.value = Boolean(res.data.apply_tag_filter);
+    userPrefsStore.applyTagFilter = Boolean(res.data.apply_tag_filter);
     const rawPt = res.data.smart_score_penalised_tags;
     if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
-      penalisedTagWeights.value = Object.fromEntries(
+      userPrefsStore.penalisedTagWeights = Object.fromEntries(
         Object.entries(rawPt).map(([k, v]) => [
           String(k).trim().toLowerCase(),
           Number(v) || 0,
         ]),
       );
     } else if (Array.isArray(rawPt)) {
-      penalisedTagWeights.value = Object.fromEntries(
+      userPrefsStore.penalisedTagWeights = Object.fromEntries(
         rawPt.map((t) => [
           String(t || "")
             .trim()
@@ -989,41 +786,40 @@ async function fetchConfig() {
         ]),
       );
     } else {
-      penalisedTagWeights.value = {};
+      userPrefsStore.penalisedTagWeights = {};
     }
-    config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
+    config.selectedSimilarityCharacter = sortStore.selectedSimilarityCharacter;
     configSnapshot.value = {
-      sort: selectedSort.value || "",
-      descending: selectedDescending.value,
-      columns: typeof columns.value === "number" ? columns.value : null,
+      sort: sortStore.selectedSort || "",
+      descending: sortStore.selectedDescending,
+      columns: typeof gridStore.columns === "number" ? gridStore.columns : null,
       sidebar_thumbnail_size:
-        typeof sidebarThumbnailSize.value === "number"
-          ? sidebarThumbnailSize.value
+        typeof userPrefsStore.sidebarThumbnailSize === "number"
+          ? userPrefsStore.sidebarThumbnailSize
           : null,
-      show_keyboard_hint: showKeyboardHint.value,
-      show_face_bboxes: showFaceBboxes.value,
-      show_problem_icon: showProblemIcon.value,
-      expand_all_stacks: showStacks.value,
-      compact_mode: compactMode.value,
-      date_format: dateFormat.value,
-      theme_mode: themeMode.value,
-      similarity_character: selectedSimilarityCharacter.value,
+      show_keyboard_hint: userPrefsStore.showKeyboardHint,
+      show_face_bboxes: gridStore.showFaceBboxes,
+      show_problem_icon: gridStore.showProblemIcon,
+      expand_all_stacks: gridStore.showStacks,
+      compact_mode: gridStore.compactMode,
+      date_format: userPrefsStore.dateFormat,
+      theme_mode: userPrefsStore.themeMode,
+      similarity_character: sortStore.selectedSimilarityCharacter,
       stack_strictness:
         res.data.stack_strictness != null
           ? Number(res.data.stack_strictness)
           : null,
-      hidden_tags: hiddenTags.value,
-      apply_tag_filter: applyTagFilter.value,
+      hidden_tags: userPrefsStore.hiddenTags,
+      apply_tag_filter: userPrefsStore.applyTagFilter,
     };
-    comfyuiConfigured.value = Boolean(res.data?.comfyui_url);
+    filterStore.comfyuiConfigured = Boolean(res.data?.comfyui_url);
     if (typeof res.data?.public_url === "string" && res.data.public_url) {
-      publicUrl.value = res.data.public_url;
+      userPrefsStore.publicUrl = res.data.public_url;
     }
-    embedWatermark.value = Boolean(res.data?.embed_watermark);
-    // tri-state: null = undecided → show dialog after config loads
+    userPrefsStore.embedWatermark = Boolean(res.data?.embed_watermark);
     const cfu = res.data?.check_for_updates;
-    checkForUpdates.value = cfu === true ? true : cfu === false ? false : null;
-    if (checkForUpdates.value === null) {
+    userPrefsStore.checkForUpdates = cfu === true ? true : cfu === false ? false : null;
+    if (userPrefsStore.checkForUpdates === null) {
       updateCheckDialogOpen.value = true;
     }
   } catch (e) {
@@ -1038,39 +834,38 @@ async function fetchConfig() {
 async function patchConfigUIOptions() {
   if (!configLoaded.value || configLoading.value || configApplying.value)
     return;
-  // Only include fields the backend expects and that are not undefined/null/empty
   const patch = {};
-  if (selectedSort.value) patch.sort = selectedSort.value;
-  patch.descending = selectedDescending.value;
-  if (columns.value) patch.columns = columns.value;
-  if (sidebarThumbnailSize.value) {
-    patch.sidebar_thumbnail_size = sidebarThumbnailSize.value;
+  if (sortStore.selectedSort) patch.sort = sortStore.selectedSort;
+  patch.descending = sortStore.selectedDescending;
+  if (gridStore.columns) patch.columns = gridStore.columns;
+  if (userPrefsStore.sidebarThumbnailSize) {
+    patch.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
   }
-  if (typeof showKeyboardHint.value === "boolean")
-    patch.show_keyboard_hint = showKeyboardHint.value;
-  if (typeof showFaceBboxes.value === "boolean") {
-    patch.show_face_bboxes = showFaceBboxes.value;
+  if (typeof userPrefsStore.showKeyboardHint === "boolean")
+    patch.show_keyboard_hint = userPrefsStore.showKeyboardHint;
+  if (typeof gridStore.showFaceBboxes === "boolean") {
+    patch.show_face_bboxes = gridStore.showFaceBboxes;
   }
-  if (typeof showProblemIcon.value === "boolean") {
-    patch.show_problem_icon = showProblemIcon.value;
+  if (typeof gridStore.showProblemIcon === "boolean") {
+    patch.show_problem_icon = gridStore.showProblemIcon;
   }
-  if (typeof showStacks.value === "boolean") {
-    patch.expand_all_stacks = showStacks.value;
+  if (typeof gridStore.showStacks === "boolean") {
+    patch.expand_all_stacks = gridStore.showStacks;
   }
-  if (typeof compactMode.value === "boolean") {
-    patch.compact_mode = compactMode.value;
+  if (typeof gridStore.compactMode === "boolean") {
+    patch.compact_mode = gridStore.compactMode;
   }
-  if (typeof dateFormat.value === "string" && dateFormat.value) {
-    patch.date_format = dateFormat.value;
+  if (typeof userPrefsStore.dateFormat === "string" && userPrefsStore.dateFormat) {
+    patch.date_format = userPrefsStore.dateFormat;
   }
-  if (typeof themeMode.value === "string" && themeMode.value) {
-    patch.theme_mode = themeMode.value;
+  if (typeof userPrefsStore.themeMode === "string" && userPrefsStore.themeMode) {
+    patch.theme_mode = userPrefsStore.themeMode;
   }
-  if (selectedSimilarityCharacter.value != null) {
-    patch.similarity_character = selectedSimilarityCharacter.value;
+  if (sortStore.selectedSimilarityCharacter != null) {
+    patch.similarity_character = sortStore.selectedSimilarityCharacter;
   }
-  if (stackThreshold.value != null && stackThreshold.value !== "") {
-    const parsed = parseFloat(String(stackThreshold.value));
+  if (sortStore.stackThreshold != null && sortStore.stackThreshold !== "") {
+    const parsed = parseFloat(String(sortStore.stackThreshold));
     if (Number.isFinite(parsed)) {
       patch.stack_strictness = parsed;
     }
@@ -1086,7 +881,6 @@ async function patchConfigUIOptions() {
 
   try {
     const response = await apiClient.patch("/users/me/config", changed);
-
     const updatedConfig = await response.data;
     configSnapshot.value = { ...snapshot, ...changed };
   } catch (e) {
@@ -1144,10 +938,9 @@ function resolveThemeName(mode) {
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
-  if (selectedCharacter.value !== UNASSIGNED_PICTURES_ID || selectedSet.value) {
+  if (selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID || selectionStore.selectedSet) {
     return;
   }
-  // Forward to ImageGrid via ref
   if (
     gridContainer.value &&
     typeof gridContainer.value.removeImagesById === "function"
@@ -1157,7 +950,7 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
 }
 
 function handleImagesMovedToSet({ imageIds }) {
-  if (selectedCharacter.value !== UNASSIGNED_PICTURES_ID || selectedSet.value) {
+  if (selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID || selectionStore.selectedSet) {
     return;
   }
   if (
@@ -1180,38 +973,37 @@ function handleFacesAssignedToCharacter({ characterId, faceIds }) {
 function refreshExportCount() {
   const counts = gridContainer.value?.getExportCount?.();
   if (!counts) return;
-  exportSelectedCount.value = Number(counts.selectedCount) || 0;
-  exportTotalCount.value = Number(counts.totalCount) || 0;
+  exportStore.exportSelectedCount = Number(counts.selectedCount) || 0;
+  exportStore.exportTotalCount = Number(counts.totalCount) || 0;
 }
 
 function confirmExportZip() {
   gridContainer.value?.exportCurrentViewToZip({
-    exportType: exportType.value,
-    captionMode: exportCaptionMode.value,
-    tagFormat: exportTagFormat.value,
-    includeCharacterName: exportIncludeCharacterName.value,
-    useOriginalFileNames: exportUseOriginalFileNames.value,
-    resolution: exportResolution.value,
+    exportType: exportStore.exportType,
+    captionMode: exportStore.exportCaptionMode,
+    tagFormat: exportStore.exportTagFormat,
+    includeCharacterName: exportStore.exportIncludeCharacterName,
+    useOriginalFileNames: exportStore.exportUseOriginalFileNames,
+    resolution: exportStore.exportResolution,
   });
-  exportMenuOpen.value = false;
+  exportStore.exportMenuOpen = false;
 }
 
 // --- Search Overlay ---
-const searchOverlayVisible = ref(false);
 
 function openSearchOverlay() {
-  searchOverlayVisible.value = true;
+  searchStore.searchOverlayVisible = true;
 }
 
 function closeSearchOverlay() {
-  searchOverlayVisible.value = false;
+  searchStore.searchOverlayVisible = false;
 }
 
 function handleClearSearch() {
-  searchQuery.value = "";
-  searchInput.value = "";
-  isSearchHistoryOpen.value = false;
-  refreshGridVersion(); // Force the ImageGrid to refresh
+  searchStore.searchQuery = "";
+  searchStore.searchInput = "";
+  searchStore.isSearchHistoryOpen = false;
+  gridStore.refreshGridVersion();
 }
 
 function blurSearchInput() {
@@ -1226,160 +1018,151 @@ function blurSearch(event) {
 }
 
 function addToSearchHistory(query) {
-  if (!query) {
-    return;
-  }
-  const existingIndex = searchHistory.value.findIndex((item) => item === query);
-  if (existingIndex !== -1) {
-    searchHistory.value.splice(existingIndex, 1);
-  }
-  searchHistory.value.unshift(query);
-  if (searchHistory.value.length > MAX_SEARCH_HISTORY) {
-    searchHistory.value = searchHistory.value.slice(0, MAX_SEARCH_HISTORY);
-  }
+  searchStore.addToSearchHistory(query);
 }
 
 function applySearchHistory(query) {
-  searchInput.value = query;
-  commitSearch();
-  isSearchHistoryOpen.value = false;
+  searchStore.searchInput = query;
+  searchStore.commitSearch();
+  searchStore.isSearchHistoryOpen = false;
   nextTick(() => {
     blurSearchInput();
   });
 }
 
 function clearSearchHistory() {
-  searchHistory.value = [];
-  isSearchHistoryOpen.value = false;
+  searchStore.clearSearchHistory();
 }
 
 function commitSearch() {
-  const nextQuery =
-    typeof searchInput.value === "string" ? searchInput.value.trim() : "";
-  if (nextQuery === searchQuery.value) {
-    return;
-  }
-  searchQuery.value = nextQuery;
-  addToSearchHistory(nextQuery);
-  isSearchHistoryOpen.value = false;
+  searchStore.commitSearch();
 }
 
 function handleResetToAll() {
-  selectedCharacter.value = ALL_PICTURES_ID;
-  selectedSet.value = null;
-  selectedSetIds.value = [];
-  lastSelectedCharacterLabel.value = "All Pictures";
-  selectedSort.value = "DATE";
-  selectedDescending.value = true;
-  selectedSimilarityCharacter.value = null;
-  searchQuery.value = "";
-  mediaTypeFilter.value = "all";
-  comfyuiModelFilter.value = [];
-  comfyuiLoraFilter.value = [];
-  minScoreFilter.value = null;
-  maxScoreFilter.value = null;
-  smartScoreBucketFilter.value = null;
-  resolutionBucketFilter.value = null;
-  tagFilter.value = [];
-  tagRejectedFilter.value = [];
-  tagConfidenceAboveFilter.value = [];
-  tagConfidenceBelowFilter.value = [];
-  faceBboxFilter.value = null;
-  refreshGridVersion();
+  selectionStore.selectedCharacter = ALL_PICTURES_ID;
+  selectionStore.selectedSet = null;
+  selectionStore.selectedSetIds = [];
+  selectionStore.lastSelectedCharacterLabel = "All Pictures";
+  sortStore.selectedSort = "DATE";
+  sortStore.selectedDescending = true;
+  sortStore.selectedSimilarityCharacter = null;
+  searchStore.searchQuery = "";
+  filterStore.resetFilters();
+  gridStore.refreshGridVersion();
   closeSidebarIfMobile();
 }
 
 // --- Watchers ---
-watch(searchQuery, (newVal, oldVal) => {
-  if (searchInput.value !== newVal) {
-    searchInput.value = newVal || "";
+watch(() => searchStore.searchQuery, (newVal, oldVal) => {
+  if (searchStore.searchInput !== newVal) {
+    searchStore.searchInput = newVal || "";
   }
   if (!newVal && oldVal) {
-    refreshGridVersion();
+    gridStore.refreshGridVersion();
   }
 });
 
-watch([searchInput, searchHistory], () => {
-  const needle = (searchInput.value || "").trim();
+watch([() => searchStore.searchInput, () => searchStore.searchHistory], () => {
+  const needle = (searchStore.searchInput || "").trim();
   if (!needle) {
-    isSearchHistoryOpen.value = false;
+    searchStore.isSearchHistoryOpen = false;
     return;
   }
-  isSearchHistoryOpen.value = filteredSearchHistory.value.length > 0;
+  searchStore.isSearchHistoryOpen = searchStore.filteredSearchHistory.length > 0;
 });
 
-watch([selectedSort, selectedDescending], () => {
+watch([() => sortStore.selectedSort, () => sortStore.selectedDescending], () => {
   patchConfigUIOptions();
-  refreshGridVersion();
+  gridStore.refreshGridVersion();
 });
 
-watch(hiddenTags, () => {
-  refreshGridVersion();
-  if (applyTagFilter.value) {
+watch(() => userPrefsStore.hiddenTags, () => {
+  gridStore.refreshGridVersion();
+  if (userPrefsStore.applyTagFilter) {
     refreshSidebarDebounced();
   }
 });
 
-watch(applyTagFilter, () => {
-  refreshGridVersion();
+watch(() => userPrefsStore.applyTagFilter, () => {
+  gridStore.refreshGridVersion();
   refreshSidebarDebounced();
 });
 
-watch([selectedCharacter, selectedSet, selectedSetIds, searchQuery], () => {
-  sendUpdatesFilters();
-});
+watch(
+  [
+    () => selectionStore.selectedCharacter,
+    () => selectionStore.selectedSet,
+    () => selectionStore.selectedSetIds,
+    () => searchStore.searchQuery,
+  ],
+  () => {
+    sendUpdatesFilters();
+  },
+);
 
-watch(thumbnailSize, () => {
+watch(() => gridStore.thumbnailSize, () => {
   patchConfigUIOptions();
   updateMaxColumns();
 });
 
-watch(showKeyboardHint, () => {
+watch(() => userPrefsStore.showKeyboardHint, () => {
   if (!configLoaded.value) return;
   patchConfigUIOptions();
 });
 
-watch([showFaceBboxes, showProblemIcon, showStacks, compactMode], () => {
-  patchConfigUIOptions();
-});
+watch(
+  [
+    () => gridStore.showFaceBboxes,
+    () => gridStore.showProblemIcon,
+    () => gridStore.showStacks,
+    () => gridStore.compactMode,
+  ],
+  () => {
+    patchConfigUIOptions();
+  },
+);
 
 watch(
-  [showFaceBboxes, showProblemIcon, showStacks],
+  [
+    () => gridStore.showFaceBboxes,
+    () => gridStore.showProblemIcon,
+    () => gridStore.showStacks,
+  ],
   ([face, problem, stacks]) => {},
   { immediate: true },
 );
 
-watch(selectedSimilarityCharacter, () => {
+watch(() => sortStore.selectedSimilarityCharacter, () => {
   patchConfigUIOptions();
 });
 
-watch(stackThreshold, () => {
+watch(() => sortStore.stackThreshold, () => {
   if (!configLoaded.value) return;
   patchConfigUIOptions();
 });
 
-watch(columns, () => {
+watch(() => gridStore.columns, () => {
   if (!configLoaded.value) return;
   patchConfigUIOptions();
 });
 
-watch(sidebarThumbnailSize, () => {
+watch(() => userPrefsStore.sidebarThumbnailSize, () => {
   if (!configLoaded.value) return;
   patchConfigUIOptions();
 });
 
-watch(dateFormat, () => {
+watch(() => userPrefsStore.dateFormat, () => {
   if (!configLoaded.value) return;
   patchConfigUIOptions();
-  refreshGridVersion();
+  gridStore.refreshGridVersion();
 });
 
-watch(gridVersion, () => {
-  pendingExternalImportCount.value = 0;
+watch(() => gridStore.gridVersion, () => {
+  wsStore.pendingExternalImportCount = 0;
 });
 
 watch(
-  themeMode,
+  () => userPrefsStore.themeMode,
   (value) => {
     theme.global.name.value = resolveThemeName(value);
     if (!configLoaded.value) return;
@@ -1388,10 +1171,14 @@ watch(
   { immediate: true },
 );
 
-watch(exportMenuOpen, async (isOpen) => {
+watch(() => exportStore.exportMenuOpen, async (isOpen) => {
   if (!isOpen) return;
   await nextTick();
   refreshExportCount();
+});
+
+watch(() => sidebarStore.statsOpen, () => {
+  updateIsMobile();
 });
 
 // --- Lifecycle ---
@@ -1412,16 +1199,16 @@ onMounted(async () => {
   const ctx = sessionContext.value;
   if (ctx && ctx.scope !== "ALL") {
     if (ctx.resource_type === "picture_set") {
-      selectedSet.value = ctx.resource_id;
-      selectedCharacter.value = ALL_PICTURES_ID;
+      selectionStore.selectedSet = ctx.resource_id;
+      selectionStore.selectedCharacter = ALL_PICTURES_ID;
     } else if (ctx.resource_type === "character") {
-      selectedCharacter.value = ctx.resource_id;
-      selectedSet.value = null;
+      selectionStore.selectedCharacter = ctx.resource_id;
+      selectionStore.selectedSet = null;
     } else if (ctx.resource_type === "project") {
-      selectedProjectId.value = ctx.resource_id;
-      projectViewMode.value = "project";
-      selectedSet.value = null;
-      selectedCharacter.value = ALL_PICTURES_ID;
+      projectStore.selectedProjectId = ctx.resource_id;
+      projectStore.projectViewMode = "project";
+      selectionStore.selectedSet = null;
+      selectionStore.selectedCharacter = ALL_PICTURES_ID;
     }
   }
   updateIsMobile();
@@ -1466,141 +1253,50 @@ onBeforeUnmount(() => {
   }
 });
 
-defineExpose({ sidebarVisible, sidebarDocked, mediaTypeFilter });
-
-// ---------------------------------------------------------------------------
-// GridBar state – shared with SelectionBar via provide/inject so we don't need
-// to thread dozens of props through ImageGrid.
-// ---------------------------------------------------------------------------
-provide("gridBarState", {
-  // Sort
-  sortOptions,
-  selectedSort,
-  selectedDescending,
-  isSearchActive: computed(() =>
-    Boolean(searchQuery.value && searchQuery.value.trim()),
-  ),
-  similarityCharacterOptions,
-  selectedSimilarityCharacter,
-  stackThreshold,
-  updateSort: handleUpdateSelectedSort,
-  updateSimilarityCharacter: handleUpdateSimilarityCharacter,
-  updateStackThreshold: handleUpdateStackThreshold,
-  // Filter
-  mediaTypeFilter,
-  minScoreFilter,
-  maxScoreFilter,
-  smartScoreBucketFilter,
-  resolutionBucketFilter,
-  tagFilter,
-  tagRejectedFilter,
-  tagConfidenceAboveFilter,
-  tagConfidenceBelowFilter,
-  faceBboxFilter,
-  sharedOnlyFilter,
-  unassignedOnlyFilter,
-  comfyuiModelFilter,
-  comfyuiLoraFilter,
-  comfyuiConfigured,
-  backendUrl: BACKEND_URL,
-  // View
-  columns,
-  minColumns,
-  maxColumns,
-  compactMode,
-  showStars,
-  showFaceBboxes,
-  showProblemIcon,
-  showStacks,
-  stackExpandedCount: expandedStackCount,
-  stackTotalCount: totalStackCount,
-  expandAllStacks: handleExpandAllStacks,
-  collapseAllStacks: handleCollapseAllStacks,
-  visibleRangeLabel,
-});
-
-// Toolbar state – shared with SelectionBar via provide/inject so toolbar items
-// can live in the combined bar without threading props through ImageGrid.
-// ---------------------------------------------------------------------------
-provide("toolbarState", {
-  sidebarVisible,
-  sidebarForcedHidden,
-  statsForcedHidden,
-  statsOpen,
-  searchInput,
-  isSearchHistoryOpen,
-  filteredSearchHistory,
-  searchOverlayVisible,
-  exportMenuOpen,
-  exportCount,
-  exportType,
-  exportCaptionMode,
-  exportTagFormat,
-  exportIncludeCharacterName,
-  exportUseOriginalFileNames,
-  exportResolution,
-  exportTypeLocksCaptions,
-  exportCaptionOptions,
-  exportTypeOptions,
-  exportResolutionOptions,
-  exportTagFormatOptions,
-  toggleSidebar: () => {
-    sidebarVisible.value = !sidebarVisible.value;
-  },
-  toggleStats: () => {
-    statsOpen.value = !statsOpen.value;
-    saveStatsOpen(statsOpen.value);
-    updateIsMobile();
-  },
-  openSearchOverlay,
-  commitSearch,
-  clearSearch: handleClearSearch,
-  applySearchHistory,
-  clearSearchHistory,
-  openSettings: openSettingsDialog,
-  openImport: openImportDialog,
-  confirmExportZip,
-  comfyuiRunGrid: handleComfyuiRunGrid,
+defineExpose({
+  get sidebarVisible() { return sidebarStore.sidebarVisible; },
+  get sidebarDocked() { return sidebarStore.sidebarDocked; },
+  get mediaTypeFilter() { return filterStore.mediaTypeFilter; },
 });
 </script>
 <template>
   <v-app>
     <div class="app-viewport">
       <div class="file-manager">
-        <div class="sidebar-shell" :class="{ open: sidebarVisible }">
+        <div class="sidebar-shell" :class="{ open: sidebarStore.sidebarVisible }">
           <SideBar
             ref="sidebarRef"
-            :docked="sidebarDocked"
-            :selectedCharacter="selectedCharacter"
-            :selectedCharacterIds="selectedCharacterIds"
+            :docked="sidebarStore.sidebarDocked"
+            :selectedCharacter="selectionStore.selectedCharacter"
+            :selectedCharacterIds="selectionStore.selectedCharacterIds"
             :allPicturesId="ALL_PICTURES_ID"
             :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
             :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-            :selectedSet="selectedSet"
-            :selectedSetIds="selectedSetIds"
-            :searchQuery="searchQuery"
-            :selectedSort="selectedSort"
-            :selectedDescending="selectedDescending"
+            :selectedSet="selectionStore.selectedSet"
+            :selectedSetIds="selectionStore.selectedSetIds"
+            :searchQuery="searchStore.searchQuery"
+            :selectedSort="sortStore.selectedSort"
+            :selectedDescending="sortStore.selectedDescending"
             :backendUrl="BACKEND_URL"
-            :publicUrl="publicUrl"
-            :embedWatermark="embedWatermark"
-            :selectedSimilarityCharacter="selectedSimilarityCharacter"
-            :sidebarThumbnailSize="sidebarThumbnailSize"
-            :dateFormat="dateFormat"
-            :themeMode="themeMode"
-            :hasFolderFilter="selectedFolderFilter != null"
-            :checkForUpdates="checkForUpdates"
+            :publicUrl="userPrefsStore.publicUrl"
+            :embedWatermark="userPrefsStore.embedWatermark"
+            :selectedSimilarityCharacter="sortStore.selectedSimilarityCharacter"
+            :sidebarThumbnailSize="userPrefsStore.sidebarThumbnailSize"
+            :dateFormat="userPrefsStore.dateFormat"
+            :themeMode="userPrefsStore.themeMode"
+            :hasFolderFilter="selectionStore.selectedFolderFilter != null"
+            :checkForUpdates="userPrefsStore.checkForUpdates"
             :installType="installType"
             :dockerVariant="dockerVariant"
-            :showKeyboardHint="showKeyboardHint"
-            @update:show-keyboard-hint="showKeyboardHint = $event"
+            :showKeyboardHint="userPrefsStore.showKeyboardHint"
+            @update:show-keyboard-hint="userPrefsStore.showKeyboardHint = $event"
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
             @update:hidden-tags="handleUpdateHiddenTags"
             @update:apply-tag-filter="handleUpdateApplyTagFilter"
-            @update:comfyui-configured="comfyuiConfigured = $event"
-            @update:public-url="publicUrl = $event"
-            @update:embed-watermark="embedWatermark = $event"
+            @update:comfyui-configured="filterStore.comfyuiConfigured = $event"
+            @update:public-url="userPrefsStore.publicUrl = $event"
+            @update:embed-watermark="userPrefsStore.embedWatermark = $event"
             @update:date-format="handleUpdateDateFormat"
             @update:theme-mode="handleUpdateThemeMode"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
@@ -1624,9 +1320,9 @@ provide("toolbarState", {
         </div>
         <Transition name="backdrop-fade">
           <div
-            v-if="sidebarVisible && sidebarForcedHidden"
+            v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarForcedHidden"
             class="sidebar-backdrop"
-            @click="sidebarVisible = false"
+            @click="sidebarStore.sidebarVisible = false"
           ></div>
         </Transition>
 
@@ -1678,7 +1374,7 @@ provide("toolbarState", {
         />
         <main :class="['main-area']" ref="mainAreaRef">
           <div
-            :class="['main-content', selectedCharacter ? 'accent-border' : '']"
+            :class="['main-content', selectionStore.selectedCharacter ? 'accent-border' : '']"
             style="margin-top: 0; flex-direction: row; align-items: stretch"
           >
             <div
@@ -1692,71 +1388,71 @@ provide("toolbarState", {
             >
               <ImageGrid
                 ref="gridContainer"
-                :thumbnailSize="thumbnailSize"
-                :sidebarVisible="sidebarVisible"
+                :thumbnailSize="gridStore.thumbnailSize"
+                :sidebarVisible="sidebarStore.sidebarVisible"
                 :backendUrl="BACKEND_URL"
-                :selectedCharacter="selectedCharacter"
-                :selectedCharacterIds="selectedCharacterIds"
-                :characterMultiMode="characterMultiMode"
-                :selectedSet="selectedSet"
-                :selectedSetIds="selectedSetIds"
-                :setMultiMode="setMultiMode"
-                :searchQuery="searchQuery"
+                :selectedCharacter="selectionStore.selectedCharacter"
+                :selectedCharacterIds="selectionStore.selectedCharacterIds"
+                :characterMultiMode="selectionStore.characterMultiMode"
+                :selectedSet="selectionStore.selectedSet"
+                :selectedSetIds="selectionStore.selectedSetIds"
+                :setMultiMode="selectionStore.setMultiMode"
+                :searchQuery="searchStore.searchQuery"
                 :activeCategoryLabel="activeCategoryLabel"
-                :isAllPicturesActive="isAllPicturesActive"
-                :selectedSort="selectedSort"
-                :selectedDescending="selectedDescending"
-                :similarityCharacter="selectedSimilarityCharacter"
-                :stackThreshold="stackThreshold"
-                :showStars="showStars"
-                :gridVersion="gridVersion"
-                :wsUpdateKey="wsUpdateKey"
-                :wsTagUpdate="wsTagUpdate"
-                :wsPluginProgress="wsPluginProgress"
-                :mediaTypeFilter="mediaTypeFilter"
-                :comfyuiModelFilter="comfyuiModelFilter"
-                :comfyuiLoraFilter="comfyuiLoraFilter"
-                :comfyuiConfigured="comfyuiConfigured"
-                :minScoreFilter="minScoreFilter"
-                :maxScoreFilter="maxScoreFilter"
-                :smartScoreBucketFilter="smartScoreBucketFilter"
-                :resolutionBucketFilter="resolutionBucketFilter"
-                :tagFilter="tagFilter"
-                :tagRejectedFilter="tagRejectedFilter"
-                :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
-                :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
-                :faceBboxFilter="faceBboxFilter"
-                :sharedOnlyFilter="sharedOnlyFilter"
-                :unassignedOnlyFilter="unassignedOnlyFilter"
-                :showFaceBboxes="showFaceBboxes"
-                :showProblemIcon="showProblemIcon"
-                :penalisedTagWeights="penalisedTagWeights"
-                :showStacks="showStacks"
-                :compactMode="compactMode"
-                :themeMode="themeMode"
-                :dateFormat="dateFormat"
-                :hiddenTags="hiddenTags"
-                :applyTagFilter="applyTagFilter"
+                :isAllPicturesActive="selectionStore.isAllPicturesActive"
+                :selectedSort="sortStore.selectedSort"
+                :selectedDescending="sortStore.selectedDescending"
+                :similarityCharacter="sortStore.selectedSimilarityCharacter"
+                :stackThreshold="sortStore.stackThreshold"
+                :showStars="gridStore.showStars"
+                :gridVersion="gridStore.gridVersion"
+                :wsUpdateKey="gridStore.wsUpdateKey"
+                :wsTagUpdate="wsStore.wsTagUpdate"
+                :wsPluginProgress="wsStore.wsPluginProgress"
+                :mediaTypeFilter="filterStore.mediaTypeFilter"
+                :comfyuiModelFilter="filterStore.comfyuiModelFilter"
+                :comfyuiLoraFilter="filterStore.comfyuiLoraFilter"
+                :comfyuiConfigured="filterStore.comfyuiConfigured"
+                :minScoreFilter="filterStore.minScoreFilter"
+                :maxScoreFilter="filterStore.maxScoreFilter"
+                :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
+                :resolutionBucketFilter="filterStore.resolutionBucketFilter"
+                :tagFilter="filterStore.tagFilter"
+                :tagRejectedFilter="filterStore.tagRejectedFilter"
+                :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
+                :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
+                :faceBboxFilter="filterStore.faceBboxFilter"
+                :sharedOnlyFilter="filterStore.sharedOnlyFilter"
+                :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
+                :showFaceBboxes="gridStore.showFaceBboxes"
+                :showProblemIcon="gridStore.showProblemIcon"
+                :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
+                :showStacks="gridStore.showStacks"
+                :compactMode="gridStore.compactMode"
+                :themeMode="userPrefsStore.themeMode"
+                :dateFormat="userPrefsStore.dateFormat"
+                :hiddenTags="userPrefsStore.hiddenTags"
+                :applyTagFilter="userPrefsStore.applyTagFilter"
                 :allPicturesId="ALL_PICTURES_ID"
                 :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
                 :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-                :projectViewMode="projectViewMode"
-                :selectedProjectId="selectedProjectId"
-                :characterProjectIds="characterProjectIds"
-                :setProjectIds="setProjectIds"
-                :setDifferenceBaseId="setDifferenceBaseId"
-                :selectedSetNames="selectedSetNames"
+                :projectViewMode="projectStore.projectViewMode"
+                :selectedProjectId="projectStore.selectedProjectId"
+                :characterProjectIds="projectStore.characterProjectIds"
+                :setProjectIds="projectStore.setProjectIds"
+                :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
+                :selectedSetNames="selectionStore.selectedSetNames"
                 :referenceFolderIdFilter="
-                  selectedFolderFilter?.referenceFolderId ?? null
+                  selectionStore.selectedFolderFilter?.referenceFolderId ?? null
                 "
-                :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+                :filePathPrefixFilter="selectionStore.selectedFolderFilter?.pathPrefix ?? null"
                 :importSourceFolderFilter="
-                  selectedFolderFilter?.importSourceFolder ?? null
+                  selectionStore.selectedFolderFilter?.importSourceFolder ?? null
                 "
-                :publicUrl="publicUrl"
-                :embedWatermark="embedWatermark"
+                :publicUrl="userPrefsStore.publicUrl"
+                :embedWatermark="userPrefsStore.embedWatermark"
                 :folderScanning="folderScanning"
-                :columns="columns"
+                :columns="gridStore.columns"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
                 @update:selected-sort="handleUpdateSelectedSort"
@@ -1765,138 +1461,134 @@ provide("toolbarState", {
                 @update:stack-stats="handleStackStatsUpdate"
                 @clear-multi-selection="
                   () => {
-                    selectedCharacterIds.length > 1
-                      ? ((selectedCharacter = ALL_PICTURES_ID),
-                        (selectedCharacterIds = []))
-                      : ((selectedSet = null), (selectedSetIds = []));
+                    selectionStore.selectedCharacterIds.length > 1
+                      ? ((selectionStore.selectedCharacter = ALL_PICTURES_ID),
+                        (selectionStore.selectedCharacterIds = []))
+                      : ((selectionStore.selectedSet = null), (selectionStore.selectedSetIds = []));
                   }
                 "
                 @update:character-multi-mode="
                   (v) => {
-                    characterMultiMode = v;
-                    saveMultiMode('pixlstash:characterMultiMode', v);
+                    selectionStore.setCharacterMultiMode(v);
                   }
                 "
                 @update:set-multi-mode="
                   (v) => {
-                    setMultiMode = v;
-                    saveMultiMode('pixlstash:setMultiMode', v);
+                    selectionStore.setSetMultiMode(v);
                   }
                 "
                 @update:set-difference-base-id="
                   (v) => {
-                    setDifferenceBaseId = v;
-                    saveBaseId('pixlstash:setDifferenceBaseId', v);
+                    selectionStore.setSetDifferenceBaseId(v);
                   }
                 "
-                @import-started="isUploadInProgress = true"
-                @import-ended="isUploadInProgress = false"
-                :pendingExternalImportCount="pendingExternalImportCount"
+                @import-started="wsStore.isUploadInProgress = true"
+                @import-ended="wsStore.isUploadInProgress = false"
+                :pendingExternalImportCount="wsStore.pendingExternalImportCount"
                 @load-pending-imports="loadPendingExternalImports"
-                @update:visible-range-label="visibleRangeLabel = $event"
+                @update:visible-range-label="gridStore.visibleRangeLabel = $event"
+                @open-settings="openSettingsDialog"
+                @open-import="openImportDialog"
+                @confirm-export-zip="confirmExportZip"
               />
             </div>
             <StatsSidebar
-              :open="statsOpen"
+              :open="sidebarStore.statsOpen"
               :backendUrl="BACKEND_URL"
-              :selectedCharacter="selectedCharacter"
-              :selectedCharacterIds="selectedCharacterIds"
-              :characterMode="characterMultiMode"
-              :selectedSet="selectedSet"
-              :selectedSetIds="selectedSetIds"
-              :setMode="setMultiMode"
-              :setDifferenceBaseId="setDifferenceBaseId"
-              :projectViewMode="projectViewMode"
-              :selectedProjectId="selectedProjectId"
-              :tagFilter="tagFilter"
-              :tagRejectedFilter="tagRejectedFilter"
-              :mediaTypeFilter="mediaTypeFilter"
-              :minScoreFilter="minScoreFilter"
-              :maxScoreFilter="maxScoreFilter"
-              :smartScoreBucketFilter="smartScoreBucketFilter"
-              :resolutionBucketFilter="resolutionBucketFilter"
-              :faceBboxFilter="faceBboxFilter"
-              :sharedOnlyFilter="sharedOnlyFilter"
-              :unassignedOnlyFilter="unassignedOnlyFilter"
-              :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+              :selectedCharacter="selectionStore.selectedCharacter"
+              :selectedCharacterIds="selectionStore.selectedCharacterIds"
+              :characterMode="selectionStore.characterMultiMode"
+              :selectedSet="selectionStore.selectedSet"
+              :selectedSetIds="selectionStore.selectedSetIds"
+              :setMode="selectionStore.setMultiMode"
+              :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
+              :projectViewMode="projectStore.projectViewMode"
+              :selectedProjectId="projectStore.selectedProjectId"
+              :tagFilter="filterStore.tagFilter"
+              :tagRejectedFilter="filterStore.tagRejectedFilter"
+              :mediaTypeFilter="filterStore.mediaTypeFilter"
+              :minScoreFilter="filterStore.minScoreFilter"
+              :maxScoreFilter="filterStore.maxScoreFilter"
+              :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
+              :resolutionBucketFilter="filterStore.resolutionBucketFilter"
+              :faceBboxFilter="filterStore.faceBboxFilter"
+              :sharedOnlyFilter="filterStore.sharedOnlyFilter"
+              :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
+              :filePathPrefixFilter="selectionStore.selectedFolderFilter?.pathPrefix ?? null"
               :importSourceFolderFilter="
-                selectedFolderFilter?.importSourceFolder ?? null
+                selectionStore.selectedFolderFilter?.importSourceFolder ?? null
               "
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-              :penalisedTagWeights="penalisedTagWeights"
-              :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
-              :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
-              :wsTagUpdate="wsTagUpdate"
+              :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
+              :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
+              :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
+              :wsTagUpdate="wsStore.wsTagUpdate"
               @filter-tag="
                 (tag) => {
-                  if (tagFilter.includes(tag))
-                    tagFilter = tagFilter.filter((t) => t !== tag);
-                  else tagFilter = [...tagFilter, tag];
+                  if (filterStore.tagFilter.includes(tag))
+                    filterStore.tagFilter = filterStore.tagFilter.filter((t) => t !== tag);
+                  else filterStore.tagFilter = [...filterStore.tagFilter, tag];
                 }
               "
               @filter-tags="
                 (tags) => {
-                  const allPresent = tags.every((t) => tagFilter.includes(t));
+                  const allPresent = tags.every((t) => filterStore.tagFilter.includes(t));
                   if (allPresent)
-                    tagFilter = tagFilter.filter((t) => !tags.includes(t));
-                  else tagFilter = [...new Set([...tagFilter, ...tags])];
+                    filterStore.tagFilter = filterStore.tagFilter.filter((t) => !tags.includes(t));
+                  else filterStore.tagFilter = [...new Set([...filterStore.tagFilter, ...tags])];
                 }
               "
               @filter-confidence-above="
                 (entry) => {
-                  if (tagConfidenceAboveFilter.includes(entry))
-                    tagConfidenceAboveFilter = tagConfidenceAboveFilter.filter(
+                  if (filterStore.tagConfidenceAboveFilter.includes(entry))
+                    filterStore.tagConfidenceAboveFilter = filterStore.tagConfidenceAboveFilter.filter(
                       (e) => e !== entry,
                     );
                   else
-                    tagConfidenceAboveFilter = [
-                      ...tagConfidenceAboveFilter,
+                    filterStore.tagConfidenceAboveFilter = [
+                      ...filterStore.tagConfidenceAboveFilter,
                       entry,
                     ];
                 }
               "
               @clear-tag-filter="
                 (tags) => {
-                  tagFilter = tagFilter.filter((t) => !tags.includes(t));
+                  filterStore.tagFilter = filterStore.tagFilter.filter((t) => !tags.includes(t));
                 }
               "
               @clear-confidence-filter="
                 (entries) => {
-                  tagConfidenceAboveFilter = tagConfidenceAboveFilter.filter(
+                  filterStore.tagConfidenceAboveFilter = filterStore.tagConfidenceAboveFilter.filter(
                     (e) => !entries.includes(e),
                   );
                 }
               "
-              @update:minScoreFilter="(v) => (minScoreFilter = v)"
-              @update:maxScoreFilter="(v) => (maxScoreFilter = v)"
+              @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
+              @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
               @update:smartScoreBucketFilter="
-                (v) => (smartScoreBucketFilter = v)
+                (v) => (filterStore.smartScoreBucketFilter = v)
               "
               @update:resolutionBucketFilter="
-                (v) => (resolutionBucketFilter = v)
+                (v) => (filterStore.resolutionBucketFilter = v)
               "
-              @toggle="
-                statsOpen = !statsOpen;
-                saveStatsOpen(statsOpen);
-                updateIsMobile();
-              "
+              @toggle="sidebarStore.toggleStats(); updateIsMobile();"
             />
           </div>
         </main>
       </div>
       <SearchOverlay
-        v-if="searchOverlayVisible"
-        :modelValue="searchQuery"
-        :history="searchHistory"
+        v-if="searchStore.searchOverlayVisible"
+        :modelValue="searchStore.searchQuery"
+        :history="searchStore.searchHistory"
         @search="handleUpdateSearchQuery"
         @close="closeSearchOverlay"
         @clear-history="clearSearchHistory"
       />
     </div>
     <button
-      v-show="showKeyboardHint"
+      v-show="userPrefsStore.showKeyboardHint"
       class="shortcuts-fab"
       type="button"
       title="Keyboard shortcuts (F1)"

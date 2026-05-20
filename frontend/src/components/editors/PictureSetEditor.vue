@@ -131,8 +131,8 @@ import {
   VTextField,
   VTextarea,
 } from "vuetify/components";
-import { apiClient } from "../utils/apiClient";
-import { SET_ICONS, SET_COLORS, SET_ICON_CATEGORIES, ICON_CARDS } from "../utils/setAppearance";
+import { apiClient } from "../../utils/apiClient";
+import { SET_ICONS, SET_COLORS, SET_ICON_CATEGORIES, ICON_CARDS } from "../../utils/setAppearance";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

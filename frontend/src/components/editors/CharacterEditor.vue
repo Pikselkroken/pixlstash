@@ -126,8 +126,8 @@ import {
   VTextField,
   VTextarea,
 } from "vuetify/components";
-import { apiClient, appendShareToken } from "../utils/apiClient";
-import StarRatingOverlay from "./StarRatingOverlay.vue";
+import { apiClient, appendShareToken } from "../../utils/apiClient";
+import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

@@ -1181,24 +1181,24 @@ import {
   isSupportedVideoFile,
   getOverlayFormat,
   buildMediaUrl,
-} from "../utils/media.js";
-import { apiClient, appendShareToken, isReadOnly } from "../utils/apiClient";
-import { copyText } from "../utils/clipboard";
-import AddToEntityControl from "./AddToEntityControl.vue";
-import PluginParametersUI from "./PluginParametersUI.vue";
-import StarRatingOverlay from "./StarRatingOverlay.vue";
+} from "../../utils/media.js";
+import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
+import { copyText } from "../../utils/clipboard";
+import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import PluginParametersUI from "../widgets/PluginParametersUI.vue";
+import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import {
   faceBoxColor,
   formatUserDate,
   getStackColor,
   toggleScore,
-} from "../utils/utils.js";
+} from "../../utils/utils.js";
 import {
   dedupeTagList,
   getTagId as tagId,
   getTagLabel as tagLabel,
   getTagList,
-} from "../utils/tags.js";
+} from "../../utils/tags.js";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

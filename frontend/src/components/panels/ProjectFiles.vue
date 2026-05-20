@@ -134,7 +134,7 @@
 <script setup>
 import { ref, watch, onMounted, nextTick } from "vue";
 import { VProgressCircular } from "vuetify/components";
-import { apiClient } from "../utils/apiClient";
+import { apiClient } from "../../utils/apiClient";
 
 const props = defineProps({
   projectId: { type: Number, required: true },

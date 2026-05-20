@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
-import { apiClient, isReadOnly } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
 
 const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 32 },

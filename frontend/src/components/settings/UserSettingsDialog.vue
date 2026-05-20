@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient, isReadOnly, logout } from "../utils/apiClient";
+import { apiClient, isReadOnly, logout } from "../../utils/apiClient";
 import AccountSection from "./AccountSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
