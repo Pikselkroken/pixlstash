@@ -37,6 +37,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from pixlstash.db_models.face import Face  # noqa: E402
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS  # noqa: E402
 from pixlstash.picture_tagger import PictureTagger  # noqa: E402
+from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square  # noqa: E402
 from pixlstash.tagger_plugins.pixlstash_tagger import (  # noqa: E402
     CUSTOM_TAGGER_DEFAULT_THRESHOLD as CUSTOM_TAGGER_THRESHOLD_FULL,
     QUALITY_CROP_TAG_WHITELIST,
@@ -235,7 +236,7 @@ def run_quality_crop_tags(
         for idx, bbox in enumerate(bboxes):
             if not bbox:
                 continue
-            expanded = PictureTagger._expand_bbox_to_square(bbox, w, h, target)
+            expanded = expand_bbox_to_square(bbox, w, h, target)
             crop = img.crop(expanded)
             key = f"{path}#face{idx}"
             items.append((key, crop))

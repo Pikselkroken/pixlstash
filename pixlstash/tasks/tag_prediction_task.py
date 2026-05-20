@@ -15,6 +15,7 @@ from pixlstash.picture_tagger import PictureTagger
 from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
+from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
@@ -48,7 +49,7 @@ class TagPredictionTask(BaseTask):
             params={"picture_ids": picture_ids, "model_version": model_version},
         )
         self._db = database
-        self._picture_tagger = picture_tagger
+        self._workflow = picture_tagger.tagging_workflow
         self._pictures = pictures or []
         self._model_version = model_version
 
@@ -75,7 +76,7 @@ class TagPredictionTask(BaseTask):
         if not image_paths:
             return {"written": 0}
 
-        scores_by_path = self._picture_tagger.score_images_custom(
+        scores_by_path = self._workflow.score_images_custom(
             image_paths,
             min_confidence=_PREDICTION_MIN_CONFIDENCE,
         )
@@ -104,7 +105,7 @@ class TagPredictionTask(BaseTask):
                 return result
 
             faces_by_pic = self._db.run_task(_fetch_faces, priority=DBPriority.LOW)
-            target = self._picture_tagger.custom_tagger_image_size_quality_crop()
+            target = self._workflow.custom_tagger_image_size_quality_crop()
             quality_items = []
             key_to_pic_id: dict[str, int] = {}
             for pic in self._pictures:
@@ -130,7 +131,7 @@ class TagPredictionTask(BaseTask):
                             * (float(f.bbox[3]) - float(f.bbox[1])),
                         ),
                     )
-                    expanded = PictureTagger._expand_bbox_to_square(
+                    expanded = expand_bbox_to_square(
                         largest_face.bbox, w, h, target
                     )
                     crop = img.crop(expanded)
@@ -144,7 +145,7 @@ class TagPredictionTask(BaseTask):
                         exc,
                     )
             if quality_items:
-                crop_scores = self._picture_tagger.score_quality_crops_raw(
+                crop_scores = self._workflow.score_quality_crops_raw(
                     quality_items
                 )
                 for key, tag_scores in crop_scores.items():

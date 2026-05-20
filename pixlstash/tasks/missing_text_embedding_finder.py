@@ -61,6 +61,6 @@ class MissingTextEmbeddingFinder(SimpleMissingFinder):
     def _create_task(self, pictures: list):
         return TextEmbeddingTask(
             database=self._db,
-            picture_tagger=self._picture_tagger_getter(),
+            workflow=self._picture_tagger_getter().text_embedding_workflow,
             pictures=pictures,
         )
