@@ -21,13 +21,27 @@
     6. Properties (getters/setters)
     7. Public methods in logical order
     8. Private methods in logical order
+
 ## Project Architecture
 
-- **Backend:** Python FastAPI server (`pixlstash/server.py`), with core logic in `pixlstash/routes`.
-- **Frontend:** Vue 3 + Vite app in `frontend/`.
-- **Database:** SQLite (`vault.db`), schema managed via Python.
-- **Utility functions:** Utilities should be placed in `pixlstash/utils`.
-- **Tasks:** Long-running tasks (e.g., quality calculation) are handled asynchronously with the TaskRunner class in `pixlstash/task_runner.py`.
+Use the following architecture documents depending on the scope of the task:
+
+1. Frontend tasks:
+   Always read and follow `/docs/frontend_architecture.md`.
+
+2. Backend tasks:
+   Always read and follow `/docs/backend_architecture.md`.
+
+3. Full‑stack tasks (involving both frontend and backend):
+   Read and follow both documents plus `/docs/integration_architecture.md` for guidance on how to integrate frontend and backend changes effectively.
+
+Task classification rules:
+- If the task involves UI, components, state management, routing, or client-side logic → treat it as a frontend task.
+- If the task involves APIs, storage, indexing, ML pipelines, or server-side logic → treat it as a backend task.
+- If the task touches both (e.g., API changes that require UI updates) → treat it as a full‑stack task.
+
+When making changes to architecture or integration patterns, always update the relevant documentation to reflect the new approach. This ensures that all future work follows the updated architecture and maintains consistency across the codebase.
+
 
 ## Imports
 - Mostly use imports at the top of the file. Local imports within functions are only acceptable if they are necessary to avoid circular dependencies, to reduce startup time for rarely used modules or if the import is *clearly* optional.
