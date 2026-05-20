@@ -9,14 +9,16 @@
     >
       <!-- ── Set / Character / Project ─────────────────────────────── -->
       <template v-if="!isScrapheapView && !isReadOnly">
-        <AddToSetControl
+        <AddToEntityControl
+          type="set"
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           :disabled="!selectedImageIds.length"
           @added="onAction('added-to-set', $event)"
         />
-        <AddToCharacterControl
+        <AddToEntityControl
+          type="character"
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
@@ -24,7 +26,8 @@
           @added="onAction('add-to-character', $event)"
           @removed="onAction('remove-from-character', $event)"
         />
-        <AddToProjectControl
+        <AddToEntityControl
+          type="project"
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
@@ -159,9 +162,7 @@ import {
   watch,
 } from "vue";
 import { isReadOnly } from "../utils/apiClient";
-import AddToSetControl from "./AddToSetControl.vue";
-import AddToCharacterControl from "./AddToCharacterControl.vue";
-import AddToProjectControl from "./AddToProjectControl.vue";
+import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
