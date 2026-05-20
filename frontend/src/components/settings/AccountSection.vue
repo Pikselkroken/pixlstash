@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient, isReadOnly } from "../utils/apiClient";
-import { copyText } from "../utils/clipboard";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { copyText } from "../../utils/clipboard";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

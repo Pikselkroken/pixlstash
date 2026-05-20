@@ -78,7 +78,13 @@
       @create-stacks-from-groups="createStacksFromSelectedGroups"
       @run-plugin="handlePluginRunRequest"
       @comfyui-run="handleComfyuiRun"
+      @comfyui-run-grid="runComfyuiOnGridImages"
       @tags-applied="fetchAllGridImages({ force: true, showProgress: true })"
+      @expand-all-stacks="expandAllStacks"
+      @collapse-all-stacks="collapseAllStacks"
+      @open-settings="emit('open-settings')"
+      @open-import="emit('open-import')"
+      @confirm-export-zip="emit('confirm-export-zip')"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -754,18 +760,18 @@ import {
   buildMediaUrl,
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
-} from "../utils/media.js";
-import ImageImporter from "./ImageImporter.vue";
+} from "../../utils/media.js";
+import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
-import EmptyScrapHeap from "./EmptyScrapHeap.vue";
-import Toolbar from "./Toolbar.vue";
-import ImageGridContextMenu from "./ImageGridContextMenu.vue";
-import SearchResultBar from "./SearchResultBar.vue";
-import StarRatingOverlay from "./StarRatingOverlay.vue";
-import ComfyUiRunner from "./ComfyUiRunner.vue";
-import ProgressOverlay from "./ProgressOverlay.vue";
-import ShareDialog from "./ShareDialog.vue";
-import { apiClient, appendShareToken, isReadOnly } from "../utils/apiClient";
+import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
+import Toolbar from "../panels/Toolbar.vue";
+import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
+import SearchResultBar from "../widgets/SearchResultBar.vue";
+import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import ComfyUiRunner from "../io/ComfyUiRunner.vue";
+import ProgressOverlay from "../widgets/ProgressOverlay.vue";
+import ShareDialog from "../io/ShareDialog.vue";
+import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   applyStackBackgroundAlpha,
   arraysEqualByString,
@@ -781,7 +787,7 @@ import {
   sleep,
   getStackThreshold,
   toggleScore,
-} from "../utils/utils.js";
+} from "../../utils/utils.js";
 import {
   dedupeTagList,
   getTagId,
@@ -791,7 +797,7 @@ import {
   penalisedTagColor,
   getTagList,
   tagMatches,
-} from "../utils/tags.js";
+} from "../../utils/tags.js";
 import {
   applyStackOrderToList,
   buildStackLeaderMap,
@@ -803,7 +809,7 @@ import {
   shouldShowStackBadge,
   sortStackMembers,
   stackBadgeTitle,
-} from "../utils/stack.js";
+} from "../../utils/stack.js";
 import { debounce } from "lodash-es";
 
 const emit = defineEmits([
@@ -823,6 +829,9 @@ const emit = defineEmits([
   "update:embed-watermark",
   "update:visible-range-label",
   "load-pending-imports",
+  "open-settings",
+  "open-import",
+  "confirm-export-zip",
 ]);
 
 // Props

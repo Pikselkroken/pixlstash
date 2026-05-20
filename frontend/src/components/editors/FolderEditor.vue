@@ -465,8 +465,8 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { apiClient } from "../utils/apiClient";
-import { copyText } from "../utils/clipboard";
+import { apiClient } from "../../utils/apiClient";
+import { copyText } from "../../utils/clipboard";
 import {
   buildDockerRestartCommand,
   buildDockerVolumeFlag,
@@ -475,7 +475,7 @@ import {
   inferImportMount,
   inferReferenceMount,
   normalizeFolderPath,
-} from "../utils/dockerHelpers";
+} from "../../utils/dockerHelpers";
 import FolderBrowser from "./FolderBrowser.vue";
 
 const appVersion = __APP_VERSION__;

@@ -5,6 +5,7 @@ import './style.css'
 import './styles/context-menu.css'
 
 import {createApp} from 'vue'
+import {createPinia} from 'pinia'
 import {createVuetify} from 'vuetify'
 import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
@@ -111,4 +112,4 @@ const vuetify = createVuetify({
   directives,
 })
 
-createApp(Root).use(vuetify).mount('#app')
+createApp(Root).use(createPinia()).use(vuetify).mount('#app')

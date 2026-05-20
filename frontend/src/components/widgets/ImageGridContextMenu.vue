@@ -161,7 +161,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { isReadOnly } from "../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({

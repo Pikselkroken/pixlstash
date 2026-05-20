@@ -17,7 +17,7 @@ import {
   isAuthenticated,
   sessionContext,
 } from "./utils/apiClient";
-import LoginScreen from "./components/LoginScreen.vue";
+import LoginScreen from "./components/views/LoginScreen.vue";
 import App from "./App.vue";
 
 const isChecking = ref(true);

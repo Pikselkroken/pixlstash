@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref } from "vue";
-import { apiClient, isReadOnly } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },

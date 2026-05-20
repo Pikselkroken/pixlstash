@@ -3,9 +3,9 @@ import { computed, nextTick, ref, watch } from "vue";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
-} from "../utils/media.js";
-import { apiClient } from "../utils/apiClient.js";
-import ProjectEditor from "./ProjectEditor.vue";
+} from "../../utils/media.js";
+import { apiClient } from "../../utils/apiClient.js";
+import ProjectEditor from "../editors/ProjectEditor.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

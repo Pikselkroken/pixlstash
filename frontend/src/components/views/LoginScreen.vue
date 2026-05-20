@@ -66,7 +66,7 @@
 
 <script setup>
 import { onMounted, ref } from "vue";
-import { checkLoginStatus, login } from "../utils/apiClient";
+import { checkLoginStatus, login } from "../../utils/apiClient";
 
 const props = defineProps({
   tokenError: { type: String, default: null },

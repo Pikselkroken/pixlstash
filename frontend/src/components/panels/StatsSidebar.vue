@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient } from "../../utils/apiClient";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },

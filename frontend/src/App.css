@@ -380,3 +380,13 @@ kbd {
   gap: 8px;
   padding-top: 8px;
 }
+
+/* ── Popup panel base — shared by all floating dropdown/popover panels ─────── */
+.popup-panel {
+  border-radius: 8px;
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+  background: rgba(var(--v-theme-background), 0.96);
+  color: rgb(var(--v-theme-on-background));
+  display: flex;
+  flex-direction: column;
+}

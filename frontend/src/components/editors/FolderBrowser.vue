@@ -70,7 +70,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient } from "../../utils/apiClient";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

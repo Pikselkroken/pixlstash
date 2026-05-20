@@ -113,7 +113,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient } from "../../utils/apiClient";
 
 const props = defineProps({
   type: { type: String, required: true }, // 'set' | 'project' | 'character'

@@ -5,10 +5,10 @@
         <!-- ── Sidebar toggle ──────────────────────────────────── -->
         <button
           class="bar-btn bar-btn--icon"
-          :class="{ 'bar-btn--active': tb?.sidebarVisible?.value }"
+          :class="{ 'bar-btn--active': sidebarStore.sidebarVisible }"
           type="button"
-          :title="tb?.sidebarVisible?.value ? 'Hide sidebar' : 'Show sidebar'"
-          @click="tb?.toggleSidebar?.()"
+          :title="sidebarStore.sidebarVisible ? 'Hide sidebar' : 'Show sidebar'"
+          @click="sidebarStore.toggleSidebar()"
         >
           <v-icon size="20">mdi-dock-left</v-icon>
         </button>
@@ -49,7 +49,7 @@
               </button>
             </div>
           </template>
-          <div class="gb-sort-panel">
+          <div class="gb-sort-panel popup-panel">
             <div class="gb-sort-header">
               <div class="gb-sort-panel-title">
                 Sort order
@@ -58,7 +58,7 @@
               <v-btn
                 class="gb-sort-direction"
                 variant="text"
-                :disabled="gb?.isSearchActive?.value"
+                :disabled="Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())"
                 @click="gbToggleSortDirection"
               >
                 <v-icon size="18">
@@ -73,7 +73,7 @@
                 }}</span>
               </v-btn>
             </div>
-            <div v-if="gb?.isSearchActive?.value" class="gb-sort-search-note">
+            <div v-if="Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())" class="gb-sort-search-note">
               Search relevance (fixed)
             </div>
             <v-btn-toggle
@@ -81,10 +81,10 @@
               @update:model-value="gbHandleSortModelUpdate"
               mandatory
               class="gb-sort-grid"
-              :disabled="gb?.isSearchActive?.value"
+              :disabled="Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())"
             >
               <v-btn
-                v-for="opt in gb?.sortOptions?.value ?? []"
+                v-for="opt in sortStore.sortOptions ?? []"
                 :key="opt.value"
                 :value="opt.value"
                 class="gb-sort-grid-btn"
@@ -116,7 +116,7 @@
                   :disabled="!gbHasSimilarityOptions"
                 >
                   <v-btn
-                    v-for="opt in gb?.similarityCharacterOptions?.value ?? []"
+                    v-for="opt in sortStore.similarityCharacterOptions ?? []"
                     :key="opt.value"
                     :value="opt.value"
                     class="gb-sort-grid-btn"
@@ -210,7 +210,7 @@
               <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="gb-filter-panel">
+          <div class="gb-filter-panel popup-panel">
             <div class="gb-filter-panel-header">
               <div class="gb-filter-panel-title">Filters</div>
               <v-btn
@@ -772,7 +772,7 @@
               <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="gb-view-panel">
+          <div class="gb-view-panel popup-panel">
             <div class="gb-filter-section-label">Grid View</div>
             <v-switch
               v-model="gbCompactModeModel"
@@ -789,8 +789,8 @@
               <v-slider
                 class="gb-columns-slider"
                 v-model="gbPendingColumns"
-                :min="gb?.minColumns?.value ?? 2"
-                :max="gb?.maxColumns?.value ?? 14"
+                :min="gridStore.minColumns ?? 2"
+                :max="gridStore.maxColumns ?? 14"
                 :step="1"
                 density="compact"
                 hide-details
@@ -808,7 +808,7 @@
                   variant="flat"
                   size="small"
                   :disabled="gbExpandAllStacksDisabled"
-                  @click="gb?.expandAllStacks?.()"
+                  @click="emit('expand-all-stacks')"
                   >Expand all</v-btn
                 >
                 <v-btn
@@ -817,7 +817,7 @@
                   variant="flat"
                   size="small"
                   :disabled="gbCollapseAllStacksDisabled"
-                  @click="gb?.collapseAllStacks?.()"
+                  @click="emit('collapse-all-stacks')"
                   >Collapse all</v-btn
                 >
               </div>
@@ -849,7 +849,7 @@
           :class="{ 'bar-btn--active': gb?.isSearchActive?.value }"
           type="button"
           title="Search (F)"
-          @click="tb?.openSearchOverlay?.()"
+          @click="searchStore.searchOverlayVisible = true"
         >
           <v-icon size="20">mdi-magnify</v-icon>
         </button>
@@ -872,15 +872,15 @@
               <v-icon size="20">mdi-download</v-icon>
             </button>
           </template>
-          <div class="tb-export-panel">
+          <div class="tb-export-panel popup-panel">
             <div class="tb-export-title">
-              Export {{ tb?.exportCount?.value ?? 0 }} picture{{
-                (tb?.exportCount?.value ?? 0) === 1 ? "" : "s"
+              Export {{ exportStore.exportCount ?? 0 }} picture{{
+                (exportStore.exportCount ?? 0) === 1 ? "" : "s"
               }}
             </div>
             <v-select
               v-model="tbExportTypeModel"
-              :items="tb?.exportTypeOptions ?? []"
+              :items="exportStore.exportTypeOptions ?? []"
               item-title="title"
               item-value="value"
               label="Export type"
@@ -888,16 +888,16 @@
             />
             <v-select
               v-model="tbExportCaptionModeModel"
-              :items="tb?.exportCaptionOptions ?? []"
+              :items="exportStore.exportCaptionOptions ?? []"
               item-title="title"
               item-value="value"
               label="Captions"
               density="comfortable"
-              :disabled="tb?.exportTypeLocksCaptions?.value"
+              :disabled="exportStore.exportTypeLocksCaptions"
             />
             <v-select
               v-model="tbExportResolutionModel"
-              :items="tb?.exportResolutionOptions ?? []"
+              :items="exportStore.exportResolutionOptions ?? []"
               item-title="title"
               item-value="value"
               label="Resolution"
@@ -906,7 +906,7 @@
             <v-select
               v-if="tbExportCaptionModeModel === 'tags'"
               v-model="tbExportTagFormatModel"
-              :items="tb?.exportTagFormatOptions ?? []"
+              :items="exportStore.exportTagFormatOptions ?? []"
               item-title="title"
               item-value="value"
               label="Tag format"
@@ -919,7 +919,7 @@
               density="comfortable"
               :disabled="
                 tbExportCaptionModeModel === 'none' ||
-                tb?.exportTypeLocksCaptions?.value
+                exportStore.exportTypeLocksCaptions
               "
             />
             <v-switch
@@ -931,7 +931,7 @@
             <v-btn
               color="primary"
               @click="
-                tb?.confirmExportZip?.();
+                emit('confirm-export-zip');
                 tbExportMenuOpen = false;
               "
             >
@@ -945,13 +945,13 @@
           class="bar-btn bar-btn--icon"
           type="button"
           title="Import photos"
-          @click="tb?.openImport?.()"
+          @click="emit('open-import')"
         >
           <v-icon size="20">mdi-cloud-upload-outline</v-icon>
         </button>
         <!-- ── Toolbar: ComfyUI T2I ──────────────────────────────────── -->
         <v-menu
-          v-if="gb?.comfyuiConfigured?.value && !isReadOnly"
+          v-if="filterStore.comfyuiConfigured && !isReadOnly"
           v-model="tbComfyuiMenuOpen"
           :close-on-content-click="false"
           location="bottom start"
@@ -969,7 +969,7 @@
               <v-icon size="20">mdi-robot</v-icon>
             </button>
           </template>
-          <div class="tb-comfyui-panel">
+          <div class="tb-comfyui-panel popup-panel">
             <div class="tb-comfyui-header">Generate with ComfyUI (T2I)</div>
             <div class="tb-comfyui-body">
               <div v-if="tbComfyuiWorkflowLoading" class="tb-comfyui-note">
@@ -1648,7 +1648,7 @@
           class="bar-btn bar-btn--icon"
           type="button"
           title="Settings"
-          @click="tb?.openSettings?.()"
+          @click="emit('open-settings')"
         >
           <v-icon size="20">mdi-cog-outline</v-icon>
         </button>
@@ -1656,12 +1656,12 @@
         <button
           v-if="tb"
           class="bar-btn bar-btn--icon"
-          :class="{ 'bar-btn--active': tb?.statsOpen?.value }"
+          :class="{ 'bar-btn--active': sidebarStore.statsOpen }"
           type="button"
           :title="
-            tb?.statsOpen?.value ? 'Hide stats sidebar' : 'Show stats sidebar'
+            sidebarStore.statsOpen ? 'Hide stats sidebar' : 'Show stats sidebar'
           "
-          @click="tb?.toggleStats?.()"
+          @click="sidebarStore.toggleStats()"
         >
           <v-icon size="20">mdi-chart-bar</v-icon>
         </button>
@@ -1699,10 +1699,16 @@
 </template>
 
 <script setup>
-import { computed, inject, nextTick, ref, watch } from "vue";
-import { apiClient, isReadOnly } from "../utils/apiClient";
-import AddToEntityControl from "./AddToEntityControl.vue";
-import PluginParametersUI from "./PluginParametersUI.vue";
+import { computed, nextTick, ref, watch } from "vue";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { useFilterStore } from "../../stores/useFilterStore";
+import { useSortStore } from "../../stores/useSortStore";
+import { useGridStore } from "../../stores/useGridStore";
+import { useExportStore } from "../../stores/useExportStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useSearchStore } from "../../stores/useSearchStore";
+import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 const props = defineProps({
   selectedCount: Number,
   selectedExpandedCount: { type: Number, default: 0 },
@@ -1746,63 +1752,55 @@ const emit = defineEmits([
   "delete-selected",
   "run-plugin",
   "comfyui-run",
+  "comfyui-run-grid",
   "tags-applied",
+  "expand-all-stacks",
+  "collapse-all-stacks",
+  "confirm-export-zip",
+  "open-import",
+  "open-settings",
 ]);
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Grid Bar state (inject from App.vue via provide/inject)
+// Pinia stores (replaces gridBarState and toolbarState provide/inject)
 // ═══════════════════════════════════════════════════════════════════════════════
-const gb = inject("gridBarState", null);
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Toolbar state (inject from App.vue via provide/inject)
-// ═══════════════════════════════════════════════════════════════════════════════
-const tb = inject("toolbarState", null);
+const filterStore = useFilterStore();
+const sortStore = useSortStore();
+const gridStore = useGridStore();
+const exportStore = useExportStore();
+const sidebarStore = useSidebarStore();
+const searchStore = useSearchStore();
 
 // ── Toolbar: export computed models ───────────────────────────────────────────
 const tbExportTypeModel = computed({
-  get: () => tb?.exportType?.value ?? "full",
-  set: (v) => {
-    if (tb?.exportType) tb.exportType.value = v;
-  },
+  get: () => exportStore.exportType,
+  set: (v) => { exportStore.exportType = v; },
 });
 const tbExportCaptionModeModel = computed({
-  get: () => tb?.exportCaptionMode?.value ?? "description",
-  set: (v) => {
-    if (tb?.exportCaptionMode) tb.exportCaptionMode.value = v;
-  },
+  get: () => exportStore.exportCaptionMode,
+  set: (v) => { exportStore.exportCaptionMode = v; },
 });
 const tbExportTagFormatModel = computed({
-  get: () => tb?.exportTagFormat?.value ?? "spaces",
-  set: (v) => {
-    if (tb?.exportTagFormat) tb.exportTagFormat.value = v;
-  },
+  get: () => exportStore.exportTagFormat,
+  set: (v) => { exportStore.exportTagFormat = v; },
 });
 const tbExportResolutionModel = computed({
-  get: () => tb?.exportResolution?.value ?? "original",
-  set: (v) => {
-    if (tb?.exportResolution) tb.exportResolution.value = v;
-  },
+  get: () => exportStore.exportResolution,
+  set: (v) => { exportStore.exportResolution = v; },
 });
 const tbExportIncludeCharacterNameModel = computed({
-  get: () => tb?.exportIncludeCharacterName?.value ?? true,
-  set: (v) => {
-    if (tb?.exportIncludeCharacterName) tb.exportIncludeCharacterName.value = v;
-  },
+  get: () => exportStore.exportIncludeCharacterName,
+  set: (v) => { exportStore.exportIncludeCharacterName = v; },
 });
 const tbExportUseOriginalFileNamesModel = computed({
-  get: () => tb?.exportUseOriginalFileNames?.value ?? false,
-  set: (v) => {
-    if (tb?.exportUseOriginalFileNames) tb.exportUseOriginalFileNames.value = v;
-  },
+  get: () => exportStore.exportUseOriginalFileNames,
+  set: (v) => { exportStore.exportUseOriginalFileNames = v; },
 });
 const tbExportMenuOpen = computed({
-  get: () => tb?.exportMenuOpen?.value ?? false,
-  set: (v) => {
-    if (tb?.exportMenuOpen) tb.exportMenuOpen.value = v;
-  },
+  get: () => exportStore.exportMenuOpen,
+  set: (v) => { exportStore.exportMenuOpen = v; },
 });
 
 // ── Toolbar: ComfyUI T2I ───────────────────────────────────────────────────────
@@ -1848,7 +1846,7 @@ watch(tbComfyuiMenuOpen, async (isOpen) => {
 
 async function tbFetchComfyWorkflows() {
   if (tbComfyuiWorkflowLoading.value) return;
-  const url = gb?.backendUrl?.value ?? props.backendUrl;
+  const url = props.backendUrl;
   if (!url) return;
   tbComfyuiWorkflowLoading.value = true;
   tbComfyuiWorkflowError.value = "";
@@ -1867,7 +1865,7 @@ async function tbFetchComfyWorkflows() {
 
 function tbRunComfyuiOnGrid() {
   if (!tbCanRunComfyWorkflow.value) return;
-  tb?.comfyuiRunGrid?.({
+  emit("comfyui-run-grid", {
     workflowName: tbComfyuiSelectedWorkflow.value,
     caption: tbComfyuiCaption.value || "",
     seedMode: tbComfyuiSeedMode.value,
@@ -1883,18 +1881,15 @@ const gbSortMenuOpen = ref(false);
 const gbPendingSortSelection = ref(null);
 
 const gbSortModel = computed({
-  get: () => gb?.selectedSort?.value ?? "",
-  set: (value) =>
-    gb?.updateSort?.({
-      sort: value != null ? String(value) : "",
-      descending: gb?.selectedDescending?.value ?? true,
-    }),
+  get: () => sortStore.selectedSort ?? "",
+  set: (value) => {
+    sortStore.selectedSort = value != null ? String(value) : "";
+  },
 });
 
 const gbDescendingModel = computed({
-  get: () => gb?.selectedDescending?.value ?? true,
-  set: (value) =>
-    gb?.updateSort?.({ sort: gbSortModel.value, descending: Boolean(value) }),
+  get: () => sortStore.selectedDescending ?? true,
+  set: (value) => { sortStore.selectedDescending = Boolean(value); },
 });
 
 const gbSortMenuModel = computed(
@@ -1931,13 +1926,13 @@ watch(gbSortMenuOpen, (isOpen) => {
 
 const gbHasSimilarityOptions = computed(
   () =>
-    Array.isArray(gb?.similarityCharacterOptions?.value) &&
-    gb.similarityCharacterOptions.value.length > 0,
+    Array.isArray(sortStore.similarityCharacterOptions) &&
+    sortStore.similarityCharacterOptions.length > 0,
 );
 
 const gbSimilarityCharacterModel = computed({
-  get: () => gb?.selectedSimilarityCharacter?.value ?? null,
-  set: (value) => gb?.updateSimilarityCharacter?.(value ?? null),
+  get: () => sortStore.selectedSimilarityCharacter ?? null,
+  set: (value) => { sortStore.selectedSimilarityCharacter = value ?? null; },
 });
 
 const gbStackThresholdOptions = [
@@ -1950,13 +1945,13 @@ const gbStackThresholdOptions = [
 
 const gbStackThresholdModel = computed({
   get: () => {
-    const v = gb?.stackThreshold?.value;
+    const v = sortStore.stackThreshold;
     if (v == null || v === "") return "0.92";
     const parsed = parseFloat(String(v));
     if (!Number.isFinite(parsed) || parsed <= 0) return "0.92";
     return String(v);
   },
-  set: (value) => gb?.updateStackThreshold?.(value),
+  set: (value) => { sortStore.stackThreshold = value; },
 });
 
 const GB_SORT_ICON_MAP = {
@@ -1987,7 +1982,7 @@ function gbCommitSortSelection(sortValue) {
 }
 
 function gbHandleSortModelUpdate(sortValue) {
-  if (gb?.isSearchActive?.value) return;
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return;
   gbPendingSortSelection.value = sortValue != null ? String(sortValue) : "";
   if (!gbSortRequiresParameter(gbPendingSortSelection.value)) {
     gbCommitSortSelection(gbPendingSortSelection.value);
@@ -2019,10 +2014,10 @@ function gbToggleSortDirection() {
 }
 
 const gbSelectedSortOption = computed(() =>
-  (gb?.sortOptions?.value ?? []).find((opt) => opt.value === gbSortModel.value),
+  (sortStore.sortOptions ?? []).find((opt) => opt.value === gbSortModel.value),
 );
 const gbSelectedSimilarityOption = computed(() =>
-  (gb?.similarityCharacterOptions?.value ?? []).find(
+  (sortStore.similarityCharacterOptions ?? []).find(
     (opt) => opt.value === gbSimilarityCharacterModel.value,
   ),
 );
@@ -2033,7 +2028,7 @@ const gbSelectedStackThresholdOption = computed(() =>
 );
 
 const gbSortButtonLabel = computed(() => {
-  if (gb?.isSearchActive?.value) return "Search relevance";
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return "Search relevance";
   if (gbSortModel.value === SIMILARITY_SORT_KEY_GB)
     return gbSelectedSimilarityOption.value?.text
       ? `Similarity: ${gbSelectedSimilarityOption.value.text}`
@@ -2046,7 +2041,7 @@ const gbSortButtonLabel = computed(() => {
 });
 
 const gbSortTypeName = computed(() => {
-  if (gb?.isSearchActive?.value) return "Search relevance";
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return "Search relevance";
   if (gbSortModel.value === SIMILARITY_SORT_KEY_GB) return "Similarity";
   if (gbSortModel.value === LIKENESS_GROUPS_SORT_KEY_GB) return "Groups";
   return gbSelectedSortOption.value?.label || "Sort";
@@ -2065,7 +2060,7 @@ const gbSortButtonIcon = computed(() =>
 );
 
 const gbSortTypeIcon = computed(() => {
-  if (gb?.isSearchActive?.value) return "mdi-magnify";
+  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim())) return "mdi-magnify";
   return gbGetSortIcon(gbSortModel.value);
 });
 
@@ -2073,147 +2068,97 @@ const gbSortTypeIcon = computed(() => {
 const gbFilterMenuOpen = ref(false);
 
 const gbMediaTypeFilter = computed({
-  get: () => gb?.mediaTypeFilter?.value ?? "all",
-  set: (v) => {
-    if (gb?.mediaTypeFilter) gb.mediaTypeFilter.value = v;
-  },
+  get: () => filterStore.mediaTypeFilter,
+  set: (v) => { filterStore.mediaTypeFilter = v; },
 });
 const gbMinScoreFilter = computed({
-  get: () => gb?.minScoreFilter?.value ?? null,
-  set: (v) => {
-    if (gb?.minScoreFilter) gb.minScoreFilter.value = v ?? null;
-  },
+  get: () => filterStore.minScoreFilter,
+  set: (v) => { filterStore.minScoreFilter = v ?? null; },
 });
 const gbMaxScoreFilter = computed({
-  get: () => gb?.maxScoreFilter?.value ?? null,
-  set: (v) => {
-    if (gb?.maxScoreFilter) gb.maxScoreFilter.value = v ?? null;
-  },
+  get: () => filterStore.maxScoreFilter,
+  set: (v) => { filterStore.maxScoreFilter = v ?? null; },
 });
 const gbFaceBboxFilter = computed({
-  get: () => gb?.faceBboxFilter?.value ?? null,
-  set: (v) => {
-    if (gb?.faceBboxFilter) gb.faceBboxFilter.value = v;
-  },
+  get: () => filterStore.faceBboxFilter,
+  set: (v) => { filterStore.faceBboxFilter = v; },
 });
 const gbTagFilter = computed({
-  get: () => gb?.tagFilter?.value ?? [],
-  set: (v) => {
-    if (gb?.tagFilter) gb.tagFilter.value = v ?? [];
-  },
+  get: () => filterStore.tagFilter,
+  set: (v) => { filterStore.tagFilter = v ?? []; },
 });
 const gbTagRejectedFilter = computed({
-  get: () => gb?.tagRejectedFilter?.value ?? [],
-  set: (v) => {
-    if (gb?.tagRejectedFilter) gb.tagRejectedFilter.value = v ?? [];
-  },
+  get: () => filterStore.tagRejectedFilter,
+  set: (v) => { filterStore.tagRejectedFilter = v ?? []; },
 });
 const gbTagConfidenceAboveFilter = computed({
-  get: () => gb?.tagConfidenceAboveFilter?.value ?? [],
-  set: (v) => {
-    if (gb?.tagConfidenceAboveFilter)
-      gb.tagConfidenceAboveFilter.value = v ?? [];
-  },
+  get: () => filterStore.tagConfidenceAboveFilter,
+  set: (v) => { filterStore.tagConfidenceAboveFilter = v ?? []; },
 });
 const gbTagConfidenceBelowFilter = computed({
-  get: () => gb?.tagConfidenceBelowFilter?.value ?? [],
-  set: (v) => {
-    if (gb?.tagConfidenceBelowFilter)
-      gb.tagConfidenceBelowFilter.value = v ?? [];
-  },
+  get: () => filterStore.tagConfidenceBelowFilter,
+  set: (v) => { filterStore.tagConfidenceBelowFilter = v ?? []; },
 });
 const gbSharedOnlyFilter = computed({
-  get: () => gb?.sharedOnlyFilter?.value ?? false,
-  set: (v) => {
-    if (gb?.sharedOnlyFilter) gb.sharedOnlyFilter.value = Boolean(v);
-  },
+  get: () => filterStore.sharedOnlyFilter,
+  set: (v) => { filterStore.sharedOnlyFilter = Boolean(v); },
 });
 const gbUnassignedOnlyFilter = computed({
-  get: () => gb?.unassignedOnlyFilter?.value ?? false,
-  set: (v) => {
-    if (gb?.unassignedOnlyFilter) gb.unassignedOnlyFilter.value = Boolean(v);
-  },
+  get: () => filterStore.unassignedOnlyFilter,
+  set: (v) => { filterStore.unassignedOnlyFilter = Boolean(v); },
 });
 const isAllPicturesView = computed(
   () =>
     String(props.selectedCharacter ?? "") === String(props.allPicturesId ?? ""),
 );
 const gbComfyuiModelFilter = computed({
-  get: () => gb?.comfyuiModelFilter?.value ?? [],
-  set: (v) => {
-    if (gb?.comfyuiModelFilter) gb.comfyuiModelFilter.value = v ?? [];
-  },
+  get: () => filterStore.comfyuiModelFilter,
+  set: (v) => { filterStore.comfyuiModelFilter = v ?? []; },
 });
 const gbComfyuiLoraFilter = computed({
-  get: () => gb?.comfyuiLoraFilter?.value ?? [],
-  set: (v) => {
-    if (gb?.comfyuiLoraFilter) gb.comfyuiLoraFilter.value = v ?? [];
-  },
+  get: () => filterStore.comfyuiLoraFilter,
+  set: (v) => { filterStore.comfyuiLoraFilter = v ?? []; },
 });
 
 const gbIsFilterActive = computed(
   () =>
-    (gb?.mediaTypeFilter?.value ?? "all") !== "all" ||
-    (gb?.minScoreFilter?.value ?? null) != null ||
-    (gb?.maxScoreFilter?.value ?? null) != null ||
-    (gb?.smartScoreBucketFilter?.value ?? null) != null ||
-    (gb?.resolutionBucketFilter?.value ?? null) != null ||
-    (Array.isArray(gb?.tagFilter?.value) && gb.tagFilter.value.length > 0) ||
-    (Array.isArray(gb?.tagRejectedFilter?.value) &&
-      gb.tagRejectedFilter.value.length > 0) ||
-    (Array.isArray(gb?.tagConfidenceAboveFilter?.value) &&
-      gb.tagConfidenceAboveFilter.value.length > 0) ||
-    (Array.isArray(gb?.tagConfidenceBelowFilter?.value) &&
-      gb.tagConfidenceBelowFilter.value.length > 0) ||
-    (Array.isArray(gb?.comfyuiModelFilter?.value) &&
-      gb.comfyuiModelFilter.value.length > 0) ||
-    (Array.isArray(gb?.comfyuiLoraFilter?.value) &&
-      gb.comfyuiLoraFilter.value.length > 0) ||
-    (gb?.faceBboxFilter?.value ?? null) != null ||
-    (gb?.sharedOnlyFilter?.value ?? false) ||
-    (gb?.unassignedOnlyFilter?.value ?? false),
+    filterStore.mediaTypeFilter !== "all" ||
+    filterStore.minScoreFilter != null ||
+    filterStore.maxScoreFilter != null ||
+    filterStore.smartScoreBucketFilter != null ||
+    filterStore.resolutionBucketFilter != null ||
+    (Array.isArray(filterStore.tagFilter) && filterStore.tagFilter.length > 0) ||
+    (Array.isArray(filterStore.tagRejectedFilter) && filterStore.tagRejectedFilter.length > 0) ||
+    (Array.isArray(filterStore.tagConfidenceAboveFilter) && filterStore.tagConfidenceAboveFilter.length > 0) ||
+    (Array.isArray(filterStore.tagConfidenceBelowFilter) && filterStore.tagConfidenceBelowFilter.length > 0) ||
+    (Array.isArray(filterStore.comfyuiModelFilter) && filterStore.comfyuiModelFilter.length > 0) ||
+    (Array.isArray(filterStore.comfyuiLoraFilter) && filterStore.comfyuiLoraFilter.length > 0) ||
+    filterStore.faceBboxFilter != null ||
+    filterStore.sharedOnlyFilter ||
+    filterStore.unassignedOnlyFilter,
 );
 
 const gbActiveFilterCount = computed(() => {
   let count = 0;
-  if ((gb?.mediaTypeFilter?.value ?? "all") !== "all") count++;
-  if ((gb?.minScoreFilter?.value ?? null) != null) count++;
-  if ((gb?.maxScoreFilter?.value ?? null) != null) count++;
-  if ((gb?.smartScoreBucketFilter?.value ?? null) != null) count++;
-  if ((gb?.resolutionBucketFilter?.value ?? null) != null) count++;
-  if (Array.isArray(gb?.tagFilter?.value)) count += gb.tagFilter.value.length;
-  if (Array.isArray(gb?.tagRejectedFilter?.value))
-    count += gb.tagRejectedFilter.value.length;
-  if (Array.isArray(gb?.tagConfidenceAboveFilter?.value))
-    count += gb.tagConfidenceAboveFilter.value.length;
-  if (Array.isArray(gb?.tagConfidenceBelowFilter?.value))
-    count += gb.tagConfidenceBelowFilter.value.length;
-  if (Array.isArray(gb?.comfyuiModelFilter?.value))
-    count += gb.comfyuiModelFilter.value.length;
-  if (Array.isArray(gb?.comfyuiLoraFilter?.value))
-    count += gb.comfyuiLoraFilter.value.length;
-  if ((gb?.faceBboxFilter?.value ?? null) != null) count++;
-  if (gb?.sharedOnlyFilter?.value) count++;
-  if (gb?.unassignedOnlyFilter?.value) count++;
+  if (filterStore.mediaTypeFilter !== "all") count++;
+  if (filterStore.minScoreFilter != null) count++;
+  if (filterStore.maxScoreFilter != null) count++;
+  if (filterStore.smartScoreBucketFilter != null) count++;
+  if (filterStore.resolutionBucketFilter != null) count++;
+  if (Array.isArray(filterStore.tagFilter)) count += filterStore.tagFilter.length;
+  if (Array.isArray(filterStore.tagRejectedFilter)) count += filterStore.tagRejectedFilter.length;
+  if (Array.isArray(filterStore.tagConfidenceAboveFilter)) count += filterStore.tagConfidenceAboveFilter.length;
+  if (Array.isArray(filterStore.tagConfidenceBelowFilter)) count += filterStore.tagConfidenceBelowFilter.length;
+  if (Array.isArray(filterStore.comfyuiModelFilter)) count += filterStore.comfyuiModelFilter.length;
+  if (Array.isArray(filterStore.comfyuiLoraFilter)) count += filterStore.comfyuiLoraFilter.length;
+  if (filterStore.faceBboxFilter != null) count++;
+  if (filterStore.sharedOnlyFilter) count++;
+  if (filterStore.unassignedOnlyFilter) count++;
   return count;
 });
 
 function gbClearAllFilters() {
-  if (!gb) return;
-  if (gb.mediaTypeFilter) gb.mediaTypeFilter.value = "all";
-  if (gb.minScoreFilter) gb.minScoreFilter.value = null;
-  if (gb.maxScoreFilter) gb.maxScoreFilter.value = null;
-  if (gb.smartScoreBucketFilter) gb.smartScoreBucketFilter.value = null;
-  if (gb.resolutionBucketFilter) gb.resolutionBucketFilter.value = null;
-  if (gb.faceBboxFilter) gb.faceBboxFilter.value = null;
-  if (gb.tagFilter) gb.tagFilter.value = [];
-  if (gb.tagRejectedFilter) gb.tagRejectedFilter.value = [];
-  if (gb.tagConfidenceAboveFilter) gb.tagConfidenceAboveFilter.value = [];
-  if (gb.tagConfidenceBelowFilter) gb.tagConfidenceBelowFilter.value = [];
-  if (gb.comfyuiModelFilter) gb.comfyuiModelFilter.value = [];
-  if (gb.comfyuiLoraFilter) gb.comfyuiLoraFilter.value = [];
-  if (gb.sharedOnlyFilter) gb.sharedOnlyFilter.value = false;
-  if (gb.unassignedOnlyFilter) gb.unassignedOnlyFilter.value = false;
+  filterStore.resetFilters();
 }
 
 const gbMediaTypeOptions = [
@@ -2276,7 +2221,7 @@ async function gbLoadTagFilterSuggestions(input) {
     return;
   }
   try {
-    const res = await apiClient.get(`${gb?.backendUrl ?? ""}/tags`);
+    const res = await apiClient.get(`${props.backendUrl ?? ""}/tags`);
     const all = Array.isArray(res.data) ? res.data : [];
     const q = input.toLowerCase();
     gbTagFilterSuggestions.value = all
@@ -2344,7 +2289,7 @@ async function gbLoadConfidenceTagSuggestions(input) {
     return;
   }
   try {
-    const res = await apiClient.get(`${gb?.backendUrl ?? ""}/tags`);
+    const res = await apiClient.get(`${props.backendUrl ?? ""}/tags`);
     const all = Array.isArray(res.data) ? res.data : [];
     const q = input.toLowerCase();
     gbConfidenceTagSuggestions.value = all
@@ -2417,7 +2362,7 @@ const gbComfyuiFilterExpanded = ref(false);
 
 watch(gbFilterMenuOpen, async (isOpen) => {
   if (isOpen) {
-    const backendUrl = gb?.backendUrl ?? "";
+    const backendUrl = props.backendUrl ?? "";
     if (
       backendUrl &&
       !gbComfyuiModelOptions.value.length &&
@@ -2440,40 +2385,34 @@ watch(gbFilterMenuOpen, async (isOpen) => {
 
 // ── Grid Bar: View ─────────────────────────────────────────────────────────────
 const gbViewMenuOpen = ref(false);
-const gbPendingColumns = ref(gb?.columns?.value ?? 4);
+const gbPendingColumns = ref(gridStore.columns ?? 4);
 
 watch(
-  () => gb?.columns?.value,
+  () => gridStore.columns,
   (v) => {
     if (!gbViewMenuOpen.value) gbPendingColumns.value = v ?? 4;
   },
 );
 
 watch(gbViewMenuOpen, (isOpen) => {
-  if (isOpen) gbPendingColumns.value = gb?.columns?.value ?? 4;
+  if (isOpen) gbPendingColumns.value = gridStore.columns ?? 4;
 });
 
 function gbCommitColumns() {
-  if (gb?.columns) gb.columns.value = gbPendingColumns.value;
+  gridStore.columns = gbPendingColumns.value;
 }
 
 const gbCompactModeModel = computed({
-  get: () => gb?.compactMode?.value ?? false,
-  set: (v) => {
-    if (gb?.compactMode) gb.compactMode.value = Boolean(v);
-  },
+  get: () => gridStore.compactMode,
+  set: (v) => { gridStore.compactMode = Boolean(v); },
 });
 const gbShowFaceBboxesModel = computed({
-  get: () => gb?.showFaceBboxes?.value ?? false,
-  set: (v) => {
-    if (gb?.showFaceBboxes) gb.showFaceBboxes.value = Boolean(v);
-  },
+  get: () => gridStore.showFaceBboxes,
+  set: (v) => { gridStore.showFaceBboxes = Boolean(v); },
 });
 const gbShowProblemIconModel = computed({
-  get: () => gb?.showProblemIcon?.value ?? true,
-  set: (v) => {
-    if (gb?.showProblemIcon) gb.showProblemIcon.value = Boolean(v);
-  },
+  get: () => gridStore.showProblemIcon,
+  set: (v) => { gridStore.showProblemIcon = Boolean(v); },
 });
 
 const gbOverlayOptions = computed(() => [
@@ -2506,13 +2445,13 @@ const gbOverlayOptions = computed(() => [
 ]);
 
 const gbExpandAllStacksDisabled = computed(() => {
-  const total = Number(gb?.stackTotalCount?.value || 0);
-  const expanded = Number(gb?.stackExpandedCount?.value || 0);
+  const total = Number(gridStore.totalStackCount || 0);
+  const expanded = Number(gridStore.expandedStackCount || 0);
   return total <= 0 || expanded >= total;
 });
 
 const gbCollapseAllStacksDisabled = computed(
-  () => Number(gb?.stackExpandedCount?.value || 0) <= 0,
+  () => Number(gridStore.expandedStackCount || 0) <= 0,
 );
 
 // ── Tag-panel mini-grid ───────────────────────────────────────────────────────
@@ -4024,7 +3963,8 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
    Grid Bar – Sort / Filter / View buttons and panels
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Bar buttons ──────────────────────────────────────────────────────────── */.bar-split-button {
+/* ── Bar buttons ──────────────────────────────────────────────────────────── */
+.bar-split-button {
   display: flex;
   align-items: center;
   border-radius: 5px;
@@ -4078,15 +4018,13 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .tb-comfyui-panel {
   padding: 12px 14px;
   min-width: 260px;
-  background: rgb(var(--v-theme-background));
-  color: rgb(var(--v-theme-on-background));
-  border-radius: 8px;
-  box-shadow: 2px 2px 16px rgba(0, 0, 0, 0.4);
-  display: flex;
-  flex-direction: column;
 }
-.tb-export-panel { gap: 8px; }
-.tb-comfyui-panel { gap: 10px; }
+.tb-export-panel {
+  gap: 8px;
+}
+.tb-comfyui-panel {
+  gap: 10px;
+}
 
 .tb-export-title {
   font-size: 1em;
@@ -4258,10 +4196,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   min-width: 340px;
   max-width: 400px;
   padding: 8px 8px 10px;
-  background: rgba(var(--v-theme-background), 0.96);
-  color: rgb(var(--v-theme-on-background));
-  border-radius: 8px;
-  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
 }
 .gb-sort-header {
   display: flex;
@@ -4375,17 +4309,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 /* ── Filter panel ─────────────────────────────────────────────────────────── */
 .gb-filter-panel {
-  display: flex;
-  flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   padding: 10px 12px;
   min-width: 280px;
   max-width: 340px;
-  background: rgba(var(--v-theme-background), 0.96);
-  color: rgb(var(--v-theme-on-background));
-  border-radius: 8px;
-  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
 }
 
 .gb-filter-panel-header {
@@ -4682,16 +4610,10 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 /* ── View panel ───────────────────────────────────────────────────────────── */
 .gb-view-panel {
-  display: flex;
-  flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   padding: 8px 12px 12px;
   min-width: 220px;
-  background: rgba(var(--v-theme-background), 0.96);
-  color: rgb(var(--v-theme-on-background));
-  border-radius: 8px;
-  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
 }
 
 .gb-view-switch {
