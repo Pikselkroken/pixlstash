@@ -956,7 +956,7 @@
         </v-menu>
         <!-- ── Toolbar: Import ───────────────────────────────────────── -->
         <button
-          v-if="!isReadOnly && tb"
+          v-if="!isReadOnly"
           class="bar-btn bar-btn--icon"
           type="button"
           title="Import photos"
@@ -1656,10 +1656,9 @@
         </div>
         <!-- /selection-ctx-bar -->
         <!-- ── Separator: Delete | Settings ───────────────────────────── -->
-        <div v-if="tb" class="bar-separator"></div>
+        <div class="bar-separator"></div>
         <!-- ── Toolbar: Settings ─────────────────────────────────────── -->
         <button
-          v-if="tb"
           class="bar-btn bar-btn--icon"
           type="button"
           title="Settings"
@@ -1669,7 +1668,6 @@
         </button>
         <!-- ── Toolbar: Stats toggle ──── -->
         <button
-          v-if="tb"
           class="bar-btn bar-btn--icon"
           :class="{ 'bar-btn--active': sidebarStore.statsOpen }"
           type="button"
