@@ -69,6 +69,9 @@ frontend/src/
 │   ├── tags.js                  # Tag normalisation, deduplication, penalty scoring
 │   └── utils.js                 # Date formatting, score toggle, stack colours, ComfyUI error parsing
 │
+├── router/
+│   └── index.js                 # Vue Router config: app routes + history mode
+│
 └── components/
     ├── views/       # Full-page / full-screen UI surfaces
     ├── panels/      # Large structural panels that form the app shell
@@ -88,7 +91,7 @@ frontend/src/
 | UI component library | Vuetify 3 |
 | State management | **Pinia** — 10 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
-| Routing | **No Vue Router.** Navigation is pure conditional rendering (`Root.vue` gates on `isAuthenticated`; sub-views are toggled by sidebar selection state in `App.vue`) |
+| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`) render `App.vue` via `<RouterView>`. `App.vue` watches the route and syncs params to Pinia stores; nav handlers call `router.push()` to update the URL. |
 | Build tool | Vite 5 |
 | Unit tests | Vitest (jsdom environment) — test files co-located as `*.test.js` in `utils/` |
 | Icons | Material Design Icons (`@mdi/font`) |
@@ -110,14 +113,15 @@ frontend/src/
 Bootstraps the app:
 1. Imports global CSS (`vuetify/styles`, MDI icons, `style.css`, `context-menu.css`).
 2. Creates a Vuetify instance with two custom themes: `pixlStashLight` and `pixlStashDark` (full custom colour tokens — sidebar, toolbar, accent, primary, input-background, etc.).
-3. Mounts `Root` as the top-level component.
+3. Creates the Vue Router instance (imported from `src/router/index.js`).
+4. Mounts `Root` as the top-level component.
 
 ### `Root.vue`
 
 Authentication gate rendered before `App`. On mount:
 1. Reads `?token=` query parameter — if present, calls `activateShareToken()` and validates via `GET /session/context`. Valid → sets `isAuthenticated = true` and `sessionContext`.
 2. Otherwise calls `checkSession()` (a `GET /check-session` request).
-3. Shows `LoginScreen` when `isAuthenticated` is false, `App` when true.
+3. Shows `LoginScreen` when `isAuthenticated` is false; shows `<RouterView>` (which renders `App.vue`) when true.
 4. Renders a blank `root-loading` div during the async check.
 
 ### `App.vue`

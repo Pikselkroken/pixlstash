@@ -9,6 +9,7 @@ import {
   watch,
 } from "vue";
 import { useTheme } from "vuetify";
+import { useRoute, useRouter } from "vue-router";
 import {
   apiClient,
   API_BASE_URL,
@@ -48,6 +49,10 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
+
+// --- Router ---
+const route = useRoute();
+const router = useRouter();
 
 // --- Theme ---
 const theme = useTheme();
@@ -493,6 +498,7 @@ async function handleSelectCharacter(payload) {
   selectionStore.selectedSetIds = [];
   await nextTick();
   closeSidebarIfMobile();
+  pushRouteForCurrentSelection();
 }
 
 async function handleSelectSet(payload) {
@@ -542,6 +548,7 @@ async function handleSelectSet(payload) {
     selectionStore.setSetDifferenceBaseId(null);
   }
   closeSidebarIfMobile();
+  pushRouteForCurrentSelection();
 }
 
 function handleSearchAllPictures() {
@@ -551,6 +558,7 @@ function handleSearchAllPictures() {
   selectionStore.selectedSetIds = [];
   selectionStore.selectedFolderFilter = null;
   selectionStore.lastSelectedCharacterLabel = "All Pictures";
+  pushAppRoute({ name: "all-pictures" });
 }
 
 function handleSelectFolder(payload) {
@@ -563,7 +571,180 @@ function handleSelectFolder(payload) {
   selectionStore.selectedCharacterIds = [];
   selectionStore.selectedSet = null;
   selectionStore.selectedSetIds = [];
+  // Folder filters are not reflected in the URL (complex payload; Phase 10 scope).
 }
+
+// ============================================================
+// ROUTING — URL ↔ Store sync
+// ============================================================
+
+/**
+ * Push a route without cluttering history on duplicate navigations.
+ * Swallows NavigationDuplicated errors (vue-router throws on same-route push).
+ */
+function pushAppRoute(target) {
+  router.push(target).catch(() => {});
+}
+
+/**
+ * Build and push the correct app route for the current store selection state.
+ * Called at the end of each user-initiated navigation handler so the URL
+ * always reflects what the grid is showing.
+ */
+function pushRouteForCurrentSelection() {
+  const sel = selectionStore;
+  const proj = projectStore;
+
+  if (proj.projectViewMode === "project" && proj.selectedProjectId != null) {
+    pushAppRoute({
+      name: "project",
+      params: { id: String(proj.selectedProjectId) },
+    });
+    return;
+  }
+
+  if (sel.selectedSetIds.length > 0) {
+    const query = {};
+    if (sel.selectedSetIds.length > 1) {
+      query.ids = sel.selectedSetIds.join(",");
+      query.mode = sel.setMultiMode || "intersection";
+      if (
+        sel.setMultiMode === "difference" &&
+        sel.setDifferenceBaseId != null
+      ) {
+        query.base = String(sel.setDifferenceBaseId);
+      }
+    }
+    pushAppRoute({
+      name: "set",
+      params: { id: String(sel.selectedSetIds[0]) },
+      query,
+    });
+    return;
+  }
+
+  if (sel.selectedCharacter === SCRAPHEAP_PICTURES_ID) {
+    pushAppRoute({ name: "scrapheap" });
+    return;
+  }
+
+  if (!sel.selectedCharacter || sel.selectedCharacter === ALL_PICTURES_ID) {
+    pushAppRoute({ name: "all-pictures" });
+    return;
+  }
+
+  const query = {};
+  if (sel.selectedCharacterIds.length > 1) {
+    query.ids = sel.selectedCharacterIds.join(",");
+    query.mode = sel.characterMultiMode || "union";
+  }
+  pushAppRoute({
+    name: "character",
+    params: { id: String(sel.selectedCharacter) },
+    query,
+  });
+}
+
+/**
+ * Apply the current route params/query to the Pinia stores.
+ * Called on initial load (immediate) and on every route change so that
+ * back/forward navigation and direct URL entry update the grid correctly.
+ *
+ * This function is intentionally idempotent — writing the same values to
+ * reactive refs is a no-op in Vue's reactivity system, so it is safe to
+ * call it on every route tick without triggering unnecessary re-renders.
+ */
+function applyRouteToStores() {
+  const { name, params, query } = route;
+
+  if (name === "all-pictures") {
+    selectionStore.selectedFolderFilter = null;
+    selectionStore.selectedSet = null;
+    selectionStore.selectedSetIds = [];
+    selectionStore.selectedCharacter = ALL_PICTURES_ID;
+    selectionStore.selectedCharacterIds = [];
+    selectionStore.lastSelectedCharacterLabel = "All Pictures";
+    projectStore.projectViewMode = "global";
+    projectStore.selectedProjectId = null;
+  } else if (name === "character") {
+    const charId = String(params.id || ALL_PICTURES_ID);
+    const idsRaw = query.ids;
+    const modeRaw = query.mode;
+    const ids = idsRaw
+      ? String(idsRaw)
+          .split(",")
+          .map(Number)
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+    selectionStore.selectedFolderFilter = null;
+    selectionStore.selectedSet = null;
+    selectionStore.selectedSetIds = [];
+    selectionStore.selectedCharacter = charId;
+    selectionStore.selectedCharacterIds = ids;
+    if (ids.length > 1 && modeRaw) {
+      selectionStore.characterMultiMode = String(modeRaw);
+    }
+    if (charId === ALL_PICTURES_ID) {
+      selectionStore.lastSelectedCharacterLabel = "All Pictures";
+    } else if (charId === UNASSIGNED_PICTURES_ID) {
+      selectionStore.lastSelectedCharacterLabel = "Unassigned Pictures";
+    }
+    projectStore.projectViewMode = "global";
+    projectStore.selectedProjectId = null;
+  } else if (name === "scrapheap") {
+    selectionStore.selectedFolderFilter = null;
+    selectionStore.selectedSet = null;
+    selectionStore.selectedSetIds = [];
+    selectionStore.selectedCharacter = SCRAPHEAP_PICTURES_ID;
+    selectionStore.selectedCharacterIds = [];
+    selectionStore.lastSelectedCharacterLabel = "Scrapheap";
+    projectStore.projectViewMode = "global";
+    projectStore.selectedProjectId = null;
+  } else if (name === "set") {
+    const primaryId = Number(params.id);
+    const idsRaw = query.ids;
+    const modeRaw = query.mode;
+    const baseRaw = query.base;
+    const ids = idsRaw
+      ? String(idsRaw)
+          .split(",")
+          .map(Number)
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : Number.isFinite(primaryId) && primaryId > 0
+        ? [primaryId]
+        : [];
+    selectionStore.selectedFolderFilter = null;
+    selectionStore.selectedCharacter = null;
+    selectionStore.selectedCharacterIds = [];
+    selectionStore.selectedSet = ids[0] ?? null;
+    selectionStore.selectedSetIds = ids;
+    if (ids.length > 1 && modeRaw) {
+      selectionStore.setMultiMode = String(modeRaw);
+    }
+    if (ids.length > 1 && baseRaw) {
+      const baseId = Number(baseRaw);
+      if (Number.isFinite(baseId) && baseId > 0) {
+        selectionStore.setDifferenceBaseId = baseId;
+      }
+    }
+    projectStore.projectViewMode = "global";
+    projectStore.selectedProjectId = null;
+  } else if (name === "project") {
+    const projectId = Number(params.id);
+    projectStore.projectViewMode = "project";
+    projectStore.selectedProjectId =
+      Number.isFinite(projectId) && projectId > 0 ? projectId : null;
+    selectionStore.selectedCharacter = ALL_PICTURES_ID;
+    selectionStore.selectedCharacterIds = [];
+    selectionStore.selectedSet = null;
+    selectionStore.selectedSetIds = [];
+    selectionStore.selectedFolderFilter = null;
+    selectionStore.lastSelectedCharacterLabel = "All Pictures";
+  }
+}
+
+// Sync route → stores on every navigation (and immediately on mount for deep-linking).
+watch(route, applyRouteToStores, { immediate: true, deep: true });
 
 async function handleUpdateSearchQuery(value) {
   const nextQuery = typeof value === "string" ? value.trim() : "";
@@ -574,10 +755,21 @@ async function handleUpdateSearchQuery(value) {
 
 function handleUpdateProjectViewMode(mode) {
   projectStore.projectViewMode = mode;
+  if (mode === "global") {
+    pushAppRoute({ name: "all-pictures" });
+  } else if (mode === "project" && projectStore.selectedProjectId != null) {
+    pushAppRoute({
+      name: "project",
+      params: { id: String(projectStore.selectedProjectId) },
+    });
+  }
 }
 
 function handleUpdateSelectedProjectId(id) {
   projectStore.selectedProjectId = id;
+  if (projectStore.projectViewMode === "project" && id != null) {
+    pushAppRoute({ name: "project", params: { id: String(id) } });
+  }
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
