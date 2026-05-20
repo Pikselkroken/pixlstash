@@ -4,11 +4,9 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import Session, delete, or_, select
 
 from pixlstash.db_models import Tag
-from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
-from pixlstash.tagger_plugins.pixlstash_tagger import PIXLSTASH_TAGGER_DEFAULT_THRESHOLD
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import sanitise_tag
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
@@ -99,20 +97,13 @@ def create_router(server) -> APIRouter:
         ]
         if not include_meta:
             return payload
-        bias = server.vault._pixlstash_tagger_threshold_offset or 0.0
-        tagger = (
-            server.vault._engine.pixlstash_tagger_service
-            if server.vault._engine
-            else None
-        )
-        meta_path = tagger.meta_path if tagger is not None else None
+        meta_path = server.vault.get_pixlstash_tagger_meta_path()
+        offset = server.vault.get_pixlstash_tagger_threshold_offset()
         return {
             "tag_predictions": payload,
             "meta": {
-                "acceptance_threshold": max(
-                    0.01, float(PIXLSTASH_TAGGER_DEFAULT_THRESHOLD) + bias
-                ),
-                "label_thresholds": _load_label_thresholds(meta_path, bias),
+                "acceptance_threshold": server.vault.get_pixlstash_acceptance_threshold(),
+                "label_thresholds": _load_label_thresholds(meta_path, offset),
             },
         }
 
@@ -280,26 +271,7 @@ def create_router(server) -> APIRouter:
 
         server.vault.db.run_task(_reset)
         server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
-
-        # Submit an interactive TagTask directly so the retag is not held
-        # behind the face-extraction priority gate.
-        engine = server.vault._engine
-        if engine is not None:
-            from pixlstash.tasks.tag_task import TagTask
-
-            def _fetch_pic(session: Session):
-                return session.get(Picture, pic_id)
-
-            pic = server.vault.db.run_immediate_read_task(_fetch_pic)
-            if pic is not None:
-                task = TagTask(
-                    database=server.vault.db,
-                    tagging_workflow=engine.tagging_workflow,
-                    pictures=[pic],
-                    interactive=True,
-                )
-                server.vault.submit_task(task)
-
+        server.vault.retag_picture_interactive(pic_id)
         return {"status": "reset"}
 
     @router.get(
@@ -311,13 +283,8 @@ def create_router(server) -> APIRouter:
         ),
     )
     def get_label_thresholds():
-        offset = server.vault._pixlstash_tagger_threshold_offset or 0.0
-        tagger = (
-            server.vault._engine.pixlstash_tagger_service
-            if server.vault._engine
-            else None
-        )
-        meta_path = tagger.meta_path if tagger is not None else None
+        offset = server.vault.get_pixlstash_tagger_threshold_offset()
+        meta_path = server.vault.get_pixlstash_tagger_meta_path()
         raw = _load_raw_label_thresholds(meta_path)
         sorted_labels = sorted(raw.items())
         return [

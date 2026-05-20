@@ -66,7 +66,6 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
 )
 AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/assets/",
-    "/pictures/shared/",
     "/share/",
     "/docs/",
     "/redoc/",
