@@ -47,6 +47,7 @@ class InferenceEngine:
         florence_service: "Florence2Service",
         vram_budget: VramBudget,
         lifecycle: ModelLifecycleManager,
+        force_cpu: bool = False,
     ) -> None:
         self.device = device
         self.clip_service = clip_service
@@ -56,3 +57,4 @@ class InferenceEngine:
         self.florence_service = florence_service
         self.vram_budget = vram_budget
         self.lifecycle = lifecycle
+        self.force_cpu = force_cpu

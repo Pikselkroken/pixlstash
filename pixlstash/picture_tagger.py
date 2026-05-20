@@ -33,10 +33,6 @@ MAX_CONCURRENT_IMAGES_GPU = 64
 MAX_CONCURRENT_IMAGES_CPU = 8
 DEFAULT_MAX_VRAM_GB: float | None = None
 
-# Approximate VRAM footprints for non-tagging GPU pipelines
-INSIGHTFACE_VRAM_MB = 400  # RetinaFace + ArcFace models via CUDA provider
-# FLORENCE_BASE_VRAM_MB and FLORENCE_PER_IMAGE_VRAM_MB are imported from
-# pixlstash.tagger_plugins.florence2 (defined there alongside the service).
 
 
 class PictureTagger:
@@ -145,6 +141,7 @@ class PictureTagger:
             florence_service=self._florence_service,
             vram_budget=_vram_budget,
             lifecycle=_lifecycle,
+            force_cpu=(self._device != "cuda"),
         )
 
         self.set_max_vram_usage_gb(DEFAULT_MAX_VRAM_GB)
@@ -165,24 +162,12 @@ class PictureTagger:
         return self.tagging_workflow.estimated_incremental_vram_mb(image_count)
 
     def suggested_image_embedding_batch_size(self) -> int:
-        """VRAM-budget-constrained batch size for ImageEmbeddingTask CLIP inference."""
-        # CLIP ViT-B-32: ~350 MB model (fp16), ~8 MB per image activation.
-        # This is vastly cheaper than the tagger (220 MB/image) so a much
-        # larger batch fits in the same VRAM budget.
-        max_batch = 128
-        if self._device == "cuda":
-            max_batch = min(
-                max_batch,
-                self._engine.vram_budget.limited_batch_cap(base_mb=350, per_item_mb=8),
-            )
-        return max(1, max_batch)
+        """Delegate to :meth:`ClipEmbeddingWorkflow.suggested_batch_size`."""
+        return self.clip_embedding_workflow.suggested_batch_size()
 
     def estimate_image_embedding_vram_mb(self, image_count: int) -> int:
-        """Incremental VRAM estimate for an ImageEmbeddingTask batch."""
-        if self._device != "cuda":
-            return 0
-        batch = min(max(1, int(image_count or 1)), 512)
-        return int(max(64, 8 * batch))
+        """Delegate to :meth:`ClipEmbeddingWorkflow.estimated_vram_mb`."""
+        return self.clip_embedding_workflow.estimated_vram_mb(image_count)
 
     def estimate_face_extraction_vram_mb(self) -> int:
         """Delegate to :meth:`FaceEmbeddingWorkflow.estimated_vram_mb`."""
@@ -341,6 +326,11 @@ class PictureTagger:
         self._clip_service.ensure_ready()
 
     @property
+    def force_cpu(self) -> bool:
+        """Return ``True`` when this tagger is configured to use CPU-only inference."""
+        return self._engine.force_cpu
+
+    @property
     def clip_service(self) -> ClipService:
         """The underlying :class:`ClipService` instance."""
         return self._clip_service
@@ -359,6 +349,13 @@ class PictureTagger:
     def description_workflow(self) -> DescriptionWorkflow:
         """A :class:`DescriptionWorkflow` bound to this tagger's engine."""
         return DescriptionWorkflow(engine=self._engine, image_root=self._image_root)
+
+    @property
+    def clip_embedding_workflow(self) -> "ClipEmbeddingWorkflow":
+        """A :class:`ClipEmbeddingWorkflow` bound to this tagger's engine."""
+        from pixlstash.inference.workflows.clip_embedding import ClipEmbeddingWorkflow
+
+        return ClipEmbeddingWorkflow(engine=self._engine)
 
     @property
     def tagging_workflow(self) -> TaggingWorkflow:

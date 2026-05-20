@@ -311,7 +311,7 @@ class FaceExtractionTask(BaseTask):
             self._insightface_app = FaceExtractionTask._global_insightface_app
             return
 
-        use_cuda = not PictureTagger.FORCE_CPU and torch.cuda.is_available()
+        use_cuda = not self._picture_tagger.force_cpu and torch.cuda.is_available()
         if use_cuda:
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         else:
