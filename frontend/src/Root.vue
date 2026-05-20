@@ -3,13 +3,14 @@
     <div v-if="isChecking" class="root-loading" />
     <template v-else>
       <LoginScreen v-if="!isAuthenticated" :tokenError="tokenError" />
-      <App v-else />
+      <RouterView v-else />
     </template>
   </div>
 </template>
 
 <script setup>
 import { onMounted, ref } from "vue";
+import { RouterView } from "vue-router";
 import {
   activateShareToken,
   apiClient,
@@ -18,7 +19,6 @@ import {
   sessionContext,
 } from "./utils/apiClient";
 import LoginScreen from "./components/views/LoginScreen.vue";
-import App from "./App.vue";
 
 const isChecking = ref(true);
 const tokenError = ref(null);
