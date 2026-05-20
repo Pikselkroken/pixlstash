@@ -1,13 +1,19 @@
+from __future__ import annotations
+
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from sqlmodel import Session
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.workflows.description import DescriptionWorkflow
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
+
+if TYPE_CHECKING:
+    from pixlstash.picture_tagger import PictureTagger
 
 
 logger = get_logger(__name__)
@@ -18,19 +24,20 @@ class DescriptionTask(BaseTask):
 
     Args:
         database: Vault database instance.
-        picture_tagger: Tagger used to generate descriptions.
+        workflow: :class:`~pixlstash.inference.workflows.description.DescriptionWorkflow`
+            used to generate captions.
         pictures: Pictures to process in this batch.
     """
 
     CPU_SPILLOVER_REUSE_GRACE_S = 8.0
-    _cpu_spillover_tagger: PictureTagger | None = None
+    _cpu_spillover_tagger: "PictureTagger | None" = None
     _cpu_spillover_last_used_at: float = 0.0
     _cpu_spillover_lock = threading.Lock()
 
     def __init__(
         self,
         database,
-        picture_tagger: PictureTagger,
+        workflow: DescriptionWorkflow,
         pictures: list[Picture],
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -42,7 +49,7 @@ class DescriptionTask(BaseTask):
             },
         )
         self._db = database
-        self._picture_tagger = picture_tagger
+        self._workflow = workflow
         self._pictures = pictures or []
         self._cpu_spillover_enabled = False
 
@@ -90,13 +97,10 @@ class DescriptionTask(BaseTask):
             logger.debug("DescriptionTask CPU spillover tagger close failed: %s", exc)
 
     def estimated_vram_mb(self) -> int:
-        fn = getattr(self._picture_tagger, "estimate_description_vram_mb", None)
-        if callable(fn):
-            try:
-                return max(0, int(fn(len(self._pictures))))
-            except Exception:
-                return 0
-        return 0
+        try:
+            return max(0, self._workflow.estimate_vram_mb(len(self._pictures)))
+        except Exception:
+            return 0
 
     def _run_task(self):
         if not self._pictures:
@@ -137,7 +141,7 @@ class DescriptionTask(BaseTask):
         )
 
         self._release_idle_cpu_spillover_tagger(force=False)
-        active_tagger = self._picture_tagger
+        active_workflow = self._workflow
         cpu_spillover_tagger = None
         if self._cpu_spillover_enabled:
             logger.debug(
@@ -148,11 +152,11 @@ class DescriptionTask(BaseTask):
             cpu_spillover_tagger = self._acquire_cpu_spillover_tagger(
                 self._db.image_root
             )
-            active_tagger = cpu_spillover_tagger
+            active_workflow = cpu_spillover_tagger.description_workflow
 
         descriptions_generated = []
         try:
-            batch_results = active_tagger.generate_descriptions_batch(pictures)
+            batch_results = active_workflow.generate_batch(pictures)
         except Exception as exc:
             import traceback
 

@@ -69,6 +69,79 @@ class ClipService:
         self._preprocess = preprocess
         self._tokenizer = open_clip.get_tokenizer(CLIP_MODEL_NAME)
 
+    @property
+    def device(self) -> str:
+        """Current inference device (``"cuda"`` or ``"cpu"``).""" 
+        return self._device
+
+    @property
+    def model(self):
+        """The loaded OpenCLIP model, or ``None`` if not yet loaded."""
+        return self._model
+
+    @property
+    def tokenizer(self):
+        """The CLIP tokenizer, or ``None`` if not yet loaded."""
+        return self._tokenizer
+
+    def encode_image_batch(self, images: list) -> "Optional[np.ndarray]":
+        """Encode a batch of PIL images into normalised CLIP visual embeddings.
+
+        Preprocesses the images, runs a single batched forward pass, and returns
+        row-normalised float32 embeddings.  Falls back to CPU on CUDA OOM.
+
+        Args:
+            images: List of ``PIL.Image`` objects.
+
+        Returns:
+            Float32 numpy array of shape ``(N, D)`` or ``None`` on failure.
+        """
+        if not images:
+            return None
+        self.ensure_ready()
+        try:
+            tensors = torch.stack(
+                [self._preprocess(img) for img in images]
+            ).to(self._device)
+            if self._device == "cuda":
+                tensors = tensors.half()
+            with torch.no_grad():
+                features = self._model.encode_image(tensors)
+                features = features / features.norm(dim=-1, keepdim=True)
+            return features.cpu().float().numpy()
+        except RuntimeError as exc:
+            if any(
+                kw in str(exc)
+                for kw in ("CUDA out of memory", "not compatible", "CUDA error")
+            ):
+                logger.warning(
+                    "ClipService.encode_image_batch: CUDA error, retrying on CPU: %s",
+                    exc,
+                )
+                self._model = self._model.float().to("cpu")
+                self._device = "cpu"
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                try:
+                    tensors = torch.stack(
+                        [self._preprocess(img) for img in images]
+                    ).to("cpu")
+                    with torch.no_grad():
+                        features = self._model.encode_image(tensors)
+                        features = features / features.norm(dim=-1, keepdim=True)
+                    return features.cpu().float().numpy()
+                except Exception as cpu_exc:
+                    logger.error(
+                        "ClipService.encode_image_batch: CPU fallback failed: %s",
+                        cpu_exc,
+                    )
+                    return None
+            logger.error("ClipService.encode_image_batch: RuntimeError: %s", exc)
+            return None
+        except Exception as exc:
+            logger.error("ClipService.encode_image_batch: %s", exc)
+            return None
+
     def encode_text(self, query: str) -> Optional[np.ndarray]:
         """Encode a text query into a normalised CLIP embedding.
 

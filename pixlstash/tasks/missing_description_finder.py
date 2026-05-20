@@ -53,7 +53,7 @@ class MissingDescriptionFinder(BaseTaskFinder):
 
         return DescriptionTask(
             database=self._db,
-            picture_tagger=picture_tagger,
+            workflow=picture_tagger.description_workflow,
             pictures=selected,
         )
 

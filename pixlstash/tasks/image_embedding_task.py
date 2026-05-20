@@ -243,12 +243,8 @@ class ImageEmbeddingTask(BaseTask):
 
         for attempt in range(1, 4):
             try:
-                self._picture_tagger._ensure_clip_ready()
-                if (
-                    getattr(self._picture_tagger, "_clip_model", None) is not None
-                    and getattr(self._picture_tagger, "_clip_preprocess", None)
-                    is not None
-                ):
+                self._picture_tagger.ensure_clip_ready()
+                if self._picture_tagger.clip_service.is_loaded():
                     return True
             except Exception as exc:
                 logger.warning(
@@ -305,10 +301,8 @@ class ImageEmbeddingTask(BaseTask):
             model.load_state_dict(state_dict)
             model.eval()
 
-            if self._picture_tagger and getattr(
-                self._picture_tagger, "_clip_device", None
-            ):
-                model = model.to(self._picture_tagger._clip_device)
+            if self._picture_tagger:
+                model = model.to(self._picture_tagger.clip_service.device)
 
             ImageEmbeddingTask._aesthetic_model = model
             logger.info("ImageEmbeddingTask: Aesthetic model loaded.")
@@ -319,31 +313,25 @@ class ImageEmbeddingTask(BaseTask):
             ImageEmbeddingTask._aesthetic_disabled = True
 
     def _ensure_embedding_backend(self) -> bool:
-        clip_model = getattr(self._picture_tagger, "_clip_model", None)
-        clip_preprocess = getattr(self._picture_tagger, "_clip_preprocess", None)
+        clip_service = getattr(self._picture_tagger, "clip_service", None)
 
-        if self._picture_tagger and (clip_model is None or clip_preprocess is None):
-            ensure_clip_ready = getattr(
-                self._picture_tagger, "_ensure_clip_ready", None
-            )
-            if callable(ensure_clip_ready):
-                try:
-                    ensure_clip_ready()
-                except Exception as exc:
-                    now = time.time()
-                    if (
-                        now - self._last_backend_error_log_at
-                        >= self.BACKEND_ERROR_LOG_INTERVAL_SECONDS
-                    ):
-                        logger.error(
-                            "ImageEmbeddingTask: Failed to initialise CLIP backend: %s",
-                            exc,
-                        )
-                        self._last_backend_error_log_at = now
+        if self._picture_tagger and clip_service is not None and not clip_service.is_loaded():
+            try:
+                self._picture_tagger.ensure_clip_ready()
+            except Exception as exc:
+                now = time.time()
+                if (
+                    now - self._last_backend_error_log_at
+                    >= self.BACKEND_ERROR_LOG_INTERVAL_SECONDS
+                ):
+                    logger.error(
+                        "ImageEmbeddingTask: Failed to initialise CLIP backend: %s",
+                        exc,
+                    )
+                    self._last_backend_error_log_at = now
 
         clip_ready = bool(
-            getattr(self._picture_tagger, "_clip_model", None) is not None
-            and getattr(self._picture_tagger, "_clip_preprocess", None) is not None
+            clip_service is not None and clip_service.is_loaded()
         )
         fallback_ready = self.model is not None
 
@@ -418,21 +406,9 @@ class ImageEmbeddingTask(BaseTask):
 
         if clip_ready:
             try:
-                preprocess = self._picture_tagger._clip_preprocess
-                device = self._picture_tagger._clip_device
-
-                image_tensors = torch.stack(
-                    [preprocess(img) for img in flat_images]
-                ).to(device)
-                if device == "cuda":
-                    image_tensors = image_tensors.half()
-
-                with torch.no_grad():
-                    features = self._picture_tagger._clip_model.encode_image(
-                        image_tensors
-                    )
-                    features /= features.norm(dim=-1, keepdim=True)
-                    embeddings = features.cpu().numpy()
+                embeddings = self._picture_tagger.clip_service.encode_image_batch(
+                    flat_images
+                )
             except Exception as exc:
                 logger.error(
                     "ImageEmbeddingTask: Failed to use PictureTagger CLIP model: %s",
@@ -478,7 +454,10 @@ class ImageEmbeddingTask(BaseTask):
             logger.error(
                 "ImageEmbeddingTask: No embeddings generated for batch of %s pictures (clip_ready=%s fallback_ready=%s).",
                 len(batch_pids),
-                bool(getattr(self._picture_tagger, "_clip_model", None)),
+                bool(
+                    getattr(self._picture_tagger, "clip_service", None) is not None
+                    and self._picture_tagger.clip_service.is_loaded()
+                ),
                 bool(self.model),
             )
             return []

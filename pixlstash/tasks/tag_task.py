@@ -14,7 +14,9 @@ from pixlstash.db_models import Face, Picture, Tag, TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
 from pixlstash.utils.service.tag_prediction_utils import _PENALISED_TAG_SET
+from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
@@ -151,23 +153,15 @@ class TagTask(BaseTask):
         }
 
     def estimated_vram_mb(self) -> int:
-        incremental_estimate_fn = getattr(
-            self._picture_tagger,
-            "estimate_task_incremental_vram_mb",
-            None,
-        )
-        if callable(incremental_estimate_fn):
-            try:
-                return max(0, int(incremental_estimate_fn(len(self._pictures))))
-            except Exception:
-                return 0
-        estimate_fn = getattr(self._picture_tagger, "estimate_task_vram_mb", None)
-        if callable(estimate_fn):
-            try:
-                return max(0, int(estimate_fn(len(self._pictures))))
-            except Exception:
-                return 0
-        return 0
+        try:
+            return max(
+                0,
+                self._picture_tagger.tagging_workflow.estimated_incremental_vram_mb(
+                    len(self._pictures)
+                ),
+            )
+        except Exception:
+            return 0
 
     @property
     def priority(self) -> TaskPriority:
@@ -404,12 +398,13 @@ class TagTask(BaseTask):
                 logger.debug("Tagging image paths: %s", image_paths)
                 # Collect raw confidence scores in the same GPU pass as tagging.
                 full_scores_by_path: dict = {}
-                use_custom = getattr(active_tagger, "_use_custom_tagger", False)
+                active_workflow: TaggingWorkflow = active_tagger.tagging_workflow
+                use_custom = active_workflow.is_custom_enabled
                 inference_start = time.perf_counter()
-                tag_results = active_tagger.tag_images(
+                tag_results = active_workflow.tag_images(
                     image_paths,
                     preloaded_images=preloaded_images,
-                    _out_raw_custom_scores=full_scores_by_path if use_custom else None,
+                    out_raw_custom_scores=full_scores_by_path if use_custom else None,
                 )
                 inference_s = time.perf_counter() - inference_start
                 logger.debug("Got tag results for %s images.", len(tag_results))
@@ -429,7 +424,7 @@ class TagTask(BaseTask):
                         ),
                     )
                     crop_fetch_s = time.perf_counter() - crop_fetch_start
-                    target = active_tagger.custom_tagger_image_size_quality_crop()
+                    target = active_workflow.custom_tagger_image_size_quality_crop()
                     quality_items = []
                     key_to_path = {}
                     for pic in batch:
@@ -478,7 +473,7 @@ class TagTask(BaseTask):
                                     * (float(face.bbox[3]) - float(face.bbox[1])),
                                 ),
                             )
-                            expanded = PictureTagger._expand_bbox_to_square(
+                            expanded = expand_bbox_to_square(
                                 largest_face.bbox, w, h, target
                             )
                             crop = img.crop(expanded)
@@ -495,7 +490,7 @@ class TagTask(BaseTask):
                         # Single GPU pass: get quality tags AND raw scores for predictions.
                         crop_raw_scores: dict = {}
                         crop_inf_start = time.perf_counter()
-                        quality_results = active_tagger.tag_quality_crops(
+                        quality_results = active_workflow.tag_quality_crops(
                             quality_items,
                             out_raw_scores=crop_raw_scores if use_custom else None,
                         )

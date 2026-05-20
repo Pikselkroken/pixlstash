@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, Picture
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.workflows.text_embedding import TextEmbeddingWorkflow
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
@@ -17,7 +17,7 @@ class TextEmbeddingTask(BaseTask):
     def __init__(
         self,
         database,
-        picture_tagger: PictureTagger,
+        workflow: TextEmbeddingWorkflow,
         pictures: list[Picture],
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -29,7 +29,7 @@ class TextEmbeddingTask(BaseTask):
             },
         )
         self._db = database
-        self._picture_tagger = picture_tagger
+        self._workflow = workflow
         self._pictures = pictures or []
 
     @property
@@ -120,9 +120,7 @@ class TextEmbeddingTask(BaseTask):
     def _generate_text_embeddings(
         self, pictures_to_embed: list[Picture]
     ) -> list[Picture]:
-        embeddings = self._picture_tagger.generate_text_embedding(
-            pictures=pictures_to_embed
-        )
+        embeddings = self._workflow.encode(pictures_to_embed)
         if not embeddings:
             return []
 

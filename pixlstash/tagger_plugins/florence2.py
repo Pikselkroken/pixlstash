@@ -9,13 +9,13 @@ import torch
 from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.model_utils import env_int, from_pretrained_local_first
+from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
 
-FLORENCE_BATCH_SIZE_GPU = env_int("PIXLSTASH_FLORENCE_BATCH_GPU", 32)
-FLORENCE_BATCH_SIZE_CPU = env_int("PIXLSTASH_FLORENCE_BATCH_CPU", 2)
+FLORENCE_BATCH_SIZE_GPU = 32
+FLORENCE_BATCH_SIZE_CPU = 2
 FLORENCE_BASE_VRAM_MB = 900  # Florence-2-base model footprint (fp16 on GPU)
 FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-batch
 FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"

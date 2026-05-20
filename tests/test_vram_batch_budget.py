@@ -1,31 +1,40 @@
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.inference.vram_budget import VramBudget
+from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
 
-def _build_tagger_for_budget_tests(
+class _FakeWD14Service:
+    def __init__(self, capacity):
+        self._capacity = capacity
+
+    def batch_capacity(self):
+        return self._capacity
+
+
+class _FakeEngine:
+    def __init__(self, vram_budget, wd14_service, device="cuda"):
+        self.vram_budget = vram_budget
+        self.wd14_service = wd14_service
+        self.device = device
+
+
+def _build_workflow_for_budget_tests(
     budget_mb: int = 4096,
-    max_concurrent: int = 64,
     onnx_capacity: int = 64,
-    custom_batch: int = 16,
+    use_wd14: bool = True,
+    use_custom: bool = False,
+    device: str = "cuda",
 ):
-    class _FakeWD14Service:
-        def __init__(self, capacity):
-            self._capacity = capacity
-
-        def batch_capacity(self):
-            return self._capacity
-
-    tagger = PictureTagger.__new__(PictureTagger)
-    tagger._device = "cuda"
-    tagger._max_vram_usage_mb = budget_mb
-    tagger._wd14_service = _FakeWD14Service(onnx_capacity)
-    tagger.max_concurrent_images = lambda: max_concurrent
-    return tagger
+    vram_budget = VramBudget.__new__(VramBudget)
+    vram_budget._device = device
+    vram_budget._max_vram_usage_mb = budget_mb
+    engine = _FakeEngine(vram_budget, _FakeWD14Service(onnx_capacity), device=device)
+    return TaggingWorkflow(engine=engine, use_wd14=use_wd14, use_custom=use_custom)
 
 
 def test_vram_batch_cap_constrains_by_budget():
-    small_budget = _build_tagger_for_budget_tests(budget_mb=2048)
-    large_budget = _build_tagger_for_budget_tests(budget_mb=8192)
+    small_budget = _build_workflow_for_budget_tests(budget_mb=2048)
+    large_budget = _build_workflow_for_budget_tests(budget_mb=8192)
 
     cap_small = small_budget._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
     cap_large = large_budget._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
@@ -35,62 +44,53 @@ def test_vram_batch_cap_constrains_by_budget():
 
 
 def test_estimated_task_vram_stays_within_budget_window():
-    tagger = _build_tagger_for_budget_tests(
+    workflow = _build_workflow_for_budget_tests(
         budget_mb=4096,
-        max_concurrent=64,
         onnx_capacity=64,
-        custom_batch=32,
     )
 
-    estimate_mb = tagger.estimate_task_vram_mb(image_count=64)
+    estimate_mb = workflow.estimated_vram_mb(image_count=64)
 
     assert estimate_mb <= 4096
     assert estimate_mb >= 1200
 
 
 def test_vram_cap_noop_on_cpu_mode():
-    tagger = _build_tagger_for_budget_tests()
-    tagger._device = "cpu"
+    workflow = _build_workflow_for_budget_tests(device="cpu")
 
-    cap = tagger._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
+    cap = workflow._vram_limited_batch_cap(base_mb=900, per_item_mb=220)
 
     assert cap == 10_000
 
 
 def test_suggested_tag_task_size_tracks_effective_batch():
-    tagger = _build_tagger_for_budget_tests(
+    workflow = _build_workflow_for_budget_tests(
         budget_mb=4096,
-        max_concurrent=64,
         onnx_capacity=64,
-        custom_batch=32,
     )
 
-    assert tagger._effective_wd14_batch_size() == 10
-    assert tagger._effective_custom_batch_size() == 10
-    assert tagger.suggested_tag_task_size() == 10
+    assert workflow._effective_wd14_batch_size() == 10
+    assert workflow._effective_custom_batch_size() == 10
+    assert workflow.suggested_task_size() == 10
 
 
 def test_custom_and_wd14_use_same_effective_batch_size():
-    tagger = _build_tagger_for_budget_tests(
+    workflow = _build_workflow_for_budget_tests(
         budget_mb=4096,
-        max_concurrent=64,
         onnx_capacity=64,
-        custom_batch=64,
     )
 
-    assert tagger._effective_custom_batch_size() == tagger._effective_wd14_batch_size()
+    assert workflow._effective_custom_batch_size() == workflow._effective_wd14_batch_size()
 
 
 def test_incremental_vram_estimate_is_below_full_estimate():
-    tagger = _build_tagger_for_budget_tests(
+    workflow = _build_workflow_for_budget_tests(
         budget_mb=4096,
-        max_concurrent=64,
         onnx_capacity=64,
-        custom_batch=32,
     )
 
-    full_estimate = tagger.estimate_task_vram_mb(image_count=64)
-    incremental_estimate = tagger.estimate_task_incremental_vram_mb(image_count=64)
+    full_estimate = workflow.estimated_vram_mb(image_count=64)
+    incremental_estimate = workflow.estimated_incremental_vram_mb(image_count=64)
 
     assert incremental_estimate < full_estimate
     assert incremental_estimate >= 256
@@ -127,17 +127,13 @@ def test_missing_tags_finder_uses_suggested_task_size():
 
 
 def test_larger_budget_gives_bigger_batch_than_smaller_budget():
-    small_budget = _build_tagger_for_budget_tests(
+    small_budget = _build_workflow_for_budget_tests(
         budget_mb=4096,
-        max_concurrent=64,
         onnx_capacity=64,
-        custom_batch=32,
     )
-    large_budget = _build_tagger_for_budget_tests(
+    large_budget = _build_workflow_for_budget_tests(
         budget_mb=8192,
-        max_concurrent=64,
         onnx_capacity=64,
-        custom_batch=32,
     )
 
     small_batch = small_budget._effective_wd14_batch_size()
@@ -145,4 +141,4 @@ def test_larger_budget_gives_bigger_batch_than_smaller_budget():
 
     assert large_batch > small_batch
     assert large_budget._effective_custom_batch_size() == large_batch
-    assert large_budget.suggested_tag_task_size() == large_batch
+    assert large_budget.suggested_task_size() == large_batch

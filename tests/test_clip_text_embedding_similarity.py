@@ -71,7 +71,7 @@ def shared_tagger():
     import torch
 
     tagger = PictureTagger("cuda" if not PictureTagger.FORCE_CPU else "cpu")
-    tagger._ensure_clip_ready()
+    tagger.ensure_clip_ready()
     yield tagger
     tagger.close()
     del tagger
@@ -87,8 +87,8 @@ def test_clip_text_embedding_similarity_measures(query, shared_tagger):
 
     tagger = shared_tagger
     query_embedding = (
-        tagger._clip_model.encode_text(
-            tagger._clip_tokenizer([query]).to(tagger._clip_device)
+        tagger.clip_service.model.encode_text(
+            tagger.clip_service.tokenizer([query]).to(tagger.clip_service.device)
         )
         .detach()
         .cpu()
@@ -99,8 +99,8 @@ def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     cosine_scores = []
     for desc in descriptions:
         emb = (
-            tagger._clip_model.encode_text(
-                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            tagger.clip_service.model.encode_text(
+                tagger.clip_service.tokenizer([desc]).to(tagger.clip_service.device)
             )
             .detach()
             .cpu()
@@ -119,8 +119,8 @@ def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     dot_scores = []
     for desc in descriptions:
         emb = (
-            tagger._clip_model.encode_text(
-                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            tagger.clip_service.model.encode_text(
+                tagger.clip_service.tokenizer([desc]).to(tagger.clip_service.device)
             )
             .detach()
             .cpu()
@@ -135,8 +135,8 @@ def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     euclid_scores = []
     for desc in descriptions:
         emb = (
-            tagger._clip_model.encode_text(
-                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            tagger.clip_service.model.encode_text(
+                tagger.clip_service.tokenizer([desc]).to(tagger.clip_service.device)
             )
             .detach()
             .cpu()
@@ -151,8 +151,8 @@ def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     maxpool_scores = []
     for desc in descriptions:
         emb = (
-            tagger._clip_model.encode_text(
-                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            tagger.clip_service.model.encode_text(
+                tagger.clip_service.tokenizer([desc]).to(tagger.clip_service.device)
             )
             .detach()
             .cpu()
@@ -167,8 +167,8 @@ def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     partial_scores = []
     for desc in descriptions:
         emb = (
-            tagger._clip_model.encode_text(
-                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            tagger.clip_service.model.encode_text(
+                tagger.clip_service.tokenizer([desc]).to(tagger.clip_service.device)
             )
             .detach()
             .cpu()

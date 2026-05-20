@@ -332,3 +332,29 @@ class FaceUtils:
         scores = np.array(scores)
         weights = np.exp(alpha * scores)
         return float(np.sum(weights * scores) / np.sum(weights))
+
+
+def expand_bbox_to_square(
+    bbox, img_width: int, img_height: int, target_size: int
+) -> list:
+    """Expand [x1, y1, x2, y2] outward from its centre to a square of
+    ``target_size`` pixels, clamped to image bounds.
+
+    Args:
+        bbox: [x1, y1, x2, y2] face bounding box.
+        img_width: Image width in pixels.
+        img_height: Image height in pixels.
+        target_size: Desired square side length in pixels.
+
+    Returns:
+        Clamped [x1, y1, x2, y2] square region.
+    """
+    x1, y1, x2, y2 = bbox
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    half = target_size / 2.0
+    nx1 = max(0, int(round(cx - half)))
+    ny1 = max(0, int(round(cy - half)))
+    nx2 = min(img_width, int(round(cx + half)))
+    ny2 = min(img_height, int(round(cy + half)))
+    return [nx1, ny1, nx2, ny2]
