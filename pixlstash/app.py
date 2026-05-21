@@ -76,7 +76,7 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bo
     if not sys.stdin.isatty():
         return False
 
-    config = Server._init_server_config(server_config_path)
+    config = Server.init_server_config(server_config_path)
 
     print("\nPixlStash first-run setup")
     print("Press Enter to keep defaults.\n")
@@ -236,7 +236,7 @@ def main():
             return 1
         path_map[parts[0]] = parts[1]
 
-    server_config = Server._init_server_config(args.server_config)
+    server_config = Server.init_server_config(args.server_config)
 
     log_level = _resolve_log_level(server_config.get("log_level"))
     log_file = server_config.get("log_file")

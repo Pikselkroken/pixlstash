@@ -15,7 +15,7 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
-from pixlstash.utils.service.tag_prediction_utils import _PENALISED_TAG_SET
+from pixlstash.utils.service.tag_prediction_utils import PENALISED_TAG_SET
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
@@ -191,7 +191,7 @@ class TagTask(BaseTask):
             return cls._cpu_spillover_engine
 
     @classmethod
-    def _release_idle_cpu_spillover_engine(cls, force: bool = False) -> None:
+    def release_idle_cpu_spillover_engine(cls, force: bool = False) -> None:
         with cls._cpu_spillover_lock:
             engine = cls._cpu_spillover_engine
             if engine is None:
@@ -379,7 +379,7 @@ class TagTask(BaseTask):
             pic_by_path[file_path] = pic
 
         tagged_pictures = []
-        self._release_idle_cpu_spillover_engine(force=False)
+        self.release_idle_cpu_spillover_engine(force=False)
         active_workflow: TaggingWorkflow = self._tagging_workflow
         cpu_spillover_engine = None
         if self._cpu_spillover_enabled:
@@ -643,7 +643,7 @@ class TagTask(BaseTask):
             if cpu_spillover_engine is not None:
                 with self._cpu_spillover_lock:
                     self._cpu_spillover_last_used_at = time.perf_counter()
-                self._release_idle_cpu_spillover_engine(force=False)
+                self.release_idle_cpu_spillover_engine(force=False)
 
         return tagged_pictures
 
@@ -789,7 +789,7 @@ class TagTask(BaseTask):
             pic_applied = applied_tags_by_pic.get(picture_id, set())
             anomaly_scores: list[float] = []
             for tag, confidence in label_scores.items():
-                if tag is None or tag.strip().lower() not in _PENALISED_TAG_SET:
+                if tag is None or tag.strip().lower() not in PENALISED_TAG_SET:
                     continue
                 if tag in pic_applied:
                     anomaly_scores.append(1.0 - float(confidence))

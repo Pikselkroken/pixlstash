@@ -21,7 +21,7 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.quality.smart_score_utils import (
     SmartScoreUtils,
-    _smart_score_penalised_tags,
+    smart_score_penalised_tags,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask
@@ -96,7 +96,7 @@ class SmartScoreTask(BaseTask):
         user = session.exec(select(User)).first()
         if user is None:
             return DEFAULT_SMART_SCORE_PENALIZED_TAGS or {}
-        parsed = _smart_score_penalised_tags(
+        parsed = smart_score_penalised_tags(
             user.smart_score_penalised_tags,
             DEFAULT_SMART_SCORE_PENALIZED_TAGS,
             default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,

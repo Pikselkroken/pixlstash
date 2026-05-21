@@ -249,9 +249,9 @@ class ExportUtils:
                 pics = server.vault.db.run_task(find_by_text, query)
             else:
                 logger.debug("Exporting pictures using list filters")
-                from pixlstash.routes.pictures._listing import _select_pictures_for_listing
+                from pixlstash.routes.pictures import select_pictures_for_listing
 
-                ordered_ids = _select_pictures_for_listing(
+                ordered_ids = select_pictures_for_listing(
                     server=server,
                     request=request,
                     sort=None,
@@ -435,16 +435,16 @@ class ExportUtils:
                             if caption_mode_d == "description":
                                 caption_text = pic.description or ""
                                 if not caption_text:
-                                    caption_text = CaptionUtils._build_tag_caption(
+                                    caption_text = CaptionUtils.build_tag_caption(
                                         pic, tag_format_d
                                     )
                             elif caption_mode_d == "tags":
-                                caption_text = CaptionUtils._build_tag_caption(
+                                caption_text = CaptionUtils.build_tag_caption(
                                     pic, tag_format_d
                                 )
 
                             if include_character_name_enabled:
-                                character_names = CaptionUtils._build_character_caption(
+                                character_names = CaptionUtils.build_character_caption(
                                     pic
                                 )
                                 if character_names:

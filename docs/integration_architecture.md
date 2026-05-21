@@ -208,7 +208,6 @@ Browser-native `<img>` tags **cannot** use the axios interceptor, so the integra
 | `GET /api/v1/pictures/{id}/thumbnail` | Cached WebP thumbnail. Backend uses an async lock + LRU memory cache + on-disk `.pixlstash/` cache. |
 | `POST /api/v1/pictures/thumbnails` | Batch thumbnail metadata (JSON). |
 | `GET /api/v1/pictures/{id}/{ext}` | Original file (optionally watermarked). |
-| `GET /pictures/shared/{token}.{ext}` | Public file served via share token (no auth required beyond the token). |
 
 ### Watermarking
 
@@ -279,7 +278,7 @@ Backend rule: errors must use FastAPI's `HTTPException(status_code, detail=...)`
 1. `/assets/*` is mounted as `StaticFiles(directory=…/frontend/dist/assets)`.
 2. `/` returns `frontend/dist/index.html` (the SPA shell). If the dist directory is missing (e.g. a clean dev checkout), the root returns a small JSON status so the user sees a clear error.
 3. All API routers are mounted under `/api/v1/`.
-4. Other top-level routes (e.g. `/pictures/shared/{token}.{ext}`) are added explicitly for public sharing.
+4. Other top-level routes are added explicitly for public sharing.
 
 ### Dev workflow
 

@@ -177,7 +177,7 @@ class Server:
 
         self.path_mapper = PathMapper(path_map)
 
-        self._server_config = self._init_server_config(server_config_path)
+        self._server_config = self.init_server_config(server_config_path)
         self._startup_check_report = StartupChecks(
             server_config=self._server_config,
             server_config_path=self._server_config_path,
@@ -218,7 +218,7 @@ class Server:
         self._ws_clients = []
         self._ws_clients_lock = threading.Lock()
         self._ws_loop = None
-        self.vault.add_event_listener(self._handle_vault_event)
+        self.vault.add_event_listener(self.handle_vault_event)
         self.vault.start()
 
         self.auth = AuthService(
@@ -297,7 +297,7 @@ class Server:
             self.vault.close()
         gc.collect()
 
-    def _handle_vault_event(self, event_type: EventType, data=None):
+    def handle_vault_event(self, event_type: EventType, data=None):
         if event_type in (
             EventType.CHANGED_TAGS,
             EventType.CLEARED_TAGS,
@@ -590,7 +590,7 @@ class Server:
             self.vault.close()
 
     @staticmethod
-    def _init_server_config(server_config_path):
+    def init_server_config(server_config_path):
         config_dir = os.path.dirname(server_config_path)
         os.makedirs(config_dir, exist_ok=True)
 

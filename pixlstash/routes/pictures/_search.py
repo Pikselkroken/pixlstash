@@ -1,103 +1,27 @@
-import ast
-import asyncio
-import concurrent.futures
-import base64
-import os
 import re
-import shutil
-import subprocess
 import sys
-import time
-import uuid
-import zipfile
-from io import BytesIO
-from collections import defaultdict, deque, OrderedDict
-from email.utils import formatdate
-from datetime import datetime
 
-from PIL import Image
 from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Body,
-    File,
-    Form,
     HTTPException,
     Query,
     Request,
-    Response,
-    UploadFile,
 )
-from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import (
-    case,
-    delete,
-    func,
-    or_,
-    text,
-    update,
-)
-from sqlmodel import Session, select
+from sqlmodel import select
 
-from pixlstash.database import DBPriority
 from pixlstash.db_models import (
-    Character,
     Face,
     Picture,
-    PictureLikeness,
-    PictureProjectMember,
-    PictureSetMember,
-    Project,
-    ReferenceFolder,
     SortMechanism,
-    Tag,
 )
-from pixlstash.db_models.guest_score import GuestScore
-from pixlstash.db_models.user import User
-from pixlstash.db_models.user_token import UserToken
-from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.picture_scoring import (
-    compute_character_likeness_for_faces,
-    fetch_smart_score_data,
-    find_pictures_by_character_likeness,
-    get_smart_score_penalised_tags_from_request,
-    prepare_smart_score_inputs,
-    select_reference_faces_for_character,
-)
-from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
-from pixlstash.utils.service.caption_utils import (
-    _normalize_hidden_tags,
-    serialize_tag_objects,
-    sync_picture_sidecar,
-)
-from pixlstash.utils.service.serialization_utils import safe_model_dict
-from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
-from pixlstash.utils.watermark import apply_watermark, get_watermark_bytes
-from pixlstash.tasks import TaskType
-from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
-from pixlstash.services._filter_helpers import (
-    collect_set_filter_ids,
-    fetch_set_candidate_ids,
-    normalize_set_mode,
-    project_membership_exists_clause,
-    project_unassigned_clause,
-)
-from pixlstash.services import plugin_service
-from pixlstash.services.picture_stats import PictureStatsParams, compute_picture_stats
 
 from ._helpers import (
     _collect_set_filter_ids,
-    _enrich_stack_counts,
     _fetch_hidden_picture_ids,
     _fetch_set_candidate_ids,
     _normalize_set_mode,
     _project_membership_exists_clause,
     _project_unassigned_clause,
-    _stats_cache,
-    _STATS_TTL,
-    clear_stats_cache,
 )
 
 
@@ -490,4 +414,3 @@ def register_routes(router, server):
                     and getattr(result[0], "id", None) not in hidden_ids
                 ]
         return [Picture.serialize_with_likeness(r) for r in results]
-

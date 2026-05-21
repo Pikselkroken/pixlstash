@@ -71,8 +71,8 @@ def test_suggested_tag_task_size_tracks_effective_batch():
         onnx_capacity=64,
     )
 
-    assert workflow._effective_wd14_batch_size() == 10
-    assert workflow._effective_pixlstash_tagger_batch_size() == 10
+    assert workflow.effective_wd14_batch_size() == 10
+    assert workflow.effective_pixlstash_tagger_batch_size() == 10
     assert workflow.suggested_task_size() == 10
 
 
@@ -83,8 +83,8 @@ def test_pixlstash_tagger_and_wd14_use_same_effective_batch_size():
     )
 
     assert (
-        workflow._effective_pixlstash_tagger_batch_size()
-        == workflow._effective_wd14_batch_size()
+        workflow.effective_pixlstash_tagger_batch_size()
+        == workflow.effective_wd14_batch_size()
     )
 
 
@@ -143,9 +143,9 @@ def test_larger_budget_gives_bigger_batch_than_smaller_budget():
         onnx_capacity=64,
     )
 
-    small_batch = small_budget._effective_wd14_batch_size()
-    large_batch = large_budget._effective_wd14_batch_size()
+    small_batch = small_budget.effective_wd14_batch_size()
+    large_batch = large_budget.effective_wd14_batch_size()
 
     assert large_batch > small_batch
-    assert large_budget._effective_pixlstash_tagger_batch_size() == large_batch
+    assert large_budget.effective_pixlstash_tagger_batch_size() == large_batch
     assert large_budget.suggested_task_size() == large_batch

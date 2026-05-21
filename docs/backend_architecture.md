@@ -341,8 +341,6 @@ Public guest scoring and shared-link endpoints.
 | GET | `/share/{token_slug}` | Public token-embedded picture serving |
 | GET | `/{full_path:path}` | SPA fallback (serves `index.html`) |
 
-The legacy `/pictures/shared/` prefix is still listed in the auth exclusion table in [auth.py](../pixlstash/auth.py) for backwards compatibility but is no longer served by any router; all new share links go through `/share/{token_slug}`.
-
 ### Complete route index
 
 > Auto-generated from `server.api.openapi()`. Regenerate with `python scripts/render_backend_architecture.py`.
@@ -799,7 +797,7 @@ Public paths (no auth) — defined as `AUTH_EXCLUDED_PATHS` / `AUTH_EXCLUDED_PRE
 Exact:    /, /login, /logout, /check-session, /version,
           /docs, /redoc, /openapi.json, /docs/oauth2-redirect,
           /favicon.ico, /Logo.png, /Empty.png, /EmptyTrash.png
-Prefix:   /assets/, /pictures/shared/ (legacy), /share/, /docs/, /redoc/
+Prefix:   /assets/, /share/, /docs/, /redoc/
 ```
 
 In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
@@ -1065,4 +1063,3 @@ sequenceDiagram
 
 ### Known drift / cleanup notes
 
-- The legacy `/pictures/shared/` auth prefix has no live route handler; remove it from `AUTH_EXCLUDED_PREFIXES` once any deployed share URLs in the wild have expired.

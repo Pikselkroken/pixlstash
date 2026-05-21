@@ -32,7 +32,7 @@ class CaptionUtils:
         return tag.replace("_", " ").strip().lower()
 
     @staticmethod
-    def _build_tag_caption(picture, tag_format: str = "spaces") -> str:
+    def build_tag_caption(picture, tag_format: str = "spaces") -> str:
         """Build a comma-separated tag string from a picture's tags.
 
         Args:
@@ -51,7 +51,7 @@ class CaptionUtils:
         return ", ".join(tags)
 
     @staticmethod
-    def _build_character_caption(picture) -> str:
+    def build_character_caption(picture) -> str:
         """Build a comma-separated character name string from a picture's characters."""
         character_names = []
         for character in getattr(picture, "characters", []) or []:
@@ -114,7 +114,7 @@ def serialize_tag_objects(tags: list | None, empty_sentinel: str = "") -> list[d
     return items
 
 
-def _normalize_hidden_tags(value):
+def normalize_hidden_tags(value):
     """Parse and normalise a hidden-tags value to a lowercase de-duped list.
 
     Accepts a JSON string, list, or dict (keys used as tags).

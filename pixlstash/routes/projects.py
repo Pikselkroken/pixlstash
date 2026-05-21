@@ -28,7 +28,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
@@ -511,7 +511,7 @@ def create_router(server) -> APIRouter:
                 user = server.auth.get_user()
             if user:
                 hidden_tags = (
-                    _normalize_hidden_tags(getattr(user, "hidden_tags", None)) or []
+                    normalize_hidden_tags(getattr(user, "hidden_tags", None)) or []
                 )
         hidden_tag_set = {str(t).strip().lower() for t in hidden_tags if t}
         hidden_tag_filter = None

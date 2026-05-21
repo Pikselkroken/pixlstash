@@ -27,8 +27,8 @@ def serialize_user_config(user) -> dict:
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     )
-    from pixlstash.utils.quality.smart_score_utils import _smart_score_penalised_tags
-    from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+    from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
+    from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 
     default_user = User()
     source = user or default_user
@@ -89,12 +89,12 @@ def serialize_user_config(user) -> dict:
         sidebar_size = min(allowed_sidebar_sizes, key=lambda v: abs(v - sidebar_size))
     config["sidebar_thumbnail_size"] = sidebar_size
 
-    config["smart_score_penalised_tags"] = _smart_score_penalised_tags(
+    config["smart_score_penalised_tags"] = smart_score_penalised_tags(
         getattr(source, "smart_score_penalised_tags", None),
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     )
-    config["hidden_tags"] = _normalize_hidden_tags(getattr(source, "hidden_tags", None))
+    config["hidden_tags"] = normalize_hidden_tags(getattr(source, "hidden_tags", None))
     config["sort_order"] = config["sort"]
     if config.get("max_vram_gb") is None:
         config["max_vram_gb"] = default_max_vram_gb()
@@ -115,8 +115,8 @@ def apply_user_config_patch(user, patch_data) -> bool:
         ValueError: If an unknown key is provided or a value fails validation.
     """
     from pixlstash.db_models import DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT
-    from pixlstash.utils.quality.smart_score_utils import _smart_score_penalised_tags
-    from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+    from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
+    from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 
     allowed_fields = {
         "description",
@@ -208,7 +208,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
             if value in ("", None):
                 new_value = None
             else:
-                d = _smart_score_penalised_tags(
+                d = smart_score_penalised_tags(
                     value,
                     None,
                     allow_empty=True,
@@ -227,7 +227,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
             if value in ("", None, "null"):
                 normalized = []
             else:
-                normalized = _normalize_hidden_tags(value)
+                normalized = normalize_hidden_tags(value)
                 if normalized is None:
                     raise ValueError("hidden_tags must be a JSON list of strings")
             new_value = json.dumps(normalized)

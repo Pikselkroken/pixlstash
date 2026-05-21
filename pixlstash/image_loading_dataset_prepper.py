@@ -24,7 +24,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
         if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"]:
             try:
                 image = Image.open(img_path).convert("RGB")
-                image = self._preprocess_image(image)
+                image = self.preprocess_image(image)
             except Exception as e:
                 logger.error(f"Could not load image path: {img_path}, error: {e}")
                 return None
@@ -55,7 +55,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
                         continue
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_img = Image.fromarray(frame_rgb)
-                    prepped = self._preprocess_image(pil_img)
+                    prepped = self.preprocess_image(pil_img)
                     images.append((prepped, f"{img_path}#frame{idx_frame}"))
                 cap.release()
                 if not images:
@@ -71,7 +71,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
             return None
 
     @staticmethod
-    def _preprocess_image(image, image_size=IMAGE_SIZE):
+    def preprocess_image(image, image_size=IMAGE_SIZE):
         image = np.array(image)
         image = image[:, :, ::-1]  # RGB->BGR
 

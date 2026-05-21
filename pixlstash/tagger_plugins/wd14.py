@@ -369,7 +369,7 @@ class WD14Service:
             if loaded_img is None:
                 continue
             try:
-                prepared = ImageLoadingDatasetPrepper._preprocess_image(loaded_img)
+                prepared = ImageLoadingDatasetPrepper.preprocess_image(loaded_img)
             except Exception as exc:
                 logger.error("Could not preprocess preloaded image %s: %s", path, exc)
                 continue

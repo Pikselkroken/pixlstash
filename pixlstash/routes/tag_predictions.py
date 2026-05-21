@@ -76,7 +76,7 @@ def create_router(server) -> APIRouter:
             tag_prediction_service.confirm_tag_prediction(server.vault, pic_id, tag)
         except KeyError:
             raise HTTPException(status_code=404, detail="Prediction not found")
-        server._handle_vault_event(
+        server.handle_vault_event(
             EventType.CHANGED_PICTURES,
             {"picture_ids": [pic_id]},
         )
@@ -95,7 +95,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
         tag_prediction_service.reject_tag_prediction(server.vault, pic_id, tag)
-        server._handle_vault_event(
+        server.handle_vault_event(
             EventType.CHANGED_PICTURES,
             {"picture_ids": [pic_id]},
         )
@@ -117,7 +117,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
         count = tag_prediction_service.delete_tag_predictions(server.vault, pic_id)
-        server._handle_vault_event(
+        server.handle_vault_event(
             EventType.CHANGED_PICTURES,
             {"picture_ids": [pic_id]},
         )
