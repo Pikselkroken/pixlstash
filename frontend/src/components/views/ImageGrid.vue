@@ -92,6 +92,14 @@
         visibleRangeLabel
       }}</span>
     </transition>
+    <!-- ── Streaming "loading more" pill ── -->
+    <transition name="grid-range-fade">
+      <span
+        v-if="imagesLoading && allGridImages.length > 0"
+        class="grid-loading-more-pill"
+        >Loading more…</span
+      >
+    </transition>
     <ImageGridContextMenu
       :visible="contextMenuVisible"
       :x="contextMenuX"
@@ -625,6 +633,20 @@
                 <div class="thumbnail-placeholder">
                   <v-icon class="thumbnail-placeholder-icon"
                     >mdi-loading</v-icon
+                  >
+                  <span
+                    v-if="img.id"
+                    style="
+                      position: absolute;
+                      bottom: 4px;
+                      left: 0;
+                      right: 0;
+                      text-align: center;
+                      font-size: 10px;
+                      color: #aaa;
+                      pointer-events: none;
+                    "
+                    >id:{{ img.id }}</span
                   >
                 </div>
               </template>
@@ -3569,7 +3591,8 @@ const {
 // that useStackOrdering has returned them.
 _stackOps.collapseStackImages = collapseStackImages;
 _stackOps.mapGridImages = mapGridImages;
-_stackOps.syncExpandAllStacksFromFetchedImages = syncExpandAllStacksFromFetchedImages;
+_stackOps.syncExpandAllStacksFromFetchedImages =
+  syncExpandAllStacksFromFetchedImages;
 _stackOps.refreshExpandedStacksAfterFetch = refreshExpandedStacksAfterFetch;
 
 const selectedGroupName = ref("");
@@ -4688,6 +4711,23 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       thumbnail_width: img?.thumbnail_width,
       thumbnail_height: img?.thumbnail_height,
     }));
+    // Synchronously pre-fill thumbnail URLs from imported_at so <img> elements
+    // render immediately without waiting for the POST round trip. The POST
+    // still runs to enrich face overlays and penalised-tag hints.
+    for (let i = 0; i < gridImages.length; i++) {
+      const gridImg = gridImages[i];
+      if (!gridImg.thumbnail && gridImg.id && gridImg.imported_at) {
+        const v = Math.floor(new Date(gridImg.imported_at).getTime() / 1000);
+        const rawUrl = `/pictures/thumbnails/${gridImg.id}.webp?v=${v}`;
+        gridImg.thumbnail = appendShareToken(
+          rawUrl.startsWith("http") ? rawUrl : `${props.backendUrl}${rawUrl}`,
+        );
+        allGridImages.value[start + i] = {
+          ...allGridImages.value[start + i],
+          thumbnail: gridImg.thumbnail,
+        };
+      }
+    }
     // Separate images: those missing a thumbnail need a full fetch; those that
     // already have one still need penalised_tags refreshed (e.g. after a tag
     // removal on a stack-head image whose thumbnail was carried over from the
@@ -4746,13 +4786,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
             thumbnailLoadedMap[gridImg.id] =
               (thumbnailLoadedMap[gridImg.id] || 0) + 1;
           }
-          gridImg.faces =
-            thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
-          gridImg.hands =
-            thumbObj && Array.isArray(thumbObj.hands) ? thumbObj.hands : [];
-          if (props.showFaceBboxes && gridImg.faces.length) {
-            overlayNeedsRedraw = true;
-          }
           if (thumbObj) {
             const thumbWidth = Number(thumbObj.thumbnail_width);
             const thumbHeight = Number(thumbObj.thumbnail_height);
@@ -4764,7 +4797,15 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
             }
           }
         }
-        // Always refresh penalised_tags regardless of thumbnail cache state.
+        // Always refresh faces, hands, and penalised_tags from authoritative
+        // server data, even when the thumbnail URL was pre-filled from imported_at.
+        gridImg.faces =
+          thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
+        gridImg.hands =
+          thumbObj && Array.isArray(thumbObj.hands) ? thumbObj.hands : [];
+        if (props.showFaceBboxes && gridImg.faces.length) {
+          overlayNeedsRedraw = true;
+        }
         gridImg.penalised_tags =
           thumbObj && Array.isArray(thumbObj.penalised_tags)
             ? thumbObj.penalised_tags
@@ -4778,6 +4819,12 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
       img.idx = start + i; // Redundant but explicit for safety
+      // Skip null-id slots: the snapshot was taken before the grid was fully
+      // populated and a concurrent BG batch may have since written real data
+      // into this slot. Writing a stale null-id object would wipe that data.
+      if (img.id == null) {
+        continue;
+      }
       allGridImages.value[start + i] = img;
       if (img.thumbnail) {
         clearThumbnailRetry(img.id);
@@ -5142,7 +5189,6 @@ function updateDescriptionForImage(imageId, description) {
 // ============================================================
 // LIFECYCLE
 // ============================================================
-
 
 watch(
   () => props.thumbnailSize,
@@ -5554,6 +5600,25 @@ function handleEmptyStateReset() {
   top: calc(var(--selbar-height, 48px) + 10px);
   left: 50%;
   transform: translateX(-50%);
+  background: rgba(var(--v-theme-surface), 0.82);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  border-radius: 999px;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 12px;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  user-select: none;
+  z-index: 50;
+}
+.grid-loading-more-pill {
+  position: absolute;
+  top: calc(var(--selbar-height, 48px) + 10px);
+  right: 16px;
   background: rgba(var(--v-theme-surface), 0.82);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
   border-radius: 999px;

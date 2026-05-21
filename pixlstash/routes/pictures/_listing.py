@@ -60,7 +60,38 @@ def select_pictures_for_listing(
     project_id: int | None = None,
     scope_set_id: int | None = None,
     scope_character_id: int | None = None,
+    stream_state: dict | None = None,
+    count_only: bool = False,
 ):
+    """List pictures for a request.
+
+    When `stream_state` is a dict, the function operates in streaming mode:
+    it over-fetches by one row at the SQL layer and records the pre-post-filter
+    row count in `stream_state["sql_count"]`. This lets the caller decide
+    completion (`done = sql_count <= limit`) without relying on the post-filter
+    row count, which the historical implementation incorrectly conflated with
+    end-of-stream. For the CHARACTER_LIKENESS sort the function sets
+    `stream_state["oneshot"] = True` to signal that the caller should treat
+    the response as complete (no further pagination).
+    """
+    effective_limit = limit + 1 if stream_state is not None else limit
+
+    def _record_sql_count(pics):
+        if stream_state is not None:
+            stream_state["sql_count"] = len(pics)
+            if len(pics) > limit:
+                return pics[:limit]
+        return pics
+
+    def _empty_result():
+        # An empty-result early-return is always end-of-stream for a streaming
+        # caller: any subsequent fetch with a larger offset would yield the
+        # same empty set.
+        if stream_state is not None:
+            stream_state["sql_count"] = 0
+            stream_state["oneshot"] = True
+        return []
+
     def serialize_metadata(pictures):
         result = []
         for pic in pictures:
@@ -529,6 +560,8 @@ def select_pictures_for_listing(
     logger.info("Getting pictures with project id = %s", project_id_raw)
 
     if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
+        if count_only:
+            return None  # CHARACTER_LIKENESS count is not supported cheaply
         if not reference_character_id:
             raise HTTPException(
                 status_code=400,
@@ -566,7 +599,15 @@ def select_pictures_for_listing(
                 else set(candidate_ids) & set_candidate_ids
             )
         if candidate_ids is not None and not candidate_ids:
+            if stream_state is not None:
+                stream_state["sql_count"] = 0
+                stream_state["oneshot"] = True
             return []
+        # CHARACTER_LIKENESS sort is inherently non-streamable: the underlying
+        # routine loads and ranks all candidates in memory. Signal one-shot to
+        # the streaming caller so it stops paginating after this batch.
+        if stream_state is not None:
+            stream_state["oneshot"] = True
         pics = find_pictures_by_character_likeness(
             server,
             character_id,
@@ -576,6 +617,8 @@ def select_pictures_for_listing(
             descending,
             candidate_ids=candidate_ids,
         )
+        if stream_state is not None:
+            stream_state["sql_count"] = len(pics)
         if pics:
             hidden_ids = _fetch_hidden_picture_ids(
                 server,
@@ -595,6 +638,8 @@ def select_pictures_for_listing(
             pics = _enrich_stack_counts(server, pics)
         return pics
     if character_id == "UNASSIGNED":
+        if count_only:
+            return None  # UNASSIGNED count requires a separate query not implemented here
         unassigned_project_id = None
         unassigned_project_only = False
         if project_id_raw == "UNASSIGNED":
@@ -611,7 +656,7 @@ def select_pictures_for_listing(
             Picture.find_unassigned,
             sort_mech=sort_mech,
             offset=offset,
-            limit=limit,
+            limit=effective_limit,
             format=format,
             metadata_fields=metadata_fields,
             stack_leaders_only=stack_leaders_only,
@@ -640,12 +685,13 @@ def select_pictures_for_listing(
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,
         )
+        pics = _record_sql_count(pics)
     elif only_deleted:
         pics = server.vault.db.run_task(
             Picture.find,
             sort_mech=sort_mech,
             offset=offset,
-            limit=limit,
+            limit=effective_limit,
             select_fields=metadata_fields,
             format=format,
             only_deleted=True,
@@ -660,13 +706,14 @@ def select_pictures_for_listing(
             guest_token_id=guest_token_id,
             **query_params,
         )
+        pics = _record_sql_count(pics)
     else:
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
                 _set_candidate_ids_for_session
             )
             if not set_candidate_ids:
-                return []
+                return _empty_result()
             existing_ids = query_params.get("id")
             if existing_ids:
                 query_params["id"] = list(set(existing_ids) & set_candidate_ids)
@@ -685,7 +732,7 @@ def select_pictures_for_listing(
                 get_picture_ids_for_character, character_id
             )
             if not picture_ids:
-                return []
+                return _empty_result()
 
             # When a project filter is also present, restrict to pictures that
             # are members of that project so pictures removed from a project no
@@ -726,13 +773,13 @@ def select_pictures_for_listing(
                         )
 
             if not picture_ids:
-                return []
+                return _empty_result()
             existing_ids = query_params.get("id")
             if existing_ids:
                 existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
                 picture_ids = [i for i in picture_ids if int(i) in existing_id_set]
                 if not picture_ids:
-                    return []
+                    return _empty_result()
             query_params["id"] = picture_ids
         elif character_id_list:
 
@@ -777,7 +824,7 @@ def select_pictures_for_listing(
                 get_picture_ids_for_characters, character_id_list, character_mode
             )
             if not picture_ids:
-                return []
+                return _empty_result()
 
             if project_id_raw is not None:
                 if project_id_raw == "UNASSIGNED":
@@ -815,13 +862,13 @@ def select_pictures_for_listing(
                         )
 
             if not picture_ids:
-                return []
+                return _empty_result()
             existing_ids = query_params.get("id")
             if existing_ids:
                 existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
                 picture_ids = [i for i in picture_ids if int(i) in existing_id_set]
                 if not picture_ids:
-                    return []
+                    return _empty_result()
             query_params["id"] = picture_ids
         elif project_id_raw is not None:
             # Project filter only applies when not already filtering by character/set.
@@ -842,7 +889,7 @@ def select_pictures_for_listing(
 
                 project_pic_ids = server.vault.db.run_task(get_unassigned_project_ids)
                 if not project_pic_ids:
-                    return []
+                    return _empty_result()
                 existing_ids = query_params.get("id")
                 if existing_ids:
                     query_params["id"] = list(set(existing_ids) & set(project_pic_ids))
@@ -858,11 +905,25 @@ def select_pictures_for_listing(
                         project_id_raw,
                     )
 
+        if count_only:
+            return server.vault.db.run_task(
+                Picture.find,
+                count_only=True,
+                format=format,
+                include_unimported=True,
+                min_score=min_score,
+                max_score=max_score,
+                smart_score_bucket=smart_score_bucket,
+                resolution_bucket=resolution_bucket,
+                file_path_prefix=file_path_prefix,
+                face_filter=face_filter,
+                **query_params,
+            )
         pics = server.vault.db.run_task(
             Picture.find,
             sort_mech=sort_mech,
             offset=offset,
-            limit=limit,
+            limit=effective_limit,
             select_fields=metadata_fields,
             format=format,
             include_unimported=True,
@@ -877,6 +938,7 @@ def select_pictures_for_listing(
             guest_token_id=guest_token_id,
             **query_params,
         )
+        pics = _record_sql_count(pics)
     if pics:
         hidden_ids = _fetch_hidden_picture_ids(
             server,
@@ -978,3 +1040,144 @@ def register_routes(router, server):
             scope_set_id=scope_set_id,
             scope_character_id=scope_character_id,
         )
+
+    @router.get(
+        "/pictures/stream",
+        summary="Stream pictures in batches",
+        description=(
+            "Fetches a single batch of pictures and reports completion via an "
+            "explicit `done` flag derived from the underlying SQL row count "
+            "(not the post-filter row count). Callers paginate by passing the "
+            "returned `next_offset` until `done` is true."
+        ),
+    )
+    def stream_pictures(
+        request: Request,
+        sort: str = Query(None),
+        descending: bool = Query(True),
+        offset: int = Query(0, ge=0),
+        batch_limit: int = Query(1000, ge=1, le=5000),
+        fields: str = Query(None),
+        project_id: str | None = Query(
+            None, description="Filter by project id or 'UNASSIGNED'"
+        ),
+    ):
+        if fields == "grid":
+            metadata_fields = list(Picture.grid_fields())
+        elif fields:
+            metadata_fields = [f.strip() for f in fields.split(",") if f.strip()]
+        else:
+            metadata_fields = Picture.metadata_fields()
+        token_scope = getattr(request.state, "token_scope", None)
+        scope_set_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "picture_set"
+            else None
+        )
+        if token_scope is not None and token_scope.resource_type == "project":
+            project_id = str(token_scope.resource_id)
+        scope_character_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "character"
+            else None
+        )
+        stream_state: dict = {}
+        pictures = select_pictures_for_listing(
+            server=server,
+            request=request,
+            sort=sort,
+            descending=descending,
+            offset=offset,
+            limit=batch_limit,
+            metadata_fields=metadata_fields,
+            return_ids_only=False,
+            stack_leaders_only=False,  # TODO: re-enable once streaming baseline is stable
+            project_id=project_id,
+            scope_set_id=scope_set_id,
+            scope_character_id=scope_character_id,
+            stream_state=stream_state,
+        )
+        sql_count = int(stream_state.get("sql_count", 0))
+        oneshot = bool(stream_state.get("oneshot", False))
+        # `done` is decided purely on the pre-post-filter SQL row count. This
+        # is the crucial property that prevents the historical bug where
+        # post-filter shrinkage (hidden tags, stack dedup) was misread as
+        # end-of-stream.
+        done = oneshot or sql_count <= batch_limit
+        next_offset = offset + min(batch_limit, sql_count)
+        logger.debug(
+            "[stream] offset=%d batch_limit=%d sort=%r sql_count=%d "
+            "returned=%d done=%s next_offset=%d first_id=%s last_id=%s",
+            offset, batch_limit, sort, sql_count,
+            len(pictures), done, next_offset,
+            pictures[0].get("id") if pictures else None,
+            pictures[-1].get("id") if pictures else None,
+        )
+        return {
+            "pictures": pictures,
+            "done": done,
+            "next_offset": next_offset,
+        }
+
+    @router.get(
+        "/pictures/count",
+        summary="Total picture count for a listing filter",
+        description=(
+            "Returns the total number of pictures matching the same filter "
+            "set used by `/pictures` and `/pictures/stream`. For non-"
+            "streamable views (character-likeness) the count is reported as "
+            "`null`."
+        ),
+    )
+    def count_pictures(
+        request: Request,
+        sort: str = Query(None),
+        descending: bool = Query(True),
+        fields: str = Query(None),
+        project_id: str | None = Query(
+            None, description="Filter by project id or 'UNASSIGNED'"
+        ),
+    ):
+        if fields == "grid":
+            metadata_fields = list(Picture.grid_fields())
+        elif fields:
+            metadata_fields = [f.strip() for f in fields.split(",") if f.strip()]
+        else:
+            metadata_fields = Picture.metadata_fields()
+        token_scope = getattr(request.state, "token_scope", None)
+        scope_set_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "picture_set"
+            else None
+        )
+        if token_scope is not None and token_scope.resource_type == "project":
+            project_id = str(token_scope.resource_id)
+        scope_character_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "character"
+            else None
+        )
+        # Use count_only=True to run a fast SELECT COUNT(*) rather than
+        # fetching all rows. Character-likeness paths are inherently
+        # non-streamable; we return null in that case. The count may be a
+        # small over-estimate for deployments with hidden-tag post-filtering,
+        # but is exact for the common case.
+        sort_mech = SortMechanism.from_string(sort, descending=descending) if sort else None
+        if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
+            return {"count": None}
+        count = select_pictures_for_listing(
+            server=server,
+            request=request,
+            sort=sort,
+            descending=descending,
+            offset=0,
+            limit=sys.maxsize,
+            metadata_fields=[],
+            count_only=True,
+            project_id=project_id,
+            scope_set_id=scope_set_id,
+            scope_character_id=scope_character_id,
+        )
+        logger.debug("[count] sort=%r returning count=%s", sort, count)
+        return {"count": count}
+

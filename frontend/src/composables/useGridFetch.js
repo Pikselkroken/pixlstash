@@ -421,6 +421,177 @@ export function useGridFetch(
     fetchAllGridImages.lastRequestId = requestId;
     try {
       let images = [];
+
+      // ─── FAST GRID PATH ─────────────────────────────────────────────────────
+      // Bypasses sort/filter/search to establish the optimised loading baseline.
+      // Set USE_FAST_GRID_PATH = false to restore sort/filter/search features.
+      // Strategy:
+      //   1. Fast SELECT COUNT(*) → total
+      //   2. Pre-build placeholder grid so END key works before streaming starts
+      //   3. First batch (visible area) + last batch (END cells) in parallel
+      //   4. Background stream fills the middle at BG_BATCH rows per request
+      const USE_FAST_GRID_PATH = true;
+      // Fast path is not applicable to text search (Python-level post-filter
+      // breaks LIMIT/OFFSET count accuracy) or non-streamable sort views.
+      const _hasSearch = !!props.searchQuery?.trim();
+      const _isLikenessSort =
+        props.selectedSort === "CHARACTER_LIKENESS" ||
+        props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
+      if (USE_FAST_GRID_PATH && !_hasSearch && !_isLikenessSort) {
+        // For sorted fetches the progress bar is meaningless in the fast path
+        // — data is already in the DB, LIMIT/OFFSET is instant.
+        if (isSortedFetch && options?.showProgress === true) {
+          completeSmartScoreProgress(loadId, 0, true);
+        }
+        const FIRST_BATCH = 200; // visible area + render buffer
+        const LAST_BATCH = 200;  // cells visible when pressing END
+        const BG_BATCH = 1000;   // background fill rate
+        // Pass sort/descending to the stream so pictures arrive in the right
+        // order.  Count URL stays param-free — sort never affects COUNT(*).
+        const _sort = props.selectedSort?.trim();
+        const _desc = typeof props.selectedDescending === 'boolean'
+          ? props.selectedDescending
+          : true;
+        const _sortSuffix = _sort
+          ? `&sort=${encodeURIComponent(_sort)}&descending=${_desc}`
+          : '';
+        const streamBase =
+          `${props.backendUrl}/pictures/stream?fields=grid${_sortSuffix}`;
+
+        // Splice raw picture metadata into the placeholder grid at `offset`,
+        // preserving thumbnail/face data for cells already loaded.
+        const splicePictures = (pictures, offset, label = '?') => {
+          if (!pictures.length) { console.warn('[FastGrid] splicePictures(' + label + '): empty pictures array at offset', offset); return; }
+          const grid = allGridImages.value.slice();
+          // Trace slots 200-203 before and after every splice
+          const WATCH = [200, 201, 202, 203];
+          const before = WATCH.map(i => grid[i]?.id ?? null);
+          for (let i = 0; i < pictures.length; i++) {
+            const idx = offset + i;
+            if (idx < grid.length) {
+              const pic = pictures[i];
+              const existing = grid[idx];
+              grid[idx] = {
+                ...pic,
+                idx,
+                thumbnail: existing?.thumbnail ?? null,
+                faces: existing?.faces ?? [],
+                hands: existing?.hands ?? [],
+                penalised_tags: existing?.penalised_tags ?? [],
+                thumbnail_width: pic.thumbnail_width ?? existing?.thumbnail_width,
+                thumbnail_height: pic.thumbnail_height ?? existing?.thumbnail_height,
+              };
+            }
+          }
+          const after = WATCH.map(i => grid[i]?.id ?? null);
+          console.log('[FastGrid] splicePictures(' + label + ') offset=' + offset + ' len=' + pictures.length + ' | slots 200-203 before:', before, '=> after:', after);
+          allGridImages.value = grid;
+        };
+
+        // 1. Fast total count — single indexed SQL query.
+        console.log('[FastGrid] COUNT url:', `${props.backendUrl}/pictures/count`);
+        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count`);
+        if (fetchAllGridImages.lastRequestId !== requestId) return;
+        const total =
+          typeof countRes.data?.count === 'number' ? countRes.data.count : 0;
+        console.log('[FastGrid] COUNT response:', countRes.data, '=> total:', total);
+
+        // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
+        const cols = props.columns || 1;
+        const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
+        resetThumbnailState();
+        allGridImages.value = Array.from({ length: total }, (_, i) => ({
+          id: null,
+          idx: i,
+        }));
+        if (!fetchStartedWithPreserveScroll) {
+          visibleStart.value = 0;
+          visibleEnd.value = Math.min(total, windowCount);
+        }
+        gridReady.value = true; // render placeholder grid immediately
+
+        if (total === 0) {
+          hasLoadedOnce.value = true;
+          initialRender.value = false;
+          lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
+          return;
+        }
+
+        // 3. First + last batches in parallel.
+        // lastBatchStart: where the tail batch begins.  When total fits inside
+        // FIRST_BATCH + LAST_BATCH the tail immediately follows the head.
+        const lastBatchStart = Math.max(FIRST_BATCH, total - LAST_BATCH);
+        console.log('[FastGrid] FIRST_BATCH=', FIRST_BATCH, 'LAST_BATCH=', LAST_BATCH, 'lastBatchStart=', lastBatchStart);
+        console.log('[FastGrid] Requesting first batch: offset=0 limit=', FIRST_BATCH);
+        if (total > FIRST_BATCH)
+          console.log('[FastGrid] Requesting last batch: offset=', lastBatchStart, 'limit=', LAST_BATCH);
+        const [firstRes, lastRes] = await Promise.all([
+          apiClient.get(`${streamBase}&offset=0&batch_limit=${FIRST_BATCH}`),
+          // Tail batch: needed whenever there are any cells beyond the first batch.
+          total > FIRST_BATCH
+            ? apiClient.get(
+                `${streamBase}&offset=${lastBatchStart}&batch_limit=${LAST_BATCH}`,
+              )
+            : Promise.resolve(null),
+        ]);
+        if (fetchAllGridImages.lastRequestId !== requestId) return;
+
+        const firstPics = firstRes?.data?.pictures ?? [];
+        console.log('[FastGrid] First batch received:', firstPics.length, 'pics (requested', FIRST_BATCH, ') done=', firstRes?.data?.done, 'next_offset=', firstRes?.data?.next_offset, 'first_id=', firstPics[0]?.id, 'last_id=', firstPics[firstPics.length-1]?.id);
+        splicePictures(firstPics, 0, 'first');
+        hasLoadedOnce.value = true;
+        console.log('[FastGrid] after hasLoadedOnce=true, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
+        initialRender.value = false;
+        console.log('[FastGrid] after initialRender=false, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
+        const prefetchEnd = Math.min(
+          total,
+          visibleEnd.value + (divisibleViewWindow.value || windowCount),
+        );
+        fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
+        console.log('[FastGrid] after fetchThumbnailsBatch, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
+
+        if (lastRes) {
+          const lastPics = lastRes?.data?.pictures ?? [];
+          console.log('[FastGrid] Last batch received:', lastPics.length, 'pics (requested', LAST_BATCH, 'at offset', lastBatchStart, ') done=', lastRes?.data?.done, 'next_offset=', lastRes?.data?.next_offset, 'first_id=', lastPics[0]?.id, 'last_id=', lastPics[lastPics.length-1]?.id);
+          splicePictures(lastPics, lastBatchStart, 'last');
+        }
+        console.log('[FastGrid] after last batch, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
+
+        lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
+
+        // 4. Background stream: fill the gap between first and last batches.
+        let bgOffset = FIRST_BATCH;
+        while (bgOffset < lastBatchStart) {
+          if (fetchAllGridImages.lastRequestId !== requestId) return;
+          const limit = Math.min(BG_BATCH, lastBatchStart - bgOffset);
+          console.log('[FastGrid] BG batch: offset=', bgOffset, 'limit=', limit);
+          const res = await apiClient.get(
+            `${streamBase}&offset=${bgOffset}&batch_limit=${limit}`,
+          );
+          if (fetchAllGridImages.lastRequestId !== requestId) return;
+          const bgPics = res?.data?.pictures ?? [];
+          console.log('[FastGrid] BG batch received:', bgPics.length, 'pics (requested', limit, ') done=', res?.data?.done, 'next_offset=', res?.data?.next_offset, 'first_id=', bgPics[0]?.id, 'last_id=', bgPics[bgPics.length-1]?.id);
+          splicePictures(bgPics, bgOffset, 'bg@'+bgOffset);
+          updateVisibleThumbnails();
+          bgOffset += limit;
+          await nextTick();
+        }
+
+        // Audit: report any grid slots that are still null after all batches.
+        const nullSlots = allGridImages.value
+          .map((img, i) => (img.id === null ? i : -1))
+          .filter(i => i >= 0);
+        if (nullSlots.length > 0) {
+          console.warn('[FastGrid] GAPS after full load — null slots:', nullSlots.length, 'indices:', nullSlots.slice(0, 20), '(total grid size:', total, ')');
+          console.warn('[FastGrid] reactive check slots 200-203:', allGridImages.value.slice(200,204).map(x => JSON.stringify({id:x?.id, idx:x?.idx})));
+        } else {
+          console.log('[FastGrid] All', total, 'slots filled — no gaps.');
+        }
+
+        return; // early return — existing sort/filter/search paths are bypassed
+      }
+      // ─── END FAST GRID PATH ─────────────────────────────────────────────────
+
       if (props.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
         const threshold = getStackThreshold(props.stackThreshold);
         const likenessGroupParams = buildLikenessGroupQueryParams();
@@ -471,21 +642,220 @@ export function useGridFetch(
         const data = await res.data;
         images = data.pictures || [];
       } else {
+        // STREAMING PATH — incrementally fetches and commits batches.
+        //
+        // Completion is determined by the backend's `done` flag (derived from
+        // the SQL pre-filter row count), not by comparing the response length
+        // against `batch_limit`.  This is the key reliability property: even
+        // when a batch is shrunk by post-filtering (hidden tags, stack-leader
+        // dedup) the loader keeps fetching until the server signals done.
         const params = buildPictureIdsQueryParams();
-        // Only use allowed parameters: sort, offset, limit, threshold
-        const url = `${props.backendUrl}/pictures?offset=0${
-          params ? `&${params}` : ""
-        }`;
-        const res = await apiClient.get(url);
-        const data = await res.data;
-        images = data;
+        // 100 items fills the visible viewport + render buffer in one batch;
+        // subsequent batches use a larger size for background throughput.
+        const FIRST_BATCH_LIMIT = 100;
+        const NEXT_BATCH_LIMIT = 1000;
+        const MAX_BATCHES = 200; // safety cap; 200 * 1000 = 200k rows
+        let streamOffset = 0;
+        let streamBatchLimit = FIRST_BATCH_LIMIT;
+        let firstBatch = true;
+        let accumulatedRaw = [];
+        let batchesFetched = 0;
+        // Fire a fast SELECT COUNT(*) in parallel with the stream so that the
+        // grid can be pre-extended with placeholders before streaming finishes.
+        // This lets the END key jump to the real bottom immediately.
+        const countUrl = `${props.backendUrl}/pictures/count${params ? `?${params}` : ''}`;
+        const countPromise = apiClient
+          .get(countUrl)
+          .then((r) => (typeof r.data?.count === 'number' ? r.data.count : null))
+          .catch(() => null);
+
+        const commitStreamingBatch = (isFirst) => {
+          lastFetchedGridImages.value = accumulatedRaw.slice();
+          syncExpandAllStacksFromFetchedImages();
+          // TODO: re-enable collapseStackImages once streaming baseline is stable
+          const collapsed = accumulatedRaw;
+          const nextIdSet = new Set(
+            Array.isArray(collapsed)
+              ? collapsed
+                  .map((img) => getPictureId(img?.id))
+                  .filter((id) => id !== null)
+              : [],
+          );
+          if (isFirst) {
+            const shouldHighlight =
+              highlightNextFetch.value && hasLoadedOnce.value;
+            if (shouldHighlight) {
+              const newIds = [];
+              nextIdSet.forEach((id) => {
+                if (!previousImageIds.has(id)) newIds.push(id);
+              });
+              if (newIds.length) triggerNewImageHighlight(newIds);
+            }
+            previousImageIds.clear();
+          }
+          nextIdSet.forEach((id) => previousImageIds.add(id));
+          if (isFirst) {
+            highlightNextFetch.value = false;
+            hasLoadedOnce.value = true;
+          }
+          const newImages = mapGridImages(collapsed);
+          if (isFirst) {
+            resetThumbnailState();
+          }
+          if (overlayOpen.value) {
+            pendingGridImages.value = newImages;
+            pendingOverlayGridRefresh.value = true;
+          } else {
+            // Preserve any tail placeholders (from the parallel count pre-extension)
+            // so they aren't truncated on each batch commit.
+            const current = allGridImages.value;
+            allGridImages.value =
+              current.length > newImages.length
+                ? [...newImages, ...current.slice(newImages.length)]
+                : newImages;
+          }
+          if (props.sharedOnlyFilter && !isReadOnly.value) {
+            const next = new Set(sharedPictureIds.value);
+            for (const img of newImages) {
+              if (img.id) next.add(img.id);
+            }
+            sharedPictureIds.value = next;
+          }
+          if (isSetOverlapView.value) {
+            totalCurrentCategoryCount.value = newImages.length;
+          }
+          if (isFirst) {
+            const cols = props.columns || 1;
+            const windowCount = Math.max(
+              cols,
+              divisibleViewWindow.value || cols,
+            );
+            if (!fetchStartedWithPreserveScroll) {
+              visibleStart.value = 0;
+              visibleEnd.value = Math.min(newImages.length, windowCount);
+            } else {
+              visibleEnd.value = Math.min(visibleEnd.value, newImages.length);
+              if (visibleStart.value > visibleEnd.value)
+                visibleStart.value = Math.max(0, visibleEnd.value - 1);
+            }
+            // Always fire thumbnail fetch for the first batch regardless of
+            // initialRender state. A second fetch call (e.g. after
+            // apply_tag_filter is applied) replaces allGridImages with fresh
+            // objects that have null thumbnails; without this, those images
+            // would have no thumbnail URL until the next updateVisibleThumbnails
+            // call. fetchThumbnailsBatch synchronously pre-fills the URLs from
+            // imported_at so images start rendering immediately.
+            const prefetchEnd = Math.min(
+              newImages.length,
+              visibleEnd.value + divisibleViewWindow.value,
+            );
+            fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
+          }
+          return null;
+        };
+
+        while (batchesFetched < MAX_BATCHES) {
+          const url = `${props.backendUrl}/pictures/stream?offset=${streamOffset}&batch_limit=${streamBatchLimit}${
+            params ? `&${params}` : ""
+          }`;
+          const res = await apiClient.get(url);
+          const data = await res.data;
+          if (fetchAllGridImages.lastRequestId !== requestId) {
+            if (isSortedFetch && options?.showProgress === true)
+              completeSmartScoreProgress(loadId, 0, false);
+            return;
+          }
+          const batchPictures = Array.isArray(data?.pictures)
+            ? data.pictures
+            : [];
+          accumulatedRaw = accumulatedRaw.concat(batchPictures);
+          commitStreamingBatch(firstBatch);
+          const isFirstBatch = firstBatch;
+          firstBatch = false;
+          batchesFetched += 1;
+          if (isFirstBatch) {
+            // Expand the render buffer immediately so the prefetched cells
+            // are added to the DOM and can show thumbnails as they arrive.
+            // Thumbnail URLs are already pre-filled synchronously by
+            // fetchThumbnailsBatch, so there is no need to await the POST.
+            initialRender.value = false;
+            // When the parallel count response arrives, pre-extend allGridImages
+            // with placeholder items so the END key jumps to the real bottom
+            // before streaming has finished filling every item.
+            countPromise.then((total) => {
+              if (fetchAllGridImages.lastRequestId !== requestId) return;
+              if (overlayOpen.value) return;
+              if (typeof total !== 'number') return;
+              const current = allGridImages.value;
+              if (total <= current.length) return;
+              const extra = total - current.length;
+              const base = current.length;
+              const placeholders = Array.from({ length: extra }, (_, i) => ({
+                id: null,
+                idx: base + i,
+              }));
+              allGridImages.value = [...current, ...placeholders];
+            });
+          } else {
+            // Keep thumbnails current for any newly visible range.
+            updateVisibleThumbnails();
+          }
+          if (data?.done) break;
+          if (
+            typeof data?.next_offset !== "number" ||
+            data.next_offset <= streamOffset
+          ) {
+            // Defensive: backend signalled non-progressing next_offset.
+            break;
+          }
+          streamOffset = data.next_offset;
+          streamBatchLimit = NEXT_BATCH_LIMIT;
+          // Yield to the event loop so the UI can paint between batches.
+          await nextTick();
+        }
+        images = accumulatedRaw;
+        // Trim leftover tail placeholders from the parallel count pre-extension.
+        // The SELECT COUNT(*) may be a slight over-estimate when the hidden-tag
+        // post-filter removes pictures that were counted at the SQL layer.
+        if (!overlayOpen.value && allGridImages.value.length > images.length) {
+          allGridImages.value = allGridImages.value.slice(0, images.length);
+        }
+        // Streaming path has already applied all per-batch post-processing.
+        // Skip the legacy single-shot post-process block below.
+        if (fetchAllGridImages.lastRequestId !== requestId) {
+          if (isSortedFetch && options?.showProgress === true)
+            completeSmartScoreProgress(loadId, 0, false);
+          return;
+        }
+        await refreshExpandedStacksAfterFetch();
+        await maybeRefreshOverlayForComfyui();
+        requestAnimationFrame(() => {
+          if (initialRender.value) {
+            initialRender.value = false;
+            updateVisibleThumbnails();
+          }
+        });
+        lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
+        if (isSortedFetch) {
+          const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
+          completeSmartScoreProgress(loadId, elapsedMs, true);
+        }
+        // Mark the streaming branch as handled and short-circuit the legacy
+        // post-process block by jumping ahead via a flag.
+        fetchAllGridImages._streamingHandled = true;
       }
       if (fetchAllGridImages.lastRequestId !== requestId) {
         if (isSortedFetch && options?.showProgress === true)
           completeSmartScoreProgress(loadId, 0, false);
         return;
       }
-      lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
+      if (fetchAllGridImages._streamingHandled) {
+        // Streaming branch already did its own post-processing per batch and
+        // finalized the load. Reset the flag and skip the legacy single-shot
+        // post-process below.
+        fetchAllGridImages._streamingHandled = false;
+      } else {
+        lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
       syncExpandAllStacksFromFetchedImages();
       images = collapseStackImages(images);
       const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
@@ -565,6 +935,7 @@ export function useGridFetch(
       if (isSortedFetch) {
         const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
         completeSmartScoreProgress(loadId, elapsedMs, true);
+      }
       }
     } catch (e) {
       if (fetchAllGridImages.lastRequestId !== requestId) {
