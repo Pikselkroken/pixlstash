@@ -1,3 +1,6 @@
+# [1.2.2]
+- Update brace-expansion NPM package for frontend [Security:Moderate]
+
 # [1.2.1]
 - Fix some clipboard issues for copying tokens
 - Guard against the tagging of deleted pictures
