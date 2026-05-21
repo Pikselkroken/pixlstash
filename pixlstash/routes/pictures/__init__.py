@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from ._helpers import MEDIA_TYPE_BY_FORMAT, clear_stats_cache, _stats_cache  # noqa: F401
+from ._helpers import MEDIA_TYPE_BY_FORMAT, clear_stats_cache, _stats_cache, _STATS_TTL  # noqa: F401
 from . import _crud, _export, _import, _listing, _misc, _search, _thumbnails
 
 

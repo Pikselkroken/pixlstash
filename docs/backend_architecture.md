@@ -1,8 +1,11 @@
 # PixlStash Backend Architecture
 
-> Synthetic reference of the PixlStash backend. This document is the source of truth for Copilot and human contributors when reasoning about server-side code.
+> Synthetic reference of the PixlStash backend. This document is the source of truth for both Copilot and human contributors when reasoning about server-side code.
 >
-> Companion document: [docs/frontend_architecture.md](frontend_architecture.md)
+> Companion documents: 
+
+* Frontend: [docs/frontend_architecture.md](frontend_architecture.md)
+* Integration: [docs/integration_architecture.md](integration_architecture.md)
 
 ---
 
@@ -152,7 +155,7 @@ pixlstash/
 ├── migrations/
 │   ├── env.py
 │   ├── script.py.mako
-│   └── versions/                     # 0001_baseline … 0044_add_grid_sort_indexes
+│   └── versions/                     # Migration files for Alembic
 │
 ├── data/
 │   ├── anchors/                      # builtin_good.npy, builtin_bad.npy
@@ -167,9 +170,9 @@ pixlstash/
 
 PixlStash is a **single-process image vault** built on FastAPI. Despite running on an ASGI server, most route handlers are synchronous and offload to background threads; "async" here means cooperative I/O for FastAPI/WebSockets, not an async stack end-to-end. It combines:
 
-- A **REST + WebSocket API** for the Vue 3 SPA
+- A **REST + WebSocket API** for the Vue 3 frontend
 - A **threaded task runner** with separate CPU and GPU queues
-- A **SQLite database** wrapped in a threaded work queue (`VaultDatabase`) — a single dedicated writer thread serialises mutations while reads can bypass the queue via `run_immediate_read_task`
+- A **SQLite database** wrapped in a threaded work queue (`VaultDatabase`) — a single dedicated writer thread serialises mutations while reads can bypass the queue via `run_immediate_read_task` meant for interactive tasks that needs a quick response
 - A **ML pipeline** (CLIP, WD14, InsightFace, PixlStash tagger, SentenceTransformer)
 - A **plugin system** for image transformations
 - A **file vault** rooted at a configured `image_root` directory
@@ -664,7 +667,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | utils/likeness/ | `likeness_utils`, `likeness_parameter_utils` |
 | utils/quality/ | `quality_utils`, `smart_score_utils` |
 | utils/stack/ | `stack_utils` |
-| utils/service/ | `path_utils`, `system_utils`, `export_utils`, `tag_prediction_utils`, `serialization_utils`, `caption_utils`, `config_utils` |
+| utils/service/ | `path_utils`, `system_utils`, `export_utils`, `tag_prediction_utils`, `serialization_utils`, `caption_utils`, `user_settings_utils` |
 
 ---
 
