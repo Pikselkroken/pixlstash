@@ -27,16 +27,18 @@ from pixlstash.picture_scoring import (
     find_pictures_by_character_likeness,
 )
 from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.service.filter_helpers import (
+    collect_set_filter_ids,
+    fetch_set_candidate_ids,
+    normalize_set_mode,
+    project_membership_exists_clause,
+    project_unassigned_clause,
+)
 from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
 
 from ._helpers import (
-    _collect_set_filter_ids,
     _enrich_stack_counts,
     _fetch_hidden_picture_ids,
-    _fetch_set_candidate_ids,
-    _normalize_set_mode,
-    _project_membership_exists_clause,
-    _project_unassigned_clause,
 )
 
 
@@ -184,8 +186,8 @@ def select_pictures_for_listing(
         "guest_session_id", None
     )  # handled separately; must not leak into **query_params
     only_deleted = False
-    set_mode = _normalize_set_mode(set_mode_raw)
-    set_filter_ids = _collect_set_filter_ids(
+    set_mode = normalize_set_mode(set_mode_raw)
+    set_filter_ids = collect_set_filter_ids(
         set_id_value=set_id_raw,
         set_ids_values=set_ids_raw if isinstance(set_ids_raw, list) else None,
     )
@@ -247,8 +249,8 @@ def select_pictures_for_listing(
             else:
                 query_params["id"] = [str(i) for i in shared_id_set]
 
-    def fetch_set_candidate_ids(session: Session):
-        return _fetch_set_candidate_ids(
+    def _set_candidate_ids_for_session(session: Session):
+        return fetch_set_candidate_ids(
             session,
             set_ids=set_filter_ids,
             set_mode=set_mode,
@@ -360,11 +362,11 @@ def select_pictures_for_listing(
             return None
 
         if project_id_value == "UNASSIGNED":
-            query = query.where(_project_unassigned_clause(Picture))
+            query = query.where(project_unassigned_clause(Picture))
         elif project_id_value is not None:
             try:
                 query = query.where(
-                    _project_membership_exists_clause(int(project_id_value), Picture)
+                    project_membership_exists_clause(int(project_id_value), Picture)
                 )
             except (TypeError, ValueError):
                 logger.warning(
@@ -556,7 +558,7 @@ def select_pictures_for_listing(
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
-                fetch_set_candidate_ids
+                _set_candidate_ids_for_session
             )
             candidate_ids = (
                 set_candidate_ids
@@ -661,7 +663,7 @@ def select_pictures_for_listing(
     else:
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
-                fetch_set_candidate_ids
+                _set_candidate_ids_for_session
             )
             if not set_candidate_ids:
                 return []
@@ -695,7 +697,7 @@ def select_pictures_for_listing(
                         rows = session.exec(
                             select(Picture.id).where(
                                 Picture.id.in_(ids),
-                                _project_unassigned_clause(Picture),
+                                project_unassigned_clause(Picture),
                             )
                         ).all()
                         return list(rows)
@@ -784,7 +786,7 @@ def select_pictures_for_listing(
                         rows = session.exec(
                             select(Picture.id).where(
                                 Picture.id.in_(ids),
-                                _project_unassigned_clause(Picture),
+                                project_unassigned_clause(Picture),
                             )
                         ).all()
                         return list(rows)
@@ -832,7 +834,7 @@ def select_pictures_for_listing(
 
                     rows = session.exec(
                         select(Pic.id).where(
-                            _project_unassigned_clause(Pic),
+                            project_unassigned_clause(Pic),
                             Pic.deleted.is_(False),
                         )
                     ).all()

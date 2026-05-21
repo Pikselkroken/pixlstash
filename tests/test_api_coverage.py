@@ -179,7 +179,7 @@ def test_smart_score_stats_refresh_after_picture_change_event():
             row.get("label"): int(row.get("count") or 0) for row in second_dist
         }
         assert second_map.get("Unscored", 0) == 0
-        assert second_map.get("4–5", 0) >= 1
+        assert second_map.get("4-5", 0) >= 1
     finally:
         server.vault.close()
         temp_dir.cleanup()

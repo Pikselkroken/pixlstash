@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-import time
 from collections import defaultdict, deque
 from datetime import datetime
 
@@ -33,18 +32,18 @@ from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.services import plugin_service
 from pixlstash.utils.service.picture_stats import (
     PictureStatsParams,
-    compute_picture_stats,
+    get_cached_picture_stats,
+)
+from pixlstash.utils.service.filter_helpers import (
+    collect_set_filter_ids,
+    fetch_set_candidate_ids,
+    normalize_set_mode,
+    project_membership_exists_clause,
+    project_unassigned_clause,
 )
 
 from ._helpers import (
-    _collect_set_filter_ids,
     _fetch_hidden_picture_ids,
-    _fetch_set_candidate_ids,
-    _normalize_set_mode,
-    _project_membership_exists_clause,
-    _project_unassigned_clause,
-    _stats_cache,
-    _STATS_TTL,
 )
 
 
@@ -180,15 +179,15 @@ def register_routes(router, server):
     ):
         candidate_ids = None
         only_deleted = character_id == "SCRAPHEAP"
-        set_filter_ids = _collect_set_filter_ids(
+        set_filter_ids = collect_set_filter_ids(
             set_id_value=set_id,
             set_ids_values=set_ids,
         )
-        normalized_set_mode = _normalize_set_mode(set_mode)
+        normalized_set_mode = normalize_set_mode(set_mode)
 
         if set_filter_ids:
             candidate_ids = server.vault.db.run_immediate_read_task(
-                _fetch_set_candidate_ids,
+                fetch_set_candidate_ids,
                 set_ids=set_filter_ids,
                 set_mode=normalized_set_mode,
                 deleted_only=only_deleted,
@@ -271,7 +270,7 @@ def register_routes(router, server):
             ):
                 query = select(Picture.id)
                 if project_id_value == "UNASSIGNED":
-                    query = query.where(_project_unassigned_clause(Picture))
+                    query = query.where(project_unassigned_clause(Picture))
                 else:
                     try:
                         parsed_project_id = int(project_id_value)
@@ -281,7 +280,7 @@ def register_routes(router, server):
                             detail="Invalid project_id",
                         )
                     query = query.where(
-                        _project_membership_exists_clause(parsed_project_id, Picture)
+                        project_membership_exists_clause(parsed_project_id, Picture)
                     )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
@@ -743,16 +742,6 @@ def register_routes(router, server):
     )
     def get_picture_stats(request: Request):
         cache_key = str(sorted(request.query_params.multi_items()))
-        now = time.monotonic()
-        for expired_key in [
-            k for k, (ts, _) in list(_stats_cache.items()) if now - ts >= _STATS_TTL
-        ]:
-            _stats_cache.pop(expired_key, None)
-        cached = _stats_cache.get(cache_key)
-        if cached is not None:
-            ts, data = cached
-            if now - ts < _STATS_TTL:
-                return data
 
         only_penalised_raw = request.query_params.get("only_penalised") or ""
         only_penalised = only_penalised_raw in ("1", "true", "one", "both")
@@ -801,8 +790,8 @@ def register_routes(router, server):
         only_deleted = character_id_raw == "SCRAPHEAP"
         if only_deleted:
             character_id_raw = None
-        set_mode = _normalize_set_mode(set_mode_raw)
-        set_filter_ids = _collect_set_filter_ids(
+        set_mode = normalize_set_mode(set_mode_raw)
+        set_filter_ids = collect_set_filter_ids(
             set_id_value=set_id_raw,
             set_ids_values=set_ids_raw or None,
         )
@@ -847,6 +836,4 @@ def register_routes(router, server):
             penalised_tag_set=penalised_tag_set,
             penalised_cooc_both=penalised_cooc_both,
         )
-        result = compute_picture_stats(server.vault, params)
-        _stats_cache[cache_key] = (now, result)
-        return result
+        return get_cached_picture_stats(server.vault, params, cache_key)

@@ -14,14 +14,16 @@ from pixlstash.db_models import (
     SortMechanism,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.filter_helpers import (
+    collect_set_filter_ids,
+    fetch_set_candidate_ids,
+    normalize_set_mode,
+    project_membership_exists_clause,
+    project_unassigned_clause,
+)
 
 from ._helpers import (
-    _collect_set_filter_ids,
     _fetch_hidden_picture_ids,
-    _fetch_set_candidate_ids,
-    _normalize_set_mode,
-    _project_membership_exists_clause,
-    _project_unassigned_clause,
 )
 
 
@@ -87,8 +89,8 @@ def register_routes(router, server):
         only_deleted = character_id == "SCRAPHEAP"
         candidate_ids = None
         sort_mech = None
-        normalized_set_mode = _normalize_set_mode(set_mode)
-        set_filter_ids = _collect_set_filter_ids(
+        normalized_set_mode = normalize_set_mode(set_mode)
+        set_filter_ids = collect_set_filter_ids(
             set_id_value=set_id,
             set_ids_values=set_ids,
         )
@@ -114,7 +116,7 @@ def register_routes(router, server):
 
         if set_filter_ids:
             candidate_ids = server.vault.db.run_immediate_read_task(
-                _fetch_set_candidate_ids,
+                fetch_set_candidate_ids,
                 set_ids=set_filter_ids,
                 set_mode=normalized_set_mode,
                 deleted_only=only_deleted,
@@ -265,7 +267,7 @@ def register_routes(router, server):
             ):
                 query_stmt = select(Picture.id)
                 if project_id_value == "UNASSIGNED":
-                    query_stmt = query_stmt.where(_project_unassigned_clause(Picture))
+                    query_stmt = query_stmt.where(project_unassigned_clause(Picture))
                 else:
                     try:
                         parsed_project_id = int(project_id_value)
@@ -275,7 +277,7 @@ def register_routes(router, server):
                             detail="Invalid project_id",
                         )
                     query_stmt = query_stmt.where(
-                        _project_membership_exists_clause(parsed_project_id, Picture)
+                        project_membership_exists_clause(parsed_project_id, Picture)
                     )
                 if deleted_only:
                     query_stmt = query_stmt.where(Picture.deleted.is_(True))

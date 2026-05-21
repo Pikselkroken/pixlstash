@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 
-from ._helpers import MEDIA_TYPE_BY_FORMAT, clear_stats_cache, _stats_cache, _STATS_TTL  # noqa: F401
+from pixlstash.utils.service.picture_stats import clear_stats_cache  # noqa: F401
+
+from ._helpers import MEDIA_TYPE_BY_FORMAT  # noqa: F401
 from ._listing import select_pictures_for_listing  # noqa: F401
 from . import _crud, _export, _import, _listing, _misc, _search, _thumbnails
 
