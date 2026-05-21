@@ -95,7 +95,7 @@ def pytest_sessionfinish(session, exitstatus):
     """Release native model/session resources before interpreter teardown."""
     try:
         # Drain optional CPU spillover tagger if one was created by tag tasks.
-        TagTask._release_idle_cpu_spillover_engine(force=True)
+        TagTask.release_idle_cpu_spillover_engine(force=True)
     except Exception:
         # Best-effort teardown: ignore spillover tagger cleanup failures.
         pass

@@ -8,7 +8,7 @@ from pixlstash.db_models.tag import (
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
 
-_PENALISED_TAG_SET = {t.strip().lower() for t in DEFAULT_SMART_SCORE_PENALIZED_TAGS}
+PENALISED_TAG_SET = {t.strip().lower() for t in DEFAULT_SMART_SCORE_PENALIZED_TAGS}
 
 
 def recompute_anomaly_tag_uncertainty(session: Session, picture_id: int) -> None:
@@ -52,7 +52,7 @@ def recompute_anomaly_tag_uncertainty(session: Session, picture_id: int) -> None
 
     scores: list[float] = []
     for tag, confidence in predictions:
-        if tag is None or tag.strip().lower() not in _PENALISED_TAG_SET:
+        if tag is None or tag.strip().lower() not in PENALISED_TAG_SET:
             continue
         if tag in applied_tags:
             scores.append(1.0 - float(confidence))

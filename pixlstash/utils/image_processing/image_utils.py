@@ -206,7 +206,7 @@ class ImageUtils:
         if not file_path or not os.path.exists(file_path):
             return None
         if VideoUtils.is_video_file(file_path):
-            return VideoUtils._read_first_video_frame_bgr(file_path)
+            return VideoUtils.read_first_video_frame_bgr(file_path)
 
         img = cv2.imread(file_path)
         if img is not None:
@@ -416,7 +416,7 @@ class ImageUtils:
                 logger.debug(
                     "PIL failed to load image %s; trying video: %s", file_path, exc
                 )
-            frame = VideoUtils._read_first_video_frame_bgr(file_path)
+            frame = VideoUtils.read_first_video_frame_bgr(file_path)
             if frame is not None:
                 return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             raise ValueError("Could not read image or first frame from video.")
@@ -452,7 +452,7 @@ class ImageUtils:
                     exc,
                 )
             if arr is None:
-                frame = VideoUtils._read_first_video_frame_bgr(file_path)
+                frame = VideoUtils.read_first_video_frame_bgr(file_path)
                 if frame is None:
                     return None
                 arr = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

@@ -41,7 +41,7 @@ class StackUtils:
         )
 
 
-def _deduplicate_by_stack(pics: list) -> list:
+def deduplicate_by_stack(pics: list) -> list:
     """Keep first-seen member per stack; unstacked pictures pass through.
 
     The incoming list is expected to already be ordered by the active sort.

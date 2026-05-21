@@ -10,7 +10,7 @@ from pixlstash.pixl_logging import get_logger
 logger = get_logger(__name__)
 
 
-def _smart_score_penalised_tags(
+def smart_score_penalised_tags(
     value,
     fallback=None,
     allow_empty: bool = False,

@@ -1,8 +1,4 @@
-"""Shared filter helpers for picture query construction.
-
-These were extracted from pixlstash/routes/pictures.py so that service modules
-can use them without creating a circular import.
-"""
+"""Shared filter helpers for picture query construction."""
 
 from fastapi import HTTPException
 from sqlalchemy import exists, select

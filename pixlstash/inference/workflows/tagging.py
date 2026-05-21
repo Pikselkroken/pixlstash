@@ -350,7 +350,7 @@ class TaggingWorkflow:
         """Delegate VRAM-based batch cap to the engine's budget."""
         return self._engine.vram_budget.limited_batch_cap(base_mb, per_item_mb)
 
-    def _effective_wd14_batch_size(self) -> int:
+    def effective_wd14_batch_size(self) -> int:
         """Effective WD14 batch size subject to ONNX capacity and VRAM budget."""
         max_concurrent = max(1, int(self._max_concurrent_images()))
         onnx_cap = self._engine.wd14_service.batch_capacity()
@@ -362,9 +362,9 @@ class TaggingWorkflow:
             )
         return max(1, int(wd14_batch))
 
-    def _effective_pixlstash_tagger_batch_size(self) -> int:
+    def effective_pixlstash_tagger_batch_size(self) -> int:
         # WD14 is the conservative bound; both taggers share the same limit.
-        return self._effective_wd14_batch_size()
+        return self.effective_wd14_batch_size()
 
     def suggested_task_size(self) -> int:
         """VRAM-budget-aware batch size for a TagTask run.
@@ -391,11 +391,11 @@ class TaggingWorkflow:
         image_count = max(1, int(image_count or 1))
         candidates = [1200]
         if self._use_wd14:
-            wd14_batch = min(self._effective_wd14_batch_size(), image_count)
+            wd14_batch = min(self.effective_wd14_batch_size(), image_count)
             candidates.append(900 + 220 * wd14_batch)
         if self._use_pixlstash_tagger:
             custom_batch = min(
-                self._effective_pixlstash_tagger_batch_size(), image_count
+                self.effective_pixlstash_tagger_batch_size(), image_count
             )
             candidates.append(700 + 90 * custom_batch)
         return int(max(candidates))
@@ -405,13 +405,13 @@ class TaggingWorkflow:
         candidates = [256]
         if self._use_wd14:
             wd14_batch = min(
-                self._effective_wd14_batch_size(),
+                self.effective_wd14_batch_size(),
                 max(1, int(image_count or 1)),
             )
             candidates.append(220 * wd14_batch)
         if self._use_pixlstash_tagger:
             custom_batch = min(
-                self._effective_pixlstash_tagger_batch_size(),
+                self.effective_pixlstash_tagger_batch_size(),
                 max(1, int(image_count or 1)),
             )
             candidates.append(90 * custom_batch)

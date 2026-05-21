@@ -28,7 +28,7 @@ from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
     select_reference_faces_for_character,
 )
-from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 
@@ -115,7 +115,7 @@ def create_router(server) -> APIRouter:
             user = server.auth.get_user()
         if not user:
             return []
-        normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
+        normalized = normalize_hidden_tags(getattr(user, "hidden_tags", None))
         return normalized or []
 
     @router.get(
@@ -694,7 +694,7 @@ def create_router(server) -> APIRouter:
                 )
             try:
                 if VideoUtils.is_video_file(picture_path):
-                    frame_bgr = VideoUtils._read_first_video_frame_bgr(picture_path)
+                    frame_bgr = VideoUtils.read_first_video_frame_bgr(picture_path)
                     if frame_bgr is None:
                         raise ValueError("Could not read first frame from video")
                     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)

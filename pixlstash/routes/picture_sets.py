@@ -28,10 +28,10 @@ from pixlstash.picture_scoring import (
     get_smart_score_penalised_tags_from_request,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.utils.service.serialization_utils import safe_model_dict
-from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
+from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
 
 logger = get_logger(__name__)
 
@@ -160,7 +160,7 @@ def create_router(server) -> APIRouter:
             user = server.auth.get_user()
         if not user:
             return []
-        normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
+        normalized = normalize_hidden_tags(getattr(user, "hidden_tags", None))
         return normalized or []
 
     def _filter_hidden_picture_ids(
@@ -908,7 +908,7 @@ def create_router(server) -> APIRouter:
                 penalised_tags=penalised_tags,
             )
             if deduplicate_stacks:
-                pictures = _deduplicate_by_stack(pictures)
+                pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
@@ -928,7 +928,7 @@ def create_router(server) -> APIRouter:
                 candidate_ids=picture_ids,
             )
             if deduplicate_stacks:
-                pictures = _deduplicate_by_stack(pictures)
+                pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 

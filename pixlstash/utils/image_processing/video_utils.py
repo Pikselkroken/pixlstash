@@ -75,7 +75,7 @@ class VideoUtils:
         return None
 
     @staticmethod
-    def _read_first_video_frame_bgr(file_path: str) -> Optional[np.ndarray]:
+    def read_first_video_frame_bgr(file_path: str) -> Optional[np.ndarray]:
         """Read the first frame of a video file and return it as a BGR numpy array."""
         cap = cv2.VideoCapture(file_path)
         ret, frame = cap.read()

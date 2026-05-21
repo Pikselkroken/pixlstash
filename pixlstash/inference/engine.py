@@ -258,11 +258,11 @@ class InferenceEngine:
 
     def _effective_pixlstash_tagger_batch_size(self) -> int:
         """Return the VRAM-constrained batch size for the PixlStash tagger."""
-        return self.tagging_workflow._effective_pixlstash_tagger_batch_size()
+        return self.tagging_workflow.effective_pixlstash_tagger_batch_size()
 
     def _effective_wd14_batch_size(self) -> int:
         """Return the VRAM-constrained batch size for WD14."""
-        return self.tagging_workflow._effective_wd14_batch_size()
+        return self.tagging_workflow.effective_wd14_batch_size()
 
     def loaded_model_state(self) -> dict:
         """Return a dict snapshot of which models are currently loaded."""
