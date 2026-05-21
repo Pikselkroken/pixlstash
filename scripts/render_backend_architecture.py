@@ -33,7 +33,6 @@ SERVER_PY = os.path.join(REPO_ROOT, "pixlstash", "server.py")
 # ---------------------------------------------------------------------------
 
 _START_RE = re.compile(r"<!--\s*AUTOGEN:start(?:\s+name=\"(?P<name>[^\"]+)\")?\s*-->")
-_END_RE = re.compile(r"<!--\s*AUTOGEN:end(?:\s+name=\"(?P<name>[^\"]+)\")?\s*-->")
 
 
 def _inject(original: str, sections: dict[str | None, str]) -> str:

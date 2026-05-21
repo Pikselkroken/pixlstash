@@ -128,9 +128,7 @@ pixlstash/
 ├── tagger_plugins/                   # Tagger service classes (WD14, PixlStash, CLIP, SBert, Florence2)
 │
 ├── services/                         # Business-logic extracted from route handlers
-│   ├── _filter_helpers.py            # Shared picture query filter helpers
 │   ├── config_service.py             # Hardware monitoring + import folder utilities
-│   ├── picture_stats.py              # /pictures/stats aggregation queries
 │   ├── plugin_service.py             # Image plugin orchestration + progress tracking
 │   ├── share_service.py              # Share-token validation + watermark resolution
 │   └── tag_prediction_service.py     # Confirm / reject / reset tag predictions
