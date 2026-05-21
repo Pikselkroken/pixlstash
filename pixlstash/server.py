@@ -219,7 +219,6 @@ class Server:
         self._ws_clients_lock = threading.Lock()
         self._ws_loop = None
         self.vault.add_event_listener(self.handle_vault_event)
-        self.vault.start()
 
         self.auth = AuthService(
             self.vault.db,
@@ -249,6 +248,7 @@ class Server:
         self.vault.set_pixlstash_tagger_threshold_offset(
             getattr(self._user, "custom_tagger_threshold_offset", None)
         )
+        self.vault.start()
 
         self.api = FastAPI(
             title="PixlStash API",

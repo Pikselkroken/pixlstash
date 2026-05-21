@@ -282,8 +282,7 @@ def test_workers_not_started_at_vault_init():
     from pixlstash.vault import Vault
 
     with tempfile.TemporaryDirectory() as tmp:
-        vault = Vault(image_root=tmp, disable_background_workers=False)
-        try:
+        with Vault(image_root=tmp, disable_background_workers=False) as vault:
             assert vault._task_runner is not None, (
                 "_task_runner should be created in __init__"
             )
@@ -303,5 +302,3 @@ def test_workers_not_started_at_vault_init():
             assert vault._work_planner.is_running(), (
                 "WorkPlanner must be running after Vault.start()"
             )
-        finally:
-            vault.close()

@@ -438,7 +438,7 @@ def register_routes(router, server):
                         duplicate_picture_id_set,
                     )
                     if tagged_ids:
-                        server.vault.notify(EventType.CHANGED_TAGS)
+                        server.vault.notify(EventType.CHANGED_TAGS, tagged_ids)
 
                 if all_imported_ids:
                     _mark_stage("finalizing_import_context")
