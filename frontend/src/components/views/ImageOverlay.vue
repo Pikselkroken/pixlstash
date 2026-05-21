@@ -548,99 +548,16 @@
           </div>
         </div>
 
-        <div
-          ref="overlayRailRef"
-          class="overlay-rail"
-          :class="{ hidden: chromeHidden }"
-        >
-          <div
-            class="filmstrip-viewport"
-            @wheel.prevent.stop="onFilmstripWheel"
-          >
-            <transition-group
-              name="filmstrip-slide"
-              tag="div"
-              class="filmstrip-list"
-              :style="filmstripCanvasStyle"
-            >
-              <button
-                v-for="item in filmstripCanvasWindow"
-                :key="
-                  item.id ? `filmstrip-${item.id}` : `filmstrip-${item.index}`
-                "
-                :class="[
-                  'filmstrip-thumb',
-                  {
-                    'filmstrip-thumb-stack-joined': item.isStackJoined,
-                  },
-                ]"
-                @click.stop="selectImageByIndex(item.index)"
-                :title="item.description || 'Image'"
-              >
-                <div
-                  class="filmstrip-thumb-tile"
-                  :style="getFilmstripStackStyle(item)"
-                >
-                  <img
-                    v-if="getFilmstripThumbSrc(item)"
-                    :class="[
-                      'filmstrip-thumb-image',
-                      { 'filmstrip-thumb-image-active': item.isActive },
-                    ]"
-                    :src="getFilmstripThumbSrc(item)"
-                    :alt="item.description || 'Thumbnail'"
-                    loading="lazy"
-                    draggable="false"
-                  />
-                  <div
-                    v-else
-                    :class="[
-                      'filmstrip-thumb-placeholder',
-                      { 'filmstrip-thumb-image-active': item.isActive },
-                    ]"
-                  >
-                    <v-icon size="22">
-                      {{
-                        isSupportedVideoFile(getOverlayFormat(item))
-                          ? "mdi-video"
-                          : "mdi-image"
-                      }}
-                    </v-icon>
-                  </div>
-                </div>
-                <div
-                  v-if="
-                    shouldShowFilmstripStackBadge(item) &&
-                    getFilmstripThumbSrc(item) &&
-                    isFilmstripStackLead(item)
-                  "
-                  class="filmstrip-badge filmstrip-badge--top-left"
-                  :title="filmstripStackBadgeTitle(item)"
-                  @click.stop="toggleFilmstripStackExpand(item)"
-                  @mouseenter.stop="prefetchFilmstripStackMembers(item)"
-                >
-                  <v-icon size="14" :style="getFilmstripStackIconStyle(item)"
-                    >mdi-layers</v-icon
-                  >
-                </div>
-                <div
-                  v-if="shouldShowFilmstripProblemBadge(item)"
-                  :class="[
-                    'filmstrip-badge',
-                    shouldShowFilmstripStackBadge(item)
-                      ? 'filmstrip-badge--top-left-stack'
-                      : 'filmstrip-badge--top-left',
-                  ]"
-                  :title="filmstripProblemTitle(item)"
-                >
-                  <v-icon size="14" color="error"
-                    >mdi-emoticon-sad-outline</v-icon
-                  >
-                </div>
-              </button>
-            </transition-group>
-          </div>
-        </div>
+        <OverlayFilmstrip
+          ref="filmstripRef"
+          :items="filmstripCanvasWindow"
+          :canvas-style="filmstripCanvasStyle"
+          :hidden="chromeHidden"
+          @select="selectImageByIndex"
+          @toggle-expand="toggleFilmstripStackExpand"
+          @prefetch="prefetchFilmstripStackMembers"
+          @navigate="onFilmstripNavigate"
+        />
 
         <aside
           class="overlay-sidebar"
@@ -723,169 +640,17 @@
             </template>
           </div>
 
-          <div
-            class="sidebar-section sidebar-section--tags"
-            :class="{ 'sidebar-section--collapsed': tagsCollapsed }"
-          >
-            <div
-              class="section-header section-header--collapsible"
-              @click="tagsCollapsed = !tagsCollapsed"
-            >
-              <span>Tags</span>
-              <span class="section-meta-group">
-                <button
-                  v-if="image && !isReadOnly"
-                  class="section-meta-btn"
-                  type="button"
-                  title="Reset and regenerate tags — deletes all tags and predictions for this picture and requeues it for re-tagging"
-                  :disabled="isTagsRefreshing"
-                  @click.stop="refreshPictureTags"
-                >
-                  <v-icon size="16">mdi-refresh</v-icon>
-                </button>
-                <button
-                  v-if="image && !isReadOnly"
-                  class="section-meta-btn"
-                  type="button"
-                  title="Add tag (T)"
-                  @click.stop="beginAddTag"
-                >
-                  <v-icon size="16">mdi-plus</v-icon>
-                </button>
-                <v-icon size="16" style="opacity: 0.6">{{
-                  tagsCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-                }}</v-icon>
-              </span>
-            </div>
-            <template v-if="!tagsCollapsed">
-              <div class="tag-list" ref="tagListRef">
-                <div v-if="isTagsRefreshing" class="tag-refresh-indicator">
-                  <v-progress-circular
-                    indeterminate
-                    size="16"
-                    width="2"
-                    color="primary"
-                  />
-                </div>
-                <div class="tag-section">
-                  <div
-                    class="tag-drop-zone"
-                    :class="{
-                      'tag-drop-zone--active': isDragOver('unassigned', null),
-                    }"
-                    @dragover.prevent="handleDragOver('unassigned', null)"
-                    @dragenter.prevent="handleDragOver('unassigned', null)"
-                    @dragleave="handleDragLeave('unassigned', null)"
-                    @drop.prevent="handleDropOnAllTags"
-                  >
-                    <span
-                      v-for="tag in allImageTags"
-                      :key="`unassigned-${tag.id ?? tag.tag}`"
-                      :class="[
-                        'overlay-tag',
-                        { 'overlay-tag--penalised': isPenalisedTag(tag) },
-                        predictionClassForTag(tagLabel(tag)),
-                      ]"
-                      :style="predictionStyleForTag(tagLabel(tag))"
-                      :title="predictionTitleForTag(tagLabel(tag))"
-                      draggable="true"
-                      @dragstart="
-                        startTagDrag(tagLabel(tag), 'unassigned', null, $event)
-                      "
-                      @dragend="clearTagDrag"
-                    >
-                      {{ tagLabel(tag) }}
-                      <button
-                        v-if="!isReadOnly"
-                        class="tag-delete-btn"
-                        @click.stop="removeAllTag(tag)"
-                        title="Remove tag"
-                      >
-                        <v-icon size="12">mdi-close</v-icon>
-                      </button>
-                    </span>
-                    <div
-                      v-if="!allImageTags.length"
-                      class="tag-drop-placeholder"
-                    >
-                      Drop tags here
-                    </div>
-                    <input
-                      v-if="addingTag && !isReadOnly"
-                      ref="tagInputRef"
-                      v-model="newTag"
-                      @keydown.enter.prevent="confirmAddTag"
-                      @keydown="handleTagInputKey"
-                      @blur="cancelAddTag"
-                      class="tag-add-input"
-                      placeholder="New tag"
-                    />
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
-
-          <div v-if="nearMissPredictions.length" class="sidebar-section">
-            <div class="section-header">
-              <span class="section-header-title-with-meta">
-                Rejected Tags
-              </span>
-              <button
-                class="section-meta-btn"
-                type="button"
-                :title="
-                  nearMissesCollapsed
-                    ? 'Expand rejected tags'
-                    : 'Collapse rejected tags'
-                "
-                @click.stop="nearMissesCollapsed = !nearMissesCollapsed"
-              >
-                <v-icon size="14">{{
-                  nearMissesCollapsed ? "mdi-chevron-down" : "mdi-chevron-up"
-                }}</v-icon>
-              </button>
-            </div>
-            <div
-              v-show="!nearMissesCollapsed"
-              class="tag-drop-zone tag-drop-zone--predictions"
-              :class="{
-                'tag-drop-zone--active': isDragOver('rejected', null),
-              }"
-              @dragover.prevent="handleDragOver('rejected', null)"
-              @dragenter.prevent="handleDragOver('rejected', null)"
-              @dragleave="handleDragLeave('rejected', null)"
-              @drop.prevent="handleDropOnRejectedTags"
-            >
-              <span
-                v-for="pred in nearMissPredictions"
-                :key="`pred-${pred.tag}`"
-                :class="[
-                  'overlay-tag',
-                  predictionClassForTag(pred.tag),
-                  'overlay-tag--prediction',
-                ]"
-                :style="{ '--pred-confidence': pred.confidence }"
-                :title="rejectedTagTitle(pred)"
-                draggable="true"
-                @dragstart="startTagDrag(pred.tag, 'rejected', null, $event)"
-                @dragend="clearTagDrag"
-              >
-                {{ pred.tag }}
-                <span class="tag-pred-confidence"
-                  >{{ (pred.confidence * 100).toFixed(0) }}%</span
-                >
-                <button
-                  v-if="!isReadOnly"
-                  class="tag-pred-btn tag-pred-btn--confirm"
-                  title="Confirm prediction (add as tag)"
-                  @click.stop="confirmPrediction(pred.tag)"
-                >
-                  <v-icon size="11">mdi-check</v-icon>
-                </button>
-              </span>
-            </div>
-          </div>
+          <OverlayTagsPanel
+            ref="tagsPanelRef"
+            :image="image"
+            :backend-url="backendUrl"
+            :hidden-tags="hiddenTags"
+            :apply-tag-filter="applyTagFilter"
+            @update-tags="handleTagsUpdate"
+            @overlay-change="(payload) => emit('overlay-change', payload)"
+            @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
+            @request-metadata-refresh="fetchOverlayMetadata"
+          />
 
           <OverlayMetadataPanel
             :image="image"
@@ -898,36 +663,6 @@
       </div>
     </div>
   </div>
-  <Teleport to="body">
-    <div
-      v-if="addingTag && tagSuggestions.length && tagInputRect"
-      class="tag-autocomplete-dropdown"
-      :class="{
-        'tag-autocomplete-dropdown--hover-enabled': autocompleteHoverEnabled,
-      }"
-      @mousemove.once="autocompleteHoverEnabled = true"
-      :style="{
-        top: tagInputRect.bottom + 4 + 'px',
-        left: tagInputRect.left + 'px',
-        minWidth: Math.max(tagInputRect.width, 160) + 'px',
-      }"
-    >
-      <button
-        v-for="(item, idx) in tagSuggestions"
-        :key="item.tag"
-        class="tag-autocomplete-item"
-        :class="{ 'tag-autocomplete-item--active': idx === tagSuggestionIndex }"
-        @mousedown.prevent="selectTagSuggestion(item)"
-      >
-        {{ item.tag }}
-        <span
-          v-if="idx === (tagSuggestionIndex >= 0 ? tagSuggestionIndex : 0)"
-          class="tag-autocomplete-tab-hint"
-          >TAB</span
-        >
-      </button>
-    </div>
-  </Teleport>
 </template>
 
 <script setup>
@@ -950,7 +685,9 @@ import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
+import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
+import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import {
@@ -959,12 +696,7 @@ import {
   getStackColor,
   toggleScore,
 } from "../../utils/utils.js";
-import {
-  dedupeTagList,
-  getTagId as tagId,
-  getTagLabel as tagLabel,
-  getTagList,
-} from "../../utils/tags.js";
+import { dedupeTagList, getTagList } from "../../utils/tags.js";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -1011,8 +743,14 @@ const {
 
 const image = ref(null);
 const addToSetControlRef = ref(null);
-const isTagsRefreshing = ref(false);
-const userVisibleHiddenTagKeys = ref(new Set());
+const tagsPanelRef = ref(null);
+const isAddingTag = computed(() => tagsPanelRef.value?.addingTag ?? false);
+
+function handleTagsUpdate(newTagsArray) {
+  if (image.value) {
+    image.value = { ...image.value, tags: newTagsArray };
+  }
+}
 const sidebarOpen = ref(true);
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
@@ -1127,10 +865,7 @@ function setOverlayImageById(nextId) {
     }
     return;
   }
-  if (!isSameImage) {
-    userVisibleHiddenTagKeys.value = new Set();
-    isTagsRefreshing.value = true;
-  }
+  // Tag state reset is handled by OverlayTagsPanel's image-id watcher.
 }
 
 const emit = defineEmits([
@@ -1165,19 +900,6 @@ const descriptionTeaser = computed(() => {
   return match ? match[0].trim() : trimmed;
 });
 
-const addingTag = ref(false);
-const tagSuggestionIndex = ref(-1);
-const tagInputRect = ref(null);
-const autocompleteHoverEnabled = ref(false);
-const newTag = ref("");
-const tagInputRef = ref(null);
-const tagListRef = ref(null);
-const penalisedTags = ref(new Set());
-const penalisedTagsLoading = ref(false);
-const tagPredictions = ref([]);
-const predictionAcceptanceThreshold = ref(0.95);
-const labelThresholds = ref({});
-const nearMissesCollapsed = ref(loadOverlayRejectedTagsCollapsed());
 const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
@@ -1254,23 +976,6 @@ function persistComfyuiPromptToSession() {
   window.sessionStorage?.setItem(key, value);
 }
 
-function loadOverlayRejectedTagsCollapsed() {
-  if (typeof window === "undefined") return false;
-  const raw = window.sessionStorage?.getItem(
-    "pixlstash:imageOverlay:rejectedTagsCollapsed",
-  );
-  if (raw == null) return false;
-  return raw === "1";
-}
-
-function persistOverlayRejectedTagsCollapsed(value) {
-  if (typeof window === "undefined") return;
-  window.sessionStorage?.setItem(
-    "pixlstash:imageOverlay:rejectedTagsCollapsed",
-    value ? "1" : "0",
-  );
-}
-
 const validComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
     (workflow) => workflow?.valid && workflow?.workflow_type === "i2i",
@@ -1315,7 +1020,6 @@ watch(open, (value) => {
     resetOverlayStackState();
     pluginMenuOpen.value = false;
     comfyuiMenuOpen.value = false;
-    resetTagInput();
     chromeHidden.value = false;
     chromeRevealTimestamp.value = 0;
     addToSetControlKey.value += 1;
@@ -1334,7 +1038,6 @@ watch(open, (value) => {
       comfyuiCaptionTouched.value = Boolean(stored);
     }
     fetchCharacters();
-    fetchPenalisedTags();
     fetchComfyWorkflows();
   }
 });
@@ -1372,10 +1075,6 @@ watch([comfyuiSelectedWorkflow, selectedComfyUsesCaption], () => {
 
 watch(comfyuiCaption, () => {
   persistComfyuiPromptToSession();
-});
-
-watch(nearMissesCollapsed, (value) => {
-  persistOverlayRejectedTagsCollapsed(Boolean(value));
 });
 
 watch(comfyuiMenuOpen, (value) => {
@@ -1421,38 +1120,6 @@ watch(pluginMenuOpen, (isOpen) => {
   }
   overlayPluginParameters.value = {};
 });
-
-async function fetchPenalisedTags() {
-  if (penalisedTagsLoading.value) return;
-  penalisedTagsLoading.value = true;
-  try {
-    const endpoint = isReadOnly.value
-      ? "/users/me/penalised-tags"
-      : "/users/me/config";
-    const res = await apiClient.get(endpoint);
-    let list = [];
-    if (Array.isArray(res.data?.smart_score_penalised_tags)) {
-      list = res.data.smart_score_penalised_tags;
-    } else if (
-      res.data?.smart_score_penalised_tags &&
-      typeof res.data.smart_score_penalised_tags === "object"
-    ) {
-      list = Object.keys(res.data.smart_score_penalised_tags);
-    }
-    const d = list
-      .map((tag) =>
-        String(tag || "")
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean);
-    penalisedTags.value = new Set(d);
-  } catch (e) {
-    penalisedTags.value = new Set();
-  } finally {
-    penalisedTagsLoading.value = false;
-  }
-}
 
 async function fetchComfyWorkflows() {
   if (comfyuiWorkflowLoading.value) return;
@@ -1516,38 +1183,11 @@ function runOverlayPlugin() {
   pluginMenuOpen.value = false;
 }
 
-function isPenalisedTag(tag) {
-  const key = tagLabel(tag).trim().toLowerCase();
-  if (!key) return false;
-  return penalisedTags.value.has(key);
-}
-
 function getFullImageUrl(targetImage = null) {
   const data = targetImage || image.value;
   return appendShareToken(
     buildMediaUrl({ backendUrl: backendUrl.value, image: data }),
   );
-}
-
-function getFilmstripThumbSrc(target) {
-  if (!target) return "";
-  if (target.thumbnail) {
-    const thumbnail = String(target.thumbnail);
-    if (!thumbnail) return "";
-    if (thumbnail.startsWith("http")) return appendShareToken(thumbnail);
-    if (thumbnail.startsWith("/")) {
-      return appendShareToken(
-        backendUrl.value ? `${backendUrl.value}${thumbnail}` : thumbnail,
-      );
-    }
-    return appendShareToken(thumbnail);
-  }
-  if (target.id != null && backendUrl.value) {
-    return appendShareToken(
-      `${backendUrl.value}/pictures/thumbnails/${target.id}.webp`,
-    );
-  }
-  return "";
 }
 
 function getOverlayImageList() {
@@ -1729,44 +1369,6 @@ function getOverlayStackCount(item) {
   return overlayStackCounts.value.get(stackId) || 0;
 }
 
-function shouldShowFilmstripStackBadge(item) {
-  return getOverlayStackCount(item) > 1;
-}
-
-function isFilmstripStackLead(item) {
-  if (!item) return false;
-  const stackId = getOverlayStackId(item);
-  if (!stackId) return false;
-  const list = filmstripImages.value;
-  const idx = Number(item?.index ?? -1);
-  if (!Array.isArray(list) || idx < 0 || idx >= list.length) return true;
-  const prev = idx > 0 ? list[idx - 1] : null;
-  const prevStackId = getOverlayStackId(prev);
-  return stackId !== prevStackId;
-}
-
-function hasFilmstripPenalisedTags(item) {
-  return Array.isArray(item?.penalised_tags) && item.penalised_tags.length > 0;
-}
-
-function shouldShowFilmstripProblemBadge(item) {
-  if (!showProblemIcon.value) return false;
-  if (!getFilmstripThumbSrc(item)) return false;
-  return hasFilmstripPenalisedTags(item);
-}
-
-function filmstripProblemTitle(item) {
-  const tags = Array.isArray(item?.penalised_tags) ? item.penalised_tags : [];
-  if (!tags.length) return "";
-  return `Penalised tags: ${tags.join(", ")}`;
-}
-
-function filmstripStackBadgeTitle(item) {
-  const count = getOverlayStackCount(item);
-  if (count <= 1) return "";
-  return `Stack of ${count} images`;
-}
-
 function getStackColorIndexFromId(stackId) {
   if (stackId === null || stackId === undefined) return null;
   const numeric = Number(stackId);
@@ -1799,21 +1401,6 @@ function getOverlayStackColor(item) {
   return getStackColor(index);
 }
 
-function getFilmstripStackIconStyle(item) {
-  const color = getOverlayStackColor(item);
-  if (!color) return {};
-  return { color };
-}
-
-function getFilmstripStackStyle(item) {
-  if (!isFilmstripStackExpanded(item)) return {};
-  const color = applyOverlayStackBackgroundAlpha(getOverlayStackColor(item));
-  if (!color) return {};
-  return {
-    "--filmstrip-stack-bg": color,
-  };
-}
-
 function applyOverlayStackBackgroundAlpha(color) {
   if (!color || typeof color !== "string") return color;
   const trimmed = color.trim();
@@ -1836,12 +1423,6 @@ function applyOverlayStackBackgroundAlpha(color) {
     return `rgb(${inner} / 0.6)`;
   }
   return trimmed;
-}
-
-function isFilmstripStackExpanded(item) {
-  const stackId = getOverlayStackId(item);
-  if (!stackId) return false;
-  return overlayExpandedStackIds.value.has(stackId);
 }
 
 function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
@@ -2173,11 +1754,9 @@ watch(showStacks, (value) => {
 
 watch(image, (newImage, oldImage) => {
   if (newImage?.id === oldImage?.id) return;
-  resetTagInput();
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
   resetOverlayCopyState();
-  tagPredictions.value = [];
 });
 
 watch(open, (isOpen) => {
@@ -2188,12 +1767,6 @@ watch(open, (isOpen) => {
   }
 });
 
-function resetTagInput() {
-  addingTag.value = false;
-  newTag.value = "";
-  tagSuggestionIndex.value = -1;
-}
-
 function resetComfyState() {
   comfyuiMenuOpen.value = false;
   comfyuiRunLoading.value = false;
@@ -2201,86 +1774,6 @@ function resetComfyState() {
   comfyuiRunSuccess.value = "";
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
-}
-
-function beginAddTag() {
-  addingTag.value = true;
-  newTag.value = "";
-  fetchAllAvailableTags();
-  nextTick(() => {
-    if (tagInputRef.value) {
-      // Use preventScroll so the browser doesn't auto-scroll the sidebar
-      // (which has overflow:hidden but still acts as a scroll container for
-      // the focus algorithm), which would push the description off the top.
-      tagInputRef.value.focus({ preventScroll: true });
-      tagInputRef.value.select?.();
-      // Manually scroll only the tag-list to reveal the input.
-      if (tagListRef.value) {
-        tagListRef.value.scrollTop = tagListRef.value.scrollHeight;
-      }
-    }
-  });
-}
-
-function cancelAddTag() {
-  resetTagInput();
-}
-
-function selectTagSuggestion(item) {
-  newTag.value = typeof item === "string" ? item : item.tag;
-  tagSuggestionIndex.value = -1;
-  nextTick(() => confirmAddTag());
-}
-
-function confirmAddTag() {
-  // If a suggestion is highlighted, use it directly.
-  if (
-    tagSuggestionIndex.value >= 0 &&
-    tagSuggestions.value.length > tagSuggestionIndex.value
-  ) {
-    const item = tagSuggestions.value[tagSuggestionIndex.value];
-    newTag.value = typeof item === "string" ? item : item.tag;
-    tagSuggestionIndex.value = -1;
-  }
-  const trimmed = newTag.value.trim();
-  if (!trimmed) {
-    cancelAddTag();
-    return;
-  }
-  const currentTags = getTagList(image.value?.tags);
-  if (currentTags.some((tag) => tag.tag === trimmed)) {
-    cancelAddTag();
-    return;
-  }
-  pinUserVisibleHiddenTag(trimmed);
-  emit("add-tag", image.value.id, trimmed);
-  if (image.value && Array.isArray(image.value.tags)) {
-    const next = dedupeTagList([...currentTags, { id: null, tag: trimmed }]);
-    image.value.tags = next;
-  }
-  resetTagInput();
-}
-
-function normalizeTagKey(tag) {
-  return String(tagLabel(tag) ?? tag ?? "")
-    .trim()
-    .toLowerCase();
-}
-
-function pinUserVisibleHiddenTag(tag) {
-  const key = normalizeTagKey(tag);
-  if (!key) return;
-  const next = new Set(userVisibleHiddenTagKeys.value);
-  next.add(key);
-  userVisibleHiddenTagKeys.value = next;
-}
-
-function unpinUserVisibleHiddenTag(tag) {
-  const key = normalizeTagKey(tag);
-  if (!key) return;
-  const next = new Set(userVisibleHiddenTagKeys.value);
-  next.delete(key);
-  userVisibleHiddenTagKeys.value = next;
 }
 
 function setScore(n) {
@@ -2323,6 +1816,12 @@ function selectImageByIndex(idx) {
   if (target) {
     setOverlayImageById(target.id ?? null);
   }
+}
+
+function onFilmstripNavigate(direction) {
+  if (isMobile.value) return;
+  handleUserActivity();
+  navigateOverlayImage(direction, { wrap: false });
 }
 
 function showNextImage() {
@@ -2394,12 +1893,12 @@ function handleKeydown(e) {
     return;
   }
 
-  if (isDescriptionEditing.value || addingTag.value) {
+  if (isDescriptionEditing.value || isAddingTag.value) {
     if (e.key === "Escape") {
       if (isDescriptionEditing.value) {
         descriptionPanelRef.value?.cancelEditDescription();
-      } else if (addingTag.value) {
-        cancelAddTag();
+      } else if (isAddingTag.value) {
+        tagsPanelRef.value?.cancelAddTag();
       }
     }
     return;
@@ -2476,7 +1975,7 @@ function handleKeydown(e) {
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     if (!isReadOnly.value) {
       e.preventDefault();
-      beginAddTag();
+      tagsPanelRef.value?.beginAddTag();
     }
   } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
     if (!isReadOnly.value) {
@@ -2493,23 +1992,17 @@ const FILMSTRIP_VISIBLE_COUNT = 7;
 const FILMSTRIP_BUFFER_COUNT = 3;
 const FILMSTRIP_GAP = 0;
 const FILMSTRIP_RAIL_PADDING = 8;
-const FILMSTRIP_WHEEL_THRESHOLD = 60;
-const WHEEL_LINE_HEIGHT_PX = 16;
-const FILMSTRIP_WHEEL_SENSITIVITY = 0.2;
-const FILMSTRIP_WHEEL_STEP_COOLDOWN_MS = 30;
 const ZOOM_WHEEL_THRESHOLD = 40;
 const ZOOM_WHEEL_SENSITIVITY = 0.25;
 const windowHeight = ref(0);
 const overlayMainRef = ref(null);
-const overlayRailRef = ref(null);
+const filmstripRef = ref(null);
 const touchStart = ref({ x: 0, y: 0, time: 0 });
 const touchLatest = ref({ x: 0, y: 0 });
 const swipeHintVisible = ref(false);
 let swipeHintTimer = null;
 let touchTapConsumed = false;
 let lastTouchEndTime = 0;
-let filmstripWheelAccumulator = 0;
-let filmstripWheelLastStepTs = 0;
 let zoomWheelAccumulator = 0;
 
 function updateViewportMetrics() {
@@ -2522,7 +2015,7 @@ function updateViewportMetrics() {
 const filmstripThumbSizePx = computed(() => {
   const targetCount = FILMSTRIP_VISIBLE_COUNT;
   const railPaddingTotal = FILMSTRIP_RAIL_PADDING * 2;
-  const railHeight = overlayRailRef.value?.offsetHeight || 0;
+  const railHeight = filmstripRef.value?.railEl?.offsetHeight || 0;
   const overlayMainHeight = overlayMainRef.value?.offsetHeight || 0;
   const fallbackHeight = Math.max(0, windowHeight.value || 0);
   const availableRaw = Math.max(0, overlayMainHeight || fallbackHeight);
@@ -2537,7 +2030,7 @@ const filmstripThumbSizePx = computed(() => {
 const filmstripStyleVars = computed(() => {
   const railPaddingTotal = FILMSTRIP_RAIL_PADDING * 2;
   const thumbSize = filmstripThumbSizePx.value;
-  const railHeight = overlayRailRef.value?.offsetHeight || 0;
+  const railHeight = filmstripRef.value?.railEl?.offsetHeight || 0;
   const overlayMainHeight = overlayMainRef.value?.offsetHeight || 0;
   const fallbackHeight = Math.max(0, windowHeight.value || 0);
   const availableRaw = Math.max(0, overlayMainHeight || fallbackHeight);
@@ -2738,52 +2231,6 @@ function normalizeZoomWheelDelta(event) {
   return scaled;
 }
 
-function onFilmstripWheel(event) {
-  if (!open.value) return;
-  if (isMobile.value) return;
-  handleUserActivity();
-  const now = Date.now();
-  if (now - filmstripWheelLastStepTs < FILMSTRIP_WHEEL_STEP_COOLDOWN_MS) {
-    return;
-  }
-  const deltaY = normalizeWheelDelta(event);
-  if (!Number.isFinite(deltaY) || deltaY === 0) return;
-  filmstripWheelAccumulator += deltaY;
-  if (Math.abs(filmstripWheelAccumulator) < FILMSTRIP_WHEEL_THRESHOLD) {
-    return;
-  }
-  const direction = Math.sign(filmstripWheelAccumulator);
-  filmstripWheelAccumulator -= direction * FILMSTRIP_WHEEL_THRESHOLD;
-  if (direction > 0) {
-    const moved = navigateOverlayImage(1, { wrap: false });
-    if (!moved) {
-      filmstripWheelAccumulator = 0;
-    }
-    filmstripWheelLastStepTs = now;
-  } else if (direction < 0) {
-    const moved = navigateOverlayImage(-1, { wrap: false });
-    if (!moved) {
-      filmstripWheelAccumulator = 0;
-    }
-    filmstripWheelLastStepTs = now;
-  }
-}
-
-function normalizeWheelDelta(event) {
-  if (!event) return 0;
-  const raw = Number(event.deltaY ?? 0);
-  if (!Number.isFinite(raw) || raw === 0) return 0;
-  const scaled = raw * FILMSTRIP_WHEEL_SENSITIVITY;
-  if (event.deltaMode === 1) {
-    return scaled * WHEEL_LINE_HEIGHT_PX;
-  }
-  if (event.deltaMode === 2) {
-    const pagePx = Number(windowHeight.value) || 800;
-    return scaled * pagePx;
-  }
-  return scaled;
-}
-
 const mediaTransformStyle = computed(() => {
   const scale = zoomScale.value;
   return {
@@ -2868,11 +2315,60 @@ const filmstripCanvasData = computed(() => {
       : false;
     const isStackJoined =
       isStackExpanded && !!stackId && stackId === prevStackId;
+
+    // Pre-compute all display fields for OverlayFilmstrip
+    const thumbSrc = (() => {
+      if (item.thumbnail) {
+        const thumbnail = String(item.thumbnail);
+        if (!thumbnail) return "";
+        if (thumbnail.startsWith("http")) return appendShareToken(thumbnail);
+        if (thumbnail.startsWith("/")) {
+          return appendShareToken(
+            backendUrl.value ? `${backendUrl.value}${thumbnail}` : thumbnail,
+          );
+        }
+        return appendShareToken(thumbnail);
+      }
+      if (item.id != null && backendUrl.value) {
+        return appendShareToken(
+          `${backendUrl.value}/pictures/thumbnails/${item.id}.webp`,
+        );
+      }
+      return "";
+    })();
+    const stackColor = getOverlayStackColor(item);
+    const stackTileStyle = (() => {
+      if (!isStackExpanded) return {};
+      const color = applyOverlayStackBackgroundAlpha(stackColor);
+      return color ? { "--filmstrip-stack-bg": color } : {};
+    })();
+
     return {
       ...item,
       index: idx,
       isActive: idx === safeCurrentIndex,
       isStackJoined,
+      thumbSrc,
+      isVideo: isSupportedVideoFile(getOverlayFormat(item)),
+      stackBadgeVisible: getOverlayStackCount(item) > 1,
+      isStackLead: stackId !== prevStackId,
+      stackBadgeTitle: (() => {
+        const count = getOverlayStackCount(item);
+        return count <= 1 ? "" : `Stack of ${count} images`;
+      })(),
+      problemBadgeVisible:
+        showProblemIcon.value &&
+        !!thumbSrc &&
+        Array.isArray(item?.penalised_tags) &&
+        item.penalised_tags.length > 0,
+      problemTitle: (() => {
+        const tags = Array.isArray(item?.penalised_tags)
+          ? item.penalised_tags
+          : [];
+        return tags.length ? `Penalised tags: ${tags.join(", ")}` : "";
+      })(),
+      stackIconStyle: stackColor ? { color: stackColor } : {},
+      stackTileStyle,
     };
   });
 
@@ -3154,7 +2650,6 @@ onMounted(() => {
   window.addEventListener("resize", updateViewportMetrics);
   window.addEventListener("keydown", handleKeydown);
   window.addEventListener("pointerdown", handleOverlayPointerDown, true);
-  fetchPenalisedTags();
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
       scheduleOverlayDimsUpdate();
@@ -3190,8 +2685,6 @@ onUnmounted(() => {
 
 watch(open, (isOpen) => {
   if (!isOpen) {
-    filmstripWheelAccumulator = 0;
-    filmstripWheelLastStepTs = 0;
     zoomWheelAccumulator = 0;
     swipeHintVisible.value = false;
     if (swipeHintTimer) {
@@ -3276,12 +2769,6 @@ function onTouchEnd(event) {
 }
 
 const faceBboxes = ref([]);
-const dragState = reactive({
-  tag: null,
-  sourceType: null,
-  sourceId: null,
-});
-const dragOverTarget = ref({ type: null, id: null });
 const characters = ref([]);
 const charactersLoading = ref(false);
 const characterThumbnails = ref({});
@@ -3343,7 +2830,6 @@ async function fetchComfyWorkflow(imageId) {
 async function fetchOverlayMetadata(imageId) {
   if (!imageId || !backendUrl.value) return;
   const requestId = (metadataRequestId += 1);
-  isTagsRefreshing.value = true;
   try {
     const res = await apiClient.get(
       `${backendUrl.value}/pictures/${imageId}/metadata?smart_score=true`,
@@ -3381,195 +2867,10 @@ async function fetchOverlayMetadata(imageId) {
       merged.metadata = { ...currentMeta, ...dataMeta };
     }
     image.value = merged;
-    syncDescriptionDraft();
     void ensureOverlayFilmstripForImage();
-    void fetchTagPredictions(imageId);
+    void tagsPanelRef.value?.refetchPredictions(imageId);
   } catch (e) {
     console.error("Failed to fetch overlay metadata:", e);
-  } finally {
-    if (metadataRequestId === requestId) {
-      isTagsRefreshing.value = false;
-    }
-  }
-}
-
-async function fetchTagPredictions(imageId) {
-  if (!imageId || !backendUrl.value) return;
-  try {
-    const res = await apiClient.get(
-      `${backendUrl.value}/pictures/${imageId}/tag_predictions?include_meta=1`,
-    );
-    if (!image.value || image.value.id !== imageId) {
-      return;
-    }
-    const payload = res.data;
-    const predictions = Array.isArray(payload)
-      ? payload
-      : Array.isArray(payload?.tag_predictions)
-        ? payload.tag_predictions
-        : [];
-    const threshold = Number(payload?.meta?.acceptance_threshold);
-    if (Number.isFinite(threshold) && threshold > 0 && threshold <= 1) {
-      predictionAcceptanceThreshold.value = threshold;
-    }
-    labelThresholds.value = payload?.meta?.label_thresholds || {};
-    tagPredictions.value = predictions;
-  } catch {
-    tagPredictions.value = [];
-  }
-}
-
-const confirmedTagNames = computed(() => {
-  const names = new Set();
-  for (const tag of allImageTags.value) {
-    const label = tagLabel(tag);
-    if (label) names.add(label.trim().toLowerCase());
-  }
-  return names;
-});
-
-const nearMissPredictions = computed(() => {
-  return tagPredictions.value.filter(
-    (p) =>
-      p.status === "REJECTED" &&
-      p.confidence >= 0.3 &&
-      !confirmedTagNames.value.has(p.tag.trim().toLowerCase()),
-  );
-});
-
-const pendingPredictionMap = computed(() => {
-  const map = new Map();
-  for (const p of tagPredictions.value) {
-    map.set(p.tag.trim().toLowerCase(), p);
-  }
-  return map;
-});
-
-function predictionClassForTag(label) {
-  if (!label) return null;
-  const pred = pendingPredictionMap.value.get(label.trim().toLowerCase());
-  if (!pred) return null;
-  // Penalised (anomaly) tags → red spectrum; all others → primary spectrum
-  if (penalisedTags.value.has(label.trim().toLowerCase())) {
-    return "overlay-tag--predicted-anomaly";
-  }
-  return "overlay-tag--predicted-normal";
-}
-
-function predictionStyleForTag(label) {
-  if (!label) return null;
-  const pred = pendingPredictionMap.value.get(label.trim().toLowerCase());
-  if (!pred) return null;
-  return { "--pred-confidence": pred.confidence };
-}
-
-function _predThreshold(tag) {
-  const perLabel = tag != null ? labelThresholds.value[tag] : undefined;
-  return typeof perLabel === "number" && Number.isFinite(perLabel)
-    ? perLabel
-    : Number(predictionAcceptanceThreshold.value) || 0.95;
-}
-
-function predictionTitleForTag(label) {
-  if (!label) return null;
-  const pred = pendingPredictionMap.value.get(label.trim().toLowerCase());
-  if (!pred) return null;
-  const threshold = _predThreshold(pred.tag);
-  const threshPct = Math.round(threshold * 100);
-  const confPct = Math.round(pred.confidence * 100);
-  const needed = predictionNeededToAccept(pred.confidence, pred.tag);
-  if (needed <= 0) {
-    return `Prediction confidence: ${confPct}% (auto-applied > ${threshPct}%)`;
-  }
-  return `Prediction confidence: ${confPct}% (needs +${Math.round(needed * 100)}% to auto-accept)`;
-}
-
-function predictionNeededToAccept(confidence, tag) {
-  const current = Number(confidence) || 0;
-  return Math.max(0, _predThreshold(tag) - current);
-}
-
-function rejectedTagTitle(pred) {
-  const threshold = _predThreshold(pred?.tag);
-  const threshPct = Math.round(threshold * 100);
-  const confPct = Math.round((pred.confidence || 0) * 100);
-  const needed = predictionNeededToAccept(pred.confidence, pred.tag);
-  if (needed <= 0) {
-    return `Confidence: ${confPct}% | > ${threshPct}% but manually rejected`;
-  }
-  return `Confidence: ${confPct}% | Needs +${Math.round(needed * 100)}% to reach ${threshPct}%`;
-}
-
-async function confirmPrediction(tag) {
-  if (!image.value?.id || !backendUrl.value) return;
-  const imageId = image.value.id;
-  const prevTags = Array.isArray(image.value?.tags)
-    ? [...image.value.tags]
-    : [];
-  const prevPredictions = Array.isArray(tagPredictions.value)
-    ? [...tagPredictions.value]
-    : [];
-
-  // Optimistic UI first so drag/drop feedback is instant.
-  const key = String(tag || "")
-    .trim()
-    .toLowerCase();
-  if (key) {
-    const current = getTagList(image.value?.tags);
-    const hasTag = current.some(
-      (entry) => tagLabel(entry).trim().toLowerCase() === key,
-    );
-    if (!hasTag && image.value) {
-      image.value.tags = dedupeTagList([
-        ...current,
-        { id: null, tag: String(tag) },
-      ]);
-    }
-    tagPredictions.value = tagPredictions.value.map((p) =>
-      p.tag.trim().toLowerCase() === key ? { ...p, status: "CONFIRMED" } : p,
-    );
-  }
-
-  try {
-    await apiClient.post(
-      `${backendUrl.value}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/confirm`,
-    );
-
-    void fetchTagPredictions(imageId);
-  } catch (e) {
-    // Roll back optimistic state on failure.
-    if (image.value) {
-      image.value.tags = prevTags;
-    }
-    tagPredictions.value = prevPredictions;
-    console.error("Failed to confirm prediction:", e);
-  }
-}
-
-async function rejectPrediction(tag) {
-  if (!image.value?.id || !backendUrl.value) return;
-  const imageId = image.value.id;
-  const key = String(tag).trim().toLowerCase();
-  try {
-    await apiClient.post(
-      `${backendUrl.value}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/reject`,
-    );
-    tagPredictions.value = tagPredictions.value.map((p) =>
-      p.tag.trim().toLowerCase() === key ? { ...p, status: "REJECTED" } : p,
-    );
-  } catch {
-    // Network error — fall through to ensure local entry below.
-  }
-  // Ensure there's a local REJECTED entry so the tag appears in Rejected Tags.
-  if (
-    !tagPredictions.value.some(
-      (p) => p.tag.trim().toLowerCase() === key && p.status === "REJECTED",
-    )
-  ) {
-    tagPredictions.value = [
-      ...tagPredictions.value,
-      { tag: String(tag), confidence: 1.0, status: "REJECTED" },
-    ];
   }
 }
 
@@ -3839,7 +3140,6 @@ function preloadAdjacentImages() {
 
 const comfyMetadata = ref(null);
 const facesCollapsed = ref(false);
-const tagsCollapsed = ref(false);
 
 watch(
   () => image.value?.id,
@@ -3885,107 +3185,6 @@ watch(
   },
 );
 
-const allAvailableTags = ref([]);
-let allAvailableTagsFetchedAt = 0;
-
-async function fetchAllAvailableTags() {
-  if (!backendUrl.value) return;
-  const now = Date.now();
-  // Re-fetch at most once per 30 seconds
-  if (now - allAvailableTagsFetchedAt < 30_000) return;
-  try {
-    const res = await apiClient.get(`${backendUrl.value}/tags`);
-    const data = res.data;
-    if (Array.isArray(data)) {
-      allAvailableTags.value = data;
-      allAvailableTagsFetchedAt = now;
-    }
-  } catch (e) {
-    // Non-critical — autocomplete just stays empty
-  }
-}
-
-const tagSuggestions = computed(() => {
-  const query = newTag.value.trim().toLowerCase();
-  if (!query) return [];
-  const currentTags = new Set(getTagList(image.value?.tags).map((t) => t.tag));
-
-  // Build lookup of rejected prediction confidences for this image
-  const rejectedConf = new Map();
-  for (const p of tagPredictions.value) {
-    if (p.status === "REJECTED" && typeof p.confidence === "number") {
-      rejectedConf.set(p.tag.trim().toLowerCase(), p.confidence);
-    }
-  }
-
-  return allAvailableTags.value
-    .filter((item) => {
-      const t = typeof item === "string" ? item : item.tag;
-      return !currentTags.has(t) && t.toLowerCase().startsWith(query);
-    })
-    .sort((a, b) => {
-      const aTag = (typeof a === "string" ? a : a.tag).toLowerCase();
-      const bTag = (typeof b === "string" ? b : b.tag).toLowerCase();
-      const aConf = rejectedConf.get(aTag) ?? -1;
-      const bConf = rejectedConf.get(bTag) ?? -1;
-      // Rejected predictions first, sorted by confidence desc
-      if (aConf !== bConf) return bConf - aConf;
-      // Then by global usage count desc (already the original order)
-      const aCount = (typeof a === "string" ? 0 : a.count) || 0;
-      const bCount = (typeof b === "string" ? 0 : b.count) || 0;
-      return bCount - aCount;
-    })
-    .slice(0, 8);
-});
-
-watch(newTag, () => {
-  tagSuggestionIndex.value = -1;
-});
-
-watch(
-  [addingTag, tagSuggestions],
-  () => {
-    if (addingTag.value && tagSuggestions.value.length) {
-      autocompleteHoverEnabled.value = false;
-      nextTick(() => {
-        tagInputRect.value = tagInputRef.value
-          ? tagInputRef.value.getBoundingClientRect()
-          : null;
-      });
-    } else {
-      tagInputRect.value = null;
-    }
-  },
-  { deep: false },
-);
-
-function handleTagInputKey(event) {
-  if (event.key === "ArrowDown") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      tagSuggestionIndex.value = Math.min(
-        tagSuggestionIndex.value + 1,
-        tagSuggestions.value.length - 1,
-      );
-    }
-  } else if (event.key === "ArrowUp") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      tagSuggestionIndex.value = Math.max(tagSuggestionIndex.value - 1, -1);
-    }
-  } else if (event.key === "Tab") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      const idx = tagSuggestionIndex.value >= 0 ? tagSuggestionIndex.value : 0;
-      selectTagSuggestion(tagSuggestions.value[idx]);
-    }
-  } else if (event.key === "Backspace") {
-    if (newTag.value || event.repeat) return;
-    event.preventDefault();
-    cancelAddTag();
-  }
-}
-
 const faceAssignItems = computed(() => {
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
   return faces.map((face, idx) => ({
@@ -3995,90 +3194,6 @@ const faceAssignItems = computed(() => {
     label: `Face ${idx + 1}`,
   }));
 });
-
-const hiddenTagSet = computed(() => {
-  const values = Array.isArray(hiddenTags.value) ? hiddenTags.value : [];
-  const cleaned = values
-    .map((tag) =>
-      String(tag || "")
-        .trim()
-        .toLowerCase(),
-    )
-    .filter(Boolean);
-  return new Set(cleaned);
-});
-
-function filterHiddenTags(tags, options = {}) {
-  if (!applyTagFilter.value) return tags;
-  const set = hiddenTagSet.value;
-  if (!set || set.size === 0) return tags;
-  const keepVisible =
-    options?.keepVisible instanceof Set ? options.keepVisible : null;
-  return (tags || []).filter((tag) => {
-    const key = tagLabel(tag).trim().toLowerCase();
-    if (keepVisible?.has(key)) return true;
-    return key && !set.has(key);
-  });
-}
-
-const allImageTags = computed(() => {
-  return filterHiddenTags(dedupeTagList(getTagList(image.value?.tags)), {
-    keepVisible: userVisibleHiddenTagKeys.value,
-  });
-});
-
-function startTagDrag(tag, sourceType, sourceId, event) {
-  dragState.tag = tag;
-  dragState.sourceType = sourceType;
-  dragState.sourceId = sourceId;
-  if (event?.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move";
-  }
-}
-
-function clearTagDrag() {
-  dragState.tag = null;
-  dragState.sourceType = null;
-  dragState.sourceId = null;
-  dragOverTarget.value = { type: null, id: null };
-}
-
-function handleDragOver(type, id) {
-  dragOverTarget.value = { type, id };
-}
-
-function handleDragLeave(type, id) {
-  if (dragOverTarget.value?.type === type && dragOverTarget.value?.id === id) {
-    dragOverTarget.value = { type: null, id: null };
-  }
-}
-
-function isDragOver(type, id) {
-  return dragOverTarget.value?.type === type && dragOverTarget.value?.id === id;
-}
-
-function handleDropOnAllTags() {
-  const draggedTag = dragState.tag;
-  const sourceType = dragState.sourceType;
-  clearTagDrag();
-  if (!draggedTag || sourceType !== "rejected") return;
-
-  confirmPrediction(draggedTag);
-}
-
-async function handleDropOnRejectedTags() {
-  const draggedTag = dragState.tag;
-  const sourceType = dragState.sourceType;
-  clearTagDrag();
-  if (!draggedTag || sourceType !== "unassigned") return;
-
-  const key = String(draggedTag).trim().toLowerCase();
-  const tagObj = allImageTags.value.find(
-    (entry) => tagLabel(entry).trim().toLowerCase() === key,
-  );
-  await removeAllTag(tagObj || { tag: draggedTag });
-  await rejectPrediction(draggedTag);
-}
 
 const sortedCharacters = computed(() => {
   const list = Array.isArray(characters.value) ? characters.value : [];
@@ -4258,102 +3373,6 @@ function resetOverlayCopyState() {
     overlayCopyResetTimer = null;
   }
   overlayCopyState.value = "idle";
-}
-
-async function removeAllTag(tag) {
-  if (!tag) return;
-  const label = tagLabel(tag);
-  if (!label) return;
-  unpinUserVisibleHiddenTag(label);
-  let didUpdate = false;
-  const imageMatch = allImageTags.value.find((entry) => entry.tag === label);
-  if (imageMatch && imageMatch.id != null) {
-    if (image.value && Array.isArray(image.value.tags)) {
-      const current = getTagList(image.value.tags);
-      image.value.tags = current.filter((entry) => entry.tag !== label);
-    }
-    didUpdate = true;
-  } else if (image.value && Array.isArray(image.value.tags)) {
-    const current = getTagList(image.value.tags);
-    const next = current.filter((entry) => entry.tag !== label);
-    if (next.length !== current.length) {
-      image.value.tags = next;
-      didUpdate = true;
-    }
-  }
-
-  const capturedImageId = image.value?.id ?? null;
-  if (capturedImageId && backendUrl.value) {
-    try {
-      await apiClient.post(
-        `${backendUrl.value}/pictures/${capturedImageId}/tags/remove_all`,
-        { tag: label },
-      );
-    } catch (err) {
-      console.warn("Failed to remove tag everywhere:", err);
-    }
-  }
-
-  if (didUpdate && capturedImageId) {
-    await rejectPrediction(label);
-    emit("overlay-change", {
-      imageId: capturedImageId,
-      fields: { tags: true, smartScore: true },
-    });
-  }
-}
-
-async function refreshPictureTags() {
-  if (!image.value?.id || !backendUrl.value) return;
-  if (isTagsRefreshing.value) return;
-  // Capture before any await in case image.value is nulled by ESC during the request
-  const capturedImageId = image.value.id;
-
-  isTagsRefreshing.value = true;
-  try {
-    // Single atomic call: clears both tag predictions and confirmed tags in one
-    // transaction and restores the empty sentinel.  This avoids the intermediate
-    // state where predictions are already gone but tags still exist, which would
-    // cause the background MissingTagPredictionFinder to run a wasted inference
-    // pass before tags are also cleared.
-    await apiClient.post(
-      `${backendUrl.value}/pictures/${capturedImageId}/reset_tags`,
-    );
-    tagPredictions.value = [];
-
-    if (image.value && Array.isArray(image.value.tags)) {
-      image.value.tags = [];
-    }
-
-    emit("overlay-change", {
-      imageId: capturedImageId,
-      fields: { tags: true, smartScore: true },
-    });
-
-    await Promise.all([
-      fetchOverlayMetadata(capturedImageId),
-      fetchTagPredictions(capturedImageId),
-    ]);
-  } catch (err) {
-    console.warn("Failed to refresh picture tags:", err);
-  } finally {
-    isTagsRefreshing.value = false;
-  }
-}
-
-function removeTag(tag) {
-  if (!image.value || !Array.isArray(image.value.tags)) return;
-  if (tagId(tag) == null) {
-    console.warn("Tag id is required to remove a picture tag.", tag);
-    return;
-  }
-  const current = getTagList(image.value.tags);
-  const label = tagLabel(tag);
-  if (!label) return;
-  unpinUserVisibleHiddenTag(label);
-  const next = current.filter((entry) => entry.tag !== label);
-  image.value.tags = next;
-  emit("remove-tag", image.value.id, tag);
 }
 </script>
 
@@ -4932,141 +3951,6 @@ function removeTag(tag) {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 3px;
   padding: 0 4px;
-}
-
-.overlay-rail {
-  position: absolute;
-  top: var(--topbar-height);
-  left: 0;
-  bottom: 0;
-  width: var(--filmstrip-rail-width, var(--rail-open-width));
-  background: rgba(var(--v-theme-dark-surface), 0.9);
-  border-left: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: var(--filmstrip-padding, 8px) 6px;
-  transition: opacity 0.2s ease;
-  overflow: hidden;
-  height: calc(100% - var(--topbar-height));
-  z-index: 3;
-}
-
-.overlay-rail.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.filmstrip-viewport {
-  width: var(--filmstrip-thumb-size, 100%);
-  height: 100%;
-  overflow: hidden;
-  align-self: center;
-}
-
-.filmstrip-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--filmstrip-gap, 8px);
-  overflow-y: visible;
-  width: var(--filmstrip-thumb-size, 100%);
-  align-items: center;
-  overflow-x: visible;
-  align-self: center;
-  padding-right: 0;
-  box-sizing: border-box;
-  min-height: 100%;
-  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.filmstrip-thumb {
-  border: none;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-  border-radius: 0;
-  overflow: visible;
-  width: var(--filmstrip-thumb-size, 100%);
-  height: var(--filmstrip-thumb-size, auto);
-  max-width: 100%;
-  aspect-ratio: 1 / 1;
-  position: relative;
-}
-
-.filmstrip-slide-move {
-  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.filmstrip-slide-enter-active,
-.filmstrip-slide-leave-active {
-  transition: opacity 0.2s ease-out;
-}
-
-.filmstrip-slide-enter-from,
-.filmstrip-slide-leave-to {
-  opacity: 0;
-}
-
-.filmstrip-thumb-tile {
-  width: 100%;
-  height: 100%;
-  background: var(--filmstrip-stack-bg, transparent);
-  padding: 6px;
-  box-sizing: border-box;
-  border-radius: 0;
-  overflow: visible;
-}
-
-.filmstrip-thumb-stack-joined {
-  margin-top: calc(-1 * var(--filmstrip-gap, 8px));
-}
-
-.filmstrip-thumb-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  border-radius: 8px;
-}
-
-.filmstrip-thumb-image-active {
-  box-shadow: 0 0 0 4px rgba(var(--v-theme-accent), 0.9);
-  z-index: 2;
-}
-
-.filmstrip-thumb-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  border-radius: 8px;
-}
-
-.filmstrip-badge {
-  position: absolute;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(var(--v-theme-dark-surface), 0.7);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.35);
-  border-radius: 6px;
-  padding: 2px 4px;
-  color: rgb(var(--v-theme-on-dark-surface));
-  box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
-  z-index: 2;
-}
-
-.filmstrip-badge--top-left {
-  top: 8px;
-  left: 8px;
-}
-
-.filmstrip-badge--top-left-stack {
-  top: 28px;
-  left: 8px;
 }
 
 .overlay-sidebar {
@@ -5918,52 +4802,6 @@ function removeTag(tag) {
 
   .overlay-main {
     grid-template-columns: 1fr;
-  }
-
-  .overlay-rail {
-    position: absolute;
-    top: auto;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;
-    height: 100px;
-    flex-direction: row;
-    justify-content: flex-start;
-    padding: 6px 10px;
-  }
-
-  .overlay-rail.open {
-    width: 100%;
-  }
-
-  .filmstrip-list {
-    min-height: 0;
-    flex-direction: row;
-    overflow: visible;
-    width: 100%;
-    transform: none !important;
-    transition: none;
-  }
-
-  .filmstrip-viewport {
-    width: 100%;
-    height: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  .filmstrip-thumb {
-    flex: 1 1 0;
-    min-width: 0;
-    width: auto;
-    height: 100%;
-    aspect-ratio: unset;
-  }
-
-  .filmstrip-thumb img {
-    height: 100%;
-    width: 100%;
   }
 
   .overlay-sidebar {
