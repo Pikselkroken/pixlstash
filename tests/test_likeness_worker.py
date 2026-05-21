@@ -56,9 +56,7 @@ def test_likeness_worker():
             # always get a deterministic completion signal — no polling races.
             embedding_pictures = [pic for pic in pictures if pic.file_path]
             params_pictures = [
-                pic
-                for pic in pictures
-                if pic.file_path and pic.width and pic.height
+                pic for pic in pictures if pic.file_path and pic.width and pic.height
             ]
             quality_futures = {
                 pic.id: server.vault.get_worker_future(
@@ -135,8 +133,7 @@ def test_likeness_worker():
                 return [
                     {
                         "id": int(r[0]),
-                        "image_embedding_missing": r[1] is None
-                        or len(r[1]) == 0,
+                        "image_embedding_missing": r[1] is None or len(r[1]) == 0,
                         "likeness_parameters_missing": r[2] is None,
                         "perceptual_hash_missing": r[3] is None,
                     }
