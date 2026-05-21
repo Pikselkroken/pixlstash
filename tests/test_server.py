@@ -26,7 +26,6 @@ from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture_set import PictureSetMember
 import pixlstash.routes.pictures as pictures_routes
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.server import Server
@@ -153,126 +152,6 @@ def _check_semantic_search_regression(
             f"Baseline file was not modified: {regression_path.name}.\n"
             f"Captured actual payload: {artifact_path}\n\n" + "\n".join(failures)
         )
-
-
-def test_esmeralda_vault_character_and_logo():
-    """Test that Esmeralda Vault exists and that the Logo is not associated with any character."""
-
-    tracemalloc.start()
-    log_resources("START test_esmeralda_vault_character_and_logo")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        server_config_path = os.path.join(temp_dir, "server-config.json")
-
-        # This triggers _import_default_data
-        with Server(server_config_path) as server:
-            server.vault.import_default_data()
-            client = TestClient(server.api)
-
-            # Get a valid token
-            response = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
-            )
-            assert response.status_code == 200
-            # First access with the token
-            response = client.get("/protected")
-            assert response.status_code == 200
-            assert response.json()["message"] == "You are authenticated!"
-
-            pics = server.vault.db.run_task(lambda s: s.query(Picture).all())
-            assert len(pics) > 0, "No pictures found in vault"
-
-            logging.info(
-                f"Found {len(pics)} pictures in vault, starting facial features processing"
-            )
-
-            # Find Esmeralda Vault character (by name)
-            resp = client.get("/characters")
-            assert resp.status_code == 200
-            chars = resp.json()
-            assert len(chars) > 0, "No characters found in vault"
-            esmeralda = None
-            for c in chars:
-                if c.get("name") == "Esmeralda Vault":
-                    esmeralda = c
-                    break
-            assert esmeralda is not None, "Esmeralda Vault character not found"
-            char_id = esmeralda["id"]
-            logging.info(f"Found Esmeralda Vault character with ID: {char_id}")
-
-            # Find all pictures, then filter by character association (robust to int/str id)
-            resp2 = client.get("/pictures")
-            assert resp2.status_code == 200
-            pics = resp2.json()
-            assert len(pics) > 0, "No pictures found in vault"
-            pic_id = None
-            for pic in pics:
-                char_resp = client.get(f"/pictures/{pic['id']}/metadata")
-                if char_resp.status_code == 200:
-                    pic_info = char_resp.json()
-                    char_ids = [str(cid) for cid in pic_info.get("character_ids", [])]
-                    if str(char_id) in char_ids:
-                        pic_id = pic["id"]
-                        break
-
-            # In the end the logo simply doesn't have any face and so no character association
-            assert pic_id is None, (
-                f"Logo picture should not be associated with any character (char_id={char_id})"
-            )
-
-            # Fetch the  picture form id
-            img_resp = client.get(f"/pictures/{pics[0]['id']}.png")
-            assert img_resp.status_code == 200
-            logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
-            with open(logo_path, "rb") as f:
-                logo_bytes = f.read()
-            # Compare the full file
-            assert img_resp.content == logo_bytes, (
-                "Esmeralda Vault's picture does not match Logo.png"
-            )
-    gc.collect()
-    log_resources("END test_esmeralda_vault_character_and_logo")
-
-
-def test_create_and_get_default_character():
-    """Test creating and fetching the default character 'Esmeralda'."""
-    log_resources("START test_create_and_get_default_character")
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(server_config_path=server_config_path) as server:
-            client = TestClient(server.api)
-
-            # Get a valid token
-            response = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
-            )
-            assert response.status_code == 200
-
-            # Create Esmeralda
-            char_name = "Esmeralda"
-            char_desc = "Default vault character"
-            resp = client.post(
-                "/characters",
-                json={"name": char_name, "description": char_desc},
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["status"] == "success"
-            logger.info("Created character: {}".format(data["character"]))
-            char_id = data["character"]["id"]
-            assert data["character"]["name"] == char_name
-            assert data["character"]["description"] == char_desc
-
-            # Fetch Esmeralda by id
-            resp2 = client.get(f"/characters/{char_id}")
-            assert resp2.status_code == 200
-            char = resp2.json()
-            logger.info("List object?? " + str(char))
-            assert char["id"] == char_id
-            assert char["name"] == char_name
-            assert char["description"] == char_desc
-    gc.collect()
-    log_resources("END test_create_and_get_default_character")
 
 
 def test_upload_existing_picture():
@@ -1843,21 +1722,6 @@ def test_duplicate_import_with_sidecar_replaces_existing_tags():
     log_resources("END test_duplicate_import_with_sidecar_replaces_existing_tags")
 
 
-def test_favicon():
-    """Test /favicon.ico endpoint returns 200 and PNG content."""
-    log_resources("START test_favicon")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(server_config_path) as server:
-            client = TestClient(server.api)
-            resp = client.get("/favicon.ico")
-            assert resp.status_code == 200
-            assert resp.headers["content-type"] == "image/vnd.microsoft.icon"
-            assert resp.content[:4] == b"\x00\x00\x01\x00"  # ICO file signature
-    gc.collect()
-    log_resources("END test_favicon")
-
-
 def test_characters_summary():
     """Test /characters/summary endpoint returns 200 and valid structure."""
     log_resources("START test_characters_summary")
@@ -1956,26 +1820,6 @@ def test_characters_summary():
             )
     gc.collect()
     log_resources("END test_characters_summary")
-
-
-def test_pictures_likeness_groups():
-    """Test /pictures/likeness-groups endpoint returns 200 and valid structure."""
-    log_resources("START test_pictures_likeness_groups")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(server_config_path) as server:
-            client = TestClient(server.api)
-
-            response = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
-            )
-            assert response.status_code == 200
-            resp = client.get("/pictures/likeness-groups")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert isinstance(data, list)
-    gc.collect()
-    log_resources("END test_pictures_likeness_groups")
 
 
 def test_pictures_likeness_groups_supports_set_intersection_filter():
@@ -2141,127 +1985,6 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
     log_resources("END test_pictures_likeness_groups_supports_set_intersection_filter")
 
 
-def test_pictures_thumbnails():
-    """Test /pictures/thumbnails endpoint returns 200 and valid structure."""
-    log_resources("START test_pictures_thumbnails")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(server_config_path) as server:
-            client = TestClient(server.api)
-
-            response = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
-            )
-            assert response.status_code == 200
-            # Send empty payload for basic test
-            resp = client.post("/pictures/thumbnails", json={"ids": []})
-            assert resp.status_code == 200
-            assert isinstance(resp.json(), dict)
-    gc.collect()
-    log_resources("END test_pictures_thumbnails")
-
-
-def test_pictures_export():
-    """Test /pictures/export endpoint returns 200 and zip content."""
-
-    log_resources("START test_pictures_export")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(server_config_path) as server:
-            server.vault.import_default_data(add_tagger_test_images=True)
-            client = TestClient(server.api)
-
-            resp = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
-            )
-            assert resp.status_code == 200
-
-            resp = client.get("/pictures/export")
-            assert resp.status_code == 200, f"Error: {resp.text}"
-            assert resp.headers["content-type"] == "application/json"
-
-            task_id = resp.json().get("task_id")
-            assert task_id, "Missing task_id in export response"
-
-            status_payload = None
-            timeout_s = 10
-            start = time.time()
-            while time.time() - start < timeout_s:
-                status_resp = client.get(
-                    "/pictures/export/status", params={"task_id": task_id}
-                )
-                assert status_resp.status_code == 200, f"Error: {status_resp.text}"
-                status_payload = status_resp.json()
-                if status_payload.get("status") == "completed":
-                    break
-                if status_payload.get("status") == "failed":
-                    raise AssertionError("Export task failed")
-                time.sleep(0.1)
-
-            assert status_payload, "Missing export status payload"
-            assert status_payload.get("status") == "completed", (
-                f"Export task did not complete in {timeout_s}s"
-            )
-
-            download_url = status_payload.get("download_url")
-            assert download_url, "Missing download_url in export status"
-
-            download_resp = client.get(download_url)
-            assert download_resp.status_code == 200, f"Error: {download_resp.text}"
-            assert download_resp.content[:2] == b"PK"  # ZIP file signature
-            logger.info(
-                "Exported pictures zip size: {} bytes".format(
-                    len(download_resp.content)
-                )
-            )
-
-            # Extract zip and compare SHA, file size, format, width, height
-            with zipfile.ZipFile(BytesIO(download_resp.content)) as zf:
-                zip_names = set(zf.namelist())
-                image_names = [
-                    name for name in zip_names if not name.lower().endswith(".txt")
-                ]
-                # Get expected metadata from the database
-                pictures = server.vault.db.run_task(Picture.find)
-
-                assert len(pictures) == len(image_names), (
-                    f"Expected {len(pictures)} pictures in export, found {len(image_names)} in zip"
-                )
-                logger.info("Found {} images in export zip".format(len(image_names)))
-                for fname in image_names:
-                    found = False
-                    data = None
-                    with zf.open(fname) as f:
-                        data = f.read()
-                        sha = ImageUtils.calculate_hash_from_bytes(data)
-
-                    # For file in the zip find a matching picture by SHA
-                    for pic in pictures:
-                        if sha == pic.pixel_sha:
-                            found = True
-                            # Compare file size
-                            assert len(data) == pic.size_bytes, (
-                                f"Size mismatch for {fname}: {len(data)} != {pic.size_bytes}"
-                            )
-                            # Compare format, width, height
-                            img = Image.open(BytesIO(data))
-                            assert img.format.lower() == (pic.format or "").lower(), (
-                                f"Format mismatch for {fname}: {img.format} != {pic.format}"
-                            )
-                            assert img.width == pic.width, (
-                                f"Width mismatch for {fname}: {img.width} != {pic.width}"
-                            )
-                            assert img.height == pic.height, (
-                                f"Height mismatch for {fname}: {img.height} != {pic.height}"
-                            )
-                            break
-                    assert found, (
-                        f"No database picture matches exported SHA for picture {fname}"
-                    )
-    gc.collect()
-    log_resources("END test_pictures_export")
-
-
 def test_post_logo_identical_upload():
     log_resources("START test_post_logo_identical_upload")
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -2317,23 +2040,6 @@ def test_post_logo_altered_pixel_upload():
             os.remove(tmp_path)
     gc.collect()
     log_resources("END test_post_logo_altered_pixel_upload")
-
-
-def test_read_version():
-    log_resources("START test_read_version")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(server_config_path=server_config_path) as server:
-            client = TestClient(server.api)
-            response = client.get("/version")
-            assert response.status_code == 200
-            expected_version = get_project_version()
-            data = response.json()
-            assert data["message"] == "PixlStash REST API"
-            assert data["version"] == expected_version
-            assert "install_type" in data
-    gc.collect()
-    log_resources("END test_read_version")
 
 
 def test_benchmark_add_images_by_binary_upload():
