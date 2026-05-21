@@ -220,7 +220,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["tags-applied"]);
+const emit = defineEmits(["tags-applied", "close"]);
 
 // ── Tag-panel mini-grid ───────────────────────────────────────────────────────
 const previewImages = computed(() => {
