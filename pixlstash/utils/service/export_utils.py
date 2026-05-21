@@ -249,7 +249,7 @@ class ExportUtils:
                 pics = server.vault.db.run_task(find_by_text, query)
             else:
                 logger.debug("Exporting pictures using list filters")
-                from pixlstash.routes.pictures import _select_pictures_for_listing
+                from pixlstash.routes.pictures._listing import _select_pictures_for_listing
 
                 ordered_ids = _select_pictures_for_listing(
                     server=server,

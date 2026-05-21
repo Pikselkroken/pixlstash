@@ -1634,7 +1634,7 @@ def test_character_likeness_query_respects_project_filter(monkeypatch):
                 ]
 
             monkeypatch.setattr(
-                pictures_routes,
+                pictures_routes._listing,
                 "find_pictures_by_character_likeness",
                 fake_find_pictures_by_character_likeness,
             )
