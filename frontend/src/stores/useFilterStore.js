@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { defineStore } from "pinia";
 
 export const useFilterStore = defineStore("filter", () => {
@@ -35,6 +35,53 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiLoraFilter.value = [];
   }
 
+  const isActive = computed(
+    () =>
+      mediaTypeFilter.value !== "all" ||
+      minScoreFilter.value != null ||
+      maxScoreFilter.value != null ||
+      smartScoreBucketFilter.value != null ||
+      resolutionBucketFilter.value != null ||
+      (Array.isArray(tagFilter.value) && tagFilter.value.length > 0) ||
+      (Array.isArray(tagRejectedFilter.value) &&
+        tagRejectedFilter.value.length > 0) ||
+      (Array.isArray(tagConfidenceAboveFilter.value) &&
+        tagConfidenceAboveFilter.value.length > 0) ||
+      (Array.isArray(tagConfidenceBelowFilter.value) &&
+        tagConfidenceBelowFilter.value.length > 0) ||
+      (Array.isArray(comfyuiModelFilter.value) &&
+        comfyuiModelFilter.value.length > 0) ||
+      (Array.isArray(comfyuiLoraFilter.value) &&
+        comfyuiLoraFilter.value.length > 0) ||
+      faceBboxFilter.value != null ||
+      sharedOnlyFilter.value ||
+      unassignedOnlyFilter.value,
+  );
+
+  const activeCount = computed(() => {
+    let count = 0;
+    if (mediaTypeFilter.value !== "all") count++;
+    if (minScoreFilter.value != null) count++;
+    if (maxScoreFilter.value != null) count++;
+    if (smartScoreBucketFilter.value != null) count++;
+    if (resolutionBucketFilter.value != null) count++;
+    if (Array.isArray(tagFilter.value)) count += tagFilter.value.length;
+    if (Array.isArray(tagRejectedFilter.value))
+      count += tagRejectedFilter.value.length;
+    if (Array.isArray(tagConfidenceAboveFilter.value))
+      count += tagConfidenceAboveFilter.value.length;
+    if (Array.isArray(tagConfidenceBelowFilter.value))
+      count += tagConfidenceBelowFilter.value.length;
+    if (Array.isArray(comfyuiModelFilter.value))
+      count += comfyuiModelFilter.value.length;
+    if (Array.isArray(comfyuiLoraFilter.value))
+      count += comfyuiLoraFilter.value.length;
+    if (faceBboxFilter.value != null) count++;
+    if (sharedOnlyFilter.value) count++;
+    if (unassignedOnlyFilter.value) count++;
+    return count;
+  });
+
   return {
     mediaTypeFilter,
     minScoreFilter,
@@ -52,5 +99,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiLoraFilter,
     comfyuiConfigured,
     resetFilters,
+    isActive,
+    activeCount,
   };
 });
