@@ -224,7 +224,6 @@ import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import {
   dedupeTagList,
-  getTagId as tagId,
   getTagLabel as tagLabel,
   getTagList,
 } from "../../utils/tags.js";
@@ -883,3 +882,240 @@ defineExpose({
   refetchPredictions: fetchTagPredictions,
 });
 </script>
+
+<style scoped>
+.section-meta-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-meta-btn {
+  border: none;
+  background: transparent;
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.section-meta-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.tag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tag-refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  margin-right: 4px;
+}
+
+.overlay-tag {
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+  color: rgb(var(--v-theme-on-dark-surface));
+  border-radius: 6px;
+  padding: 1px 2px 1px 6px;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  justify-content: center;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.overlay-tag--penalised {
+  color: rgb(var(--v-theme-error));
+  font-size: 0.72rem;
+  line-height: 1.2;
+  border: 1px solid rgba(var(--v-theme-error), 0.6);
+  background: rgba(var(--v-theme-error), 0.15);
+}
+
+.overlay-tag--predicted-anomaly {
+  --ac: clamp(0.35, var(--pred-confidence, 0.6), 1);
+  font-size: 0.72rem;
+  color: color-mix(
+    in srgb,
+    rgb(var(--v-theme-on-dark-surface)) calc((1 - var(--ac)) * 100%),
+    rgb(var(--v-theme-error)) calc(var(--ac) * 100%)
+  );
+  border-color: color-mix(
+    in srgb,
+    rgba(var(--v-theme-on-dark-surface), 0.2) calc((1 - var(--ac)) * 100%),
+    rgba(var(--v-theme-error), 0.7) calc(var(--ac) * 100%)
+  );
+  background: color-mix(
+    in srgb,
+    rgba(var(--v-theme-on-dark-surface), 0.05) calc((1 - var(--ac)) * 100%),
+    rgba(var(--v-theme-error), 0.2) calc(var(--ac) * 100%)
+  );
+}
+
+.overlay-tag--predicted-normal {
+  --nc: clamp(0.25, var(--pred-confidence, 0.7), 1);
+  --nm: calc(25% + var(--nc) * 55%);
+  color: color-mix(
+    in srgb,
+    rgb(var(--v-theme-primary)) var(--nm),
+    rgb(var(--v-theme-on-dark-surface))
+  );
+  border-color: color-mix(
+    in srgb,
+    rgba(var(--v-theme-primary), 0.6) var(--nm),
+    rgba(var(--v-theme-on-dark-surface), 0.15)
+  );
+  background: color-mix(
+    in srgb,
+    rgba(var(--v-theme-primary), 0.18) var(--nm),
+    rgba(var(--v-theme-on-dark-surface), 0.06)
+  );
+}
+
+.overlay-tag--prediction {
+  filter: saturate(0.82) brightness(0.9);
+  opacity: 0.88;
+  border-style: dashed;
+  border-width: 1px;
+}
+
+.tag-pred-confidence {
+  font-size: 0.65rem;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
+.tag-pred-btn {
+  margin: 0 1px;
+  padding: 1px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75em;
+  line-height: 1;
+  vertical-align: middle;
+  opacity: 0.6;
+}
+
+.tag-pred-btn:hover {
+  opacity: 1;
+}
+
+.tag-pred-btn--confirm:hover {
+  color: rgb(var(--v-theme-success));
+}
+
+.tag-pred-btn--reject:hover {
+  color: rgb(var(--v-theme-error));
+}
+
+.tag-drop-zone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  min-height: 26px;
+  max-height: none;
+  overflow: visible;
+}
+
+.tag-drop-zone--active {
+  border-color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tag-drop-zone--predictions {
+  gap: 4px;
+}
+
+.tag-drop-placeholder {
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.tag-delete-btn {
+  margin: 0;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+  font-size: 0.8em;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.tag-delete-btn:hover {
+  color: rgb(var(--v-theme-accent));
+}
+
+.tag-add-input {
+  background: rgba(var(--v-theme-shadow), 0.4);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 0.7rem;
+}
+
+.tag-autocomplete-dropdown {
+  position: fixed;
+  z-index: 9999;
+  background: color-mix(in srgb, rgb(var(--v-theme-shadow)) 85%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.tag-autocomplete-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: none;
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-autocomplete-dropdown--hover-enabled .tag-autocomplete-item:hover,
+.tag-autocomplete-item--active {
+  background: rgba(var(--v-theme-primary), 0.22);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.tag-autocomplete-tab-hint {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 4px;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.15);
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  vertical-align: middle;
+  line-height: 1.5;
+}
+</style>

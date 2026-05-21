@@ -100,7 +100,7 @@ const props = defineProps({
 const emit = defineEmits(["select", "toggle-expand", "prefetch", "navigate"]);
 
 const railRef = ref(null);
-defineExpose({ railEl: railRef });
+defineExpose({ railEl: railRef, resetWheel });
 
 const FILMSTRIP_WHEEL_THRESHOLD = 60;
 const WHEEL_LINE_HEIGHT_PX = 16;
@@ -109,6 +109,11 @@ const FILMSTRIP_WHEEL_STEP_COOLDOWN_MS = 30;
 
 let filmstripWheelAccumulator = 0;
 let filmstripWheelLastStepTs = 0;
+
+function resetWheel() {
+  filmstripWheelAccumulator = 0;
+  filmstripWheelLastStepTs = 0;
+}
 
 function normalizeWheelDelta(event) {
   if (!event) return 0;
