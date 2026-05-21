@@ -7,8 +7,8 @@ Provides vault-level functions so route handlers need not call vault.db directly
 import json
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, or_, select
-from sqlmodel import Session
+from sqlalchemy import delete, or_
+from sqlmodel import Session, select
 
 from pixlstash.db_models import Tag
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL

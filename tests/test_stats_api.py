@@ -8,7 +8,9 @@ import time
 
 from fastapi.testclient import TestClient
 
-import pixlstash.routes.pictures as pictures_module
+import pixlstash.routes.pictures as pictures_module  # noqa: F401  (kept for backward compat with other tests)
+from pixlstash.utils.service import picture_stats as picture_stats_module
+from pixlstash.utils.service.picture_stats import STATS_TTL, clear_stats_cache
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -46,7 +48,7 @@ def _upload_picture(client, filename="Bad1.png"):
 def test_stats_basic_counts():
     """Total, tagged, untagged counts are accurate and response shape is correct."""
     temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
+    clear_stats_cache()
     try:
         pic_id1 = _upload_picture(client, "Bad1.png")
         _upload_picture(client, "Bad2.png")
@@ -55,7 +57,7 @@ def test_stats_basic_counts():
         resp = client.post(f"/pictures/{pic_id1}/tags", json={"tag": "solo_tag"})
         assert resp.status_code == 200
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats")
         assert resp.status_code == 200
         data = resp.json()
@@ -82,20 +84,20 @@ def test_stats_basic_counts():
 def test_stats_tag_filter_reduces_total():
     """Passing tag= restricts the picture population used for counting."""
     temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
+    clear_stats_cache()
     try:
         pic_id1 = _upload_picture(client, "Bad1.png")
         _upload_picture(client, "Bad2.png")
 
         client.post(f"/pictures/{pic_id1}/tags", json={"tag": "rare_filter_tag"})
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?tag=rare_filter_tag")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?tag=nonexistent_tag_xyz")
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
@@ -108,7 +110,7 @@ def test_stats_tag_filter_reduces_total():
 def test_stats_score_filter():
     """min_score/max_score params restrict the picture population."""
     temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
+    clear_stats_cache()
     try:
         pic_id1 = _upload_picture(client, "Bad1.png")
         pic_id2 = _upload_picture(client, "Bad2.png")
@@ -116,17 +118,17 @@ def test_stats_score_filter():
         client.patch(f"/pictures/{pic_id1}", json={"score": 5})
         client.patch(f"/pictures/{pic_id2}", json={"score": 2})
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?min_score=4")
         assert resp.status_code == 200
         assert resp.json()["total"] == 1
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?max_score=3")
         assert resp.status_code == 200
         assert resp.json()["total"] == 1
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?min_score=1&max_score=5")
         assert resp.status_code == 200
         assert resp.json()["total"] == 2
@@ -139,12 +141,12 @@ def test_stats_score_filter():
 def test_stats_include_picture():
     """include=picture returns score_distribution, smart_score_distribution, resolution_distribution."""
     temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
+    clear_stats_cache()
     try:
         pic_id = _upload_picture(client, "Bad1.png")
         client.patch(f"/pictures/{pic_id}", json={"score": 3})
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?include=picture")
         assert resp.status_code == 200
         data = resp.json()
@@ -169,13 +171,13 @@ def test_stats_include_picture():
 def test_stats_include_cooc():
     """include=cooc returns top_cooccurrences when two tags share a picture."""
     temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
+    clear_stats_cache()
     try:
         pic_id = _upload_picture(client, "Bad1.png")
         client.post(f"/pictures/{pic_id}/tags", json={"tag": "cooc_a"})
         client.post(f"/pictures/{pic_id}/tags", json={"tag": "cooc_b"})
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?include=cooc")
         assert resp.status_code == 200
         data = resp.json()
@@ -195,12 +197,12 @@ def test_stats_include_cooc():
 def test_stats_include_conf():
     """include=conf returns non-empty confidence_histogram and regular_tags."""
     temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
+    clear_stats_cache()
     try:
         pic_id = _upload_picture(client, "Bad1.png")
         client.post(f"/pictures/{pic_id}/tags", json={"tag": "conf_tag"})
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp = client.get("/pictures/stats?include=conf")
         assert resp.status_code == 200
         data = resp.json()
@@ -217,20 +219,20 @@ def test_stats_include_conf():
 def test_stats_cache_expires_after_ttl(monkeypatch):
     """After the TTL elapses the result is recomputed from the database."""
     temp_dir, client, server = _setup()
-    pictures_module._stats_cache.clear()
+    clear_stats_cache()
     try:
         _upload_picture(client, "Bad1.png")
 
-        pictures_module._stats_cache.clear()
+        clear_stats_cache()
         resp1 = client.get("/pictures/stats")
         assert resp1.status_code == 200
         assert resp1.json()["total"] == 1
 
         # Expire the cache entry by back-dating its timestamp.
-        expired_ts = time.monotonic() - (pictures_module._STATS_TTL + 1)
-        for key in list(pictures_module._stats_cache.keys()):
-            _, data = pictures_module._stats_cache[key]
-            pictures_module._stats_cache[key] = (expired_ts, data)
+        expired_ts = time.monotonic() - (STATS_TTL + 1)
+        for key in list(picture_stats_module._stats_cache.keys()):
+            _, data = picture_stats_module._stats_cache[key]
+            picture_stats_module._stats_cache[key] = (expired_ts, data)
 
         _upload_picture(client, "Bad2.png")
 

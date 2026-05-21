@@ -1,6 +1,7 @@
 """Picture statistics aggregation utilities (/pictures/stats)."""
 
 import dataclasses
+import time
 
 from fastapi import HTTPException
 from sqlalchemy import Integer, and_, case, cast, desc, exists, func, or_, text
@@ -16,6 +17,9 @@ from pixlstash.utils.service.filter_helpers import (
 )
 
 logger = get_logger(__name__)
+
+# How long to cache stats results for identical queries, in seconds.
+STATS_TTL = 60.0
 
 
 @dataclasses.dataclass
@@ -612,3 +616,38 @@ def compute_picture_stats(vault, params: PictureStatsParams) -> dict:
         }
 
     return vault.db.run_immediate_read_task(compute)
+
+
+# In-memory TTL cache for /pictures/stats responses.
+#
+# Keyed by an opaque string built by the caller from the request query params.
+# Centralised here (next to compute_picture_stats) so callers don't share
+# module-level mutable state across routes.
+_stats_cache: dict[str, tuple[float, dict]] = {}
+
+
+def clear_stats_cache() -> None:
+    """Discard all cached /pictures/stats results (e.g. after tag mutations)."""
+    _stats_cache.clear()
+
+
+def get_cached_picture_stats(vault, params: PictureStatsParams, cache_key: str) -> dict:
+    """Return cached stats for ``cache_key`` or compute and cache them.
+
+    Expired entries (older than ``STATS_TTL`` seconds) are evicted on access.
+    """
+    now = time.monotonic()
+    for expired_key in [
+        k for k, (ts, _) in list(_stats_cache.items()) if now - ts >= STATS_TTL
+    ]:
+        _stats_cache.pop(expired_key, None)
+
+    cached = _stats_cache.get(cache_key)
+    if cached is not None:
+        ts, data = cached
+        if now - ts < STATS_TTL:
+            return data
+
+    result = compute_picture_stats(vault, params)
+    _stats_cache[cache_key] = (time.monotonic(), result)
+    return result

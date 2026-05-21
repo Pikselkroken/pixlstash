@@ -24,24 +24,9 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import (
     normalize_hidden_tags,
 )
-from pixlstash.utils.service.filter_helpers import (
-    collect_set_filter_ids,
-    fetch_set_candidate_ids,
-    normalize_set_mode,
-    project_membership_exists_clause,
-    project_unassigned_clause,
-)
 
 
 logger = get_logger(__name__)
-
-_stats_cache: dict = {}
-_STATS_TTL = 60.0
-
-
-def clear_stats_cache() -> None:
-    """Discard all cached /pictures/stats results (e.g. after tag mutations)."""
-    _stats_cache.clear()
 
 
 def _score_is_good_anchor(score_value: int | None) -> bool:
@@ -119,16 +104,6 @@ def _fetch_hidden_picture_ids(server, request: Request, picture_ids: list[int]):
     return server.vault.db.run_immediate_read_task(
         fetch_hidden, list(picture_ids), hidden_tag_set
     )
-
-
-# These helpers were extracted to pixlstash/utils/service/filter_helpers.py.
-# The private-prefixed aliases below keep existing callers in this file working
-# without requiring a bulk rename in the same changeset.
-_project_membership_exists_clause = project_membership_exists_clause
-_project_unassigned_clause = project_unassigned_clause
-_normalize_set_mode = normalize_set_mode
-_collect_set_filter_ids = collect_set_filter_ids
-_fetch_set_candidate_ids = fetch_set_candidate_ids
 
 
 def _create_picture_imports(
