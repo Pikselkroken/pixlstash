@@ -15,7 +15,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, User
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import config_service
-from pixlstash.utils.service.config_utils import (
+from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
     serialize_user_config,
 )
