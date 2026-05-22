@@ -2606,25 +2606,45 @@ async function characterSaved() {
 }
 
 const VERSION_CHECK_STORAGE_KEY = "pixlstash:lastVersionCheck";
+const VERSION_CHECK_SECURITY_KEY = "pixlstash:lastSecurityLevel";
+const VERSION_CHECK_DISMISSED_KEY = "pixlstash:dismissedUpdateVersion";
 const VERSION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+const updateDismissed = ref(
+  localStorage.getItem(VERSION_CHECK_DISMISSED_KEY) === latestVersion.value,
+);
+
+function dismissUpdateAlert() {
+  localStorage.setItem(VERSION_CHECK_DISMISSED_KEY, latestVersion.value);
+  updateDismissed.value = true;
+}
 
 function checkForUpdatesNow() {
   const last = parseInt(
     localStorage.getItem(VERSION_CHECK_STORAGE_KEY) ?? "0",
     10,
   );
-  if (Date.now() - last < VERSION_CHECK_INTERVAL_MS) return;
+  const lastSecurity = localStorage.getItem(VERSION_CHECK_SECURITY_KEY) ?? "";
+  const isHighSecurity = ["critical", "high"].includes(
+    lastSecurity.toLowerCase(),
+  );
+  // Bypass the 24h throttle when the last known release was a High/Critical
+  // security patch so it re-checks (and re-shows) on every page load.
+  if (Date.now() - last < VERSION_CHECK_INTERVAL_MS && !isHighSecurity) return;
 
   const url = `${LATEST_VERSION_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
   fetch(url)
     .then((r) => r.json())
     .then((data) => {
       localStorage.setItem(VERSION_CHECK_STORAGE_KEY, String(Date.now()));
+      localStorage.setItem(VERSION_CHECK_SECURITY_KEY, data?.security ?? "");
       const remote = data?.version;
       if (remote && isRemoteNewer(appVersion, remote)) {
+        const dismissed = localStorage.getItem(VERSION_CHECK_DISMISSED_KEY);
         latestVersion.value = remote;
         latestVersionUrl.value = `${UPDATE_PAGE_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
         latestSecurityLevel.value = data?.security ?? null;
+        updateDismissed.value = dismissed === remote;
       }
     })
     .catch(() => {});
@@ -3137,18 +3157,23 @@ defineExpose({
         </a>
         <div v-if="!props.docked" class="sidebar-brand-text">
           <span class="sidebar-brand-title">PixlStash</span>
-          <a
-            v-if="updateAvailable"
-            :href="latestVersionUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            :class="securityUpdateClass"
-            :title="securityUpdateTitle"
-            >&#x2191; v{{ latestVersion
-            }}{{
-              latestSecurityLevel ? " security \u26a0\ufe0f" : " available"
-            }}</a
-          >
+          <div v-if="updateAvailable && !updateDismissed" class="sidebar-update-wrapper">
+            <a
+              :href="latestVersionUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              :class="securityUpdateClass"
+              :title="securityUpdateTitle"
+              >&#x2191; v{{ latestVersion
+              }}{{
+                latestSecurityLevel ? " security \u26a0\ufe0f" : " available"
+              }}</a
+            ><button
+              class="sidebar-update-dismiss"
+              :title="`Dismiss v${latestVersion} update alert`"
+              @click.prevent="dismissUpdateAlert"
+            >&times;</button>
+          </div>
         </div>
       </div>
       <button
@@ -6458,10 +6483,17 @@ defineExpose({
   position: relative;
 }
 
-.sidebar-update-available {
+.sidebar-update-wrapper {
   position: absolute;
   top: 100%;
   left: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.sidebar-update-available {
   font-size: 0.65rem;
   line-height: 1;
   color: rgba(var(--v-theme-accent), 0.8);
@@ -6473,6 +6505,27 @@ defineExpose({
   text-decoration: underline;
 }
 
+.sidebar-update-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 10px;
+  height: 10px;
+  font-size: 0.6rem;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: rgba(var(--v-theme-on-surface), 0.4);
+  opacity: 0.7;
+}
+
+.sidebar-update-dismiss:hover {
+  opacity: 1;
+  color: rgba(var(--v-theme-on-surface), 0.8);
+}
+
 .sidebar-update-security {
   color: #e57c00;
 }
@@ -6482,11 +6535,11 @@ defineExpose({
 }
 
 .sidebar-update-security--high {
-  color: #d32f2f;
+  color: #e53935;
 }
 
 .sidebar-update-security--high:hover {
-  color: #b71c1c;
+  color: #c62828;
 }
 
 .sidebar-brand-task-btn {
