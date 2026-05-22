@@ -467,9 +467,34 @@ export function useGridFetch(
         const _sortSuffix = _sort
           ? `&sort=${encodeURIComponent(_sort)}&descending=${_desc}`
           : '';
-        // Build character + project filter params for count and stream URLs.
+        // Build character/set + project filter params for count and stream URLs.
         const _charP = new URLSearchParams();
-        if (_fastCharIds.length > 1) {
+        if (hasSetSelection.value) {
+          // Set view — mirrors _appendSelectionParams set branch.
+          if (isSetOverlapView.value) {
+            for (const setId of normalizedSelectedSetIds.value) {
+              _charP.append('set_ids', String(setId));
+            }
+            _charP.set('set_mode', props.setMultiMode ?? 'intersection');
+            if (props.setMultiMode === 'difference' && props.setDifferenceBaseId != null) {
+              _charP.set('base_set_id', String(props.setDifferenceBaseId));
+            }
+            if (props.projectViewMode === 'project') {
+              const _pidSet = new Set(
+                normalizedSelectedSetIds.value.map(id => props.setProjectIds?.[id] ?? null)
+              );
+              if (_pidSet.size === 1) {
+                const _pid = [..._pidSet][0];
+                _charP.set('project_id', _pid != null ? String(_pid) : 'UNASSIGNED');
+              }
+            }
+          } else if (primarySelectedSetId.value != null) {
+            _charP.set('set_id', String(primarySelectedSetId.value));
+            if (props.projectViewMode === 'project') {
+              _charP.set('project_id', props.selectedProjectId != null ? String(props.selectedProjectId) : 'UNASSIGNED');
+            }
+          }
+        } else if (_fastCharIds.length > 1) {
           for (const id of _fastCharIds) _charP.append('character_ids', String(id));
           _charP.set('character_mode', props.characterMultiMode ?? 'union');
           // Only apply project filter when all selected characters share the same project.
@@ -1082,7 +1107,7 @@ export function useGridFetch(
     }
   }
 
-  const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
+  const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 1000);
 
   return {
     imagesLoading,
