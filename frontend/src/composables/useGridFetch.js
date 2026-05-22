@@ -467,17 +467,30 @@ export function useGridFetch(
         const _sortSuffix = _sort
           ? `&sort=${encodeURIComponent(_sort)}&descending=${_desc}`
           : '';
-        // Build character filter params for count and stream URLs.
+        // Build character + project filter params for count and stream URLs.
         const _charP = new URLSearchParams();
         if (_fastCharIds.length > 1) {
           for (const id of _fastCharIds) _charP.append('character_ids', String(id));
           _charP.set('character_mode', props.characterMultiMode ?? 'union');
+          // Only apply project filter when all selected characters share the same project.
+          if (props.projectViewMode === 'project') {
+            const _pidSet = new Set(_fastCharIds.map(id => props.characterProjectIds?.[id] ?? null));
+            if (_pidSet.size === 1) {
+              const _pid = [..._pidSet][0];
+              _charP.set('project_id', _pid != null ? String(_pid) : 'UNASSIGNED');
+            }
+          }
         } else if (
           _fastSelChar != null &&
           _fastSelChar !== '' &&
           _fastSelChar !== props.allPicturesId
         ) {
           _charP.set('character_id', String(_fastSelChar));
+          if (props.projectViewMode === 'project') {
+            _charP.set('project_id', props.selectedProjectId != null ? String(props.selectedProjectId) : 'UNASSIGNED');
+          }
+        } else if (props.projectViewMode === 'project') {
+          _charP.set('project_id', props.selectedProjectId != null ? String(props.selectedProjectId) : 'UNASSIGNED');
         }
         const _charSuffix = _charP.size ? `&${_charP.toString()}` : '';
         const streamBase =
