@@ -2003,4 +2003,4 @@ defineExpose({
     </v-dialog>
   </v-app>
 </template>
-<style scoped src="./App.css"></style>
+<style src="./App.css"></style>
