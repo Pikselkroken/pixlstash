@@ -183,6 +183,96 @@
           padding: 18px;
         }
       }
+
+      .changes-since {
+        background: var(--panel);
+        border: 1px solid rgba(34, 38, 44, 0.11);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 8px 24px var(--shadow);
+        padding: 20px 26px;
+        margin-bottom: 24px;
+      }
+
+      .changes-since-heading {
+        margin: 0 0 14px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--muted);
+      }
+
+      .changes-since-heading span {
+        color: var(--text);
+      }
+
+      .change-entry {
+        display: flex;
+        gap: 18px;
+        align-items: baseline;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(34, 38, 44, 0.07);
+      }
+
+      .change-entry:last-child {
+        border-bottom: none;
+        padding-bottom: 0;
+      }
+
+      .change-version {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--accent);
+        white-space: nowrap;
+        min-width: 52px;
+      }
+
+      .change-items {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+
+      .change-items li {
+        font-size: 0.875rem;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .security-badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 5px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        vertical-align: middle;
+        margin-left: 4px;
+      }
+
+      .security-badge--critical {
+        background: rgba(210, 45, 45, 0.14);
+        color: #b02020;
+      }
+
+      .security-badge--high {
+        background: rgba(210, 100, 20, 0.15);
+        color: #a04010;
+      }
+
+      .security-badge--moderate {
+        background: rgba(190, 150, 0, 0.14);
+        color: #7a5e00;
+      }
+
+      .security-badge--low {
+        background: rgba(57, 63, 70, 0.09);
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
@@ -207,22 +297,30 @@
         </p>
       </div>
 
+      <div id="changes-since" style="display:none" class="changes-since">
+        <p class="changes-since-heading">
+          Changes since v<span id="changes-since-version"></span>
+        </p>
+        <div id="changes-since-list"></div>
+      </div>
+
       <a class="whatsnew-banner" href="whatsnew.html">
         <div>
-          <span class="whatsnew-kicker">New in 1.1</span>
+          <span class="whatsnew-kicker">New in 1.2</span>
           <h2 class="whatsnew-title">
             Explore what changed before you upgrade
           </h2>
           <p class="whatsnew-copy">
-            See the new statistics sidebar, context menus, and reference folders
-            in one focused walkthrough with screenshots.
+            See the redesigned sidebar and toolbar, picture sharing, context
+            menus, and faster background processing in one focused walkthrough
+            with screenshots.
           </p>
           <span class="whatsnew-cta">Open the What's New page →</span>
         </div>
         <div class="whatsnew-media">
           <img
-            src="assets/ScreenshotReferenceFolders.jpg"
-            alt="PixlStash showing reference folders, context menu, and statistics sidebar"
+            src="assets/ScreenshotWhatsNew1_2.jpg"
+            alt="PixlStash 1.2 — redesigned sidebar and toolbar"
           />
         </div>
       </a>
@@ -448,29 +546,201 @@
     </div>
 
     <script>
+      var userVersionStr = new URLSearchParams(window.location.search).get("v");
+
+      function parseVer(v) {
+        var m = String(v).match(
+          /^(\d+)\.(\d+)\.(\d+)(?:(\.?(?:a|b|rc|dev))(\d+))?/i,
+        );
+        if (!m) return null;
+        var preTag = (m[4] || "").toLowerCase().replace(/^\./, "");
+        var preWeight = { dev: -4, a: -3, b: -2, rc: -1 }[preTag] || 0;
+        return [
+          Number(m[1]),
+          Number(m[2]),
+          Number(m[3]),
+          preWeight,
+          Number(m[5] || 0),
+        ];
+      }
+
+      function isNewer(base, candidate) {
+        var a = parseVer(base),
+          b = parseVer(candidate);
+        if (!a || !b) return false;
+        for (var i = 0; i < a.length; i++) {
+          if (b[i] > a[i]) return true;
+          if (b[i] < a[i]) return false;
+        }
+        return false;
+      }
+
+      function escHtml(s) {
+        return s
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function formatItem(raw) {
+        return escHtml(raw).replace(
+          /\[Security:(\w+)\]/gi,
+          function (_, level) {
+            return (
+              '<span class="security-badge security-badge--' +
+              level.toLowerCase() +
+              '">Security: ' +
+              escHtml(level) +
+              "</span>"
+            );
+          },
+        );
+      }
+
+      // Extract items from a GitHub release body (Markdown).
+      // Accepts "- item", "* item", or plain non-heading non-empty lines.
+      // Skips Markdown headings (# …) and HTML tags.
+      function itemsFromBody(body) {
+        var items = [];
+        (body || "").split("\n").forEach(function (line) {
+          var trimmed = line.trim();
+          if (!trimmed) return;
+          if (trimmed.match(/^#+\s/)) return; // heading
+          if (trimmed.match(/^<[a-z]/i)) return; // HTML tag
+          var m = trimmed.match(/^[-*]\s+(.*)/);
+          items.push(m ? m[1].trim() : trimmed);
+        });
+        return items;
+      }
+
+      // Parse a raw CHANGELOG.md text into { version -> [items] } map.
+      function parseChangelog(text) {
+        var map = {};
+        var cur = null;
+        (text || "").split("\n").forEach(function (line) {
+          var hm = line.match(/^#\s*\[([^\]]+)\]/);
+          if (hm) {
+            cur = hm[1].trim();
+            map[cur] = [];
+          } else if (cur && line.indexOf("- ") === 0) {
+            map[cur].push(line.slice(2).trim());
+          }
+        });
+        return map;
+      }
+
+      function renderEntries(entries) {
+        if (!entries.length) return;
+        document.getElementById("changes-since-version").textContent =
+          userVersionStr;
+        document.getElementById("changes-since-list").innerHTML = entries
+          .map(function (e) {
+            return (
+              '<div class="change-entry"><span class="change-version">v' +
+              escHtml(e.version) +
+              '</span><ul class="change-items">' +
+              e.items
+                .map(function (i) {
+                  return "<li>" + formatItem(i) + "</li>";
+                })
+                .join("") +
+              "</ul></div>"
+            );
+          })
+          .join("");
+        document.getElementById("changes-since").style.display = "block";
+      }
+
+      // Fetch the full releases list so we can show changes across multiple
+      // intermediate versions (e.g. 1.2.2 AND 1.2.3 when upgrading from 1.2.1).
       fetch(
-        "https://api.github.com/repos/pikselkroken/pixlstash/releases/latest",
+        "https://api.github.com/repos/pikselkroken/pixlstash/releases?per_page=30",
       )
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (!data || !data.tag_name) return;
-          const version = data.tag_name.replace(/^v/, "");
-          const date = data.published_at
-            ? new Date(data.published_at).toLocaleDateString("en-GB", {
+        .then(function (r) {
+          return r.ok ? r.json() : [];
+        })
+        .then(function (releases) {
+          if (!releases.length) return;
+
+          // Update header with latest release version + date.
+          var latest = releases[0];
+          var latestVersion = latest.tag_name.replace(/^v/, "");
+          var date = latest.published_at
+            ? new Date(latest.published_at).toLocaleDateString("en-GB", {
                 year: "numeric",
                 month: "long",
                 day: "numeric",
               })
             : null;
           document.getElementById("latest-release-version").textContent =
-            version;
+            latestVersion;
           if (date) {
             document.getElementById("latest-release-date").textContent =
               "Released " + date;
           }
           document.getElementById("latest-release").style.display = "block";
+
+          if (!userVersionStr) return;
+
+          // Keep only final releases (x.y.z) strictly newer than the user's.
+          var newer = releases.filter(function (rel) {
+            var v = rel.tag_name.replace(/^v/, "");
+            return /^\d+\.\d+\.\d+$/.test(v) && isNewer(userVersionStr, v);
+          });
+          if (!newer.length) return;
+
+          // Build a preliminary entry list using each release's body.
+          // Releases with an empty body are flagged for CHANGELOG fallback.
+          var entries = newer.map(function (rel) {
+            var items = itemsFromBody(rel.body);
+            return {
+              version: rel.tag_name.replace(/^v/, ""),
+              tag: rel.tag_name,
+              items: items,
+              needsFallback: items.length === 0,
+            };
+          });
+
+          var anyNeedsFallback = entries.some(function (e) {
+            return e.needsFallback;
+          });
+
+          function applyAndRender(changelogText) {
+            var clMap = parseChangelog(changelogText);
+            var final = entries
+              .map(function (e) {
+                var items = e.needsFallback
+                  ? clMap[e.version] || []
+                  : e.items;
+                return { version: e.version, items: items };
+              })
+              .filter(function (e) {
+                return e.items.length > 0;
+              });
+            renderEntries(final);
+          }
+
+          if (!anyNeedsFallback) {
+            applyAndRender("");
+            return;
+          }
+
+          // Fetch CHANGELOG once from the newest release tag as fallback.
+          // This single file contains all point-release entries on the branch.
+          fetch(
+            "https://raw.githubusercontent.com/pikselkroken/pixlstash/refs/tags/" +
+              newer[0].tag_name +
+              "/CHANGELOG.md",
+          )
+            .then(function (r) {
+              return r.ok ? r.text() : "";
+            })
+            .then(applyAndRender)
+            .catch(function () {
+              applyAndRender("");
+            });
         })
-        .catch(() => {});
+        .catch(function () {});
 
       document.querySelectorAll(".copy-btn[data-copy]").forEach((btn) => {
         btn.addEventListener("click", () => {
