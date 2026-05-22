@@ -1,0 +1,136 @@
+name: Update latest-version.json on release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v1.2.3). Used when running manually.'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            echo "No release tag provided." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          path: release
+
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          path: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install packaging
+        run: python -m pip install --upgrade packaging
+
+      - name: Compute and maybe update latest-version.json
+        id: update
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          python - <<'EOF'
+          import json, os, re, sys
+          from pathlib import Path
+          from packaging.version import Version, InvalidVersion
+
+          tag = os.environ["RELEASE_TAG"]
+          new_version_str = tag.lstrip("v")
+          try:
+              new_version = Version(new_version_str)
+          except InvalidVersion:
+              print(f"Release tag '{tag}' is not a valid version; skipping.")
+              sys.exit(0)
+
+          # Read the released branch's CHANGELOG.md for [Security: LEVEL] on the
+          # top heading. This means each release's security level is decided by
+          # the changelog that ships with the release itself, not by main.
+          security_level = None
+          changelog = Path("release/CHANGELOG.md")
+          if changelog.exists():
+              with changelog.open(encoding="utf-8") as f:
+                  for line in f:
+                      stripped = line.strip()
+                      if not stripped.startswith("#"):
+                          continue
+                      m = re.search(
+                          r"\[Security:\s*(Critical|High|Moderate|Low)\]",
+                          stripped,
+                          re.IGNORECASE,
+                      )
+                      if m:
+                          security_level = m.group(1).capitalize()
+                      break  # only inspect the first (latest) version heading
+
+          # Compare against main's existing latest-version.json. We only update
+          # if this release is strictly newer than what's currently published.
+          current_path = Path("main/website/latest-version.json")
+          current_version = None
+          if current_path.exists():
+              try:
+                  current = json.loads(current_path.read_text())
+                  current_version = Version(str(current.get("version", "")))
+              except (InvalidVersion, json.JSONDecodeError, ValueError):
+                  current_version = None
+
+          if current_version is not None and new_version <= current_version:
+              print(
+                  f"Release {new_version} is not newer than currently published "
+                  f"{current_version}; skipping update."
+              )
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("changed=false\n")
+              sys.exit(0)
+
+          payload = {"version": str(new_version)}
+          if security_level:
+              payload["security"] = security_level
+          current_path.parent.mkdir(parents=True, exist_ok=True)
+          current_path.write_text(json.dumps(payload) + "\n")
+          print(f"Updated latest-version.json: {payload}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("changed=true\n")
+          EOF
+
+      - name: Open pull request with updated latest-version.json
+        if: steps.update.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          path: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          branch: bot/update-latest-version-${{ steps.tag.outputs.tag }}
+          commit-message: "chore: update latest-version.json to ${{ steps.tag.outputs.tag }}"
+          title: "chore: update latest-version.json to ${{ steps.tag.outputs.tag }}"
+          body: |
+            Automated update of `website/latest-version.json` triggered by
+            release **${{ steps.tag.outputs.tag }}**.
+
+            The version field and (if present) the `[Security: ...]` tag
+            were taken from the release tag's own `CHANGELOG.md`.
+          add-paths: website/latest-version.json
+          delete-branch: true

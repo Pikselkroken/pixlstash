@@ -46,37 +46,6 @@ jobs:
         run: |
           python scripts/generate_openapi_docs.py --output-dir website/api
 
-      - name: Generate latest-version.json
-        run: |
-          python - <<'EOF'
-          import json, re, tomllib
-          with open("pyproject.toml", "rb") as f:
-              data = tomllib.load(f)
-          version = data["project"]["version"]
-
-          # Parse the first version block in CHANGELOG.md for a [Security: LEVEL] tag.
-          # Convention: # [VERSION] [Security: LEVEL]  (LEVEL = Critical/High/Moderate/Low)
-          security_level = None
-          with open("CHANGELOG.md", "r", encoding="utf-8") as f:
-              for line in f:
-                  line = line.strip()
-                  if not line.startswith("#"):
-                      continue
-                  # First heading is always the latest version block
-                  m = re.search(r"\[Security:\s*(Critical|High|Moderate|Low)\]", line, re.IGNORECASE)
-                  if m:
-                      security_level = m.group(1).capitalize()
-                  break  # only inspect the first version heading
-
-          payload = {"version": version}
-          if security_level:
-              payload["security"] = security_level
-
-          with open("website/latest-version.json", "w") as out:
-              json.dump(payload, out)
-          print(f"latest-version.json: {version}, security={security_level}")
-          EOF
-
       - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
