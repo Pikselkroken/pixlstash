@@ -634,20 +634,6 @@
                   <v-icon class="thumbnail-placeholder-icon"
                     >mdi-loading</v-icon
                   >
-                  <span
-                    v-if="img.id"
-                    style="
-                      position: absolute;
-                      bottom: 4px;
-                      left: 0;
-                      right: 0;
-                      text-align: center;
-                      font-size: 10px;
-                      color: #aaa;
-                      pointer-events: none;
-                    "
-                    >id:{{ img.id }}</span
-                  >
                 </div>
               </template>
               <!-- Stack band overlay (top+bottom color stripe for compact mode) -->

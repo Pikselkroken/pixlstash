@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto, IntEnum
-from sqlalchemy import Float, String, and_, desc, func, or_, text
+from sqlalchemy import Float, String, desc, func, or_, text
 from sqlalchemy.orm import aliased, load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
@@ -967,32 +967,15 @@ class Picture(SQLModel, table=True):
                 )
             )
 
+        # A stack leader is either an unstacked picture or the picture with
+        # stack_position == 0 in its stack.  This inline condition replaces the
+        # former _get_stack_leader_ids() round-trip + IN(ids) approach, which
+        # was unacceptably slow on large libraries.
         if stack_leaders_only:
-            leader_ids = cls._get_stack_leader_ids(session, only_deleted=only_deleted)
-            if comfyui_conditions:
-                # Find stack_ids that contain at least one picture matching the filter,
-                # then show the leader of those stacks (plus any unstacked matches).
-                matching_stack_subq = (
-                    select(cls.stack_id)
-                    .where(
-                        cls.stack_id.is_not(None),
-                        cls.deleted.is_(False),
-                        or_(*comfyui_conditions),
-                    )
-                    .distinct()
-                )
-                query = query.where(
-                    or_(
-                        and_(cls.stack_id.is_(None), or_(*comfyui_conditions)),
-                        and_(
-                            cls.id.in_(leader_ids),
-                            cls.stack_id.in_(matching_stack_subq),
-                        ),
-                    )
-                )
-            else:
-                query = query.where(or_(cls.stack_id.is_(None), cls.id.in_(leader_ids)))
-        elif comfyui_conditions:
+            query = query.where(
+                or_(cls.stack_id.is_(None), cls.stack_position == 0)
+            )
+        if comfyui_conditions:
             query = query.where(or_(*comfyui_conditions))
 
         if sort_mech and not count_only:
