@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <title>PixlStash API Reference</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 560px;
+        margin: 4rem auto;
+        padding: 0 1.5rem;
+        color: #222;
+      }
+      a { color: #0969da; }
+    </style>
+  </head>
+  <body>
+    <h1>PixlStash API Reference</h1>
+    <p id="msg">Loading latest version&hellip;</p>
+    <script>
+      fetch("../latest-version.json")
+        .then((r) => r.json())
+        .then((data) => {
+          const v = data.version || "";
+          const parts = v.split(".");
+          if (parts.length < 2) throw new Error("bad version");
+          const folder = `v${parts[0]}.${parts[1]}`;
+          const el = document.getElementById("msg");
+          el.innerHTML = `Redirecting to the latest API docs (<a href="./${folder}/">${folder}</a>)&hellip;`;
+          window.location.replace(`./${folder}/`);
+        })
+        .catch(() => {
+          document.getElementById("msg").textContent =
+            "Could not determine the latest version. Navigate to a specific version directly (e.g. v1.2/).";
+        });
+    </script>
+  </body>
+</html>

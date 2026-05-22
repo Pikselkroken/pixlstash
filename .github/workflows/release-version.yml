@@ -45,8 +45,14 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install packaging
-        run: python -m pip install --upgrade packaging
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip packaging
+          pip install ./release
+
+      - name: Generate versioned OpenAPI docs
+        run: |
+          python release/scripts/generate_openapi_docs.py --output-dir main/website/api
 
       - name: Compute and maybe update latest-version.json
         id: update
@@ -116,21 +122,25 @@ jobs:
               f.write("changed=true\n")
           EOF
 
-      - name: Open pull request with updated latest-version.json
-        if: steps.update.outputs.changed == 'true'
+      - name: Open pull request with updated website files
         uses: peter-evans/create-pull-request@v7
         with:
           path: main
           token: ${{ secrets.GITHUB_TOKEN }}
           base: main
           branch: bot/update-latest-version-${{ steps.tag.outputs.tag }}
-          commit-message: "chore: update latest-version.json to ${{ steps.tag.outputs.tag }}"
-          title: "chore: update latest-version.json to ${{ steps.tag.outputs.tag }}"
+          commit-message: "chore: release ${{ steps.tag.outputs.tag }} website update"
+          title: "chore: release ${{ steps.tag.outputs.tag }} website update"
           body: |
-            Automated update of `website/latest-version.json` triggered by
-            release **${{ steps.tag.outputs.tag }}**.
+            Automated website update triggered by release **${{ steps.tag.outputs.tag }}**.
 
-            The version field and (if present) the `[Security: ...]` tag
-            were taken from the release tag's own `CHANGELOG.md`.
-          add-paths: website/latest-version.json
+            Changes included:
+            - `website/api/v{major}.{minor}/` — versioned OpenAPI docs generated
+              from the release tag's own backend code.
+            - `website/latest-version.json` — updated to this release (if it is
+              strictly newer than the currently published version; skipped otherwise).
+              The `[Security: ...]` tag was taken from the release tag's own `CHANGELOG.md`.
+          add-paths: |
+            website/latest-version.json
+            website/api/**
           delete-branch: true
