@@ -1,3 +1,6 @@
+# [1.2.3]
+- Update js-cookie NPM package for frontend [Security:High]
+
 # [1.2.2]
 - Update brace-expansion NPM package for frontend [Security:Moderate]
 
