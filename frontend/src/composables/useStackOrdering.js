@@ -101,7 +101,6 @@ export function useStackOrdering(
         ? existing.penalised_tags
         : [],
       faces: Array.isArray(existing?.faces) ? existing.faces : [],
-      hands: Array.isArray(existing?.hands) ? existing.hands : [],
       thumbnail_width: existing?.thumbnail_width ?? img?.thumbnail_width,
       thumbnail_height: existing?.thumbnail_height ?? img?.thumbnail_height,
     };

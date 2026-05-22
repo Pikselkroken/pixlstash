@@ -4690,7 +4690,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       idx: start + idx, // Ensure idx is global index
       thumbnail: img?.thumbnail ?? null,
       faces: Array.isArray(img?.faces) ? img.faces : [],
-      hands: Array.isArray(img?.hands) ? img.hands : [],
       penalised_tags: Array.isArray(img?.penalised_tags)
         ? img.penalised_tags
         : [],
@@ -4772,23 +4771,22 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
             thumbnailLoadedMap[gridImg.id] =
               (thumbnailLoadedMap[gridImg.id] || 0) + 1;
           }
-          if (thumbObj) {
-            const thumbWidth = Number(thumbObj.thumbnail_width);
-            const thumbHeight = Number(thumbObj.thumbnail_height);
-            if (!Number.isNaN(thumbWidth) && thumbWidth > 0) {
-              gridImg.thumbnail_width = thumbWidth;
-            }
-            if (!Number.isNaN(thumbHeight) && thumbHeight > 0) {
-              gridImg.thumbnail_height = thumbHeight;
-            }
+        }
+        // Always refresh faces, thumbnail dimensions, and penalised_tags
+        // from authoritative server data, even when the thumbnail URL was
+        // pre-filled from imported_at.
+        if (thumbObj) {
+          const thumbWidth = Number(thumbObj.thumbnail_width);
+          const thumbHeight = Number(thumbObj.thumbnail_height);
+          if (!Number.isNaN(thumbWidth) && thumbWidth > 0) {
+            gridImg.thumbnail_width = thumbWidth;
+          }
+          if (!Number.isNaN(thumbHeight) && thumbHeight > 0) {
+            gridImg.thumbnail_height = thumbHeight;
           }
         }
-        // Always refresh faces, hands, and penalised_tags from authoritative
-        // server data, even when the thumbnail URL was pre-filled from imported_at.
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
-        gridImg.hands =
-          thumbObj && Array.isArray(thumbObj.hands) ? thumbObj.hands : [];
         if (props.showFaceBboxes && gridImg.faces.length) {
           overlayNeedsRedraw = true;
         }
@@ -5562,14 +5560,6 @@ function handleEmptyStateReset() {
   white-space: nowrap;
 }
 
-.hand-bbox-overlay {
-  box-sizing: border-box;
-  position: absolute;
-  pointer-events: none;
-  border: 2px dashed rgb(var(--v-theme-tertiary));
-  display: block;
-  z-index: 30;
-}
 .grid-content-area {
   --selbar-height: 48px;
 }

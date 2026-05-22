@@ -99,7 +99,7 @@ API_OPENAPI_TAGS = [
     },
     {
         "name": "tags",
-        "description": "Tag management for pictures, faces and hands.",
+        "description": "Tag management for pictures, faces",
     },
     {
         "name": "stacks",

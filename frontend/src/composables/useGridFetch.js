@@ -521,7 +521,6 @@ export function useGridFetch(
                 idx,
                 thumbnail: existing?.thumbnail ?? null,
                 faces: existing?.faces ?? [],
-                hands: existing?.hands ?? [],
                 penalised_tags: existing?.penalised_tags ?? [],
                 thumbnail_width: pic.thumbnail_width ?? existing?.thumbnail_width,
                 thumbnail_height: pic.thumbnail_height ?? existing?.thumbnail_height,
