@@ -1,3 +1,9 @@
+# [1.3.0.dev0]
+- Massive refactoring of both backend and frontend
+- Massive speedup of grid loading
+- js-cookie update [Security:High]
+- Improve version checks to give a proper alert for security updates
+
 # [1.2.2]
 - Update brace-expansion NPM package for frontend [Security:Moderate]
 
