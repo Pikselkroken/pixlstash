@@ -491,9 +491,7 @@ async function handleSelectCharacter(payload) {
   if (charId !== ALL_PICTURES_ID) {
     filterStore.unassignedOnlyFilter = false;
   }
-  if (charId === ALL_PICTURES_ID) {
-    gridStore.refreshGridVersion();
-  }
+  wsStore.pendingExternalImportCount = 0;
   selectionStore.selectedSet = null;
   selectionStore.selectedSetIds = [];
   await nextTick();
@@ -654,15 +652,26 @@ function pushRouteForCurrentSelection() {
  * reactive refs is a no-op in Vue's reactivity system, so it is safe to
  * call it on every route tick without triggering unnecessary re-renders.
  */
+// True array equality by numeric content — avoids spurious reactive updates
+// when applyRouteToStores writes the same IDs that handleSelect* already set.
+function _sameNumIds(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (Number(a[i]) !== Number(b[i])) return false;
+  }
+  return true;
+}
+
 function applyRouteToStores() {
   const { name, params, query } = route;
 
   if (name === "all-pictures") {
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedSet = null;
-    selectionStore.selectedSetIds = [];
-    selectionStore.selectedCharacter = ALL_PICTURES_ID;
-    selectionStore.selectedCharacterIds = [];
+    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
+    if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
+      selectionStore.selectedCharacter = ALL_PICTURES_ID;
+    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
     projectStore.projectViewMode = "global";
     projectStore.selectedProjectId = null;
@@ -678,9 +687,11 @@ function applyRouteToStores() {
       : [];
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedSet = null;
-    selectionStore.selectedSetIds = [];
-    selectionStore.selectedCharacter = charId;
-    selectionStore.selectedCharacterIds = ids;
+    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
+    if (String(selectionStore.selectedCharacter) !== charId)
+      selectionStore.selectedCharacter = charId;
+    if (!_sameNumIds(selectionStore.selectedCharacterIds, ids))
+      selectionStore.selectedCharacterIds = ids;
     if (ids.length > 1 && modeRaw) {
       selectionStore.characterMultiMode = String(modeRaw);
     }
@@ -694,9 +705,10 @@ function applyRouteToStores() {
   } else if (name === "scrapheap") {
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedSet = null;
-    selectionStore.selectedSetIds = [];
-    selectionStore.selectedCharacter = SCRAPHEAP_PICTURES_ID;
-    selectionStore.selectedCharacterIds = [];
+    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
+    if (String(selectionStore.selectedCharacter) !== String(SCRAPHEAP_PICTURES_ID))
+      selectionStore.selectedCharacter = SCRAPHEAP_PICTURES_ID;
+    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
     selectionStore.lastSelectedCharacterLabel = "Scrapheap";
     projectStore.projectViewMode = "global";
     projectStore.selectedProjectId = null;
@@ -715,9 +727,11 @@ function applyRouteToStores() {
         : [];
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedCharacter = null;
-    selectionStore.selectedCharacterIds = [];
-    selectionStore.selectedSet = ids[0] ?? null;
-    selectionStore.selectedSetIds = ids;
+    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
+    const nextSet = ids[0] ?? null;
+    if (selectionStore.selectedSet !== nextSet) selectionStore.selectedSet = nextSet;
+    if (!_sameNumIds(selectionStore.selectedSetIds, ids))
+      selectionStore.selectedSetIds = ids;
     if (ids.length > 1 && modeRaw) {
       selectionStore.setMultiMode = String(modeRaw);
     }
@@ -734,10 +748,11 @@ function applyRouteToStores() {
     projectStore.projectViewMode = "project";
     projectStore.selectedProjectId =
       Number.isFinite(projectId) && projectId > 0 ? projectId : null;
-    selectionStore.selectedCharacter = ALL_PICTURES_ID;
-    selectionStore.selectedCharacterIds = [];
+    if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
+      selectionStore.selectedCharacter = ALL_PICTURES_ID;
+    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
     selectionStore.selectedSet = null;
-    selectionStore.selectedSetIds = [];
+    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
     selectionStore.selectedFolderFilter = null;
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
   }
