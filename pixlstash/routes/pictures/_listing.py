@@ -216,6 +216,9 @@ def select_pictures_for_listing(
     query_params.pop(
         "guest_session_id", None
     )  # handled separately; must not leak into **query_params
+    query_params.pop(
+        "stack_leaders_only", None
+    )  # already consumed as an explicit kwarg; must not leak into **query_params
     only_deleted = False
     set_mode = normalize_set_mode(set_mode_raw)
     set_filter_ids = collect_set_filter_ids(
@@ -909,6 +912,7 @@ def select_pictures_for_listing(
             return server.vault.db.run_task(
                 Picture.find,
                 count_only=True,
+                stack_leaders_only=stack_leaders_only,
                 format=format,
                 include_unimported=True,
                 min_score=min_score,
@@ -1058,6 +1062,7 @@ def register_routes(router, server):
         offset: int = Query(0, ge=0),
         batch_limit: int = Query(1000, ge=1, le=5000),
         fields: str = Query(None),
+        stack_leaders_only: bool = Query(False),
         project_id: str | None = Query(
             None, description="Filter by project id or 'UNASSIGNED'"
         ),
@@ -1091,7 +1096,7 @@ def register_routes(router, server):
             limit=batch_limit,
             metadata_fields=metadata_fields,
             return_ids_only=False,
-            stack_leaders_only=False,  # TODO: re-enable once streaming baseline is stable
+            stack_leaders_only=stack_leaders_only,
             project_id=project_id,
             scope_set_id=scope_set_id,
             scope_character_id=scope_character_id,
@@ -1105,14 +1110,6 @@ def register_routes(router, server):
         # end-of-stream.
         done = oneshot or sql_count <= batch_limit
         next_offset = offset + min(batch_limit, sql_count)
-        logger.debug(
-            "[stream] offset=%d batch_limit=%d sort=%r sql_count=%d "
-            "returned=%d done=%s next_offset=%d first_id=%s last_id=%s",
-            offset, batch_limit, sort, sql_count,
-            len(pictures), done, next_offset,
-            pictures[0].get("id") if pictures else None,
-            pictures[-1].get("id") if pictures else None,
-        )
         return {
             "pictures": pictures,
             "done": done,
@@ -1134,16 +1131,11 @@ def register_routes(router, server):
         sort: str = Query(None),
         descending: bool = Query(True),
         fields: str = Query(None),
+        stack_leaders_only: bool = Query(False),
         project_id: str | None = Query(
             None, description="Filter by project id or 'UNASSIGNED'"
         ),
     ):
-        if fields == "grid":
-            metadata_fields = list(Picture.grid_fields())
-        elif fields:
-            metadata_fields = [f.strip() for f in fields.split(",") if f.strip()]
-        else:
-            metadata_fields = Picture.metadata_fields()
         token_scope = getattr(request.state, "token_scope", None)
         scope_set_id = (
             token_scope.resource_id
@@ -1174,10 +1166,10 @@ def register_routes(router, server):
             limit=sys.maxsize,
             metadata_fields=[],
             count_only=True,
+            stack_leaders_only=stack_leaders_only,
             project_id=project_id,
             scope_set_id=scope_set_id,
             scope_character_id=scope_character_id,
         )
-        logger.debug("[count] sort=%r returning count=%s", sort, count)
         return {"count": count}
 

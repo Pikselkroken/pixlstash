@@ -437,7 +437,19 @@ export function useGridFetch(
       const _isLikenessSort =
         props.selectedSort === "CHARACTER_LIKENESS" ||
         props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
-      if (USE_FAST_GRID_PATH && !_hasSearch && !_isLikenessSort) {
+      // Fast path is also not applicable when the character view requires
+      // special backend logic that either returns null for count (UNASSIGNED)
+      // or bypasses count_only entirely (non-numeric special views like SCRAPHEAP).
+      const _fastCharIds = normalizedSelectedCharacterIds.value;
+      const _fastSelChar = props.selectedCharacter;
+      const _isUnassignedView =
+        _fastSelChar === props.allPicturesId && !!props.unassignedOnlyFilter;
+      const _isSpecialCharView =
+        _fastSelChar != null &&
+        _fastSelChar !== '' &&
+        _fastSelChar !== props.allPicturesId &&
+        !String(_fastSelChar).match(/^\d+$/);
+      if (USE_FAST_GRID_PATH && !_hasSearch && !_isLikenessSort && !_isUnassignedView && !_isSpecialCharView) {
         // For sorted fetches the progress bar is meaningless in the fast path
         // — data is already in the DB, LIMIT/OFFSET is instant.
         if (isSortedFetch && options?.showProgress === true) {
@@ -455,17 +467,27 @@ export function useGridFetch(
         const _sortSuffix = _sort
           ? `&sort=${encodeURIComponent(_sort)}&descending=${_desc}`
           : '';
+        // Build character filter params for count and stream URLs.
+        const _charP = new URLSearchParams();
+        if (_fastCharIds.length > 1) {
+          for (const id of _fastCharIds) _charP.append('character_ids', String(id));
+          _charP.set('character_mode', props.characterMultiMode ?? 'union');
+        } else if (
+          _fastSelChar != null &&
+          _fastSelChar !== '' &&
+          _fastSelChar !== props.allPicturesId
+        ) {
+          _charP.set('character_id', String(_fastSelChar));
+        }
+        const _charSuffix = _charP.size ? `&${_charP.toString()}` : '';
         const streamBase =
-          `${props.backendUrl}/pictures/stream?fields=grid${_sortSuffix}`;
+          `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}`;
 
         // Splice raw picture metadata into the placeholder grid at `offset`,
         // preserving thumbnail/face data for cells already loaded.
-        const splicePictures = (pictures, offset, label = '?') => {
-          if (!pictures.length) { console.warn('[FastGrid] splicePictures(' + label + '): empty pictures array at offset', offset); return; }
+        const splicePictures = (pictures, offset) => {
+          if (!pictures.length) return;
           const grid = allGridImages.value.slice();
-          // Trace slots 200-203 before and after every splice
-          const WATCH = [200, 201, 202, 203];
-          const before = WATCH.map(i => grid[i]?.id ?? null);
           for (let i = 0; i < pictures.length; i++) {
             const idx = offset + i;
             if (idx < grid.length) {
@@ -483,18 +505,14 @@ export function useGridFetch(
               };
             }
           }
-          const after = WATCH.map(i => grid[i]?.id ?? null);
-          console.log('[FastGrid] splicePictures(' + label + ') offset=' + offset + ' len=' + pictures.length + ' | slots 200-203 before:', before, '=> after:', after);
           allGridImages.value = grid;
         };
 
         // 1. Fast total count — single indexed SQL query.
-        console.log('[FastGrid] COUNT url:', `${props.backendUrl}/pictures/count`);
-        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count`);
+        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count?stack_leaders_only=true${_charSuffix}`);
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         const total =
           typeof countRes.data?.count === 'number' ? countRes.data.count : 0;
-        console.log('[FastGrid] COUNT response:', countRes.data, '=> total:', total);
 
         // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
         const cols = props.columns || 1;
@@ -521,10 +539,6 @@ export function useGridFetch(
         // lastBatchStart: where the tail batch begins.  When total fits inside
         // FIRST_BATCH + LAST_BATCH the tail immediately follows the head.
         const lastBatchStart = Math.max(FIRST_BATCH, total - LAST_BATCH);
-        console.log('[FastGrid] FIRST_BATCH=', FIRST_BATCH, 'LAST_BATCH=', LAST_BATCH, 'lastBatchStart=', lastBatchStart);
-        console.log('[FastGrid] Requesting first batch: offset=0 limit=', FIRST_BATCH);
-        if (total > FIRST_BATCH)
-          console.log('[FastGrid] Requesting last batch: offset=', lastBatchStart, 'limit=', LAST_BATCH);
         const [firstRes, lastRes] = await Promise.all([
           apiClient.get(`${streamBase}&offset=0&batch_limit=${FIRST_BATCH}`),
           // Tail batch: needed whenever there are any cells beyond the first batch.
@@ -537,25 +551,19 @@ export function useGridFetch(
         if (fetchAllGridImages.lastRequestId !== requestId) return;
 
         const firstPics = firstRes?.data?.pictures ?? [];
-        console.log('[FastGrid] First batch received:', firstPics.length, 'pics (requested', FIRST_BATCH, ') done=', firstRes?.data?.done, 'next_offset=', firstRes?.data?.next_offset, 'first_id=', firstPics[0]?.id, 'last_id=', firstPics[firstPics.length-1]?.id);
-        splicePictures(firstPics, 0, 'first');
+        splicePictures(firstPics, 0);
         hasLoadedOnce.value = true;
-        console.log('[FastGrid] after hasLoadedOnce=true, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
         initialRender.value = false;
-        console.log('[FastGrid] after initialRender=false, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
         const prefetchEnd = Math.min(
           total,
           visibleEnd.value + (divisibleViewWindow.value || windowCount),
         );
         fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
-        console.log('[FastGrid] after fetchThumbnailsBatch, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
 
         if (lastRes) {
           const lastPics = lastRes?.data?.pictures ?? [];
-          console.log('[FastGrid] Last batch received:', lastPics.length, 'pics (requested', LAST_BATCH, 'at offset', lastBatchStart, ') done=', lastRes?.data?.done, 'next_offset=', lastRes?.data?.next_offset, 'first_id=', lastPics[0]?.id, 'last_id=', lastPics[lastPics.length-1]?.id);
-          splicePictures(lastPics, lastBatchStart, 'last');
+          splicePictures(lastPics, lastBatchStart);
         }
-        console.log('[FastGrid] after last batch, slots 200-203:', allGridImages.value.slice(200,204).map(x=>x?.id));
 
         lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
 
@@ -564,28 +572,15 @@ export function useGridFetch(
         while (bgOffset < lastBatchStart) {
           if (fetchAllGridImages.lastRequestId !== requestId) return;
           const limit = Math.min(BG_BATCH, lastBatchStart - bgOffset);
-          console.log('[FastGrid] BG batch: offset=', bgOffset, 'limit=', limit);
           const res = await apiClient.get(
             `${streamBase}&offset=${bgOffset}&batch_limit=${limit}`,
           );
           if (fetchAllGridImages.lastRequestId !== requestId) return;
           const bgPics = res?.data?.pictures ?? [];
-          console.log('[FastGrid] BG batch received:', bgPics.length, 'pics (requested', limit, ') done=', res?.data?.done, 'next_offset=', res?.data?.next_offset, 'first_id=', bgPics[0]?.id, 'last_id=', bgPics[bgPics.length-1]?.id);
-          splicePictures(bgPics, bgOffset, 'bg@'+bgOffset);
+          splicePictures(bgPics, bgOffset);
           updateVisibleThumbnails();
           bgOffset += limit;
           await nextTick();
-        }
-
-        // Audit: report any grid slots that are still null after all batches.
-        const nullSlots = allGridImages.value
-          .map((img, i) => (img.id === null ? i : -1))
-          .filter(i => i >= 0);
-        if (nullSlots.length > 0) {
-          console.warn('[FastGrid] GAPS after full load — null slots:', nullSlots.length, 'indices:', nullSlots.slice(0, 20), '(total grid size:', total, ')');
-          console.warn('[FastGrid] reactive check slots 200-203:', allGridImages.value.slice(200,204).map(x => JSON.stringify({id:x?.id, idx:x?.idx})));
-        } else {
-          console.log('[FastGrid] All', total, 'slots filled — no gaps.');
         }
 
         return; // early return — existing sort/filter/search paths are bypassed
