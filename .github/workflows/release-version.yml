@@ -38,12 +38,19 @@ jobs:
         with:
           ref: main
           path: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Cache pip packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('release/setup.py', 'release/requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-py3.12-
 
       - name: Install dependencies
         run: |
@@ -126,7 +133,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           path: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
           base: main
           branch: bot/update-latest-version-${{ steps.tag.outputs.tag }}
           commit-message: "chore: release ${{ steps.tag.outputs.tag }} website update"
