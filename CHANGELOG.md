@@ -1,8 +1,10 @@
 # [1.3.0.dev0]
 - Massive refactoring of both backend and frontend
-- Massive speedup of grid loading
+- Massive speedup of grid loading. Grid appears practically instant now even with 30k images
 - js-cookie update [Security:High]
 - Improve version checks to give a proper alert for security updates
+- Add Vue router so that you get a proper URL to all the different views
+- A refresh now refreshes the actual view you're watching
 
 # [1.2.2]
 - Update brace-expansion NPM package for frontend [Security:Moderate]
