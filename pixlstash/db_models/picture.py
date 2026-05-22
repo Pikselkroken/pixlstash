@@ -1466,9 +1466,6 @@ class Picture(SQLModel, table=True):
         Fetch faces for a list of picture IDs.
         Returns:
             faces_by_pic: dict[picture_id, list[Face]]
-            hands_by_pic: dict (empty, hand detection removed)
-            face_tags_by_face: dict (empty, face tags removed)
-            hand_tags_by_hand: dict (empty, hand tags removed)
         """
         faces = session.exec(select(Face).where(Face.picture_id.in_(picture_ids))).all()
 

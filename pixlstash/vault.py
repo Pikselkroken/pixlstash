@@ -695,7 +695,7 @@ class Vault:
             if obj is None:
                 return False, None
             value = getattr(obj, attr, None)
-            if attr in {"faces", "hands", "tags"}:
+            if attr in {"faces", "tags"}:
                 try:
                     return len(value or []) > 0, value
                 except Exception:
