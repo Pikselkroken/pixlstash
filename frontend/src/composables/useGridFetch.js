@@ -492,6 +492,12 @@ export function useGridFetch(
         } else if (props.projectViewMode === 'project') {
           _charP.set('project_id', props.selectedProjectId != null ? String(props.selectedProjectId) : 'UNASSIGNED');
         }
+        if (props.referenceFolderIdFilter != null) {
+          _charP.set('reference_folder_id', String(props.referenceFolderIdFilter));
+        }
+        if (props.importSourceFolderFilter != null) {
+          _charP.set('import_source_folder', String(props.importSourceFolderFilter));
+        }
         const _charSuffix = _charP.size ? `&${_charP.toString()}` : '';
         const streamBase =
           `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}`;
