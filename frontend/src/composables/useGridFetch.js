@@ -499,8 +499,12 @@ export function useGridFetch(
           _charP.set('import_source_folder', String(props.importSourceFolderFilter));
         }
         const _charSuffix = _charP.size ? `&${_charP.toString()}` : '';
+        // Build media type format filter params for count and stream URLs.
+        const _formatP = new URLSearchParams();
+        _appendMediaTypeParams(_formatP);
+        const _formatSuffix = _formatP.size ? `&${_formatP.toString()}` : '';
         const streamBase =
-          `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}`;
+          `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}`;
 
         // Splice raw picture metadata into the placeholder grid at `offset`,
         // preserving thumbnail/face data for cells already loaded.
@@ -528,7 +532,7 @@ export function useGridFetch(
         };
 
         // 1. Fast total count — single indexed SQL query.
-        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count?stack_leaders_only=true${_charSuffix}`);
+        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count?stack_leaders_only=true${_charSuffix}${_formatSuffix}`);
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         const total =
           typeof countRes.data?.count === 'number' ? countRes.data.count : 0;
