@@ -645,10 +645,6 @@ def select_pictures_for_listing(
             pics = _enrich_stack_counts(server, pics)
         return pics
     if character_id == "UNASSIGNED":
-        if count_only:
-            return (
-                None  # UNASSIGNED count requires a separate query not implemented here
-            )
         unassigned_project_id = None
         unassigned_project_only = False
         if project_id_raw == "UNASSIGNED":
@@ -661,6 +657,34 @@ def select_pictures_for_listing(
                     "Invalid project_id_raw value %r for UNASSIGNED query; skipping project filter",
                     project_id_raw,
                 )
+        if count_only:
+            return server.vault.db.run_task(
+                Picture.find_unassigned,
+                count_only=True,
+                project_id=unassigned_project_id,
+                only_unassigned_project=unassigned_project_only,
+                format=format,
+                min_score=min_score,
+                max_score=max_score,
+                smart_score_bucket=smart_score_bucket,
+                resolution_bucket=resolution_bucket,
+                face_filter=face_filter,
+                tags_filter=query_params.get("tags_filter") or None,
+                tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
+                tags_confidence_above_filter=query_params.get(
+                    "tags_confidence_above_filter"
+                )
+                or None,
+                tags_confidence_below_filter=query_params.get(
+                    "tags_confidence_below_filter"
+                )
+                or None,
+                picture_ids=(
+                    [int(i) for i in query_params["id"] if str(i).isdigit()]
+                    if query_params.get("id")
+                    else None
+                ),
+            )
         pics = server.vault.db.run_task(
             Picture.find_unassigned,
             sort_mech=sort_mech,
@@ -1187,11 +1211,8 @@ def register_routes(router, server):
             if token_scope is not None and token_scope.resource_type == "character"
             else None
         )
-        # Use count_only=True to run a fast SELECT COUNT(*) rather than
-        # fetching all rows. Character-likeness paths are inherently
-        # non-streamable; we return null in that case. The count may be a
-        # small over-estimate for deployments with hidden-tag post-filtering,
-        # but is exact for the common case.
+        # Use count_only=True to run a fast SELECT COUNT(*) rather than fetching all rows.
+        # The count may be a small over-estimate for deployments with hidden-tag post-filtering,
         sort_mech = (
             SortMechanism.from_string(sort, descending=descending) if sort else None
         )
