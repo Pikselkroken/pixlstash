@@ -668,10 +668,12 @@ function applyRouteToStores() {
   if (name === "all-pictures") {
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
+    if (selectionStore.selectedSetIds.length > 0)
+      selectionStore.selectedSetIds = [];
     if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
       selectionStore.selectedCharacter = ALL_PICTURES_ID;
-    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
+    if (selectionStore.selectedCharacterIds.length > 0)
+      selectionStore.selectedCharacterIds = [];
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
     projectStore.projectViewMode = "global";
     projectStore.selectedProjectId = null;
@@ -687,7 +689,8 @@ function applyRouteToStores() {
       : [];
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
+    if (selectionStore.selectedSetIds.length > 0)
+      selectionStore.selectedSetIds = [];
     if (String(selectionStore.selectedCharacter) !== charId)
       selectionStore.selectedCharacter = charId;
     if (!_sameNumIds(selectionStore.selectedCharacterIds, ids))
@@ -705,10 +708,14 @@ function applyRouteToStores() {
   } else if (name === "scrapheap") {
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
-    if (String(selectionStore.selectedCharacter) !== String(SCRAPHEAP_PICTURES_ID))
+    if (selectionStore.selectedSetIds.length > 0)
+      selectionStore.selectedSetIds = [];
+    if (
+      String(selectionStore.selectedCharacter) !== String(SCRAPHEAP_PICTURES_ID)
+    )
       selectionStore.selectedCharacter = SCRAPHEAP_PICTURES_ID;
-    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
+    if (selectionStore.selectedCharacterIds.length > 0)
+      selectionStore.selectedCharacterIds = [];
     selectionStore.lastSelectedCharacterLabel = "Scrapheap";
     projectStore.projectViewMode = "global";
     projectStore.selectedProjectId = null;
@@ -727,9 +734,11 @@ function applyRouteToStores() {
         : [];
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedCharacter = null;
-    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
+    if (selectionStore.selectedCharacterIds.length > 0)
+      selectionStore.selectedCharacterIds = [];
     const nextSet = ids[0] ?? null;
-    if (selectionStore.selectedSet !== nextSet) selectionStore.selectedSet = nextSet;
+    if (selectionStore.selectedSet !== nextSet)
+      selectionStore.selectedSet = nextSet;
     if (!_sameNumIds(selectionStore.selectedSetIds, ids))
       selectionStore.selectedSetIds = ids;
     if (ids.length > 1 && modeRaw) {
@@ -750,9 +759,11 @@ function applyRouteToStores() {
       Number.isFinite(projectId) && projectId > 0 ? projectId : null;
     if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
       selectionStore.selectedCharacter = ALL_PICTURES_ID;
-    if (selectionStore.selectedCharacterIds.length > 0) selectionStore.selectedCharacterIds = [];
+    if (selectionStore.selectedCharacterIds.length > 0)
+      selectionStore.selectedCharacterIds = [];
     selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0) selectionStore.selectedSetIds = [];
+    if (selectionStore.selectedSetIds.length > 0)
+      selectionStore.selectedSetIds = [];
     selectionStore.selectedFolderFilter = null;
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
   }
@@ -978,9 +989,15 @@ async function fetchConfig() {
       res.data.similarity_character ?? res.data.selected_similarity_character;
     sortStore.selectedSimilarityCharacter =
       similarityValue ?? sortStore.selectedSimilarityCharacter ?? null;
-    userPrefsStore.hiddenTags = Array.isArray(res.data.hidden_tags)
+    const newHiddenTags = Array.isArray(res.data.hidden_tags)
       ? res.data.hidden_tags
       : [];
+    if (
+      userPrefsStore.hiddenTags.length !== newHiddenTags.length ||
+      userPrefsStore.hiddenTags.some((tag, i) => tag !== newHiddenTags[i])
+    ) {
+      userPrefsStore.hiddenTags = newHiddenTags;
+    }
     userPrefsStore.applyTagFilter = Boolean(res.data.apply_tag_filter);
     const rawPt = res.data.smart_score_penalised_tags;
     if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
@@ -1306,7 +1323,9 @@ watch(
   [() => sortStore.selectedSort, () => sortStore.selectedDescending],
   () => {
     patchConfigUIOptions();
-    gridStore.refreshGridVersion();
+    // No refreshGridVersion() here: ImageGrid's selection watch already fires
+    // when selectedSort/selectedDescending props change, so calling
+    // refreshGridVersion() would produce a redundant second grid fetch.
   },
 );
 

@@ -972,9 +972,7 @@ class Picture(SQLModel, table=True):
         # former _get_stack_leader_ids() round-trip + IN(ids) approach, which
         # was unacceptably slow on large libraries.
         if stack_leaders_only:
-            query = query.where(
-                or_(cls.stack_id.is_(None), cls.stack_position == 0)
-            )
+            query = query.where(or_(cls.stack_id.is_(None), cls.stack_position == 0))
         if comfyui_conditions:
             query = query.where(or_(*comfyui_conditions))
 

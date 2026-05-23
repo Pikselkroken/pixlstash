@@ -72,7 +72,9 @@ def select_pictures_for_listing(
     row count, which the historical implementation incorrectly conflated with
     end-of-stream. For the CHARACTER_LIKENESS sort the function sets
     `stream_state["oneshot"] = True` to signal that the caller should treat
-    the response as complete (no further pagination).
+    the response as complete (no further pagination). CHARACTER_LIKENESS sorts
+    in memory but still supports offset/limit slicing, so it uses the normal
+    over-fetch probe instead of oneshot.
     """
     effective_limit = limit + 1 if stream_state is not None else limit
 
@@ -606,22 +608,23 @@ def select_pictures_for_listing(
                 stream_state["sql_count"] = 0
                 stream_state["oneshot"] = True
             return []
-        # CHARACTER_LIKENESS sort is inherently non-streamable: the underlying
-        # routine loads and ranks all candidates in memory. Signal one-shot to
-        # the streaming caller so it stops paginating after this batch.
-        if stream_state is not None:
-            stream_state["oneshot"] = True
+        # CHARACTER_LIKENESS sorts all candidates in memory so it does not
+        # use SQL pagination, but offset/limit slicing still works correctly.
+        # Over-fetch by one (effective_limit) so the done flag is derived from
+        # whether more results exist, not hardcoded as oneshot.
         pics = find_pictures_by_character_likeness(
             server,
             character_id,
             reference_character_id,
             offset,
-            limit,
+            effective_limit,
             descending,
             candidate_ids=candidate_ids,
         )
         if stream_state is not None:
             stream_state["sql_count"] = len(pics)
+            if len(pics) > limit:
+                pics = pics[:limit]
         if pics:
             hidden_ids = _fetch_hidden_picture_ids(
                 server,
@@ -642,7 +645,9 @@ def select_pictures_for_listing(
         return pics
     if character_id == "UNASSIGNED":
         if count_only:
-            return None  # UNASSIGNED count requires a separate query not implemented here
+            return (
+                None  # UNASSIGNED count requires a separate query not implemented here
+            )
         unassigned_project_id = None
         unassigned_project_only = False
         if project_id_raw == "UNASSIGNED":
@@ -1154,7 +1159,9 @@ def register_routes(router, server):
         # non-streamable; we return null in that case. The count may be a
         # small over-estimate for deployments with hidden-tag post-filtering,
         # but is exact for the common case.
-        sort_mech = SortMechanism.from_string(sort, descending=descending) if sort else None
+        sort_mech = (
+            SortMechanism.from_string(sort, descending=descending) if sort else None
+        )
         if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
             return {"count": None}
         count = select_pictures_for_listing(
@@ -1172,4 +1179,3 @@ def register_routes(router, server):
             scope_character_id=scope_character_id,
         )
         return {"count": count}
-
