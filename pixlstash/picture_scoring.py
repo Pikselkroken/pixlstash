@@ -492,6 +492,7 @@ def find_pictures_by_character_likeness_sql(
     limit: int,
     descending: bool,
     candidate_ids: list[int] | None = None,
+    deleted_only: bool = False,
 ) -> list[dict]:
     """List pictures by character likeness using SQL ORDER BY with LIMIT/OFFSET.
 
@@ -506,6 +507,7 @@ def find_pictures_by_character_likeness_sql(
         limit: Maximum number of rows to return.
         descending: If True, highest-likeness pictures come first.
         candidate_ids: Optional list of picture ids to restrict the search to.
+        deleted_only: If True, restrict to deleted (scrapheap) pictures only.
 
     Returns:
         List of picture metadata dicts with a "character_likeness" field added.
@@ -542,10 +544,13 @@ def find_pictures_by_character_likeness_sql(
         order_expr = (
             desc(text("likeness_score")) if descending else asc(text("likeness_score"))
         )
+        deleted_filter = (
+            Picture.deleted.is_(True) if deleted_only else Picture.deleted.is_(False)
+        )
         query = (
             select(Face.picture_id, max_likeness)
             .join(Picture, Face.picture_id == Picture.id)
-            .where(Picture.deleted.is_(False))
+            .where(deleted_filter)
             .group_by(Face.picture_id)
             .order_by(order_expr)
             .limit(limit)
@@ -610,6 +615,7 @@ def count_pictures_by_character_likeness(
     server,
     character_id,
     candidate_ids: list[int] | None = None,
+    deleted_only: bool = False,
 ) -> int:
     """Count pictures that would be returned by a CHARACTER_LIKENESS sort query.
 
@@ -620,16 +626,20 @@ def count_pictures_by_character_likeness(
         server: The server object.
         character_id: Character id filter (int, None/"ALL", or "UNASSIGNED").
         candidate_ids: Optional list of picture ids to restrict the count to.
+        deleted_only: If True, restrict to deleted (scrapheap) pictures only.
 
     Returns:
         Total number of distinct matching pictures.
     """
 
     def run_count(session: Session) -> int:
+        deleted_filter = (
+            Picture.deleted.is_(True) if deleted_only else Picture.deleted.is_(False)
+        )
         query = (
             select(func.count(func.distinct(Face.picture_id)))
             .join(Picture, Face.picture_id == Picture.id)
-            .where(Picture.deleted.is_(False))
+            .where(deleted_filter)
         )
         if character_id == "UNASSIGNED":
             query = query.where(Face.character_id.is_(None))
