@@ -758,6 +758,7 @@ import {
   nextTick,
   onUnmounted,
 } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -1558,6 +1559,12 @@ onMounted(() => {
   window.addEventListener("drop", clearGridDragOverlay, true);
   window.addEventListener("dragend", clearGridDragOverlay, true);
   window.addEventListener("keydown", handleKeyDown);
+
+  // Restore overlay from URL on initial page load (e.g. after a page refresh).
+  const overlayIdFromUrl = _overlayRoute.query.overlay;
+  if (overlayIdFromUrl && !overlayOpen.value) {
+    openOverlay({ id: overlayIdFromUrl });
+  }
 
   fetchAvailablePlugins();
   fetchAllPicturesCount();
@@ -3366,6 +3373,44 @@ const {
 // ============================================================
 const overlayOpen = ref(false);
 const overlayImageId = ref(null);
+
+// ---- Overlay route tracking ----
+const _overlayRoute = useRoute();
+const _overlayRouter = useRouter();
+// Prevents the route watcher from re-triggering when we push the route ourselves.
+let _overlayRoutePushPending = false;
+
+function _pushOverlayRoute(id) {
+  _overlayRoutePushPending = true;
+  const query = { ..._overlayRoute.query, overlay: String(id) };
+  _overlayRouter.replace({ query }).finally(() => {
+    _overlayRoutePushPending = false;
+  });
+}
+
+function _removeOverlayRoute() {
+  _overlayRoutePushPending = true;
+  const { overlay: _removed, ...rest } = _overlayRoute.query;
+  _overlayRouter.replace({ query: rest }).finally(() => {
+    _overlayRoutePushPending = false;
+  });
+}
+
+watch(
+  () => _overlayRoute.query.overlay,
+  (id) => {
+    if (_overlayRoutePushPending) return;
+    if (id) {
+      if (!overlayOpen.value || String(overlayImageId.value) !== String(id)) {
+        openOverlay({ id });
+      }
+    } else {
+      if (overlayOpen.value) {
+        closeOverlay();
+      }
+    }
+  },
+);
 const overlayInitialExpandedStackIds = ref([]);
 const overlayGuestScore = computed(() => {
   const id = overlayImageId.value;
@@ -3804,12 +3849,14 @@ async function openOverlay(img) {
   );
   overlayImageId.value = img.id;
   overlayOpen.value = true;
+  _pushOverlayRoute(img.id);
 }
 
 function closeOverlay() {
   overlayOpen.value = false;
   overlayImageId.value = null;
   overlayInitialExpandedStackIds.value = [];
+  _removeOverlayRoute();
   if (comfyuiRunner.value?.comfyuiPendingOverlayRefresh) {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
   }

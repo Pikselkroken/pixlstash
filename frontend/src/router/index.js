@@ -16,6 +16,9 @@ import App from "../App.vue";
 //   /project/:id                 → Project view
 //   /scrapheap                   → Scrapheap
 //
+//   Any of the above routes may also carry:
+//   ?overlay=<pictureId>         → Open ImageOverlay for that picture
+//
 // Folder filters are NOT encoded in the URL — they carry complex payloads
 // (path strings, reference-folder IDs) that are hard to round-trip safely.
 // URL support for folder filters can be added in a future phase.
