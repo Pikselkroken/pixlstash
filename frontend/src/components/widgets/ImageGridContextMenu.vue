@@ -350,9 +350,7 @@ function onDocumentMousedown(event) {
   // Don't close when clicking inside a Vuetify overlay (e.g. AddToSet sub-menu)
   if (event.target.closest?.(".v-overlay-container")) return;
   // Don't close when clicking inside teleported flyout menus from the Add-to controls
-  if (event.target.closest?.(".add-to-project-menu")) return;
-  if (event.target.closest?.(".add-to-set-menu")) return;
-  if (event.target.closest?.(".add-to-character-menu")) return;
+  if (event.target.closest?.(".ate-menu")) return;
   emit("close");
 }
 
