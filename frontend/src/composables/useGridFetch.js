@@ -426,39 +426,58 @@ export function useGridFetch(
     try {
       let images = [];
 
-      // ─── FAST GRID PATH ─────────────────────────────────────────────────────
-      // Bypasses sort/filter/search to establish the optimised loading baseline.
-      // Set USE_FAST_GRID_PATH = false to restore sort/filter/search features.
-      // Strategy:
-      //   1. Fast SELECT COUNT(*) → total
-      //   2. Pre-build placeholder grid so END key works before streaming starts
-      //   3. First batch (visible area) + last batch (END cells) in parallel
-      //   4. Background stream fills the middle at BG_BATCH rows per request
-      const USE_FAST_GRID_PATH = true;
-      // Fast path is not applicable to text search (Python-level post-filter
-      // breaks LIMIT/OFFSET count accuracy) or non-streamable sort views.
-      // CHARACTER_LIKENESS is now handled via a registered SQLite scalar function
-      // so it supports SQL ORDER BY + LIMIT/OFFSET and is compatible with the fast path.
       const _hasSearch = !!props.searchQuery?.trim();
       const _isLikenessSort = props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
-      // Fast path is also not applicable when the character view requires
-      // special backend logic that either returns null for count (UNASSIGNED).
-      // SCRAPHEAP is explicitly allowed: the backend maps character_id=SCRAPHEAP
-      // to only_deleted=True in both the /pictures/stream and /pictures/count
-      // endpoints, so LIMIT/OFFSET and COUNT(*) both work correctly.
-      const _fastCharIds = normalizedSelectedCharacterIds.value;
-      const _fastSelChar = props.selectedCharacter;
-      const _isUnassignedView =
-        _fastSelChar === props.allPicturesId && !!props.unassignedOnlyFilter;
-      const _isSpecialCharView =
-        _fastSelChar != null &&
-        _fastSelChar !== '' &&
-        _fastSelChar !== props.allPicturesId &&
-        _fastSelChar !== props.scrapheapPicturesId &&
-        !String(_fastSelChar).match(/^\d+$/);
-      if (USE_FAST_GRID_PATH && !_hasSearch && !_isLikenessSort && !_isUnassignedView && !_isSpecialCharView) {
-        // For sorted fetches the progress bar is meaningless in the fast path
-        // — data is already in the DB, LIMIT/OFFSET is instant.
+
+      if (_isLikenessSort) {
+        const threshold = getStackThreshold(props.stackThreshold);
+        const likenessGroupParams = buildLikenessGroupQueryParams();
+        const url = `${
+          props.backendUrl
+        }/pictures/likeness-groups?threshold=${encodeURIComponent(threshold)}${
+          likenessGroupParams ? `&${likenessGroupParams}` : ""
+        }`;
+        const res = await apiClient.get(url);
+        const data = await res.data;
+        if (fetchAllGridImages.lastRequestId !== requestId) {
+          if (isSortedFetch && options?.showProgress === true)
+            completeSmartScoreProgress(loadId, 0, false);
+          return;
+        }
+        const likenessGroupImages = Array.isArray(data) ? data : [];
+        images = likenessGroupImages.map((img) => {
+          const stackIndex =
+            typeof img.stack_index === "number"
+              ? img.stack_index
+              : typeof img.stackIndex === "number"
+                ? img.stackIndex
+                : null;
+          return {
+            ...img,
+            stackIndex,
+            stackColor:
+              typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
+          };
+        });
+      } else if (_hasSearch) {
+        // Use /pictures/search endpoint for text search
+        const params = buildPictureIdsQueryParams();
+        const url = `${
+          props.backendUrl
+        }/pictures/search?query=${encodeURIComponent(
+          props.searchQuery.trim(),
+        )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
+        const res = await apiClient.get(url);
+        const data = await res.data;
+        images = data;
+      } else {
+        // Streaming: COUNT(*) → placeholder grid → parallel first/last batches → background fill.
+        //   1. Fast SELECT COUNT(*) → total
+        //   2. Pre-build placeholder grid so END key works before streaming starts
+        //   3. First batch (visible area) + last batch (END cells) in parallel
+        //   4. Background stream fills the middle at BG_BATCH rows per request
+        const _charIds = normalizedSelectedCharacterIds.value;
+        const _selChar = props.selectedCharacter;
         if (isSortedFetch && options?.showProgress === true) {
           completeSmartScoreProgress(loadId, 0, true);
         }
@@ -507,25 +526,30 @@ export function useGridFetch(
               _charP.set('project_id', props.selectedProjectId != null ? String(props.selectedProjectId) : 'UNASSIGNED');
             }
           }
-        } else if (_fastCharIds.length > 1) {
-          for (const id of _fastCharIds) _charP.append('character_ids', String(id));
+        } else if (_charIds.length > 1) {
+          for (const id of _charIds) _charP.append('character_ids', String(id));
           _charP.set('character_mode', props.characterMultiMode ?? 'union');
           // Only apply project filter when all selected characters share the same project.
           if (props.projectViewMode === 'project') {
-            const _pidSet = new Set(_fastCharIds.map(id => props.characterProjectIds?.[id] ?? null));
+            const _pidSet = new Set(_charIds.map(id => props.characterProjectIds?.[id] ?? null));
             if (_pidSet.size === 1) {
               const _pid = [..._pidSet][0];
               _charP.set('project_id', _pid != null ? String(_pid) : 'UNASSIGNED');
             }
           }
-        } else if (_fastSelChar === String(props.scrapheapPicturesId)) {
+        } else if (_selChar === String(props.scrapheapPicturesId)) {
           _charP.set('only_deleted', 'true');
         } else if (
-          _fastSelChar != null &&
-          _fastSelChar !== '' &&
-          _fastSelChar !== props.allPicturesId
+          _selChar != null &&
+          _selChar !== '' &&
+          _selChar !== props.allPicturesId
         ) {
-          _charP.set('character_id', String(_fastSelChar));
+          _charP.set('character_id', String(_selChar));
+          if (props.projectViewMode === 'project') {
+            _charP.set('project_id', props.selectedProjectId != null ? String(props.selectedProjectId) : 'UNASSIGNED');
+          }
+        } else if (_selChar === props.allPicturesId && props.unassignedOnlyFilter) {
+          _charP.set('character_id', String(props.unassignedPicturesId));
           if (props.projectViewMode === 'project') {
             _charP.set('project_id', props.selectedProjectId != null ? String(props.selectedProjectId) : 'UNASSIGNED');
           }
@@ -538,7 +562,7 @@ export function useGridFetch(
         if (props.importSourceFolderFilter != null) {
           _charP.set('import_source_folder', String(props.importSourceFolderFilter));
         }
-        // FAST PATH FILTER [1]: file path prefix
+        // Filter params
         if (props.filePathPrefixFilter != null) {
           _charP.set('file_path_prefix', String(props.filePathPrefixFilter));
         }
@@ -551,24 +575,24 @@ export function useGridFetch(
         // Each labelled block corresponds to a separate commit — remove any single
         // block to bisect a regression.
         const _filterP = new URLSearchParams();
-        // FAST PATH FILTER [2]: score range
+        // Filter params: score range
         if (props.minScoreFilter != null) _filterP.set('min_score', String(props.minScoreFilter));
         if (props.maxScoreFilter != null) _filterP.set('max_score', String(props.maxScoreFilter));
-        // FAST PATH FILTER [3]: smart score bucket
+        // Filter params: smart score bucket
         if (props.smartScoreBucketFilter != null) _filterP.set('smart_score_bucket', String(props.smartScoreBucketFilter));
-        // FAST PATH FILTER [4]: resolution bucket
+        // Filter params: resolution bucket
         if (props.resolutionBucketFilter != null) _filterP.set('resolution_bucket', String(props.resolutionBucketFilter));
-        // FAST PATH FILTER [5]: ComfyUI model / LoRA
+        // Filter params: ComfyUI model / LoRA
         (props.comfyuiModelFilter || []).forEach((m) => _filterP.append('comfyui_model', m));
         (props.comfyuiLoraFilter || []).forEach((l) => _filterP.append('comfyui_lora', l));
-        // FAST PATH FILTER [6]: tag filters
+        // Filter params: tag filters
         (props.tagFilter || []).forEach((t) => _filterP.append('tag', t));
         (props.tagRejectedFilter || []).forEach((t) => _filterP.append('rejected_tag', t));
         (props.tagConfidenceAboveFilter || []).forEach((e) => _filterP.append('tag_confidence_above', e));
         (props.tagConfidenceBelowFilter || []).forEach((e) => _filterP.append('tag_confidence_below', e));
-        // FAST PATH FILTER [7]: face bbox filter
+        // Filter params: face bbox filter
         if (props.faceBboxFilter != null) _filterP.set('face_filter', String(props.faceBboxFilter));
-        // FAST PATH FILTER [8]: shared only
+        // Filter params: shared only
         if (props.sharedOnlyFilter) _filterP.set('shared_only', 'true');
         const _filterSuffix = _filterP.size ? `&${_filterP.toString()}` : '';
         const streamBase =
@@ -685,278 +709,19 @@ export function useGridFetch(
         }
 
         // Sync lastFetchedGridImages so that removeImagesById/rebuildGridImagesFromLastFetch
-        // works correctly after a delete when the fast path was used.
+        // works correctly after a delete during streaming.
         lastFetchedGridImages.value = allGridImages.value.filter(
           (img) => img && img.id != null,
         );
-        return; // early return — existing sort/filter/search paths are bypassed
+        return;
       }
-      // ─── END FAST GRID PATH ─────────────────────────────────────────────────
 
-      if (props.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
-        const threshold = getStackThreshold(props.stackThreshold);
-        const likenessGroupParams = buildLikenessGroupQueryParams();
-        const url = `${
-          props.backendUrl
-        }/pictures/likeness-groups?threshold=${encodeURIComponent(threshold)}${
-          likenessGroupParams ? `&${likenessGroupParams}` : ""
-        }`;
-        const res = await apiClient.get(url);
-        const data = await res.data;
-        if (fetchAllGridImages.lastRequestId !== requestId) {
-          if (isSortedFetch && options?.showProgress === true)
-            completeSmartScoreProgress(loadId, 0, false);
-          return;
-        }
-        const likenessGroupImages = Array.isArray(data) ? data : [];
-        images = likenessGroupImages.map((img) => {
-          const stackIndex =
-            typeof img.stack_index === "number"
-              ? img.stack_index
-              : typeof img.stackIndex === "number"
-                ? img.stackIndex
-                : null;
-          return {
-            ...img,
-            stackIndex,
-            stackColor:
-              typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
-          };
-        });
-      } else if (props.searchQuery && props.searchQuery.trim()) {
-        // Use /pictures/search endpoint for text search
-        const params = buildPictureIdsQueryParams();
-        const url = `${
-          props.backendUrl
-        }/pictures/search?query=${encodeURIComponent(
-          props.searchQuery.trim(),
-        )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
-        const res = await apiClient.get(url);
-        const data = await res.data;
-        images = data;
-      } else if (hasSetSelection.value && !isSetOverlapView.value) {
-        const params = buildPictureIdsQueryParams();
-        const url = `${props.backendUrl}/picture_sets/${primarySelectedSetId.value}${
-          params ? `?${params}` : ""
-        }`;
-        const res = await apiClient.get(url);
-        const data = await res.data;
-        images = data.pictures || [];
-      } else {
-        // STREAMING PATH — incrementally fetches and commits batches.
-        //
-        // Completion is determined by the backend's `done` flag (derived from
-        // the SQL pre-filter row count), not by comparing the response length
-        // against `batch_limit`.  This is the key reliability property: even
-        // when a batch is shrunk by post-filtering (hidden tags, stack-leader
-        // dedup) the loader keeps fetching until the server signals done.
-        const params = buildPictureIdsQueryParams();
-        // 100 items fills the visible viewport + render buffer in one batch;
-        // subsequent batches use a larger size for background throughput.
-        const FIRST_BATCH_LIMIT = 100;
-        const NEXT_BATCH_LIMIT = 1000;
-        const MAX_BATCHES = 200; // safety cap; 200 * 1000 = 200k rows
-        let streamOffset = 0;
-        let streamBatchLimit = FIRST_BATCH_LIMIT;
-        let firstBatch = true;
-        let accumulatedRaw = [];
-        let batchesFetched = 0;
-        // Fire a fast SELECT COUNT(*) in parallel with the stream so that the
-        // grid can be pre-extended with placeholders before streaming finishes.
-        // This lets the END key jump to the real bottom immediately.
-        const countUrl = `${props.backendUrl}/pictures/count${params ? `?${params}` : ''}`;
-        const countPromise = apiClient
-          .get(countUrl)
-          .then((r) => (typeof r.data?.count === 'number' ? r.data.count : null))
-          .catch(() => null);
-
-        const commitStreamingBatch = (isFirst) => {
-          lastFetchedGridImages.value = accumulatedRaw.slice();
-          syncExpandAllStacksFromFetchedImages();
-          // TODO: re-enable collapseStackImages once streaming baseline is stable
-          const collapsed = accumulatedRaw;
-          const nextIdSet = new Set(
-            Array.isArray(collapsed)
-              ? collapsed
-                  .map((img) => getPictureId(img?.id))
-                  .filter((id) => id !== null)
-              : [],
-          );
-          if (isFirst) {
-            const shouldHighlight =
-              highlightNextFetch.value && hasLoadedOnce.value;
-            if (shouldHighlight) {
-              const newIds = [];
-              nextIdSet.forEach((id) => {
-                if (!previousImageIds.has(id)) newIds.push(id);
-              });
-              if (newIds.length) triggerNewImageHighlight(newIds);
-            }
-            previousImageIds.clear();
-          }
-          nextIdSet.forEach((id) => previousImageIds.add(id));
-          if (isFirst) {
-            highlightNextFetch.value = false;
-            hasLoadedOnce.value = true;
-          }
-          const newImages = mapGridImages(collapsed);
-          if (isFirst) {
-            resetThumbnailState();
-          }
-          if (overlayOpen.value) {
-            pendingGridImages.value = newImages;
-            pendingOverlayGridRefresh.value = true;
-          } else {
-            // Preserve any tail placeholders (from the parallel count pre-extension)
-            // so they aren't truncated on each batch commit.
-            const current = allGridImages.value;
-            allGridImages.value =
-              current.length > newImages.length
-                ? [...newImages, ...current.slice(newImages.length)]
-                : newImages;
-          }
-          if (props.sharedOnlyFilter && !isReadOnly.value) {
-            const next = new Set(sharedPictureIds.value);
-            for (const img of newImages) {
-              if (img.id) next.add(img.id);
-            }
-            sharedPictureIds.value = next;
-          }
-          if (isSetOverlapView.value) {
-            totalCurrentCategoryCount.value = newImages.length;
-          }
-          if (isFirst) {
-            const cols = props.columns || 1;
-            const windowCount = Math.max(
-              cols,
-              divisibleViewWindow.value || cols,
-            );
-            if (!fetchStartedWithPreserveScroll) {
-              visibleStart.value = 0;
-              visibleEnd.value = Math.min(newImages.length, windowCount);
-            } else {
-              visibleEnd.value = Math.min(visibleEnd.value, newImages.length);
-              if (visibleStart.value > visibleEnd.value)
-                visibleStart.value = Math.max(0, visibleEnd.value - 1);
-            }
-            // Always fire thumbnail fetch for the first batch regardless of
-            // initialRender state. A second fetch call (e.g. after
-            // apply_tag_filter is applied) replaces allGridImages with fresh
-            // objects that have null thumbnails; without this, those images
-            // would have no thumbnail URL until the next updateVisibleThumbnails
-            // call. fetchThumbnailsBatch synchronously pre-fills the URLs from
-            // imported_at so images start rendering immediately.
-            const prefetchEnd = Math.min(
-              newImages.length,
-              visibleEnd.value + divisibleViewWindow.value,
-            );
-            fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
-          }
-          return null;
-        };
-
-        while (batchesFetched < MAX_BATCHES) {
-          const url = `${props.backendUrl}/pictures/stream?offset=${streamOffset}&batch_limit=${streamBatchLimit}${
-            params ? `&${params}` : ""
-          }`;
-          const res = await apiClient.get(url);
-          const data = await res.data;
-          if (fetchAllGridImages.lastRequestId !== requestId) {
-            if (isSortedFetch && options?.showProgress === true)
-              completeSmartScoreProgress(loadId, 0, false);
-            return;
-          }
-          const batchPictures = Array.isArray(data?.pictures)
-            ? data.pictures
-            : [];
-          accumulatedRaw = accumulatedRaw.concat(batchPictures);
-          commitStreamingBatch(firstBatch);
-          const isFirstBatch = firstBatch;
-          firstBatch = false;
-          batchesFetched += 1;
-          if (isFirstBatch) {
-            // Expand the render buffer immediately so the prefetched cells
-            // are added to the DOM and can show thumbnails as they arrive.
-            // Thumbnail URLs are already pre-filled synchronously by
-            // fetchThumbnailsBatch, so there is no need to await the POST.
-            initialRender.value = false;
-            // When the parallel count response arrives, pre-extend allGridImages
-            // with placeholder items so the END key jumps to the real bottom
-            // before streaming has finished filling every item.
-            countPromise.then((total) => {
-              if (fetchAllGridImages.lastRequestId !== requestId) return;
-              if (overlayOpen.value) return;
-              if (typeof total !== 'number') return;
-              const current = allGridImages.value;
-              if (total <= current.length) return;
-              const extra = total - current.length;
-              const base = current.length;
-              const placeholders = Array.from({ length: extra }, (_, i) => ({
-                id: null,
-                idx: base + i,
-              }));
-              allGridImages.value = [...current, ...placeholders];
-            });
-          } else {
-            // Keep thumbnails current for any newly visible range.
-            updateVisibleThumbnails();
-          }
-          if (data?.done) break;
-          if (
-            typeof data?.next_offset !== "number" ||
-            data.next_offset <= streamOffset
-          ) {
-            // Defensive: backend signalled non-progressing next_offset.
-            break;
-          }
-          streamOffset = data.next_offset;
-          streamBatchLimit = NEXT_BATCH_LIMIT;
-          // Yield to the event loop so the UI can paint between batches.
-          await nextTick();
-        }
-        images = accumulatedRaw;
-        // Trim leftover tail placeholders from the parallel count pre-extension.
-        // The SELECT COUNT(*) may be a slight over-estimate when the hidden-tag
-        // post-filter removes pictures that were counted at the SQL layer.
-        if (!overlayOpen.value && allGridImages.value.length > images.length) {
-          allGridImages.value = allGridImages.value.slice(0, images.length);
-        }
-        // Streaming path has already applied all per-batch post-processing.
-        // Skip the legacy single-shot post-process block below.
-        if (fetchAllGridImages.lastRequestId !== requestId) {
-          if (isSortedFetch && options?.showProgress === true)
-            completeSmartScoreProgress(loadId, 0, false);
-          return;
-        }
-        await refreshExpandedStacksAfterFetch();
-        await maybeRefreshOverlayForComfyui();
-        requestAnimationFrame(() => {
-          if (initialRender.value) {
-            initialRender.value = false;
-            updateVisibleThumbnails();
-          }
-        });
-        lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
-        if (isSortedFetch) {
-          const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
-          completeSmartScoreProgress(loadId, elapsedMs, true);
-        }
-        // Mark the streaming branch as handled and short-circuit the legacy
-        // post-process block by jumping ahead via a flag.
-        fetchAllGridImages._streamingHandled = true;
-      }
       if (fetchAllGridImages.lastRequestId !== requestId) {
         if (isSortedFetch && options?.showProgress === true)
           completeSmartScoreProgress(loadId, 0, false);
         return;
       }
-      if (fetchAllGridImages._streamingHandled) {
-        // Streaming branch already did its own post-processing per batch and
-        // finalized the load. Reset the flag and skip the legacy single-shot
-        // post-process below.
-        fetchAllGridImages._streamingHandled = false;
-      } else {
-        lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
+      lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
       syncExpandAllStacksFromFetchedImages();
       images = collapseStackImages(images);
       const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
@@ -1036,7 +801,6 @@ export function useGridFetch(
       if (isSortedFetch) {
         const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
         completeSmartScoreProgress(loadId, elapsedMs, true);
-      }
       }
     } catch (e) {
       if (fetchAllGridImages.lastRequestId !== requestId) {

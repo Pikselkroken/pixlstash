@@ -1133,8 +1133,9 @@ class Picture(SQLModel, table=True):
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
         guest_token_id: Optional[int] = None,
+        count_only: bool = False,
     ):
-        query = select(Picture)
+        query = select(func.count(cls.id)) if count_only else select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
             enforce_stack_assignment=True,
             assignment_project_id=project_id,
@@ -1291,6 +1292,8 @@ class Picture(SQLModel, table=True):
             )
 
         select_fields = metadata_fields or cls.metadata_fields()
+        if count_only:
+            return session.execute(query).scalar_one()
         if select_fields:
             select_fields = list(set(select_fields) | {"id"})
             scalar_attrs = [
