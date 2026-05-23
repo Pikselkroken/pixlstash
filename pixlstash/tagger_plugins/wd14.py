@@ -500,6 +500,9 @@ class WD14Plugin(TaggerPlugin):
     requires_download: bool = True
     default_enabled: bool = False
 
+    def __init__(self) -> None:
+        self._service: "WD14Service | None" = None  # noqa: F821
+
     # ------------------------------------------------------------------
     # Infrastructure binding
     # ------------------------------------------------------------------

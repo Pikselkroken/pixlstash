@@ -60,6 +60,7 @@ from pixlstash.routes.import_folders import (
 from pixlstash.routes.filesystem import create_router as create_filesystem_router
 from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
+from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -116,6 +117,10 @@ API_OPENAPI_TAGS = [
     {
         "name": "projects",
         "description": "Project management, including character/set scoping and file attachments.",
+    },
+    {
+        "name": "taggers",
+        "description": "Tagger plugin registry, artifact downloads and deletion.",
     },
 ]
 
@@ -1023,6 +1028,11 @@ class Server:
             create_filesystem_router(self),
             prefix=API_V1_PREFIX,
             tags=["config"],
+        )
+        self.api.include_router(
+            create_taggers_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["taggers"],
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.
         self.api.include_router(

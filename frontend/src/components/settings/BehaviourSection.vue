@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import TagPluginsTable from "../widgets/TagPluginsTable.vue";
+import DescriptionPluginsTable from "../widgets/DescriptionPluginsTable.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -28,25 +30,9 @@ const applyTagFilterLoading = ref(false);
 const keepModelsInMemory = ref(true);
 const keepModelsInMemoryLoading = ref(false);
 const keepModelsInMemoryError = ref("");
-const wd14TaggerEnabled = ref(true);
-const wd14TaggerLoading = ref(false);
-const wd14TaggerError = ref("");
-const customTaggerEnabled = ref(true);
-const customTaggerLoading = ref(false);
-const customTaggerError = ref("");
-const WD14_THRESHOLD_DEFAULT = 85;
-const CUSTOM_TAGGER_THRESHOLD_OFFSET_DEFAULT = 0;
-const wd14ThresholdValue = ref(WD14_THRESHOLD_DEFAULT);
-const wd14ThresholdLoading = ref(false);
-const wd14ThresholdError = ref("");
-const customTaggerThresholdOffsetValue = ref(
-  CUSTOM_TAGGER_THRESHOLD_OFFSET_DEFAULT,
-);
-const customTaggerThresholdOffsetLoading = ref(false);
-const customTaggerThresholdOffsetError = ref("");
-const labelThresholdsDialogOpen = ref(false);
-const labelThresholdsData = ref([]);
-const labelThresholdsLoading = ref(false);
+const taggerPlugins = ref([]);
+const taggerSettings = ref({});
+const taggerLoading = ref(false);
 const VRAM_BUDGET_MIN_GB = 2;
 const VRAM_BUDGET_STEP_GB = 2;
 const VRAM_BUDGET_MAX_GB = 12;
@@ -65,10 +51,6 @@ function resetForm() {
   hiddenTagsError.value = "";
   hiddenTagsSuccess.value = "";
   keepModelsInMemoryError.value = "";
-  wd14TaggerError.value = "";
-  customTaggerError.value = "";
-  wd14ThresholdError.value = "";
-  customTaggerThresholdOffsetError.value = "";
   maxVramGbError.value = "";
   maxVramGbSuccess.value = "";
   maxVramGbValue.value = VRAM_BUDGET_MIN_GB;
@@ -229,17 +211,6 @@ async function fetchBehaviourSettings() {
     } else {
       keepModelsInMemory.value = true;
     }
-    wd14TaggerEnabled.value = res.data?.wd14_tagger_enabled !== false;
-    customTaggerEnabled.value = res.data?.custom_tagger_enabled !== false;
-    const parsedWd14Threshold = Number(res.data?.wd14_threshold);
-    wd14ThresholdValue.value =
-      Number.isFinite(parsedWd14Threshold) && parsedWd14Threshold > 0
-        ? Math.round(parsedWd14Threshold * 100)
-        : WD14_THRESHOLD_DEFAULT;
-    const parsedCustomOffset = Number(res.data?.custom_tagger_threshold_offset);
-    customTaggerThresholdOffsetValue.value = Number.isFinite(parsedCustomOffset)
-      ? Math.round(parsedCustomOffset * 100)
-      : CUSTOM_TAGGER_THRESHOLD_OFFSET_DEFAULT;
     await fetchVramSliderBounds();
     maxVramGbHydrating.value = true;
     const parsedMaxVram = Number(res.data?.max_vram_gb);
@@ -347,89 +318,16 @@ async function setKeepModelsInMemory(value) {
   }
 }
 
-async function setWd14TaggerEnabled(value) {
-  wd14TaggerLoading.value = true;
-  wd14TaggerError.value = "";
+async function fetchTaggerPlugins() {
+  taggerLoading.value = true;
   try {
-    const nextValue = Boolean(value);
-    await apiClient.patch("/users/me/config", {
-      wd14_tagger_enabled: nextValue,
-    });
-    wd14TaggerEnabled.value = nextValue;
-  } catch (e) {
-    wd14TaggerError.value =
-      e?.response?.data?.detail || "Failed to update WD14 tagger setting.";
+    const res = await apiClient.get("/taggers");
+    taggerPlugins.value = res.data?.plugins ?? [];
+    taggerSettings.value = res.data?.settings ?? {};
+  } catch {
+    taggerPlugins.value = [];
   } finally {
-    wd14TaggerLoading.value = false;
-  }
-}
-
-async function setCustomTaggerEnabled(value) {
-  customTaggerLoading.value = true;
-  customTaggerError.value = "";
-  try {
-    const nextValue = Boolean(value);
-    await apiClient.patch("/users/me/config", {
-      custom_tagger_enabled: nextValue,
-    });
-    customTaggerEnabled.value = nextValue;
-  } catch (e) {
-    customTaggerError.value =
-      e?.response?.data?.detail || "Failed to update custom tagger setting.";
-  } finally {
-    customTaggerLoading.value = false;
-  }
-}
-
-async function saveWd14Threshold() {
-  wd14ThresholdLoading.value = true;
-  wd14ThresholdError.value = "";
-  try {
-    const pct = Math.min(
-      100,
-      Math.max(1, Math.round(Number(wd14ThresholdValue.value))),
-    );
-    await apiClient.patch("/users/me/config", { wd14_threshold: pct / 100 });
-    wd14ThresholdValue.value = pct;
-  } catch (e) {
-    wd14ThresholdError.value =
-      e?.response?.data?.detail || "Failed to update WD14 tagger threshold.";
-  } finally {
-    wd14ThresholdLoading.value = false;
-  }
-}
-
-async function saveCustomTaggerThresholdOffset() {
-  customTaggerThresholdOffsetLoading.value = true;
-  customTaggerThresholdOffsetError.value = "";
-  try {
-    const pct = Math.min(
-      50,
-      Math.max(-50, Math.round(Number(customTaggerThresholdOffsetValue.value))),
-    );
-    await apiClient.patch("/users/me/config", {
-      custom_tagger_threshold_offset: pct / 100,
-    });
-    customTaggerThresholdOffsetValue.value = pct;
-  } catch (e) {
-    customTaggerThresholdOffsetError.value =
-      e?.response?.data?.detail ||
-      "Failed to update PixlStash tagger threshold offset.";
-  } finally {
-    customTaggerThresholdOffsetLoading.value = false;
-  }
-}
-
-async function openLabelThresholdsDialog() {
-  labelThresholdsDialogOpen.value = true;
-  labelThresholdsLoading.value = true;
-  try {
-    const res = await apiClient.get("/tagger/label-thresholds");
-    labelThresholdsData.value = res.data;
-  } catch (_) {
-    labelThresholdsData.value = [];
-  } finally {
-    labelThresholdsLoading.value = false;
+    taggerLoading.value = false;
   }
 }
 
@@ -439,8 +337,10 @@ watch(
     if (isOpen) {
       resetForm();
       fetchBehaviourSettings();
+      fetchTaggerPlugins();
     }
   },
+  { immediate: true },
 );
 
 watch(maxVramGbValue, () => {
@@ -461,218 +361,33 @@ watch(maxVramGbValue, () => {
   </div>
   <v-divider class="settings-section-divider" />
   <div class="settings-section">
-    <div class="settings-section-title">Taggers</div>
+    <div class="settings-section-title">Tag Plugins</div>
     <div class="settings-section-desc">
-      Enable or disable each tagger and set its confidence threshold. Changes
-      apply immediately.
+      Enable or disable each tagger. Use the settings icon to adjust per-plugin
+      parameters.
     </div>
-    <div class="settings-tagger-row">
-      <v-tooltip text="Primarily trained on anime" location="top">
-        <template #activator="{ props: tooltipProps }">
-          <v-checkbox
-            v-bind="tooltipProps"
-            v-model="wd14TaggerEnabled"
-            class="settings-tag-filter-toggle settings-tagger-checkbox"
-            density="compact"
-            hide-details
-            :disabled="wd14TaggerLoading"
-            label="WD14 Tagger"
-            @update:model-value="setWd14TaggerEnabled"
-          />
-        </template>
-      </v-tooltip>
-      <div
-        class="settings-stepper"
-        :class="{
-          'settings-stepper--disabled':
-            wd14ThresholdLoading || !wd14TaggerEnabled,
-        }"
-      >
-        <span class="settings-stepper-label">Threshold (%)</span>
-        <div class="settings-stepper-controls">
-          <button
-            class="settings-stepper-btn"
-            :disabled="
-              wd14ThresholdLoading ||
-              !wd14TaggerEnabled ||
-              wd14ThresholdValue <= 1
-            "
-            @click="
-              () => {
-                wd14ThresholdValue = Math.max(1, wd14ThresholdValue - 1);
-                saveWd14Threshold();
-              }
-            "
-          >
-            −
-          </button>
-          <span class="settings-stepper-value">{{ wd14ThresholdValue }}</span>
-          <button
-            class="settings-stepper-btn"
-            :disabled="
-              wd14ThresholdLoading ||
-              !wd14TaggerEnabled ||
-              wd14ThresholdValue >= 100
-            "
-            @click="
-              () => {
-                wd14ThresholdValue = Math.min(100, wd14ThresholdValue + 1);
-                saveWd14Threshold();
-              }
-            "
-          >
-            +
-          </button>
-        </div>
-      </div>
-      <v-tooltip
-        text="Primarily trained on real/realistic images"
-        location="top"
-      >
-        <template #activator="{ props: tooltipProps }">
-          <v-checkbox
-            v-bind="tooltipProps"
-            v-model="customTaggerEnabled"
-            class="settings-tag-filter-toggle settings-tagger-checkbox"
-            density="compact"
-            hide-details
-            :disabled="customTaggerLoading"
-            label="PixlStash Tagger"
-            @update:model-value="setCustomTaggerEnabled"
-          />
-        </template>
-      </v-tooltip>
-      <div
-        class="settings-stepper"
-        :class="{
-          'settings-stepper--disabled':
-            customTaggerThresholdOffsetLoading || !customTaggerEnabled,
-        }"
-      >
-        <span class="settings-stepper-label">Offset (%pt)</span>
-        <div class="settings-stepper-controls">
-          <button
-            class="settings-stepper-btn"
-            :disabled="
-              customTaggerThresholdOffsetLoading ||
-              !customTaggerEnabled ||
-              customTaggerThresholdOffsetValue <= -50
-            "
-            @click="
-              () => {
-                customTaggerThresholdOffsetValue = Math.max(
-                  -50,
-                  customTaggerThresholdOffsetValue - 1,
-                );
-                saveCustomTaggerThresholdOffset();
-              }
-            "
-          >
-            −
-          </button>
-          <span class="settings-stepper-value">{{
-            customTaggerThresholdOffsetValue
-          }}</span>
-          <button
-            class="settings-stepper-btn"
-            :disabled="
-              customTaggerThresholdOffsetLoading ||
-              !customTaggerEnabled ||
-              customTaggerThresholdOffsetValue >= 50
-            "
-            @click="
-              () => {
-                customTaggerThresholdOffsetValue = Math.min(
-                  50,
-                  customTaggerThresholdOffsetValue + 1,
-                );
-                saveCustomTaggerThresholdOffset();
-              }
-            "
-          >
-            +
-          </button>
-        </div>
-      </div>
-      <button
-        class="settings-threshold-preview-btn"
-        title="Preview tag thresholds"
-        @click="openLabelThresholdsDialog"
-      >
-        <v-icon size="16">mdi-table-eye</v-icon>
-      </button>
-    </div>
-    <div
-      v-if="
-        wd14TaggerError ||
-        wd14ThresholdError ||
-        customTaggerError ||
-        customTaggerThresholdOffsetError
-      "
-      class="settings-error"
-    >
-      {{
-        wd14TaggerError ||
-        wd14ThresholdError ||
-        customTaggerError ||
-        customTaggerThresholdOffsetError
-      }}
-    </div>
+    <div v-if="taggerLoading" class="settings-tagger-loading">Loading…</div>
+    <TagPluginsTable
+      v-else
+      :plugins="taggerPlugins"
+      :settings="taggerSettings"
+      @update:settings="(s) => (taggerSettings.value = s)"
+    />
   </div>
-
-  <!-- Label thresholds preview dialog -->
-  <v-dialog
-    v-model="labelThresholdsDialogOpen"
-    max-width="520"
-    @click:outside="labelThresholdsDialogOpen = false"
-  >
-    <v-card class="label-thresholds-dialog">
-      <v-card-title class="label-thresholds-dialog-title">
-        PixlStash Tagger — Label Thresholds
-      </v-card-title>
-      <v-card-text class="label-thresholds-dialog-body">
-        <div v-if="labelThresholdsLoading" class="label-thresholds-loading">
-          Loading…
-        </div>
-        <div
-          v-else-if="!labelThresholdsData.length"
-          class="label-thresholds-empty"
-        >
-          No label thresholds found. Ensure the PixlStash tagger model is
-          installed.
-        </div>
-        <table v-else class="label-thresholds-table">
-          <thead>
-            <tr>
-              <th class="lth-col-name">Tag</th>
-              <th class="lth-col-base">Base threshold</th>
-              <th class="lth-col-eff">After offset</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in labelThresholdsData" :key="row.label">
-              <td class="lth-col-name">{{ row.label }}</td>
-              <td class="lth-col-base">
-                {{ (row.base_threshold * 100).toFixed(1) }}%
-              </td>
-              <td
-                class="lth-col-eff"
-                :class="
-                  row.effective_threshold > row.base_threshold
-                    ? 'lth-penalised'
-                    : row.effective_threshold < row.base_threshold
-                      ? 'lth-boosted'
-                      : ''
-                "
-              >
-                {{ (row.effective_threshold * 100).toFixed(1) }}%
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </v-card-text>
-    </v-card>
-  </v-dialog>
+  <v-divider class="settings-section-divider" />
+  <div class="settings-section">
+    <div class="settings-section-title">Description Plugin</div>
+    <div class="settings-section-desc">
+      Select which plugin generates image descriptions (captions).
+    </div>
+    <div v-if="taggerLoading" class="settings-tagger-loading">Loading…</div>
+    <DescriptionPluginsTable
+      v-else
+      :plugins="taggerPlugins"
+      :settings="taggerSettings"
+      @update:settings="(s) => (taggerSettings.value = s)"
+    />
+  </div>
 
   <v-divider class="settings-section-divider" />
   <div class="settings-section">
@@ -827,190 +542,10 @@ watch(maxVramGbValue, () => {
   margin: 4px 0 8px;
 }
 
-.settings-tagger-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
-}
-
-.settings-tagger-checkbox {
-  flex: 1;
-  min-width: 0;
-}
-
-.settings-stepper {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-}
-
-.settings-stepper-label {
-  font-size: 0.8em;
-  color: rgba(var(--v-theme-on-surface), 0.68);
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.settings-stepper-controls {
-  display: flex;
-  align-items: center;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
-  border-radius: 4px;
-  overflow: hidden;
-  height: 26px;
-}
-
-.settings-stepper-btn {
-  width: 26px;
-  height: 100%;
-  border: none;
-  border-radius: 0;
-  appearance: none;
-  -webkit-appearance: none;
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  cursor: pointer;
-  font-size: 1em;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s;
-  flex-shrink: 0;
-  padding: 0;
-  color: inherit;
-  outline: none;
-}
-
-.settings-stepper-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-surface), 0.14);
-}
-
-.settings-stepper-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.settings-stepper-value {
-  min-width: 30px;
-  text-align: center;
-  font-size: 0.88em;
-  line-height: 1;
-  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.2);
-  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.2);
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 2px;
-}
-
-.settings-stepper--disabled .settings-stepper-label {
-  opacity: 0.4;
-}
-
-.settings-stepper--disabled .settings-stepper-controls {
-  opacity: 0.4;
-}
-
-.settings-threshold-preview-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-  outline: none;
-  padding: 0;
-  color: rgba(var(--v-theme-on-surface), 0.68);
-  flex-shrink: 0;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.settings-threshold-preview-btn:hover {
-  background: rgba(var(--v-theme-on-surface), 0.1);
-  color: rgba(var(--v-theme-on-surface), 0.92);
-}
-
-/* Label thresholds dialog */
-.label-thresholds-dialog {
-  background: rgb(var(--v-theme-panel));
-  color: rgb(var(--v-theme-on-panel));
-}
-
-.label-thresholds-dialog-title {
-  font-size: 1rem;
-  font-weight: 600;
-  padding-bottom: 4px;
-}
-
-.label-thresholds-dialog-body {
-  padding-top: 0;
-  max-height: 420px;
-  overflow-y: auto;
-}
-
-.label-thresholds-loading,
-.label-thresholds-empty {
-  font-size: 0.875rem;
-  opacity: 0.6;
-  padding: 12px 0;
-  text-align: center;
-}
-
-.label-thresholds-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.label-thresholds-table th,
-.label-thresholds-table td {
-  padding: 4px 8px;
-  vertical-align: middle;
-  text-align: left;
-}
-
-.label-thresholds-table th {
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.5;
-  border-bottom: 1px solid rgba(var(--v-theme-on-background), 0.1);
-  padding-bottom: 6px;
-}
-
-.label-thresholds-table tr:hover td {
-  background: rgba(var(--v-theme-on-background), 0.04);
-}
-
-.lth-col-name {
-  width: 60%;
-}
-
-.lth-col-base,
-.lth-col-eff {
-  width: 20%;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.lth-boosted {
-  color: rgb(var(--v-theme-primary));
-}
-
-.lth-penalised {
-  color: rgb(var(--v-theme-error));
+.settings-tagger-loading {
+  font-size: 0.9em;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  padding: 6px 0;
 }
 
 .settings-tag-filter-toggle {
