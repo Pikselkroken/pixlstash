@@ -14,6 +14,7 @@ from typing import Callable
 import torch
 from torchvision import transforms
 
+from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 
 logger = logging.getLogger(__name__)
@@ -701,3 +702,215 @@ class PixlStashTaggerService:
             transform = self._build_transform(image_size)
             self._transform_cache[image_size] = transform
         return transform
+
+
+class PixlStashTaggerPlugin(TaggerPlugin):
+    """TaggerPlugin wrapper around :class:`PixlStashTaggerService`.
+
+    Attributes:
+        name: Plugin identifier used in ``tagger_settings``.
+        display_name: Human-readable label shown in the UI.
+        description: Short description.
+        supports_tags: Produces anomaly/quality tags.
+        supports_descriptions: Does not produce captions.
+        requires_download: Model must be downloaded on first use.
+    """
+
+    name: str = "pixlstash_tagger"
+    display_name: str = "PixlStash Tagger"
+    description: str = "Custom anomaly/quality tagger trained for PixlStash — detects blur, artefacts, and content-specific tags."
+    supports_tags: bool = True
+    supports_descriptions: bool = False
+    requires_download: bool = True
+    default_enabled: bool = True
+
+    def __init__(self) -> None:
+        self._service: PixlStashTaggerService | None = None
+
+    # ------------------------------------------------------------------
+    # Infrastructure binding
+    # ------------------------------------------------------------------
+
+    def setup(
+        self,
+        device: str,
+        model_dir: str,
+        batch_size_fn,
+    ) -> None:
+        """Create the underlying :class:`PixlStashTaggerService`.
+
+        Must be called before any other method.
+
+        Args:
+            device: Inference device string (``"cuda"`` or ``"cpu"``).
+            model_dir: Root directory for downloaded model files.
+            batch_size_fn: Zero-argument callable returning the effective
+                inference batch size.
+        """
+        self._service = PixlStashTaggerService(
+            device=device,
+            model_dir=model_dir,
+            batch_size_fn=batch_size_fn,
+        )
+
+    @property
+    def service(self) -> PixlStashTaggerService:
+        """Return the underlying :class:`PixlStashTaggerService` (raises if not set up)."""
+        if self._service is None:
+            raise RuntimeError("PixlStashTaggerPlugin.setup() has not been called")
+        return self._service
+
+    # ------------------------------------------------------------------
+    # TaggerPlugin interface
+    # ------------------------------------------------------------------
+
+    def parameter_schema(self) -> list:
+        """Return parameter definitions for the PixlStash tagger."""
+        return [
+            {
+                "name": "threshold_offset",
+                "label": "Threshold offset",
+                "type": "number",
+                "default": PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS,
+                "min": -0.5,
+                "max": 0.5,
+                "step": 0.01,
+                "description": (
+                    "Offset added to each label's base threshold. "
+                    "Positive values raise the bar; negative values lower it."
+                ),
+            },
+        ]
+
+    def default_params(self) -> dict:
+        """Return ``{name: default}`` from ``parameter_schema``."""
+        return {f["name"]: f["default"] for f in self.parameter_schema()}
+
+    def plugin_schema(self) -> dict:
+        """Return JSON-serialisable metadata for this plugin."""
+        return {
+            "name": self.name,
+            "display_name": self.display_name,
+            "description": self.description,
+            "supports_tags": self.supports_tags,
+            "supports_descriptions": self.supports_descriptions,
+            "requires_download": self.requires_download,
+            "parameters": self.parameter_schema(),
+            "downloaded_artifacts": self.list_downloaded_artifacts(),
+            "is_loaded": self.is_loaded(),
+        }
+
+    def needs_download(self, parameters=None) -> bool:
+        """Return ``True`` if model files are absent or stale."""
+        return self.service.needs_download()
+
+    def download(self, parameters=None, progress_callback=None) -> None:
+        """Download the PixlStash tagger model from HuggingFace."""
+        self.service.download()
+
+    def init(self, parameters: dict) -> None:
+        """Load the model checkpoint (idempotent)."""
+        self.service.init()
+
+    def unload(self) -> None:
+        """Release the model from memory."""
+        self.service.unload()
+
+    def is_loaded(self) -> bool:
+        """Return ``True`` if the model is ready for inference."""
+        if self._service is None:
+            return False
+        return self._service.is_loaded()
+
+    def list_downloaded_artifacts(self) -> list:
+        """Return empty list — PixlStash tagger has a single non-deletable artifact."""
+        return []
+
+    def estimated_vram_mb(self, image_count: int, parameters=None) -> int:
+        """Return 0 — VRAM is modest and managed by the service internally."""
+        return 0
+
+    def effective_batch_size(self, parameters=None) -> int:
+        """Return the effective inference batch size."""
+        if self._service is None:
+            return 1
+        return max(1, int(self._service._batch_size_fn()))
+
+    def tag_images(
+        self,
+        image_paths: list,
+        parameters: dict,
+        preloaded: dict | None = None,
+        stop_event=None,
+        out_raw_scores: dict | None = None,
+    ) -> dict:
+        """Run the PixlStash tagger and return ``{path: [TagResult, ...]}``
+
+        Calls :meth:`PixlStashTaggerService.tag_and_score_items` so that raw
+        per-label confidence scores are collected in the same GPU pass.
+        Confidence scores are included in each :class:`~pixlstash.tagger_plugins.base.TagResult`.
+
+        Args:
+            image_paths: Ordered list of absolute image/video paths.
+            parameters: Plugin parameters (uses ``threshold_offset``).
+            preloaded: Optional ``{path: PIL.Image}`` map.
+            stop_event: Optional :class:`threading.Event` to interrupt.
+            out_raw_scores: When provided, raw ``{path: {label: float}}``
+                confidence scores are written here.
+
+        Returns:
+            ``{path: [TagResult, ...]}`` for each processed image.
+        """
+        from PIL import Image as PILImage
+        from pixlstash.utils.image_processing.video_utils import VideoUtils
+
+        threshold_offset = float(
+            parameters.get("threshold_offset", PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS)
+        )
+        preloaded_map = preloaded or {}
+
+        _VIDEO_EXTS = frozenset(
+            {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        )
+        items = []
+        for path in image_paths:
+            path_str = str(path)
+            ext = os.path.splitext(path_str)[1].lower()
+            img = preloaded_map.get(path_str)
+            if img is None:
+                if ext in _VIDEO_EXTS:
+                    frames = VideoUtils.extract_representative_video_frames(
+                        path_str, count=1
+                    )
+                    if not frames:
+                        continue
+                    img = frames[0].convert("RGB")
+                else:
+                    try:
+                        img = PILImage.open(path_str).convert("RGB")
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not load %s for tagging: %s", path_str, exc
+                        )
+                        continue
+            items.append((path_str, img))
+
+        if not items:
+            return {}
+
+        tags_by_path, scores_by_path = self.service.tag_and_score_items(
+            items,
+            stop_event=stop_event,
+            threshold_offset=threshold_offset,
+        )
+        if out_raw_scores is not None:
+            out_raw_scores.update(scores_by_path)
+
+        # Build TagResult list, including confidence for labels that have scores.
+        result = {}
+        for path_str, tags in tags_by_path.items():
+            scores = scores_by_path.get(path_str, {})
+            result[path_str] = [
+                TagResult(tag=t, confidence=scores.get(t)) for t in tags
+            ]
+        return result

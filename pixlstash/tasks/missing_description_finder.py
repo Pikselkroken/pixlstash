@@ -32,6 +32,15 @@ class MissingDescriptionFinder(BaseTaskFinder):
         if engine is None:
             return None
 
+        # Only queue description work when an active description plugin is configured.
+        tagger_settings = getattr(engine, "tagger_settings", None)
+        if tagger_settings is not None:
+            active_plugin = tagger_settings.get("active_description_plugin")
+            if not active_plugin:
+                return None
+        # If no tagger_settings at all, fall through to the old behaviour
+        # (Florence-2 always active).
+
         batch_limit = max(
             1,
             int(engine.description_batch_size()),

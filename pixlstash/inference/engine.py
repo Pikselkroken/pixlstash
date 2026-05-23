@@ -54,6 +54,8 @@ class InferenceEngine:
         pixlstash_tagger_enabled: Whether the PixlStash tagger is active.
         pixlstash_tagger_threshold_offset: Score threshold adjustment for the
             PixlStash tagger.
+        tagger_settings: Full plugin settings dict (takes precedence over the
+            per-tagger flags when provided).
     """
 
     def __init__(
@@ -72,6 +74,7 @@ class InferenceEngine:
         wd14_enabled: bool = True,
         pixlstash_tagger_enabled: bool = True,
         pixlstash_tagger_threshold_offset: float = 0.0,
+        tagger_settings: dict | None = None,
     ) -> None:
         self.device = device
         self.clip_service = clip_service
@@ -84,9 +87,36 @@ class InferenceEngine:
         self.force_cpu = force_cpu
         self.image_root = image_root
         self._keep_models_in_memory = keep_models_in_memory
-        self._wd14_enabled = wd14_enabled
-        self._pixlstash_tagger_enabled = pixlstash_tagger_enabled
-        self._pixlstash_tagger_threshold_offset = pixlstash_tagger_threshold_offset
+        # tagger_settings is the authoritative config; the per-tagger flags are
+        # kept for backward compat but derived from settings when settings are set.
+        if tagger_settings is not None:
+            self._tagger_settings: dict = tagger_settings
+        else:
+            # Build a minimal settings dict from the legacy flags.
+            self._tagger_settings = {
+                "active_description_plugin": "florence2",
+                "plugins": {
+                    "wd14": {
+                        "enabled": bool(wd14_enabled),
+                        "params": {"threshold": 0.85},
+                    },
+                    "pixlstash_tagger": {
+                        "enabled": bool(pixlstash_tagger_enabled),
+                        "params": {
+                            "threshold_offset": float(pixlstash_tagger_threshold_offset)
+                        },
+                    },
+                    "florence2": {
+                        "params": {"max_new_tokens": 120, "fast_mode": False},
+                    },
+                },
+            }
+        # Legacy private flags — kept so existing setters don't break.
+        self._wd14_enabled = bool(wd14_enabled)
+        self._pixlstash_tagger_enabled = bool(pixlstash_tagger_enabled)
+        self._pixlstash_tagger_threshold_offset = float(
+            pixlstash_tagger_threshold_offset
+        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -98,14 +128,33 @@ class InferenceEngine:
         return self._keep_models_in_memory
 
     @property
+    def tagger_settings(self) -> dict:
+        """Full tagger plugin settings dict."""
+        return self._tagger_settings
+
+    @property
     def wd14_enabled(self) -> bool:
         """Whether the WD14 tagger is currently enabled."""
-        return self._wd14_enabled
+        try:
+            return bool(
+                self._tagger_settings["plugins"]["wd14"].get(
+                    "enabled", self._wd14_enabled
+                )
+            )
+        except (KeyError, TypeError):
+            return self._wd14_enabled
 
     @property
     def pixlstash_tagger_enabled(self) -> bool:
         """Whether the PixlStash tagger is currently enabled."""
-        return self._pixlstash_tagger_enabled
+        try:
+            return bool(
+                self._tagger_settings["plugins"]["pixlstash_tagger"].get(
+                    "enabled", self._pixlstash_tagger_enabled
+                )
+            )
+        except (KeyError, TypeError):
+            return self._pixlstash_tagger_enabled
 
     # ------------------------------------------------------------------
     # Workflow accessors
@@ -116,11 +165,21 @@ class InferenceEngine:
         """Return a :class:`TaggingWorkflow` bound to the current engine config."""
         from pixlstash.inference.workflows.tagging import TaggingWorkflow
 
+        plugins = self._tagger_settings.get("plugins", {})
+        wd14_cfg = plugins.get("wd14", {})
+        pixl_cfg = plugins.get("pixlstash_tagger", {})
         return TaggingWorkflow(
             engine=self,
-            use_wd14=self._wd14_enabled,
-            use_pixlstash_tagger=self._pixlstash_tagger_enabled,
-            threshold_offset=self._pixlstash_tagger_threshold_offset,
+            use_wd14=bool(wd14_cfg.get("enabled", self._wd14_enabled)),
+            use_pixlstash_tagger=bool(
+                pixl_cfg.get("enabled", self._pixlstash_tagger_enabled)
+            ),
+            threshold_offset=float(
+                pixl_cfg.get("params", {}).get(
+                    "threshold_offset", self._pixlstash_tagger_threshold_offset
+                )
+            ),
+            tagger_settings=self._tagger_settings,
         )
 
     @property
@@ -163,9 +222,34 @@ class InferenceEngine:
         """Control whether models stay loaded between inference runs."""
         self._keep_models_in_memory = bool(value)
 
+    def set_tagger_settings(self, settings: dict) -> None:
+        """Replace the full tagger plugin settings dict.
+
+        Also keeps the legacy per-tagger flags in sync so that existing code
+        reading ``engine.wd14_enabled`` / ``engine.pixlstash_tagger_enabled``
+        continues to work without changes.
+        """
+        self._tagger_settings = settings
+        plugins = settings.get("plugins", {})
+        wd14_cfg = plugins.get("wd14", {})
+        pixl_cfg = plugins.get("pixlstash_tagger", {})
+        self._wd14_enabled = bool(wd14_cfg.get("enabled", False))
+        self._pixlstash_tagger_enabled = bool(pixl_cfg.get("enabled", True))
+        self._pixlstash_tagger_threshold_offset = float(
+            pixl_cfg.get("params", {}).get("threshold_offset", 0.0)
+        )
+        # Keep the WD14 service threshold in sync.
+        wd14_threshold = wd14_cfg.get("params", {}).get("threshold")
+        if wd14_threshold is not None:
+            self.wd14_service.set_threshold(float(wd14_threshold))
+
     def set_wd14_tagger_enabled(self, enabled: bool) -> None:
         """Enable or disable the WD14 tagger."""
         self._wd14_enabled = bool(enabled)
+        try:
+            self._tagger_settings["plugins"]["wd14"]["enabled"] = self._wd14_enabled
+        except (KeyError, TypeError):
+            pass
 
     def set_pixlstash_tagger_enabled(self, enabled: bool) -> None:
         """Enable or disable the PixlStash tagger (only if model files exist)."""
@@ -176,14 +260,32 @@ class InferenceEngine:
                 self._pixlstash_tagger_enabled = True
         elif not bool(enabled):
             self._pixlstash_tagger_enabled = False
+        try:
+            self._tagger_settings["plugins"]["pixlstash_tagger"]["enabled"] = (
+                self._pixlstash_tagger_enabled
+            )
+        except (KeyError, TypeError):
+            pass
 
     def set_wd14_threshold(self, threshold: float) -> None:
         """Update the WD14 inference threshold."""
         self.wd14_service.set_threshold(threshold)
+        try:
+            self._tagger_settings["plugins"]["wd14"]["params"]["threshold"] = float(
+                threshold
+            )
+        except (KeyError, TypeError):
+            pass
 
     def set_pixlstash_tagger_threshold_offset(self, offset: float) -> None:
         """Update the PixlStash tagger score threshold offset."""
         self._pixlstash_tagger_threshold_offset = float(offset)
+        try:
+            self._tagger_settings["plugins"]["pixlstash_tagger"]["params"][
+                "threshold_offset"
+            ] = float(offset)
+        except (KeyError, TypeError):
+            pass
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -295,6 +397,7 @@ class InferenceEngine:
         wd14_threshold: float | None = None,
         pixlstash_tagger_threshold_offset: float = 0.0,
         keep_models_in_memory: bool = True,
+        tagger_settings: dict | None = None,
     ) -> "InferenceEngine":
         """Construct a fully-wired :class:`InferenceEngine`.
 
@@ -399,6 +502,7 @@ class InferenceEngine:
             wd14_enabled=wd14_enabled,
             pixlstash_tagger_enabled=pixlstash_tagger_enabled,
             pixlstash_tagger_threshold_offset=pixlstash_tagger_threshold_offset,
+            tagger_settings=tagger_settings,
         )
         _engine_cell[0] = engine
 

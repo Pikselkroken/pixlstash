@@ -9,6 +9,7 @@ import torch
 from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
@@ -443,3 +444,222 @@ class Florence2Service:
             and getattr(self._model_device, "type", "") == "cuda"
             and "cuda" in str(error).lower()
         )
+
+
+class Florence2Plugin(TaggerPlugin):
+    """TaggerPlugin wrapper around :class:`Florence2Service`.
+
+    Attributes:
+        name: Plugin identifier used in ``tagger_settings``.
+        display_name: Human-readable label shown in the UI.
+        description: Short description.
+        supports_tags: Florence-2 does not produce tags.
+        supports_descriptions: Florence-2 generates captions.
+        requires_download: Model must be downloaded on first use.
+    """
+
+    name: str = "florence2"
+    display_name: str = "Florence-2"
+    description: str = (
+        "Microsoft Florence-2-base — generates natural-language image descriptions."
+    )
+    supports_tags: bool = False
+    supports_descriptions: bool = True
+    requires_download: bool = True
+
+    def __init__(self) -> None:
+        self._service: Florence2Service | None = None
+
+    # ------------------------------------------------------------------
+    # Infrastructure binding
+    # ------------------------------------------------------------------
+
+    def setup(
+        self,
+        device: str,
+        fast_captions: bool = False,
+        force_cpu_fn=None,
+        max_concurrent_fn=None,
+        vram_cap_fn=None,
+    ) -> None:
+        """Create the underlying :class:`Florence2Service`.
+
+        Must be called before any other method.
+
+        Args:
+            device: Inference device string (``"cuda"`` or ``"cpu"``).
+            fast_captions: When ``True`` enables lower-quality / faster mode.
+            force_cpu_fn: Zero-argument callable returning ``True`` when CPU
+                inference should be forced regardless of ``device``.
+            max_concurrent_fn: Zero-argument callable returning the max
+                concurrent image count.
+            vram_cap_fn: Callable ``(base_mb, per_item_mb) -> int`` returning
+                a VRAM-capped batch size.
+        """
+        self._service = Florence2Service(
+            device=device,
+            fast_captions=fast_captions,
+            force_cpu_fn=force_cpu_fn,
+            max_concurrent_fn=max_concurrent_fn,
+            vram_cap_fn=vram_cap_fn,
+        )
+
+    @property
+    def service(self) -> Florence2Service:
+        """Return the underlying :class:`Florence2Service` (raises if not set up)."""
+        if self._service is None:
+            raise RuntimeError("Florence2Plugin.setup() has not been called")
+        return self._service
+
+    # ------------------------------------------------------------------
+    # TaggerPlugin interface
+    # ------------------------------------------------------------------
+
+    def parameter_schema(self) -> list:
+        """Return parameter definitions for Florence-2."""
+        return [
+            {
+                "name": "max_new_tokens",
+                "label": "Max new tokens",
+                "type": "integer",
+                "default": 120,
+                "min": 16,
+                "max": 512,
+                "step": 8,
+                "description": "Maximum number of tokens to generate per caption.",
+            },
+            {
+                "name": "fast_mode",
+                "label": "Fast mode",
+                "type": "boolean",
+                "default": False,
+                "description": "Use a shorter prompt for faster, less detailed captions.",
+            },
+        ]
+
+    def default_params(self) -> dict:
+        """Return ``{name: default}`` from ``parameter_schema``."""
+        return {f["name"]: f["default"] for f in self.parameter_schema()}
+
+    def plugin_schema(self) -> dict:
+        """Return JSON-serialisable metadata for this plugin."""
+        return {
+            "name": self.name,
+            "display_name": self.display_name,
+            "description": self.description,
+            "supports_tags": self.supports_tags,
+            "supports_descriptions": self.supports_descriptions,
+            "requires_download": self.requires_download,
+            "parameters": self.parameter_schema(),
+            "downloaded_artifacts": self.list_downloaded_artifacts(),
+            "is_loaded": self.is_loaded(),
+        }
+
+    def needs_download(self, parameters=None) -> bool:
+        """Return ``True`` — Florence-2 is always downloaded on first use."""
+        # Florence-2 uses HuggingFace's automatic caching; the service handles
+        # download lazily inside ensure_ready().  We report False here so the
+        # workflow doesn't gate on an explicit download step.
+        return False
+
+    def download(self, parameters=None, progress_callback=None) -> None:
+        """No-op — Florence-2 downloads automatically inside ensure_ready()."""
+
+    def init(self, parameters: dict) -> None:
+        """Apply parameters and load the model (idempotent).
+
+        Updates ``max_new_tokens`` on the service and then loads the model.
+
+        Args:
+            parameters: Plugin parameters (uses ``max_new_tokens``).
+        """
+        max_tokens = int(parameters.get("max_new_tokens", 120))
+        self.service._max_tokens = max_tokens
+        self.service.ensure_ready()
+
+    def unload(self) -> None:
+        """Unload Florence-2 from memory."""
+        if self._service is not None:
+            self._service._model = None
+            self._service._processor = None
+
+    def is_loaded(self) -> bool:
+        """Return ``True`` if Florence-2 is loaded."""
+        if self._service is None:
+            return False
+        return self._service.is_loaded()
+
+    def list_downloaded_artifacts(self) -> list:
+        """Return empty list — Florence-2 uses HF cache, not a named artifact."""
+        return []
+
+    def estimated_vram_mb(self, image_count: int, parameters=None) -> int:
+        """Estimate VRAM required for captioning *image_count* images.
+
+        Args:
+            image_count: Number of images to caption.
+            parameters: Unused.
+
+        Returns:
+            Estimated VRAM in MB.
+        """
+        if self._service is None:
+            return 0
+        svc = self._service
+        if svc._model_device is None or str(svc._model_device) == "cpu":
+            return 0
+        batch = min(max(1, image_count), svc.description_batch_size())
+        if svc.is_loaded():
+            return int(FLORENCE_PER_IMAGE_VRAM_MB * batch)
+        return int(FLORENCE_BASE_VRAM_MB + FLORENCE_PER_IMAGE_VRAM_MB * batch)
+
+    def effective_batch_size(self, parameters=None) -> int:
+        """Return the VRAM-constrained batch size."""
+        if self._service is None:
+            return 1
+        return max(1, self._service.description_batch_size())
+
+    def generate_descriptions(
+        self,
+        image_paths: list,
+        parameters: dict,
+        stop_event=None,
+    ) -> dict:
+        """Generate captions for a batch of image/video paths.
+
+        Args:
+            image_paths: Ordered list of absolute image/video paths.
+            parameters: Plugin parameters (uses ``max_new_tokens``).
+            stop_event: Not used by Florence-2 (kept for interface compatibility).
+
+        Returns:
+            ``{path: caption_str}`` — value is ``None`` on per-image failure.
+        """
+        _VIDEO_EXTS = frozenset(
+            {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        )
+
+        max_tokens = int(parameters.get("max_new_tokens", 120))
+        self.service._max_tokens = max_tokens
+
+        results: dict[str, str | None] = {}
+        batch_items: list[str] = []
+
+        for path in image_paths:
+            path_str = str(path)
+            ext = os.path.splitext(path_str)[1].lower()
+            if ext in _VIDEO_EXTS:
+                results[path_str] = self.service.generate_caption(
+                    path_str, _retry_on_cpu=False
+                )
+            else:
+                batch_items.append(path_str)
+
+        batch_size = self.service.description_batch_size()
+        for idx in range(0, len(batch_items), batch_size):
+            chunk = batch_items[idx : idx + batch_size]
+            captions = self.service.generate_captions_batch(chunk)
+            for path_str in chunk:
+                results[path_str] = captions.get(path_str)
+
+        return results

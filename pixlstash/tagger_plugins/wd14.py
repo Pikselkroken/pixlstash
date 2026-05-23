@@ -15,6 +15,7 @@ import torch
 from tqdm import tqdm
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 
 logger = get_logger(__name__)
@@ -477,3 +478,169 @@ class WD14Service:
                 out_results.update(dataloader_results)
                 return b_imgs, failed
             return [], True
+
+
+class WD14Plugin(TaggerPlugin):
+    """TaggerPlugin wrapper around :class:`WD14Service`.
+
+    Attributes:
+        name: Plugin identifier used in ``tagger_settings``.
+        display_name: Human-readable label shown in the UI.
+        description: Short description.
+        supports_tags: WD14 produces tags.
+        supports_descriptions: WD14 does not produce captions.
+        requires_download: Model must be downloaded on first use.
+    """
+
+    name: str = "wd14"
+    display_name: str = "WD14 Tagger"
+    description: str = "WD14 ONNX tagger (SmilingWolf/wd-convnext-tagger-v3) — broad anime/illustration tag coverage."
+    supports_tags: bool = True
+    supports_descriptions: bool = False
+    requires_download: bool = True
+    default_enabled: bool = False
+
+    # ------------------------------------------------------------------
+    # Infrastructure binding
+    # ------------------------------------------------------------------
+
+    def setup(
+        self,
+        device: str,
+        model_dir: str,
+        batch_size_fn,
+        silent: bool = True,
+    ) -> None:
+        """Create the underlying :class:`WD14Service` with runtime infrastructure.
+
+        Must be called before any other method.
+
+        Args:
+            device: Inference device string (``"cuda"`` or ``"cpu"``).
+            model_dir: Root directory for downloaded model files.
+            batch_size_fn: Zero-argument callable returning the effective
+                inference batch size.
+            silent: When ``True`` suppress tqdm progress bars.
+        """
+        self._service = WD14Service(
+            device=device,
+            model_dir=model_dir,
+            batch_size_fn=batch_size_fn,
+            silent=silent,
+        )
+
+    @property
+    def service(self) -> WD14Service:
+        """Return the underlying :class:`WD14Service` (raises if not set up)."""
+        if self._service is None:
+            raise RuntimeError("WD14Plugin.setup() has not been called")
+        return self._service
+
+    # ------------------------------------------------------------------
+    # TaggerPlugin interface
+    # ------------------------------------------------------------------
+
+    def parameter_schema(self) -> list:
+        """Return parameter definitions for WD14."""
+        return [
+            {
+                "name": "threshold",
+                "label": "Confidence threshold",
+                "type": "number",
+                "default": WD14_GENERAL_THRESHOLD,
+                "min": 0.01,
+                "max": 1.0,
+                "step": 0.01,
+                "description": "Minimum model confidence required to include a tag.",
+            },
+        ]
+
+    def default_params(self) -> dict:
+        """Return ``{name: default}`` from ``parameter_schema``."""
+        return {f["name"]: f["default"] for f in self.parameter_schema()}
+
+    def plugin_schema(self) -> dict:
+        """Return JSON-serialisable metadata for this plugin."""
+        return {
+            "name": self.name,
+            "display_name": self.display_name,
+            "description": self.description,
+            "supports_tags": self.supports_tags,
+            "supports_descriptions": self.supports_descriptions,
+            "requires_download": self.requires_download,
+            "parameters": self.parameter_schema(),
+            "downloaded_artifacts": self.list_downloaded_artifacts(),
+            "is_loaded": self.is_loaded(),
+        }
+
+    def needs_download(self, parameters=None) -> bool:
+        """Return ``True`` if model files are absent."""
+        return self.service.needs_download()
+
+    def download(self, parameters=None, progress_callback=None) -> None:
+        """Download the WD14 model from HuggingFace."""
+        self.service.download()
+
+    def init(self, parameters: dict) -> None:
+        """Apply *parameters* and load the ONNX session (idempotent)."""
+        threshold = float(parameters.get("threshold", WD14_GENERAL_THRESHOLD))
+        self.service.set_threshold(threshold)
+        self.service.init()
+
+    def unload(self) -> None:
+        """Unload the ONNX session."""
+        self.service.unload()
+
+    def is_loaded(self) -> bool:
+        """Return ``True`` if the ONNX session is ready."""
+        if self._service is None:
+            return False
+        return self._service.is_loaded()
+
+    def list_downloaded_artifacts(self) -> list:
+        """Return empty list — WD14 has a single non-deletable artifact set."""
+        return []
+
+    def estimated_vram_mb(self, image_count: int, parameters=None) -> int:
+        """WD14 runs via ONNX and has a negligible VRAM footprint."""
+        return 0
+
+    def effective_batch_size(self, parameters=None) -> int:
+        """Return the ONNX model batch capacity."""
+        if self._service is None:
+            return 1
+        return max(1, self._service.batch_capacity())
+
+    def tag_images(
+        self,
+        image_paths: list,
+        parameters: dict,
+        preloaded: dict | None = None,
+        stop_event=None,
+    ) -> dict:
+        """Run WD14 inference and return ``{path: [TagResult, ...]}``.
+
+        WD14 does not expose per-tag confidence scores in its current API,
+        so all returned :class:`~pixlstash.tagger_plugins.base.TagResult`
+        objects carry ``confidence=None``.
+
+        Args:
+            image_paths: Ordered list of image/video paths.
+            parameters: Plugin parameters (uses ``threshold``).
+            preloaded: Optional ``{path: preprocessed_array}`` map.
+            stop_event: Optional :class:`threading.Event` to interrupt.
+
+        Returns:
+            ``{path: [TagResult, ...]}`` for each processed image.
+        """
+        threshold = float(parameters.get("threshold", WD14_GENERAL_THRESHOLD))
+        self.service.set_threshold(threshold)
+        raw: dict = self.service.tag_images(
+            image_paths,
+            stop_event=stop_event,
+            preloaded_map=preloaded or {},
+        )
+        return {
+            path: [TagResult(tag=t, confidence=None) for t in tags]
+            for path, tags in raw.items()
+        }

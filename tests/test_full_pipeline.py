@@ -175,6 +175,19 @@ def test_full_pipeline_on_real_pictures():
             )
             assert resp.status_code == 200
 
+            # Enable the PixlStash tagger (all tag plugins default to disabled).
+            resp = client.patch(
+                f"{_API_PREFIX}/users/me/config",
+                json={
+                    "tagger_settings": {
+                        "plugins": {
+                            "pixlstash_tagger": {"enabled": True},
+                        }
+                    }
+                },
+            )
+            assert resp.status_code == 200, f"Failed to enable tagger: {resp.text}"
+
             # ------------------------------------------------------------------ #
             # Upload all pictures in a single batch so the WorkPlanner sees the
             # full set before any per-image tasks fire.
