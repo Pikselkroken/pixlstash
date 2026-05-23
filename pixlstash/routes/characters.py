@@ -837,7 +837,31 @@ def create_router(server) -> APIRouter:
                             raise HTTPException(
                                 status_code=400, detail="Invalid project_id"
                             )
-                return session.exec(query).all()
+                characters = session.exec(query).all()
+
+                # Annotate each character with whether it has at least one face
+                # embedding so the UI can filter the similarity-sort dropdown.
+                char_ids = [c.id for c in characters]
+                if char_ids:
+                    has_faces_query = (
+                        select(Face.character_id)
+                        .where(
+                            Face.character_id.in_(char_ids),
+                            Face.features.is_not(None),
+                        )
+                        .distinct()
+                    )
+                    chars_with_faces = set(session.exec(has_faces_query).all())
+                else:
+                    chars_with_faces = set()
+
+                return [
+                    {
+                        **c.model_dump(exclude_unset=False),
+                        "has_reference_faces": c.id in chars_with_faces,
+                    }
+                    for c in characters
+                ]
 
             return server.vault.db.run_immediate_read_task(fetch)
         except HTTPException:

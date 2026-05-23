@@ -433,10 +433,10 @@ export function useGridFetch(
       const USE_FAST_GRID_PATH = true;
       // Fast path is not applicable to text search (Python-level post-filter
       // breaks LIMIT/OFFSET count accuracy) or non-streamable sort views.
+      // CHARACTER_LIKENESS is now handled via a registered SQLite scalar function
+      // so it supports SQL ORDER BY + LIMIT/OFFSET and is compatible with the fast path.
       const _hasSearch = !!props.searchQuery?.trim();
-      const _isLikenessSort =
-        props.selectedSort === "CHARACTER_LIKENESS" ||
-        props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
+      const _isLikenessSort = props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
       // Fast path is also not applicable when the character view requires
       // special backend logic that either returns null for count (UNASSIGNED)
       // or bypasses count_only entirely (non-numeric special views like SCRAPHEAP).
@@ -464,8 +464,14 @@ export function useGridFetch(
         const _desc = typeof props.selectedDescending === 'boolean'
           ? props.selectedDescending
           : true;
+        // For CHARACTER_LIKENESS the backend also needs reference_character_id in the
+        // stream URL (count URL only needs the character filter, not the reference).
+        const _refCharSuffix =
+          _sort === 'CHARACTER_LIKENESS' && props.similarityCharacter
+            ? `&reference_character_id=${encodeURIComponent(props.similarityCharacter)}`
+            : '';
         const _sortSuffix = _sort
-          ? `&sort=${encodeURIComponent(_sort)}&descending=${_desc}`
+          ? `&sort=${encodeURIComponent(_sort)}&descending=${_desc}${_refCharSuffix}`
           : '';
         // Build character/set + project filter params for count and stream URLs.
         const _charP = new URLSearchParams();
@@ -642,6 +648,13 @@ export function useGridFetch(
 
         lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
 
+        // Sync lastFetchedGridImages after the initial batches so that
+        // removeImagesById/rebuildGridImagesFromLastFetch works correctly even
+        // if a delete happens before background streaming finishes.
+        lastFetchedGridImages.value = allGridImages.value.filter(
+          (img) => img && img.id != null,
+        );
+
         // 4. Background stream: fill the gap between first and last batches.
         let bgOffset = FIRST_BATCH;
         while (bgOffset < lastBatchStart) {
@@ -655,9 +668,18 @@ export function useGridFetch(
           splicePictures(bgPics, bgOffset);
           updateVisibleThumbnails();
           bgOffset += limit;
+          // Keep lastFetchedGridImages current so deletes during streaming work.
+          lastFetchedGridImages.value = allGridImages.value.filter(
+            (img) => img && img.id != null,
+          );
           await nextTick();
         }
 
+        // Sync lastFetchedGridImages so that removeImagesById/rebuildGridImagesFromLastFetch
+        // works correctly after a delete when the fast path was used.
+        lastFetchedGridImages.value = allGridImages.value.filter(
+          (img) => img && img.id != null,
+        );
         return; // early return — existing sort/filter/search paths are bypassed
       }
       // ─── END FAST GRID PATH ─────────────────────────────────────────────────

@@ -92,14 +92,6 @@
         visibleRangeLabel
       }}</span>
     </transition>
-    <!-- ── Streaming "loading more" pill ── -->
-    <transition name="grid-range-fade">
-      <span
-        v-if="imagesLoading && allGridImages.length > 0"
-        class="grid-loading-more-pill"
-        >Loading more…</span
-      >
-    </transition>
     <ImageGridContextMenu
       :visible="contextMenuVisible"
       :x="contextMenuX"
@@ -4389,10 +4381,12 @@ watch(
     () => props.selectedProjectId,
     () => props.searchQuery,
     () => props.selectedSort,
+    () => props.selectedDescending,
     () => props.similarityCharacter,
     () => props.stackThreshold,
   ],
   () => {
+    if (scrollWrapper.value) scrollWrapper.value.scrollTop = 0;
     _resetGridState();
     updateSelectedGroupName();
     fetchAllPicturesCount();

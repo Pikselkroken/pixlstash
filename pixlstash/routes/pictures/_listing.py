@@ -24,7 +24,8 @@ from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.pixl_logging import get_logger
 from pixlstash.picture_scoring import (
-    find_pictures_by_character_likeness,
+    count_pictures_by_character_likeness,
+    find_pictures_by_character_likeness_sql,
 )
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.service.filter_helpers import (
@@ -70,11 +71,9 @@ def select_pictures_for_listing(
     row count in `stream_state["sql_count"]`. This lets the caller decide
     completion (`done = sql_count <= limit`) without relying on the post-filter
     row count, which the historical implementation incorrectly conflated with
-    end-of-stream. For the CHARACTER_LIKENESS sort the function sets
-    `stream_state["oneshot"] = True` to signal that the caller should treat
-    the response as complete (no further pagination). CHARACTER_LIKENESS sorts
-    in memory but still supports offset/limit slicing, so it uses the normal
-    over-fetch probe instead of oneshot.
+    end-of-stream. CHARACTER_LIKENESS now uses a registered SQLite scalar
+    function (character_face_likeness) so sorting and pagination happen fully
+    at the SQL layer, meaning the standard over-fetch probe applies.
     """
     effective_limit = limit + 1 if stream_state is not None else limit
 
@@ -565,8 +564,6 @@ def select_pictures_for_listing(
     logger.info("Getting pictures with project id = %s", project_id_raw)
 
     if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
-        if count_only:
-            return None  # CHARACTER_LIKENESS count is not supported cheaply
         if not reference_character_id:
             raise HTTPException(
                 status_code=400,
@@ -604,27 +601,25 @@ def select_pictures_for_listing(
                 else set(candidate_ids) & set_candidate_ids
             )
         if candidate_ids is not None and not candidate_ids:
-            if stream_state is not None:
-                stream_state["sql_count"] = 0
-                stream_state["oneshot"] = True
-            return []
-        # CHARACTER_LIKENESS sorts all candidates in memory so it does not
-        # use SQL pagination, but offset/limit slicing still works correctly.
-        # Over-fetch by one (effective_limit) so the done flag is derived from
-        # whether more results exist, not hardcoded as oneshot.
-        pics = find_pictures_by_character_likeness(
+            return _empty_result()
+        if count_only:
+            return count_pictures_by_character_likeness(
+                server,
+                character_id,
+                candidate_ids=list(candidate_ids)
+                if candidate_ids is not None
+                else None,
+            )
+        pics = find_pictures_by_character_likeness_sql(
             server,
             character_id,
             reference_character_id,
             offset,
             effective_limit,
             descending,
-            candidate_ids=candidate_ids,
+            candidate_ids=list(candidate_ids) if candidate_ids is not None else None,
         )
-        if stream_state is not None:
-            stream_state["sql_count"] = len(pics)
-            if len(pics) > limit:
-                pics = pics[:limit]
+        pics = _record_sql_count(pics)
         if pics:
             hidden_ids = _fetch_hidden_picture_ids(
                 server,
