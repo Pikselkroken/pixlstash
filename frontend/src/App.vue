@@ -239,6 +239,12 @@ function connectUpdatesSocket() {
         : [];
       const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
       wsStore.wsTagUpdate = { key: nextKey, pictureIds };
+    } else if (payload?.type === "descriptions_changed") {
+      const pictureIds = Array.isArray(payload.picture_ids)
+        ? payload.picture_ids
+        : [];
+      const nextKey = (wsStore.wsDescriptionUpdate?.key || 0) + 1;
+      wsStore.wsDescriptionUpdate = { key: nextKey, pictureIds };
     } else if (payload?.type === "plugin_progress") {
       wsStore.wsPluginProgress = {
         key: Date.now(),
@@ -450,9 +456,16 @@ function SelectionPayload(payload) {
         payload.projectIds && typeof payload.projectIds === "object"
           ? payload.projectIds
           : {},
+      projectContext: payload.projectContext ?? null,
     };
   }
-  return { id: payload ?? null, label: null, ids: [], projectIds: {} };
+  return {
+    id: payload ?? null,
+    label: null,
+    ids: [],
+    projectIds: {},
+    projectContext: null,
+  };
 }
 
 function clearSearchForCategoryChange() {
@@ -466,8 +479,18 @@ function clearSearchForCategoryChange() {
 
 async function handleSelectCharacter(payload) {
   selectionStore.selectedFolderFilter = null;
-  const { id: charId, label, ids, projectIds } = SelectionPayload(payload);
+  const {
+    id: charId,
+    label,
+    ids,
+    projectIds,
+    projectContext,
+  } = SelectionPayload(payload);
   projectStore.characterProjectIds = projectIds;
+  if (projectContext) {
+    projectStore.projectViewMode = projectContext.mode;
+    projectStore.selectedProjectId = projectContext.projectId;
+  }
   clearSearchForCategoryChange();
   if (charId == null) {
     selectionStore.selectedCharacter = null;
@@ -507,8 +530,18 @@ async function handleSelectCharacter(payload) {
 
 async function handleSelectSet(payload) {
   selectionStore.selectedFolderFilter = null;
-  const { id: setId, label, ids, projectIds } = SelectionPayload(payload);
+  const {
+    id: setId,
+    label,
+    ids,
+    projectIds,
+    projectContext,
+  } = SelectionPayload(payload);
   projectStore.setProjectIds = projectIds;
+  if (projectContext) {
+    projectStore.projectViewMode = projectContext.mode;
+    projectStore.selectedProjectId = projectContext.projectId;
+  }
   const names = payload && payload.names ? payload.names : {};
   clearSearchForCategoryChange();
   const nextIds = ids.length
@@ -600,9 +633,28 @@ function pushRouteForCurrentSelection() {
   const proj = projectStore;
 
   if (proj.projectViewMode === "project" && proj.selectedProjectId != null) {
+    const projId = String(proj.selectedProjectId);
+    if (sel.selectedSetIds.length > 0) {
+      pushAppRoute({
+        name: "project-set",
+        params: { projectId: projId, id: String(sel.selectedSetIds[0]) },
+      });
+      return;
+    }
+    if (
+      sel.selectedCharacter &&
+      sel.selectedCharacter !== ALL_PICTURES_ID &&
+      sel.selectedCharacter !== SCRAPHEAP_PICTURES_ID
+    ) {
+      pushAppRoute({
+        name: "project-character",
+        params: { projectId: projId, id: String(sel.selectedCharacter) },
+      });
+      return;
+    }
     pushAppRoute({
       name: "project",
-      params: { id: String(proj.selectedProjectId) },
+      params: { id: projId },
     });
     return;
   }
@@ -771,6 +823,36 @@ function applyRouteToStores() {
     if (selectionStore.selectedSetIds.length > 0)
       selectionStore.selectedSetIds = [];
     selectionStore.selectedFolderFilter = null;
+    selectionStore.lastSelectedCharacterLabel = "All Pictures";
+  } else if (name === "project-character") {
+    const projectId = Number(params.projectId);
+    const charId = String(params.id || ALL_PICTURES_ID);
+    projectStore.projectViewMode = "project";
+    projectStore.selectedProjectId =
+      Number.isFinite(projectId) && projectId > 0 ? projectId : null;
+    selectionStore.selectedFolderFilter = null;
+    selectionStore.selectedSet = null;
+    if (selectionStore.selectedSetIds.length > 0)
+      selectionStore.selectedSetIds = [];
+    if (String(selectionStore.selectedCharacter) !== charId)
+      selectionStore.selectedCharacter = charId;
+    if (selectionStore.selectedCharacterIds.length > 0)
+      selectionStore.selectedCharacterIds = [];
+  } else if (name === "project-set") {
+    const projectId = Number(params.projectId);
+    const setId = Number(params.id);
+    projectStore.projectViewMode = "project";
+    projectStore.selectedProjectId =
+      Number.isFinite(projectId) && projectId > 0 ? projectId : null;
+    selectionStore.selectedFolderFilter = null;
+    selectionStore.selectedCharacter = null;
+    if (selectionStore.selectedCharacterIds.length > 0)
+      selectionStore.selectedCharacterIds = [];
+    const nextSet = Number.isFinite(setId) && setId > 0 ? setId : null;
+    if (selectionStore.selectedSet !== nextSet)
+      selectionStore.selectedSet = nextSet;
+    if (!_sameNumIds(selectionStore.selectedSetIds, nextSet ? [nextSet] : []))
+      selectionStore.selectedSetIds = nextSet ? [nextSet] : [];
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
   }
 }
@@ -1719,6 +1801,7 @@ defineExpose({
                 :gridVersion="gridStore.gridVersion"
                 :wsUpdateKey="gridStore.wsUpdateKey"
                 :wsTagUpdate="wsStore.wsTagUpdate"
+                :wsDescriptionUpdate="wsStore.wsDescriptionUpdate"
                 :wsPluginProgress="wsStore.wsPluginProgress"
                 :mediaTypeFilter="filterStore.mediaTypeFilter"
                 :comfyuiModelFilter="filterStore.comfyuiModelFilter"

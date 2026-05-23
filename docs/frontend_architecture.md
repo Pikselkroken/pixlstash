@@ -319,7 +319,19 @@ Reusable control for assigning images to/from characters and sets. Props: `type`
 Task progress overlay. Props: `status`, `progress`, `message`, `abortable`. Emits: `abort`. Terminal statuses: `completed`, `failed`, `cancelled`.
 
 #### `PluginParametersUI.vue` (336 lines)
-Dynamic form renderer for plugin JSON schemas. Props: `schema`, `modelValue`. Emits: `update:modelValue`. Uses `reactive` form values synced bidirectionally with props.
+Dynamic form renderer for **image plugin** JSON schemas. Props: `schema`, `modelValue`. Emits: `update:modelValue`. Uses `reactive` form values synced bidirectionally with props. **Not reused for tagger plugins** — those use `TaggerParametersUI.vue`.
+
+#### `TaggerParametersUI.vue`
+Schema-driven form renderer for **tagger plugin** parameter schemas. Props: `schema` (array of parameter definition dicts), `modelValue` (dict). Emits: `update:modelValue`. Supports field types: `number`/`integer` (with `min`/`max`/`step`), `boolean`, `select` (with `options`), `string`, `textarea`, `csv-int`.
+
+#### `TaggerPluginSettingsDialog.vue`
+Per-plugin settings dialog. Props: `plugin` (plugin schema object), `params` (current param dict), `modelValue` (v-dialog open). Emits: `update:modelValue`, `saved`. Contains `TaggerParametersUI`, a "Reset to defaults" button, and a label-thresholds preview panel (PixlStash tagger only). Saves via `PATCH /users/me/config` (`tagger_settings.plugins.<name>.params`).
+
+#### `TagPluginsTable.vue`
+Table of tag-capable plugins (`supports_tags = true`). Columns: Enabled (checkbox), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.plugins.<name>.enabled` via `PATCH /users/me/config` on toggle. Props: `plugins`, `settings`. Emits: `update:settings`.
+
+#### `DescriptionPluginsTable.vue`
+Table of description-capable plugins (`supports_descriptions = true`). Columns: Active (radio — single selection), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.active_description_plugin` via `PATCH /users/me/config` on change. Props: `plugins`, `settings`. Emits: `update:settings`.
 
 #### `ComfyUiRunner.vue` (1 110 lines)
 ComfyUI workflow executor embedded in `ImageGrid` and `ImageOverlay`. Connects to the ComfyUI WebSocket for real-time progress. Props: `workflowId`, `clientId`, `imageIds`, `backendUrl`. Emits progress and completion events.

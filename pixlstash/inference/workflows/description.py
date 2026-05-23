@@ -42,8 +42,8 @@ class DescriptionWorkflow:
     def generate_batch(self, pictures: list) -> dict[int, str]:
         """Generate captions for a batch of picture-like objects.
 
-        Videos are captioned one at a time (from their first frame); images
-        are sent to Florence-2 in GPU mini-batches.
+        Dispatches to the active description plugin (from tagger_settings).
+        Defaults to Florence-2 when no other plugin is configured.
 
         Args:
             pictures: Sequence of ORM ``Picture`` objects (or any object that
@@ -54,6 +54,90 @@ class DescriptionWorkflow:
             captions are stored as ``None``.  An empty dict is returned when
             *pictures* is empty.
         """
+        if not pictures:
+            return {}
+
+        active = self._engine.tagger_settings.get(
+            "active_description_plugin", "florence2"
+        )
+        logger.info(
+            "[DescriptionWorkflow] active_description_plugin=%r; known plugins: %s",
+            active,
+            list(self._engine.tagger_settings.get("plugins", {}).keys()),
+        )
+
+        if active and active != "florence2":
+            return self._generate_batch_plugin(pictures, active)
+
+        return self._generate_batch_florence(pictures)
+
+    def _generate_batch_plugin(
+        self, pictures: list, plugin_name: str
+    ) -> dict[int, str]:
+        """Dispatch description generation to a named TaggerPlugin."""
+        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+        mgr = get_tagger_plugin_manager()
+        plugin = mgr.get_plugin(plugin_name)
+        logger.info(
+            "[DescriptionWorkflow] dispatching to plugin %r (found=%s, supports_descriptions=%s)",
+            plugin_name,
+            plugin is not None,
+            plugin.supports_descriptions if plugin else "n/a",
+        )
+        if plugin is None or not plugin.supports_descriptions:
+            logger.warning(
+                "Active description plugin %r not found or does not support descriptions; "
+                "falling back to Florence-2.",
+                plugin_name,
+            )
+            return self._generate_batch_florence(pictures)
+
+        plugins_cfg = self._engine.tagger_settings.get("plugins", {})
+        cfg = plugins_cfg.get(plugin_name, {})
+        params = {**plugin.default_params(), **cfg.get("params", {})}
+
+        try:
+            if plugin._service is None:
+                plugin.setup(self._engine.device)
+            plugin.init(params)
+        except Exception:
+            logger.exception(
+                "Failed to initialise description plugin %r; falling back to Florence-2.",
+                plugin_name,
+            )
+            return self._generate_batch_florence(pictures)
+
+        image_paths = []
+        path_to_id: dict[str, int] = {}
+        results: dict[int, str | None] = {}
+
+        for picture in pictures:
+            picture_path = ImageUtils.resolve_picture_path(
+                self._image_root, getattr(picture, "file_path", None)
+            )
+            if not picture_path:
+                results[picture.id] = None
+                continue
+            image_paths.append(picture_path)
+            path_to_id[picture_path] = picture.id
+
+        try:
+            captions = plugin.generate_descriptions(image_paths, parameters=params)
+            for path, caption in captions.items():
+                pic_id = path_to_id.get(str(path))
+                if pic_id is not None:
+                    results[pic_id] = caption
+        except Exception:
+            logger.exception(
+                "Description plugin %r raised during generation; results may be partial.",
+                plugin_name,
+            )
+
+        return results
+
+    def _generate_batch_florence(self, pictures: list) -> dict[int, str]:
+        """Caption a batch using Florence-2 (original implementation)."""
         if not pictures:
             return {}
 

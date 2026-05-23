@@ -336,6 +336,7 @@ class Server:
             EventType.CLEARED_TAGS,
             EventType.CHANGED_CHARACTERS,
             EventType.CHANGED_FACES,
+            EventType.CHANGED_DESCRIPTIONS,
         )
 
     async def _broadcast_ws_event(self, event_type: EventType, data=None):
@@ -347,6 +348,13 @@ class Server:
             payload = {
                 "type": "characters_changed",
                 "event": event_type.name,
+            }
+        elif event_type == EventType.CHANGED_DESCRIPTIONS:
+            picture_ids = data if isinstance(data, (list, tuple, set)) else []
+            payload = {
+                "type": "descriptions_changed",
+                "event": event_type.name,
+                "picture_ids": list(picture_ids),
             }
         elif event_type in (EventType.CHANGED_TAGS, EventType.CLEARED_TAGS):
             picture_ids = data if isinstance(data, (list, tuple, set)) else []

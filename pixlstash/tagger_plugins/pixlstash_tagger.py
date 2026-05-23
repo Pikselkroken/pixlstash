@@ -373,7 +373,7 @@ class PixlStashTaggerService:
             inputs = torch.stack(batch_tensors)
             device = self._device
             try:
-                inputs = inputs.to(device).float()
+                inputs = inputs.to(device=device, dtype=self._dtype)
                 with torch.inference_mode():
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
@@ -387,7 +387,7 @@ class PixlStashTaggerService:
                     )
                     if self.reload_on_cpu():
                         logger.warning("PixlStash tagger is now running on CPU.")
-                        inputs = inputs.to("cpu").float()
+                        inputs = inputs.to(device="cpu", dtype=torch.float32)
                         with torch.inference_mode():
                             logits = self._model(inputs)
                             probs = torch.sigmoid(logits).cpu().numpy()
@@ -631,7 +631,7 @@ class PixlStashTaggerService:
             inputs = torch.stack(batch_tensors)
             device = self._device
             try:
-                inputs = inputs.to(device).float()
+                inputs = inputs.to(device=device, dtype=self._dtype)
                 with torch.inference_mode():
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
@@ -644,7 +644,7 @@ class PixlStashTaggerService:
                         "Custom scorer CUDA OOM; falling back to CPU for this batch."
                     )
                     if self.reload_on_cpu():
-                        inputs = inputs.to("cpu").float()
+                        inputs = inputs.to(device="cpu", dtype=torch.float32)
                         with torch.inference_mode():
                             logits = self._model(inputs)
                             probs = torch.sigmoid(logits).cpu().numpy()

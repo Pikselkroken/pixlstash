@@ -6,6 +6,7 @@
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
     :tagUpdate="props.wsTagUpdate"
+    :descriptionUpdate="props.wsDescriptionUpdate"
     :hiddenTags="props.hiddenTags"
     :applyTagFilter="props.applyTagFilter"
     :dateFormat="props.dateFormat"
@@ -858,6 +859,10 @@ const props = defineProps({
   gridVersion: { type: Number, default: 0 },
   wsUpdateKey: { type: Number, default: 0 },
   wsTagUpdate: {
+    type: Object,
+    default: () => ({ key: 0, pictureIds: [] }),
+  },
+  wsDescriptionUpdate: {
     type: Object,
     default: () => ({ key: 0, pictureIds: [] }),
   },

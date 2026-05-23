@@ -14,6 +14,7 @@ _FIRST_PARTY_PLUGINS = [
     ("pixlstash.tagger_plugins.wd14", "WD14Plugin"),
     ("pixlstash.tagger_plugins.pixlstash_tagger", "PixlStashTaggerPlugin"),
     ("pixlstash.tagger_plugins.florence2", "Florence2Plugin"),
+    ("pixlstash.tagger_plugins.joycaption", "JoyCaptionPlugin"),
 ]
 
 
@@ -88,6 +89,12 @@ class TaggerPluginManager:
         """
         with self._lock:
             return [{"name": e.name, "message": e.message} for e in self._errors]
+
+    def get_all_plugins(self) -> list["TaggerPlugin"]:  # noqa: F821
+        """Return all successfully loaded plugin instances."""
+        self._ensure_loaded()
+        with self._lock:
+            return list(self._plugins.values())
 
     def get_plugin(self, name: str) -> "TaggerPlugin | None":  # noqa: F821
         """Return the plugin with the given name, or ``None`` if not found.

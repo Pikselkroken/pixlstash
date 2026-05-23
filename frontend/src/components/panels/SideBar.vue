@@ -1431,22 +1431,36 @@ function selectCharacter(id, label = null, event = null) {
       allPicturesLastMode.value = projectViewMode.value;
       allPicturesLastProjectId.value = selectedProjectId.value;
     }
-    if (!isSpecial && projectViewMode.value === "project") {
-      const char = characters.value.find((c) => c.id === id);
-      if (char && char.project_id !== selectedProjectId.value) {
-        selectedProjectId.value = char.project_id;
-      }
-    }
     const numId = Number(id);
     const singleChar = isSpecial
       ? null
       : characters.value.find((c) => c.id === numId);
+    // Compute the full project context so App.vue can apply everything
+    // atomically without relying on any pre-existing store state.
+    let projectContext;
+    if (id === props.allPicturesId) {
+      // "All Pictures" keeps whatever project scope was active when clicked.
+      projectContext = {
+        mode: projectViewMode.value,
+        projectId: selectedProjectId.value ?? null,
+      };
+    } else if (isSpecial) {
+      // Scrapheap / Unassigned are always outside a project.
+      projectContext = { mode: "global", projectId: null };
+    } else {
+      const charProjectId = singleChar?.project_id ?? null;
+      projectContext = {
+        mode: charProjectId != null ? "project" : "global",
+        projectId: charProjectId,
+      };
+    }
     emit("select-set", null);
     emit("select-character", {
       id,
       label,
       ids: isSpecial ? [] : [numId],
       projectIds: singleChar ? { [numId]: singleChar.project_id ?? null } : {},
+      projectContext,
     });
     return;
   }
@@ -1458,14 +1472,17 @@ function selectCharacter(id, label = null, event = null) {
   if (currentIds.size === 0) {
     // Nothing selected yet — treat as plain click
     const singleChar0 = characters.value.find((c) => c.id === numericId);
+    const charProjectId0 = singleChar0?.project_id ?? null;
     emit("select-set", null);
     emit("select-character", {
       id,
       label,
       ids: [numericId],
-      projectIds: singleChar0
-        ? { [numericId]: singleChar0.project_id ?? null }
-        : {},
+      projectIds: singleChar0 ? { [numericId]: charProjectId0 } : {},
+      projectContext: {
+        mode: charProjectId0 != null ? "project" : "global",
+        projectId: charProjectId0,
+      },
     });
     return;
   }
@@ -1512,19 +1529,18 @@ function selectSet(setId, label = null, event = null) {
 
   const isMultiToggle = Boolean(event?.ctrlKey || event?.metaKey);
   if (!isMultiToggle) {
-    if (projectViewMode.value === "project") {
-      const pset = nonReferenceSets.value.find((s) => s.id === numericSetId);
-      if (pset && pset.project_id !== selectedProjectId.value) {
-        selectedProjectId.value = pset.project_id;
-      }
-    }
     const singleSet = pictureSets.value.find((s) => s.id === numericSetId);
+    const setProjectId = singleSet?.project_id ?? null;
     emit("select-set", {
       id: numericSetId,
       label,
       ids: [numericSetId],
       names: { [numericSetId]: label || String(numericSetId) },
-      projectIds: { [numericSetId]: singleSet?.project_id ?? null },
+      projectIds: { [numericSetId]: setProjectId },
+      projectContext: {
+        mode: setProjectId != null ? "project" : "global",
+        projectId: setProjectId,
+      },
     });
     return;
   }

@@ -106,21 +106,28 @@ class TaggingWorkflow:
             )
         wd14_results = merge_video_frame_tags(wd14_results)
 
-        if not use_pixlstash_tagger:
-            return wd14_results
+        combined: dict[str, list[str]] = dict(wd14_results)
 
-        pixlstash_results = self._tag_images_custom(
-            image_paths,
-            stop_event=stop_event,
-            preloaded_images=preloaded_map,
-            out_raw_scores=out_raw_pixlstash_scores,
-        )
+        if use_pixlstash_tagger:
+            pixlstash_results = self._tag_images_custom(
+                image_paths,
+                stop_event=stop_event,
+                preloaded_images=preloaded_map,
+                out_raw_scores=out_raw_pixlstash_scores,
+            )
+            for path in set(combined) | set(pixlstash_results):
+                tags = set(combined.get(path, []))
+                tags.update(pixlstash_results.get(path, []))
+                combined[path] = sorted(tags)
 
-        combined = {}
-        for path in set(wd14_results) | set(pixlstash_results):
-            tags = set(wd14_results.get(path, []))
-            tags.update(pixlstash_results.get(path, []))
-            combined[path] = sorted(tags)
+        extra = self._tag_images_extra_plugins(image_paths, stop_event=stop_event)
+        if extra:
+            all_paths = set(combined) | set(extra)
+            combined = {
+                path: sorted(set(combined.get(path, [])) | set(extra.get(path, [])))
+                for path in all_paths
+            }
+
         return combined
 
     def tag_quality_crops(
@@ -244,6 +251,70 @@ class TaggingWorkflow:
 
     # ------------------------------------------------------------------
     # Private helpers
+
+    # Built-in plugins handled by this workflow's dedicated code paths.
+    # Any other plugin in the registry that supports_tags will go through
+    # _tag_images_extra_plugins().
+    _BUILTIN_TAG_PLUGIN_NAMES = frozenset({"wd14", "pixlstash_tagger"})
+
+    def _tag_images_extra_plugins(
+        self,
+        image_paths,
+        stop_event=None,
+    ) -> dict[str, list[str]]:
+        """Call any enabled tag-capable plugin that isn't WD14 or PixlStash tagger.
+
+        Returns a merged ``{path: [tag, ...]}`` dict (plain strings, no
+        confidence values — LLM-based plugins don't emit per-tag scores).
+        """
+        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+        mgr = get_tagger_plugin_manager()
+        plugins_cfg = self._tagger_settings.get("plugins", {})
+        combined: dict[str, list[str]] = {}
+
+        extra_candidates = [
+            (p.name, p)
+            for p in mgr.get_all_plugins()
+            if p.supports_tags and p.name not in self._BUILTIN_TAG_PLUGIN_NAMES
+        ]
+        logger.info(
+            "[TaggingWorkflow] extra plugin candidates: %s; tagger_settings plugins: %s",
+            [n for n, _ in extra_candidates],
+            {k: v.get("enabled") for k, v in plugins_cfg.items()},
+        )
+
+        for plugin_name, plugin in extra_candidates:
+            cfg = plugins_cfg.get(plugin_name, {})
+            enabled = cfg.get("enabled", False)
+            logger.info(
+                "[TaggingWorkflow] extra plugin %r: enabled=%s", plugin_name, enabled
+            )
+            if not enabled:
+                continue
+            params = {
+                **plugin.default_params(),
+                **cfg.get("params", {}),
+            }
+            try:
+                if plugin._service is None:
+                    plugin.setup(self._engine.device)
+                plugin.init(params)
+                raw = plugin.tag_images(
+                    image_paths,
+                    parameters=params,
+                    stop_event=stop_event,
+                )
+                for path, tag_results in raw.items():
+                    path_str = str(path)
+                    existing = set(combined.get(path_str, []))
+                    existing.update(tr.tag for tr in tag_results)
+                    combined[path_str] = sorted(existing)
+            except Exception:
+                logger.exception("Extra tag plugin %r failed; skipping.", plugin_name)
+
+        return combined
+
     # ------------------------------------------------------------------
 
     def _ensure_ready(self) -> bool:
@@ -372,7 +443,10 @@ class TaggingWorkflow:
         """VRAM-budget-aware batch size for a TagTask run.
 
         Uses the tightest cap across enabled taggers.  When only the custom
-        tagger is active the WD14 cap would be overly conservative.
+        tagger is active the WD14 cap would be overly conservative.  Extra
+        plugins (e.g. JoyCaption) that report a preferred batch size via
+        ``effective_batch_size()`` are also respected so that the task manager
+        shows incremental progress instead of a single jump at task completion.
         """
         max_concurrent = max(1, int(self._max_concurrent_images()))
         if self._engine.device == "cuda":
@@ -386,6 +460,27 @@ class TaggingWorkflow:
                     max_concurrent,
                     self._vram_limited_batch_cap(base_mb=700, per_item_mb=90),
                 )
+        # Cap by any extra plugin's preferred batch size so each TagTask covers
+        # exactly one inference batch, giving fine-grained progress updates.
+        try:
+            from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+            mgr = get_tagger_plugin_manager()
+            plugins_cfg = self._tagger_settings.get("plugins", {})
+            for plugin in mgr.get_all_plugins():
+                if not plugin.supports_tags:
+                    continue
+                if plugin.name in self._BUILTIN_TAG_PLUGIN_NAMES:
+                    continue
+                cfg = plugins_cfg.get(plugin.name, {})
+                if not cfg.get("enabled", False):
+                    continue
+                params = {**plugin.default_params(), **cfg.get("params", {})}
+                plugin_batch = plugin.effective_batch_size(params)
+                if plugin_batch > 1:
+                    max_concurrent = min(max_concurrent, plugin_batch)
+        except Exception:
+            pass
         return max(1, max_concurrent)
 
     def estimated_vram_mb(self, image_count: int) -> int:

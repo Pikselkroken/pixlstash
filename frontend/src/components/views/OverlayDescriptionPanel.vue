@@ -13,6 +13,18 @@
       <span>Description</span>
       <span class="section-meta-group">
         <button
+          v-if="props.image && !isReadOnly"
+          class="section-meta-btn"
+          type="button"
+          title="Regenerate description — deletes the current description and requeues it for captioning"
+          :disabled="isDescriptionRefreshing"
+          @click.stop="refreshDescription"
+        >
+          <v-icon size="16" :class="{ 'mdi-spin': isDescriptionRefreshing }">
+            {{ isDescriptionRefreshing ? "mdi-loading" : "mdi-refresh" }}
+          </v-icon>
+        </button>
+        <button
           class="section-meta-btn"
           type="button"
           title="Copy description"
@@ -96,6 +108,7 @@ const isSavingDescription = ref(false);
 const descriptionDraft = ref(props.image?.description || "");
 const descriptionEditorRef = ref(null);
 const descriptionCopyState = ref("idle");
+const isDescriptionRefreshing = ref(false);
 let copyResetTimer = null;
 
 watch(
@@ -173,6 +186,24 @@ async function copyDescription() {
     }, 2000);
   } else {
     alert("Unable to copy description.");
+  }
+}
+
+async function refreshDescription() {
+  if (!props.image?.id || !props.backendUrl || isDescriptionRefreshing.value)
+    return;
+  isDescriptionRefreshing.value = true;
+  const capturedImageId = props.image.id;
+  try {
+    await apiClient.patch(`${props.backendUrl}/pictures/${capturedImageId}`, {
+      description: null,
+    });
+    emit("update-description", capturedImageId, null);
+    cancelEditDescription();
+  } catch (err) {
+    alert(`Failed to reset description: ${err?.message || err}`);
+  } finally {
+    isDescriptionRefreshing.value = false;
   }
 }
 
