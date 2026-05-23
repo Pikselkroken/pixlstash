@@ -3055,13 +3055,15 @@ const isSelectionEmpty = computed(() => {
   return !showSelectionBar.value;
 });
 const showScrapheapBar = computed(() => {
-  return isScrapheapView.value && isSelectionEmpty.value;
+  return isScrapheapView.value;
 });
 const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const wrapperStyle = { position: "relative", height: "100%" };
 const scrollWrapperStyle = computed(() => ({
   position: "absolute",
-  top: "var(--selbar-height, 48px)",
+  top: showScrapheapBar.value
+    ? `calc(var(--selbar-height, 48px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
+    : "var(--selbar-height, 48px)",
   left: "0",
   right: "0",
   bottom: "0",
