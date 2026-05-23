@@ -148,9 +148,7 @@ def test_stream_continues_when_hidden_tag_post_filter_shrinks_batches():
         assert len(hidden_ids) == 20
 
         # Configure the test user to hide that tag.
-        resp = client.patch(
-            "/users/me/config", json={"hidden_tags": ["hide_me"]}
-        )
+        resp = client.patch("/users/me/config", json={"hidden_tags": ["hide_me"]})
         assert resp.status_code == 200
 
         # Drain with a small batch so post-filter shrinkage is visible per call.

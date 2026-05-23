@@ -3235,7 +3235,7 @@ const _stackOps = {
   syncExpandAllStacksFromFetchedImages: null,
   refreshExpandedStacksAfterFetch: null,
 };
-const lastGridVersionRefreshAt = ref(0);
+const lastGridVersionRefreshAt = ref(Date.now());
 const WS_TAG_FULL_REFRESH_MIN_INTERVAL_MS = 6000;
 const lastWsTagFullRefreshAt = ref(0);
 let wsTagFullRefreshTimer = null;
@@ -4342,6 +4342,7 @@ watch(
     () => props.selectedProjectId,
     () => props.searchQuery,
     () => props.selectedSort,
+    () => props.similarityCharacter,
     () => props.stackThreshold,
   ],
   () => {

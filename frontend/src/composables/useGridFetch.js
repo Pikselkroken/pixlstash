@@ -523,13 +523,41 @@ export function useGridFetch(
         if (props.importSourceFolderFilter != null) {
           _charP.set('import_source_folder', String(props.importSourceFolderFilter));
         }
+        // FAST PATH FILTER [1]: file path prefix
+        if (props.filePathPrefixFilter != null) {
+          _charP.set('file_path_prefix', String(props.filePathPrefixFilter));
+        }
         const _charSuffix = _charP.size ? `&${_charP.toString()}` : '';
         // Build media type format filter params for count and stream URLs.
         const _formatP = new URLSearchParams();
         _appendMediaTypeParams(_formatP);
         const _formatSuffix = _formatP.size ? `&${_formatP.toString()}` : '';
+        // Build filter-menu params for count and stream URLs.
+        // Each labelled block corresponds to a separate commit — remove any single
+        // block to bisect a regression.
+        const _filterP = new URLSearchParams();
+        // FAST PATH FILTER [2]: score range
+        if (props.minScoreFilter != null) _filterP.set('min_score', String(props.minScoreFilter));
+        if (props.maxScoreFilter != null) _filterP.set('max_score', String(props.maxScoreFilter));
+        // FAST PATH FILTER [3]: smart score bucket
+        if (props.smartScoreBucketFilter != null) _filterP.set('smart_score_bucket', String(props.smartScoreBucketFilter));
+        // FAST PATH FILTER [4]: resolution bucket
+        if (props.resolutionBucketFilter != null) _filterP.set('resolution_bucket', String(props.resolutionBucketFilter));
+        // FAST PATH FILTER [5]: ComfyUI model / LoRA
+        (props.comfyuiModelFilter || []).forEach((m) => _filterP.append('comfyui_model', m));
+        (props.comfyuiLoraFilter || []).forEach((l) => _filterP.append('comfyui_lora', l));
+        // FAST PATH FILTER [6]: tag filters
+        (props.tagFilter || []).forEach((t) => _filterP.append('tag', t));
+        (props.tagRejectedFilter || []).forEach((t) => _filterP.append('rejected_tag', t));
+        (props.tagConfidenceAboveFilter || []).forEach((e) => _filterP.append('tag_confidence_above', e));
+        (props.tagConfidenceBelowFilter || []).forEach((e) => _filterP.append('tag_confidence_below', e));
+        // FAST PATH FILTER [7]: face bbox filter
+        if (props.faceBboxFilter != null) _filterP.set('face_filter', String(props.faceBboxFilter));
+        // FAST PATH FILTER [8]: shared only
+        if (props.sharedOnlyFilter) _filterP.set('shared_only', 'true');
+        const _filterSuffix = _filterP.size ? `&${_filterP.toString()}` : '';
         const streamBase =
-          `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}`;
+          `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`;
 
         // Splice raw picture metadata into the placeholder grid at `offset`,
         // preserving thumbnail/face data for cells already loaded.
@@ -556,7 +584,7 @@ export function useGridFetch(
         };
 
         // 1. Fast total count — single indexed SQL query.
-        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count?stack_leaders_only=true${_charSuffix}${_formatSuffix}`);
+        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count?stack_leaders_only=true${_charSuffix}${_formatSuffix}${_filterSuffix}`);
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         const total =
           typeof countRes.data?.count === 'number' ? countRes.data.count : 0;
