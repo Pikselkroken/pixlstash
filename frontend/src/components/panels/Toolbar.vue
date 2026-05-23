@@ -27,6 +27,7 @@
                 class="bar-btn bar-split-toggle"
                 type="button"
                 :title="gbDescendingModel ? 'Descending' : 'Ascending'"
+                :disabled="gbSortModel === LIKENESS_GROUPS_SORT_KEY_GB"
                 @click.stop="gbToggleSortDirection"
               >
                 <v-icon size="19">{{ gbSortButtonIcon }}</v-icon>
@@ -61,7 +62,7 @@
                 :disabled="
                   Boolean(
                     searchStore.searchQuery && searchStore.searchQuery.trim(),
-                  )
+                  ) || gbSortModel === LIKENESS_GROUPS_SORT_KEY_GB
                 "
                 @click="gbToggleSortDirection"
               >
@@ -219,9 +220,13 @@
               title="Filters"
             >
               <v-icon size="19">mdi-filter</v-icon>
-              <span v-if="filterStore.activeCount > 0" class="bar-filter-badge">{{
-                filterStore.activeCount > 99 ? "99+" : filterStore.activeCount
-              }}</span>
+              <span
+                v-if="filterStore.activeCount > 0"
+                class="bar-filter-badge"
+                >{{
+                  filterStore.activeCount > 99 ? "99+" : filterStore.activeCount
+                }}</span
+              >
               <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
@@ -386,7 +391,10 @@
           <TbComfyPanel
             :backend-url="props.backendUrl"
             :open="tbComfyuiMenuOpen"
-            @run-grid="emit('comfyui-run-grid', $event); tbComfyuiMenuOpen = false"
+            @run-grid="
+              emit('comfyui-run-grid', $event);
+              tbComfyuiMenuOpen = false;
+            "
           />
         </v-menu>
       </div>
@@ -1015,10 +1023,13 @@ function gbHandleSortModelUpdate(sortValue) {
   }
 }
 
-function gbHandleSimilarityOptionClick() {
+function gbHandleSimilarityOptionClick(selectedValue) {
   if (
     String(gbSortMenuModel.value || "").toUpperCase() === SIMILARITY_SORT_KEY_GB
   ) {
+    if (selectedValue != null) {
+      sortStore.selectedSimilarityCharacter = selectedValue;
+    }
     gbCommitSortSelection(SIMILARITY_SORT_KEY_GB);
     gbSortMenuOpen.value = false;
   }
@@ -1094,7 +1105,6 @@ const gbSortTypeIcon = computed(() => {
 
 // ── Grid Bar: Filter ───────────────────────────────────────────────────────────
 const gbFilterMenuOpen = ref(false);
-
 
 // ── Grid Bar: View ─────────────────────────────────────────────────────────────
 const gbViewMenuOpen = ref(false);

@@ -1257,12 +1257,13 @@ const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a di
 const DATE_SORT_KEY = "DATE";
 
 const similarityCharacterOptions = computed(() => {
-  let options = sortedCharacters.value.map((c) => ({
-    text: c.name,
-    value: c.id,
-    thumbnail: characterThumbnails.value?.[c.id] || null,
-  }));
-  return options;
+  return sortedCharacters.value
+    .filter((c) => c.has_reference_faces === true)
+    .map((c) => ({
+      text: c.name,
+      value: c.id,
+      thumbnail: characterThumbnails.value?.[c.id] || null,
+    }));
 });
 
 watch(
@@ -3157,7 +3158,10 @@ defineExpose({
         </a>
         <div v-if="!props.docked" class="sidebar-brand-text">
           <span class="sidebar-brand-title">PixlStash</span>
-          <div v-if="updateAvailable && !updateDismissed" class="sidebar-update-wrapper">
+          <div
+            v-if="updateAvailable && !updateDismissed"
+            class="sidebar-update-wrapper"
+          >
             <a
               :href="latestVersionUrl"
               target="_blank"
@@ -3172,7 +3176,9 @@ defineExpose({
               class="sidebar-update-dismiss"
               :title="`Dismiss v${latestVersion} update alert`"
               @click.prevent="dismissUpdateAlert"
-            >&times;</button>
+            >
+              &times;
+            </button>
           </div>
         </div>
       </div>

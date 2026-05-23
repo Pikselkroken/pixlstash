@@ -2,6 +2,7 @@ import inspect
 import itertools
 import math
 import os
+import struct
 import threading
 import queue
 from pathlib import Path
@@ -10,6 +11,8 @@ from enum import IntEnum
 from sqlalchemy import event, inspect as sa_inspect
 from sqlmodel import create_engine, Session
 from rapidfuzz.distance import Levenshtein
+
+import numpy as np
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -203,10 +206,55 @@ def levenshtein_with_id(concatenated_tags, query, picture_id):
     return _levenshtein_internal(concatenated_tags, query, picture_id)
 
 
+def character_face_likeness(candidate_blob: bytes, refs_blob: bytes) -> float:
+    """Compute softmax-weighted cosine similarity between a candidate face and packed reference faces.
+
+    This function is registered as a SQLite scalar function and called once per face row.
+    It enables ORDER BY on likeness score at the SQL level so LIMIT/OFFSET pagination works.
+
+    Args:
+        candidate_blob: Feature vector bytes for the candidate face (float32 array).
+        refs_blob: Packed reference face vectors with header:
+            bytes 0-3: int32 n_refs (little-endian)
+            bytes 4-7: int32 vec_size (little-endian)
+            remaining: n_refs * vec_size float32 values (pre-normalised)
+
+    Returns:
+        Softmax-weighted cosine similarity in [-1, 1], or 0.0 on any error.
+    """
+    try:
+        if candidate_blob is None or refs_blob is None or len(refs_blob) < 8:
+            return 0.0
+        n_refs, vec_size = struct.unpack_from("<ii", refs_blob, 0)
+        if n_refs <= 0 or vec_size <= 0:
+            return 0.0
+        cand = np.frombuffer(candidate_blob, dtype=np.float32)
+        if cand.size != vec_size:
+            return 0.0
+        norm = np.linalg.norm(cand)
+        if norm < 1e-8:
+            return 0.0
+        cand_norm = cand / norm
+        ref_norm = np.frombuffer(refs_blob, dtype=np.float32, offset=8).reshape(
+            n_refs, vec_size
+        )
+        sims = ref_norm @ cand_norm  # (n_refs,)
+        sims = np.clip(sims, -1.0, 1.0)
+        alpha = 5.0
+        weights = np.exp(alpha * sims)
+        denom = weights.sum()
+        if denom < 1e-8:
+            return 0.0
+        return float((weights * sims).sum() / denom)
+    except Exception:
+        return 0.0
+
+
 def init_database(dbapi_conn, conn_record):
     dbapi_conn.create_function("levenshtein", 2, levenshtein)
     dbapi_conn.create_function("levenshtein_with_id", 3, levenshtein_with_id)
     dbapi_conn.create_function("cosine_similarity", 2, ImageUtils.cosine_similarity)
+    dbapi_conn.create_function("character_face_likeness", 2, character_face_likeness)
 
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")
@@ -286,9 +334,11 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
                 raise
         if table_names:
             logger.info(
-                "Existing database without Alembic version table detected; stamping head."
+                "Existing database without Alembic version table detected; "
+                "stamping baseline and upgrading to head to apply missing columns."
             )
-            command.stamp(config, "head")
+            command.stamp(config, "0001_baseline")
+            command.upgrade(config, "head")
             return
 
     try:
