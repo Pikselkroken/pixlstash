@@ -191,14 +191,18 @@ function buildQueryParams() {
     props.selectedCharacter !== "" &&
     props.selectedCharacter !== props.allPicturesId
   ) {
-    params.append("character_id", props.selectedCharacter);
-    if (props.projectViewMode === "project") {
-      params.append(
-        "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
-          : "UNASSIGNED",
-      );
+    if (props.selectedCharacter === String(props.scrapheapPicturesId)) {
+      params.append("only_deleted", "true");
+    } else {
+      params.append("character_id", props.selectedCharacter);
+      if (props.projectViewMode === "project") {
+        params.append(
+          "project_id",
+          props.selectedProjectId != null
+            ? props.selectedProjectId
+            : "UNASSIGNED",
+        );
+      }
     }
   } else if (
     props.selectedCharacter === props.allPicturesId &&
