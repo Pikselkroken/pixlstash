@@ -55,10 +55,6 @@ def serialize_user_config(user) -> dict:
         "apply_tag_filter",
         "keep_models_in_memory",
         "max_vram_gb",
-        "wd14_tagger_enabled",
-        "custom_tagger_enabled",
-        "wd14_threshold",
-        "custom_tagger_threshold_offset",
         "check_for_updates",
         "show_keyboard_hint",
         "embed_watermark",
@@ -98,11 +94,27 @@ def serialize_user_config(user) -> dict:
     config["sort_order"] = config["sort"]
     if config.get("max_vram_gb") is None:
         config["max_vram_gb"] = default_max_vram_gb()
-    if config.get("wd14_threshold") is None:
-        config["wd14_threshold"] = 0.85
-    if config.get("custom_tagger_threshold_offset") is None:
-        config["custom_tagger_threshold_offset"] = 0.0
+
+    # Include tagger_settings, filling in defaults for any missing entries.
+    config["tagger_settings"] = _load_tagger_settings(source)
+
     return config
+
+
+def _load_tagger_settings(user) -> dict:
+    """Return the user's tagger_settings dict, filling defaults for missing entries."""
+    from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+    manager = get_tagger_plugin_manager()
+    raw = getattr(user, "tagger_settings", None)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = {}
+    else:
+        parsed = {}
+    return manager.fill_defaults(parsed)
 
 
 def apply_user_config_patch(user, patch_data) -> bool:
@@ -144,13 +156,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "apply_tag_filter",
         "keep_models_in_memory",
         "max_vram_gb",
-        "wd14_tagger_enabled",
-        "custom_tagger_enabled",
-        "wd14_threshold",
-        "custom_tagger_threshold_offset",
         "check_for_updates",
         "show_keyboard_hint",
         "embed_watermark",
+        "tagger_settings",
     }
 
     allowed_date_formats = {
@@ -268,31 +277,6 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.max_vram_gb = new_value
                 updated = True
             continue
-        if key in {"wd14_tagger_enabled", "custom_tagger_enabled"}:
-            new_value = bool(value)
-            if getattr(user, key) != new_value:
-                setattr(user, key, new_value)
-                updated = True
-            continue
-        if key in {"wd14_threshold", "custom_tagger_threshold_offset"}:
-            if value in ("", None, "null"):
-                new_value = None
-            else:
-                new_value = float(value)
-                if key == "wd14_threshold" and not (0.0 < new_value <= 1.0):
-                    raise ValueError(
-                        f"{key} must be between 0 (exclusive) and 1 (inclusive)"
-                    )
-                if key == "custom_tagger_threshold_offset" and not (
-                    -1.0 <= new_value <= 1.0
-                ):
-                    raise ValueError(
-                        "custom_tagger_threshold_offset must be between -1.0 and 1.0"
-                    )
-            if getattr(user, key) != new_value:
-                setattr(user, key, new_value)
-                updated = True
-            continue
         if key == "check_for_updates":
             if value in ("", "null"):
                 new_value = None
@@ -352,8 +336,90 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.sidebar_thumbnail_size = new_value
                 updated = True
             continue
+        if key == "tagger_settings":
+            updated |= _apply_tagger_settings_patch(user, value)
+            continue
         current_value = getattr(user, key, None)
         if current_value != value:
             setattr(user, key, value)
             updated = True
     return updated
+
+
+def _apply_tagger_settings_patch(user, patch_value) -> bool:
+    """Deep-merge a ``tagger_settings`` patch into the user's stored settings.
+
+    Merges at the plugin level: existing plugin entries are updated with the
+    patch's values, unknown plugin names in the patch are rejected with
+    :class:`ValueError`.
+
+    Args:
+        user: User ORM object.
+        patch_value: Partial or full tagger_settings dict (or JSON string).
+
+    Returns:
+        True if the stored value changed, False otherwise.
+
+    Raises:
+        ValueError: If the patch references an unknown plugin or contains an
+            invalid ``active_description_plugin`` value.
+    """
+    from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+    if isinstance(patch_value, str):
+        try:
+            patch_value = json.loads(patch_value)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"tagger_settings must be a JSON object: {exc}") from exc
+    if not isinstance(patch_value, dict):
+        raise ValueError("tagger_settings must be a JSON object")
+
+    manager = get_tagger_plugin_manager()
+    known_plugins = set(manager.plugin_names())
+
+    # Load and fill current settings.
+    current = _load_tagger_settings(user)
+
+    # Validate and apply active_description_plugin.
+    if "active_description_plugin" in patch_value:
+        adp = patch_value["active_description_plugin"]
+        if adp is not None and adp not in known_plugins:
+            raise ValueError(f"active_description_plugin '{adp}' is not a known plugin")
+        if adp is not None:
+            plugin = manager.get_plugin(adp)
+            if plugin is None or not plugin.supports_descriptions:
+                raise ValueError(f"Plugin '{adp}' does not support descriptions")
+        current["active_description_plugin"] = adp
+
+    # Validate and deep-merge per-plugin entries.
+    if "plugins" in patch_value:
+        for plugin_name, plugin_patch in patch_value["plugins"].items():
+            if plugin_name not in known_plugins:
+                raise ValueError(f"Unknown plugin '{plugin_name}' in tagger_settings")
+            if not isinstance(plugin_patch, dict):
+                raise ValueError(
+                    f"Plugin entry for '{plugin_name}' must be a JSON object"
+                )
+            current_plugin = current["plugins"].setdefault(plugin_name, {})
+            # Merge top-level keys (enabled, params).
+            if "enabled" in plugin_patch:
+                current_plugin["enabled"] = bool(plugin_patch["enabled"])
+            if "params" in plugin_patch:
+                plugin_obj = manager.get_plugin(plugin_name)
+                schema = {
+                    f["name"]: f
+                    for f in (plugin_obj.parameter_schema() if plugin_obj else [])
+                }
+                current_params = current_plugin.setdefault("params", {})
+                for param_name, param_value in plugin_patch["params"].items():
+                    if schema and param_name not in schema:
+                        raise ValueError(
+                            f"Unknown parameter '{param_name}' for plugin '{plugin_name}'"
+                        )
+                    current_params[param_name] = param_value
+
+    new_json = json.dumps(current)
+    if getattr(user, "tagger_settings", None) != new_json:
+        user.tagger_settings = new_json
+        return True
+    return False

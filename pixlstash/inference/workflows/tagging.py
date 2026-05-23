@@ -42,11 +42,13 @@ class TaggingWorkflow:
         use_wd14: bool,
         use_pixlstash_tagger: bool,
         threshold_offset: float = 0.0,
+        tagger_settings: dict | None = None,
     ) -> None:
         self._engine = engine
         self._use_wd14 = use_wd14
         self._use_pixlstash_tagger = use_pixlstash_tagger
         self._threshold_offset = threshold_offset
+        self._tagger_settings = tagger_settings or {}
 
     # ------------------------------------------------------------------
     # Properties

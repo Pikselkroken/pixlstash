@@ -133,20 +133,18 @@ def create_router(server) -> APIRouter:
             )
         if "max_vram_gb" in patch_data:
             server.vault.set_max_vram_usage_gb(getattr(user, "max_vram_gb", None))
-        if "wd14_tagger_enabled" in patch_data:
-            server.vault.set_wd14_tagger_enabled(
-                getattr(user, "wd14_tagger_enabled", False)
-            )
-        if "custom_tagger_enabled" in patch_data:
-            server.vault.set_pixlstash_tagger_enabled(
-                getattr(user, "custom_tagger_enabled", True)
-            )
-        if "wd14_threshold" in patch_data:
-            server.vault.set_wd14_threshold(getattr(user, "wd14_threshold", None))
-        if "custom_tagger_threshold_offset" in patch_data:
-            server.vault.set_pixlstash_tagger_threshold_offset(
-                getattr(user, "custom_tagger_threshold_offset", None)
-            )
+        if "tagger_settings" in patch_data:
+            import json as _json
+
+            raw = getattr(user, "tagger_settings", None)
+            if raw:
+                try:
+                    settings = _json.loads(raw)
+                    server.vault.set_tagger_settings(settings)
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Could not apply tagger_settings from patch: %s", exc
+                    )
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"

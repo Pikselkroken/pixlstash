@@ -108,6 +108,7 @@ class Vault:
         self._pixlstash_tagger_enabled = True
         self._wd14_threshold = None
         self._pixlstash_tagger_threshold_offset = None
+        self._tagger_settings: dict | None = None
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
 
@@ -404,6 +405,24 @@ class Vault:
             self._task_runner.set_max_vram_usage_gb(max_vram_gb)
         if self._engine:
             self._engine.set_max_vram_usage_gb(max_vram_gb)
+
+    def set_tagger_settings(self, settings: dict) -> None:
+        """Replace the full tagger plugin settings and propagate to the engine."""
+        self._tagger_settings = settings
+        # Keep legacy fields in sync so existing code paths work unchanged.
+        plugins = settings.get("plugins", {})
+        wd14_cfg = plugins.get("wd14", {})
+        pixl_cfg = plugins.get("pixlstash_tagger", {})
+        self._wd14_tagger_enabled = bool(wd14_cfg.get("enabled", False))
+        self._pixlstash_tagger_enabled = bool(pixl_cfg.get("enabled", True))
+        wd14_threshold = wd14_cfg.get("params", {}).get("threshold")
+        if wd14_threshold is not None:
+            self._wd14_threshold = float(wd14_threshold)
+        threshold_offset = pixl_cfg.get("params", {}).get("threshold_offset")
+        if threshold_offset is not None:
+            self._pixlstash_tagger_threshold_offset = float(threshold_offset)
+        if self._engine:
+            self._engine.set_tagger_settings(settings)
 
     def set_wd14_tagger_enabled(self, enabled: bool):
         self._wd14_tagger_enabled = bool(enabled)
@@ -736,6 +755,7 @@ class Vault:
                 pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
                 or 0.0,
                 keep_models_in_memory=self._keep_models_in_memory,
+                tagger_settings=self._tagger_settings,
             )
 
         # Register the watcher BEFORE checking the DB to avoid a TOCTOU race where

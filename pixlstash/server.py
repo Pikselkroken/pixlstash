@@ -238,16 +238,22 @@ class Server:
             else getattr(self._user, "max_vram_gb", None)
         )
         self.vault.set_max_vram_usage_gb(effective_vram_gb)
-        self.vault.set_wd14_tagger_enabled(
-            getattr(self._user, "wd14_tagger_enabled", False)
-        )
-        self.vault.set_pixlstash_tagger_enabled(
-            getattr(self._user, "custom_tagger_enabled", True)
-        )
-        self.vault.set_wd14_threshold(getattr(self._user, "wd14_threshold", None))
-        self.vault.set_pixlstash_tagger_threshold_offset(
-            getattr(self._user, "custom_tagger_threshold_offset", None)
-        )
+        # Initialise tagger_settings from the stored JSON (fills defaults for any
+        # missing plugin entries so the engine always has a complete config).
+        if self._user is not None:
+            import json as _json
+            from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+            raw_settings = getattr(self._user, "tagger_settings", None)
+            if raw_settings:
+                try:
+                    parsed = _json.loads(raw_settings)
+                except (ValueError, TypeError):
+                    parsed = {}
+            else:
+                parsed = {}
+            filled = get_tagger_plugin_manager().fill_defaults(parsed)
+            self.vault.set_tagger_settings(filled)
         self.vault.start()
 
         self.api = FastAPI(

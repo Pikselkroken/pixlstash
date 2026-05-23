@@ -49,9 +49,18 @@ class MissingTagFinder(BaseTaskFinder):
         engine = self._engine_getter()
         if engine is None:
             return None
-        wd14_enabled = engine.wd14_enabled
-        pixlstash_tagger_enabled = engine.pixlstash_tagger_enabled
-        if not wd14_enabled and not pixlstash_tagger_enabled:
+        # Check via tagger_settings if any tag-capable plugin is enabled.
+        tagger_settings = getattr(engine, "tagger_settings", None)
+        if tagger_settings:
+            plugins = tagger_settings.get("plugins", {})
+            any_enabled = any(
+                bool(cfg.get("enabled", False))
+                for cfg in plugins.values()
+                if isinstance(cfg, dict)
+            )
+        else:
+            any_enabled = engine.wd14_enabled or engine.pixlstash_tagger_enabled
+        if not any_enabled:
             return None
 
         batch_limit = max(
