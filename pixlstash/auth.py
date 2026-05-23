@@ -1054,6 +1054,16 @@ class AuthService:
             return await call_next(request)
 
         if not is_auth_excluded_path(request.url.path):
+            # Only enforce authentication for API routes.  Non-API paths (e.g.
+            # SPA routes like /character/5) are served as static HTML so the
+            # frontend can load and handle auth itself — the login screen is
+            # shown and, after a successful login, Vue router restores the
+            # original URL automatically.
+            if not any(
+                request.url.path.startswith(prefix) for prefix in AUTH_API_PREFIXES
+            ):
+                return await call_next(request)
+
             session_id = request.cookies.get("session_id")
             user_id = self.active_session_ids.get(session_id) if session_id else None
 
