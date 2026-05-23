@@ -33,6 +33,9 @@ sqlmodel==0.0.37
 alembic==1.18.4
 nltk==3.9.4
 python-jose[cryptography]==3.5.0
+# Optional dependency for JoyCaption NF4/INT8 quantisation (Linux/WSL2 only).
+# Install manually: pip install bitsandbytes
+# bitsandbytes
 dotenv==0.9.9
 passlib==1.7.4
 bcrypt==3.2.2

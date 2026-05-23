@@ -8,13 +8,15 @@ import App from "../App.vue";
 // when the user navigates between views.
 //
 // Route schema:
-//   /                            → All Pictures
-//   /character/:id               → Character view (id = "UNASSIGNED" | numeric)
-//   /character/:id?ids=1,2,3&mode=union  → Multi-character
-//   /set/:id                     → Set view (primary set id = numeric)
+//   /                                       → All Pictures
+//   /character/:id                          → Character view (id = "UNASSIGNED" | numeric)
+//   /character/:id?ids=1,2,3&mode=union     → Multi-character
+//   /set/:id                                → Set view (primary set id = numeric)
 //   /set/:id?ids=1,2,3&mode=intersection&base=1  → Multi-set
-//   /project/:id                 → Project view
-//   /scrapheap                   → Scrapheap
+//   /project/:id                            → Project view (all pictures)
+//   /project/:projectId/character/:id       → Character inside a project
+//   /project/:projectId/set/:id             → Picture set inside a project
+//   /scrapheap                              → Scrapheap
 //
 //   Any of the above routes may also carry:
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
@@ -28,6 +30,8 @@ const routes = [
   { path: "/character/:id", name: "character", component: App },
   { path: "/set/:id", name: "set", component: App },
   { path: "/project/:id", name: "project", component: App },
+  { path: "/project/:projectId/character/:id", name: "project-character", component: App },
+  { path: "/project/:projectId/set/:id", name: "project-set", component: App },
   { path: "/scrapheap", name: "scrapheap", component: App },
   // Catch-all: redirect unknown paths to home
   { path: "/:pathMatch(.*)*", redirect: "/" },

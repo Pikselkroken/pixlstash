@@ -210,7 +210,6 @@ export function MediaFormat(source) {
   if (source.format) return MediaFormat(source.format);
   if (source.filename) return MediaFormat(source.filename);
   if (source.url) return MediaFormat(source.url);
-  if (source.id) return MediaFormat(source.id);
   return '';
 }
 

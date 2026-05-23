@@ -125,7 +125,7 @@ pixlstash/
 │       ├── scaling.py
 │       └── plugin_template.py
 │
-├── tagger_plugins/                   # Tagger service classes (WD14, PixlStash, CLIP, SBert, Florence2)
+├── tagger_plugins/                   # TaggerPlugin subclasses + registry (WD14, PixlStash tagger, Florence-2, JoyCaption)
 │
 ├── services/                         # Business-logic extracted from route handlers
 │   ├── config_service.py             # Hardware monitoring + import folder utilities
@@ -543,8 +543,8 @@ Project / PictureProjectMember
 ```text
 User: id, username, password_hash, plus full settings block
       (sort, columns, theme, similarity_character, hidden_tags,
-       smart_score_penalised_tags, wd14_tagger_enabled,
-       custom_tagger_enabled, thresholds, watermark_image (BLOB), …)
+       smart_score_penalised_tags, tagger_settings (JSON),
+       keep_models_in_memory, max_vram_gb, watermark_image (BLOB), …)
 
 UserToken: id, user_id, token_hash, scope (READ|WRITE),
            resource_type, resource_id, expires_at,
@@ -579,7 +579,7 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 |------|-------|--------|---------|
 | `FACE_EXTRACTION` | GPU | `MissingFaceExtractionFinder` | InsightFace detection + 512-d embedding |
 | `QUALITY` | CPU | `MissingQualityFinder` | OpenCV quality metrics |
-| `TAGGER` | GPU | `MissingTagFinder` | WD14 + PixlStash tagger |
+| `TAGGER` | GPU | `MissingTagFinder` | All enabled tag plugins (union) |
 | `DESCRIPTION` | GPU | `MissingDescriptionFinder` | Image caption generation |
 | `TEXT_EMBEDDING` | GPU | `MissingTextEmbeddingFinder` | SentenceTransformer on captions |
 | `IMAGE_EMBEDDING` | GPU | `MissingImageEmbeddingFinder` | CLIP image embedding |
@@ -611,21 +611,52 @@ Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixel
 
 ## 9. Tagger Plugins
 
-Tagger service classes live in [pixlstash/tagger_plugins/](../pixlstash/tagger_plugins/). They are wired together by `InferenceEngine` ([pixlstash/inference/engine.py](../pixlstash/inference/engine.py)), which is the single dependency-injection root for all ML inference. Use `InferenceEngine.create(...)` as the factory entry point.
+All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlstash/tagger_plugins/base.py](../pixlstash/tagger_plugins/base.py)). Plugins are managed by `TaggerPluginManager` ([pixlstash/tagger_plugins/registry.py](../pixlstash/tagger_plugins/registry.py)), the process-wide singleton accessed via `get_tagger_plugin_manager()`. If a plugin module fails to import (e.g. a missing optional dependency), the registry logs a warning and skips it — the rest of the app boots normally.
 
-| Tagger | File | Model | Toggle | Threshold |
-|--------|------|-------|--------|-----------|
-| WD14 | `tagger_plugins/wd14.py` | `SmilingWolf/wd-convnext-tagger-v3` (HF) | `User.wd14_tagger_enabled` | `User.wd14_threshold` |
-| PixlStash tagger | `tagger_plugins/pixlstash_tagger.py` | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned commit) | `User.custom_tagger_enabled` | `User.custom_tagger_threshold_offset` |
+| Plugin name | Class | File | Capability | Notes |
+|-------------|-------|------|------------|-------|
+| `wd14` | `WD14Plugin` | `tagger_plugins/wd14.py` | Tags | `SmilingWolf/wd-convnext-tagger-v3` ONNX |
+| `pixlstash_tagger` | `PixlStashTaggerPlugin` | `tagger_plugins/pixlstash_tagger.py` | Tags | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned) |
+| `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions |
+| `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
 
-Both models support CUDA and CPU. Models are lazily loaded on first use and can be unloaded after idle to free VRAM unless `keep_models_in_memory` is set.
+### `TaggerPlugin` ABC
+
+Every plugin declares:
+- **Class attributes**: `name`, `display_name`, `description`, `supports_tags`, `supports_descriptions`, `requires_download`, `default_enabled`.
+- **`parameter_schema()`** — list of JSON-serialisable parameter definitions (same shape as `ImagePlugin.parameter_schema()`).
+- **Lifecycle**: `needs_download()`, `download()`, `init(parameters)`, `unload()`, `is_loaded()`.
+- **Inference**: `tag_images(...)` (when `supports_tags`) returns `{path: list[TagResult]}`; `generate_descriptions(...)` (when `supports_descriptions`) returns `{path: caption_str}`. `TagResult` carries `tag` and `confidence` (may be `None` for LLM-based plugins).
+- **VRAM hints**: `estimated_vram_mb()`, `effective_batch_size()`.
+
+### `tagger_settings` JSON column
+
+User plugin preferences are stored in a single `User.tagger_settings` JSON column:
+
+```json
+{
+  "active_description_plugin": "florence2",
+  "plugins": {
+    "wd14":             {"enabled": false, "params": {"threshold": 0.85}},
+    "pixlstash_tagger": {"enabled": true,  "params": {"threshold_offset": 0.0}},
+    "florence2":        {                   "params": {"max_new_tokens": 120, "fast_mode": false}}
+  }
+}
+```
+
+- **Tag plugins** carry an `enabled` flag; outputs union across all enabled plugins (max confidence wins).
+- **Description plugins** are selected via the single `active_description_plugin` value (radio-select). Florence-2 is the fallback if the configured plugin is unavailable.
+- Missing entries are filled with per-plugin defaults on every serialise; unknown plugin names are preserved on read for downgrade safety.
+- Written exclusively through `PATCH /users/me/config` (`tagger_settings` key); `user_settings_utils._apply_tagger_settings_patch` validates all plugin names and parameter names against the live registry.
+
+All models support CUDA and CPU. Models are lazily loaded on first `init()` call and can be unloaded after idle to free VRAM unless `keep_models_in_memory` is set.
 
 The `InferenceEngine` also exposes workflow accessor properties that wrap the tagger services:
 
 | Property | Workflow class | Purpose |
 |----------|---------------|---------|
-| `tagging_workflow` | `inference/workflows/tagging.py` | WD14 + PixlStash tagger |
-| `description_workflow` | `inference/workflows/description.py` | Florence-2 captions |
+| `tagging_workflow` | `inference/workflows/tagging.py` | All enabled tag plugins (union) |
+| `description_workflow` | `inference/workflows/description.py` | Active description plugin (Florence-2 fallback) |
 | `text_embedding_workflow` | `inference/workflows/text_embedding.py` | SentenceTransformer + CLIP text |
 | `face_embedding_workflow` | `inference/workflows/face_embedding.py` | InsightFace 512-d embeddings |
 | `clip_embedding_workflow` | `inference/workflows/clip_embedding.py` | CLIP image embeddings |

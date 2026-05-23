@@ -705,6 +705,7 @@ const props = defineProps({
   allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
   tagUpdate: { type: Object, default: () => ({}) },
+  descriptionUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -727,6 +728,7 @@ const {
   allImages,
   backendUrl,
   tagUpdate,
+  descriptionUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -901,6 +903,7 @@ const descriptionTeaser = computed(() => {
 });
 
 const lastTagUpdateKey = ref(0);
+const lastDescriptionUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -3178,6 +3181,23 @@ watch(
     const nextKey = payload.key || 0;
     if (!nextKey || nextKey === lastTagUpdateKey.value) return;
     lastTagUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    const currentId = String(image.value.id);
+    if (pictureIds.length && !pictureIds.includes(currentId)) return;
+    fetchOverlayMetadata(image.value.id);
+  },
+);
+
+watch(
+  () => descriptionUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastDescriptionUpdateKey.value) return;
+    lastDescriptionUpdateKey.value = nextKey;
     if (!open.value || !image.value?.id) return;
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds.map((id) => String(id))

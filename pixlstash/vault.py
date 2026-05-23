@@ -179,6 +179,7 @@ class Vault:
                 pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
                 or 0.0,
                 keep_models_in_memory=self._keep_models_in_memory,
+                tagger_settings=self._tagger_settings,
             )
 
     def start(self) -> None:
@@ -408,13 +409,16 @@ class Vault:
 
     def set_tagger_settings(self, settings: dict) -> None:
         """Replace the full tagger plugin settings and propagate to the engine."""
+        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+        settings = get_tagger_plugin_manager().fill_defaults(settings)
         self._tagger_settings = settings
         # Keep legacy fields in sync so existing code paths work unchanged.
         plugins = settings.get("plugins", {})
         wd14_cfg = plugins.get("wd14", {})
         pixl_cfg = plugins.get("pixlstash_tagger", {})
         self._wd14_tagger_enabled = bool(wd14_cfg.get("enabled", False))
-        self._pixlstash_tagger_enabled = bool(pixl_cfg.get("enabled", True))
+        self._pixlstash_tagger_enabled = bool(pixl_cfg.get("enabled", False))
         wd14_threshold = wd14_cfg.get("params", {}).get("threshold")
         if wd14_threshold is not None:
             self._wd14_threshold = float(wd14_threshold)
@@ -618,7 +622,10 @@ class Vault:
 
         if task.type == "DescriptionTask":
             self._notify_worker_ids_processed(TaskType.DESCRIPTION, changed)
-            self.notify(EventType.CHANGED_DESCRIPTIONS)
+            picture_ids = [pic_id for _, pic_id, _, _ in changed]
+            self.notify(
+                EventType.CHANGED_DESCRIPTIONS, picture_ids if picture_ids else None
+            )
             return
 
         if task.type == "TextEmbeddingTask":

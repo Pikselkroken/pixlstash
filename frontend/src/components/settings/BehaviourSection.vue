@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
 import TagPluginsTable from "../widgets/TagPluginsTable.vue";
 import DescriptionPluginsTable from "../widgets/DescriptionPluginsTable.vue";
@@ -331,6 +331,36 @@ async function fetchTaggerPlugins() {
   }
 }
 
+async function refreshTaggerLoaded() {
+  try {
+    const res = await apiClient.get("/taggers");
+    const fresh = res.data?.plugins ?? [];
+    // Only update is_loaded on existing entries to avoid layout churn.
+    taggerPlugins.value = taggerPlugins.value.map((p) => {
+      const update = fresh.find((f) => f.name === p.name);
+      return update ? { ...p, is_loaded: update.is_loaded } : p;
+    });
+  } catch {
+    // Ignore poll errors silently.
+  }
+}
+
+let taggerPollTimer = null;
+
+function startTaggerPoll() {
+  stopTaggerPoll();
+  taggerPollTimer = setInterval(refreshTaggerLoaded, 5000);
+}
+
+function stopTaggerPoll() {
+  if (taggerPollTimer !== null) {
+    clearInterval(taggerPollTimer);
+    taggerPollTimer = null;
+  }
+}
+
+onUnmounted(stopTaggerPoll);
+
 watch(
   () => props.open,
   (isOpen) => {
@@ -338,6 +368,9 @@ watch(
       resetForm();
       fetchBehaviourSettings();
       fetchTaggerPlugins();
+      startTaggerPoll();
+    } else {
+      stopTaggerPoll();
     }
   },
   { immediate: true },
@@ -371,7 +404,7 @@ watch(maxVramGbValue, () => {
       v-else
       :plugins="taggerPlugins"
       :settings="taggerSettings"
-      @update:settings="(s) => (taggerSettings.value = s)"
+      @update:settings="(s) => (taggerSettings = s)"
     />
   </div>
   <v-divider class="settings-section-divider" />
@@ -385,7 +418,7 @@ watch(maxVramGbValue, () => {
       v-else
       :plugins="taggerPlugins"
       :settings="taggerSettings"
-      @update:settings="(s) => (taggerSettings.value = s)"
+      @update:settings="(s) => (taggerSettings = s)"
     />
   </div>
 

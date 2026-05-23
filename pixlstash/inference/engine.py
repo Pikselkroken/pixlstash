@@ -234,7 +234,7 @@ class InferenceEngine:
         wd14_cfg = plugins.get("wd14", {})
         pixl_cfg = plugins.get("pixlstash_tagger", {})
         self._wd14_enabled = bool(wd14_cfg.get("enabled", False))
-        self._pixlstash_tagger_enabled = bool(pixl_cfg.get("enabled", True))
+        self._pixlstash_tagger_enabled = bool(pixl_cfg.get("enabled", False))
         self._pixlstash_tagger_threshold_offset = float(
             pixl_cfg.get("params", {}).get("threshold_offset", 0.0)
         )

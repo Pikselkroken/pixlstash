@@ -80,10 +80,7 @@
                 <v-icon size="12">mdi-close</v-icon>
               </button>
             </span>
-            <div
-              v-if="!allImageTags.length"
-              class="tag-drop-placeholder"
-            >
+            <div v-if="!allImageTags.length" class="tag-drop-placeholder">
               Drop tags here
             </div>
             <input
@@ -103,24 +100,16 @@
   </div>
 
   <div v-if="nearMissPredictions.length" class="sidebar-section">
-    <div class="section-header">
-      <span class="section-header-title-with-meta">
-        Rejected Tags
-      </span>
-      <button
-        class="section-meta-btn"
-        type="button"
-        :title="
-          nearMissesCollapsed
-            ? 'Expand rejected tags'
-            : 'Collapse rejected tags'
-        "
-        @click.stop="nearMissesCollapsed = !nearMissesCollapsed"
-      >
-        <v-icon size="14">{{
-          nearMissesCollapsed ? "mdi-chevron-down" : "mdi-chevron-up"
+    <div
+      class="section-header section-header--collapsible"
+      @click="nearMissesCollapsed = !nearMissesCollapsed"
+    >
+      <span>Rejected Tags</span>
+      <span class="section-meta-group">
+        <v-icon size="16" style="opacity: 0.6">{{
+          !nearMissesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
         }}</v-icon>
-      </button>
+      </span>
     </div>
     <div
       v-show="!nearMissesCollapsed"
@@ -884,6 +873,28 @@ defineExpose({
 </script>
 
 <style scoped>
+.section-header--collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.section-header--collapsible:hover {
+  opacity: 0.85;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+  padding: 2px 0;
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+
 .section-meta-group {
   display: inline-flex;
   align-items: center;
