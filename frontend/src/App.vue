@@ -483,6 +483,12 @@ async function handleSelectCharacter(payload) {
   } else if (charId === SCRAPHEAP_PICTURES_ID) {
     selectionStore.lastSelectedCharacterLabel = "Scrapheap";
   }
+  if (
+    charId === SCRAPHEAP_PICTURES_ID &&
+    sortStore.selectedSort === "LIKENESS_GROUPS"
+  ) {
+    sortStore.selectedSort = "DATE";
+  }
   selectionStore.selectedCharacter = charId;
   selectionStore.selectedCharacterIds = ids.length ? ids : [];
   if (ids.length <= 1) {

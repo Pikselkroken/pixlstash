@@ -100,7 +100,7 @@
               "
             >
               <v-btn
-                v-for="opt in sortStore.sortOptions ?? []"
+                v-for="opt in filteredSortOptions"
                 :key="opt.value"
                 :value="opt.value"
                 class="gb-sort-grid-btn"
@@ -825,6 +825,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -888,12 +889,22 @@ const emit = defineEmits([
 ]);
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
+const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
+
+const filteredSortOptions = computed(() => {
+  const options = sortStore.sortOptions ?? [];
+  if (selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID) {
+    return options.filter((opt) => opt.value !== LIKENESS_GROUPS_SORT_KEY);
+  }
+  return options;
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Pinia stores (replaces gridBarState and toolbarState provide/inject)
 // ═══════════════════════════════════════════════════════════════════════════════
 const filterStore = useFilterStore();
 const sortStore = useSortStore();
+const selectionStore = useSelectionStore();
 const gridStore = useGridStore();
 const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
@@ -1050,7 +1061,7 @@ function gbToggleSortDirection() {
 }
 
 const gbSelectedSortOption = computed(() =>
-  (sortStore.sortOptions ?? []).find((opt) => opt.value === gbSortModel.value),
+  filteredSortOptions.value.find((opt) => opt.value === gbSortModel.value),
 );
 const gbSelectedSimilarityOption = computed(() =>
   (sortStore.similarityCharacterOptions ?? []).find(

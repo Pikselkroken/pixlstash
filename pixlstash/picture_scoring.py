@@ -587,6 +587,7 @@ def find_pictures_by_character_likeness_sql(
         Picture.find,
         id=selected_ids,
         select_fields=Picture.metadata_fields(),
+        only_deleted=deleted_only,
     )
     timing_after_fetch = time.perf_counter()
 
