@@ -191,14 +191,18 @@ export function useGridFetch(
       props.selectedCharacter !== "" &&
       props.selectedCharacter !== props.allPicturesId
     ) {
-      params.append("character_id", props.selectedCharacter);
-      if (props.projectViewMode === "project") {
-        params.append(
-          "project_id",
-          props.selectedProjectId != null
-            ? props.selectedProjectId
-            : "UNASSIGNED",
-        );
+      if (props.selectedCharacter === String(props.scrapheapPicturesId)) {
+        params.append("only_deleted", "true");
+      } else {
+        params.append("character_id", props.selectedCharacter);
+        if (props.projectViewMode === "project") {
+          params.append(
+            "project_id",
+            props.selectedProjectId != null
+              ? props.selectedProjectId
+              : "UNASSIGNED",
+          );
+        }
       }
     } else if (
       props.selectedCharacter === props.allPicturesId &&
@@ -438,8 +442,10 @@ export function useGridFetch(
       const _hasSearch = !!props.searchQuery?.trim();
       const _isLikenessSort = props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
       // Fast path is also not applicable when the character view requires
-      // special backend logic that either returns null for count (UNASSIGNED)
-      // or bypasses count_only entirely (non-numeric special views like SCRAPHEAP).
+      // special backend logic that either returns null for count (UNASSIGNED).
+      // SCRAPHEAP is explicitly allowed: the backend maps character_id=SCRAPHEAP
+      // to only_deleted=True in both the /pictures/stream and /pictures/count
+      // endpoints, so LIMIT/OFFSET and COUNT(*) both work correctly.
       const _fastCharIds = normalizedSelectedCharacterIds.value;
       const _fastSelChar = props.selectedCharacter;
       const _isUnassignedView =
@@ -448,6 +454,7 @@ export function useGridFetch(
         _fastSelChar != null &&
         _fastSelChar !== '' &&
         _fastSelChar !== props.allPicturesId &&
+        _fastSelChar !== props.scrapheapPicturesId &&
         !String(_fastSelChar).match(/^\d+$/);
       if (USE_FAST_GRID_PATH && !_hasSearch && !_isLikenessSort && !_isUnassignedView && !_isSpecialCharView) {
         // For sorted fetches the progress bar is meaningless in the fast path
@@ -511,6 +518,8 @@ export function useGridFetch(
               _charP.set('project_id', _pid != null ? String(_pid) : 'UNASSIGNED');
             }
           }
+        } else if (_fastSelChar === String(props.scrapheapPicturesId)) {
+          _charP.set('only_deleted', 'true');
         } else if (
           _fastSelChar != null &&
           _fastSelChar !== '' &&

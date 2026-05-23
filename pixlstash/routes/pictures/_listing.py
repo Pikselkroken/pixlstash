@@ -220,7 +220,8 @@ def select_pictures_for_listing(
     query_params.pop(
         "stack_leaders_only", None
     )  # already consumed as an explicit kwarg; must not leak into **query_params
-    only_deleted = False
+    _only_deleted_raw = query_params.pop("only_deleted", None)
+    only_deleted = _only_deleted_raw == "true" or _only_deleted_raw is True
     set_mode = normalize_set_mode(set_mode_raw)
     set_filter_ids = collect_set_filter_ids(
         set_id_value=set_id_raw,
@@ -317,6 +318,9 @@ def select_pictures_for_listing(
 
     pics = []
     if character_id == "SCRAPHEAP":
+        logger.warning(
+            "character_id=SCRAPHEAP is deprecated; use only_deleted=true instead"
+        )
         only_deleted = True
         character_id = None
 
@@ -609,6 +613,7 @@ def select_pictures_for_listing(
                 candidate_ids=list(candidate_ids)
                 if candidate_ids is not None
                 else None,
+                deleted_only=only_deleted,
             )
         pics = find_pictures_by_character_likeness_sql(
             server,
@@ -618,6 +623,7 @@ def select_pictures_for_listing(
             effective_limit,
             descending,
             candidate_ids=list(candidate_ids) if candidate_ids is not None else None,
+            deleted_only=only_deleted,
         )
         pics = _record_sql_count(pics)
         if pics:
@@ -690,6 +696,23 @@ def select_pictures_for_listing(
         )
         pics = _record_sql_count(pics)
     elif only_deleted:
+        if count_only:
+            return server.vault.db.run_task(
+                Picture.find,
+                count_only=True,
+                only_deleted=True,
+                include_unimported=True,
+                stack_leaders_only=stack_leaders_only,
+                format=format,
+                min_score=min_score,
+                max_score=max_score,
+                smart_score_bucket=smart_score_bucket,
+                resolution_bucket=resolution_bucket,
+                face_filter=face_filter,
+                guest_session_id=guest_session_id,
+                guest_token_id=guest_token_id,
+                **query_params,
+            )
         pics = server.vault.db.run_task(
             Picture.find,
             sort_mech=sort_mech,
@@ -1006,6 +1029,11 @@ def register_routes(router, server):
         project_id: str | None = Query(
             None, description="Filter by project id or 'UNASSIGNED'"
         ),
+        only_deleted: bool = Query(
+            False,
+            description="Return only deleted (scrapheap) pictures. "
+            "Replaces the deprecated character_id=SCRAPHEAP.",
+        ),
     ):
         if fields == "grid":
             metadata_fields = list(Picture.grid_fields())
@@ -1065,6 +1093,11 @@ def register_routes(router, server):
         stack_leaders_only: bool = Query(False),
         project_id: str | None = Query(
             None, description="Filter by project id or 'UNASSIGNED'"
+        ),
+        only_deleted: bool = Query(
+            False,
+            description="Return only deleted (scrapheap) pictures. "
+            "Replaces the deprecated character_id=SCRAPHEAP.",
         ),
     ):
         if fields == "grid":
@@ -1134,6 +1167,11 @@ def register_routes(router, server):
         stack_leaders_only: bool = Query(False),
         project_id: str | None = Query(
             None, description="Filter by project id or 'UNASSIGNED'"
+        ),
+        only_deleted: bool = Query(
+            False,
+            description="Return only deleted (scrapheap) pictures. "
+            "Replaces the deprecated character_id=SCRAPHEAP.",
         ),
     ):
         token_scope = getattr(request.state, "token_scope", None)
