@@ -65,8 +65,12 @@ def upgrade() -> None:
 
     # Composite unique index on (project_id, lower(name)).
     # NULL project_id rows are unaffected (SQLite NULL distinctness).
-    existing_indexes = {idx["name"] for idx in inspector.get_indexes("character")}
-    if "ux_character_name_project_ci" not in existing_indexes:
+    existing = bind.execute(
+        sa.text(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='ux_character_name_project_ci'"
+        )
+    ).fetchone()
+    if existing is None:
         op.create_index(
             "ux_character_name_project_ci",
             "character",
@@ -81,6 +85,10 @@ def downgrade() -> None:
     if "character" not in set(inspector.get_table_names()):
         return
 
-    existing_indexes = {idx["name"] for idx in inspector.get_indexes("character")}
-    if "ux_character_name_project_ci" in existing_indexes:
+    existing = bind.execute(
+        sa.text(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='ux_character_name_project_ci'"
+        )
+    ).fetchone()
+    if existing is not None:
         op.drop_index("ux_character_name_project_ci", table_name="character")

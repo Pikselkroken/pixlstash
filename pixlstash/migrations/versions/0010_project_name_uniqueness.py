@@ -56,8 +56,12 @@ def upgrade() -> None:
                 {"id": project_id, "name": project_name},
             )
 
-    existing_indexes = {idx["name"] for idx in inspector.get_indexes("project")}
-    if "ux_project_name_ci" not in existing_indexes:
+    existing = bind.execute(
+        sa.text(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='ux_project_name_ci'"
+        )
+    ).fetchone()
+    if existing is None:
         op.create_index(
             "ux_project_name_ci",
             "project",
@@ -72,6 +76,10 @@ def downgrade() -> None:
     if "project" not in set(inspector.get_table_names()):
         return
 
-    existing_indexes = {idx["name"] for idx in inspector.get_indexes("project")}
-    if "ux_project_name_ci" in existing_indexes:
+    existing = bind.execute(
+        sa.text(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='ux_project_name_ci'"
+        )
+    ).fetchone()
+    if existing is not None:
         op.drop_index("ux_project_name_ci", table_name="project")
