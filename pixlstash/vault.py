@@ -438,7 +438,6 @@ class Vault:
 
     def set_tagger_settings(self, settings: dict) -> None:
         """Replace the full tagger plugin settings and propagate to the engine."""
-        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 
         settings = get_tagger_plugin_manager().fill_defaults(settings)
         self._tagger_settings = settings
