@@ -391,6 +391,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/apply-scores                                   | pictures        | Batch apply manual scores                         |
 | GET    | /api/v1/pictures/comfyui_loras                                  | pictures        | List distinct ComfyUI LoRA names                  |
 | GET    | /api/v1/pictures/comfyui_models                                 | pictures        | List distinct ComfyUI model names                 |
+| GET    | /api/v1/pictures/count                                          | pictures        | Total picture count for a listing filter          |
 | GET    | /api/v1/pictures/export                                         | pictures        | Start picture export job                          |
 | GET    | /api/v1/pictures/export/download/{task_id}                      | pictures        | Download completed export                         |
 | GET    | /api/v1/pictures/export/status                                  | pictures        | Get export job status                             |
@@ -407,6 +408,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/scrapheap/restore                              | pictures        | Restore deleted pictures                          |
 | GET    | /api/v1/pictures/search                                         | pictures        | Search pictures by text                           |
 | GET    | /api/v1/pictures/stats                                          | pictures        | Get picture statistics                            |
+| GET    | /api/v1/pictures/stream                                         | pictures        | Stream pictures in batches                        |
 | POST   | /api/v1/pictures/tags/bulk_fetch                                | tags            | Fetch tags for multiple pictures                  |
 | POST   | /api/v1/pictures/thumbnails                                     | pictures        | Get batch thumbnail metadata                      |
 | GET    | /api/v1/pictures/thumbnails/{id}.webp                           | pictures        | Get picture thumbnail image                       |
