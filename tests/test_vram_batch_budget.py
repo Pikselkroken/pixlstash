@@ -110,15 +110,21 @@ def test_missing_tags_finder_uses_suggested_task_size():
         wd14_enabled = True
         pixlstash_tagger_enabled = False
         tagging_workflow = FakeTaggingWorkflow()
+        tagger_settings = {"active_tag_plugin": "wd14"}
 
     class FakeDB:
         def __init__(self):
             self.image_root = "/tmp"
 
         def run_immediate_read_task(self, callback):
+            class FakeTag:
+                def __init__(self):
+                    self.tag = "__tag"
+
             class Picture:
                 def __init__(self, pic_id):
                     self.id = pic_id
+                    self.tags = [FakeTag()]
 
             return [Picture(i) for i in range(1, 30)]
 
