@@ -228,3 +228,38 @@ def test_count_endpoint_excludes_hidden_tagged_pictures_when_filter_enabled():
         server.vault.close()
         tmp.cleanup()
         gc.collect()
+
+
+def test_pictures_endpoint_paginates_correctly():
+    """The non-stream /pictures endpoint must return all pictures when the
+    caller advances offset by limit until fewer than limit results come back.
+
+    55 pictures at limit=10 → 5 full pages + 1 partial (5 items) = 6 calls.
+    A count not divisible by limit is chosen so the loop always terminates on a
+    partial page (no extra empty sentinel call needed).
+    """
+    tmp, client, server = _setup_server()
+    try:
+        ids, _ = _seed_pictures(server, total=55)
+        limit, offset, all_ids, calls = 10, 0, [], 0
+        while True:
+            resp = client.get(
+                f"/pictures?fields=grid&limit={limit}&offset={offset}"
+                "&sort=IMPORTED_AT&descending=true"
+            )
+            assert resp.status_code == 200
+            page = resp.json()
+            calls += 1
+            all_ids.extend(p["id"] for p in page)
+            if len(page) < limit:
+                break
+            offset += limit
+        assert set(all_ids) == set(ids), (
+            f"Expected {len(ids)} unique IDs; got {len(set(all_ids))}"
+        )
+        # 55 pictures / limit 10 → 6 calls (pages of 10,10,10,10,10,5).
+        assert calls == 6, f"Expected 6 pages for 55 pictures at limit=10; got {calls}"
+    finally:
+        server.vault.close()
+        tmp.cleanup()
+        gc.collect()
