@@ -1493,7 +1493,7 @@ def test_character_likeness_query_respects_project_filter(monkeypatch):
             )
             assert set_resp.status_code == 200
 
-            def fake_find_pictures_by_character_likeness(
+            def fake_find_pictures_by_character_likeness_sql(
                 _server,
                 _character_id,
                 _reference_character_id,
@@ -1501,6 +1501,7 @@ def test_character_likeness_query_respects_project_filter(monkeypatch):
                 _limit,
                 _descending,
                 candidate_ids=None,
+                deleted_only=False,
             ):
                 ids = sorted(set(candidate_ids or []))
                 return [
@@ -1514,8 +1515,8 @@ def test_character_likeness_query_respects_project_filter(monkeypatch):
 
             monkeypatch.setattr(
                 pictures_routes._listing,
-                "find_pictures_by_character_likeness",
-                fake_find_pictures_by_character_likeness,
+                "find_pictures_by_character_likeness_sql",
+                fake_find_pictures_by_character_likeness_sql,
             )
 
             scoped_resp = client.get(
