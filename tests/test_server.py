@@ -1502,6 +1502,7 @@ def test_character_likeness_query_respects_project_filter(monkeypatch):
                 _descending,
                 candidate_ids=None,
                 deleted_only=False,
+                stack_leaders_only=False,
             ):
                 ids = sorted(set(candidate_ids or []))
                 return [
