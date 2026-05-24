@@ -12,7 +12,7 @@ from sqlmodel import Session, delete, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
-from pixlstash.db_models.tag import Tag, TAG_EMPTY_SENTINEL
+from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.utils.caption_file_utils import (
     find_caption_file,
@@ -291,7 +291,7 @@ class ReferenceFolderScanTask(BaseTask):
                     if tags:
                         session.add_all([Tag(picture_id=pic_id, tag=t) for t in tags])
                     else:
-                        session.add(Tag(picture_id=pic_id, tag=TAG_EMPTY_SENTINEL))
+                        session.add(Tag(picture_id=pic_id, tag=TAG_PENDING_SENTINEL))
                 session.commit()
 
             self._db.run_task(

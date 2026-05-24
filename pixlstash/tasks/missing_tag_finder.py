@@ -3,7 +3,14 @@ from typing import Callable
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 
-from pixlstash.db_models import Picture, Tag, TAG_EMPTY_SENTINEL
+from pixlstash.db_models import (
+    Picture,
+    Tag,
+    TAG_SENTINEL_LIKE_PATTERN,
+    TAG_SENTINEL_ESCAPE_CHAR,
+    is_tag_sentinel,
+    parse_tag_engine_from_sentinel,
+)
 from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask
@@ -11,7 +18,7 @@ from .task_type import TaskType
 
 
 class MissingTagFinder(BaseTaskFinder):
-    """Find a batch of pictures missing tags and create a TagTask."""
+    """Find a batch of pictures with a pending-retag sentinel and create a TagTask."""
 
     def __init__(
         self,
@@ -49,18 +56,10 @@ class MissingTagFinder(BaseTaskFinder):
         engine = self._engine_getter()
         if engine is None:
             return None
-        # Check via tagger_settings if any tag-capable plugin is enabled.
+        # Only queue tagging when an active tag plugin is configured.
         tagger_settings = getattr(engine, "tagger_settings", None)
-        if tagger_settings:
-            plugins = tagger_settings.get("plugins", {})
-            any_enabled = any(
-                bool(cfg.get("enabled", False))
-                for cfg in plugins.values()
-                if isinstance(cfg, dict)
-            )
-        else:
-            any_enabled = engine.wd14_enabled or engine.pixlstash_tagger_enabled
-        if not any_enabled:
+        active_tag_plugin = (tagger_settings or {}).get("active_tag_plugin")
+        if not active_tag_plugin:
             return None
 
         batch_limit = max(
@@ -69,11 +68,6 @@ class MissingTagFinder(BaseTaskFinder):
         )
         # Fetch enough candidates that _filter_and_claim can always fill one
         # additional task even when all max_inflight slots are already in-flight.
-        # With max_inflight=3 and batch_limit=18, the 3 running tasks claim 54
-        # picture IDs.  Fetching only batch_limit*3=54 returns the same 54 IDs
-        # (all claimed) so find_task() returns None → _finder_exhausted=True →
-        # on_all_tasks_complete() fires and destroys the ONNX session mid-run.
-        # Fetching batch_limit*(max_inflight+1) guarantees unclaimed candidates.
         max_inflight = max(1, self.max_inflight_tasks())
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing_tags(
@@ -83,8 +77,19 @@ class MissingTagFinder(BaseTaskFinder):
         if not pictures:
             return None
 
-        selected = self._filter_and_claim(pictures, batch_limit)
+        # Group pictures by their requested engine (None = use active_tag_plugin).
+        groups: dict[str | None, list] = {}
+        for pic in pictures:
+            sentinel_tag = next(
+                (t.tag for t in pic.tags if is_tag_sentinel(t.tag)),
+                None,
+            )
+            engine_name = parse_tag_engine_from_sentinel(sentinel_tag)
+            groups.setdefault(engine_name, []).append(pic)
 
+        # Process the first group only (subsequent calls will handle the rest).
+        first_engine, first_pics = next(iter(groups.items()))
+        selected = self._filter_and_claim(first_pics, batch_limit)
         if not selected:
             return None
 
@@ -92,14 +97,17 @@ class MissingTagFinder(BaseTaskFinder):
             database=self._db,
             tagging_workflow=engine.tagging_workflow,
             pictures=selected,
+            engine_override=first_engine,
         )
 
     @staticmethod
     def _fetch_missing_tags(session: Session, limit: int):
-        has_real_tag = (Tag.tag.is_not(None)) & (Tag.tag != TAG_EMPTY_SENTINEL)
+        has_sentinel = Tag.tag.like(
+            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+        )
         return session.exec(
             select(Picture)
-            .where(~Picture.tags.any(has_real_tag))
+            .where(Picture.tags.any(has_sentinel))
             .options(
                 selectinload(Picture.tags),
             )

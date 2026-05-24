@@ -78,8 +78,14 @@ class TaggingWorkflow:
         stop_event=None,
         preloaded_images=None,
         out_raw_pixlstash_scores: dict | None = None,
+        engine_override: str | None = None,
     ) -> dict[str, list[str]]:
-        """Tag a batch of images with WD14 and/or the custom tagger.
+        """Tag a batch of images using the active tag plugin.
+
+        The active plugin is read from ``tagger_settings['active_tag_plugin']``
+        unless *engine_override* is supplied.  When neither is set, ``'wd14'``
+        is used as a fallback.  Passing ``engine_override=''`` or setting
+        ``active_tag_plugin`` to ``None`` returns an empty dict (no tagging).
 
         Args:
             image_paths: Sequence of absolute image/video file paths.
@@ -88,47 +94,61 @@ class TaggingWorkflow:
                 re-loading images from disk.
             out_raw_pixlstash_scores: When provided, per-label confidence scores
                 from the PixlStash tagger's full-image pass are written here
-                (``{path: {label: float}}``).
+                (``{path: {label: float}}``).  Only populated when the active
+                plugin is ``'pixlstash_tagger'``.
+            engine_override: If given, run this specific plugin instead of the
+                configured ``active_tag_plugin``.
 
         Returns:
-            ``{path: [tag, ...]}`` mapping with combined WD14 + custom tags.
+            ``{path: [tag, ...]}`` mapping.
         """
-        use_pixlstash_tagger = self._ensure_ready()
+        active = (
+            engine_override
+            if engine_override is not None
+            else self._tagger_settings.get("active_tag_plugin") or "wd14"
+        )
+
+        if not active:
+            return {}
 
         preloaded_map = preloaded_images or {}
 
-        wd14_results = {}
-        if self._use_wd14:
-            wd14_results = self._engine.wd14_service.tag_images(
+        if active == "wd14":
+            self._engine.lifecycle.ensure_tagging_ready(
+                self._engine.wd14_service,
+                self._engine.pixlstash_tagger_service,
+                True,
+                False,
+            )
+            results = self._engine.wd14_service.tag_images(
                 image_paths,
                 stop_event=stop_event,
                 preloaded_map=preloaded_map,
             )
-        wd14_results = merge_video_frame_tags(wd14_results)
+            return merge_video_frame_tags(results)
 
-        combined: dict[str, list[str]] = dict(wd14_results)
-
-        if use_pixlstash_tagger:
-            pixlstash_results = self._tag_images_custom(
+        if active == "pixlstash_tagger":
+            success = self._engine.lifecycle.ensure_tagging_ready(
+                self._engine.wd14_service,
+                self._engine.pixlstash_tagger_service,
+                False,
+                True,
+            )
+            if not success:
+                logger.warning(
+                    "[TaggingWorkflow] PixlStash tagger failed to load; returning empty results."
+                )
+                return {}
+            return self._tag_images_custom(
                 image_paths,
                 stop_event=stop_event,
                 preloaded_images=preloaded_map,
                 out_raw_scores=out_raw_pixlstash_scores,
             )
-            for path in set(combined) | set(pixlstash_results):
-                tags = set(combined.get(path, []))
-                tags.update(pixlstash_results.get(path, []))
-                combined[path] = sorted(tags)
 
-        extra = self._tag_images_extra_plugins(image_paths, stop_event=stop_event)
-        if extra:
-            all_paths = set(combined) | set(extra)
-            combined = {
-                path: sorted(set(combined.get(path, [])) | set(extra.get(path, [])))
-                for path in all_paths
-            }
-
-        return combined
+        return self._tag_images_single_plugin(
+            active, image_paths, stop_event=stop_event
+        )
 
     def tag_quality_crops(
         self,
@@ -254,8 +274,62 @@ class TaggingWorkflow:
 
     # Built-in plugins handled by this workflow's dedicated code paths.
     # Any other plugin in the registry that supports_tags will go through
-    # _tag_images_extra_plugins().
+    # _tag_images_single_plugin().
     _BUILTIN_TAG_PLUGIN_NAMES = frozenset({"wd14", "pixlstash_tagger"})
+
+    def _tag_images_single_plugin(
+        self,
+        plugin_name: str,
+        image_paths,
+        stop_event=None,
+    ) -> dict[str, list[str]]:
+        """Dispatch tagging to a single named third-party plugin.
+
+        Args:
+            plugin_name: The registered plugin name (e.g. ``'joycaption'``).
+            image_paths: Sequence of absolute image/video file paths.
+            stop_event: Optional :class:`threading.Event` to interrupt.
+
+        Returns:
+            ``{path: [tag, ...]}`` or an empty dict on failure.
+        """
+        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+        mgr = get_tagger_plugin_manager()
+        plugin = mgr.get_plugin(plugin_name)
+        if plugin is None or not plugin.supports_tags:
+            logger.warning(
+                "[TaggingWorkflow] active_tag_plugin %r not found or does not support tags; "
+                "returning empty results.",
+                plugin_name,
+            )
+            return {}
+
+        plugins_cfg = self._tagger_settings.get("plugins", {})
+        cfg = plugins_cfg.get(plugin_name, {})
+        params = {**plugin.default_params(), **cfg.get("params", {})}
+
+        try:
+            if plugin._service is None:
+                plugin.setup(self._engine.device)
+            plugin.init(params)
+            raw = plugin.tag_images(
+                image_paths,
+                parameters=params,
+                stop_event=stop_event,
+            )
+        except Exception:
+            logger.exception(
+                "[TaggingWorkflow] Plugin %r failed during tag_images; returning empty results.",
+                plugin_name,
+            )
+            return {}
+
+        combined: dict[str, list[str]] = {}
+        for path, tag_results in raw.items():
+            path_str = str(path)
+            combined[path_str] = sorted(tr.tag for tr in tag_results)
+        return combined
 
     def _tag_images_extra_plugins(
         self,
@@ -264,8 +338,11 @@ class TaggingWorkflow:
     ) -> dict[str, list[str]]:
         """Call any enabled tag-capable plugin that isn't WD14 or PixlStash tagger.
 
-        Returns a merged ``{path: [tag, ...]}`` dict (plain strings, no
-        confidence values — LLM-based plugins don't emit per-tag scores).
+        .. deprecated::
+            The multi-plugin path is no longer used by :meth:`tag_images`.
+            Kept for any direct callers during the transition period.
+
+        Returns a merged ``{path: [tag, ...]}`` dict.
         """
         from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 
@@ -278,18 +355,12 @@ class TaggingWorkflow:
             for p in mgr.get_all_plugins()
             if p.supports_tags and p.name not in self._BUILTIN_TAG_PLUGIN_NAMES
         ]
-        logger.info(
-            "[TaggingWorkflow] extra plugin candidates: %s; tagger_settings plugins: %s",
-            [n for n, _ in extra_candidates],
-            {k: v.get("enabled") for k, v in plugins_cfg.items()},
-        )
 
         for plugin_name, plugin in extra_candidates:
             cfg = plugins_cfg.get(plugin_name, {})
             enabled = cfg.get("enabled", False)
-            logger.info(
-                "[TaggingWorkflow] extra plugin %r: enabled=%s", plugin_name, enabled
-            )
+            if not enabled:
+                continue
             if not enabled:
                 continue
             params = {

@@ -26,7 +26,12 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks import TaskType
-from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
+from pixlstash.db_models.tag import (
+    TAG_PENDING_SENTINEL,
+    is_tag_sentinel,
+    TAG_SENTINEL_LIKE_PATTERN,
+    TAG_SENTINEL_ESCAPE_CHAR,
+)
 
 from ._helpers import (
     _create_picture_imports,
@@ -302,6 +307,11 @@ def register_routes(router, server):
 
                     def import_task(session):
                         session.add_all(new_pictures)
+                        session.flush()
+                        for pic in new_pictures:
+                            session.add(
+                                Tag(tag=TAG_PENDING_SENTINEL, picture_id=pic.id)
+                            )
                         session.commit()
                         for pic in new_pictures:
                             session.refresh(pic)
@@ -414,11 +424,14 @@ def register_routes(router, server):
                                     session.add(Tag(tag=tag_value, picture_id=pic.id))
                                 changed = True
                             else:
-                                if TAG_EMPTY_SENTINEL in existing_values:
+                                if any(is_tag_sentinel(v) for v in existing_values):
                                     session.exec(
                                         delete(Tag).where(
                                             Tag.picture_id == pic.id,
-                                            Tag.tag == TAG_EMPTY_SENTINEL,
+                                            Tag.tag.like(
+                                                TAG_SENTINEL_LIKE_PATTERN,
+                                                escape=TAG_SENTINEL_ESCAPE_CHAR,
+                                            ),
                                         )
                                     )
                                     changed = True

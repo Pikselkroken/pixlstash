@@ -39,7 +39,9 @@ class DescriptionWorkflow:
         self._engine = engine
         self._image_root = image_root
 
-    def generate_batch(self, pictures: list) -> dict[int, str]:
+    def generate_batch(
+        self, pictures: list, engine_override: str | None = None
+    ) -> dict[int, str]:
         """Generate captions for a batch of picture-like objects.
 
         Dispatches to the active description plugin (from tagger_settings).
@@ -48,6 +50,8 @@ class DescriptionWorkflow:
         Args:
             pictures: Sequence of ORM ``Picture`` objects (or any object that
                 exposes ``id`` and ``file_path``).
+            engine_override: If supplied, use this plugin instead of
+                ``active_description_plugin`` for this batch.
 
         Returns:
             A ``{picture_id: caption_str}`` mapping.  Missing or failed
@@ -57,8 +61,12 @@ class DescriptionWorkflow:
         if not pictures:
             return {}
 
-        active = self._engine.tagger_settings.get(
-            "active_description_plugin", "florence2"
+        active = (
+            engine_override
+            if engine_override is not None
+            else self._engine.tagger_settings.get(
+                "active_description_plugin", "florence2"
+            )
         )
         logger.info(
             "[DescriptionWorkflow] active_description_plugin=%r; known plugins: %s",

@@ -5,7 +5,9 @@ from sqlmodel import Session, delete, select
 from pixlstash.db_models import (
     Picture,
     Tag,
-    TAG_EMPTY_SENTINEL,
+    TAG_SENTINEL_LIKE_PATTERN,
+    TAG_SENTINEL_ESCAPE_CHAR,
+    is_tag_sentinel,
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
@@ -67,7 +69,7 @@ def create_router(server) -> APIRouter:
                         include_unimported=True,
                     )[0]
                     sentinel = next(
-                        (t for t in pic.tags if t.tag == TAG_EMPTY_SENTINEL),
+                        (t for t in pic.tags if is_tag_sentinel(t.tag)),
                         None,
                     )
                     if sentinel is not None:
@@ -163,22 +165,6 @@ def create_router(server) -> APIRouter:
                     )
                 session.delete(target)
                 session.flush()
-                remaining = session.exec(
-                    select(Tag).where(
-                        Tag.picture_id == pic_id,
-                        Tag.tag.is_not(None),
-                        Tag.tag != TAG_EMPTY_SENTINEL,
-                    )
-                ).all()
-                if not remaining:
-                    sentinel = session.exec(
-                        select(Tag).where(
-                            Tag.picture_id == pic_id,
-                            Tag.tag == TAG_EMPTY_SENTINEL,
-                        )
-                    ).first()
-                    if sentinel is None:
-                        session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
                 recompute_anomaly_tag_uncertainty(session, pic_id)
                 session.commit()
                 session.refresh(pic)
@@ -227,22 +213,6 @@ def create_router(server) -> APIRouter:
             if tag_ids:
                 session.exec(delete(Tag).where(Tag.id.in_(tag_ids)))
             session.flush()
-            remaining = session.exec(
-                select(Tag).where(
-                    Tag.picture_id == pic_id,
-                    Tag.tag.is_not(None),
-                    Tag.tag != TAG_EMPTY_SENTINEL,
-                )
-            ).all()
-            if not remaining:
-                sentinel = session.exec(
-                    select(Tag).where(
-                        Tag.picture_id == pic_id,
-                        Tag.tag == TAG_EMPTY_SENTINEL,
-                    )
-                ).first()
-                if sentinel is None:
-                    session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
             recompute_anomaly_tag_uncertainty(session, pic_id)
             session.commit()
             session.refresh(pic)
@@ -276,7 +246,6 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Picture not found")
             pic = pic_list[0]
             session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-            session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
             session.flush()
             recompute_anomaly_tag_uncertainty(session, pic_id)
             session.commit()
@@ -300,7 +269,12 @@ def create_router(server) -> APIRouter:
             def fetch(session: Session):
                 rows = session.exec(
                     select(Tag.tag, func.count(Tag.id).label("count"))
-                    .where(Tag.tag.is_not(None), Tag.tag != TAG_EMPTY_SENTINEL)
+                    .where(
+                        Tag.tag.is_not(None),
+                        ~Tag.tag.like(
+                            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                        ),
+                    )
                     .group_by(Tag.tag)
                     .order_by(func.count(Tag.id).desc(), Tag.tag)
                 ).all()
@@ -330,7 +304,9 @@ def create_router(server) -> APIRouter:
                     select(Tag.picture_id, Tag.id, Tag.tag).where(
                         Tag.picture_id.in_(ids),
                         Tag.tag.is_not(None),
-                        Tag.tag != TAG_EMPTY_SENTINEL,
+                        ~Tag.tag.like(
+                            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                        ),
                     )
                 ).all()
                 by_pic: dict = {i: [] for i in ids}

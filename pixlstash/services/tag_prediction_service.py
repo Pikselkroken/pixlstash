@@ -11,7 +11,7 @@ from sqlalchemy import delete, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Tag
-from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
+from pixlstash.db_models.tag import make_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import sanitise_tag
@@ -201,12 +201,17 @@ def delete_tag_predictions(vault: "Vault", pic_id: int) -> int:
     return vault.db.run_task(_delete)
 
 
-def reset_picture_tags(vault: "Vault", pic_id: int) -> None:
+def reset_picture_tags(
+    vault: "Vault", pic_id: int, engine_name: str | None = None
+) -> None:
     """Atomically delete all non-manual predictions and all tags, then restore the sentinel.
 
     Args:
         vault: Application vault, used for DB task dispatch.
         pic_id: Picture ID to reset.
+        engine_name: Optional engine/plugin name to embed in the sentinel so the
+            background tagger uses that specific engine for this picture.  Pass
+            ``None`` to use the default ``active_tag_plugin`` setting.
     """
 
     def _reset(session: Session) -> None:
@@ -221,7 +226,7 @@ def reset_picture_tags(vault: "Vault", pic_id: int) -> None:
             )
         )
         session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-        session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
+        session.add(Tag(tag=make_tag_sentinel(engine_name), picture_id=pic_id))
         session.commit()
 
     vault.db.run_task(_reset)

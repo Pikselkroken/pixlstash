@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
@@ -6,6 +7,12 @@ from pixlstash.services import tag_prediction_service
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
 
 logger = get_logger(__name__)
+
+
+class ResetTagsRequest(BaseModel):
+    """Request body for reset_tags and reset_description endpoints."""
+
+    model: str | None = None
 
 
 def create_router(server) -> APIRouter:
@@ -128,22 +135,57 @@ def create_router(server) -> APIRouter:
         summary="Reset tags and predictions for a picture",
         description=(
             "Atomically deletes all non-manual TagPrediction rows and all Tag rows "
-            "for the picture, then restores the empty-tag sentinel.  This is the "
+            "for the picture, then restores the pending-retag sentinel.  This is the "
             "single-round-trip equivalent of calling tag_predictions/delete followed "
             "by DELETE tags — it avoids the intermediate state where predictions are "
             "gone but tags still exist, which otherwise tricks the background "
             "MissingTagFinder into running a wasted inference pass."
         ),
     )
-    def reset_picture_tags(id: int):
+    def reset_picture_tags(id: int, payload: ResetTagsRequest | None = None):
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        tag_prediction_service.reset_picture_tags(server.vault, pic_id)
+        model = payload.model if payload else None
+        tag_prediction_service.reset_picture_tags(
+            server.vault, pic_id, engine_name=model
+        )
         server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
-        server.vault.retag_picture_interactive(pic_id)
+        server.vault.retag_picture_interactive(pic_id, engine_name=model)
+        return {"status": "reset"}
+
+    @router.post(
+        "/pictures/{id}/reset_description",
+        summary="Reset description for a picture",
+        description=(
+            "Clears the picture's description field and queues a new description "
+            "inference pass.  Pass a 'model' field in the request body to override "
+            "which description plugin to use for this specific picture."
+        ),
+    )
+    def reset_picture_description(id: int, payload: ResetTagsRequest | None = None):
+        from sqlmodel import Session
+        from pixlstash.db_models import Picture
+
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        model = payload.model if payload else None
+
+        def _clear_description(session: Session) -> None:
+            pic = session.get(Picture, pic_id)
+            if pic is None:
+                raise HTTPException(status_code=404, detail="Picture not found")
+            pic.description = None
+            session.commit()
+
+        server.vault.db.run_task(_clear_description)
+        server.vault.notify(EventType.CHANGED_PICTURES, {"picture_ids": [pic_id]})
+        server.vault.redescribe_picture_interactive(pic_id, engine_name=model)
         return {"status": "reset"}
 
     @router.get(

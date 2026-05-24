@@ -23,7 +23,8 @@ from .db_models import (
     Picture,
     PictureSet,
     Tag,
-    TAG_EMPTY_SENTINEL,
+    TAG_SENTINEL_LIKE_PATTERN,
+    TAG_SENTINEL_ESCAPE_CHAR,
 )
 from .pixl_logging import get_logger
 from pixlstash.inference.engine import InferenceEngine
@@ -467,7 +468,9 @@ class Vault:
         bias = self._pixlstash_tagger_threshold_offset or 0.0
         return max(0.01, float(PIXLSTASH_TAGGER_DEFAULT_THRESHOLD) + bias)
 
-    def retag_picture_interactive(self, picture_id: int) -> None:
+    def retag_picture_interactive(
+        self, picture_id: int, engine_name: str | None = None
+    ) -> None:
         if self._engine is None:
             return
         from pixlstash.tasks.tag_task import TagTask
@@ -482,6 +485,34 @@ class Vault:
                 tagging_workflow=self._engine.tagging_workflow,
                 pictures=[pic],
                 interactive=True,
+                engine_override=engine_name,
+            )
+            self.submit_task(task)
+
+    def redescribe_picture_interactive(
+        self, picture_id: int, engine_name: str | None = None
+    ) -> None:
+        """Queue an immediate description-generation pass for a single picture.
+
+        Args:
+            picture_id: Primary key of the picture to describe.
+            engine_name: Optional plugin name to use for this picture.  When
+                ``None``, the current ``active_description_plugin`` setting is used.
+        """
+        if self._engine is None:
+            return
+        from pixlstash.tasks.description_task import DescriptionTask
+
+        def _fetch_pic(session: Session):
+            return session.get(Picture, picture_id)
+
+        pic = self.db.run_immediate_read_task(_fetch_pic)
+        if pic is not None:
+            task = DescriptionTask(
+                database=self.db,
+                workflow=self._engine.description_workflow,
+                pictures=[pic],
+                engine_override=engine_name,
             )
             self.submit_task(task)
 
@@ -940,11 +971,13 @@ class Vault:
 
     @staticmethod
     def _count_missing_tags(session: Session) -> int:
-        has_real_tag = (Tag.tag.is_not(None)) & (Tag.tag != TAG_EMPTY_SENTINEL)
+        has_sentinel = Tag.tag.like(
+            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+        )
         result = session.exec(
             select(func.count())
             .select_from(Picture)
-            .where(~Picture.tags.any(has_real_tag))
+            .where(Picture.tags.any(has_sentinel))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]

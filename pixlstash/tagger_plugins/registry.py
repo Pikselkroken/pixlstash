@@ -156,6 +156,7 @@ class TaggerPluginManager:
             active_desc = "florence2" if "florence2" in self._plugins else None
             return {
                 "active_description_plugin": active_desc,
+                "active_tag_plugin": "wd14",
                 "plugins": plugins,
             }
 
@@ -181,6 +182,8 @@ class TaggerPluginManager:
             default_desc = "florence2" if "florence2" in self._plugins else None
         if "active_description_plugin" not in result:
             result["active_description_plugin"] = default_desc
+        if "active_tag_plugin" not in result:
+            result["active_tag_plugin"] = "wd14"
         plugins_node = result.setdefault("plugins", {})
 
         with self._lock:
