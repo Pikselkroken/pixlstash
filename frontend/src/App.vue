@@ -767,7 +767,9 @@ function applyRouteToStores() {
     projectStore.projectViewMode = "global";
     projectStore.selectedProjectId = null;
   } else if (name === "character") {
-    const charId = String(params.id || ALL_PICTURES_ID);
+    const charIdRaw = params.id || ALL_PICTURES_ID;
+    const charIdNum = Number(charIdRaw);
+    const charId = Number.isFinite(charIdNum) ? charIdNum : String(charIdRaw);
     const idsRaw = query.ids;
     const modeRaw = query.mode;
     const ids = idsRaw
@@ -780,7 +782,7 @@ function applyRouteToStores() {
     selectionStore.selectedSet = null;
     if (selectionStore.selectedSetIds.length > 0)
       selectionStore.selectedSetIds = [];
-    if (String(selectionStore.selectedCharacter) !== charId)
+    if (String(selectionStore.selectedCharacter) !== String(charId))
       selectionStore.selectedCharacter = charId;
     if (!_sameNumIds(selectionStore.selectedCharacterIds, ids))
       selectionStore.selectedCharacterIds = ids;
@@ -857,7 +859,9 @@ function applyRouteToStores() {
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
   } else if (name === "project-character") {
     const projectId = Number(params.projectId);
-    const charId = String(params.id || ALL_PICTURES_ID);
+    const charIdRaw = params.id || ALL_PICTURES_ID;
+    const charIdNum = Number(charIdRaw);
+    const charId = Number.isFinite(charIdNum) ? charIdNum : String(charIdRaw);
     projectStore.projectViewMode = "project";
     projectStore.selectedProjectId =
       Number.isFinite(projectId) && projectId > 0 ? projectId : null;
@@ -865,7 +869,7 @@ function applyRouteToStores() {
     selectionStore.selectedSet = null;
     if (selectionStore.selectedSetIds.length > 0)
       selectionStore.selectedSetIds = [];
-    if (String(selectionStore.selectedCharacter) !== charId)
+    if (String(selectionStore.selectedCharacter) !== String(charId))
       selectionStore.selectedCharacter = charId;
     if (selectionStore.selectedCharacterIds.length > 0)
       selectionStore.selectedCharacterIds = [];
@@ -1716,6 +1720,8 @@ defineExpose({
             :themeMode="userPrefsStore.themeMode"
             :hasFolderFilter="selectionStore.selectedFolderFilter != null"
             :activeFolderKey="activeFolderKey"
+            :externalProjectViewMode="projectStore.projectViewMode"
+            :externalSelectedProjectId="projectStore.selectedProjectId"
             :checkForUpdates="userPrefsStore.checkForUpdates"
             :installType="installType"
             :dockerVariant="dockerVariant"
