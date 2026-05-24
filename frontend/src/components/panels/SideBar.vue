@@ -107,6 +107,8 @@ const props = defineProps({
   themeMode: { type: String, default: "light" },
   hasFolderFilter: { type: Boolean, default: false },
   activeFolderKey: { type: String, default: null },
+  externalProjectViewMode: { type: String, default: null },
+  externalSelectedProjectId: { type: Number, default: null },
   checkForUpdates: { type: Boolean, default: null },
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
@@ -2718,12 +2720,35 @@ watch(
 onMounted(() => {
   // When the session is scoped to a project via a share token, initialise
   // SideBar's internal project view state before any data is fetched.
-  if (
+  // This path DOES emit so App.vue can push the correct route.
+  const isProjectShareToken =
     scopedResourceType.value === "project" &&
-    sessionContext.value?.resource_id != null
-  ) {
+    sessionContext.value?.resource_id != null;
+  if (isProjectShareToken) {
     projectViewMode.value = "project";
     selectedProjectId.value = sessionContext.value.resource_id;
+  } else {
+    // Restore project state from the current route on page load.  App.vue's
+    // applyRouteToStores() runs (via an immediate watcher) before this
+    // component is created, so the externalProjectViewMode/Id props already
+    // reflect the correct route when we reach this point.
+    // _initializing suppresses the watchers so this one-time restore does NOT
+    // emit navigation events back to App.vue.
+    if (
+      props.externalProjectViewMode != null ||
+      props.externalSelectedProjectId != null
+    ) {
+      _initializing = true;
+      if (props.externalProjectViewMode != null)
+        projectViewMode.value = props.externalProjectViewMode;
+      if (props.externalSelectedProjectId != null) {
+        lastUsedProjectId.value = props.externalSelectedProjectId;
+        selectedProjectId.value = props.externalSelectedProjectId;
+      }
+      nextTick(() => {
+        _initializing = false;
+      });
+    }
   }
 
   // Track scroll area height for adaptive dock layout.
@@ -2924,7 +2949,13 @@ watch(
   },
 );
 
+// Set to true during onMounted route-state restoration so the watchers below
+// do not emit navigation events back to App.vue for the one-time page-load
+// restore.  Reset to false via nextTick() after the flush cycle completes.
+let _initializing = false;
+
 watch(projectViewMode, (v) => {
+  if (_initializing) return;
   emit("update:project-view-mode", v);
   // Re-fetch sets with the correct scope (all sets in global, scoped sets in
   // project view). Without this, a set removed from a project while in
@@ -2936,6 +2967,7 @@ watch(projectViewMode, (v) => {
   void fetchSidebarData();
 });
 watch(selectedProjectId, (v) => {
+  if (_initializing) return;
   emit("update:selected-project-id", v);
   if (v !== null) lastUsedProjectId.value = v;
   // Re-fetch sets for the newly selected project.
