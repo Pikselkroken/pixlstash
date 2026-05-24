@@ -357,6 +357,27 @@ class FaceExtractionTask(BaseTask):
         return bool(self._db.run_immediate_read_task(fetch))
 
     @staticmethod
+    def detect_faces_in_images(insightface_app, images: list) -> list:
+        """Run face detection and recognition on a list of BGR numpy arrays.
+
+        This is the lowest-level detection entry point, intended to be called
+        from ``_extract_features`` and from tests that need to exercise the
+        InsightFace pipeline without a database or ``Picture`` objects.
+
+        Args:
+            insightface_app: A prepared ``FaceAnalysis`` instance.
+            images: BGR ``np.ndarray`` frames (any size), or ``None`` for
+                positions that should yield an empty result.
+
+        Returns:
+            A list with one inner list of
+            :class:`~pixlstash.utils.insightface_batched.FaceResult`
+            per input image.
+        """
+        runner = BatchedFaceRunner(insightface_app)
+        return runner.run_batch(images)
+
+    @staticmethod
     def _expand_bbox(bbox, frame_w, frame_h, scale):
         if bbox is None or len(bbox) != 4:
             return None
@@ -450,7 +471,9 @@ class FaceExtractionTask(BaseTask):
         setup_s += time.time() - _setup_start
         if _batch_imgs:
             _infer_start = time.time()
-            _batch_results = runner.run_batch(_batch_imgs)
+            _batch_results = FaceExtractionTask.detect_faces_in_images(
+                self._insightface_app, _batch_imgs
+            )
             batch_infer_s = time.time() - _infer_start
         else:
             _batch_results = []
@@ -513,7 +536,9 @@ class FaceExtractionTask(BaseTask):
                     if faces is None:
                         # Image was loaded on-demand (not in preloaded cache).
                         _infer_start = time.time()
-                        faces = runner.run_batch([img])[0]
+                        faces = FaceExtractionTask.detect_faces_in_images(
+                            self._insightface_app, [img]
+                        )[0]
                         inference_s += time.time() - _infer_start
                     detected_faces_total += len(faces)
                     logger.debug("Found %d faces in image %s", len(faces), file_path)
