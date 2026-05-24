@@ -95,7 +95,7 @@ class InferenceEngine:
             # Build a minimal settings dict from the legacy flags.
             self._tagger_settings = {
                 "active_description_plugin": "florence2",
-                "active_tag_plugin": "wd14",
+                "active_tag_plugin": "pixlstash_tagger",
                 "plugins": {
                     "wd14": {
                         "enabled": bool(wd14_enabled),
@@ -168,7 +168,10 @@ class InferenceEngine:
 
         plugins = self._tagger_settings.get("plugins", {})
         pixl_cfg = plugins.get("pixlstash_tagger", {})
-        active = self._tagger_settings.get("active_tag_plugin", "wd14") or "wd14"
+        active = (
+            self._tagger_settings.get("active_tag_plugin", "pixlstash_tagger")
+            or "pixlstash_tagger"
+        )
         return TaggingWorkflow(
             engine=self,
             use_wd14=(active == "wd14"),
@@ -248,7 +251,10 @@ class InferenceEngine:
         try:
             self._tagger_settings["plugins"]["wd14"]["enabled"] = self._wd14_enabled
         except (KeyError, TypeError):
-            pass
+            logger.warning(
+                "Failed to update tagger_settings when setting WD14 enabled=%s",
+                enabled,
+            )
 
     def set_pixlstash_tagger_enabled(self, enabled: bool) -> None:
         """Enable or disable the PixlStash tagger (only if model files exist)."""
@@ -264,7 +270,10 @@ class InferenceEngine:
                 self._pixlstash_tagger_enabled
             )
         except (KeyError, TypeError):
-            pass
+            logger.warning(
+                "Failed to update tagger_settings when setting PixlStash tagger enabled=%s",
+                enabled,
+            )
 
     def set_wd14_threshold(self, threshold: float) -> None:
         """Update the WD14 inference threshold."""
@@ -274,7 +283,10 @@ class InferenceEngine:
                 threshold
             )
         except (KeyError, TypeError):
-            pass
+            logger.warning(
+                "Failed to update tagger_settings when setting WD14 threshold=%s",
+                threshold,
+            )
 
     def set_pixlstash_tagger_threshold_offset(self, offset: float) -> None:
         """Update the PixlStash tagger score threshold offset."""
@@ -284,7 +296,10 @@ class InferenceEngine:
                 "threshold_offset"
             ] = float(offset)
         except (KeyError, TypeError):
-            pass
+            logger.warning(
+                "Failed to update tagger_settings when setting PixlStash tagger threshold_offset=%s",
+                offset,
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle
