@@ -1,3 +1,6 @@
+# [1.2.4]
+- Fix eternal loop in face recognition for images with extreme aspect ratios (error loop opencv #297)
+
 # [1.2.3]
 - Update js-cookie NPM package for frontend [Security:High]
 
