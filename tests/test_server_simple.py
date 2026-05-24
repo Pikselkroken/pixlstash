@@ -15,7 +15,10 @@ import os
 import shutil
 import tempfile
 import time
-import tomllib
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    import tomli as tomllib
 import zipfile
 from io import BytesIO
 
