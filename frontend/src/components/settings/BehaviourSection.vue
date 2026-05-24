@@ -396,8 +396,7 @@ watch(maxVramGbValue, () => {
   <div class="settings-section">
     <div class="settings-section-title">Tag Plugins</div>
     <div class="settings-section-desc">
-      Enable or disable each tagger. Use the settings icon to adjust per-plugin
-      parameters.
+      Select which plugin generates tags automatically.
     </div>
     <div v-if="taggerLoading" class="settings-tagger-loading">Loading…</div>
     <TagPluginsTable
@@ -411,7 +410,7 @@ watch(maxVramGbValue, () => {
   <div class="settings-section">
     <div class="settings-section-title">Description Plugin</div>
     <div class="settings-section-desc">
-      Select which plugin generates image descriptions (captions).
+      Select which plugin generates image descriptions (captions) automatically.
     </div>
     <div v-if="taggerLoading" class="settings-tagger-loading">Loading…</div>
     <DescriptionPluginsTable

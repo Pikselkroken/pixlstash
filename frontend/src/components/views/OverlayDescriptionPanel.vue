@@ -18,12 +18,53 @@
           type="button"
           title="Regenerate description — deletes the current description and requeues it for captioning"
           :disabled="isDescriptionRefreshing"
-          @click.stop="refreshDescription"
+          @click.stop="refreshDescription()"
         >
           <v-icon size="16" :class="{ 'mdi-spin': isDescriptionRefreshing }">
             {{ isDescriptionRefreshing ? "mdi-loading" : "mdi-refresh" }}
           </v-icon>
         </button>
+        <v-menu
+          v-if="props.image && !isReadOnly"
+          v-model="descPluginMenuOpen"
+          :close-on-content-click="true"
+          location="bottom end"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              class="section-meta-btn section-meta-btn--with-chevron"
+              type="button"
+              title="Regenerate description with a specific model..."
+              :disabled="isDescriptionRefreshing"
+              v-bind="menuProps"
+              @click.stop="fetchDescPlugins"
+            >
+              <v-icon size="14">mdi-refresh</v-icon>
+              <v-icon size="10">mdi-chevron-down</v-icon>
+            </button>
+          </template>
+          <v-list density="compact" min-width="160">
+            <v-list-item
+              v-if="descPluginsLoading"
+              disabled
+              title="Loading..."
+            />
+            <template v-if="!descPluginsLoading">
+              <v-list-item
+                v-for="plugin in descPlugins"
+                :key="plugin.name"
+                :title="plugin.display_name || plugin.name"
+                :disabled="!!plugin.load_error"
+                @click="refreshDescription(plugin.name)"
+              />
+              <v-list-item
+                v-if="!descPlugins.length"
+                disabled
+                title="No description models available"
+              />
+            </template>
+          </v-list>
+        </v-menu>
         <button
           class="section-meta-btn"
           type="button"
@@ -109,6 +150,9 @@ const descriptionDraft = ref(props.image?.description || "");
 const descriptionEditorRef = ref(null);
 const descriptionCopyState = ref("idle");
 const isDescriptionRefreshing = ref(false);
+const descPluginMenuOpen = ref(false);
+const descPlugins = ref([]);
+const descPluginsLoading = ref(false);
 let copyResetTimer = null;
 
 watch(
@@ -189,15 +233,37 @@ async function copyDescription() {
   }
 }
 
-async function refreshDescription() {
+async function fetchDescPlugins() {
+  if (descPluginsLoading.value || descPlugins.value.length) return;
+  descPluginsLoading.value = true;
+  try {
+    const res = await apiClient.get("/taggers");
+    descPlugins.value = (res.data?.plugins ?? []).filter(
+      (p) => p.supports_descriptions,
+    );
+  } catch {
+    descPlugins.value = [];
+  } finally {
+    descPluginsLoading.value = false;
+  }
+}
+
+async function refreshDescription(model = null) {
   if (!props.image?.id || !props.backendUrl || isDescriptionRefreshing.value)
     return;
   isDescriptionRefreshing.value = true;
   const capturedImageId = props.image.id;
   try {
-    await apiClient.patch(`${props.backendUrl}/pictures/${capturedImageId}`, {
-      description: null,
-    });
+    if (model) {
+      await apiClient.post(
+        `${props.backendUrl}/pictures/${capturedImageId}/reset_description`,
+        { model },
+      );
+    } else {
+      await apiClient.patch(`${props.backendUrl}/pictures/${capturedImageId}`, {
+        description: null,
+      });
+    }
     emit("update-description", capturedImageId, null);
     cancelEditDescription();
   } catch (err) {
@@ -288,6 +354,10 @@ defineExpose({
 .section-meta-btn:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.section-meta-btn--with-chevron {
+  gap: 1px;
 }
 
 .section-meta {
