@@ -20,7 +20,7 @@ keywords = [
     "comfyui",
 ]
 classifiers = [
-    "Development Status :: Development Status :: 3 - Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
