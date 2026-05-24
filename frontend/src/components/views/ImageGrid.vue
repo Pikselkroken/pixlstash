@@ -62,6 +62,8 @@
       :comfyui-client-id="comfyuiClientId"
       :comfyui-configured="props.comfyuiConfigured"
       :available-plugins="availablePlugins"
+      :tagger-plugins="taggerPlugins"
+      :captioner-plugins="captionerPlugins"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :all-grid-images="allGridImages"
@@ -81,6 +83,8 @@
       @comfyui-run="handleComfyuiRun"
       @comfyui-run-grid="runComfyuiOnGridImages"
       @tags-applied="debouncedFetchAllGridImages({ force: true })"
+      @auto-tag="handleAutoTag"
+      @generate-description="handleGenerateDescription"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-settings="emit('open-settings')"
@@ -111,6 +115,8 @@
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :available-plugins="availablePlugins"
+      :tagger-plugins="taggerPlugins"
+      :captioner-plugins="captionerPlugins"
       :context-image="contextMenuImage"
       :is-shared="
         contextMenuImage ? sharedPictureIds.has(contextMenuImage.id) : false
@@ -129,6 +135,8 @@
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+      @auto-tag="handleAutoTag"
+      @generate-description="handleGenerateDescription"
       @share-picture="sharePicture"
       @remove-picture-shares="openRevokeSharesDialog"
     />
@@ -1108,6 +1116,64 @@ async function fetchAvailablePlugins() {
   }
 }
 
+const allTaggerPlugins = ref([]);
+const taggerPlugins = computed(() =>
+  allTaggerPlugins.value.filter((p) => p.supports_tags),
+);
+const captionerPlugins = computed(() =>
+  allTaggerPlugins.value.filter((p) => p.supports_descriptions),
+);
+
+async function fetchTaggerPlugins() {
+  if (!props.backendUrl) return;
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/taggers`);
+    allTaggerPlugins.value = res.data?.plugins ?? [];
+  } catch (err) {
+    console.warn("Failed to load tagger plugins:", err);
+    allTaggerPlugins.value = [];
+  }
+}
+
+async function handleAutoTag({ model } = {}) {
+  const ids = selectedImageIds.value
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length || !props.backendUrl) return;
+  try {
+    const body = model ? { model } : {};
+    await Promise.all(
+      ids.map((id) =>
+        apiClient.post(`${props.backendUrl}/pictures/${id}/reset_tags`, body),
+      ),
+    );
+    debouncedFetchAllGridImages({ force: true });
+  } catch (err) {
+    console.error("Auto-tag failed:", err);
+  }
+}
+
+async function handleGenerateDescription({ model } = {}) {
+  const ids = selectedImageIds.value
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length || !props.backendUrl) return;
+  try {
+    const body = model ? { model } : {};
+    await Promise.all(
+      ids.map((id) =>
+        apiClient.post(
+          `${props.backendUrl}/pictures/${id}/reset_description`,
+          body,
+        ),
+      ),
+    );
+    debouncedFetchAllGridImages({ force: true });
+  } catch (err) {
+    console.error("Generate description failed:", err);
+  }
+}
+
 function handlePluginRunRequest(payload) {
   const pluginName = String(payload?.pluginName || "").trim();
   const pictureIds = Array.isArray(payload?.pictureIds)
@@ -1564,6 +1630,7 @@ onMounted(() => {
   }
 
   fetchAvailablePlugins();
+  fetchTaggerPlugins();
   fetchAllPicturesCount();
   initGuestSession();
   const mountFetchKey = buildGridFetchKey();
@@ -5826,10 +5893,6 @@ function handleEmptyStateReset() {
   border-radius: 8px;
   transition: none;
 }
-.image-card:hover .selection-overlay,
-.stack-hover-active .selection-overlay {
-}
-
 /* Touch select mode: show a checkmark badge on each selected image */
 .touch-select-mode .image-card {
   user-select: none;

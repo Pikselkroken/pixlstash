@@ -89,6 +89,60 @@
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
           Tag
         </button>
+        <div
+          v-if="taggerPlugins.length"
+          class="ctx-submenu-wrap"
+          @mouseenter="autoTagSubmenuOpen = true"
+          @mouseleave="autoTagSubmenuOpen = false"
+        >
+          <button class="ctx-item" :disabled="!selectedImageIds.length">
+            <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+            Tag automatically
+            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="autoTagSubmenuOpen" class="ctx-submenu">
+            <button
+              v-for="plugin in taggerPlugins"
+              :key="plugin.name"
+              class="ctx-item"
+              :disabled="!selectedImageIds.length"
+              @click="onAction('auto-tag', { model: plugin.name })"
+            >
+              <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+              {{ plugin.display_name || plugin.name }}
+              <span v-if="plugin.default_enabled" class="ctx-default-pill"
+                >default</span
+              >
+            </button>
+          </div>
+        </div>
+        <div
+          v-if="captionerPlugins.length"
+          class="ctx-submenu-wrap"
+          @mouseenter="descriptionSubmenuOpen = true"
+          @mouseleave="descriptionSubmenuOpen = false"
+        >
+          <button class="ctx-item" :disabled="!selectedImageIds.length">
+            <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
+            Generate description
+            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="descriptionSubmenuOpen" class="ctx-submenu">
+            <button
+              v-for="plugin in captionerPlugins"
+              :key="plugin.name"
+              class="ctx-item"
+              :disabled="!selectedImageIds.length"
+              @click="onAction('generate-description', { model: plugin.name })"
+            >
+              <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
+              {{ plugin.display_name || plugin.name }}
+              <span v-if="plugin.default_enabled" class="ctx-default-pill"
+                >default</span
+              >
+            </button>
+          </div>
+        </div>
         <button
           v-if="pluginOptions.length"
           class="ctx-item"
@@ -185,6 +239,8 @@ const props = defineProps({
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
   availablePlugins: { type: Array, default: () => [] },
+  taggerPlugins: { type: Array, default: () => [] },
+  captionerPlugins: { type: Array, default: () => [] },
   contextImage: { type: Object, default: null },
   isShared: { type: Boolean, default: false },
 });
@@ -204,6 +260,8 @@ const emit = defineEmits([
   "open-tag-panel",
   "open-plugin-panel",
   "open-comfyui-panel",
+  "auto-tag",
+  "generate-description",
   "share-picture",
   "remove-picture-shares",
 ]);
@@ -211,6 +269,8 @@ const emit = defineEmits([
 const menuRef = ref(null);
 const adjustedX = ref(props.x);
 const adjustedY = ref(props.y);
+const autoTagSubmenuOpen = ref(false);
+const descriptionSubmenuOpen = ref(false);
 
 // ── Position clamping ──────────────────────────────────────────────────────
 
