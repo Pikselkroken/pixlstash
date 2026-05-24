@@ -494,6 +494,7 @@ def find_pictures_by_character_likeness_sql(
     descending: bool,
     candidate_ids: list[int] | None = None,
     deleted_only: bool = False,
+    stack_leaders_only: bool = False,
 ) -> list[dict]:
     """List pictures by character likeness using SQL ORDER BY with LIMIT/OFFSET.
 
@@ -552,11 +553,16 @@ def find_pictures_by_character_likeness_sql(
             select(Face.picture_id, max_likeness)
             .join(Picture, Face.picture_id == Picture.id)
             .where(deleted_filter)
+            .where(Picture.import_excluded.is_(False))
             .group_by(Face.picture_id)
             .order_by(order_expr)
             .limit(limit)
             .offset(offset)
         )
+        if stack_leaders_only:
+            query = query.where(
+                or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
+            )
         if character_id == "UNASSIGNED":
             other_face = aliased(Face)
             query = query.where(Face.character_id.is_(None))
@@ -619,6 +625,7 @@ def count_pictures_by_character_likeness(
     character_id,
     candidate_ids: list[int] | None = None,
     deleted_only: bool = False,
+    stack_leaders_only: bool = False,
 ) -> int:
     """Count pictures that would be returned by a CHARACTER_LIKENESS sort query.
 
@@ -643,7 +650,12 @@ def count_pictures_by_character_likeness(
             select(func.count(func.distinct(Face.picture_id)))
             .join(Picture, Face.picture_id == Picture.id)
             .where(deleted_filter)
+            .where(Picture.import_excluded.is_(False))
         )
+        if stack_leaders_only:
+            query = query.where(
+                or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
+            )
         if character_id == "UNASSIGNED":
             inner_face = aliased(Face)
             query = query.where(Face.character_id.is_(None))

@@ -35,11 +35,10 @@ from pixlstash.utils.service.filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
-from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
 
 from ._helpers import (
     _enrich_stack_counts,
-    _fetch_hidden_picture_ids,
+    _get_hidden_tags_from_request,
 )
 
 
@@ -316,6 +315,8 @@ def select_pictures_for_listing(
                 guest_session_id = qp_sid
                 guest_token_id = getattr(request.state, "token_id", None)
 
+    hidden_tags = _get_hidden_tags_from_request(server, request) or None
+
     pics = []
     if character_id == "SCRAPHEAP":
         logger.warning(
@@ -338,6 +339,7 @@ def select_pictures_for_listing(
         tags_rejected_filter_value: list[str] | None = None,
         tags_confidence_above_filter_value: list[str] | None = None,
         tags_confidence_below_filter_value: list[str] | None = None,
+        hidden_tags_filter_value: list[str] | None = None,
         comfyui_models_filter_value: list[str] | None = None,
         comfyui_loras_filter_value: list[str] | None = None,
         face_filter_value: str | None = None,
@@ -380,6 +382,7 @@ def select_pictures_for_listing(
                 and not tags_rejected_filter_value
                 and not tags_confidence_above_filter_value
                 and not tags_confidence_below_filter_value
+                and not hidden_tags_filter_value
                 and not comfyui_models_filter_value
                 and not comfyui_loras_filter_value
                 and not face_filter_value
@@ -486,6 +489,15 @@ def select_pictures_for_listing(
                     ).bindparams(**{f"ss_rejected_tag_{i}": tag})
                 )
 
+        if hidden_tags_filter_value:
+            placeholders = ", ".join(f":ss_ht_{i}" for i in range(len(hidden_tags_filter_value)))
+            query = query.where(
+                text(
+                    f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id"
+                    f" AND LOWER(tag.tag) IN ({placeholders}))"
+                ).bindparams(**{f"ss_ht_{i}": t for i, t in enumerate(hidden_tags_filter_value)})
+            )
+
         if tags_confidence_above_filter_value:
             for i, entry in enumerate(tags_confidence_above_filter_value):
                 tag, threshold = entry.rsplit(":", 1)
@@ -591,6 +603,7 @@ def select_pictures_for_listing(
             tags_confidence_below_filter_value=query_params.get(
                 "tags_confidence_below_filter"
             ),
+            hidden_tags_filter_value=hidden_tags,
             comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
             face_filter_value=face_filter,
@@ -614,6 +627,7 @@ def select_pictures_for_listing(
                 if candidate_ids is not None
                 else None,
                 deleted_only=only_deleted,
+                stack_leaders_only=stack_leaders_only,
             )
         pics = find_pictures_by_character_likeness_sql(
             server,
@@ -624,24 +638,12 @@ def select_pictures_for_listing(
             descending,
             candidate_ids=list(candidate_ids) if candidate_ids is not None else None,
             deleted_only=only_deleted,
+            stack_leaders_only=stack_leaders_only,
         )
         pics = _record_sql_count(pics)
-        if pics:
-            hidden_ids = _fetch_hidden_picture_ids(
-                server,
-                request,
-                [pic.get("id") for pic in pics if pic.get("id") is not None],
-            )
-            if hidden_ids:
-                pics = [
-                    pic
-                    for pic in pics
-                    if pic.get("id") is None or pic.get("id") not in hidden_ids
-                ]
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
         if stack_leaders_only:
-            pics = deduplicate_by_stack(pics)
             pics = _enrich_stack_counts(server, pics)
         return pics
     if character_id == "UNASSIGNED":
@@ -679,6 +681,7 @@ def select_pictures_for_listing(
                     "tags_confidence_below_filter"
                 )
                 or None,
+                hidden_tags_filter=hidden_tags,
                 picture_ids=(
                     [int(i) for i in query_params["id"] if str(i).isdigit()]
                     if query_params.get("id")
@@ -709,6 +712,7 @@ def select_pictures_for_listing(
                 "tags_confidence_below_filter"
             )
             or None,
+            hidden_tags_filter=hidden_tags,
             face_filter=face_filter,
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
@@ -733,6 +737,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                hidden_tags_filter=hidden_tags,
                 guest_session_id=guest_session_id,
                 guest_token_id=guest_token_id,
                 **query_params,
@@ -752,6 +757,7 @@ def select_pictures_for_listing(
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
+            hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,
             **query_params,
@@ -968,6 +974,7 @@ def select_pictures_for_listing(
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
                 face_filter=face_filter,
+                hidden_tags_filter=hidden_tags,
                 **query_params,
             )
         pics = server.vault.db.run_task(
@@ -985,19 +992,12 @@ def select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             face_filter=face_filter,
+            hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,
             **query_params,
         )
         pics = _record_sql_count(pics)
-    if pics:
-        hidden_ids = _fetch_hidden_picture_ids(
-            server,
-            request,
-            [pic.id for pic in pics if getattr(pic, "id", None) is not None],
-        )
-        if hidden_ids:
-            pics = [pic for pic in pics if pic.id not in hidden_ids]
     if return_ids_only:
         return [pic.id for pic in pics]
     result = serialize_metadata(pics)
