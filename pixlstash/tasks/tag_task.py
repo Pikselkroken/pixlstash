@@ -10,7 +10,13 @@ from sqlalchemy.exc import IntegrityError
 from PIL import Image as PILImage
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Face, Picture, Tag, TAG_EMPTY_SENTINEL
+from pixlstash.db_models import (
+    Face,
+    Picture,
+    Tag,
+    TAG_SENTINEL_LIKE_PATTERN,
+    TAG_SENTINEL_ESCAPE_CHAR,
+)
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -44,6 +50,7 @@ class TagTask(BaseTask):
         tagging_workflow: TaggingWorkflow,
         pictures: list,
         interactive: bool = False,
+        engine_override: str | None = None,
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
@@ -57,6 +64,7 @@ class TagTask(BaseTask):
         self._tagging_workflow = tagging_workflow
         self._pictures = pictures or []
         self._interactive = interactive
+        self._engine_override = engine_override
         self._preloaded_images: dict[str, PILImage.Image] = {}
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
@@ -249,7 +257,7 @@ class TagTask(BaseTask):
 
             # When the tagger found no applicable tags, write the empty sentinel
             # so that MissingTagFinder knows this picture has already been processed.
-            effective_tags = set(tags) if tags else {TAG_EMPTY_SENTINEL}
+            effective_tags = set(tags) if tags else set()
 
             if effective_tags == existing_tags_map.get(pic_id, set()):
                 continue
@@ -313,7 +321,9 @@ class TagTask(BaseTask):
                     select(Tag.tag).where(
                         Tag.picture_id == picture_id,
                         Tag.tag.is_not(None),
-                        Tag.tag != TAG_EMPTY_SENTINEL,
+                        ~Tag.tag.like(
+                            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                        ),
                     )
                 ).all()
             }
@@ -403,6 +413,7 @@ class TagTask(BaseTask):
                     out_raw_pixlstash_scores=full_scores_by_path
                     if use_pixlstash_tagger
                     else None,
+                    engine_override=self._engine_override,
                 )
                 inference_s = time.perf_counter() - inference_start
                 logger.debug("Got tag results for %s images.", len(tag_results))
@@ -721,7 +732,9 @@ class TagTask(BaseTask):
             select(Tag.picture_id, Tag.tag).where(
                 Tag.picture_id.in_(picture_ids),
                 Tag.tag.is_not(None),
-                Tag.tag != TAG_EMPTY_SENTINEL,
+                ~Tag.tag.like(
+                    TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                ),
             )
         ).all()
         applied_tags_by_pic: dict[int, set[str]] = {}
@@ -805,12 +818,14 @@ class TagTask(BaseTask):
 
     @staticmethod
     def count_missing_tags(session: Session) -> int:
-        """Count pictures that have no real tags yet (excluding the empty sentinel)."""
-        has_real_tag = (Tag.tag.is_not(None)) & (Tag.tag != TAG_EMPTY_SENTINEL)
+        """Count pictures with a pending-retag sentinel (awaiting tagging)."""
+        has_sentinel = Tag.tag.like(
+            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+        )
         result = session.exec(
             select(func.count())
             .select_from(Picture)
-            .where(~Picture.tags.any(has_real_tag))
+            .where(Picture.tags.any(has_sentinel))
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
         ).one()

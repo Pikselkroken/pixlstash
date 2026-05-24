@@ -8,7 +8,7 @@ from sqlalchemy import Integer, and_, case, cast, desc, exists, func, or_, text
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Face, Picture, Tag, TagPrediction
-from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
+from pixlstash.db_models.tag import TAG_SENTINEL_LIKE_PATTERN, TAG_SENTINEL_ESCAPE_CHAR
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     fetch_set_candidate_ids,
@@ -316,7 +316,7 @@ def _compute_basic_counts(
         select(Tag.picture_id)
         .where(
             Tag.picture_id.in_(select(pic_subq.c.id)),
-            Tag.tag != TAG_EMPTY_SENTINEL,
+            ~Tag.tag.like(TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR),
             Tag.tag.is_not(None),
         )
         .distinct()
@@ -331,7 +331,7 @@ def _compute_basic_counts(
         )
         .where(
             Tag.picture_id.in_(select(pic_subq.c.id)),
-            Tag.tag != TAG_EMPTY_SENTINEL,
+            ~Tag.tag.like(TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR),
             Tag.tag.is_not(None),
         )
         .group_by(Tag.picture_id)
@@ -344,7 +344,7 @@ def _compute_basic_counts(
 
     top_tags_q = select(Tag.tag, func.count(Tag.id).label("cnt")).where(
         Tag.picture_id.in_(select(pic_subq.c.id)),
-        Tag.tag != TAG_EMPTY_SENTINEL,
+        ~Tag.tag.like(TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR),
         Tag.tag.is_not(None),
     )
     if params.penalised_tag_set:
@@ -399,8 +399,12 @@ def _compute_cooccurrences(
         )
         .where(
             t1.c.picture_id.in_(select(pic_subq.c.id)),
-            t1.c.tag != TAG_EMPTY_SENTINEL,
-            t2.c.tag != TAG_EMPTY_SENTINEL,
+            t1.c.tag.notlike(
+                TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+            ),
+            t2.c.tag.notlike(
+                TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+            ),
         )
     )
     if params.penalised_tag_set:
@@ -480,7 +484,7 @@ def _compute_confidence_stats(
         select(Tag.tag)
         .where(
             Tag.picture_id.in_(select(pic_subq.c.id)),
-            Tag.tag != TAG_EMPTY_SENTINEL,
+            ~Tag.tag.like(TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR),
             Tag.tag.is_not(None),
         )
         .distinct()

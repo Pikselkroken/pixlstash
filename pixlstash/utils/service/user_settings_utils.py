@@ -391,6 +391,20 @@ def _apply_tagger_settings_patch(user, patch_value) -> bool:
                 raise ValueError(f"Plugin '{adp}' does not support descriptions")
         current["active_description_plugin"] = adp
 
+    # Validate and apply active_tag_plugin.
+    # Built-in tag engines "wd14" and "pixlstash_tagger" are always valid;
+    # third-party plugin names must be registered and support tags.
+    _BUILTIN_TAG_PLUGINS = {"wd14", "pixlstash_tagger"}
+    if "active_tag_plugin" in patch_value:
+        atp = patch_value["active_tag_plugin"]
+        if atp is not None and atp not in _BUILTIN_TAG_PLUGINS:
+            if atp not in known_plugins:
+                raise ValueError(f"active_tag_plugin '{atp}' is not a known plugin")
+            plugin = manager.get_plugin(atp)
+            if plugin is None or not plugin.supports_tags:
+                raise ValueError(f"Plugin '{atp}' does not support tags")
+        current["active_tag_plugin"] = atp
+
     # Validate and deep-merge per-plugin entries.
     if "plugins" in patch_value:
         for plugin_name, plugin_patch in patch_value["plugins"].items():

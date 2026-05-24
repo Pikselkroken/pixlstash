@@ -39,6 +39,7 @@ class DescriptionTask(BaseTask):
         database,
         workflow: DescriptionWorkflow,
         pictures: list[Picture],
+        engine_override: str | None = None,
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
@@ -52,6 +53,7 @@ class DescriptionTask(BaseTask):
         self._workflow = workflow
         self._pictures = pictures or []
         self._cpu_spillover_enabled = False
+        self._engine_override = engine_override
 
     @property
     def priority(self) -> TaskPriority:
@@ -157,7 +159,9 @@ class DescriptionTask(BaseTask):
 
         descriptions_generated = []
         try:
-            batch_results = active_workflow.generate_batch(pictures)
+            batch_results = active_workflow.generate_batch(
+                pictures, engine_override=self._engine_override
+            )
         except Exception as exc:
             import traceback
 

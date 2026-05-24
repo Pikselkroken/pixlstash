@@ -3,7 +3,8 @@ from sqlmodel import Session, select
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAGS,
-    TAG_EMPTY_SENTINEL,
+    TAG_SENTINEL_LIKE_PATTERN,
+    TAG_SENTINEL_ESCAPE_CHAR,
     Tag,
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
@@ -44,7 +45,9 @@ def recompute_anomaly_tag_uncertainty(session: Session, picture_id: int) -> None
             select(Tag.tag).where(
                 Tag.picture_id == picture_id,
                 Tag.tag.is_not(None),
-                Tag.tag != TAG_EMPTY_SENTINEL,
+                ~Tag.tag.like(
+                    TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                ),
             )
         ).all()
         if row is not None

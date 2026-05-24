@@ -6,7 +6,7 @@ import re
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
+from pixlstash.db_models.tag import is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.caption_file_utils import write_caption_file
 
@@ -43,7 +43,7 @@ class CaptionUtils:
         tags = []
         for tag in getattr(picture, "tags", []) or []:
             tag_value = getattr(tag, "tag", None)
-            if tag_value in (None, TAG_EMPTY_SENTINEL):
+            if tag_value is None or is_tag_sentinel(tag_value):
                 continue
             if tag_format == "underscores":
                 tag_value = tag_value.replace(" ", "_")
@@ -177,13 +177,11 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
         # Fetch tags via explicit query — avoids triggering the lazy relationship
         # on pic_db (which would interact with cascade="all, delete-orphan").
         tag_rows = session.exec(select(Tag).where(Tag.picture_id == _pic_id)).all()
-        current_tags = [
-            t.tag for t in tag_rows if t.tag and t.tag != TAG_EMPTY_SENTINEL
-        ]
+        current_tags = [t.tag for t in tag_rows if t.tag and not is_tag_sentinel(t.tag)]
         fresh_tags = [
             {"id": t.id, "tag": t.tag}
             for t in tag_rows
-            if t.tag and t.tag != TAG_EMPTY_SENTINEL
+            if t.tag and not is_tag_sentinel(t.tag)
         ]
 
         if pic_db.reference_folder_id and pic_db.caption_file:

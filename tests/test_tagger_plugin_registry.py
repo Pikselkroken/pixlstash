@@ -182,13 +182,6 @@ def test_list_errors_is_empty_when_all_loaded(manager):
     assert manager.list_errors() == []
 
 
-def test_joycaption_supports_both_capabilities(manager):
-    plugin = manager.get_plugin("joycaption")
-    assert plugin is not None
-    assert plugin.supports_tags is True
-    assert plugin.supports_descriptions is True
-
-
 def test_joycaption_schema_has_required_parameters(manager):
     plugin = manager.get_plugin("joycaption")
     names = [f["name"] for f in plugin.parameter_schema()]

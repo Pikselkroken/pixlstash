@@ -14,6 +14,13 @@ from .tag import (  # noqa: F401
     DEFAULT_SMART_SCORE_PENALIZED_TAGS,
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     TAG_EMPTY_SENTINEL,
+    TAG_PENDING_SENTINEL,
+    TAG_ENGINE_SENTINEL_PREFIX,
+    TAG_SENTINEL_LIKE_PATTERN,
+    TAG_SENTINEL_ESCAPE_CHAR,
+    make_tag_sentinel,
+    is_tag_sentinel,
+    parse_tag_engine_from_sentinel,
 )
 from .tag_prediction import TagPrediction  # noqa: F401
 from .import_folder import ImportFolder  # noqa: F401

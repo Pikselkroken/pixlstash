@@ -95,6 +95,7 @@ class InferenceEngine:
             # Build a minimal settings dict from the legacy flags.
             self._tagger_settings = {
                 "active_description_plugin": "florence2",
+                "active_tag_plugin": "wd14",
                 "plugins": {
                     "wd14": {
                         "enabled": bool(wd14_enabled),
@@ -166,14 +167,12 @@ class InferenceEngine:
         from pixlstash.inference.workflows.tagging import TaggingWorkflow
 
         plugins = self._tagger_settings.get("plugins", {})
-        wd14_cfg = plugins.get("wd14", {})
         pixl_cfg = plugins.get("pixlstash_tagger", {})
+        active = self._tagger_settings.get("active_tag_plugin", "wd14") or "wd14"
         return TaggingWorkflow(
             engine=self,
-            use_wd14=bool(wd14_cfg.get("enabled", self._wd14_enabled)),
-            use_pixlstash_tagger=bool(
-                pixl_cfg.get("enabled", self._pixlstash_tagger_enabled)
-            ),
+            use_wd14=(active == "wd14"),
+            use_pixlstash_tagger=(active == "pixlstash_tagger"),
             threshold_offset=float(
                 pixl_cfg.get("params", {}).get(
                     "threshold_offset", self._pixlstash_tagger_threshold_offset
