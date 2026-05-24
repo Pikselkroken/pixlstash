@@ -565,11 +565,11 @@ class JoyCaptionPlugin(TaggerPlugin):
                 "name": "max_new_tokens_tags",
                 "label": "Max new tokens (tags)",
                 "type": "integer",
-                "default": 96,
+                "default": 512,
                 "min": 32,
-                "max": 512,
+                "max": 1024,
                 "step": 32,
-                "description": "Maximum tokens to generate for tag output. Tag lists are short — keep this low for speed.",
+                "description": "Maximum tokens to generate for tag output. A typical full Danbooru tag list needs 400–600 tokens; increase if tags are cut off alphabetically mid-list.",
             },
             {
                 "name": "tag_batch_size",
@@ -769,7 +769,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         # Use a tag-specific token budget; fall back to the shared max_new_tokens.
         max_new_tokens_tags = int(
             parameters.get("max_new_tokens_tags")
-            or parameters.get("max_new_tokens", 96)
+            or parameters.get("max_new_tokens", 512)
         )
         tag_params = {**parameters, "max_new_tokens": max_new_tokens_tags}
 
