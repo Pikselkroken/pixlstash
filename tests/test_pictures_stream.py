@@ -134,12 +134,12 @@ def test_stream_done_when_total_below_batch_limit():
 
 
 def test_stream_continues_when_hidden_tag_post_filter_shrinks_batches():
-    """Critical regression test.
+    """Regression test: hidden-tag filtering is applied in SQL so the stream
+    returns exactly the visible pictures in the correct number of batches.
 
-    When the hidden-tag post-filter drops rows, ``done`` MUST still be
-    computed from the SQL pre-filter count.  Previously, the loader counted
-    the post-filter response length and terminated early as soon as a batch
-    shrank below the requested limit.
+    Hidden-tag filtering moved from a Python post-filter into the SQL WHERE
+    clause, so ``sql_count`` (the over-fetch probe result) now reflects only
+    visible rows.  40 visible pictures / batch_limit 10 = 4 batches.
     """
     tmp, client, server = _setup_server()
     try:
@@ -151,8 +151,8 @@ def test_stream_continues_when_hidden_tag_post_filter_shrinks_batches():
         resp = client.patch("/users/me/config", json={"hidden_tags": ["hide_me"]})
         assert resp.status_code == 200
 
-        # Drain with a small batch so post-filter shrinkage is visible per call.
-        # apply_tag_filter=true activates hidden-tag filtering server-side.
+        # Drain with a small batch so batching behaviour is visible per call.
+        # apply_tag_filter=true activates hidden-tag SQL filtering server-side.
         pictures, calls = _drain_stream(
             client,
             batch_limit=10,
@@ -165,11 +165,11 @@ def test_stream_continues_when_hidden_tag_post_filter_shrinks_batches():
             f"missing {len(visible_ids - returned_ids)} visible pictures; "
             f"contains {len(returned_ids & hidden_ids)} hidden pictures"
         )
-        # SQL returns 10 rows per call until the tail (60 / 10 = 6 calls); even
-        # though each call's post-filter response is ~7 pictures, the loader
-        # must keep going. Allow some flexibility but it must be > 1 call.
-        assert calls >= 6, (
-            f"expected at least 6 stream calls (60 rows / batch_limit 10); got {calls}"
+        # SQL WHERE filters hidden tags, so sql_count reflects 40 visible rows.
+        # 40 visible / batch_limit 10 = 4 calls (each returning 10 pictures
+        # except the probe on the 4th which returns exactly 10 -> done=True).
+        assert calls == 4, (
+            f"expected 4 stream calls (40 visible rows / batch_limit 10); got {calls}"
         )
     finally:
         server.vault.close()
