@@ -138,7 +138,7 @@ class JoyCaptionService:
                 else:
                     inputs_moved[k] = v.to(self._model_device)
             inputs = inputs_moved
-            logger.info(
+            logger.debug(
                 "[JoyCaption] inputs dtypes: %s",
                 {k: v.dtype for k, v in inputs.items() if hasattr(v, "dtype")},
             )
@@ -304,7 +304,7 @@ class JoyCaptionService:
                 LlavaForConditionalGeneration,
             )
 
-            logger.info(
+            logger.debug(
                 "[JoyCaption] Loading model %s (precision=%s, device=%s) …",
                 _MODEL_NAME,
                 self._precision,
@@ -361,7 +361,7 @@ class JoyCaptionService:
             _tok = getattr(self._processor, "tokenizer", None)
             if _tok is not None and _tok.pad_token is None:
                 _tok.pad_token = _tok.eos_token
-                logger.info(
+                logger.debug(
                     "[JoyCaption] Set tokenizer pad_token = eos_token for batch padding"
                 )
 
@@ -373,7 +373,7 @@ class JoyCaptionService:
 
                 if _ip.resample == Resampling.LANCZOS:
                     _ip.resample = Resampling.BICUBIC
-                    logger.info(
+                    logger.debug(
                         "[JoyCaption] Patched image processor resample: LANCZOS → BICUBIC"
                     )
 
@@ -654,7 +654,7 @@ class JoyCaptionPlugin(TaggerPlugin):
             parameters: Plugin parameters (uses ``precision``).
         """
         precision = str(parameters.get("precision", "nf4"))
-        logger.info(
+        logger.debug(
             "[JoyCaption] init() called — precision=%s, already_loaded=%s",
             precision,
             self.is_loaded(),
@@ -713,7 +713,7 @@ class JoyCaptionPlugin(TaggerPlugin):
                 ]
             )
             delete_strategy.execute()
-            logger.info("JoyCaption model deleted from cache.")
+            logger.debug("JoyCaption model deleted from cache.")
         except Exception as exc:
             logger.error("Failed to delete JoyCaption artifact: %s", exc)
             raise
@@ -775,7 +775,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         tag_params = {**parameters, "max_new_tokens": max_new_tokens_tags}
 
         results: dict[str, list[TagResult]] = {}
-        logger.info(
+        logger.debug(
             "[JoyCaption] tag_images() — %d image(s), batch_size=%d, max_new_tokens=%d",
             len(image_paths),
             tag_batch_size,
@@ -793,7 +793,7 @@ class JoyCaptionPlugin(TaggerPlugin):
             )
             for path_str, raw in zip(batch_paths, captions):
                 tags = _parse_tags(raw) if raw else []
-                logger.info("[JoyCaption] Tagged %s → %d tag(s)", path_str, len(tags))
+                logger.debug("[JoyCaption] Tagged %s → %d tag(s)", path_str, len(tags))
                 results[path_str] = tags
             batch_paths.clear()
             batch_images.clear()
@@ -821,7 +821,7 @@ class JoyCaptionPlugin(TaggerPlugin):
 
         _flush_batch()  # process any remaining images
 
-        logger.info("[JoyCaption] tag_images() complete — %d results", len(results))
+        logger.debug("[JoyCaption] tag_images() complete — %d results", len(results))
         return results
 
     def generate_descriptions(
@@ -844,7 +844,7 @@ class JoyCaptionPlugin(TaggerPlugin):
             parameters.get("description_prompt", _DEFAULT_DESCRIPTION_PROMPT)
         )
         results: dict[str, Optional[str]] = {}
-        logger.info(
+        logger.debug(
             "[JoyCaption] generate_descriptions() — %d image(s)", len(image_paths)
         )
 
@@ -860,7 +860,7 @@ class JoyCaptionPlugin(TaggerPlugin):
                 image = Image.open(path_str).convert("RGB")
                 image = _resize_to_max_dim(image, max_dim=640)
                 caption = self.service.generate_caption(image, desc_prompt, parameters)
-                logger.info(
+                logger.debug(
                     "[JoyCaption] Described %s → %s",
                     path_str,
                     repr(caption[:80]) if caption else None,
@@ -872,7 +872,7 @@ class JoyCaptionPlugin(TaggerPlugin):
                 )
                 results[path_str] = None
 
-        logger.info(
+        logger.debug(
             "[JoyCaption] generate_descriptions() complete — %d results", len(results)
         )
         return results

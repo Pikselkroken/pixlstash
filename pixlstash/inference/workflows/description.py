@@ -106,7 +106,7 @@ class DescriptionWorkflow:
         params = {**plugin.default_params(), **cfg.get("params", {})}
 
         try:
-            if plugin._service is None:
+            if hasattr(plugin, "setup"):
                 plugin.setup(self._engine.device)
             plugin.init(params)
         except Exception:

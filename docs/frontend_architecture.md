@@ -328,7 +328,7 @@ Schema-driven form renderer for **tagger plugin** parameter schemas. Props: `sch
 Per-plugin settings dialog. Props: `plugin` (plugin schema object), `params` (current param dict), `modelValue` (v-dialog open). Emits: `update:modelValue`, `saved`. Contains `TaggerParametersUI`, a "Reset to defaults" button, and a label-thresholds preview panel (PixlStash tagger only). Saves via `PATCH /users/me/config` (`tagger_settings.plugins.<name>.params`).
 
 #### `TagPluginsTable.vue`
-Table of tag-capable plugins (`supports_tags = true`). Columns: Enabled (checkbox), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.plugins.<name>.enabled` via `PATCH /users/me/config` on toggle. Props: `plugins`, `settings`. Emits: `update:settings`.
+Table of tag-capable plugins (`supports_tags = true`). Columns: Active (radio — single selection), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.active_tag_plugin` via `PATCH /users/me/config` on change. Props: `plugins`, `settings`. Emits: `update:settings`.
 
 #### `DescriptionPluginsTable.vue`
 Table of description-capable plugins (`supports_descriptions = true`). Columns: Active (radio — single selection), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.active_description_plugin` via `PATCH /users/me/config` on change. Props: `plugins`, `settings`. Emits: `update:settings`.

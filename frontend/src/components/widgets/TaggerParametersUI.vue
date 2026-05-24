@@ -5,7 +5,7 @@
  * Supported field types:
  *   number / integer — numeric input with optional min/max/step
  *   bool             — checkbox
- *   select           — dropdown (enum of {value, label} objects or plain strings)
+ *   select           — dropdown (field.enum or field.options: {value, label} objects or plain strings)
  *   string           — single-line text input
  *   textarea         — multi-line text input
  *   csv-int          — comma-separated integers (stored as string, validated)
@@ -41,8 +41,13 @@ watch(
 watch(form, (next) => emit("update:modelValue", { ...next }), { deep: true });
 
 function enumLabel(field, value) {
-  if (!Array.isArray(field.enum)) return value;
-  const entry = field.enum.find((e) =>
+  const source = Array.isArray(field.enum)
+    ? field.enum
+    : Array.isArray(field.options)
+      ? field.options
+      : null;
+  if (!source) return value;
+  const entry = source.find((e) =>
     typeof e === "object" ? e.value === value : e === value,
   );
   if (!entry) return value;
@@ -50,8 +55,12 @@ function enumLabel(field, value) {
 }
 
 function enumOptions(field) {
-  if (!Array.isArray(field.enum)) return [];
-  return field.enum.map((e) =>
+  const source = Array.isArray(field.enum)
+    ? field.enum
+    : Array.isArray(field.options)
+      ? field.options
+      : [];
+  return source.map((e) =>
     typeof e === "object" ? e : { value: e, label: e },
   );
 }
@@ -67,7 +76,10 @@ function enumOptions(field) {
 
       <!-- select -->
       <select
-        v-if="field.type === 'select' && Array.isArray(field.enum)"
+        v-if="
+          field.type === 'select' &&
+          (Array.isArray(field.enum) || Array.isArray(field.options))
+        "
         v-model="form[field.name]"
         class="tagger-params-input"
       >

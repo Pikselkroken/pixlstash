@@ -404,7 +404,7 @@ watch(maxVramGbValue, () => {
       v-else
       :plugins="taggerPlugins"
       :settings="taggerSettings"
-      @update:settings="(s) => (taggerSettings = s)"
+      @update:settings="(s) => (taggerSettings.value = s)"
     />
   </div>
   <v-divider class="settings-section-divider" />
@@ -418,7 +418,7 @@ watch(maxVramGbValue, () => {
       v-else
       :plugins="taggerPlugins"
       :settings="taggerSettings"
-      @update:settings="(s) => (taggerSettings = s)"
+      @update:settings="(s) => (taggerSettings.value = s)"
     />
   </div>
 
