@@ -1147,6 +1147,8 @@ def register_routes(router, server):
             if token_scope is not None and token_scope.resource_type == "character"
             else None
         )
+        # Mirror the /pictures endpoint: fields=grid implies stack_leaders_only.
+        effective_stack_leaders_only = stack_leaders_only or (fields == "grid")
         stream_state: dict = {}
         pictures = select_pictures_for_listing(
             server=server,
@@ -1157,7 +1159,7 @@ def register_routes(router, server):
             limit=batch_limit,
             metadata_fields=metadata_fields,
             return_ids_only=False,
-            stack_leaders_only=stack_leaders_only,
+            stack_leaders_only=effective_stack_leaders_only,
             project_id=project_id,
             scope_set_id=scope_set_id,
             scope_character_id=scope_character_id,
