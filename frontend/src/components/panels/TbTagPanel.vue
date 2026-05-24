@@ -181,7 +181,11 @@
               <v-icon v-if="generateTagsLoading" size="14" class="spin"
                 >mdi-loading</v-icon
               >
-              {{ generateTagsLoading ? "Queuing..." : "Generate Tags" }}
+              {{
+                generateTagsLoading
+                  ? "Queuing..."
+                  : "Generate tags with default tagger"
+              }}
             </button>
           </div>
           <div v-if="generateTagsError" class="plugin-menu-error">
