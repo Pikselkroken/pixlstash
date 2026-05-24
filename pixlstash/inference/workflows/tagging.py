@@ -105,7 +105,7 @@ class TaggingWorkflow:
         active = (
             engine_override
             if engine_override is not None
-            else self._tagger_settings.get("active_tag_plugin") or "wd14"
+            else self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
         )
 
         if not active:
@@ -361,8 +361,6 @@ class TaggingWorkflow:
             enabled = cfg.get("enabled", False)
             if not enabled:
                 continue
-            if not enabled:
-                continue
             params = {
                 **plugin.default_params(),
                 **cfg.get("params", {}),
@@ -551,7 +549,9 @@ class TaggingWorkflow:
                 if plugin_batch > 1:
                     max_concurrent = min(max_concurrent, plugin_batch)
         except Exception:
-            pass
+            logger.exception(
+                "Failed to query extra tag plugins for batch sizing; ignoring."
+            )
         return max(1, max_concurrent)
 
     def estimated_vram_mb(self, image_count: int) -> int:
