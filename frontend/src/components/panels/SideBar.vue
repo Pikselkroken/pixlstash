@@ -1449,9 +1449,14 @@ function selectCharacter(id, label = null, event = null) {
       projectContext = { mode: "global", projectId: null };
     } else {
       const charProjectId = singleChar?.project_id ?? null;
+      // In the global tab, never push a project-scoped route even if the
+      // character belongs to a project.  Only the project tab should do that.
       projectContext = {
-        mode: charProjectId != null ? "project" : "global",
-        projectId: charProjectId,
+        mode:
+          projectViewMode.value === "project" && charProjectId != null
+            ? "project"
+            : "global",
+        projectId: projectViewMode.value === "project" ? charProjectId : null,
       };
     }
     emit("select-set", null);
@@ -1480,8 +1485,11 @@ function selectCharacter(id, label = null, event = null) {
       ids: [numericId],
       projectIds: singleChar0 ? { [numericId]: charProjectId0 } : {},
       projectContext: {
-        mode: charProjectId0 != null ? "project" : "global",
-        projectId: charProjectId0,
+        mode:
+          projectViewMode.value === "project" && charProjectId0 != null
+            ? "project"
+            : "global",
+        projectId: projectViewMode.value === "project" ? charProjectId0 : null,
       },
     });
     return;
@@ -1531,6 +1539,8 @@ function selectSet(setId, label = null, event = null) {
   if (!isMultiToggle) {
     const singleSet = pictureSets.value.find((s) => s.id === numericSetId);
     const setProjectId = singleSet?.project_id ?? null;
+    // In the global tab, never push a project-scoped route even if the
+    // set belongs to a project.  Only the project tab should do that.
     emit("select-set", {
       id: numericSetId,
       label,
@@ -1538,8 +1548,11 @@ function selectSet(setId, label = null, event = null) {
       names: { [numericSetId]: label || String(numericSetId) },
       projectIds: { [numericSetId]: setProjectId },
       projectContext: {
-        mode: setProjectId != null ? "project" : "global",
-        projectId: setProjectId,
+        mode:
+          projectViewMode.value === "project" && setProjectId != null
+            ? "project"
+            : "global",
+        projectId: projectViewMode.value === "project" ? setProjectId : null,
       },
     });
     return;
