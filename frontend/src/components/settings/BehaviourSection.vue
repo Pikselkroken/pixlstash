@@ -396,7 +396,8 @@ watch(maxVramGbValue, () => {
   <div class="settings-section">
     <div class="settings-section-title">Tag Plugins</div>
     <div class="settings-section-desc">
-      Select which plugin generates tags automatically.
+      Select which plugin generates tags automatically. Hint: you can pick
+      taggers for selected pictures in the tag panel or context menu.
     </div>
     <div v-if="taggerLoading" class="settings-tagger-loading">Loading…</div>
     <TagPluginsTable

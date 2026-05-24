@@ -43,6 +43,7 @@ from .utils.reference_folder_watcher import ReferenceFolderWatcher
 from . import worker_config
 
 from pixlstash.event_types import EventType
+from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 
 
 logger = get_logger(__name__)
@@ -182,6 +183,7 @@ class Vault:
                 keep_models_in_memory=self._keep_models_in_memory,
                 tagger_settings=self._tagger_settings,
             )
+            self._bind_engine_services()
 
     def start(self) -> None:
         """Start background workers.
@@ -197,6 +199,28 @@ class Vault:
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
         self._started = True
+
+    def _bind_engine_services(self) -> None:
+        """Inject the engine's service instances into registry plugins.
+
+        Built-in tagger plugins (WD14, PixlStash Tagger, Florence-2) have their
+        own ``_service`` attribute that stays ``None`` on the registry instance
+        because the engine creates its own dedicated service objects.  Binding
+        those services here makes ``plugin.is_loaded()`` reflect reality so the
+        Settings UI shows the correct loaded state.
+        """
+        if self._engine is None:
+            return
+        mgr = get_tagger_plugin_manager()
+        bindings = [
+            ("wd14", self._engine.wd14_service),
+            ("pixlstash_tagger", self._engine.pixlstash_tagger_service),
+            ("florence2", self._engine.florence_service),
+        ]
+        for plugin_name, service in bindings:
+            plugin = mgr.get_plugin(plugin_name)
+            if plugin is not None and service is not None and hasattr(plugin, "bind_service"):
+                plugin.bind_service(service)
 
     def notify(self, event_type: EventType, data=None):
         """
@@ -795,6 +819,7 @@ class Vault:
                 keep_models_in_memory=self._keep_models_in_memory,
                 tagger_settings=self._tagger_settings,
             )
+            self._bind_engine_services()
 
         # Register the watcher BEFORE checking the DB to avoid a TOCTOU race where
         # the task completes (and fires _notify_planner_ids_processed) in the gap

@@ -539,6 +539,18 @@ class WD14Plugin(TaggerPlugin):
             raise RuntimeError("WD14Plugin.setup() has not been called")
         return self._service
 
+    def bind_service(self, service: WD14Service) -> None:
+        """Bind an existing :class:`WD14Service` instance.
+
+        Used by the :class:`~pixlstash.vault.Vault` to share the engine's
+        service with the plugin registry so that ``is_loaded()`` reflects the
+        true model state.
+
+        Args:
+            service: The already-constructed service to attach.
+        """
+        self._service = service
+
     # ------------------------------------------------------------------
     # TaggerPlugin interface
     # ------------------------------------------------------------------

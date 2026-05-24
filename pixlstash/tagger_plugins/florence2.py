@@ -511,6 +511,18 @@ class Florence2Plugin(TaggerPlugin):
             raise RuntimeError("Florence2Plugin.setup() has not been called")
         return self._service
 
+    def bind_service(self, service: Florence2Service) -> None:
+        """Bind an existing :class:`Florence2Service` instance.
+
+        Used by the :class:`~pixlstash.vault.Vault` to share the engine's
+        service with the plugin registry so that ``is_loaded()`` reflects the
+        true model state.
+
+        Args:
+            service: The already-constructed service to attach.
+        """
+        self._service = service
+
     # ------------------------------------------------------------------
     # TaggerPlugin interface
     # ------------------------------------------------------------------
