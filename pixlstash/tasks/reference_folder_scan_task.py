@@ -365,6 +365,7 @@ class ReferenceFolderScanTask(BaseTask):
                 session.refresh(pic)
 
             sidecar_tags_to_add = []
+            sentinel_tags_to_add = []
             imported_ids: list[int] = []
             for pic in pictures_batch:
                 if pic.id is not None:
@@ -373,9 +374,13 @@ class ReferenceFolderScanTask(BaseTask):
                 if sidecar_tags and pic.id is not None:
                     for tag_str in sidecar_tags:
                         sidecar_tags_to_add.append(Tag(picture_id=pic.id, tag=tag_str))
+                elif pic.id is not None:
+                    sentinel_tags_to_add.append(
+                        Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL)
+                    )
 
-            if sidecar_tags_to_add:
-                session.add_all(sidecar_tags_to_add)
+            if sidecar_tags_to_add or sentinel_tags_to_add:
+                session.add_all(sidecar_tags_to_add + sentinel_tags_to_add)
                 session.commit()
             return imported_ids
 
