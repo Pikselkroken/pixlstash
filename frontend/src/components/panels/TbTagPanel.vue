@@ -33,10 +33,7 @@
               :alt="String(img.id)"
               draggable="false"
             />
-            <div
-              v-else
-              class="tag-preview-img tag-preview-img--placeholder"
-            />
+            <div v-else class="tag-preview-img tag-preview-img--placeholder" />
           </div>
         </div>
       </div>
@@ -171,8 +168,33 @@
             {{ tagLoading ? "Applying..." : "Apply to All" }}
           </button>
         </div>
+        <div v-if="!isReadOnly" class="tag-autogen-section">
+          <div class="tag-new-label">Auto-generate</div>
+          <div class="plugin-menu-actions">
+            <button
+              class="stack-btn stack-btn--secondary"
+              type="button"
+              :disabled="generateTagsLoading"
+              :title="`Reset and regenerate tags for all ${selectedCount} selected image${selectedCount !== 1 ? 's' : ''}`"
+              @click="generateTagsForAll"
+            >
+              <v-icon v-if="generateTagsLoading" size="14" class="spin"
+                >mdi-loading</v-icon
+              >
+              {{ generateTagsLoading ? "Queuing..." : "Generate Tags" }}
+            </button>
+          </div>
+          <div v-if="generateTagsError" class="plugin-menu-error">
+            {{ generateTagsError }}
+          </div>
+          <div v-if="generateTagsSuccess" class="plugin-menu-success">
+            {{ generateTagsSuccess }}
+          </div>
+        </div>
         <div v-if="tagError" class="plugin-menu-error">{{ tagError }}</div>
-        <div v-if="tagSuccess" class="plugin-menu-success">{{ tagSuccess }}</div>
+        <div v-if="tagSuccess" class="plugin-menu-success">
+          {{ tagSuccess }}
+        </div>
       </div>
     </div>
   </div>
@@ -263,6 +285,9 @@ const fetchedTagData = ref([]);
 const tagDataLoading = ref(false);
 const tagDataCapped = ref(false);
 const fetchedPredictionData = ref([]);
+const generateTagsLoading = ref(false);
+const generateTagsError = ref("");
+const generateTagsSuccess = ref("");
 const predictionLoading = ref(false);
 const predictionAcceptanceThresholdSB = ref(0.95);
 const labelThresholdsSB = ref({});
@@ -461,7 +486,10 @@ async function confirmPredictionOnAll(predEntry) {
       pictureIds: predEntry.ids,
       action: "add",
     });
-    await Promise.all([fetchSelectedImageTags(), fetchSelectedImagePredictions()]);
+    await Promise.all([
+      fetchSelectedImageTags(),
+      fetchSelectedImagePredictions(),
+    ]);
   } catch (err) {
     tagError.value = err?.response?.data?.detail || err?.message || String(err);
   } finally {
@@ -537,6 +565,32 @@ async function addTagToRemaining(tagEntry) {
     tagActionLoading.value = tagActionLoading.value.filter(
       (n) => n !== tagEntry.name,
     );
+  }
+}
+
+async function generateTagsForAll() {
+  const ids = (
+    Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
+  )
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length || generateTagsLoading.value) return;
+  generateTagsLoading.value = true;
+  generateTagsError.value = "";
+  generateTagsSuccess.value = "";
+  try {
+    await Promise.all(
+      ids.map((id) =>
+        apiClient.post(`${props.backendUrl}/pictures/${id}/reset_tags`),
+      ),
+    );
+    generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging`;
+    emit("tags-applied", { pictureIds: ids, action: "reset" });
+  } catch (err) {
+    generateTagsError.value =
+      err?.response?.data?.detail || err?.message || String(err);
+  } finally {
+    generateTagsLoading.value = false;
   }
 }
 
@@ -627,7 +681,11 @@ async function fetchPenalisedTagsSB() {
     }
     penalisedTagsSB.value = new Set(
       list
-        .map((t) => String(t || "").trim().toLowerCase())
+        .map((t) =>
+          String(t || "")
+            .trim()
+            .toLowerCase(),
+        )
         .filter(Boolean),
     );
     penalisedTagsFetchedAt = now;
@@ -638,7 +696,9 @@ async function fetchPenalisedTagsSB() {
 
 function isPenalisedTagSB(name) {
   return penalisedTagsSB.value.has(
-    String(name || "").trim().toLowerCase(),
+    String(name || "")
+      .trim()
+      .toLowerCase(),
   );
 }
 
@@ -878,7 +938,9 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   padding: 2px 7px;
   font-size: 0.78rem;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
   line-height: 1.5;
   white-space: nowrap;
 }
@@ -1141,5 +1203,58 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 .tag-panel-wide .plugin-menu-body {
   flex: 1;
   min-width: 340px;
+}
+
+.stack-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  color: rgb(var(--v-theme-on-background));
+  border: none;
+  padding: 0 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.88em;
+  font-family: inherit;
+  height: 40px;
+  white-space: nowrap;
+}
+
+.stack-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-background), 0.12);
+}
+
+.stack-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.stack-btn--secondary {
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.25);
+}
+
+.stack-btn--secondary:hover:not(:disabled) {
+  border-color: rgba(var(--v-theme-primary), 0.5);
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+.tag-autogen-section {
+  margin-top: 12px;
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  padding-top: 10px;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
 }
 </style>
