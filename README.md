@@ -8,7 +8,9 @@ PixlStash is a local picture library server for organizing, filtering, and revie
 It provides:
 
 - A browser-based interface
-- Automatic tagging of images
+- Automatic tagging and image descriptions with selectable AI engines (including JoyCaption)
+- Re-tag or regenerate descriptions for any selection directly from the context menu
+- Instant grid loading — thumbnails appear immediately, metadata fills in asynchronously
 - Fast metadata and tag filtering
 - Smart score sorting
 - Character and set organization
@@ -18,6 +20,7 @@ It provides:
 - Integration with ComfyUI for running workflows on selected images within PixlStash.
 - Plugin system for defining new filter operations that can be performed on a set of images.
 - Sharing of pictures, picture sets, characters and projects.
+- Persistent view URLs — bookmark or refresh any view and land exactly where you left off.
 
 PixlStash runs on your machine and serves the UI at a local (or Internet-facing) web address.
 

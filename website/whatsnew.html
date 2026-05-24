@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.2</title>
+    <title>What's New in PixlStash 1.3</title>
     <meta
       name="description"
-      content="Explore what's new in PixlStash 1.2 including picture sharing, a redesigned sidebar and toolbar, context menus, and faster background processing."
+      content="Explore what's new in PixlStash 1.3 including JoyCaption support, instant grid loading, selectable tag and description engines, and persistent view URLs."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -376,170 +376,107 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- ── PixlStash 1.2 ──────────────────────────────────────────── -->
+      <!-- ── PixlStash 1.3 ──────────────────────────────────────────── -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.2</span>
-            <h1>A whole new look — and picture sharing</h1>
+            <span class="release-kicker">PixlStash 1.3</span>
+            <h1>Instant grid, smarter tagging</h1>
             <p>
-              The biggest visual overhaul since launch: a redesigned sidebar,
-              new toolbar, and context menus throughout. Plus, share pictures,
-              sets, characters and projects with a single link.
+              The image grid now loads visually in milliseconds and fills in
+              details asynchronously — even at 30 000+ images it feels instant.
+              Plus full JoyCaption support, selectable tag and description
+              engines, and a URL that remembers where you were.
             </p>
             <ul class="release-bullets">
-              <li>Share pictures and collections with read-only links</li>
-              <li>Redesigned sidebar and toolbar</li>
-              <li>Context menus across the grid and sidebar</li>
               <li>
-                Faster background processing — tagging &amp; face extraction
+                Dramatically faster grid — visual content appears immediately
               </li>
+              <li>JoyCaption support for tagging and image descriptions</li>
+              <li>Choose your tag or description engine per-request</li>
+              <li>
+                Persistent view URLs — refresh and stay exactly where you were
+              </li>
+              <li>Drag tags to accept or reject them in the tag panel</li>
             </ul>
           </div>
           <div class="release-hero-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotWhatsNew1_2.jpg"
-              alt="PixlStash 1.2 — redesigned sidebar and toolbar"
+              src="assets/ScreenshotTaggers.jpg"
+              alt="PixlStash 1.3 — tagger and description engine settings"
             />
           </div>
         </div>
       </section>
 
       <section class="section-grid">
-        <article class="update-card update-card--feature">
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotJoyCaption.jpg"
+            alt="Tagger and description plugin settings in PixlStash 1.3"
+          />
           <div class="update-card-body">
-            <h2>Picture Sharing</h2>
+            <h2>Selectable tagger &amp; description engines</h2>
             <p>
-              Share individual pictures, sets, characters, and projects with
-              anyone using a read-only link — no account required for viewers.
-              Tokens are scoped, revocable, and never expose your full library.
-              Ideal for sharing work-in-progress with clients or collaborators.
-              Optionally add your own watermarks to shared pictures for
-              branding.
+              The settings page now lets you choose which plugin handles
+              automatic tagging and which generates image descriptions. Each
+              engine has its own parameter controls — tweak precision, prompt
+              style, and thresholds without leaving the settings panel.
             </p>
           </div>
-          <div class="update-card-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotShare1.jpg"
-              alt="Sharing dialog in PixlStash showing a generated share link"
-            />
+        </article>
+
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotUrl.jpg"
+            alt="Browser URL bar showing a persistent PixlStash view URL"
+          />
+          <div class="update-card-body">
+            <h2>Persistent view URLs</h2>
+            <p>
+              Every view — grid, character, picture set, project — now has its
+              own URL. Bookmark it, share it with a teammate, or simply refresh
+              and land exactly where you left off. No more navigating back from
+              scratch after an accidental reload.
+            </p>
           </div>
         </article>
       </section>
 
       <section class="section-grid">
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotShare2.jpg"
-            alt="Shared picture view as seen by a recipient"
-          />
+        <article class="update-card update-card--feature">
           <div class="update-card-body">
-            <h2>Recipient view</h2>
+            <h2>One-click tagging &amp; descriptions</h2>
             <p>
-              Recipients see a clean, read-only view of exactly what you shared.
-              No login, no noise — just the content you chose to share.
+              Right-click any image (or use the selection toolbar) to instantly
+              re-tag or regenerate a description using the engine of your
+              choice. A hover submenu lists every available model so you can
+              pick the right one for the job without touching the settings page.
             </p>
           </div>
-        </article>
-
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotToolbar.jpg"
-            alt="New PixlStash toolbar design"
-          />
-          <div class="update-card-body">
-            <h2>New Toolbar</h2>
-            <p>
-              The toolbar has been redesigned for clarity. Search, filters, and
-              sort controls are better organised, and the new layout scales more
-              naturally on smaller screens.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotContext.jpg"
-            alt="Context menu in the PixlStash image grid"
-          />
-          <div class="update-card-body">
-            <h2>Context Menus</h2>
-            <p>
-              Right-click anywhere in the grid or sidebar to access actions for
-              the item under the cursor. Rate, tag, assign, move, share, or
-              delete without leaving your current view.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotIconColor.jpg"
-            alt="Coloured icon picker for picture sets in PixlStash"
-          />
-          <div class="update-card-body">
-            <h2>Custom Icons for Sets</h2>
-            <p>
-              Give each picture set its own coloured icon instead of relying on
-              the automatic thumbnail. Instantly recognise your sets at a
-              glance, no matter how similar the contents look.
-            </p>
-          </div>
-        </article>
-      </section>
-
-      <section class="section-grid section-grid--stats">
-        <article class="update-card stats-card">
-          <div class="stats-card-media">
+          <div class="update-card-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotSidebar2.jpg"
-              alt="Redesigned PixlStash sidebar"
+              src="assets/ScreenshotTaggers.jpg"
+              alt="Context menu with Tag automatically and Generate description submenus"
             />
-          </div>
-          <div class="update-card-body">
-            <h2>Redesigned Sidebar</h2>
-            <p>
-              People, sets, projects, and folders are easier to navigate. The
-              new sidebar is more compact, loads faster, and shows more at a
-              glance.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card stats-card">
-          <div class="stats-card-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotTaskManager.jpg"
-              alt="Task manager in the statistics sidebar showing processing throughput"
-            />
-          </div>
-          <div class="update-card-body">
-            <h2>Faster Background Processing</h2>
-            <p>
-              Tagging and face extraction are significantly faster thanks to
-              bulk database operations and smarter grid update scheduling. Watch
-              real-time throughput in the statistics sidebar task manager.
-            </p>
           </div>
         </article>
       </section>
 
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
-          <h2>Security Vulnerability Notifications</h2>
+          <h2>Instant grid loading</h2>
           <p>
-            PixlStash now checks for known security issues in the ChangeLog and
-            alerts you directly in the UI when a fix is available along with the
-            security level and affected versions. Stay informed and keep your
-            installation secure with ease.
+            The image grid renders the visual content immediately and fills in
+            metadata — scores, tags, faces — asynchronously in the background.
+            The result is a dramatically snappier feel: thumbnails appear before
+            the first server response has even finished, and the grid stays
+            responsive while data loads in. This is the single biggest
+            day-to-day improvement in 1.3.
           </p>
         </div>
       </article>
@@ -561,6 +498,181 @@
           >
         </div>
       </section>
+
+      <!-- ── PixlStash 1.2 (previous release) ────────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release — PixlStash 1.2</span>
+
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.2</span>
+              <h1>A whole new look — and picture sharing</h1>
+              <p>
+                The biggest visual overhaul since launch: a redesigned sidebar,
+                new toolbar, and context menus throughout. Plus, share pictures,
+                sets, characters and projects with a single link.
+              </p>
+              <ul class="release-bullets">
+                <li>Share pictures and collections with read-only links</li>
+                <li>Redesigned sidebar and toolbar</li>
+                <li>Context menus across the grid and sidebar</li>
+                <li>
+                  Faster background processing — tagging &amp; face extraction
+                </li>
+              </ul>
+            </div>
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotWhatsNew1_2.jpg"
+                alt="PixlStash 1.2 — redesigned sidebar and toolbar"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>Picture Sharing</h2>
+              <p>
+                Share individual pictures, sets, characters, and projects with
+                anyone using a read-only link — no account required for viewers.
+                Tokens are scoped, revocable, and never expose your full
+                library. Ideal for sharing work-in-progress with clients or
+                collaborators. Optionally add your own watermarks to shared
+                pictures for branding.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotShare1.jpg"
+                alt="Sharing dialog in PixlStash showing a generated share link"
+              />
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotShare2.jpg"
+              alt="Shared picture view as seen by a recipient"
+            />
+            <div class="update-card-body">
+              <h2>Recipient view</h2>
+              <p>
+                Recipients see a clean, read-only view of exactly what you
+                shared. No login, no noise — just the content you chose to
+                share.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotToolbar.jpg"
+              alt="New PixlStash toolbar design"
+            />
+            <div class="update-card-body">
+              <h2>New Toolbar</h2>
+              <p>
+                The toolbar has been redesigned for clarity. Search, filters,
+                and sort controls are better organised, and the new layout
+                scales more naturally on smaller screens.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotContext.jpg"
+              alt="Context menu in the PixlStash image grid"
+            />
+            <div class="update-card-body">
+              <h2>Context Menus</h2>
+              <p>
+                Right-click anywhere in the grid or sidebar to access actions
+                for the item under the cursor. Rate, tag, assign, move, share,
+                or delete without leaving your current view.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotIconColor.jpg"
+              alt="Coloured icon picker for picture sets in PixlStash"
+            />
+            <div class="update-card-body">
+              <h2>Custom Icons for Sets</h2>
+              <p>
+                Give each picture set its own coloured icon instead of relying
+                on the automatic thumbnail. Instantly recognise your sets at a
+                glance, no matter how similar the contents look.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid section-grid--stats">
+          <article class="update-card stats-card">
+            <div class="stats-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotSidebar2.jpg"
+                alt="Redesigned PixlStash sidebar"
+              />
+            </div>
+            <div class="update-card-body">
+              <h2>Redesigned Sidebar</h2>
+              <p>
+                People, sets, projects, and folders are easier to navigate. The
+                new sidebar is more compact, loads faster, and shows more at a
+                glance.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card stats-card">
+            <div class="stats-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotTaskManager.jpg"
+                alt="Task manager in the statistics sidebar showing processing throughput"
+              />
+            </div>
+            <div class="update-card-body">
+              <h2>Faster Background Processing</h2>
+              <p>
+                Tagging and face extraction are significantly faster thanks to
+                bulk database operations and smarter grid update scheduling.
+                Watch real-time throughput in the statistics sidebar task
+                manager.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Security Vulnerability Notifications</h2>
+            <p>
+              PixlStash now checks for known security issues in the ChangeLog
+              and alerts you directly in the UI when a fix is available along
+              with the security level and affected versions. Stay informed and
+              keep your installation secure with ease.
+            </p>
+          </div>
+        </article>
+      </div>
+      <!-- end prev-release 1.2 -->
 
       <!-- ── PixlStash 1.1 (previous release) ────────────────────────── -->
       <div class="prev-release">
