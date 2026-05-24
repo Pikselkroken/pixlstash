@@ -594,6 +594,8 @@ export function useGridFetch(
         if (props.faceBboxFilter != null) _filterP.set('face_filter', String(props.faceBboxFilter));
         // Filter params: shared only
         if (props.sharedOnlyFilter) _filterP.set('shared_only', 'true');
+        // Filter params: hidden-tag filter
+        if (props.applyTagFilter) _filterP.set('apply_tag_filter', 'true');
         const _filterSuffix = _filterP.size ? `&${_filterP.toString()}` : '';
         const streamBase =
           `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`;

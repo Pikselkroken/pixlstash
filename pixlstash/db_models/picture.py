@@ -727,6 +727,7 @@ class Picture(SQLModel, table=True):
         tags_rejected_filter: Optional[List[str]] = None,
         tags_confidence_above_filter: Optional[List[str]] = None,
         tags_confidence_below_filter: Optional[List[str]] = None,
+        hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
@@ -921,6 +922,15 @@ class Picture(SQLModel, table=True):
                         f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
                     ).bindparams(**{f"rejected_tag_filter_{i}": tag})
                 )
+
+        if hidden_tags_filter:
+            placeholders = ", ".join(f":ht_{i}" for i in range(len(hidden_tags_filter)))
+            query = query.where(
+                text(
+                    f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id"
+                    f" AND LOWER(tag.tag) IN ({placeholders}))"
+                ).bindparams(**{f"ht_{i}": t for i, t in enumerate(hidden_tags_filter)})
+            )
 
         if tags_confidence_above_filter:
             for i, entry in enumerate(tags_confidence_above_filter):
@@ -1158,6 +1168,7 @@ class Picture(SQLModel, table=True):
         tags_rejected_filter: Optional[List[str]] = None,
         tags_confidence_above_filter: Optional[List[str]] = None,
         tags_confidence_below_filter: Optional[List[str]] = None,
+        hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
@@ -1264,6 +1275,15 @@ class Picture(SQLModel, table=True):
                         f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
                     ).bindparams(**{f"rejected_tag_filter_{i}": tag})
                 )
+
+        if hidden_tags_filter:
+            placeholders = ", ".join(f":ht_{i}" for i in range(len(hidden_tags_filter)))
+            query = query.where(
+                text(
+                    f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id"
+                    f" AND LOWER(tag.tag) IN ({placeholders}))"
+                ).bindparams(**{f"ht_{i}": t for i, t in enumerate(hidden_tags_filter)})
+            )
 
         if tags_confidence_above_filter:
             for i, entry in enumerate(tags_confidence_above_filter):
