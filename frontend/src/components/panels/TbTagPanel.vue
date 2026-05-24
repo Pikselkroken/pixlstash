@@ -170,13 +170,13 @@
         </div>
         <div v-if="!isReadOnly" class="tag-autogen-section">
           <div class="tag-new-label">Auto-generate</div>
-          <div class="plugin-menu-actions">
+          <div class="plugin-menu-actions tag-autogen-row">
             <button
               class="stack-btn stack-btn--secondary"
               type="button"
               :disabled="generateTagsLoading"
               :title="`Reset and regenerate tags for all ${selectedCount} selected image${selectedCount !== 1 ? 's' : ''}`"
-              @click="generateTagsForAll"
+              @click="generateTagsForAll()"
             >
               <v-icon v-if="generateTagsLoading" size="14" class="spin"
                 >mdi-loading</v-icon
@@ -187,6 +187,45 @@
                   : "Generate tags with default tagger"
               }}
             </button>
+            <v-menu
+              v-model="taggerMenuOpen"
+              :close-on-content-click="true"
+              location="bottom end"
+            >
+              <template #activator="{ props: menuProps }">
+                <button
+                  class="stack-btn stack-btn--secondary stack-btn--icon-only"
+                  type="button"
+                  title="Generate tags with a specific tagger..."
+                  :disabled="generateTagsLoading"
+                  v-bind="menuProps"
+                  @click="fetchTaggerPlugins"
+                >
+                  <v-icon size="14">mdi-chevron-down</v-icon>
+                </button>
+              </template>
+              <v-list density="compact" min-width="180">
+                <v-list-item
+                  v-if="taggerPluginsLoading"
+                  disabled
+                  title="Loading..."
+                />
+                <template v-if="!taggerPluginsLoading">
+                  <v-list-item
+                    v-for="plugin in taggerPlugins"
+                    :key="plugin.name"
+                    :title="plugin.display_name || plugin.name"
+                    :disabled="!!plugin.load_error"
+                    @click="generateTagsForAll(plugin.name)"
+                  />
+                  <v-list-item
+                    v-if="!taggerPlugins.length"
+                    disabled
+                    title="No taggers available"
+                  />
+                </template>
+              </v-list>
+            </v-menu>
           </div>
           <div v-if="generateTagsError" class="plugin-menu-error">
             {{ generateTagsError }}
@@ -292,6 +331,9 @@ const fetchedPredictionData = ref([]);
 const generateTagsLoading = ref(false);
 const generateTagsError = ref("");
 const generateTagsSuccess = ref("");
+const taggerMenuOpen = ref(false);
+const taggerPlugins = ref([]);
+const taggerPluginsLoading = ref(false);
 const predictionLoading = ref(false);
 const predictionAcceptanceThresholdSB = ref(0.95);
 const labelThresholdsSB = ref({});
@@ -572,7 +614,22 @@ async function addTagToRemaining(tagEntry) {
   }
 }
 
-async function generateTagsForAll() {
+async function fetchTaggerPlugins() {
+  if (taggerPluginsLoading.value || taggerPlugins.value.length) return;
+  taggerPluginsLoading.value = true;
+  try {
+    const res = await apiClient.get("/taggers");
+    taggerPlugins.value = (res.data?.plugins ?? []).filter(
+      (p) => p.supports_tags,
+    );
+  } catch {
+    taggerPlugins.value = [];
+  } finally {
+    taggerPluginsLoading.value = false;
+  }
+}
+
+async function generateTagsForAll(model = null) {
   const ids = (
     Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
   )
@@ -583,12 +640,14 @@ async function generateTagsForAll() {
   generateTagsError.value = "";
   generateTagsSuccess.value = "";
   try {
+    const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        apiClient.post(`${props.backendUrl}/pictures/${id}/reset_tags`),
+        apiClient.post(`${props.backendUrl}/pictures/${id}/reset_tags`, body),
       ),
     );
-    generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging`;
+    const suffix = model ? ` with ${model}` : "";
+    generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging${suffix}`;
     emit("tags-applied", { pictureIds: ids, action: "reset" });
   } catch (err) {
     generateTagsError.value =
@@ -828,6 +887,16 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+.tag-autogen-row {
+  gap: 4px;
+}
+
+.stack-btn--icon-only {
+  padding: 0 8px;
+  min-width: unset;
+  flex-shrink: 0;
 }
 
 .plugin-menu-error {

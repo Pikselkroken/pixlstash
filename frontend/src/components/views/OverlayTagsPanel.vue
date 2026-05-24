@@ -15,10 +15,47 @@
           type="button"
           title="Reset and regenerate tags — deletes all tags and predictions for this picture and requeues it for re-tagging"
           :disabled="isTagsRefreshing"
-          @click.stop="refreshPictureTags"
+          @click.stop="refreshPictureTags()"
         >
           <v-icon size="16">mdi-refresh</v-icon>
         </button>
+        <v-menu
+          v-if="props.image && !isReadOnly"
+          v-model="tagPluginMenuOpen"
+          :close-on-content-click="true"
+          location="bottom end"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              class="section-meta-btn section-meta-btn--with-chevron"
+              type="button"
+              title="Regenerate tags with a specific tagger..."
+              :disabled="isTagsRefreshing"
+              v-bind="menuProps"
+              @click.stop="fetchTagPlugins"
+            >
+              <v-icon size="14">mdi-refresh</v-icon>
+              <v-icon size="10">mdi-chevron-down</v-icon>
+            </button>
+          </template>
+          <v-list density="compact" min-width="160">
+            <v-list-item v-if="tagPluginsLoading" disabled title="Loading..." />
+            <template v-if="!tagPluginsLoading">
+              <v-list-item
+                v-for="plugin in tagPlugins"
+                :key="plugin.name"
+                :title="plugin.display_name || plugin.name"
+                :disabled="!!plugin.load_error"
+                @click="refreshPictureTags(plugin.name)"
+              />
+              <v-list-item
+                v-if="!tagPlugins.length"
+                disabled
+                title="No taggers available"
+              />
+            </template>
+          </v-list>
+        </v-menu>
         <button
           v-if="props.image && !isReadOnly"
           class="section-meta-btn"
@@ -242,6 +279,9 @@ const tagInputRect = ref(null);
 const autocompleteHoverEnabled = ref(false);
 const tagInputRef = ref(null);
 const tagListRef = ref(null);
+const tagPluginMenuOpen = ref(false);
+const tagPlugins = ref([]);
+const tagPluginsLoading = ref(false);
 
 // ── Prediction state ───────────────────────────────────────────────────────
 
@@ -836,15 +876,30 @@ async function rejectPrediction(tag) {
   }
 }
 
-async function refreshPictureTags() {
+async function fetchTagPlugins() {
+  if (tagPluginsLoading.value || tagPlugins.value.length) return;
+  tagPluginsLoading.value = true;
+  try {
+    const res = await apiClient.get("/taggers");
+    tagPlugins.value = (res.data?.plugins ?? []).filter((p) => p.supports_tags);
+  } catch {
+    tagPlugins.value = [];
+  } finally {
+    tagPluginsLoading.value = false;
+  }
+}
+
+async function refreshPictureTags(model = null) {
   if (!props.image?.id || !props.backendUrl) return;
   if (isTagsRefreshing.value) return;
   const capturedImageId = props.image.id;
 
   isTagsRefreshing.value = true;
   try {
+    const body = model ? { model } : {};
     await apiClient.post(
       `${props.backendUrl}/pictures/${capturedImageId}/reset_tags`,
+      body,
     );
     tagPredictions.value = [];
     emit("update-tags", []);
@@ -915,6 +970,10 @@ defineExpose({
 .section-meta-btn:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.section-meta-btn--with-chevron {
+  gap: 1px;
 }
 
 .tag-list {
