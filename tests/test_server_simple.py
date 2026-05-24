@@ -142,7 +142,7 @@ def reset_vault(server):
             try:
                 os.remove(path)
             except OSError:
-                pass
+                logger.debug(f"Failed to delete file during vault reset: {path}")
 
     server.auth.password_hash = None
     server.auth.username = None

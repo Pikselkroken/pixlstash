@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from sqlalchemy import asc, exists, desc, func, text
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -557,13 +558,14 @@ def find_pictures_by_character_likeness_sql(
             .offset(offset)
         )
         if character_id == "UNASSIGNED":
+            other_face = aliased(Face)
             query = query.where(Face.character_id.is_(None))
             query = query.where(
                 ~exists(
-                    select(Face.id)
+                    select(other_face.id)
                     .where(
-                        Face.picture_id == Face.picture_id,
-                        Face.character_id.is_not(None),
+                        other_face.picture_id == Face.picture_id,
+                        other_face.character_id.is_not(None),
                     )
                     .correlate(Face)
                 )
@@ -643,13 +645,14 @@ def count_pictures_by_character_likeness(
             .where(deleted_filter)
         )
         if character_id == "UNASSIGNED":
+            inner_face = aliased(Face)
             query = query.where(Face.character_id.is_(None))
             query = query.where(
                 ~exists(
-                    select(Face.id)
+                    select(inner_face.id)
                     .where(
-                        Face.picture_id == Face.picture_id,
-                        Face.character_id.is_not(None),
+                        inner_face.picture_id == Face.picture_id,
+                        inner_face.character_id.is_not(None),
                     )
                     .correlate(Face)
                 )
