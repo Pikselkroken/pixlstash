@@ -1178,9 +1178,7 @@ def register_routes(router, server):
         summary="Total picture count for a listing filter",
         description=(
             "Returns the total number of pictures matching the same filter "
-            "set used by `/pictures` and `/pictures/stream`. For non-"
-            "streamable views (character-likeness) the count is reported as "
-            "`null`."
+            "set used by `/pictures` and `/pictures/stream`."
         ),
     )
     def count_pictures(
