@@ -8,6 +8,12 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+from pixlstash.utils.caption_file_utils import (
+    find_caption_file,
+    get_caption_file_mtime,
+    read_caption_file,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.stacking import (
@@ -95,6 +101,18 @@ class WatchFolderImportTask(BaseTask):
                 import_source_folder = candidate.get("import_source_folder")
                 if isinstance(import_source_folder, str) and import_source_folder:
                     pic.import_source_folder = import_source_folder
+
+                # Detect sidecar caption file (.txt / .caption) next to the image.
+                caption_path = find_caption_file(file_path)
+                if caption_path:
+                    pic.caption_file = caption_path
+                    pic.caption_file_mtime = get_caption_file_mtime(caption_path)
+                    sidecar_tags, sidecar_description = read_caption_file(caption_path)
+                    if sidecar_description and not pic.description:
+                        pic.description = sidecar_description
+                    if sidecar_tags:
+                        pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
+
                 new_pictures.append(pic)
 
                 stack_id, source_id = parse_stack_tags_from_filename(file_path)
@@ -113,6 +131,14 @@ class WatchFolderImportTask(BaseTask):
 
             def insert_pictures(session: Session, pictures: list[Picture]):
                 session.add_all(pictures)
+                session.flush()
+                for pic in pictures:
+                    sidecar_tags = getattr(pic, "_sidecar_tags", None)
+                    if sidecar_tags and pic.id is not None:
+                        for tag_str in sidecar_tags:
+                            session.add(Tag(picture_id=pic.id, tag=tag_str))
+                    else:
+                        session.add(Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL))
                 session.commit()
                 for pic in pictures:
                     session.refresh(pic)
