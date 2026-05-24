@@ -106,6 +106,7 @@ const props = defineProps({
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
   hasFolderFilter: { type: Boolean, default: false },
+  activeFolderKey: { type: String, default: null },
   checkForUpdates: { type: Boolean, default: null },
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
@@ -442,6 +443,7 @@ async function importFolderSaved() {
       selectedFolderKey.value = `if-${newFolder.id}`;
       emit("select-folder", {
         importSourceFolder: newFolder.folder,
+        importFolderId: newFolder.id,
         label: newFolder.label || newFolder.folder,
       });
       emit("update:folder-scanning", Boolean(newFolder.last_checked == null));
@@ -464,6 +466,7 @@ async function importFolderSaved() {
   }
   emit("select-folder", {
     importSourceFolder: selectedImportFolder.folder,
+    importFolderId: selectedImportFolder.id,
     label: selectedImportFolder.label || selectedImportFolder.folder,
   });
 }
@@ -2940,6 +2943,55 @@ watch(selectedProjectId, (v) => {
   void fetchSidebarData();
 });
 
+// Sync the sidebar's folder highlight with the active route.
+// When App.vue navigates to /ref-folder/:id or /import-folder/:id it passes
+// the matching key via the activeFolderKey prop so we can switch to the
+// folders tab and emit the correct filter payload.
+watch(
+  () => props.activeFolderKey,
+  async (newKey, oldKey) => {
+    if (!newKey) {
+      // Route left a folder view — clear the sidebar's folder highlight.
+      if (oldKey && selectedFolderKey.value === oldKey) {
+        selectedFolderKey.value = null;
+        selectedFolderReferenceId.value = null;
+      }
+      return;
+    }
+    if (selectedFolderKey.value === newKey) return; // already in sync
+
+    sidebarPrimaryTab.value = "folders";
+    await fetchReferenceFolders();
+    await fetchImportFolders();
+
+    // Guard: user may have navigated away while fetches were in flight.
+    if (props.activeFolderKey !== newKey) return;
+
+    if (newKey.startsWith("rf-")) {
+      const id = parseInt(newKey.slice(3), 10);
+      const folder = referenceFolders.value.find((f) => f.id === id);
+      if (folder) {
+        handleFolderNodeSelect(newKey, {
+          referenceFolderId: folder.id,
+          pathPrefix: folder.folder,
+          label: folder.label || folder.folder,
+        });
+      }
+    } else if (newKey.startsWith("if-")) {
+      const id = parseInt(newKey.slice(3), 10);
+      const folder = importFolders.value.find((f) => f.id === id);
+      if (folder) {
+        handleFolderNodeSelect(newKey, {
+          importSourceFolder: folder.folder,
+          importFolderId: folder.id,
+          label: folder.label || folder.folder,
+        });
+      }
+    }
+  },
+  { immediate: true },
+);
+
 function switchToProjectView() {
   projectViewMode.value = "project";
   if (selectedProjectId.value === null && sortedProjects.value.length > 0) {
@@ -3426,6 +3478,7 @@ defineExpose({
                 selectFoldersTab();
                 handleFolderNodeSelect('if-' + imf.id, {
                   importSourceFolder: imf.folder,
+                  importFolderId: imf.id,
                   label: imf.label || imf.folder,
                 });
                 projectMenuOpen = false;
@@ -4208,6 +4261,7 @@ defineExpose({
                 @click="
                   handleFolderNodeSelect('if-' + importFolder.id, {
                     importSourceFolder: importFolder.folder,
+                    importFolderId: importFolder.id,
                     label: importFolder.label || importFolder.folder,
                   })
                 "

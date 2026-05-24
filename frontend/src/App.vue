@@ -115,6 +115,15 @@ let sidebarRefreshPicturesDebounceTimeout = null;
 let sidebarRefreshPicturesFlash = false;
 
 // --- Computed ---
+// Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
+// the sidebar can highlight the correct folder on deep-link or back-navigation.
+const activeFolderKey = computed(() => {
+  const { name, params } = route;
+  if (name === "ref-folder" && params.id) return `rf-${params.id}`;
+  if (name === "import-folder" && params.id) return `if-${params.id}`;
+  return null;
+});
+
 const activeCategoryLabel = computed(() => {
   if (selectionStore.selectedFolderFilter) {
     return selectionStore.selectedFolderFilter.label || "Folder";
@@ -601,6 +610,7 @@ function handleSearchAllPictures() {
 function handleSelectFolder(payload) {
   if (!payload) {
     selectionStore.selectedFolderFilter = null;
+    pushAppRoute({ name: "all-pictures" });
     return;
   }
   selectionStore.selectedFolderFilter = payload;
@@ -608,7 +618,7 @@ function handleSelectFolder(payload) {
   selectionStore.selectedCharacterIds = [];
   selectionStore.selectedSet = null;
   selectionStore.selectedSetIds = [];
-  // Folder filters are not reflected in the URL (complex payload; Phase 10 scope).
+  pushRouteForCurrentSelection();
 }
 
 // ============================================================
@@ -631,6 +641,27 @@ function pushAppRoute(target) {
 function pushRouteForCurrentSelection() {
   const sel = selectionStore;
   const proj = projectStore;
+
+  if (sel.selectedFolderFilter) {
+    const f = sel.selectedFolderFilter;
+    if (f.referenceFolderId != null) {
+      pushAppRoute({
+        name: "ref-folder",
+        params: { id: String(f.referenceFolderId) },
+      });
+      return;
+    }
+    if (f.importFolderId != null) {
+      pushAppRoute({
+        name: "import-folder",
+        params: { id: String(f.importFolderId) },
+      });
+      return;
+    }
+    // Path-based subfolder — no dedicated route; fall through to all-pictures.
+    pushAppRoute({ name: "all-pictures" });
+    return;
+  }
 
   if (proj.projectViewMode === "project" && proj.selectedProjectId != null) {
     const projId = String(proj.selectedProjectId);
@@ -853,6 +884,19 @@ function applyRouteToStores() {
       selectionStore.selectedSet = nextSet;
     if (!_sameNumIds(selectionStore.selectedSetIds, nextSet ? [nextSet] : []))
       selectionStore.selectedSetIds = nextSet ? [nextSet] : [];
+    selectionStore.lastSelectedCharacterLabel = "All Pictures";
+  } else if (name === "ref-folder" || name === "import-folder") {
+    // Folder routes — clear all other selection state. The sidebar will emit
+    // select-folder with the full payload once it loads the folder data.
+    projectStore.projectViewMode = "global";
+    projectStore.selectedProjectId = null;
+    if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
+      selectionStore.selectedCharacter = ALL_PICTURES_ID;
+    if (selectionStore.selectedCharacterIds.length > 0)
+      selectionStore.selectedCharacterIds = [];
+    selectionStore.selectedSet = null;
+    if (selectionStore.selectedSetIds.length > 0)
+      selectionStore.selectedSetIds = [];
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
   }
 }
@@ -1671,6 +1715,7 @@ defineExpose({
             :dateFormat="userPrefsStore.dateFormat"
             :themeMode="userPrefsStore.themeMode"
             :hasFolderFilter="selectionStore.selectedFolderFilter != null"
+            :activeFolderKey="activeFolderKey"
             :checkForUpdates="userPrefsStore.checkForUpdates"
             :installType="installType"
             :dockerVariant="dockerVariant"
