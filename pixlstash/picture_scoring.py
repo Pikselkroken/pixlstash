@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
-from sqlalchemy import asc, exists, desc, func, text
+from sqlalchemy import asc, exists, desc, func, or_, text
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, select
 

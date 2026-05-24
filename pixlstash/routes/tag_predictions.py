@@ -166,26 +166,15 @@ def create_router(server) -> APIRouter:
         ),
     )
     def reset_picture_description(id: int, payload: ResetTagsRequest | None = None):
-        from sqlmodel import Session
-        from pixlstash.db_models import Picture
-
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
         model = payload.model if payload else None
-
-        def _clear_description(session: Session) -> None:
-            pic = session.get(Picture, pic_id)
-            if pic is None:
-                raise HTTPException(status_code=404, detail="Picture not found")
-            pic.description = None
-            session.commit()
-
-        server.vault.db.run_task(_clear_description)
-        server.vault.notify(EventType.CHANGED_PICTURES, {"picture_ids": [pic_id]})
-        server.vault.redescribe_picture_interactive(pic_id, engine_name=model)
+        found = server.vault.reset_description_interactive(pic_id, engine_name=model)
+        if not found:
+            raise HTTPException(status_code=404, detail="Picture not found")
         return {"status": "reset"}
 
     @router.get(
