@@ -364,6 +364,10 @@ class FaceExtractionTask(BaseTask):
         from ``_extract_features`` and from tests that need to exercise the
         InsightFace pipeline without a database or ``Picture`` objects.
 
+        Images with either dimension below ``_MIN_DETECTION_DIM`` are skipped
+        and returned as empty (no-face) results — they cannot contain a
+        detectable face and would crash InsightFace's internal cv2.resize.
+
         Args:
             insightface_app: A prepared ``FaceAnalysis`` instance.
             images: BGR ``np.ndarray`` frames (any size), or ``None`` for
@@ -374,8 +378,36 @@ class FaceExtractionTask(BaseTask):
             :class:`~pixlstash.utils.insightface_batched.FaceResult`
             per input image.
         """
-        runner = BatchedFaceRunner(insightface_app)
-        return runner.run_batch(images)
+        results: list = [[] for _ in images]
+        safe_indices: list[int] = []
+        safe_images: list = []
+        for i, img in enumerate(images):
+            if img is None:
+                continue
+            if min(img.shape[:2]) < FaceExtractionTask._MIN_DETECTION_DIM:
+                logger.warning(
+                    "Skipping face detection: image dimensions %dx%d are too small",
+                    img.shape[1],
+                    img.shape[0],
+                )
+                continue
+            safe_indices.append(i)
+            safe_images.append(img)
+        if safe_images:
+            runner = BatchedFaceRunner(insightface_app)
+            try:
+                batch_results = runner.run_batch(safe_images)
+                for idx, res in zip(safe_indices, batch_results):
+                    results[idx] = res
+            except Exception as exc:
+                logger.warning(
+                    "Batch face detection failed (%s) for %d images "
+                    "\u2014 treating all as having no faces: %s",
+                    type(exc).__name__,
+                    len(safe_images),
+                    exc,
+                )
+        return results
 
     @staticmethod
     def _expand_bbox(bbox, frame_w, frame_h, scale):
@@ -398,6 +430,12 @@ class FaceExtractionTask(BaseTask):
 
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
+    # Minimum pixel dimension (width or height) required for InsightFace to run
+    # without triggering an internal cv2.resize assertion failure.  RetinaFace
+    # computes new_width = int(det_size / aspect_ratio); if aspect_ratio > 256
+    # the result is 0, causing a cv2 assertion error.  Images with either
+    # dimension below this threshold cannot contain a detectable face anyway.
+    _MIN_DETECTION_DIM = 8
     # Workers for the image-preload pool.  Each worker only does I/O + PIL
     # decode (GIL released for JPEG), so 4 threads hide disk latency while the
     # main thread runs sequential InsightFace inference.
