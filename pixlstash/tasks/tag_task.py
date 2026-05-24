@@ -255,8 +255,10 @@ class TagTask(BaseTask):
                 continue
             tags = update.get("tags") or []
 
-            # When the tagger found no applicable tags, write the empty sentinel
-            # so that MissingTagFinder knows this picture has already been processed.
+            # When the tagger found no applicable tags, leave the tag set empty.
+            # An empty tag set means "processed but no tags found"; MissingTagFinder
+            # only re-queues pictures that still carry a retag sentinel, so a
+            # picture with no tags at all will not be reprocessed.
             effective_tags = set(tags) if tags else set()
 
             if effective_tags == existing_tags_map.get(pic_id, set()):

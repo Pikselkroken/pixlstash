@@ -83,7 +83,7 @@ class TaggingWorkflow:
         """Tag a batch of images using the active tag plugin.
 
         The active plugin is read from ``tagger_settings['active_tag_plugin']``
-        unless *engine_override* is supplied.  When neither is set, ``'wd14'``
+        unless *engine_override* is supplied.  When neither is set, ``'pixlstash_tagger'``
         is used as a fallback.  Passing ``engine_override=''`` or setting
         ``active_tag_plugin`` to ``None`` returns an empty dict (no tagging).
 
@@ -310,7 +310,7 @@ class TaggingWorkflow:
         params = {**plugin.default_params(), **cfg.get("params", {})}
 
         try:
-            if plugin._service is None:
+            if hasattr(plugin, "setup"):
                 plugin.setup(self._engine.device)
             plugin.init(params)
             raw = plugin.tag_images(
@@ -366,7 +366,7 @@ class TaggingWorkflow:
                 **cfg.get("params", {}),
             }
             try:
-                if plugin._service is None:
+                if hasattr(plugin, "setup"):
                     plugin.setup(self._engine.device)
                 plugin.init(params)
                 raw = plugin.tag_images(
