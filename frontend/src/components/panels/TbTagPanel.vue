@@ -6,11 +6,11 @@
     <div class="tag-panel-columns">
       <!-- ── Left column: mini-grid preview ── -->
       <div
-        v-if="previewImages.length"
+        v-if="stablePreviewImages.length"
         class="tag-preview-column"
         :class="[
           `tag-preview-column--cols-${previewColumns}`,
-          previewImages.length === 2 ? 'tag-preview-column--stacked' : '',
+          stablePreviewImages.length === 2 ? 'tag-preview-column--stacked' : '',
         ]"
       >
         <div class="tag-preview-header">Selected images</div>
@@ -18,11 +18,11 @@
           class="tag-preview-grid"
           :class="[
             `tag-preview-grid--cols-${previewColumns}`,
-            previewImages.length > 1 ? 'tag-preview-grid--multi' : '',
+            stablePreviewImages.length > 1 ? 'tag-preview-grid--multi' : '',
           ]"
         >
           <div
-            v-for="img in previewImages"
+            v-for="img in stablePreviewImages"
             :key="img.id"
             class="tag-preview-tile"
           >
@@ -52,7 +52,12 @@
               (first {{ MAX_TAG_FETCH }})
             </span>
           </div>
-          <div class="tag-chips-row">
+          <div
+            class="tag-chips-row"
+            :class="{ 'tag-chips-row--drop-target': currentZoneIsDropTarget }"
+            @dragover.prevent
+            @drop.prevent="onDropToCurrent"
+          >
             <button
               v-for="t in tagsOnAll"
               :key="'all-' + t.name"
@@ -62,8 +67,11 @@
                 { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
               ]"
               type="button"
+              draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On all ${totalWithTagData} selected — click to remove`"
+              :title="`On all ${totalWithTagData} selected — click to remove, drag to rejected to remove`"
+              @dragstart="onCurrentTagDragStart($event, t)"
+              @dragend="onDragEnd"
               @click="removeTagFromAll(t)"
             >
               <span class="tag-chip-label">{{ t.name }}</span>
@@ -78,8 +86,11 @@
                 { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
               ]"
               type="button"
+              draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On ${t.count} of ${totalWithTagData} — click to add to all`"
+              :title="`On ${t.count} of ${totalWithTagData} — click to add to all, drag to rejected to remove`"
+              @dragstart="onCurrentTagDragStart($event, t)"
+              @dragend="onDragEnd"
               @click="addTagToRemaining(t)"
             >
               <span class="tag-chip-label">{{ t.name }}</span>
@@ -105,7 +116,10 @@
             </span>
           </div>
         </div>
-        <div v-if="aggregatedPredictions.length" class="tag-current-section">
+        <div
+          v-if="aggregatedPredictions.length || rejectedZoneIsDropTarget"
+          class="tag-current-section"
+        >
           <div class="tag-current-label tag-current-label--clickable">
             <button
               class="tag-current-toggle"
@@ -126,7 +140,22 @@
               }}</v-icon>
             </button>
           </div>
-          <div v-show="!rejectedTagsCollapsedSB" class="tag-chips-row">
+          <!-- Compact drop zone shown when section is collapsed but a current tag is being dragged -->
+          <div
+            v-if="rejectedZoneIsDropTarget && rejectedTagsCollapsedSB"
+            class="tag-drop-collapsed-zone"
+            @dragover.prevent
+            @drop.prevent="onDropToRejected"
+          >
+            Drop here to reject
+          </div>
+          <div
+            v-show="!rejectedTagsCollapsedSB"
+            class="tag-chips-row"
+            :class="{ 'tag-chips-row--drop-target': rejectedZoneIsDropTarget }"
+            @dragover.prevent
+            @drop.prevent="onDropToRejected"
+          >
             <button
               v-for="p in aggregatedPredictions"
               :key="'pred-' + p.tag"
@@ -136,9 +165,12 @@
                 { 'tag-chip--penalised': isPenalisedTagSB(p.tag) },
               ]"
               type="button"
+              draggable="true"
               :disabled="predActionLoading.includes(p.tag)"
               :style="{ '--pred-confidence': p.avgConf }"
-              :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all`"
+              :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all, drag to current to confirm`"
+              @dragstart="onRejectedTagDragStart($event, p)"
+              @dragend="onDragEnd"
               @click="confirmPredictionOnAll(p)"
             >
               <span class="tag-chip-label">{{ p.tag }}</span>
@@ -167,6 +199,10 @@
           >
             {{ tagLoading ? "Applying..." : "Apply to All" }}
           </button>
+        </div>
+        <div v-if="tagError" class="plugin-menu-error">{{ tagError }}</div>
+        <div v-if="tagSuccess" class="plugin-menu-success">
+          {{ tagSuccess }}
         </div>
         <div v-if="!isReadOnly" class="tag-autogen-section">
           <div class="tag-new-label">Auto-generate</div>
@@ -234,10 +270,6 @@
             {{ generateTagsSuccess }}
           </div>
         </div>
-        <div v-if="tagError" class="plugin-menu-error">{{ tagError }}</div>
-        <div v-if="tagSuccess" class="plugin-menu-success">
-          {{ tagSuccess }}
-        </div>
       </div>
     </div>
   </div>
@@ -288,7 +320,7 @@ const props = defineProps({
 const emit = defineEmits(["tags-applied", "close"]);
 
 // ── Tag-panel mini-grid ───────────────────────────────────────────────────────
-const previewImages = computed(() => {
+function buildPreviewImages() {
   const ids = new Set(
     (Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []).map(
       (id) => String(id),
@@ -309,9 +341,32 @@ const previewImages = computed(() => {
         : img.thumbnail || null;
     return { ...img, fullUrl };
   });
-});
+}
 
-const previewColumns = computed(() => (previewImages.value.length > 2 ? 2 : 1));
+// Stable preview: always update when selection changes; only update when
+// allGridImages changes if the result is non-empty — this prevents the preview
+// column from disappearing during the placeholder phase of a grid refresh.
+const stablePreviewImages = ref([]);
+
+watch(
+  () => props.selectedImageIds,
+  () => {
+    stablePreviewImages.value = buildPreviewImages();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.allGridImages,
+  () => {
+    const result = buildPreviewImages();
+    if (result.length > 0) stablePreviewImages.value = result;
+  },
+);
+
+const previewColumns = computed(() =>
+  stablePreviewImages.value.length > 2 ? 2 : 1,
+);
 
 // ── Bulk tag ──────────────────────────────────────────────────────────────────
 const tagInputRef = ref(null);
@@ -346,7 +401,7 @@ function loadRejectedTagsCollapsedSB() {
   const raw = window.sessionStorage?.getItem(
     "pixlstash:selectionBar:rejectedTagsCollapsed",
   );
-  if (raw == null) return true;
+  if (raw == null) return false;
   return raw === "1";
 }
 
@@ -370,7 +425,7 @@ async function fetchSelectedImageTags() {
     fetchedTagData.value = [];
     return;
   }
-  tagDataLoading.value = true;
+  if (!fetchedTagData.value.length) tagDataLoading.value = true;
   try {
     const res = await apiClient.post(
       `${props.backendUrl}/pictures/tags/bulk_fetch`,
@@ -856,6 +911,64 @@ async function applyTag() {
   }
 }
 
+// ── Drag-and-drop between current / rejected ──────────────────────────────────
+const dragSource = ref(null); // 'current' | 'rejected'
+const dragPayload = ref(null);
+
+const currentZoneIsDropTarget = computed(() => dragSource.value === "rejected");
+const rejectedZoneIsDropTarget = computed(() => dragSource.value === "current");
+
+function onCurrentTagDragStart(event, tagEntry) {
+  dragSource.value = "current";
+  dragPayload.value = tagEntry;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", tagEntry.name);
+}
+
+function onRejectedTagDragStart(event, predEntry) {
+  dragSource.value = "rejected";
+  dragPayload.value = predEntry;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", predEntry.tag);
+}
+
+function onDragEnd() {
+  dragSource.value = null;
+  dragPayload.value = null;
+}
+
+async function onDropToCurrent() {
+  if (dragSource.value !== "rejected" || !dragPayload.value) return;
+  const payload = dragPayload.value;
+  onDragEnd();
+  await confirmPredictionOnAll(payload);
+}
+
+async function rejectTagOnAll(tagEntry) {
+  const imageIds = [...tagEntry.tagsByImageId.keys()];
+  if (!imageIds.length) return;
+  try {
+    await Promise.all(
+      imageIds.map((id) =>
+        apiClient.post(
+          `${props.backendUrl}/pictures/${id}/tag_predictions/${encodeURIComponent(tagEntry.name)}/reject`,
+        ),
+      ),
+    );
+    await fetchSelectedImagePredictions();
+  } catch (err) {
+    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+  }
+}
+
+async function onDropToRejected() {
+  if (dragSource.value !== "current" || !dragPayload.value) return;
+  const payload = dragPayload.value;
+  onDragEnd();
+  await removeTagFromAll(payload);
+  await rejectTagOnAll(payload);
+}
+
 defineExpose({ focus: () => tagInputRef.value?.focus() });
 </script>
 
@@ -1001,6 +1114,26 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   overflow-y: auto;
   padding-right: 2px;
   align-content: flex-start;
+}
+
+.tag-chips-row--drop-target {
+  outline: 2px dashed rgba(var(--v-theme-primary), 0.55);
+  outline-offset: 3px;
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 6px;
+}
+
+.tag-drop-collapsed-zone {
+  height: 36px;
+  border-radius: 6px;
+  border: 2px dashed rgba(var(--v-theme-primary), 0.55);
+  background: rgba(var(--v-theme-primary), 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  opacity: 0.7;
+  margin-bottom: 2px;
 }
 
 .tag-chip {

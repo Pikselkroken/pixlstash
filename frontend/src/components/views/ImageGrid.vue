@@ -80,7 +80,7 @@
       @run-plugin="handlePluginRunRequest"
       @comfyui-run="handleComfyuiRun"
       @comfyui-run-grid="runComfyuiOnGridImages"
-      @tags-applied="fetchAllGridImages({ force: true, showProgress: true })"
+      @tags-applied="debouncedFetchAllGridImages({ force: true })"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-settings="emit('open-settings')"
