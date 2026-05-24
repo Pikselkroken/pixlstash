@@ -1,3 +1,10 @@
+# [1.3.0.dev1]
+- Fixed many bugs related to the grid loading optimisation
+- Add support for JoyCaption for both descriptions and tagging (with some parameters)
+- Make both tagging and description engine selectable
+- Add support for regenerating both description and tags with a choice of engine on a case-by-case basis
+- Add support for bulk auto-tagging with a choice of engine on a case-by-case basis
+
 # [1.3.0.dev0]
 - Massive refactoring of both backend and frontend
 - Massive speedup of grid loading. Grid appears practically instant now even with 30k images
