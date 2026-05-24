@@ -490,12 +490,16 @@ def select_pictures_for_listing(
                 )
 
         if hidden_tags_filter_value:
-            placeholders = ", ".join(f":ss_ht_{i}" for i in range(len(hidden_tags_filter_value)))
+            placeholders = ", ".join(
+                f":ss_ht_{i}" for i in range(len(hidden_tags_filter_value))
+            )
             query = query.where(
                 text(
                     f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id"
                     f" AND LOWER(tag.tag) IN ({placeholders}))"
-                ).bindparams(**{f"ss_ht_{i}": t for i, t in enumerate(hidden_tags_filter_value)})
+                ).bindparams(
+                    **{f"ss_ht_{i}": t for i, t in enumerate(hidden_tags_filter_value)}
+                )
             )
 
         if tags_confidence_above_filter_value:

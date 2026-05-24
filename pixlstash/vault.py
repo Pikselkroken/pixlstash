@@ -219,7 +219,11 @@ class Vault:
         ]
         for plugin_name, service in bindings:
             plugin = mgr.get_plugin(plugin_name)
-            if plugin is not None and service is not None and hasattr(plugin, "bind_service"):
+            if (
+                plugin is not None
+                and service is not None
+                and hasattr(plugin, "bind_service")
+            ):
                 plugin.bind_service(service)
 
     def notify(self, event_type: EventType, data=None):
@@ -539,6 +543,39 @@ class Vault:
                 engine_override=engine_name,
             )
             self.submit_task(task)
+
+    def reset_description_interactive(
+        self, picture_id: int, engine_name: str | None = None
+    ) -> bool:
+        """Clear a picture's description and queue a fresh description pass.
+
+        Clears the ``description`` field in the database, emits a
+        ``CHANGED_PICTURES`` event so connected clients refresh, then queues an
+        interactive description task.
+
+        Args:
+            picture_id: Primary key of the picture to reset.
+            engine_name: Optional plugin name override for this picture.
+
+        Returns:
+            ``True`` if the picture was found and processed, ``False`` if no
+            picture with *picture_id* exists.
+        """
+
+        def _clear(session: Session) -> bool:
+            pic = session.get(Picture, picture_id)
+            if pic is None:
+                return False
+            pic.description = None
+            session.commit()
+            return True
+
+        found = self.db.run_task(_clear)
+        if not found:
+            return False
+        self.notify(EventType.CHANGED_PICTURES, {"picture_ids": [picture_id]})
+        self.redescribe_picture_interactive(picture_id, engine_name=engine_name)
+        return True
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
