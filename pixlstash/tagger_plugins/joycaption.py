@@ -437,11 +437,12 @@ def _parse_suppress_tokens(value: Any) -> list[int]:
             try:
                 result.append(int(item))
             except (TypeError, ValueError):
-                pass
+                logger.warning("Invalid token ID in suppress_tokens list: %s", item)
         return result
     try:
         return [int(tok.strip()) for tok in str(value).split(",") if tok.strip()]
     except (TypeError, ValueError):
+        logger.warning("Invalid token ID in suppress_tokens list: %s", value)
         return []
 
 
@@ -688,7 +689,7 @@ class JoyCaptionPlugin(TaggerPlugin):
                         }
                     ]
         except Exception:
-            pass
+            logger.error("Failed to list JoyCaption artifacts from cache")
         return []
 
     def delete_artifact(self, artifact_id: str) -> None:

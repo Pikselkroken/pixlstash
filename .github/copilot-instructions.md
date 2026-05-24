@@ -47,6 +47,11 @@ When making changes to architecture or integration patterns, always update the r
 - Mostly use imports at the top of the file. Local imports within functions are only acceptable if they are necessary to avoid circular dependencies, to reduce startup time for rarely used modules or if the import is *clearly* optional.
 - Do not use local imports for libraries that are commonly used in the code base, like torch, numpy, PIL, cv2, etc. These should be imported at the top of the file for clarity and consistency.
 
+## Exception handling
+- Always log exceptions with as much context as possible (e.g., variable values, file paths, operation being performed) to facilitate debugging.
+- Avoid silent failures. If an exception is caught, it should either be handled in a way
+- Using `pass` to ignore exceptions is not acceptable. If you need to ignore an exception, you must log it with a warning or error level log message explaining why it is being ignored and what the potential implications are.
+
 ## Task System
 
 - The TaskRunner class manages asynchronous tasks, allowing for background processing of image quality calculations and other operations without blocking the main server thread.
