@@ -444,12 +444,32 @@ class FaceExtractionTask(BaseTask):
                 and _bimg is not None
                 and os.path.splitext(_p)[1].lower() in self._IMAGE_EXTS
             ):
+                if min(_bimg.shape[:2]) < 8:
+                    # Images this small cannot contain a face and cause
+                    # InsightFace's internal cv2.resize to compute a zero
+                    # dimension (inv_scale_x > 0 assertion failure).
+                    logger.warning(
+                        "Skipping face detection for %s: image %dx%d is too small",
+                        _p,
+                        _bimg.shape[1],
+                        _bimg.shape[0],
+                    )
+                    continue
                 _batch_paths.append(_p)
                 _batch_imgs.append(_bimg)
         setup_s += time.time() - _setup_start
         if _batch_imgs:
             _infer_start = time.time()
-            _batch_results = runner.run_batch(_batch_imgs)
+            try:
+                _batch_results = runner.run_batch(_batch_imgs)
+            except Exception as exc:
+                logger.warning(
+                    "Batch face detection failed (%s) — treating %d images as having no faces: %s",
+                    type(exc).__name__,
+                    len(_batch_imgs),
+                    exc,
+                )
+                _batch_results = [[] for _ in _batch_imgs]
             batch_infer_s = time.time() - _infer_start
         else:
             _batch_results = []
@@ -512,7 +532,16 @@ class FaceExtractionTask(BaseTask):
                     if faces is None:
                         # Image was loaded on-demand (not in preloaded cache).
                         _infer_start = time.time()
-                        faces = runner.run_batch([img])[0]
+                        try:
+                            faces = runner.run_batch([img])[0]
+                        except Exception as exc:
+                            logger.warning(
+                                "Per-image face detection failed for %s (%s): %s",
+                                file_path,
+                                type(exc).__name__,
+                                exc,
+                            )
+                            faces = []
                         inference_s += time.time() - _infer_start
                     detected_faces_total += len(faces)
                     logger.debug("Found %d faces in image %s", len(faces), file_path)
