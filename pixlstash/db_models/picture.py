@@ -879,22 +879,32 @@ class Picture(SQLModel, table=True):
                 cls.width * cls.height >= 16_000_000,
             )
 
-        # Build comfyui filter conditions (applied below, aware of stack_leaders_only)
-        comfyui_conditions = []
+        # Build comfyui filter conditions.  Two parallel lists are maintained:
+        # comfyui_self_parts   – SQL fragments that test the picture row itself.
+        # comfyui_member_parts – equivalent fragments that test an aliased member
+        #                        row (_m) used in a stack-member EXISTS subquery.
+        # comfyui_bind_params  – shared bind-parameter dict (same names in both).
+        comfyui_self_parts: list[str] = []
+        comfyui_member_parts: list[str] = []
+        comfyui_bind_params: dict = {}
         if comfyui_models_filter:
-            comfyui_conditions.extend(
-                text(
-                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :comfyui_model_{i})"
-                ).bindparams(**{f"comfyui_model_{i}": m})
-                for i, m in enumerate(comfyui_models_filter)
-            )
+            for i, m in enumerate(comfyui_models_filter):
+                comfyui_self_parts.append(
+                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :cmf_{i})"
+                )
+                comfyui_member_parts.append(
+                    f"EXISTS (SELECT 1 FROM json_each(_m.comfyui_models) WHERE value = :cmf_{i})"
+                )
+                comfyui_bind_params[f"cmf_{i}"] = m
         if comfyui_loras_filter:
-            comfyui_conditions.extend(
-                text(
-                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :comfyui_lora_{i})"
-                ).bindparams(**{f"comfyui_lora_{i}": m})
-                for i, m in enumerate(comfyui_loras_filter)
-            )
+            for i, m in enumerate(comfyui_loras_filter):
+                comfyui_self_parts.append(
+                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :clf_{i})"
+                )
+                comfyui_member_parts.append(
+                    f"EXISTS (SELECT 1 FROM json_each(_m.comfyui_loras) WHERE value = :clf_{i})"
+                )
+                comfyui_bind_params[f"clf_{i}"] = m
 
         if tags_filter:
             for i, tag in enumerate(tags_filter):
@@ -973,8 +983,27 @@ class Picture(SQLModel, table=True):
         # was unacceptably slow on large libraries.
         if stack_leaders_only:
             query = query.where(or_(cls.stack_id.is_(None), cls.stack_position == 0))
-        if comfyui_conditions:
-            query = query.where(or_(*comfyui_conditions))
+        if comfyui_self_parts:
+            self_where = " OR ".join(comfyui_self_parts)
+            if stack_leaders_only:
+                # Restore the original behaviour: include a stack leader when
+                # *any* member of the stack satisfies the ComfyUI filter, not
+                # only when the leader row itself satisfies it.
+                member_where = " OR ".join(comfyui_member_parts)
+                comfyui_sql = (
+                    f"({self_where})"
+                    f" OR (picture.stack_id IS NOT NULL"
+                    f" AND EXISTS ("
+                    f"SELECT 1 FROM picture AS _m"
+                    f" WHERE _m.stack_id = picture.stack_id"
+                    f" AND ({member_where})"
+                    f"))"
+                )
+                query = query.where(text(comfyui_sql).bindparams(**comfyui_bind_params))
+            else:
+                query = query.where(
+                    text(f"({self_where})").bindparams(**comfyui_bind_params)
+                )
 
         if sort_mech and not count_only:
             if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
