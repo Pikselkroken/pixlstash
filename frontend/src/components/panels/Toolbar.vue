@@ -686,6 +686,80 @@
                   <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
                   Tag
                 </button>
+                <div
+                  v-if="props.taggerPlugins.length"
+                  class="ctx-submenu-wrap"
+                  @mouseenter="autoTagSubmenuOpen = true"
+                  @mouseleave="autoTagSubmenuOpen = false"
+                >
+                  <button class="ctx-item" :disabled="selectedCount === 0">
+                    <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+                    Tag automatically
+                    <v-icon class="ctx-arrow" size="14"
+                      >mdi-chevron-right</v-icon
+                    >
+                  </button>
+                  <div v-if="autoTagSubmenuOpen" class="ctx-submenu">
+                    <button
+                      v-for="plugin in props.taggerPlugins"
+                      :key="plugin.name"
+                      class="ctx-item"
+                      :disabled="selectedCount === 0"
+                      @click="
+                        $emit('auto-tag', { model: plugin.name });
+                        selectionMenuOpen = false;
+                      "
+                    >
+                      <v-icon class="ctx-icon" size="15"
+                        >mdi-tag-outline</v-icon
+                      >
+                      {{ plugin.display_name || plugin.name }}
+                      <span
+                        v-if="plugin.default_enabled"
+                        class="ctx-default-pill"
+                        >default</span
+                      >
+                    </button>
+                  </div>
+                </div>
+                <div
+                  v-if="props.captionerPlugins.length"
+                  class="ctx-submenu-wrap"
+                  @mouseenter="descriptionSubmenuOpen = true"
+                  @mouseleave="descriptionSubmenuOpen = false"
+                >
+                  <button class="ctx-item" :disabled="selectedCount === 0">
+                    <v-icon class="ctx-icon" size="15"
+                      >mdi-text-box-outline</v-icon
+                    >
+                    Generate description
+                    <v-icon class="ctx-arrow" size="14"
+                      >mdi-chevron-right</v-icon
+                    >
+                  </button>
+                  <div v-if="descriptionSubmenuOpen" class="ctx-submenu">
+                    <button
+                      v-for="plugin in props.captionerPlugins"
+                      :key="plugin.name"
+                      class="ctx-item"
+                      :disabled="selectedCount === 0"
+                      @click="
+                        $emit('generate-description', { model: plugin.name });
+                        selectionMenuOpen = false;
+                      "
+                    >
+                      <v-icon class="ctx-icon" size="15"
+                        >mdi-text-box-outline</v-icon
+                      >
+                      {{ plugin.display_name || plugin.name }}
+                      <span
+                        v-if="plugin.default_enabled"
+                        class="ctx-default-pill"
+                        >default</span
+                      >
+                    </button>
+                  </div>
+                </div>
                 <button
                   v-if="pluginOptions.length"
                   class="ctx-item"
@@ -859,6 +933,8 @@ const props = defineProps({
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
   availablePlugins: { type: Array, default: () => [] },
+  taggerPlugins: { type: Array, default: () => [] },
+  captionerPlugins: { type: Array, default: () => [] },
   allGridImages: { type: Array, default: () => [] },
 });
 
@@ -881,6 +957,8 @@ const emit = defineEmits([
   "comfyui-run",
   "comfyui-run-grid",
   "tags-applied",
+  "auto-tag",
+  "generate-description",
   "expand-all-stacks",
   "collapse-all-stacks",
   "confirm-export-zip",
@@ -911,6 +989,8 @@ const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
 
 const tbComfyuiMenuOpen = ref(false);
+const autoTagSubmenuOpen = ref(false);
+const descriptionSubmenuOpen = ref(false);
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
 const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
 const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";
