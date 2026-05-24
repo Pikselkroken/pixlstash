@@ -91,7 +91,7 @@ def select_pictures_for_listing(
         if stream_state is not None:
             stream_state["sql_count"] = 0
             stream_state["oneshot"] = True
-        return []
+        return 0 if count_only else []
 
     def serialize_metadata(pictures):
         result = []
