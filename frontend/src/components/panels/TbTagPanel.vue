@@ -603,6 +603,7 @@ watch(
       fetchSelectedImagePredictions(),
     ]);
   },
+  { immediate: true },
 );
 
 watch(rejectedTagsCollapsedSB, (value) => {
