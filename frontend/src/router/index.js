@@ -17,13 +17,11 @@ import App from "../App.vue";
 //   /project/:projectId/character/:id       → Character inside a project
 //   /project/:projectId/set/:id             → Picture set inside a project
 //   /scrapheap                              → Scrapheap
+//   /ref-folder/:id                         → Reference folder view (id = numeric)
+//   /import-folder/:id                      → Import folder view (id = numeric)
 //
 //   Any of the above routes may also carry:
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
-//
-// Folder filters are NOT encoded in the URL — they carry complex payloads
-// (path strings, reference-folder IDs) that are hard to round-trip safely.
-// URL support for folder filters can be added in a future phase.
 
 const routes = [
   { path: "/", name: "all-pictures", component: App },
@@ -33,6 +31,8 @@ const routes = [
   { path: "/project/:projectId/character/:id", name: "project-character", component: App },
   { path: "/project/:projectId/set/:id", name: "project-set", component: App },
   { path: "/scrapheap", name: "scrapheap", component: App },
+  { path: "/ref-folder/:id", name: "ref-folder", component: App },
+  { path: "/import-folder/:id", name: "import-folder", component: App },
   // Catch-all: redirect unknown paths to home
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
