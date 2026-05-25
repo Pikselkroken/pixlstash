@@ -1,9 +1,42 @@
+# [1.3.0]
+- No changes since rc3
+
+# [1.3.0rc3]
+- Increase reliability of tagging in low VRAM situations
+- Delay queuing tasks until the models are loaded
+- Fix "new pictures - click to load" pill showing up when automatically refreshing
+
+# [1.3.0rc2]
+- Support changing the watermark setting on existing tokens
+- Disable watermark checkbox for full access tokens
+- Fix eternal retries for JoyCaption for missing bitsandbytes
+- Fix loading of thumbnails with maximum number of columns
+- Fix issue of newly imported ComfyUI and filter creations not getting tagged
+- Fix issue of sometimes not loading the full grid with many columns visible
+- Ensure bitsandbytes are installed in Docker images
+- Various JoyCaption and grid fixes
+
+# [1.3.0rc1]
+- Add keyboard navigation to selection menu
+- Add hint in help dialog for S (selection menu shortcut)
+- Context menu improvements: sub-menus open to the left near right edge, consistent ordering of Project/Person/Set entries
+- Make write-operations visible but disabled in read-only mode
+- Make add-to menus readable in read-only mode
+- Preserve token in Vue routes
+- Pin the JoyCaption SHA
+- Fix issue where Filter and ComfyUI menus re-open on selection
+
+# [1.3.0.dev2]
+- Add auto-tagging and auto-descriptions to the context menu
+- Ensure that a refresh of the Vue route sets the correct sidebar entries
+
 # [1.3.0.dev1]
 - Fixed many bugs related to the grid loading optimisation
 - Add support for JoyCaption for both descriptions and tagging (with some parameters)
 - Make both tagging and description engine selectable
 - Add support for regenerating both description and tags with a choice of engine on a case-by-case basis
 - Add support for bulk auto-tagging with a choice of engine on a case-by-case basis
+- Add support for dragging tags in the tag panel
 
 # [1.3.0.dev0]
 - Massive refactoring of both backend and frontend
