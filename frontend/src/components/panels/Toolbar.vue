@@ -426,13 +426,11 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button
+              <div
                 v-bind="menuProps"
                 class="hidden-panel-activator"
-                type="button"
-                tabindex="-1"
                 aria-hidden="true"
-              ></button>
+              ></div>
             </template>
             <div class="plugin-menu-panel">
               <div class="plugin-menu-header">Apply Filters</div>
@@ -487,13 +485,11 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button
+              <div
                 v-bind="menuProps"
                 class="hidden-panel-activator"
-                type="button"
-                tabindex="-1"
                 aria-hidden="true"
-              ></button>
+              ></div>
             </template>
             <div class="plugin-menu-panel">
               <div class="plugin-menu-header">ComfyUI I2I</div>
@@ -856,14 +852,12 @@
               transition="scale-transition"
             >
               <template #activator="{ props: menuProps }">
-                <button
+                <div
                   v-bind="menuProps"
                   ref="tagBtnRef"
                   class="hidden-panel-activator"
-                  type="button"
-                  tabindex="-1"
                   aria-hidden="true"
-                ></button>
+                ></div>
               </template>
               <TbTagPanel
                 :backend-url="props.backendUrl"
@@ -1609,6 +1603,30 @@ watch(pluginMenuOpen, (isOpen) => {
     selectedPluginName.value = String(pluginOptions.value[0].name);
   }
   pluginParameters.value = {};
+});
+
+// The plugin-run-controls and comfyui-run-controls divs use v-if. If either
+// menu is open when the v-if condition transitions to false (e.g. selection
+// cleared by ESC before Vuetify can emit update:modelValue), the VMenu
+// unmounts without resetting the ref, leaving it true. The watcher below
+// resets each ref whenever the hosting condition goes false so the panel
+// does not auto-reopen when the condition becomes true again.
+const showPluginControls = computed(
+  () =>
+    props.selectedCount > 0 &&
+    !isScrapheapView.value &&
+    pluginOptions.value.length > 0 &&
+    !isReadOnly.value,
+);
+watch(showPluginControls, (shown) => {
+  if (!shown) pluginMenuOpen.value = false;
+});
+
+const showComfyuiControls = computed(
+  () => props.selectedCount > 0 && !isScrapheapView.value && !isReadOnly.value,
+);
+watch(showComfyuiControls, (shown) => {
+  if (!shown) comfyuiMenuOpen.value = false;
 });
 
 const validComfyWorkflows = computed(() => {
