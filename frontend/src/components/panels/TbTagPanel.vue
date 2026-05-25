@@ -65,6 +65,7 @@
                 'tag-chip',
                 'tag-chip--all',
                 { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                { 'tag-chip--sentinel': isSentinelTag(t.name) },
               ]"
               type="button"
               draggable="true"
@@ -74,7 +75,9 @@
               @dragend="onDragEnd"
               @click="removeTagFromAll(t)"
             >
-              <span class="tag-chip-label">{{ t.name }}</span>
+              <span class="tag-chip-label">{{
+                formatSentinelTag(t.name)
+              }}</span>
               <v-icon size="11" class="tag-chip-close">mdi-close</v-icon>
             </button>
             <button
@@ -84,6 +87,7 @@
                 'tag-chip',
                 'tag-chip--some',
                 { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                { 'tag-chip--sentinel': isSentinelTag(t.name) },
               ]"
               type="button"
               draggable="true"
@@ -93,7 +97,9 @@
               @dragend="onDragEnd"
               @click="addTagToRemaining(t)"
             >
-              <span class="tag-chip-label">{{ t.name }}</span>
+              <span class="tag-chip-label">{{
+                formatSentinelTag(t.name)
+              }}</span>
               <span class="tag-chip-count"
                 >{{ t.count }}/{{ totalWithTagData }}</span
               >
@@ -305,6 +311,7 @@
 <script setup>
 import { ref, computed, watch, nextTick } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
@@ -1190,6 +1197,13 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 .tag-chip--penalised:hover:not(:disabled) {
   background: rgba(var(--v-theme-error), 0.22) !important;
   border-color: rgba(var(--v-theme-error), 0.75) !important;
+}
+
+.tag-chip--sentinel {
+  font-style: italic;
+  opacity: 0.7;
+  pointer-events: none;
+  border-style: dashed !important;
 }
 
 .tag-chip--prediction {

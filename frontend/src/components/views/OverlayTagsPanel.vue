@@ -97,6 +97,7 @@
               :class="[
                 'overlay-tag',
                 { 'overlay-tag--penalised': isPenalisedTag(tag) },
+                { 'overlay-tag--sentinel': isSentinelTag(tagLabel(tag)) },
                 predictionClassForTag(tagLabel(tag)),
               ]"
               :style="predictionStyleForTag(tagLabel(tag))"
@@ -107,7 +108,7 @@
               "
               @dragend="clearTagDrag"
             >
-              {{ tagLabel(tag) }}
+              {{ formatSentinelTag(tagLabel(tag)) }}
               <button
                 v-if="!isReadOnly"
                 class="tag-delete-btn"
@@ -252,6 +253,8 @@ import {
   dedupeTagList,
   getTagLabel as tagLabel,
   getTagList,
+  isSentinelTag,
+  formatSentinelTag,
 } from "../../utils/tags.js";
 
 const props = defineProps({
@@ -1011,6 +1014,14 @@ defineExpose({
   line-height: 1.2;
   border: 1px solid rgba(var(--v-theme-error), 0.6);
   background: rgba(var(--v-theme-error), 0.15);
+}
+
+.overlay-tag--sentinel {
+  font-weight: bold;
+  opacity: 0.85;
+  pointer-events: none;
+  background-color: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
 }
 
 .overlay-tag--predicted-anomaly {
