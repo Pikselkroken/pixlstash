@@ -16,6 +16,7 @@ from pixlstash.db_models import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
+    fetch_scope_allowed_picture_ids,
     fetch_set_candidate_ids,
     normalize_set_mode,
     project_membership_exists_clause,
@@ -296,6 +297,18 @@ def register_routes(router, server):
                 project_candidate_ids
                 if candidate_ids is None
                 else candidate_ids & project_candidate_ids
+            )
+
+        # Token scope enforcement: restrict candidate_ids to the pictures
+        # allowed by the token's resource scope.  This prevents a scoped
+        # token (e.g. picture_set, project, character) from seeing pictures
+        # outside its authorised scope by passing arbitrary filter params.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            candidate_ids = (
+                scope_allowed
+                if candidate_ids is None
+                else candidate_ids & scope_allowed
             )
 
         if candidate_ids is not None and not candidate_ids:

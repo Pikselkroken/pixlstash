@@ -4,7 +4,10 @@ from fastapi import HTTPException
 from sqlalchemy import exists, select
 from sqlmodel import Session
 
-from pixlstash.db_models import Picture, PictureProjectMember, PictureSetMember
+from pixlstash.db_models import Face, Picture, PictureProjectMember, PictureSetMember
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def normalize_set_mode(value: str | None) -> str:
@@ -167,3 +170,74 @@ def project_unassigned_clause(picture_model=Picture):
             PictureProjectMember.picture_id == picture_model.id
         )
     )
+
+
+def fetch_scope_allowed_picture_ids(server, request) -> set[int] | None:
+    """Return picture IDs accessible to the current token scope.
+
+    Args:
+        server: The server instance.
+        request: The current FastAPI request.
+
+    Returns:
+        ``None`` when the token has unrestricted access (no scope set).
+        A ``set[int]`` of allowed picture IDs for scoped tokens.
+        An empty ``set`` when the scope resource type is unrecognised
+        (fail-safe: grants no access rather than full access).
+    """
+    token_scope = getattr(request.state, "token_scope", None)
+    if token_scope is None or token_scope.resource_type is None:
+        return None
+
+    resource_id = token_scope.resource_id
+
+    if token_scope.resource_type == "picture_set":
+
+        def _fetch_set(session: Session, set_id: int) -> set[int]:
+            return {
+                int(r[0])
+                for r in session.exec(
+                    select(PictureSetMember.picture_id).where(
+                        PictureSetMember.set_id == set_id
+                    )
+                ).all()
+            }
+
+        return server.vault.db.run_immediate_read_task(_fetch_set, resource_id)
+
+    if token_scope.resource_type == "character":
+
+        def _fetch_char(session: Session, character_id: int) -> set[int]:
+            return {
+                int(r[0])
+                for r in session.exec(
+                    select(Face.picture_id).where(Face.character_id == character_id)
+                ).all()
+            }
+
+        return server.vault.db.run_immediate_read_task(_fetch_char, resource_id)
+
+    if token_scope.resource_type == "project":
+
+        def _fetch_project(session: Session, project_id: int) -> set[int]:
+            return {
+                int(r[0])
+                for r in session.exec(
+                    select(PictureProjectMember.picture_id).where(
+                        PictureProjectMember.project_id == project_id
+                    )
+                ).all()
+            }
+
+        return server.vault.db.run_immediate_read_task(_fetch_project, resource_id)
+
+    if token_scope.resource_type == "picture":
+        # Single-picture share token: only that specific picture is allowed.
+        return {int(resource_id)}
+
+    logger.warning(
+        "fetch_scope_allowed_picture_ids: unrecognised token_scope resource_type %r;"
+        " returning empty set (no access)",
+        token_scope.resource_type,
+    )
+    return set()

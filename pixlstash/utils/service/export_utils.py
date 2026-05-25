@@ -14,6 +14,7 @@ from pixlstash.db_models.picture_set import PictureSetMember
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import CaptionUtils
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 from sqlmodel import select
 
 
@@ -280,6 +281,12 @@ class ExportUtils:
                     )
                     pic_map = {pic.id: pic for pic in pics}
                     pics = [pic_map.get(pid) for pid in ordered_ids if pid in pic_map]
+
+            # Enforce token scope: remove any pictures the token is not
+            # authorised to access before packaging the ZIP.
+            scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+            if scope_allowed is not None and pics:
+                pics = [p for p in pics if getattr(p, "id", None) in scope_allowed]
 
             logger.debug(
                 f"Export task {task_id}: {len(pics)} pictures to be added to the ZIP."

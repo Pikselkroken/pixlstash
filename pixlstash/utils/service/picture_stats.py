@@ -49,6 +49,7 @@ class PictureStatsParams:
     include: set[str]
     penalised_tag_set: set[str] | None
     penalised_cooc_both: bool
+    scoped_picture_ids: list[int] | None = None
 
 
 def _empty_stats() -> dict:
@@ -86,6 +87,13 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
         Picture.deleted.is_(True) if params.only_deleted else Picture.deleted.is_(False)
     )
     pic_q = select(Picture.id).where(deleted_clause)
+
+    # Hard-limit to token-scoped pictures when the request is authorised via
+    # a scoped token (picture_set, character, or project).
+    if params.scoped_picture_ids is not None:
+        if not params.scoped_picture_ids:
+            return None
+        pic_q = pic_q.where(Picture.id.in_(params.scoped_picture_ids))
 
     if params.set_filter_ids:
         candidate_ids = fetch_set_candidate_ids(

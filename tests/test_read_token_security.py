@@ -579,6 +579,105 @@ class TestResourceScopedReadTokenIsolation:
             finally:
                 server.__exit__(None, None, None)
 
+    def test_stats_cannot_leak_out_of_scope_pictures(self):
+        """GET /pictures/stats must be limited to the token's authorised set."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                r = TestClient(server.api).get(
+                    f"{API}/pictures/stats",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                data = r.json()
+                assert data["total"] <= 1, (
+                    f"Token for set A (1 picture) reported total={data['total']}; "
+                    "out-of-scope pictures from set B leaked into stats"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_search_cannot_leak_out_of_scope_pictures(self):
+        """GET /pictures/search must not return pictures outside the token's set."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                r = TestClient(server.api).get(
+                    f"{API}/pictures/search",
+                    params={"query": "picture"},
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                result_ids = {p["id"] for p in r.json()}
+                assert pic_b not in result_ids, (
+                    "Token for set A returned picture from set B in /pictures/search"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_likeness_groups_cannot_leak_out_of_scope_pictures(self):
+        """GET /pictures/likeness-groups must not include pictures outside the token's set."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                r = TestClient(server.api).get(
+                    f"{API}/pictures/likeness-groups",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                all_ids = {pid for group in r.json() for pid in group}
+                assert pic_b not in all_ids, (
+                    "Token for set A returned picture from set B in /pictures/likeness-groups"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_export_cannot_include_out_of_scope_pictures(self):
+        """GET /pictures/export must not package pictures outside the token's set."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                scoped = TestClient(server.api)
+                r = scoped.get(
+                    f"{API}/pictures/export",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                task_id = r.json()["task_id"]
+
+                deadline = time.monotonic() + 30
+                status = None
+                while time.monotonic() < deadline:
+                    sr = scoped.get(
+                        f"{API}/pictures/export/status",
+                        params={"task_id": task_id},
+                        headers={"Authorization": f"Bearer {token_a}"},
+                    )
+                    assert sr.status_code == 200, sr.text
+                    status = sr.json()
+                    if status["status"] in ("completed", "failed"):
+                        break
+                    time.sleep(0.1)
+
+                assert status and status["status"] == "completed", (
+                    f"Export task did not complete in time: {status}"
+                )
+                # `total` is set after scope filtering — must be 1, not 2
+                assert status["total"] == 1, (
+                    f"Export for set A (1 picture) reported total={status['total']}; "
+                    "out-of-scope pictures from set B may have been included"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
 
 # ---------------------------------------------------------------------------
 # 4. Expired token is rejected

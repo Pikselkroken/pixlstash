@@ -36,6 +36,7 @@ from pixlstash.utils.service.picture_stats import (
 )
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
+    fetch_scope_allowed_picture_ids,
     fetch_set_candidate_ids,
     normalize_set_mode,
     project_membership_exists_clause,
@@ -349,6 +350,12 @@ def register_routes(router, server):
                 candidate_ids = set(
                     server.vault.db.run_immediate_read_task(fetch_active_ids)
                 )
+
+        # Enforce token scope: scoped tokens must not see pictures outside
+        # their authorised resource (picture_set, character, project).
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            candidate_ids = candidate_ids & scope_allowed
 
         def fetch_likeness(session):
             rows = session.exec(
@@ -743,6 +750,12 @@ def register_routes(router, server):
     def get_picture_stats(request: Request):
         cache_key = str(sorted(request.query_params.multi_items()))
 
+        # Include scope identity in the cache key to prevent cross-token cache
+        # poisoning when different scoped tokens share the same query params.
+        token_scope = getattr(request.state, "token_scope", None)
+        if token_scope is not None and token_scope.resource_type is not None:
+            cache_key += f"|scope:{token_scope.resource_type}:{token_scope.resource_id}"
+
         only_penalised_raw = request.query_params.get("only_penalised") or ""
         only_penalised = only_penalised_raw in ("1", "true", "one", "both")
         penalised_cooc_both = only_penalised_raw == "both"
@@ -811,6 +824,11 @@ def register_routes(router, server):
                 detail="Invalid max_score: must be an integer",
             ) from exc
 
+        # Enforce token scope: compute allowed picture IDs for scoped tokens so
+        # that stats are restricted to the authorised resource only.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        scoped_picture_ids = list(scope_allowed) if scope_allowed is not None else None
+
         params = PictureStatsParams(
             only_deleted=only_deleted,
             set_filter_ids=set_filter_ids,
@@ -835,5 +853,6 @@ def register_routes(router, server):
             include=include,
             penalised_tag_set=penalised_tag_set,
             penalised_cooc_both=penalised_cooc_both,
+            scoped_picture_ids=scoped_picture_ids,
         )
         return get_cached_picture_stats(server.vault, params, cache_key)
