@@ -21,6 +21,12 @@ from .tag import (  # noqa: F401
     make_tag_sentinel,
     is_tag_sentinel,
     parse_tag_engine_from_sentinel,
+    DESCRIPTION_SENTINEL_PREFIX,
+    DESCRIPTION_SENTINEL_LIKE_PATTERN,
+    DESCRIPTION_SENTINEL_ESCAPE_CHAR,
+    make_description_sentinel,
+    is_description_sentinel,
+    parse_engine_from_description_sentinel,
 )
 from .tag_prediction import TagPrediction  # noqa: F401
 from .import_folder import ImportFolder  # noqa: F401
