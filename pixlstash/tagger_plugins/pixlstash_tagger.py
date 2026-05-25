@@ -281,8 +281,12 @@ class PixlStashTaggerService:
         logger.warning("PixlStash tagger GPU inference failed; reloading on CPU...")
         try:
             if self._model is not None:
-                self._model.float()
+                # Move to CPU *before* converting dtype so that the FP16→FP32
+                # conversion does not allocate extra VRAM (which could itself
+                # OOM and leave the model in a partially-converted mixed-dtype
+                # state on GPU, causing every subsequent inference to fail).
                 self._model.to("cpu")
+                self._model.float()
             self._device = "cpu"
             self._dtype = torch.float32
             if torch.cuda.is_available():
@@ -290,11 +294,14 @@ class PixlStashTaggerService:
             logger.debug("PixlStash tagger reloaded on CPU")
             return True
         except Exception as cpu_error:
+            # If the move to CPU itself failed, unload the model entirely so it
+            # is not left in a partially-converted, unrunnable state.
             logger.error(
                 "Failed to reload PixlStash tagger on CPU: %s",
                 cpu_error,
                 exc_info=True,
             )
+            self.unload()
             return False
 
     def unload(self) -> None:
