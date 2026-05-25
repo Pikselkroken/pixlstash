@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 import traceback
 from typing import Any, Optional
 
@@ -293,7 +294,6 @@ class JoyCaptionService:
 
     def _init(self) -> None:
         """Load the JoyCaption model with the configured precision."""
-        import time
 
         t_start = time.perf_counter()
         try:
