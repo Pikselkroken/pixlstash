@@ -483,6 +483,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/users/me/token                                          | config           | List API tokens                                   |
 | POST   | /api/v1/users/me/token                                          | config           | Create API token                                  |
 | DELETE | /api/v1/users/me/token/{token_id}                               | config           | Delete API token                                  |
+| PATCH  | /api/v1/users/me/token/{token_id}                               | config           | Update API token                                  |
 | DELETE | /api/v1/users/me/tokens/by-resource                             | config           | Revoke all tokens for a resource                  |
 | GET    | /api/v1/users/me/watermark                                      | config           | Get watermark image                               |
 | POST   | /api/v1/users/me/watermark                                      | config           | Upload custom watermark                           |
