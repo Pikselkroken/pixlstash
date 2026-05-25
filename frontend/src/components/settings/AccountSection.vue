@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 
@@ -34,7 +34,7 @@ const tokenResourceType = ref(null);
 const tokenResourceId = ref(null);
 const tokenExpiresAt = ref(null);
 const tokenIncludeAttachments = ref(false);
-const tokenWatermark = ref(true);
+const tokenWatermark = ref(false);
 const shareResourceOptions = ref([]);
 const shareResourceLoading = ref(false);
 const shareLinkCopied = ref(false);
@@ -66,7 +66,7 @@ function resetForm() {
   tokenResourceId.value = null;
   tokenExpiresAt.value = null;
   tokenIncludeAttachments.value = false;
-  tokenWatermark.value = true;
+  tokenWatermark.value = false;
   shareResourceOptions.value = [];
   shareLinkCopied.value = false;
   publicUrlValue.value = "";
@@ -286,7 +286,7 @@ async function createUserToken() {
     newlyCreatedToken.value = res.data?.token || "";
     tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
     tokenDescription.value = "";
-    tokenWatermark.value = true;
+    tokenWatermark.value = false;
     await fetchUserTokens();
   } catch (e) {
     tokensError.value = e?.response?.data?.detail || "Failed to create token.";
@@ -295,14 +295,25 @@ async function createUserToken() {
   }
 }
 
+watch(tokenScope, (scope) => {
+  if (scope !== "READ") tokenWatermark.value = false;
+});
+
+const watermarkUpdating = reactive(new Set());
+
 async function updateTokenWatermark(token, value) {
+  if (watermarkUpdating.has(token.id)) return;
+
+  const previousValue = token.watermark;
+  token.watermark = value;
+  watermarkUpdating.add(token.id);
   try {
     await apiClient.patch(`/users/me/token/${token.id}`, { watermark: value });
-    token.watermark = value;
   } catch (e) {
     tokensError.value = e?.response?.data?.detail || "Failed to update token.";
-    // Revert optimistic update on error
-    token.watermark = !value;
+    token.watermark = previousValue;
+  } finally {
+    watermarkUpdating.delete(token.id);
   }
 }
 
@@ -661,7 +672,7 @@ watch(
         label="Apply watermark"
         density="compact"
         hide-details
-        :disabled="tokensLoading"
+        :disabled="tokensLoading || tokenScope !== 'READ'"
       />
       <v-btn
         variant="outlined"
@@ -744,7 +755,7 @@ watch(
                   density="compact"
                   hide-details
                   class="settings-token-wm-checkbox"
-                  :disabled="tokensLoading"
+                  :disabled="tokensLoading || watermarkUpdating.has(token.id) || token.scope !== 'READ'"
                   @update:model-value="updateTokenWatermark(token, $event)"
                 />
               </td>
