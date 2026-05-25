@@ -82,7 +82,8 @@ RUN pip install --no-cache-dir \
     dotenv \
     python-dotenv \
     click \
-    accelerate
+    accelerate \
+    bitsandbytes
 
 # Remove build tools — not needed at runtime
 RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*
