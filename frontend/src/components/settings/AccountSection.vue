@@ -34,6 +34,7 @@ const tokenResourceType = ref(null);
 const tokenResourceId = ref(null);
 const tokenExpiresAt = ref(null);
 const tokenIncludeAttachments = ref(false);
+const tokenWatermark = ref(true);
 const shareResourceOptions = ref([]);
 const shareResourceLoading = ref(false);
 const shareLinkCopied = ref(false);
@@ -65,6 +66,7 @@ function resetForm() {
   tokenResourceId.value = null;
   tokenExpiresAt.value = null;
   tokenIncludeAttachments.value = false;
+  tokenWatermark.value = true;
   shareResourceOptions.value = [];
   shareLinkCopied.value = false;
   publicUrlValue.value = "";
@@ -279,15 +281,28 @@ async function createUserToken() {
         tokenScope.value === "READ" && tokenResourceType.value === "project"
           ? tokenIncludeAttachments.value
           : false,
+      watermark: tokenWatermark.value,
     });
     newlyCreatedToken.value = res.data?.token || "";
     tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
     tokenDescription.value = "";
+    tokenWatermark.value = true;
     await fetchUserTokens();
   } catch (e) {
     tokensError.value = e?.response?.data?.detail || "Failed to create token.";
   } finally {
     tokensLoading.value = false;
+  }
+}
+
+async function updateTokenWatermark(token, value) {
+  try {
+    await apiClient.patch(`/users/me/token/${token.id}`, { watermark: value });
+    token.watermark = value;
+  } catch (e) {
+    tokensError.value = e?.response?.data?.detail || "Failed to update token.";
+    // Revert optimistic update on error
+    token.watermark = !value;
   }
 }
 
@@ -641,6 +656,13 @@ watch(
           :disabled="tokensLoading"
         />
       </template>
+      <v-checkbox
+        v-model="tokenWatermark"
+        label="Apply watermark"
+        density="compact"
+        hide-details
+        :disabled="tokensLoading"
+      />
       <v-btn
         variant="outlined"
         color="primary"
@@ -663,6 +685,7 @@ watch(
               <th>Created</th>
               <th>Last used</th>
               <th>Expires</th>
+              <th>Watermark</th>
               <th></th>
             </tr>
           </thead>
@@ -696,9 +719,7 @@ watch(
                       token.resource_name ?? `Character #${token.resource_id}`
                     }}
                   </template>
-                  <template
-                    v-else-if="token.resource_type === 'picture_set'"
-                  >
+                  <template v-else-if="token.resource_type === 'picture_set'">
                     <v-icon size="11" start>mdi-image-multiple-outline</v-icon>
                     {{ token.resource_name ?? `Set #${token.resource_id}` }}
                   </template>
@@ -716,6 +737,16 @@ watch(
                 :class="{ 'settings-token-expired': isTokenExpired(token) }"
               >
                 {{ formatTokenExpiry(token) }}
+              </td>
+              <td class="settings-token-watermark">
+                <v-checkbox
+                  :model-value="token.watermark"
+                  density="compact"
+                  hide-details
+                  class="settings-token-wm-checkbox"
+                  :disabled="tokensLoading"
+                  @update:model-value="updateTokenWatermark(token, $event)"
+                />
               </td>
               <td class="settings-token-actions">
                 <v-btn
@@ -1006,6 +1037,21 @@ watch(
   text-align: right;
   white-space: nowrap;
   padding-left: 0;
+}
+
+.settings-token-watermark {
+  text-align: center;
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+.settings-token-wm-checkbox {
+  display: inline-flex;
+  justify-content: center;
+}
+
+.settings-token-wm-checkbox :deep(.v-input__control) {
+  flex: none;
 }
 
 .settings-token-delete {

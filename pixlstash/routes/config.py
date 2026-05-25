@@ -206,6 +206,17 @@ def create_router(server) -> APIRouter:
     def delete_me_token(token_id: int, request: Request):
         return server.auth.delete_token(request, token_id)
 
+    class UpdateTokenRequest(BaseModel):
+        watermark: bool
+
+    @router.patch(
+        "/users/me/token/{token_id}",
+        summary="Update API token",
+        description="Updates mutable fields on a personal access token (currently: watermark).",
+    )
+    def patch_me_token(token_id: int, payload: UpdateTokenRequest, request: Request):
+        return server.auth.update_token(request, token_id, watermark=payload.watermark)
+
     # ── Watermark image endpoints ─────────────────────────────────────────────
 
     @router.get(

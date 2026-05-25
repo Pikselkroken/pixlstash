@@ -634,7 +634,11 @@ class TagTask(BaseTask):
                     gpu_throughput = n / gpu_s if gpu_s > 0 else 0.0
                     wall_throughput = n / total_s if total_s > 0 else 0.0
                     device = getattr(active_workflow, "_engine", None)
-                    device = getattr(device, "device", "unknown") if device is not None else "unknown"
+                    device = (
+                        getattr(device, "device", "unknown")
+                        if device is not None
+                        else "unknown"
+                    )
                     logger.info(
                         "[TAG_TIMING] task_id=%s n=%d device=%s "
                         "preload_wait_s=%.3f inference_s=%.3f "
