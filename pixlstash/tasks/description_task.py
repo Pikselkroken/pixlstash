@@ -179,6 +179,13 @@ class DescriptionTask(BaseTask):
                 self._release_idle_cpu_spillover_engine(force=False)
 
         if not batch_results:
+            if self._engine_override:
+                logger.error(
+                    "DescriptionTask: plugin %r failed for ids=%s; "
+                    "description will be cleared.",
+                    self._engine_override,
+                    picture_ids,
+                )
             for pic in pictures:
                 pic.description = ""
                 descriptions_generated.append(pic)

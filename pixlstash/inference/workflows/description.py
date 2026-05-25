@@ -75,12 +75,13 @@ class DescriptionWorkflow:
         )
 
         if active and active != "florence2":
-            return self._generate_batch_plugin(pictures, active)
+            explicit = engine_override is not None
+            return self._generate_batch_plugin(pictures, active, explicit=explicit)
 
         return self._generate_batch_florence(pictures)
 
     def _generate_batch_plugin(
-        self, pictures: list, plugin_name: str
+        self, pictures: list, plugin_name: str, explicit: bool = False
     ) -> dict[int, str]:
         """Dispatch description generation to a named TaggerPlugin."""
         from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
@@ -111,9 +112,14 @@ class DescriptionWorkflow:
             plugin.init(params)
         except Exception:
             logger.exception(
-                "Failed to initialise description plugin %r; falling back to Florence-2.",
+                "Failed to initialise description plugin %r; %s.",
                 plugin_name,
+                "description will be cleared (not falling back to Florence-2 because plugin was explicitly requested)"
+                if explicit
+                else "falling back to Florence-2",
             )
+            if explicit:
+                return {}
             return self._generate_batch_florence(pictures)
 
         image_paths = []

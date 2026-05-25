@@ -65,6 +65,54 @@ def parse_tag_engine_from_sentinel(tag_value: str | None) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Description sentinels
+# ---------------------------------------------------------------------------
+# Stored in Picture.description to signal "needs (re)describing with a given
+# plugin".  The MissingDescriptionFinder matches these rows, extracts the
+# engine name, and creates a DescriptionTask with the appropriate override.
+# Using a sentinel value instead of NULL prevents the background finder from
+# racing with an interactive request and overwriting with the wrong plugin.
+
+DESCRIPTION_SENTINEL_PREFIX = "__description::"
+
+# SQL LIKE pattern — both leading underscores must be escaped.
+DESCRIPTION_SENTINEL_LIKE_PATTERN = r"\_\_description::%"
+DESCRIPTION_SENTINEL_ESCAPE_CHAR = "\\"
+
+
+def make_description_sentinel(engine_name: str | None = None) -> str:
+    """Return the sentinel string for the given description engine.
+
+    Args:
+        engine_name: Plugin name to embed (e.g. ``'joycaption'``).  ``None``
+            means "use whatever the active plugin is".
+
+    Returns:
+        ``'__description::'`` or ``'__description::<engine_name>'``.
+    """
+    if engine_name:
+        return f"{DESCRIPTION_SENTINEL_PREFIX}{engine_name}"
+    return DESCRIPTION_SENTINEL_PREFIX
+
+
+def is_description_sentinel(value: str | None) -> bool:
+    """Return ``True`` if *value* is a pending-description sentinel."""
+    return value is not None and value.startswith(DESCRIPTION_SENTINEL_PREFIX)
+
+
+def parse_engine_from_description_sentinel(value: str | None) -> str | None:
+    """Extract the engine name from a description sentinel, or ``None``.
+
+    Returns ``None`` for the generic ``'__description::'`` sentinel and for
+    non-sentinel values.
+    """
+    if value and value.startswith(DESCRIPTION_SENTINEL_PREFIX):
+        engine = value[len(DESCRIPTION_SENTINEL_PREFIX):]
+        return engine or None
+    return None
+
+
 class Tag(SQLModel, table=True):
     """
     SQLModel for the picture_tags table.

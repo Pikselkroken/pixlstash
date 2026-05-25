@@ -1,8 +1,15 @@
 from typing import Callable
 
 from sqlmodel import Session, select
+from sqlalchemy import or_
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import (
+    Picture,
+    DESCRIPTION_SENTINEL_LIKE_PATTERN,
+    DESCRIPTION_SENTINEL_ESCAPE_CHAR,
+    parse_engine_from_description_sentinel,
+    is_description_sentinel,
+)
 
 from .description_task import DescriptionTask
 from .task_type import TaskType
@@ -52,7 +59,21 @@ class MissingDescriptionFinder(BaseTaskFinder):
         if not pictures:
             return None
 
-        selected = self._filter_and_claim(pictures, batch_limit)
+        # Group pictures by the engine embedded in their sentinel (None = use
+        # active_description_plugin).  Process only the first group per cycle so
+        # that interactive requests with a specific engine are not starved by a
+        # large backlog of NULL-description pictures.
+        groups: dict[str | None, list] = {}
+        for pic in pictures:
+            engine_name = (
+                parse_engine_from_description_sentinel(pic.description)
+                if is_description_sentinel(pic.description)
+                else None
+            )
+            groups.setdefault(engine_name, []).append(pic)
+
+        first_engine, first_pics = next(iter(groups.items()))
+        selected = self._filter_and_claim(first_pics, batch_limit)
         if not selected:
             return None
 
@@ -60,13 +81,23 @@ class MissingDescriptionFinder(BaseTaskFinder):
             database=self._db,
             workflow=engine.description_workflow,
             pictures=selected,
+            engine_override=first_engine,
         )
 
     @staticmethod
     def _fetch_missing_descriptions(session: Session, limit: int):
         return session.exec(
             select(Picture)
-            .where(Picture.description.is_(None))
+            .where(
+                or_(
+                    Picture.description.is_(None),
+                    Picture.description.like(
+                        DESCRIPTION_SENTINEL_LIKE_PATTERN,
+                        escape=DESCRIPTION_SENTINEL_ESCAPE_CHAR,
+                    ),
+                )
+            )
             .order_by(Picture.id)
             .limit(limit)
         ).all()
+

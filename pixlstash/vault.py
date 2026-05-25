@@ -546,34 +546,40 @@ class Vault:
     def reset_description_interactive(
         self, picture_id: int, engine_name: str | None = None
     ) -> bool:
-        """Clear a picture's description and queue a fresh description pass.
+        """Request a fresh description pass for a picture by writing a sentinel.
 
-        Clears the ``description`` field in the database, emits a
-        ``CHANGED_PICTURES`` event so connected clients refresh, then queues an
-        interactive description task.
+        Sets ``description`` to a ``__description::<engine>`` sentinel value
+        (or ``__description::`` for the default plugin).  The
+        :class:`~pixlstash.tasks.missing_description_finder.MissingDescriptionFinder`
+        picks up pictures with this sentinel and creates a
+        :class:`~pixlstash.tasks.description_task.DescriptionTask` with the
+        appropriate engine override.  Using a sentinel instead of ``NULL``
+        prevents the background finder from racing with an interactive request
+        and substituting the wrong plugin's output.
 
         Args:
             picture_id: Primary key of the picture to reset.
-            engine_name: Optional plugin name override for this picture.
+            engine_name: Optional plugin name to embed in the sentinel.
 
         Returns:
-            ``True`` if the picture was found and processed, ``False`` if no
-            picture with *picture_id* exists.
+            ``True`` if the picture was found and updated, ``False`` otherwise.
         """
+        from pixlstash.db_models import make_description_sentinel
 
-        def _clear(session: Session) -> bool:
+        sentinel = make_description_sentinel(engine_name)
+
+        def _set_sentinel(session: Session) -> bool:
             pic = session.get(Picture, picture_id)
             if pic is None:
                 return False
-            pic.description = None
+            pic.description = sentinel
             session.commit()
             return True
 
-        found = self.db.run_task(_clear)
+        found = self.db.run_task(_set_sentinel)
         if not found:
             return False
         self.notify(EventType.CHANGED_PICTURES, {"picture_ids": [picture_id]})
-        self.redescribe_picture_interactive(picture_id, engine_name=engine_name)
         return True
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
