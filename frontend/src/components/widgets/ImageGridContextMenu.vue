@@ -22,7 +22,8 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length || isReadOnly"
+          :disabled="!selectedImageIds.length"
+          :readonly="isReadOnly"
           @added="onAction('added-to-set', $event)"
         />
         <AddToEntityControl
@@ -30,7 +31,8 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length || isReadOnly"
+          :disabled="!selectedImageIds.length"
+          :readonly="isReadOnly"
           @added="onAction('add-to-character', $event)"
           @removed="onAction('remove-from-character', $event)"
         />
@@ -39,7 +41,8 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length || isReadOnly"
+          :disabled="!selectedImageIds.length"
+          :readonly="isReadOnly"
           @selected="onAction('set-project', $event)"
         />
         <div class="ctx-sep" />
@@ -107,7 +110,10 @@
           @mouseenter="autoTagSubmenuOpen = true"
           @mouseleave="autoTagSubmenuOpen = false"
         >
-          <button class="ctx-item" :disabled="!selectedImageIds.length">
+          <button
+            class="ctx-item"
+            :disabled="!selectedImageIds.length || isReadOnly"
+          >
             <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
             Tag automatically
             <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
@@ -134,7 +140,10 @@
           @mouseenter="descriptionSubmenuOpen = true"
           @mouseleave="descriptionSubmenuOpen = false"
         >
-          <button class="ctx-item" :disabled="!selectedImageIds.length">
+          <button
+            class="ctx-item"
+            :disabled="!selectedImageIds.length || isReadOnly"
+          >
             <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
             Generate description
             <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
