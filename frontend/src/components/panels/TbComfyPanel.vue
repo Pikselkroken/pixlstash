@@ -130,16 +130,15 @@ watch(
       );
     }
   },
+  { immediate: true },
 );
 
 async function tbFetchComfyWorkflows() {
   if (tbComfyuiWorkflowLoading.value) return;
-  const url = props.backendUrl;
-  if (!url) return;
   tbComfyuiWorkflowLoading.value = true;
   tbComfyuiWorkflowError.value = "";
   try {
-    const res = await apiClient.get(`${url}/comfyui/workflows`);
+    const res = await apiClient.get("/comfyui/workflows");
     const workflows = res.data?.workflows;
     tbComfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {

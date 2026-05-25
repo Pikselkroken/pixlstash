@@ -1126,11 +1126,10 @@ watch(pluginMenuOpen, (isOpen) => {
 
 async function fetchComfyWorkflows() {
   if (comfyuiWorkflowLoading.value) return;
-  if (!backendUrl.value) return;
   comfyuiWorkflowLoading.value = true;
   comfyuiWorkflowError.value = "";
   try {
-    const res = await apiClient.get(`${backendUrl.value}/comfyui/workflows`);
+    const res = await apiClient.get("/comfyui/workflows");
     const workflows = res.data?.workflows;
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {

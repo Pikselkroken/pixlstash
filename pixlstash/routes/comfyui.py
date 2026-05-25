@@ -25,6 +25,8 @@ from pixlstash.db_models import (
     PictureProjectMember,
     PictureSetMember,
     PictureStack,
+    Tag,
+    TAG_PENDING_SENTINEL,
     User,
 )
 from pixlstash.event_types import EventType
@@ -638,6 +640,9 @@ def _import_comfyui_outputs(
     def import_task(session):
         if new_pictures:
             session.add_all(new_pictures)
+            session.flush()
+            for pic in new_pictures:
+                session.add(Tag(tag=TAG_PENDING_SENTINEL, picture_id=pic.id))
             session.commit()
             for pic in new_pictures:
                 session.refresh(pic)

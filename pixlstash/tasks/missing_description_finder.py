@@ -103,4 +103,3 @@ class MissingDescriptionFinder(BaseTaskFinder):
             .order_by(Picture.id)
             .limit(limit)
         ).all()
-

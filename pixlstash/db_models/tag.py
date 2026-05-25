@@ -108,7 +108,7 @@ def parse_engine_from_description_sentinel(value: str | None) -> str | None:
     non-sentinel values.
     """
     if value and value.startswith(DESCRIPTION_SENTINEL_PREFIX):
-        engine = value[len(DESCRIPTION_SENTINEL_PREFIX):]
+        engine = value[len(DESCRIPTION_SENTINEL_PREFIX) :]
         return engine or None
     return None
 

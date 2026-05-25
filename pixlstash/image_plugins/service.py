@@ -15,6 +15,8 @@ from pixlstash.db_models import (
     PictureProjectMember,
     PictureSetMember,
     PictureStack,
+    Tag,
+    TAG_PENDING_SENTINEL,
 )
 from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -289,6 +291,9 @@ def _import_output_images(
         if not new_pictures:
             return []
         session.add_all(new_pictures)
+        session.flush()
+        for pic in new_pictures:
+            session.add(Tag(tag=TAG_PENDING_SENTINEL, picture_id=pic.id))
         session.commit()
         for pic in new_pictures:
             session.refresh(pic)

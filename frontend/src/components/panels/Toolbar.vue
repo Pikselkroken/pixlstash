@@ -1675,11 +1675,10 @@ watch(comfyuiMenuOpen, async (isOpen) => {
 
 async function fetchComfyWorkflows() {
   if (comfyuiWorkflowLoading.value) return;
-  if (!props.backendUrl) return;
   comfyuiWorkflowLoading.value = true;
   comfyuiWorkflowError.value = "";
   try {
-    const res = await apiClient.get(`${props.backendUrl}/comfyui/workflows`);
+    const res = await apiClient.get("/comfyui/workflows");
     const workflows = res.data?.workflows;
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
