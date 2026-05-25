@@ -5261,9 +5261,17 @@ defineExpose({
       @contextmenu.prevent
       @mousedown.stop
     >
+      <!-- ── Read-only indicator ───────────────────────────────── -->
+      <div v-if="isReadOnly" class="ctx-readonly-header">
+        <span class="ctx-readonly-pill">
+          <v-icon size="10">mdi-lock-outline</v-icon>
+          Read only
+        </span>
+      </div>
       <template v-if="sidebarCtxAllPictures">
         <button
           class="sidebar-ctx-item"
+          :disabled="isReadOnly"
           @click="
             shareResource(null, null, 'All Pictures');
             closeSidebarCtxMenu();
@@ -5275,9 +5283,10 @@ defineExpose({
           Share
         </button>
       </template>
-      <template v-if="sidebarCtxCharacter && !isReadOnly">
+      <template v-if="sidebarCtxCharacter">
         <button
           class="sidebar-ctx-item"
+          :disabled="isReadOnly"
           @click="
             shareResource(
               'character',
@@ -5293,12 +5302,12 @@ defineExpose({
         </button>
         <button
           class="sidebar-ctx-item"
-          :disabled="sidebarCtxDeleteIds.length > 1"
+          :disabled="sidebarCtxDeleteIds.length > 1 || isReadOnly"
           :class="{
-            'sidebar-ctx-item--disabled': sidebarCtxDeleteIds.length > 1,
+            'sidebar-ctx-item--disabled': sidebarCtxDeleteIds.length > 1 || isReadOnly,
           }"
           @click="
-            sidebarCtxDeleteIds.length === 1 &&
+            sidebarCtxDeleteIds.length === 1 && !isReadOnly &&
             (openCharacterEditor(sidebarCtxCharacter), closeSidebarCtxMenu())
           "
         >
@@ -5308,6 +5317,7 @@ defineExpose({
         <button
           v-if="sharedCharacterIds.has(sidebarCtxCharacter.id)"
           class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly"
           @click="
             openRevokeSharesDialog(
               'character',
@@ -5323,6 +5333,7 @@ defineExpose({
         </button>
         <button
           class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly"
           @click="
             deleteCharactersByIds(sidebarCtxDeleteIds);
             closeSidebarCtxMenu();
@@ -5338,9 +5349,10 @@ defineExpose({
           }}
         </button>
       </template>
-      <template v-if="sidebarCtxSet && !isReadOnly">
+      <template v-if="sidebarCtxSet">
         <button
           class="sidebar-ctx-item"
+          :disabled="isReadOnly"
           @click="
             shareResource('picture_set', sidebarCtxSet.id, sidebarCtxSet.name)
           "
@@ -5352,6 +5364,7 @@ defineExpose({
         </button>
         <button
           class="sidebar-ctx-item"
+          :disabled="isReadOnly"
           @click="
             openSetEditor(sidebarCtxSet);
             closeSidebarCtxMenu();
@@ -5363,6 +5376,7 @@ defineExpose({
         <!-- Icon sub-menu -->
         <button
           class="sidebar-ctx-item sidebar-ctx-item--has-arrow"
+          :disabled="isReadOnly"
           @click.stop="openSetCtxIconMenu($event)"
         >
           <v-icon
@@ -5456,6 +5470,7 @@ defineExpose({
         <!-- Color sub-menu -->
         <button
           class="sidebar-ctx-item sidebar-ctx-item--has-arrow"
+          :disabled="isReadOnly"
           @click.stop="openSetCtxColorMenu($event)"
         >
           <span
@@ -5490,6 +5505,7 @@ defineExpose({
         <button
           v-if="sharedSetIds.has(sidebarCtxSet.id)"
           class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly"
           @click="
             openRevokeSharesDialog(
               'picture_set',
@@ -5505,6 +5521,7 @@ defineExpose({
         </button>
         <button
           class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly"
           @click="
             deleteSetById(sidebarCtxSet.id);
             closeSidebarCtxMenu();
@@ -5518,8 +5535,8 @@ defineExpose({
       </template>
       <template v-if="sidebarCtxProject">
         <button
-          v-if="!isReadOnly"
           class="sidebar-ctx-item"
+          :disabled="isReadOnly"
           @click="
             shareResource(
               'project',
@@ -5547,8 +5564,8 @@ defineExpose({
           Export as ZIP
         </button>
         <button
-          v-if="!isReadOnly"
           class="sidebar-ctx-item"
+          :disabled="isReadOnly"
           @click="
             openProjectEditor(sidebarCtxProject);
             closeSidebarCtxMenu();
@@ -5558,8 +5575,9 @@ defineExpose({
           Edit
         </button>
         <button
-          v-if="!isReadOnly && sharedProjectIds.has(sidebarCtxProject.id)"
+          v-if="sharedProjectIds.has(sidebarCtxProject.id)"
           class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly"
           @click="
             openRevokeSharesDialog(
               'project',
@@ -5574,8 +5592,8 @@ defineExpose({
           Remove all shares
         </button>
         <button
-          v-if="!isReadOnly"
           class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly"
           @click="
             deleteProjectById(sidebarCtxProject);
             closeSidebarCtxMenu();
@@ -7989,6 +8007,16 @@ defineExpose({
   opacity: 0.38;
   cursor: default;
   pointer-events: none;
+}
+
+button.sidebar-ctx-item:disabled {
+  opacity: 0.38;
+  cursor: default;
+  pointer-events: none;
+}
+
+button.sidebar-ctx-item:disabled:hover {
+  background: transparent;
 }
 
 .sidebar-ctx-item--has-arrow {
