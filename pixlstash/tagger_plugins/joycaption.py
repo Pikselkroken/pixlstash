@@ -297,7 +297,7 @@ class JoyCaptionService:
 
         t_start = time.perf_counter()
         try:
-            # bitsandbytes is an optional dependency — import lazily.
+            # bitsandbytes is required for NF4/INT8 quantisation.
             if self._precision in ("nf4", "int8"):
                 import bitsandbytes  # noqa: F401 — validates availability
 
@@ -469,8 +469,9 @@ class JoyCaptionPlugin(TaggerPlugin):
 
     Supports both tag generation and natural-language description generation.
     Uses ``bitsandbytes`` for NF4/INT8 quantisation; the import is lazy so a
-    missing or broken ``bitsandbytes`` install only disables this plugin and
-    does not prevent the rest of the application from starting.
+    broken ``bitsandbytes`` install only disables this plugin and does not
+    prevent the rest of the application from starting.  ``bitsandbytes`` is
+    installed as a regular dependency and supports Linux, macOS, and Windows.
 
     Attributes:
         name: Plugin identifier used in ``tagger_settings``.
