@@ -4,6 +4,30 @@ export function getTagLabel(tag) {
   return '';
 }
 
+/**
+ * Returns true if the tag name is a pending-retag sentinel (`__tag` or `__tag:…`).
+ */
+export function isSentinelTag(name) {
+  return typeof name === 'string' && name.startsWith('__tag');
+}
+
+/**
+ * Returns a user-friendly display label for a tag name.
+ * Sentinel tags are converted to readable strings; all others are returned unchanged.
+ *   '__tag'        → 'Tagging…'
+ *   '__tag:engine' → 'Tagging with engine…'
+ */
+export function formatSentinelTag(name) {
+  if (typeof name !== 'string') return name;
+  if (name === '__tag') return 'Tagging\u2026';
+  if (name.startsWith('__tag:')) {
+    const engine = name.slice('__tag:'.length);
+    return `Tagging with ${engine}\u2026`;
+  }
+  return name;
+}
+
+
 export function getTagId(tag) {
   if (tag && typeof tag === 'object' && tag.id != null) {
     return tag.id;
