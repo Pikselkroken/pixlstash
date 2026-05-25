@@ -3601,6 +3601,7 @@ const {
     visibleEnd,
     divisibleViewWindow,
     initialRender,
+    rowHeight,
     sharedPictureIds,
     guestConsentState,
     guestSessionId,

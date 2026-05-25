@@ -28,6 +28,7 @@ export function useGridFetch(
     visibleEnd,
     divisibleViewWindow,
     initialRender,
+    rowHeight,
     sharedPictureIds,
     guestConsentState,
     guestSessionId,
@@ -481,8 +482,26 @@ export function useGridFetch(
         if (isSortedFetch && options?.showProgress === true) {
           completeSmartScoreProgress(loadId, 0, true);
         }
-        const FIRST_BATCH = 200; // visible area + render buffer
-        const LAST_BATCH = 200;  // cells visible when pressing END
+        // Compute FIRST_BATCH to cover all items visible in the viewport so that
+        // fetchThumbnailsBatch (called after splicing the first batch) never
+        // encounters placeholder items (no id) for visible cells.  Placeholders
+        // are skipped by fetchThumbnailsBatch but the range is still marked as
+        // loaded, causing those cells to remain as permanent spinners.
+        // Cell height is derived from clientWidth/cols (square thumbnails) rather
+        // than rowHeight?.value, which may still hold the initial thumbnailSize
+        // estimate when this runs (DOM measurement via updateRowHeightFromGrid
+        // happens asynchronously and may not have fired yet).
+        const _fbCols = props.columns || 1;
+        const _fbViewH = scrollWrapper.value?.clientHeight || 0;
+        const _fbViewW = scrollWrapper.value?.clientWidth || 0;
+        const _fbCellH = _fbViewW > 0
+          ? Math.round(_fbViewW / _fbCols) + (props.compactMode ? 0 : 24)
+          : (rowHeight?.value > 0 ? rowHeight.value : 200);
+        const _fbVisibleItems = _fbViewH > 0 && _fbCellH > 0
+          ? Math.ceil(_fbViewH / _fbCellH) * _fbCols
+          : 0;
+        const FIRST_BATCH = Math.max(200, _fbVisibleItems + _fbCols * 2);
+        const LAST_BATCH = Math.max(200, _fbVisibleItems + _fbCols * 2);
         const BG_BATCH = 1000;   // background fill rate
         // Pass sort/descending to the stream so pictures arrive in the right
         // order.  Count URL stays param-free — sort never affects COUNT(*).
@@ -634,14 +653,20 @@ export function useGridFetch(
         const cols = props.columns || 1;
         // Compute window count from actual viewport capacity so visibleEnd covers
         // all initially visible items even when the viewport shows more than VIEW_WINDOW.
-        const _thumbnailRowHeight0 = Math.round(
-          Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
-          (props.compactMode ? 0 : 24),
-        );
-        const _viewportItemCount0 =
-          scrollWrapper.value && _thumbnailRowHeight0 > 0
-            ? Math.ceil(scrollWrapper.value.clientHeight / _thumbnailRowHeight0) * cols
-            : 0;
+        // Derive cell height from clientWidth/cols (square thumbnails) rather than
+        // rowHeight?.value, which may still hold the initial thumbnailSize estimate
+        // when this runs (DOM measurement via updateRowHeightFromGrid is async).
+        const _fastViewW = scrollWrapper.value?.clientWidth || 0;
+        const _fastViewH = scrollWrapper.value?.clientHeight || 0;
+        const _effectiveRowHeight0 = _fastViewW > 0
+          ? Math.round(_fastViewW / cols) + (props.compactMode ? 0 : 24)
+          : (rowHeight?.value > 0 ? rowHeight.value : Math.round(
+              Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
+              (props.compactMode ? 0 : 24),
+            ));
+        const _viewportItemCount0 = _fastViewH > 0 && _effectiveRowHeight0 > 0
+          ? Math.ceil(_fastViewH / _effectiveRowHeight0) * cols
+          : 0;
         const windowCount = Math.max(
           cols,
           _viewportItemCount0 || divisibleViewWindow.value || cols,
@@ -787,14 +812,20 @@ export function useGridFetch(
       const cols = props.columns || 1;
       // Compute window count from actual viewport capacity so visibleEnd covers
       // all initially visible items even when the viewport shows more than VIEW_WINDOW.
-      const _thumbnailRowHeight1 = Math.round(
-        Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
-        (props.compactMode ? 0 : 24),
-      );
-      const _viewportItemCount1 =
-        scrollWrapper.value && _thumbnailRowHeight1 > 0
-          ? Math.ceil(scrollWrapper.value.clientHeight / _thumbnailRowHeight1) * cols
-          : 0;
+      // Derive cell height from clientWidth/cols (square thumbnails) rather than
+      // rowHeight?.value, which may still hold the initial thumbnailSize estimate
+      // when this runs (DOM measurement via updateRowHeightFromGrid is async).
+      const _slowViewW = scrollWrapper.value?.clientWidth || 0;
+      const _slowViewH = scrollWrapper.value?.clientHeight || 0;
+      const _effectiveRowHeight1 = _slowViewW > 0
+        ? Math.round(_slowViewW / cols) + (props.compactMode ? 0 : 24)
+        : (rowHeight?.value > 0 ? rowHeight.value : Math.round(
+            Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
+            (props.compactMode ? 0 : 24),
+          ));
+      const _viewportItemCount1 = _slowViewH > 0 && _effectiveRowHeight1 > 0
+        ? Math.ceil(_slowViewH / _effectiveRowHeight1) * cols
+        : 0;
       const windowCount = Math.max(
         cols,
         _viewportItemCount1 || divisibleViewWindow.value || cols,
