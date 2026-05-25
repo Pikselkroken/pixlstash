@@ -1,3 +1,6 @@
+# [1.3.1]
+- Remove out-of-scope read access from several API endpoints [Security:Moderate]
+
 # [1.3.0]
 - No changes since rc3
 
