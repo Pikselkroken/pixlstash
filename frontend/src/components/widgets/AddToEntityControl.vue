@@ -80,9 +80,6 @@
           </v-icon>
           <span class="ate-item-name">{{ item.name }}</span>
           <span v-if="isSet" class="ate-item-meta">
-            <span v-if="item.count != null" class="ate-item-count">
-              {{ item.count }}
-            </span>
             <span
               v-if="isLastUsedItem(item)"
               class="ate-item-shortcut"
@@ -519,10 +516,6 @@ async function toggleSet(item) {
         action: "removed",
       });
       if (members) idsToRemove.forEach((id) => members.delete(String(id)));
-      const cached = items.value.find((s) => s.id === item.id);
-      if (cached?.count != null) {
-        cached.count = Math.max(0, cached.count - idsToRemove.length);
-      }
     } else {
       await Promise.all(
         idsToAdd.map((id) =>
@@ -533,8 +526,6 @@ async function toggleSet(item) {
       emit("added", { setId: item.id, pictureIds: idsToAdd, action: "added" });
       lastUsedItem.value = { id: item.id, name: item.name };
       if (members) idsToAdd.forEach((id) => members.add(String(id)));
-      const cached = items.value.find((s) => s.id === item.id);
-      if (cached?.count != null) cached.count += idsToAdd.length;
     }
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || String(e);
@@ -685,8 +676,6 @@ async function addToLastSet() {
     statusMessage.value = `Added to ${item.name}`;
     const members = membersById.value?.[String(item.id)];
     if (members) ids.forEach((id) => members.add(String(id)));
-    const cached = items.value.find((s) => s.id === item.id);
-    if (cached?.count != null) cached.count += ids.length;
     emit("added", { setId: item.id, pictureIds: ids, action: "added" });
     scheduleStatusClear();
     return { success: true, setName: item.name };
