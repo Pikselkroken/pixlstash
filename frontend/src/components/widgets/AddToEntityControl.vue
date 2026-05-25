@@ -186,6 +186,7 @@ const lastUsedItem = ref(null); // { id, name }
 const picturesWithFaces = ref(new Set());
 
 const flyoutFlipped = ref(false);
+const flyoutClickedOpen = ref(false);
 const flyoutMenuStyle = ref({});
 
 // --- Flyout positioning ---
@@ -271,8 +272,20 @@ function isLastUsedItem(item) {
 
 // --- Menu open/close ---
 function toggleMenu() {
-  if (props.placement === "right") return; // flyout is controlled by hover
   if (props.disabled) return;
+  if (props.placement === "right") {
+    // For flyout placement, click/keyboard can open (or close a click-opened menu).
+    // Hover-opened menus are not toggled by click to avoid accidental dismissal.
+    if (menuOpen.value && flyoutClickedOpen.value) {
+      flyoutClickedOpen.value = false;
+      closeMenu();
+    } else if (!menuOpen.value) {
+      flyoutClickedOpen.value = true;
+      openMenu();
+      document.addEventListener("pointerdown", handleOutsideClick, true);
+    }
+    return;
+  }
   menuOpen.value = !menuOpen.value;
   if (menuOpen.value) {
     openMenu();
@@ -293,6 +306,10 @@ function openMenu() {
 function closeMenu() {
   menuOpen.value = false;
   searchQuery.value = "";
+  if (flyoutClickedOpen.value) {
+    document.removeEventListener("pointerdown", handleOutsideClick, true);
+    flyoutClickedOpen.value = false;
+  }
   if (props.placement !== "right") {
     searchInputRef.value?.blur();
     document.removeEventListener("pointerdown", handleOutsideClick, true);
@@ -311,6 +328,7 @@ function onFlyoutMouseenter() {
 
 function onFlyoutMouseleave() {
   if (props.placement !== "right") return;
+  if (flyoutClickedOpen.value) return; // user clicked to open — keep it open
   closeMenu();
 }
 
