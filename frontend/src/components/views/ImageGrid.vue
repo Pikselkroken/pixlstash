@@ -3429,6 +3429,7 @@ const {
   bottomSpacerHeight,
   getGridColumnWidth,
   updateRowHeightFromGrid,
+  recalculateVisibleRange,
   onGridScroll,
   scrollCursorIntoView,
 } = useVirtualScroll(scrollWrapper, gridContainer, props, allGridImagesLength, {
@@ -4516,7 +4517,7 @@ watch(
   () => props.columns,
   async () => {
     updateRowHeightFromGrid();
-    updateVisibleThumbnails();
+    recalculateVisibleRange();
     await nextTick();
     triggerFaceOverlayRedraw();
     requestAnimationFrame(() => {

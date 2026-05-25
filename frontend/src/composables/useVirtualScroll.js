@@ -135,6 +135,25 @@ export function useVirtualScroll(
     }, 50);
   }
 
+  // ── Immediate visible-range recalculation ──────────────────────────────────
+  // Used when the layout changes (column count, compact mode) without a scroll
+  // event — the debounced onGridScroll would not fire in time to fill the newly
+  // visible slots.
+  function recalculateVisibleRange() {
+    const el = scrollWrapper.value;
+    if (!el) return;
+    const cardHeight = rowHeight.value;
+    const scrollTop = el.scrollTop;
+    const cols = props.columns;
+    const firstVisibleRow = scrollTop / cardHeight;
+    const lastVisibleRow = (scrollTop + el.clientHeight - 1) / cardHeight;
+    const newVisibleStart = Math.floor(firstVisibleRow) * cols;
+    const newVisibleEnd = Math.ceil(lastVisibleRow) * cols;
+    visibleStart.value = newVisibleStart;
+    visibleEnd.value = newVisibleEnd;
+    onVisibleRangeChange?.();
+  }
+
   // ── Cursor scroll-into-view ───────────────────────────────────────────────
   function scrollCursorIntoView(idx) {
     if (!scrollWrapper.value) return;
@@ -164,6 +183,7 @@ export function useVirtualScroll(
     bottomSpacerHeight,
     getGridColumnWidth,
     updateRowHeightFromGrid,
+    recalculateVisibleRange,
     onGridScroll,
     scrollCursorIntoView,
   };
