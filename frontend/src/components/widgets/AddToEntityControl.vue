@@ -9,6 +9,8 @@
       'ate--flyout': placement === 'right',
       'ate--force-dark': forceDark,
     }"
+    @mouseenter="onFlyoutMouseenter"
+    @mouseleave="onFlyoutMouseleave"
   >
     <button
       class="ate-btn"
@@ -17,7 +19,6 @@
       :aria-expanded="menuOpen"
       aria-haspopup="true"
       :aria-label="config.ariaLabel"
-      :title="config.ariaLabel"
       @click.stop="toggleMenu"
     >
       <v-icon size="18">{{ config.icon }}</v-icon>
@@ -27,12 +28,11 @@
       }}</v-icon>
     </button>
 
-    <Teleport :disabled="placement !== 'right'" to="body">
+    <Teleport :disabled="true" to="body">
       <div
         ref="menuRef"
         class="ate-menu"
         role="menu"
-        :style="placement === 'right' ? flyoutMenuStyle : {}"
         :class="{
           open: menuOpen,
           flyout: placement === 'right',
@@ -272,6 +272,7 @@ function isLastUsedItem(item) {
 
 // --- Menu open/close ---
 function toggleMenu() {
+  if (props.placement === "right") return; // flyout is controlled by hover
   if (props.disabled) return;
   menuOpen.value = !menuOpen.value;
   if (menuOpen.value) {
@@ -284,20 +285,30 @@ function toggleMenu() {
 function openMenu() {
   menuOpen.value = true;
   fetchItems(true);
-  if (props.placement === "right") positionFlyout();
-  nextTick(() => searchInputRef.value?.focus());
-  document.addEventListener("pointerdown", handleOutsideClick, true);
-  if (props.placement === "right") {
-    window.addEventListener("resize", positionFlyout, { passive: true });
+  if (props.placement !== "right") {
+    nextTick(() => searchInputRef.value?.focus());
+    document.addEventListener("pointerdown", handleOutsideClick, true);
   }
 }
 
 function closeMenu() {
   menuOpen.value = false;
   searchQuery.value = "";
-  searchInputRef.value?.blur();
-  document.removeEventListener("pointerdown", handleOutsideClick, true);
-  window.removeEventListener("resize", positionFlyout);
+  if (props.placement !== "right") {
+    searchInputRef.value?.blur();
+    document.removeEventListener("pointerdown", handleOutsideClick, true);
+  }
+}
+
+function onFlyoutMouseenter() {
+  if (props.placement !== "right" || props.disabled) return;
+  if (menuOpen.value) return;
+  openMenu();
+}
+
+function onFlyoutMouseleave() {
+  if (props.placement !== "right") return;
+  closeMenu();
 }
 
 function handleOutsideClick(event) {
@@ -963,8 +974,16 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem });
 
 .ate--flyout .ate-menu,
 .ate-menu.flyout {
-  /* top/left set by JS positionFlyout() via inline style */
-  transform: translateX(-6px);
+  position: absolute;
+  left: 100%;
+  top: 0;
+  min-width: 185px;
+  max-width: 185px;
+  padding: 4px 0;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+  transform: translateX(-4px);
   z-index: 2500;
 }
 
@@ -972,5 +991,29 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem });
 .ate--flyout .ate-menu.open,
 .ate-menu.flyout.open {
   transform: translateX(0);
+}
+
+.ate--flyout .ate-item {
+  border-radius: 0;
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+.ate--flyout .ate-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ate--flyout .ate-search {
+  margin: 4px 6px 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
+}
+
+.ate--flyout .ate-empty,
+.ate--flyout .ate-status {
+  padding: 6px 14px;
+  font-size: 13px;
 }
 </style>
