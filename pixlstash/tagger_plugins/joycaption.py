@@ -17,7 +17,7 @@ from pixlstash.utils.service.caption_utils import sanitise_tag
 logger = get_logger(__name__)
 
 _MODEL_NAME = "fancyfeast/llama-joycaption-beta-one-hf-llava"
-_MODEL_REVISION = None  # Use latest; pin when the model stabilises.
+_MODEL_REVISION = "ebf414ea497a020da0f82df3913e5b6cb8e9663a"  # Pinned; avoids a HF network round-trip on every load.
 
 _DEFAULT_DESCRIPTION_PROMPT = "Write a long detailed description for this image."
 _DEFAULT_TAG_PROMPT = (
@@ -293,6 +293,9 @@ class JoyCaptionService:
 
     def _init(self) -> None:
         """Load the JoyCaption model with the configured precision."""
+        import time
+
+        t_start = time.perf_counter()
         try:
             # bitsandbytes is an optional dependency — import lazily.
             if self._precision in ("nf4", "int8"):
@@ -304,7 +307,7 @@ class JoyCaptionService:
                 LlavaForConditionalGeneration,
             )
 
-            logger.debug(
+            logger.info(
                 "[JoyCaption] Loading model %s (precision=%s, device=%s) …",
                 _MODEL_NAME,
                 self._precision,
@@ -350,10 +353,15 @@ class JoyCaptionService:
                 torch_dtype = torch.float16
                 device_map = "auto"
 
+            t_proc = time.perf_counter()
             self._processor = from_pretrained_local_first(
                 AutoProcessor,
                 _MODEL_NAME,
                 revision=_MODEL_REVISION,
+            )
+            logger.info(
+                "[JoyCaption] Processor loaded in %.1fs",
+                time.perf_counter() - t_proc,
             )
 
             # LLaMA tokenizers have no pad token by default; set it to EOS so
@@ -379,18 +387,22 @@ class JoyCaptionService:
 
             load_kwargs: dict[str, Any] = {
                 "device_map": device_map,
+                "revision": _MODEL_REVISION,
             }
             if quantization_config is not None:
                 load_kwargs["quantization_config"] = quantization_config
             if torch_dtype is not None:
                 load_kwargs["torch_dtype"] = torch_dtype
-            if _MODEL_REVISION:
-                load_kwargs["revision"] = _MODEL_REVISION
 
+            t_weights = time.perf_counter()
             model = from_pretrained_local_first(
                 LlavaForConditionalGeneration,
                 _MODEL_NAME,
                 **load_kwargs,
+            )
+            logger.info(
+                "[JoyCaption] Weights loaded in %.1fs",
+                time.perf_counter() - t_weights,
             )
             model.eval()
 
@@ -415,10 +427,16 @@ class JoyCaptionService:
                 else torch.device("cuda" if torch.cuda.is_available() else "cpu")
             )
             logger.info(
-                "[JoyCaption] Model loaded successfully on %s (precision=%s)",
+                "[JoyCaption] Model loaded successfully on %s (precision=%s) — total load time %.1fs",
                 self._model_device,
                 self._precision,
+                time.perf_counter() - t_start,
             )
+            if str(self._model_device) == "cpu":
+                logger.warning(
+                    "[JoyCaption] Running on CPU — inference will be very slow (~100s/image). "
+                    "Set default_device=cuda in server-config.json to use the GPU."
+                )
 
         except Exception as exc:
             self._model = None
@@ -483,13 +501,18 @@ class JoyCaptionPlugin(TaggerPlugin):
     # ------------------------------------------------------------------
 
     def setup(self, device: str) -> None:
-        """Create the underlying :class:`JoyCaptionService`.
+        """Create the underlying :class:`JoyCaptionService`, or reuse the existing one.
 
-        Must be called before any other method.
+        Calling this method repeatedly is safe: if a service already exists for
+        the same device the existing instance — and any model loaded into it —
+        is preserved.  A new service is only created when the device changes (in
+        which case the old model is unloaded automatically via garbage collection).
 
         Args:
             device: Inference device string (``"cuda"`` or ``"cpu"``).
         """
+        if self._service is not None and self._service._device == device:
+            return
         self._service = JoyCaptionService(device=device)
 
     @property
@@ -617,7 +640,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         try:
             from huggingface_hub import try_to_load_from_cache  # type: ignore[import]
 
-            result = try_to_load_from_cache(_MODEL_NAME, "config.json")
+            result = try_to_load_from_cache(_MODEL_NAME, "config.json", revision=_MODEL_REVISION)
             return result is None
         except Exception:
             return True
@@ -654,10 +677,11 @@ class JoyCaptionPlugin(TaggerPlugin):
             parameters: Plugin parameters (uses ``precision``).
         """
         precision = str(parameters.get("precision", "nf4"))
-        logger.debug(
+        already_loaded = self.is_loaded()
+        logger.info(
             "[JoyCaption] init() called — precision=%s, already_loaded=%s",
             precision,
-            self.is_loaded(),
+            already_loaded,
         )
         self.service.ensure_ready(precision=precision)
         logger.info("[JoyCaption] init() complete — loaded=%s", self.is_loaded())

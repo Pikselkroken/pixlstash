@@ -633,14 +633,17 @@ class TagTask(BaseTask):
                     gpu_s = inference_s + crop_inference_s
                     gpu_throughput = n / gpu_s if gpu_s > 0 else 0.0
                     wall_throughput = n / total_s if total_s > 0 else 0.0
+                    device = getattr(active_workflow, "_engine", None)
+                    device = getattr(device, "device", "unknown") if device is not None else "unknown"
                     logger.info(
-                        "[TAG_TIMING] task_id=%s n=%d "
+                        "[TAG_TIMING] task_id=%s n=%d device=%s "
                         "preload_wait_s=%.3f inference_s=%.3f "
                         "crop_fetch_s=%.3f crop_inference_s=%.3f "
                         "db_tags_s=%.3f db_resolve_s=%.3f db_pred_s=%.3f "
                         "total_s=%.3f gpu_throughput=%.1f/s wall_throughput=%.1f/s",
                         self.id,
                         n,
+                        device,
                         preload_wait_s,
                         inference_s,
                         crop_fetch_s,
@@ -652,6 +655,13 @@ class TagTask(BaseTask):
                         gpu_throughput,
                         wall_throughput,
                     )
+                    if device == "cpu" and inference_s > 10:
+                        logger.warning(
+                            "[TAG_TIMING] Inference ran on CPU and took %.1fs for %d image(s). "
+                            "Set default_device=cuda in server-config.json to use the GPU.",
+                            inference_s,
+                            n,
+                        )
         finally:
             if cpu_spillover_engine is not None:
                 with self._cpu_spillover_lock:
