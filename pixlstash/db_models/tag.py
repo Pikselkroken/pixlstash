@@ -77,7 +77,7 @@ def parse_tag_engine_from_sentinel(tag_value: str | None) -> str | None:
 DESCRIPTION_SENTINEL_PREFIX = "__description::"
 
 # SQL LIKE pattern — both leading underscores must be escaped.
-DESCRIPTION_SENTINEL_LIKE_PATTERN = r"\_\_description::%"
+DESCRIPTION_SENTINEL_LIKE_PATTERN = "\\_\\_description::%"
 DESCRIPTION_SENTINEL_ESCAPE_CHAR = "\\"
 
 

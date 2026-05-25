@@ -2862,7 +2862,10 @@ async function fetchOverlayMetadata(imageId) {
     if (data.tags !== undefined) {
       merged.tags = dedupeTagList(dataTags);
     }
-    if (image.value?.description == null) {
+    if (
+      image.value?.description == null ||
+      image.value.description.startsWith("__description::")
+    ) {
       merged.description = data.description ?? null;
     }
     const currentMeta = image.value?.metadata;

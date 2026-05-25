@@ -487,7 +487,7 @@ class JoyCaptionPlugin(TaggerPlugin):
     display_name: str = "JoyCaption"
     description: str = (
         "LLaVA-style LLM captioner — generates detailed descriptions and "
-        "Danbooru tags. Requires ~8 GB VRAM (NF4). Optional bitsandbytes dependency."
+        "Danbooru tags. Requires ~8 GB VRAM (NF4). Requires bitsandbytes."
     )
     supports_tags: bool = True
     supports_descriptions: bool = True

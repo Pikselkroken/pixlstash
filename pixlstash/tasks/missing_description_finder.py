@@ -72,7 +72,10 @@ class MissingDescriptionFinder(BaseTaskFinder):
             )
             groups.setdefault(engine_name, []).append(pic)
 
-        first_engine, first_pics = next(iter(groups.items()))
+        # Prefer explicit-engine (sentinel) requests first to avoid starvation
+        # by the NULL-description backlog.
+        first_engine = next((k for k in groups if k is not None), None)
+        first_pics = groups[first_engine] if first_engine is not None else groups[None]
         selected = self._filter_and_claim(first_pics, batch_limit)
         if not selected:
             return None

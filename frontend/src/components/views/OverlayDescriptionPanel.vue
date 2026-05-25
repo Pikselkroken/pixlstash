@@ -80,7 +80,7 @@
             }}
           </v-icon>
         </button>
-        <span class="section-meta">
+        <span v-if="!isSentinelDescription" class="section-meta">
           {{ descriptionDraft.length }}
         </span>
         <v-icon size="16" style="opacity: 0.6">{{
@@ -89,7 +89,10 @@
       </span>
     </div>
     <template v-if="!descriptionCollapsed">
-      <div class="description-editor">
+      <div
+        class="description-editor"
+        :class="{ 'description-editor--sentinel': isSentinelDescription }"
+      >
         <textarea
           ref="descriptionEditorRef"
           v-model="descriptionDraft"
@@ -135,6 +138,10 @@
 import { ref, computed, nextTick, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
+import {
+  isDescriptionSentinel,
+  formatDescriptionSentinel,
+} from "../../utils/descriptions";
 
 const props = defineProps({
   image: { type: Object, default: null },
@@ -146,7 +153,12 @@ const emit = defineEmits(["update-description"]);
 const descriptionCollapsed = ref(false);
 const isEditingDescription = ref(false);
 const isSavingDescription = ref(false);
-const descriptionDraft = ref(props.image?.description || "");
+const descriptionDraft = ref(
+  formatDescriptionSentinel(props.image?.description) || "",
+);
+const isSentinelDescription = computed(() =>
+  isDescriptionSentinel(props.image?.description),
+);
 const descriptionEditorRef = ref(null);
 const descriptionCopyState = ref("idle");
 const isDescriptionRefreshing = ref(false);
@@ -159,12 +171,13 @@ watch(
   () => props.image?.description,
   (desc) => {
     if (!isEditingDescription.value) {
-      descriptionDraft.value = desc || "";
+      descriptionDraft.value = formatDescriptionSentinel(desc) || "";
     }
   },
 );
 
 const canCopyDescription = computed(() => {
+  if (isSentinelDescription.value) return false;
   const source = isEditingDescription.value
     ? descriptionDraft.value
     : props.image?.description;
@@ -172,7 +185,7 @@ const canCopyDescription = computed(() => {
 });
 
 function startEditDescription() {
-  if (!props.image) return;
+  if (!props.image || isSentinelDescription.value) return;
   descriptionDraft.value = props.image?.description || "";
   isEditingDescription.value = true;
   nextTick(() => {
@@ -185,7 +198,8 @@ function startEditDescription() {
 function cancelEditDescription() {
   isEditingDescription.value = false;
   isSavingDescription.value = false;
-  descriptionDraft.value = props.image?.description || "";
+  descriptionDraft.value =
+    formatDescriptionSentinel(props.image?.description) || "";
 }
 
 async function saveDescription() {
@@ -407,5 +421,11 @@ defineExpose({
 
 .overlay-icon-btn:hover {
   background: rgba(var(--v-theme-primary), 0.6);
+}
+
+.description-editor--sentinel textarea {
+  font-style: italic;
+  opacity: 0.6;
+  cursor: default;
 }
 </style>
