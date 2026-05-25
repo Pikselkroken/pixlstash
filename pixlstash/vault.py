@@ -827,7 +827,7 @@ class Vault:
                     return False, value
             return value is not None, value
 
-        return self.db.run_immediate_read_task(fetch)
+        return self.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
 
     def _notify_planner_ids_processed(self, worker_type: TaskType, changed):
         with self._planner_watchers_lock:
