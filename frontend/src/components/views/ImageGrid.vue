@@ -5082,7 +5082,6 @@ function handleGridBackgroundClick(e) {
 
 function handleImageContextMenu(img, event) {
   if (!img?.id) return;
-  if (isReadOnly.value) return;
   if (!selectedImageIds.value.includes(img.id)) {
     selectedImageIds.value = [img.id];
     lastSelectedImageId.value = img.id;

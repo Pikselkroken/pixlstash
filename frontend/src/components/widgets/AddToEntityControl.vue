@@ -5,6 +5,7 @@
     :class="{
       open: menuOpen,
       disabled,
+      'ate--readonly': readonly,
       'ate--flyout': placement === 'right',
       'ate--force-dark': forceDark,
     }"
@@ -79,10 +80,7 @@
           </v-icon>
           <span class="ate-item-name">{{ item.name }}</span>
           <span v-if="isSet" class="ate-item-meta">
-            <span
-              v-if="item.count != null"
-              class="ate-item-count"
-            >
+            <span v-if="item.count != null" class="ate-item-count">
               {{ item.count }}
             </span>
             <span
@@ -120,6 +118,7 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
+  readonly: { type: Boolean, default: false },
   label: { type: String, default: null },
   includeDeletedMembers: { type: Boolean, default: false },
   expandStacks: { type: Boolean, default: true },
@@ -234,12 +233,15 @@ const filteredItems = computed(() => {
   const needle = searchQuery.value.trim().toLowerCase();
   if (!needle) return items.value;
   return items.value.filter((item) =>
-    String(item.name || "").toLowerCase().includes(needle),
+    String(item.name || "")
+      .toLowerCase()
+      .includes(needle),
   );
 });
 
 // --- Item state helpers ---
 function isItemDisabled(item) {
+  if (props.readonly) return true;
   if (!normalisedPictureIds.value.length) return true;
   if (isCharacter.value) return false;
   return !membersById.value?.[item.key];
@@ -500,7 +502,11 @@ async function toggleSet(item) {
         ),
       );
       statusMessage.value = `Removed from ${item.name}`;
-      emit("added", { setId: item.id, pictureIds: idsToRemove, action: "removed" });
+      emit("added", {
+        setId: item.id,
+        pictureIds: idsToRemove,
+        action: "removed",
+      });
       if (members) idsToRemove.forEach((id) => members.delete(String(id)));
       const cached = items.value.find((s) => s.id === item.id);
       if (cached?.count != null) {
@@ -733,6 +739,10 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem });
 .ate-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.ate--readonly .ate-btn {
+  opacity: 0.5;
 }
 
 .ate-btn:hover {

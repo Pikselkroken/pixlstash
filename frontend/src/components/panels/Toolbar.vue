@@ -339,7 +339,6 @@
         </button>
         <!-- ── Toolbar: Export ───────────────────────────────────────── -->
         <v-menu
-          v-if="!isReadOnly"
           v-model="exportStore.exportMenuOpen"
           :close-on-content-click="false"
           location="bottom start"
@@ -360,9 +359,9 @@
         </v-menu>
         <!-- ── Toolbar: Import ───────────────────────────────────────── -->
         <button
-          v-if="!isReadOnly"
           class="bar-btn bar-btn--icon"
           type="button"
+          :disabled="isReadOnly"
           title="Import photos"
           @click="emit('open-import')"
         >
@@ -370,7 +369,7 @@
         </button>
         <!-- ── Toolbar: ComfyUI T2I ──────────────────────────────────── -->
         <v-menu
-          v-if="filterStore.comfyuiConfigured && !isReadOnly"
+          v-if="filterStore.comfyuiConfigured"
           v-model="tbComfyuiMenuOpen"
           :close-on-content-click="false"
           location="bottom start"
@@ -383,6 +382,7 @@
               class="bar-btn bar-btn--icon"
               :class="{ 'bar-btn--active': tbComfyuiMenuOpen }"
               type="button"
+              :disabled="isReadOnly"
               title="Generate with ComfyUI (T2I)"
             >
               <v-icon size="20">mdi-robot</v-icon>
@@ -603,7 +603,8 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0 || isReadOnly"
+                  :disabled="selectedCount === 0"
+                  :readonly="isReadOnly"
                   @added="$emit('added-to-set', $event)"
                 />
                 <AddToEntityControl
@@ -611,7 +612,8 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0 || isReadOnly"
+                  :disabled="selectedCount === 0"
+                  :readonly="isReadOnly"
                   @added="$emit('add-to-character', $event)"
                   @removed="$emit('remove-from-character', $event)"
                 />
@@ -620,7 +622,8 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0 || isReadOnly"
+                  :disabled="selectedCount === 0"
+                  :readonly="isReadOnly"
                   @selected="$emit('set-project', $event)"
                 />
                 <div class="ctx-sep" />
@@ -703,7 +706,10 @@
                   @mouseenter="autoTagSubmenuOpen = true"
                   @mouseleave="autoTagSubmenuOpen = false"
                 >
-                  <button class="ctx-item" :disabled="selectedCount === 0 || isReadOnly">
+                  <button
+                    class="ctx-item"
+                    :disabled="selectedCount === 0 || isReadOnly"
+                  >
                     <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
                     Tag automatically
                     <v-icon class="ctx-arrow" size="14"
@@ -739,7 +745,10 @@
                   @mouseenter="descriptionSubmenuOpen = true"
                   @mouseleave="descriptionSubmenuOpen = false"
                 >
-                  <button class="ctx-item" :disabled="selectedCount === 0 || isReadOnly">
+                  <button
+                    class="ctx-item"
+                    :disabled="selectedCount === 0 || isReadOnly"
+                  >
                     <v-icon class="ctx-icon" size="15"
                       >mdi-text-box-outline</v-icon
                     >

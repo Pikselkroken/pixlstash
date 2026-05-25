@@ -1731,7 +1731,8 @@ async function deleteImportFolderById(id) {
 }
 
 function openSidebarCtxMenu(type, item, event) {
-  if (isReadOnly.value) return;
+  if (isReadOnly.value && (type === "folder" || type === "import-folder"))
+    return;
   if (type === "character") {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
@@ -4755,7 +4756,7 @@ defineExpose({
                   ]"
                   @click="selectProjectNode(p)"
                   @contextmenu.prevent="
-                    !isReadOnly && openSidebarCtxMenu('project', p, $event)
+                    openSidebarCtxMenu('project', p, $event)
                   "
                 >
                   <span class="sidebar-project-tree-name-group">
@@ -5304,10 +5305,12 @@ defineExpose({
           class="sidebar-ctx-item"
           :disabled="sidebarCtxDeleteIds.length > 1 || isReadOnly"
           :class="{
-            'sidebar-ctx-item--disabled': sidebarCtxDeleteIds.length > 1 || isReadOnly,
+            'sidebar-ctx-item--disabled':
+              sidebarCtxDeleteIds.length > 1 || isReadOnly,
           }"
           @click="
-            sidebarCtxDeleteIds.length === 1 && !isReadOnly &&
+            sidebarCtxDeleteIds.length === 1 &&
+            !isReadOnly &&
             (openCharacterEditor(sidebarCtxCharacter), closeSidebarCtxMenu())
           "
         >
