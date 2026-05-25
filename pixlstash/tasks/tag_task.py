@@ -72,30 +72,70 @@ class TagTask(BaseTask):
         self._preload_started_at: float | None = None
         self._preload_finished_at: float | None = None
         self._cpu_spillover_enabled = False
+        self._model_preload_thread: threading.Thread | None = None
+        self._model_preload_done: threading.Event = threading.Event()
+        self._model_preload_error: Exception | None = None
 
     def on_queued(self) -> None:
-        if self._preload_thread is not None and self._preload_thread.is_alive():
-            return
-        self._preload_cancel.clear()
-        self._preload_started_at = time.perf_counter()
-        self._preload_finished_at = None
-        self._preload_thread = threading.Thread(
-            target=self._preload_images,
-            name=f"TagTaskPreload-{self.id[:8]}",
-            daemon=True,
-        )
-        self._preload_thread.start()
+        # Start image preloading immediately so it overlaps with model loading.
+        if self._preload_thread is None or not self._preload_thread.is_alive():
+            self._preload_cancel.clear()
+            self._preload_started_at = time.perf_counter()
+            self._preload_finished_at = None
+            self._preload_thread = threading.Thread(
+                target=self._preload_images,
+                name=f"TagTaskPreload-{self.id[:8]}",
+                daemon=True,
+            )
+            self._preload_thread.start()
+
+        # Start model loading in a background thread and wait for it to finish
+        # before returning.  submit() puts the task in the GPU queue only after
+        # on_queued() returns, so the GPU worker will never block on model load.
+        if self._model_preload_thread is None:
+            self._model_preload_thread = threading.Thread(
+                target=self._preload_model,
+                name=f"TagModelPreload-{self.id[:8]}",
+                daemon=True,
+            )
+            self._model_preload_thread.start()
+        self._model_preload_done.wait()
+
+    def _preload_model(self) -> None:
+        t_start = time.perf_counter()
+        try:
+            self._tagging_workflow.ensure_active_plugin_ready(
+                engine_override=self._engine_override,
+            )
+            logger.debug(
+                "[TAG_MODEL_PRELOAD] task_id=%s done in %.1fs",
+                self.id,
+                time.perf_counter() - t_start,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[TAG_MODEL_PRELOAD] task_id=%s failed after %.1fs: %s",
+                self.id,
+                time.perf_counter() - t_start,
+                exc,
+            )
+            self._model_preload_error = exc
+        finally:
+            self._model_preload_done.set()
 
     def on_cancel(self) -> None:
         self._preload_cancel.set()
-        if self._preload_thread is None:
-            return
-        self._preload_thread.join(timeout=10)
-        if self._preload_thread.is_alive():
-            logger.warning(
-                "TagTask preload thread did not stop in time for task %s",
-                self.id,
-            )
+        if self._preload_thread is not None:
+            self._preload_thread.join(timeout=10)
+            if self._preload_thread.is_alive():
+                logger.warning(
+                    "TagTask preload thread did not stop in time for task %s",
+                    self.id,
+                )
+        # Model loading cannot be interrupted; just wait briefly so the event
+        # is set and any subsequent wait() calls return promptly.
+        if self._model_preload_thread is not None:
+            self._model_preload_thread.join(timeout=5)
 
     _PRELOAD_WORKERS = 4
 

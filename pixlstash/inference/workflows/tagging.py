@@ -269,6 +269,59 @@ class TaggingWorkflow:
             image_size=self._engine.pixlstash_tagger_service._image_size_quality_crop,
         )
 
+    def ensure_active_plugin_ready(self, engine_override: str | None = None) -> None:
+        """Pre-load the active tag plugin without running inference.
+
+        Mirrors the loading logic in :meth:`tag_images` but stops before
+        calling ``plugin.tag_images()``.  Call this from a background thread
+        before submitting a :class:`~pixlstash.tasks.tag_task.TagTask` to the
+        GPU queue so the model is warm by the time the GPU worker picks the
+        task up.
+
+        Args:
+            engine_override: If given, pre-load this specific plugin instead
+                of the configured ``active_tag_plugin``.
+        """
+        active = (
+            engine_override
+            if engine_override is not None
+            else self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
+        )
+        if not active:
+            return
+
+        if active == "wd14":
+            self._engine.lifecycle.ensure_tagging_ready(
+                self._engine.wd14_service,
+                self._engine.pixlstash_tagger_service,
+                True,
+                False,
+            )
+        elif active == "pixlstash_tagger":
+            self._engine.lifecycle.ensure_tagging_ready(
+                self._engine.wd14_service,
+                self._engine.pixlstash_tagger_service,
+                False,
+                True,
+            )
+        else:
+            from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+            mgr = get_tagger_plugin_manager()
+            plugin = mgr.get_plugin(active)
+            if plugin is None:
+                logger.warning(
+                    "[TaggingWorkflow] ensure_active_plugin_ready: plugin %r not found",
+                    active,
+                )
+                return
+            plugins_cfg = self._tagger_settings.get("plugins", {})
+            cfg = plugins_cfg.get(active, {})
+            params = {**plugin.default_params(), **cfg.get("params", {})}
+            if hasattr(plugin, "setup"):
+                plugin.setup(self._engine.device)
+            plugin.init(params)
+
     # ------------------------------------------------------------------
     # Private helpers
 
