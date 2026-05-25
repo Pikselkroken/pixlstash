@@ -293,6 +293,7 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/scores` | Bulk apply user ratings |
 | POST | `/pictures/{id}/face` | Create face record |
 | DELETE | `/pictures/{id}/face/{index}` | Delete face |
+| POST | `/pictures/likeness-search` | Reverse-image likeness search |
 
 ### `characters.py`
 List, create, update, delete characters; assign / unassign faces; fetch reference picture set; list pictures per character.

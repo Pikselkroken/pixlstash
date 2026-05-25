@@ -4,7 +4,16 @@ from pixlstash.utils.service.picture_stats import clear_stats_cache  # noqa: F40
 
 from ._helpers import MEDIA_TYPE_BY_FORMAT  # noqa: F401
 from ._listing import select_pictures_for_listing  # noqa: F401
-from . import _crud, _export, _import, _listing, _misc, _search, _thumbnails
+from . import (
+    _crud,
+    _export,
+    _import,
+    _likeness_search,
+    _listing,
+    _misc,
+    _search,
+    _thumbnails,
+)
 
 
 def create_router(server) -> APIRouter:
@@ -14,6 +23,7 @@ def create_router(server) -> APIRouter:
     _thumbnails.register_routes(router, server)
     _export.register_routes(router, server)
     _search.register_routes(router, server)
+    _likeness_search.register_routes(router, server)
     _import.register_routes(router, server)
     _crud.register_routes(router, server)
     _listing.register_routes(router, server)
