@@ -630,6 +630,9 @@ function handleSelectFolder(payload) {
  * Swallows NavigationDuplicated errors (vue-router throws on same-route push).
  */
 function pushAppRoute(target) {
+  if (route.query.token) {
+    target.query = { token: route.query.token, ...target.query };
+  }
   router.push(target).catch(() => {});
 }
 
