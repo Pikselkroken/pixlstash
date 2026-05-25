@@ -79,6 +79,12 @@ jobs:
               print(f"Release tag '{tag}' is not a valid version; skipping.")
               sys.exit(0)
 
+          if new_version.is_prerelease:
+              print(f"Release {new_version} is a pre-release (dev/rc); skipping latest-version.json update.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("changed=false\n")
+              sys.exit(0)
+
           # Read the released branch's CHANGELOG.md for [Security: LEVEL] on the
           # top heading. This means each release's security level is decided by
           # the changelog that ships with the release itself, not by main.

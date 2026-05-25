@@ -47,6 +47,8 @@ jobs:
         run: |
           $version = python -c "import tomllib, pathlib; d=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8')); print(d['project']['version'])"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $isPrerelease = python -c "from packaging.version import Version; v=Version('$version'); print('true' if v.is_prerelease else 'false')"
+          "is_prerelease=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Validate tag matches pyproject version
         if: startsWith(github.ref, 'refs/tags/v')
@@ -81,3 +83,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: installer/windows/installer-output/*.exe
+          prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
