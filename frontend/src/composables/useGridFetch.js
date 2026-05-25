@@ -632,7 +632,20 @@ export function useGridFetch(
 
         // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
         const cols = props.columns || 1;
-        const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
+        // Compute window count from actual viewport capacity so visibleEnd covers
+        // all initially visible items even when the viewport shows more than VIEW_WINDOW.
+        const _thumbnailRowHeight0 = Math.round(
+          Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
+          (props.compactMode ? 0 : 24),
+        );
+        const _viewportItemCount0 =
+          scrollWrapper.value && _thumbnailRowHeight0 > 0
+            ? Math.ceil(scrollWrapper.value.clientHeight / _thumbnailRowHeight0) * cols
+            : 0;
+        const windowCount = Math.max(
+          cols,
+          _viewportItemCount0 || divisibleViewWindow.value || cols,
+        );
         resetThumbnailState();
         allGridImages.value = Array.from({ length: total }, (_, i) => ({
           id: null,
@@ -772,7 +785,20 @@ export function useGridFetch(
         totalCurrentCategoryCount.value = newImages.length;
       }
       const cols = props.columns || 1;
-      const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
+      // Compute window count from actual viewport capacity so visibleEnd covers
+      // all initially visible items even when the viewport shows more than VIEW_WINDOW.
+      const _thumbnailRowHeight1 = Math.round(
+        Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
+        (props.compactMode ? 0 : 24),
+      );
+      const _viewportItemCount1 =
+        scrollWrapper.value && _thumbnailRowHeight1 > 0
+          ? Math.ceil(scrollWrapper.value.clientHeight / _thumbnailRowHeight1) * cols
+          : 0;
+      const windowCount = Math.max(
+        cols,
+        _viewportItemCount1 || divisibleViewWindow.value || cols,
+      );
       if (!fetchStartedWithPreserveScroll) {
         // Normal (non-preserve) fetch: jump to top so thumbnails load from index 0.
         visibleStart.value = 0;
