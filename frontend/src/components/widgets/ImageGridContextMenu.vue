@@ -4,6 +4,7 @@
       v-if="visible"
       ref="menuRef"
       class="image-ctx-menu"
+      :class="{ 'ctx-flip-sub': submenusFlip }"
       :style="menuStyle"
       tabindex="-1"
     >
@@ -292,6 +293,7 @@ const emit = defineEmits([
 const menuRef = ref(null);
 const adjustedX = ref(props.x);
 const adjustedY = ref(props.y);
+const submenusFlip = ref(false);
 const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
 
@@ -302,17 +304,21 @@ async function clampPosition() {
   if (!menuRef.value) {
     adjustedX.value = props.x;
     adjustedY.value = props.y;
+    submenusFlip.value = false;
     return;
   }
   const rect = menuRef.value.getBoundingClientRect();
-  adjustedX.value = Math.max(
+  const newX = Math.max(
     4,
     Math.min(props.x, window.innerWidth - rect.width - 4),
   );
+  adjustedX.value = newX;
   adjustedY.value = Math.max(
     4,
     Math.min(props.y, window.innerHeight - rect.height - 4),
   );
+  // Flip submenus leftward when there is not enough room to the right for a ~185px submenu
+  submenusFlip.value = newX + rect.width + 185 > window.innerWidth - 8;
 }
 
 watch(

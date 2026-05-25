@@ -77,6 +77,12 @@
   z-index: 2010;
 }
 
+/* Flip submenus to open leftward when the parent menu is near the right edge */
+.ctx-flip-sub .ctx-submenu {
+  left: auto;
+  right: 100%;
+}
+
 /* ── Read-only pill shown in context menu headers ──────────────────── */
 .ctx-readonly-header {
   display: flex;

@@ -588,7 +588,11 @@
                 <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
               </button>
             </template>
-            <div class="selection-menu-panel">
+            <div
+              ref="selectionMenuPanelRef"
+              class="selection-menu-panel"
+              :class="{ 'ctx-flip-sub': selectionPanelFlipped }"
+            >
               <!-- ── Read-only indicator ──────────────────────────── -->
               <div v-if="isReadOnly" class="ctx-readonly-header">
                 <span class="ctx-readonly-pill">
@@ -1374,7 +1378,20 @@ const pluginOptions = computed(() => {
 
 const selectedPluginName = ref("");
 const pluginMenuOpen = ref(false);
+const selectionMenuPanelRef = ref(null);
+const selectionPanelFlipped = ref(false);
 const selectionMenuOpen = ref(false);
+
+watch(selectionMenuOpen, async (open) => {
+  if (!open) {
+    selectionPanelFlipped.value = false;
+    return;
+  }
+  await nextTick();
+  if (!selectionMenuPanelRef.value) return;
+  const rect = selectionMenuPanelRef.value.getBoundingClientRect();
+  selectionPanelFlipped.value = rect.right + 185 > window.innerWidth - 8;
+});
 const pluginParameters = ref({});
 const comfyuiMenuOpen = ref(false);
 const comfyuiWorkflows = ref([]);

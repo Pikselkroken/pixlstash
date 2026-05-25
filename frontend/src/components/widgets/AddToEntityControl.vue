@@ -7,6 +7,7 @@
       disabled,
       'ate--readonly': readonly,
       'ate--flyout': placement === 'right',
+      'ate--flip': flyoutFlipped,
       'ate--force-dark': forceDark,
     }"
     @mouseenter="onFlyoutMouseenter"
@@ -184,6 +185,7 @@ const lastUsedItem = ref(null); // { id, name }
 // Character-only state
 const picturesWithFaces = ref(new Set());
 
+const flyoutFlipped = ref(false);
 const flyoutMenuStyle = ref({});
 
 // --- Flyout positioning ---
@@ -299,6 +301,10 @@ function closeMenu() {
 
 function onFlyoutMouseenter() {
   if (props.placement !== "right" || props.disabled) return;
+  if (rootRef.value) {
+    const rect = rootRef.value.getBoundingClientRect();
+    flyoutFlipped.value = rect.right + 185 > window.innerWidth - 8;
+  }
   if (menuOpen.value) return;
   openMenu();
 }
@@ -974,6 +980,20 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem });
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
   transform: translateX(-4px);
   z-index: 2500;
+}
+
+/* Flip flyout menu leftward when near the right screen edge */
+.ate--flip.ate--flyout .ate-menu,
+.ate--flip .ate-menu.flyout {
+  left: auto;
+  right: 100%;
+  transform: translateX(4px);
+}
+
+.ate--flip.ate--flyout.open .ate-menu,
+.ate--flip.ate--flyout .ate-menu.open,
+.ate--flip .ate-menu.flyout.open {
+  transform: translateX(0);
 }
 
 .ate--flyout.open .ate-menu,
