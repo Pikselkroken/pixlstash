@@ -318,6 +318,22 @@ class TaggingWorkflow:
                 parameters=params,
                 stop_event=stop_event,
             )
+        except ModuleNotFoundError as exc:
+            # A missing optional dependency (e.g. bitsandbytes) means this plugin
+            # can never succeed in the current environment.  Return an empty-but-
+            # present result for every requested path so that TagTask calls
+            # _add_tags_bulk and removes the __tag:<plugin> sentinel; without this
+            # the finder would keep re-queuing the same pictures indefinitely.
+            logger.error(
+                "[TaggingWorkflow] Plugin %r requires '%s' which is not installed. "
+                "Install it with: pip install %s\n"
+                "Clearing sentinels for %d picture(s) to prevent infinite retries.",
+                plugin_name,
+                exc.name,
+                exc.name,
+                len(image_paths),
+            )
+            return {str(p): [] for p in image_paths}
         except Exception:
             logger.exception(
                 "[TaggingWorkflow] Plugin %r failed during tag_images; returning empty results.",
