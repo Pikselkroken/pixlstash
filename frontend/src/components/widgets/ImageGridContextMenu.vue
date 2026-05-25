@@ -7,14 +7,22 @@
       :style="menuStyle"
       tabindex="-1"
     >
+      <!-- ── Read-only indicator ───────────────────────────────────── -->
+      <div v-if="isReadOnly" class="ctx-readonly-header">
+        <span class="ctx-readonly-pill">
+          <v-icon size="10">mdi-lock-outline</v-icon>
+          Read only
+        </span>
+      </div>
+
       <!-- ── Set / Character / Project ─────────────────────────────── -->
-      <template v-if="!isScrapheapView && !isReadOnly">
+      <template v-if="!isScrapheapView">
         <AddToEntityControl
           type="set"
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || isReadOnly"
           @added="onAction('added-to-set', $event)"
         />
         <AddToEntityControl
@@ -22,7 +30,7 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || isReadOnly"
           @added="onAction('add-to-character', $event)"
           @removed="onAction('remove-from-character', $event)"
         />
@@ -31,17 +39,18 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || isReadOnly"
           @selected="onAction('set-project', $event)"
         />
         <div class="ctx-sep" />
       </template>
 
       <!-- ── Stack / Unstack ───────────────────────────────────────── -->
-      <template v-if="!isScrapheapView && !isReadOnly">
+      <template v-if="!isScrapheapView">
         <button
           v-if="showRemoveStackButton"
           class="ctx-item"
+          :disabled="isReadOnly"
           title="Remove selected images from their stack"
           @click="onAction('remove-from-stack')"
         >
@@ -51,6 +60,7 @@
         <button
           v-else-if="selectedImageIds.length > 1"
           class="ctx-item"
+          :disabled="isReadOnly"
           title="Create a stack from the selected images"
           @click="onAction('create-stack')"
         >
@@ -60,6 +70,7 @@
         <button
           v-if="showUnstackMultipleButton"
           class="ctx-item"
+          :disabled="isReadOnly"
           title="Dissolve all selected stacks"
           @click="onAction('dissolve-stacks')"
         >
@@ -69,6 +80,7 @@
         <button
           v-if="showGroupStackButton"
           class="ctx-item"
+          :disabled="isReadOnly"
           title="Create stacks from selected likeness groups"
           @click="onAction('create-stacks-from-groups')"
         >
@@ -79,11 +91,11 @@
       </template>
 
       <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
-      <template v-if="!isScrapheapView && !isReadOnly">
+      <template v-if="!isScrapheapView">
         <button
           class="ctx-item"
           title="Tag selected (T)"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || isReadOnly"
           @click="delegate('open-tag-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
@@ -105,7 +117,7 @@
               v-for="plugin in taggerPlugins"
               :key="plugin.name"
               class="ctx-item"
-              :disabled="!selectedImageIds.length"
+              :disabled="!selectedImageIds.length || isReadOnly"
               @click="onAction('auto-tag', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
@@ -132,7 +144,7 @@
               v-for="plugin in captionerPlugins"
               :key="plugin.name"
               class="ctx-item"
-              :disabled="!selectedImageIds.length"
+              :disabled="!selectedImageIds.length || isReadOnly"
               @click="onAction('generate-description', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
@@ -146,7 +158,7 @@
         <button
           v-if="pluginOptions.length"
           class="ctx-item"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || isReadOnly"
           @click="delegate('open-plugin-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
@@ -155,7 +167,7 @@
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || isReadOnly"
           @click="delegate('open-comfyui-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
@@ -165,16 +177,19 @@
       </template>
 
       <!-- ── Share image ──────────────────────────────────────────── -->
-      <template
-        v-if="!isReadOnly && contextImage?.id && selectedImageIds.length === 1"
-      >
-        <button class="ctx-item" @click="onAction('share-picture')">
+      <template v-if="contextImage?.id && selectedImageIds.length === 1">
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="onAction('share-picture')"
+        >
           <v-icon class="ctx-icon" size="15">mdi-link-variant</v-icon>
           Share image
         </button>
         <button
           v-if="isShared"
           class="ctx-item ctx-item--danger"
+          :disabled="isReadOnly"
           @click="onAction('remove-picture-shares')"
         >
           <v-icon class="ctx-icon" size="15">mdi-link-variant-off</v-icon>
@@ -185,17 +200,16 @@
 
       <!-- ── Remove / Delete ───────────────────────────────────────── -->
       <button
-        v-if="showRemoveButton && !isReadOnly"
+        v-if="showRemoveButton"
         class="ctx-item ctx-item--danger"
-        :disabled="!selectedImageIds.length"
+        :disabled="!selectedImageIds.length || isReadOnly"
         @click="onAction('remove-from-group')"
       >
         {{ removeButtonLabel }}
       </button>
       <button
-        v-if="!isReadOnly"
         class="ctx-item ctx-item--danger"
-        :disabled="!selectedImageIds.length"
+        :disabled="!selectedImageIds.length || isReadOnly"
         title="Delete selected items (DEL)"
         @click="onAction('delete-selected')"
       >

@@ -589,14 +589,21 @@
               </button>
             </template>
             <div class="selection-menu-panel">
+              <!-- ── Read-only indicator ──────────────────────────── -->
+              <div v-if="isReadOnly" class="ctx-readonly-header">
+                <span class="ctx-readonly-pill">
+                  <v-icon size="10">mdi-lock-outline</v-icon>
+                  Read only
+                </span>
+              </div>
               <!-- ── Set / Character / Project ─────────────────────── -->
-              <template v-if="!isScrapheapView && !isReadOnly">
+              <template v-if="!isScrapheapView">
                 <AddToEntityControl
                   type="set"
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || isReadOnly"
                   @added="$emit('added-to-set', $event)"
                 />
                 <AddToEntityControl
@@ -604,7 +611,7 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || isReadOnly"
                   @added="$emit('add-to-character', $event)"
                   @removed="$emit('remove-from-character', $event)"
                 />
@@ -613,17 +620,18 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || isReadOnly"
                   @selected="$emit('set-project', $event)"
                 />
                 <div class="ctx-sep" />
               </template>
 
               <!-- ── Stack / Unstack ───────────────────────────────── -->
-              <template v-if="!isScrapheapView && !isReadOnly">
+              <template v-if="!isScrapheapView">
                 <button
                   v-if="showRemoveStackButton"
                   class="ctx-item"
+                  :disabled="isReadOnly"
                   title="Remove selected images from their stack"
                   @click="
                     $emit('remove-from-stack');
@@ -636,6 +644,7 @@
                 <button
                   v-else-if="selectedCount > 1"
                   class="ctx-item"
+                  :disabled="isReadOnly"
                   title="Create a stack from the selected images"
                   @click="
                     $emit('create-stack');
@@ -648,6 +657,7 @@
                 <button
                   v-if="showUnstackMultipleButton"
                   class="ctx-item"
+                  :disabled="isReadOnly"
                   title="Dissolve all selected stacks"
                   @click="
                     $emit('dissolve-stacks');
@@ -660,6 +670,7 @@
                 <button
                   v-if="showGroupStackButton"
                   class="ctx-item"
+                  :disabled="isReadOnly"
                   title="Create stacks from selected likeness groups"
                   @click="
                     $emit('create-stacks-from-groups');
@@ -673,10 +684,10 @@
               </template>
 
               <!-- ── Tag / Filters / ComfyUI ───────────────────────── -->
-              <template v-if="!isScrapheapView && !isReadOnly">
+              <template v-if="!isScrapheapView">
                 <button
                   class="ctx-item"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || isReadOnly"
                   title="Tag selected (T)"
                   @click="
                     openTagInput();
@@ -692,7 +703,7 @@
                   @mouseenter="autoTagSubmenuOpen = true"
                   @mouseleave="autoTagSubmenuOpen = false"
                 >
-                  <button class="ctx-item" :disabled="selectedCount === 0">
+                  <button class="ctx-item" :disabled="selectedCount === 0 || isReadOnly">
                     <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
                     Tag automatically
                     <v-icon class="ctx-arrow" size="14"
@@ -704,7 +715,7 @@
                       v-for="plugin in props.taggerPlugins"
                       :key="plugin.name"
                       class="ctx-item"
-                      :disabled="selectedCount === 0"
+                      :disabled="selectedCount === 0 || isReadOnly"
                       @click="
                         $emit('auto-tag', { model: plugin.name });
                         selectionMenuOpen = false;
@@ -728,7 +739,7 @@
                   @mouseenter="descriptionSubmenuOpen = true"
                   @mouseleave="descriptionSubmenuOpen = false"
                 >
-                  <button class="ctx-item" :disabled="selectedCount === 0">
+                  <button class="ctx-item" :disabled="selectedCount === 0 || isReadOnly">
                     <v-icon class="ctx-icon" size="15"
                       >mdi-text-box-outline</v-icon
                     >
@@ -742,7 +753,7 @@
                       v-for="plugin in props.captionerPlugins"
                       :key="plugin.name"
                       class="ctx-item"
-                      :disabled="selectedCount === 0"
+                      :disabled="selectedCount === 0 || isReadOnly"
                       @click="
                         $emit('generate-description', { model: plugin.name });
                         selectionMenuOpen = false;
@@ -763,7 +774,7 @@
                 <button
                   v-if="pluginOptions.length"
                   class="ctx-item"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || isReadOnly"
                   @click="
                     openPluginPanel();
                     selectionMenuOpen = false;
@@ -775,7 +786,7 @@
                 <button
                   v-if="props.comfyuiConfigured"
                   class="ctx-item"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || isReadOnly"
                   @click="
                     openComfyuiPanel();
                     selectionMenuOpen = false;
@@ -789,9 +800,9 @@
 
               <!-- ── Remove / Delete (danger) ──────────────────────── -->
               <button
-                v-if="showRemoveButton && !isReadOnly"
+                v-if="showRemoveButton"
                 class="ctx-item ctx-item--danger"
-                :disabled="selectedCount === 0"
+                :disabled="selectedCount === 0 || isReadOnly"
                 @click="
                   $emit('remove-from-group');
                   selectionMenuOpen = false;
@@ -800,9 +811,8 @@
                 {{ removeButtonLabel }}
               </button>
               <button
-                v-if="!isReadOnly"
                 class="ctx-item ctx-item--danger"
-                :disabled="selectedCount === 0"
+                :disabled="selectedCount === 0 || isReadOnly"
                 title="Delete selected items (DEL)"
                 @click="
                   $emit('delete-selected');
@@ -856,9 +866,8 @@
             <v-icon size="20" color="primary">mdi-selection-off</v-icon>
           </button>
           <button
-            v-if="!isReadOnly"
             class="delete-btn"
-            :disabled="!visible"
+            :disabled="!visible || isReadOnly"
             @click="$emit('delete-selected')"
             title="Delete selected items (DEL)"
           >

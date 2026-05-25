@@ -76,3 +76,27 @@
   min-width: 185px;
   z-index: 2010;
 }
+
+/* ── Read-only pill shown in context menu headers ──────────────────── */
+.ctx-readonly-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 10px 2px;
+}
+
+.ctx-readonly-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(var(--v-theme-warning), 0.15);
+  color: rgb(var(--v-theme-warning));
+  opacity: 0.9;
+  white-space: nowrap;
+}
