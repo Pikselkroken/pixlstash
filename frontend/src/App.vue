@@ -2128,6 +2128,10 @@ defineExpose({
                 <td>Clear selection</td>
               </tr>
               <tr>
+                <td><kbd>S</kbd></td>
+                <td>Open selection menu</td>
+              </tr>
+              <tr>
                 <td><kbd>Home</kbd> / <kbd>End</kbd></td>
                 <td>Jump to first / last image</td>
               </tr>
