@@ -23,6 +23,7 @@ export function useGridKeyboardNav(
     isMultiCharacterView,
     isSetOverlapView,
     hoveredImageIdx,
+    toolbarSelectionMenuOpen,
   },
   props,
   emit,
@@ -94,6 +95,7 @@ export function useGridKeyboardNav(
       return;
     }
     if (overlayOpen.value) return; // Ignore if overlay is open
+    if (toolbarSelectionMenuOpen?.value) return; // Ignore when selection menu is open
     if (event.key === "Escape") {
       if (showSelectionBar.value) {
         // First ESC clears selection only

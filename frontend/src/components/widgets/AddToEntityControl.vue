@@ -732,7 +732,7 @@ watch(
 );
 
 // Expose for external keyboard shortcut access (set type only)
-defineExpose({ addToLastSet, lastUsedSet: lastUsedItem });
+defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 </script>
 
 <style scoped>

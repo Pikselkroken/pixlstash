@@ -90,6 +90,7 @@
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @confirm-export-zip="emit('confirm-export-zip')"
+      @selection-menu-open="toolbarSelectionMenuOpen = $event"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -999,6 +1000,7 @@ const prefetchedFullImageOrder = [];
 const gridContainer = ref(null);
 const scrollWrapper = ref(null);
 const selectionBarRef = ref(null);
+const toolbarSelectionMenuOpen = ref(false);
 const contextMenuVisible = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
@@ -3759,6 +3761,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     isMultiCharacterView,
     isSetOverlapView,
     hoveredImageIdx,
+    toolbarSelectionMenuOpen,
   },
   props,
   emit,

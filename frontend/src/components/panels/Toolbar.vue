@@ -579,8 +579,8 @@
                   selectedCount === 0
                     ? 'Select images to apply actions'
                     : props.selectedExpandedCount > selectedCount
-                      ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks)`
-                      : `Actions for ${selectedCount} selected`
+                      ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks) — press S`
+                      : `Actions for ${selectedCount} selected — press S`
                 "
               >
                 <v-icon size="20">mdi-image-multiple-outline</v-icon>
@@ -592,6 +592,7 @@
               ref="selectionMenuPanelRef"
               class="selection-menu-panel"
               :class="{ 'ctx-flip-sub': selectionPanelFlipped }"
+              @keydown="onSelectionMenuKeydown"
             >
               <!-- ── Read-only indicator ──────────────────────────── -->
               <div v-if="isReadOnly" class="ctx-readonly-header">
@@ -603,6 +604,7 @@
               <!-- ── Set / Character / Project ─────────────────────── -->
               <template v-if="!isScrapheapView">
                 <AddToEntityControl
+                  ref="ateProjectRef"
                   type="project"
                   placement="right"
                   :backend-url="backendUrl"
@@ -612,6 +614,7 @@
                   @selected="$emit('set-project', $event)"
                 />
                 <AddToEntityControl
+                  ref="ateCharacterRef"
                   type="character"
                   placement="right"
                   :backend-url="backendUrl"
@@ -622,6 +625,7 @@
                   @removed="$emit('remove-from-character', $event)"
                 />
                 <AddToEntityControl
+                  ref="ateSetRef"
                   type="set"
                   placement="right"
                   :backend-url="backendUrl"
@@ -706,6 +710,7 @@
                 </button>
                 <div
                   v-if="props.taggerPlugins.length"
+                  ref="autoTagSubmenuWrapRef"
                   class="ctx-submenu-wrap"
                   @mouseenter="autoTagSubmenuOpen = true"
                   @mouseleave="autoTagSubmenuOpen = false"
@@ -745,6 +750,7 @@
                 </div>
                 <div
                   v-if="props.captionerPlugins.length"
+                  ref="descriptionSubmenuWrapRef"
                   class="ctx-submenu-wrap"
                   @mouseenter="descriptionSubmenuOpen = true"
                   @mouseleave="descriptionSubmenuOpen = false"
@@ -917,7 +923,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
@@ -986,6 +992,7 @@ const emit = defineEmits([
   "confirm-export-zip",
   "open-import",
   "open-settings",
+  "selection-menu-open",
 ]);
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
@@ -1381,8 +1388,167 @@ const pluginMenuOpen = ref(false);
 const selectionMenuPanelRef = ref(null);
 const selectionPanelFlipped = ref(false);
 const selectionMenuOpen = ref(false);
+const ateProjectRef = ref(null);
+const ateCharacterRef = ref(null);
+const ateSetRef = ref(null);
+const autoTagSubmenuWrapRef = ref(null);
+const descriptionSubmenuWrapRef = ref(null);
+
+function isEditableElement(el) {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (el.getAttribute("role") === "textbox") return true;
+  return false;
+}
+
+function getMenuItems() {
+  const panel = selectionMenuPanelRef.value;
+  if (!panel) return [];
+  const focused = document.activeElement;
+  // Inside an open ATE flyout menu?
+  const openAteMenu = focused?.closest(".ate-menu.open");
+  if (openAteMenu && panel.contains(openAteMenu)) {
+    return Array.from(
+      openAteMenu.querySelectorAll("input, button:not(:disabled)"),
+    ).filter((el) => el.offsetParent !== null);
+  }
+  // Inside a ctx-submenu (v-if, only in DOM when open)?
+  const ctxSub = focused?.closest(".ctx-submenu");
+  if (ctxSub && panel.contains(ctxSub)) {
+    return Array.from(ctxSub.querySelectorAll("button:not(:disabled)")).filter(
+      (el) => el.offsetParent !== null,
+    );
+  }
+  // Top level: buttons not inside any .ate-menu
+  return Array.from(panel.querySelectorAll("button:not(:disabled)")).filter(
+    (el) => el.closest(".ate-menu") === null && el.offsetParent !== null,
+  );
+}
+
+async function onSelectionMenuKeydown(event) {
+  const key = event.key;
+  if (
+    !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"].includes(key)
+  )
+    return;
+  const focused = document.activeElement;
+  const panel = selectionMenuPanelRef.value;
+  if (!panel) return;
+  // Enter: activate the focused button (Vuetify intercepts Enter in menu overlays)
+  if (key === "Enter") {
+    if (focused?.tagName === "BUTTON" && !focused.disabled) {
+      event.stopPropagation();
+      focused.click();
+    }
+    return;
+  }
+  // For left/right in a text input, only intercept Left at cursor start
+  if (focused?.tagName === "INPUT") {
+    if (key === "ArrowRight") return;
+    if (key === "ArrowLeft") {
+      const atStart =
+        focused.selectionStart === 0 && focused.selectionEnd === 0;
+      if (!atStart) return;
+    }
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const items = getMenuItems();
+  const idx = items.indexOf(focused);
+  if (key === "ArrowDown") {
+    (idx === -1
+      ? items[0]
+      : items[Math.min(idx + 1, items.length - 1)]
+    )?.focus();
+    return;
+  }
+  if (key === "ArrowUp") {
+    (idx === -1
+      ? items[items.length - 1]
+      : items[Math.max(idx - 1, 0)]
+    )?.focus();
+    return;
+  }
+  if (key === "ArrowRight") {
+    if (!focused) return;
+    // ATE flyout trigger → open it and focus its search input
+    if (
+      focused.classList.contains("ate-btn") &&
+      focused.closest(".ate--flyout")
+    ) {
+      const ateRoot = focused.closest(".ate");
+      if (!ateRoot.classList.contains("open")) focused.click();
+      await nextTick();
+      ateRoot.querySelector(".ate-menu.open input")?.focus();
+      return;
+    }
+    // ctx-submenu-wrap trigger → open submenu and focus first item
+    const wrap = focused.closest(".ctx-submenu-wrap");
+    if (wrap) {
+      if (autoTagSubmenuWrapRef.value === wrap) autoTagSubmenuOpen.value = true;
+      else if (descriptionSubmenuWrapRef.value === wrap)
+        descriptionSubmenuOpen.value = true;
+      await nextTick();
+      wrap.querySelector(".ctx-submenu button:not(:disabled)")?.focus();
+    }
+    return;
+  }
+  if (key === "ArrowLeft") {
+    if (!focused) return;
+    // Inside an open ATE flyout → close it, refocus trigger
+    const openAteMenu = focused.closest(".ate-menu.open");
+    if (openAteMenu && panel.contains(openAteMenu)) {
+      const ateRoot = openAteMenu.closest(".ate");
+      for (const ateRef of [ateProjectRef, ateCharacterRef, ateSetRef]) {
+        if (ateRef.value?.$el === ateRoot) {
+          ateRef.value.closeMenu();
+          break;
+        }
+      }
+      await nextTick();
+      ateRoot?.querySelector(".ate-btn")?.focus();
+      return;
+    }
+    // Inside a ctx-submenu → close it, refocus trigger
+    const ctxSub = focused.closest(".ctx-submenu");
+    if (ctxSub && panel.contains(ctxSub)) {
+      const wrap = ctxSub.closest(".ctx-submenu-wrap");
+      if (autoTagSubmenuWrapRef.value === wrap)
+        autoTagSubmenuOpen.value = false;
+      else if (descriptionSubmenuWrapRef.value === wrap)
+        descriptionSubmenuOpen.value = false;
+      await nextTick();
+      wrap?.querySelector(":scope > button.ctx-item")?.focus();
+    }
+  }
+}
+
+function handleSelectionMenuHotkey(event) {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (isEditableElement(event.target)) return;
+  if (isEditableElement(document.activeElement)) return;
+  // Down while menu is open and focus is outside panel → focus first item
+  if (event.key === "ArrowDown" && selectionMenuOpen.value) {
+    if (selectionMenuPanelRef.value?.contains(document.activeElement)) return;
+    event.preventDefault();
+    nextTick(() => getMenuItems()[0]?.focus());
+    return;
+  }
+  if (event.key !== "s" && event.key !== "S") return;
+  if (props.selectedCount <= 0) return;
+  event.preventDefault();
+  selectionMenuOpen.value = !selectionMenuOpen.value;
+}
+
+onMounted(() => window.addEventListener("keydown", handleSelectionMenuHotkey));
+onUnmounted(() =>
+  window.removeEventListener("keydown", handleSelectionMenuHotkey),
+);
 
 watch(selectionMenuOpen, async (open) => {
+  emit("selection-menu-open", open);
   if (!open) {
     selectionPanelFlipped.value = false;
     return;
