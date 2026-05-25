@@ -230,8 +230,8 @@ function connectUpdatesSocket() {
         wsStore.wsTagUpdate = { key: nextKey, pictureIds };
         return;
       }
-      if (payload?.type === "picture_imported" && !wsStore.isUploadInProgress) {
-        // External import (ComfyUI, API, watch-folder): show pill, don't auto-refresh
+      if (payload?.type === "picture_imported" && payload?.source !== "user" && !wsStore.isUploadInProgress) {
+        // External import (API, watch-folder): show pill, don't auto-refresh
         wsStore.pendingExternalImportCount += Math.max(1, pictureIds.length);
       } else if (
         shouldRefreshForPictureChange() ||

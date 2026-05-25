@@ -999,7 +999,9 @@ def _process_comfyui_outputs(
             )
 
         if new_ids:
-            server.vault.notify(EventType.PICTURE_IMPORTED, new_ids)
+            server.vault.notify(
+                EventType.PICTURE_IMPORTED, {"ids": new_ids, "source": "user"}
+            )
         if all_ids:
             server.vault.notify(EventType.CHANGED_PICTURES, all_ids)
     except RuntimeError as exc:

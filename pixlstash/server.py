@@ -364,11 +364,17 @@ class Server:
                 "picture_ids": list(picture_ids),
             }
         elif event_type == EventType.PICTURE_IMPORTED:
-            picture_ids = data if isinstance(data, (list, tuple, set)) else []
+            if isinstance(data, dict):
+                picture_ids = data.get("ids") or []
+                source = data.get("source", "external")
+            else:
+                picture_ids = data if isinstance(data, (list, tuple, set)) else []
+                source = "external"
             payload = {
                 "type": "picture_imported",
                 "event": event_type.name,
                 "picture_ids": list(picture_ids),
+                "source": source,
             }
         elif event_type == EventType.PLUGIN_PROGRESS:
             progress_payload = data if isinstance(data, dict) else {}

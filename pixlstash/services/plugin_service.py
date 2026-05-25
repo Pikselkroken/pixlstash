@@ -165,7 +165,7 @@ async def run_plugin_on_pictures(
     created_ids = result.get("created_picture_ids") or []
     output_ids = result.get("output_picture_ids") or []
     if created_ids:
-        vault.notify(EventType.PICTURE_IMPORTED, created_ids)
+        vault.notify(EventType.PICTURE_IMPORTED, {"ids": created_ids, "source": "user"})
     if output_ids:
         vault.notify(EventType.CHANGED_PICTURES, output_ids)
 

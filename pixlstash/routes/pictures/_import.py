@@ -511,7 +511,7 @@ def register_routes(router, server):
                     if imported_ids:
                         server.vault.notify(
                             EventType.PICTURE_IMPORTED,
-                            imported_ids,
+                            {"ids": imported_ids, "source": "user"},
                         )
                 else:
                     server.import_tasks[task_id]["status"] = "completed"
