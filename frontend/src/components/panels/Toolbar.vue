@@ -599,13 +599,13 @@
               <!-- ── Set / Character / Project ─────────────────────── -->
               <template v-if="!isScrapheapView">
                 <AddToEntityControl
-                  type="set"
+                  type="project"
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
                   :disabled="selectedCount === 0"
                   :readonly="isReadOnly"
-                  @added="$emit('added-to-set', $event)"
+                  @selected="$emit('set-project', $event)"
                 />
                 <AddToEntityControl
                   type="character"
@@ -618,13 +618,13 @@
                   @removed="$emit('remove-from-character', $event)"
                 />
                 <AddToEntityControl
-                  type="project"
+                  type="set"
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
                   :disabled="selectedCount === 0"
                   :readonly="isReadOnly"
-                  @selected="$emit('set-project', $event)"
+                  @added="$emit('added-to-set', $event)"
                 />
                 <div class="ctx-sep" />
               </template>
