@@ -79,6 +79,10 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
         "/api/v1/pictures/thumbnails",
         "/api/v1/pictures/guest-scores",
         "/api/v1/pictures/guest-scores/session",
+        # Membership lookup endpoints use POST for body size but are semantically read-only.
+        "/api/v1/picture_sets/membership",
+        "/api/v1/projects/membership",
+        "/api/v1/characters/membership",
     }
 )
 
