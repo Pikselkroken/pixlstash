@@ -40,6 +40,7 @@ class DescriptionTask(BaseTask):
         workflow: DescriptionWorkflow,
         pictures: list[Picture],
         engine_override: str | None = None,
+        interactive: bool = False,
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
@@ -54,10 +55,11 @@ class DescriptionTask(BaseTask):
         self._pictures = pictures or []
         self._cpu_spillover_enabled = False
         self._engine_override = engine_override
+        self._interactive = interactive
 
     @property
     def priority(self) -> TaskPriority:
-        return TaskPriority.LOW
+        return TaskPriority.URGENT if self._interactive else TaskPriority.LOW
 
     @property
     def queue_type(self) -> QueueType:

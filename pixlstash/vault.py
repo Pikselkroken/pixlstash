@@ -540,6 +540,7 @@ class Vault:
                 workflow=self._engine.description_workflow,
                 pictures=[pic],
                 engine_override=engine_name,
+                interactive=True,
             )
             self.submit_task(task)
 
@@ -580,6 +581,7 @@ class Vault:
         if not found:
             return False
         self.notify(EventType.CHANGED_PICTURES, {"picture_ids": [picture_id]})
+        self.redescribe_picture_interactive(picture_id, engine_name=engine_name)
         return True
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:

@@ -1291,6 +1291,7 @@ const hasLoadedOnce = ref(false);
 const highlightNextFetch = ref(false);
 const lastWsUpdateKey = ref(0);
 const lastWsTagUpdateKey = ref(0);
+const lastWsDescriptionUpdateKey = ref(0);
 const preserveScrollOnNextFetch = ref(false);
 const pendingScrollTop = ref(null);
 const skipNextWsRefresh = ref(false);
@@ -1768,6 +1769,23 @@ watch(
     // Coalesce all task-driven tag updates into an infrequent full refresh to
     // avoid starving the tagger when a large grid is open.
     scheduleWsTagFullRefresh();
+  },
+);
+
+watch(
+  () => props.wsDescriptionUpdate,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastWsDescriptionUpdateKey.value) return;
+    lastWsDescriptionUpdateKey.value = nextKey;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds
+      : [];
+    if (!pictureIds.length) return;
+    for (const id of pictureIds) {
+      refreshGridImage(id);
+    }
   },
 );
 
