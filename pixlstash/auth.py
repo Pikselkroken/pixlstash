@@ -742,6 +742,7 @@ class AuthService:
                         "created_at": token.created_at,
                         "last_used_at": token.last_used_at,
                         "include_attachments": token.include_attachments,
+                        "watermark": token.watermark,
                     }
                 )
             return result
@@ -768,6 +769,34 @@ class AuthService:
         with self._token_cache_lock:
             self._token_cache.clear()
         return {"status": "success", "deleted_id": token_id}
+
+    def update_token(self, request: Request, token_id: int, watermark: bool):
+        """Update mutable fields on an existing token (currently: watermark)."""
+        self.ensure_secure_when_required(request)
+        user_id = self.require_user_id(request)
+
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(
+                status_code=403, detail="Scoped tokens cannot modify tokens"
+            )
+
+        def _update(session: Session, user_id: int, token_id: int, watermark: bool):
+            token = session.get(UserToken, token_id)
+            if token is None or token.user_id != user_id:
+                raise HTTPException(status_code=404, detail="Token not found")
+            token.watermark = watermark
+            session.add(token)
+            session.commit()
+            session.refresh(token)
+            return token
+
+        token = self._db.run_task(
+            _update, user_id, token_id, watermark, priority=DBPriority.IMMEDIATE
+        )
+        # Flush the token cache so the updated watermark setting takes effect immediately.
+        with self._token_cache_lock:
+            self._token_cache.clear()
+        return {"status": "success", "id": token.id, "watermark": token.watermark}
 
     def revoke_tokens_for_resource(
         self,

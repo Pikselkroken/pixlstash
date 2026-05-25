@@ -640,7 +640,9 @@ class JoyCaptionPlugin(TaggerPlugin):
         try:
             from huggingface_hub import try_to_load_from_cache  # type: ignore[import]
 
-            result = try_to_load_from_cache(_MODEL_NAME, "config.json", revision=_MODEL_REVISION)
+            result = try_to_load_from_cache(
+                _MODEL_NAME, "config.json", revision=_MODEL_REVISION
+            )
             return result is None
         except Exception:
             return True
