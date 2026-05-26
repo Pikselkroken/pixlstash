@@ -20,6 +20,11 @@ from .tasks.base_task import BaseTask, QueueType, TaskPriority, TaskStatus
 logger = get_logger(__name__)
 
 
+class TaskCancelledError(RuntimeError):
+    """Raised by ``TaskRunner.submit_and_wait`` when a task is cancelled
+    before it had a chance to complete (e.g. the runner was stopped)."""
+
+
 class CallableTask(BaseTask):
     """Task wrapper for running callables in the TaskRunner."""
 
@@ -454,6 +459,7 @@ class TaskRunner:
                     )
                 queued_task.status = TaskStatus.CANCELLED
                 queued_task.completed_at = datetime.now(UTC)
+                queued_task._done_event.set()
 
         # Cancel tasks that are currently executing so their loops can exit early.
         with self._active_task_lock:
@@ -526,12 +532,18 @@ class TaskRunner:
 
         Raises:
             TimeoutError: The task did not complete within *timeout_s* seconds.
+            TaskCancelledError: The task was cancelled before completing
+                (e.g. the runner was stopped).
             RuntimeError: The task failed; the original error message is included.
         """
         self.submit(task)
         if not task._done_event.wait(timeout=timeout_s):
             raise TimeoutError(
                 f"Task {task.id} ({task.type}) did not complete within {timeout_s}s"
+            )
+        if task.status == TaskStatus.CANCELLED:
+            raise TaskCancelledError(
+                f"Task {task.id} ({task.type}) was cancelled before completion"
             )
         if task.status == TaskStatus.FAILED:
             raise RuntimeError(f"Task {task.id} ({task.type}) failed: {task.error}")
@@ -563,6 +575,7 @@ class TaskRunner:
                     )
                 task.status = TaskStatus.CANCELLED
                 task.completed_at = datetime.now(UTC)
+                task._done_event.set()
                 continue
 
             logger.debug(
