@@ -43,11 +43,13 @@ def _serialize_checkpoint(cp, manifest: dict, live_schema: str) -> dict:
     }
 
 
-def _serialize_preview(preview) -> dict:
+def _serialize_preview(preview, is_compatible: bool = True) -> dict:
     """Serialize a RestorePreview to a JSON-safe dict.
 
     Args:
         preview: RestorePreview dataclass instance.
+        is_compatible: Whether the checkpoint schema is compatible with the
+            live DB (False when the snapshot is newer than the live DB).
 
     Returns:
         JSON-serialisable dict.
@@ -58,6 +60,7 @@ def _serialize_preview(preview) -> dict:
             "kind": preview.checkpoint_kind,
             "label": preview.checkpoint_label,
             "created_at": preview.checkpoint_created_at,
+            "is_compatible": is_compatible,
         },
         "resources": [
             {
@@ -228,7 +231,12 @@ def create_router(server) -> APIRouter:
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return _serialize_preview(preview)
+        cp = server.vault.checkpoint_service.get_checkpoint(checkpoint_id)
+        live_schema = server.vault.checkpoint_service.get_live_schema_version()
+        is_compatible = True
+        if cp and cp.schema_version and live_schema:
+            is_compatible = cp.schema_version <= live_schema
+        return _serialize_preview(preview, is_compatible=is_compatible)
 
     # ------------------------------------------------------------------
     # GET /checkpoints/{id}/restore/{resource_type}/{resource_id}/preview
@@ -260,7 +268,12 @@ def create_router(server) -> APIRouter:
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return _serialize_preview(preview)
+        cp = server.vault.checkpoint_service.get_checkpoint(checkpoint_id)
+        live_schema = server.vault.checkpoint_service.get_live_schema_version()
+        is_compatible = True
+        if cp and cp.schema_version and live_schema:
+            is_compatible = cp.schema_version <= live_schema
+        return _serialize_preview(preview, is_compatible=is_compatible)
 
     # ------------------------------------------------------------------
     # POST /checkpoints/{id}/restore/preview/batch
@@ -290,7 +303,12 @@ def create_router(server) -> APIRouter:
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return _serialize_preview(preview)
+        cp = server.vault.checkpoint_service.get_checkpoint(checkpoint_id)
+        live_schema = server.vault.checkpoint_service.get_live_schema_version()
+        is_compatible = True
+        if cp and cp.schema_version and live_schema:
+            is_compatible = cp.schema_version <= live_schema
+        return _serialize_preview(preview, is_compatible=is_compatible)
 
     # ------------------------------------------------------------------
     # POST /checkpoints/{id}/restore  (full restore)

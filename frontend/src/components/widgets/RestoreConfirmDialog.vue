@@ -184,7 +184,7 @@ const canRestore = computed(
     !previewLoading.value &&
     !restoring.value &&
     preview.value != null &&
-    !preview.value?.checkpoint?.is_compatible === false
+    preview.value?.checkpoint?.is_compatible !== false
 );
 </script>
 
@@ -392,12 +392,10 @@ const canRestore = computed(
                     v-if="r.dependent_counts && Object.keys(r.dependent_counts).length"
                     class="diff-deps"
                   >
-                    <template
+                    <span
                       v-for="(cnt, depKey) in r.dependent_counts"
                       :key="depKey"
-                    >
-                      {{ depKey }}: {{ cnt }}
-                    </template>
+                    >{{ depKey }}: {{ cnt }}</span>
                   </span>
                 </div>
               </div>

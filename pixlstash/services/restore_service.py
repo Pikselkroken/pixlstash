@@ -1007,8 +1007,18 @@ class RestoreService:
             _merge(pic)
         for face in snap_rows.get("faces", []):
             _merge(face)
+        # Tags are deleted and re-inserted rather than merged to avoid UNIQUE
+        # constraint violations when snapshot and live have different row IDs
+        # for the same (picture_id, tag) pair.
+        if valid_picture_ids:
+            for existing_tag in session.exec(
+                select(Tag).where(Tag.picture_id.in_(valid_picture_ids))
+            ).all():
+                session.delete(existing_tag)
+            session.flush()
         for tag in snap_rows.get("tags", []):
-            _merge(tag)
+            session.add(Tag(picture_id=tag.picture_id, tag=tag.tag))
+            count += 1
         for psm in snap_rows.get("picture_set_members", []):
             _merge(psm)
         for ppm in snap_rows.get("picture_project_members", []):
@@ -1053,6 +1063,29 @@ class RestoreService:
             lambda session: set(session.exec(select(Picture.id)).all())
         )
 
+        # Bulk-load tag sets from snapshot and live for efficient comparison.
+        _snap_tag_map: dict[int, set] = {}
+        for _pid, _tag in snap_session.exec(select(Tag.picture_id, Tag.tag)).all():
+            _snap_tag_map.setdefault(_pid, set()).add(_tag)
+        _snap_tag_sets: dict[int, frozenset] = {
+            k: frozenset(v) for k, v in _snap_tag_map.items()
+        }
+        _snap_ids_list = list({p.id for p in snap_pictures})
+
+        def _load_live_tag_sets(session) -> dict:
+            _live: dict[int, set] = {}
+            for _pid, _tag in session.exec(
+                select(Tag.picture_id, Tag.tag).where(
+                    Tag.picture_id.in_(_snap_ids_list)
+                )
+            ).all():
+                _live.setdefault(_pid, set()).add(_tag)
+            return {k: frozenset(v) for k, v in _live.items()}
+
+        _live_tag_sets: dict[int, frozenset] = self._vault.db.run_immediate_read_task(
+            _load_live_tag_sets
+        )
+
         missing_files = 0
         pictures_to_revert = 0
         pictures_to_recreate = 0
@@ -1086,6 +1119,11 @@ class RestoreService:
 
             if len(preview.resources) < MAX_RESOURCES:
                 changed = self._diff_picture(snap_pic, exists_in_live)
+                if exists_in_live:
+                    snap_tags = _snap_tag_sets.get(snap_pic.id, frozenset())
+                    live_tags = _live_tag_sets.get(snap_pic.id, frozenset())
+                    if snap_tags != live_tags:
+                        changed.append("tags")
                 preview.resources.append(
                     ResourcePreview(
                         type="picture",
@@ -1187,6 +1225,10 @@ class RestoreService:
                 )
                 changed = self._diff_picture(snap_pic, exists_in_live)
                 dep_counts = self._picture_dependent_counts(snap_session, resource_id)
+                if exists_in_live:
+                    changed.extend(
+                        self._diff_picture_dependents(snap_session, resource_id)
+                    )
 
             preview.resources.append(
                 ResourcePreview(
@@ -1320,6 +1362,36 @@ class RestoreService:
             select(func.count(Tag.id)).where(Tag.picture_id == picture_id)
         ).one()
         return {"faces": face_count or 0, "tags": tag_count or 0}
+
+    def _diff_picture_dependents(
+        self, snap_session: Session, picture_id: int
+    ) -> list[str]:
+        """Return dependent types that differ between snapshot and live.
+
+        Compares the snapshot tag set against the live tag set for the given
+        picture.  Only ``"tags"`` is checked; face rows are system-derived and
+        not included in the diff.
+
+        Args:
+            snap_session: Read session on the snapshot.
+            picture_id: Picture primary key.
+
+        Returns:
+            List of changed dependent type names (e.g. ``["tags"]``).
+        """
+        snap_tags = frozenset(
+            snap_session.exec(select(Tag.tag).where(Tag.picture_id == picture_id)).all()
+        )
+
+        def _get_live_tags(session) -> frozenset:
+            return frozenset(
+                session.exec(select(Tag.tag).where(Tag.picture_id == picture_id)).all()
+            )
+
+        live_tags = self._vault.db.run_immediate_read_task(_get_live_tags)
+        if snap_tags != live_tags:
+            return ["tags"]
+        return []
 
     def _finalise_preview_summary(self, preview: RestorePreview) -> None:
         """Compute the summary dict on *preview* from its resources list.

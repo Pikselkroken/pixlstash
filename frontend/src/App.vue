@@ -1651,8 +1651,8 @@ onMounted(async () => {
     })
     .catch(() => {});
   await fetchConfig();
+  checkpointsStore.fetchCheckpoints();
   // Navigate to the scoped resource when a share token is active
-  const ctx = sessionContext.value;
   if (ctx && ctx.scope !== "ALL") {
     if (ctx.resource_type === "picture_set") {
       selectionStore.selectedSet = ctx.resource_id;
