@@ -239,6 +239,43 @@
         </div>
       </template>
 
+      <!-- ── Restore from checkpoint ─────────────────────────── -->
+      <template v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView">
+        <div
+          class="ctx-submenu-wrap"
+          @mouseenter="restoreSubmenuOpen = true"
+          @mouseleave="restoreSubmenuOpen = false"
+        >
+          <button
+            class="ctx-item"
+            :disabled="!selectedImageIds.length || isReadOnly"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+            Restore from checkpoint
+            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+            <button
+              v-for="cp in recentCheckpoints"
+              :key="cp.id"
+              class="ctx-item"
+              @click="handleRestoreFromCheckpoint(cp.id)"
+            >
+              <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+              {{ cp.label || cp.kind }}
+              <span class="ctx-default-pill">{{ cp.created_at ? new Date(cp.created_at + 'Z').toLocaleDateString() : '' }}</span>
+            </button>
+            <button
+              class="ctx-item"
+              @click="handleRestoreMore"
+            >
+              <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+              More…
+            </button>
+          </div>
+        </div>
+      </template>
+
       <!-- ── Reverse image search ────────────────────────────── -->
       <template v-if="contextImage?.id && !isScrapheapView">
         <button
@@ -308,6 +345,7 @@ import {
 } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { faceBoxColor } from "../../utils/utils.js";
+import { useCheckpointsStore } from "../../stores/useCheckpointsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({
@@ -359,6 +397,7 @@ const emit = defineEmits([
   "remove-picture-shares",
   "reverse-image-search",
   "find-similar-faces",
+  "restore-from-checkpoint",
 ]);
 
 const menuRef = ref(null);
@@ -368,6 +407,26 @@ const submenusFlip = ref(false);
 const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
 const findFacesSubmenuOpen = ref(false);
+const restoreSubmenuOpen = ref(false);
+
+const checkpointsStore = useCheckpointsStore();
+const recentCheckpoints = computed(() =>
+  checkpointsStore.checkpoints
+    .filter((cp) => cp.is_compatible)
+    .slice(0, 5)
+);
+
+function handleRestoreFromCheckpoint(cpId) {
+  const resources = props.selectedImageIds.map((id) => ({ type: "picture", id }));
+  checkpointsStore.openRestoreDialog(cpId, resources);
+  onAction("restore-from-checkpoint", { checkpointId: cpId, resources });
+}
+
+function handleRestoreMore() {
+  const resources = props.selectedImageIds.map((id) => ({ type: "picture", id }));
+  checkpointsStore.openRestoreDialog(null, resources);
+  onAction("restore-from-checkpoint", { checkpointId: null, resources });
+}
 const faceCharacterNames = ref({}); // face.id -> character name string or null
 
 // ── Face helpers ───────────────────────────────────────────────────────────

@@ -7,15 +7,14 @@ old snapshots according to the GFS retention constants.
 
 import json
 import os
-import shutil
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.db_models.change_log import ChangeLog
 from pixlstash.db_models.checkpoint import Checkpoint
 from pixlstash.pixl_logging import get_logger
@@ -224,6 +223,73 @@ class CheckpointService:
                 )
         return deleted
 
+    def rename_checkpoint(self, checkpoint_id: int, label: Optional[str]) -> Optional[Checkpoint]:
+        """Update the label of an existing checkpoint.
+
+        Args:
+            checkpoint_id: Primary key of the checkpoint.
+            label: New label string, or None to clear it.
+
+        Returns:
+            The updated Checkpoint row, or None if not found.
+        """
+        def _rename(session):
+            cp = session.get(Checkpoint, checkpoint_id)
+            if cp is None:
+                return None
+            cp.label = label
+            session.add(cp)
+            session.commit()
+            session.refresh(cp)
+            return cp
+
+        return self._vault.db.run_task(_rename, priority=DBPriority.IMMEDIATE)
+
+    def load_manifest(self, checkpoint_id: int) -> dict:
+        """Load the JSON manifest sidecar for a checkpoint.
+
+        Args:
+            checkpoint_id: Primary key of the checkpoint.
+
+        Returns:
+            Parsed manifest dict, or empty dict if not found / unreadable.
+        """
+        cp = self.get_checkpoint(checkpoint_id)
+        if cp is None:
+            return {}
+        abs_manifest = os.path.join(
+            self._vault.image_root, cp.manifest_relative_path
+        )
+        try:
+            with open(abs_manifest, encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception as exc:
+            logger.warning(
+                "CheckpointService: could not read manifest for checkpoint %d: %s",
+                checkpoint_id,
+                exc,
+            )
+            return {}
+
+    def get_live_schema_version(self) -> str:
+        """Return the current alembic head revision of the live database.
+
+        Returns:
+            Schema version string, or empty string on failure.
+        """
+        try:
+            from sqlalchemy import text
+            return self._vault.db.run_immediate_read_task(
+                lambda session: session.exec(
+                    text("SELECT version_num FROM alembic_version LIMIT 1")
+                ).scalar() or ""
+            )
+        except Exception as exc:
+            logger.warning(
+                "CheckpointService: could not read live schema version: %s", exc
+            )
+            return ""
+
     def checkpoint_if_due(self, reason: str = "opportunistic") -> Optional[Checkpoint]:
         """Take an opportunistic checkpoint if more than OPPORTUNISTIC_MIN_HOURS have passed.
 
@@ -275,6 +341,9 @@ class CheckpointService:
         from sqlalchemy import func, text
 
         picture_ids: list[int] = list(session.exec(select(Picture.id)).all())
+        picture_set_count = session.exec(select(func.count(PictureSet.id))).one()
+        project_count = session.exec(select(func.count(Project.id))).one()
+        character_count = session.exec(select(func.count(Character.id))).one()
 
         # schema_version from alembic_version table
         try:
@@ -297,6 +366,9 @@ class CheckpointService:
         return {
             "picture_count": len(picture_ids),
             "picture_ids": picture_ids,
+            "picture_set_count": picture_set_count,
+            "project_count": project_count,
+            "character_count": character_count,
             "schema_version": schema_version,
             "max_changelog_id": max_changelog_id,
         }
@@ -348,7 +420,6 @@ class CheckpointService:
 
             # Truncate old ChangeLog rows beyond the oldest retained checkpoint.
             from pixlstash.db_models.change_log import ChangeLog
-            from sqlalchemy import func
 
             oldest_cp = session.exec(
                 select(Checkpoint).order_by(Checkpoint.created_at.asc())

@@ -26,9 +26,11 @@ import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
+import { useCheckpointsStore } from "./stores/useCheckpointsStore";
 
 import SideBar from "./components/panels/SideBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
+import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import SearchOverlay from "./components/views/SearchOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
@@ -49,6 +51,7 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
+const checkpointsStore = useCheckpointsStore();
 
 // --- Router ---
 const route = useRoute();
@@ -259,6 +262,21 @@ function connectUpdatesSocket() {
         key: Date.now(),
         payload,
       };
+    } else if (payload?.type === "checkpoint_created") {
+      wsStore.wsCheckpointEvent = { key: Date.now(), payload };
+      checkpointsStore.onCheckpointCreated();
+    } else if (payload?.type === "checkpoint_deleted") {
+      wsStore.wsCheckpointEvent = { key: Date.now(), payload };
+      checkpointsStore.onCheckpointDeleted(payload);
+    } else if (payload?.type === "restore_started") {
+      wsStore.wsRestoreEvent = { key: Date.now(), payload };
+      checkpointsStore.onRestoreStarted(payload);
+    } else if (payload?.type === "restore_completed") {
+      wsStore.wsRestoreEvent = { key: Date.now(), payload };
+      checkpointsStore.onRestoreCompleted();
+      gridStore.wsUpdateKey = Date.now();
+      gridStore.refreshGridVersion();
+      refreshSidebar();
     }
   };
 
@@ -288,6 +306,12 @@ function disconnectUpdatesSocket() {
 function loadPendingExternalImports() {
   gridStore.wsUpdateKey = Date.now();
   gridStore.refreshGridVersion();
+}
+
+function onRestoreConfirmed() {
+  gridStore.wsUpdateKey = Date.now();
+  gridStore.refreshGridVersion();
+  refreshSidebar();
 }
 
 function refreshSidebar(options = {}) {
@@ -1819,6 +1843,12 @@ defineExpose({
           :backend-url="BACKEND_URL"
           @local-import="handleLocalImport"
           @project-created="refreshSidebar"
+        />
+        <RestoreConfirmDialog
+          v-model:open="checkpointsStore.restoreDialogOpen"
+          :checkpoint-id="checkpointsStore.restoreDialogCheckpointId"
+          :resources="checkpointsStore.restoreDialogResources"
+          @confirmed="onRestoreConfirmed"
         />
         <main :class="['main-area']" ref="mainAreaRef">
           <div

@@ -4,6 +4,7 @@ import { isReadOnly, logout } from "../../utils/apiClient";
 import AccountSection from "./AccountSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
+import CheckpointsSection from "./CheckpointsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
 import WorkflowsSection from "./WorkflowsSection.vue";
 
@@ -88,6 +89,7 @@ watch(
           <v-tab v-if="!isReadOnly" value="behaviour">Behaviour</v-tab>
           <v-tab v-if="!isReadOnly" value="smart-score">Smart Score</v-tab>
           <v-tab v-if="!isReadOnly" value="workflows">Workflows</v-tab>
+          <v-tab v-if="!isReadOnly" value="checkpoints">Checkpoints</v-tab>
           <v-tab v-if="!isReadOnly" value="account">Account Settings</v-tab>
         </v-tabs>
         <v-card-text class="settings-dialog-body">
@@ -131,6 +133,9 @@ watch(
                   emit('update:comfyui-configured', $event)
                 "
               />
+            </v-window-item>
+            <v-window-item value="checkpoints">
+              <CheckpointsSection :open="dialogOpen" />
             </v-window-item>
             <v-window-item value="account">
               <AccountSection

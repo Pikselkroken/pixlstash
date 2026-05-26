@@ -5,15 +5,13 @@ project, character) restore.  All restores run ``alembic upgrade head`` on
 the snapshot file before any data work to handle cross-version snapshots.
 """
 
-import json
 import os
 import shutil
 import tempfile
-import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-from sqlmodel import Session, create_engine, select, SQLModel
+from sqlmodel import Session, create_engine, select
 
 from pixlstash.db_models import (
     Character,
@@ -22,7 +20,6 @@ from pixlstash.db_models import (
     PictureSet,
     PictureSetMember,
     PictureProjectMember,
-    PictureStack,
     Project,
     Tag,
 )
@@ -68,6 +65,55 @@ class RestoreReport:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ResourcePreview:
+    """Preview information for a single resource that would be affected by a restore.
+
+    Attributes:
+        type: Resource type string (``'picture'``, ``'picture_set'``, etc.).
+        id: Primary key of the resource.
+        exists_in_live: True if the resource exists in the live database.
+        exists_in_snapshot: True if the resource exists in the snapshot.
+        file_on_disk: True if the picture file exists on disk (always True
+            for non-picture resources).
+        changed_fields: List of column names that differ between live and
+            snapshot (for picture resources).
+        dependent_counts: Counts of dependent objects (e.g.
+            ``{"faces": 2, "tags": 10}``).
+    """
+
+    type: str
+    id: int
+    exists_in_live: bool = True
+    exists_in_snapshot: bool = True
+    file_on_disk: bool = True
+    changed_fields: list[str] = field(default_factory=list)
+    dependent_counts: dict = field(default_factory=dict)
+
+
+@dataclass
+class RestorePreview:
+    """Dry-run preview of a restore operation.
+
+    Attributes:
+        checkpoint_id: ID of the checkpoint to be restored.
+        checkpoint_kind: Kind of the checkpoint.
+        checkpoint_label: Optional user label.
+        checkpoint_created_at: ISO timestamp string.
+        resources: Per-resource preview entries (capped at 200).
+        summary: High-level counts of what would change.
+        warnings: Human-readable warning strings (e.g. missing files).
+    """
+
+    checkpoint_id: int
+    checkpoint_kind: str
+    checkpoint_label: Optional[str]
+    checkpoint_created_at: str
+    resources: list[ResourcePreview] = field(default_factory=list)
+    summary: dict = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+
 class RestoreService:
     """Restores vault metadata from a checkpoint snapshot.
 
@@ -82,6 +128,8 @@ class RestoreService:
             vault: The owning Vault instance.
         """
         self._vault = vault
+        # Tracks the currently executing restore job for /checkpoints/status.
+        self._active_job: Optional[dict] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -115,6 +163,43 @@ class RestoreService:
                 missing from disk.
         """
         vault_root = self._vault.image_root
+        report = RestoreReport(
+            checkpoint_id=checkpoint_id,
+            resource_type="full",
+        )
+
+        from datetime import datetime, timezone
+        self._active_job = {
+            "kind": "RESTORE",
+            "checkpoint_id": checkpoint_id,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "progress": 0.0,
+        }
+        try:
+            return self._restore_full_inner(
+                checkpoint_id, dry_run, vault_root, report
+            )
+        finally:
+            self._active_job = None
+
+    def _restore_full_inner(
+        self,
+        checkpoint_id: int,
+        dry_run: bool,
+        vault_root: str,
+        report: "RestoreReport",
+    ) -> "RestoreReport":
+        """Inner implementation of full restore (called from restore_full).
+
+        Args:
+            checkpoint_id: Checkpoint ID.
+            dry_run: If True skip DB swap.
+            vault_root: Vault root path.
+            report: Pre-constructed RestoreReport to populate.
+
+        Returns:
+            Populated RestoreReport.
+        """
         db = self._vault.db
 
         cp = self._get_checkpoint_or_raise(checkpoint_id)
@@ -123,11 +208,6 @@ class RestoreService:
             raise ValueError(
                 f"Snapshot file not found on disk: {abs_snapshot}"
             )
-
-        report = RestoreReport(
-            checkpoint_id=checkpoint_id,
-            resource_type="full",
-        )
 
         # 1. Safety checkpoint of current state.
         try:
@@ -327,6 +407,272 @@ class RestoreService:
             )
 
         return report
+
+    def preview_full(self, checkpoint_id: int) -> RestorePreview:
+        """Compute a dry-run preview of a full restore without modifying the DB.
+
+        Opens the snapshot read-only, diffs picture rows against the live DB,
+        checks file presence on disk, and returns a ``RestorePreview``.
+
+        Args:
+            checkpoint_id: ID of the checkpoint to preview.
+
+        Returns:
+            A ``RestorePreview`` with summary, per-resource entries (capped at
+            200), and warnings.
+
+        Raises:
+            ValueError: If the checkpoint or snapshot file is not found.
+        """
+        vault_root = self._vault.image_root
+        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        if not os.path.exists(abs_snapshot):
+            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
+
+        preview = RestorePreview(
+            checkpoint_id=checkpoint_id,
+            checkpoint_kind=cp.kind,
+            checkpoint_label=cp.label,
+            checkpoint_created_at=cp.created_at.isoformat(),
+        )
+
+        try:
+            snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            with Session(snap_engine) as snap_session:
+                self._compute_full_preview(
+                    snap_session, preview, vault_root
+                )
+            snap_engine.dispose()
+        except Exception as exc:
+            logger.error(
+                "RestoreService: preview_full failed for checkpoint %d: %s",
+                checkpoint_id,
+                exc,
+                exc_info=True,
+            )
+            preview.warnings.append(f"Preview computation error: {exc}")
+
+        return preview
+
+    def preview_resource(
+        self,
+        checkpoint_id: int,
+        resource_type: str,
+        resource_id: int,
+    ) -> RestorePreview:
+        """Compute a dry-run preview of a single-resource restore.
+
+        Args:
+            checkpoint_id: ID of the checkpoint.
+            resource_type: One of ``'picture'``, ``'picture_set'``,
+                ``'project'``, or ``'character'``.
+            resource_id: Primary key of the resource.
+
+        Returns:
+            A ``RestorePreview`` for the targeted resource.
+
+        Raises:
+            ValueError: If the checkpoint/snapshot is not found or
+                ``resource_type`` is invalid.
+        """
+        if resource_type not in ("picture", "picture_set", "project", "character"):
+            raise ValueError(
+                f"Invalid resource_type '{resource_type}'. "
+                "Must be one of: picture, picture_set, project, character."
+            )
+
+        vault_root = self._vault.image_root
+        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        if not os.path.exists(abs_snapshot):
+            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
+
+        preview = RestorePreview(
+            checkpoint_id=checkpoint_id,
+            checkpoint_kind=cp.kind,
+            checkpoint_label=cp.label,
+            checkpoint_created_at=cp.created_at.isoformat(),
+        )
+
+        try:
+            snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            with Session(snap_engine) as snap_session:
+                self._compute_resource_preview(
+                    snap_session,
+                    preview,
+                    resource_type,
+                    resource_id,
+                    vault_root,
+                )
+            snap_engine.dispose()
+        except Exception as exc:
+            logger.error(
+                "RestoreService: preview_resource failed for checkpoint %d "
+                "(%s/%s): %s",
+                checkpoint_id,
+                resource_type,
+                resource_id,
+                exc,
+                exc_info=True,
+            )
+            preview.warnings.append(f"Preview computation error: {exc}")
+
+        return preview
+
+    def preview_batch(
+        self,
+        checkpoint_id: int,
+        resources: list[dict],
+    ) -> RestorePreview:
+        """Compute a dry-run preview for a batch of resources.
+
+        Args:
+            checkpoint_id: ID of the checkpoint.
+            resources: List of ``{"type": str, "id": int}`` dicts.
+
+        Returns:
+            A combined ``RestorePreview`` for all specified resources.
+
+        Raises:
+            ValueError: If the checkpoint/snapshot is not found.
+        """
+        vault_root = self._vault.image_root
+        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        if not os.path.exists(abs_snapshot):
+            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
+
+        preview = RestorePreview(
+            checkpoint_id=checkpoint_id,
+            checkpoint_kind=cp.kind,
+            checkpoint_label=cp.label,
+            checkpoint_created_at=cp.created_at.isoformat(),
+        )
+
+        try:
+            snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            with Session(snap_engine) as snap_session:
+                for item in resources:
+                    self._compute_resource_preview(
+                        snap_session,
+                        preview,
+                        item.get("type", ""),
+                        int(item.get("id", 0)),
+                        vault_root,
+                    )
+            snap_engine.dispose()
+        except Exception as exc:
+            logger.error(
+                "RestoreService: preview_batch failed for checkpoint %d: %s",
+                checkpoint_id,
+                exc,
+                exc_info=True,
+            )
+            preview.warnings.append(f"Preview computation error: {exc}")
+
+        self._finalise_preview_summary(preview)
+        return preview
+
+    def restore_batch(
+        self,
+        checkpoint_id: int,
+        resources: list[dict],
+    ) -> RestoreReport:
+        """Restore a batch of resources from a checkpoint.
+
+        Args:
+            checkpoint_id: ID of the checkpoint.
+            resources: List of ``{"type": str, "id": int}`` dicts.
+
+        Returns:
+            A ``RestoreReport`` with aggregate counts.
+
+        Raises:
+            ValueError: If the checkpoint/snapshot is not found.
+        """
+        vault_root = self._vault.image_root
+        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        if not os.path.exists(abs_snapshot):
+            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
+
+        if not resources:
+            return RestoreReport(
+                checkpoint_id=checkpoint_id,
+                resource_type="batch",
+            )
+
+        # Upgrade schema once for the whole batch.
+        upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
+        if upgraded_snapshot is None:
+            report = RestoreReport(
+                checkpoint_id=checkpoint_id, resource_type="batch"
+            )
+            report.errors.append("Schema upgrade failed; aborting batch restore.")
+            return report
+
+        total = RestoreReport(checkpoint_id=checkpoint_id, resource_type="batch")
+        try:
+            with self._vault.db.write_reason(
+                f"restore checkpoint {checkpoint_id} batch of "
+                f"{len(resources)} resources"
+            ):
+                for item in resources:
+                    rtype = item.get("type", "")
+                    rid = int(item.get("id", 0))
+                    if rtype not in (
+                        "picture", "picture_set", "project", "character"
+                    ):
+                        total.errors.append(
+                            f"Skipped unknown resource type '{rtype}'."
+                        )
+                        continue
+                    try:
+                        sub = self._restore_resource_from_snapshot(
+                            upgraded_snapshot,
+                            checkpoint_id,
+                            rtype,
+                            rid,
+                            vault_root,
+                        )
+                        total.missing_files_count += sub.missing_files_count
+                        total.upserted_count += sub.upserted_count
+                        total.errors.extend(sub.errors)
+                    except Exception as exc:
+                        msg = f"{rtype}/{rid}: {exc}"
+                        logger.error(
+                            "RestoreService: batch item restore failed: %s",
+                            msg,
+                            exc_info=True,
+                        )
+                        total.errors.append(msg)
+        finally:
+            try:
+                os.remove(upgraded_snapshot)
+                shutil.rmtree(
+                    os.path.dirname(upgraded_snapshot), ignore_errors=True
+                )
+            except Exception:
+                pass
+
+        try:
+            from pixlstash.event_types import EventType
+            self._vault.emit_event(
+                EventType.RESTORE_COMPLETED,
+                {
+                    "checkpoint_id": checkpoint_id,
+                    "resource_type": "batch",
+                    "upserted_count": total.upserted_count,
+                    "missing_files_count": total.missing_files_count,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "RestoreService: failed to emit RESTORE_COMPLETED: %s", exc
+            )
+
+        return total
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -659,7 +1005,6 @@ class RestoreService:
         Returns:
             Total number of objects upserted.
         """
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         count = 0
 
@@ -699,3 +1044,338 @@ class RestoreService:
 
         session.commit()
         return count
+
+    # --- Preview helpers --------------------------------------------------
+
+    def _compute_full_preview(
+        self,
+        snap_session: Session,
+        preview: RestorePreview,
+        vault_root: str,
+    ) -> None:
+        """Populate *preview* by diffing all pictures in snap vs live DB.
+
+        Caps the per-resource list at 200 entries.  Summary and warnings are
+        also populated here.
+
+        Args:
+            snap_session: Read session on the snapshot.
+            preview: Preview object to mutate.
+            vault_root: Vault root for file-existence checks.
+        """
+        from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+        MAX_RESOURCES = 200
+        snap_pictures = snap_session.exec(select(Picture)).all()
+        snap_ids = {p.id for p in snap_pictures}
+
+        live_ids_result = self._vault.db.run_immediate_read_task(
+            lambda session: set(session.exec(select(Picture.id)).all())
+        )
+
+        missing_files = 0
+        pictures_to_revert = 0
+        pictures_to_recreate = 0
+        pictures_to_delete = 0
+
+        # Pictures in snapshot (to revert or recreate).
+        for snap_pic in snap_pictures:
+            file_ok = True
+            if snap_pic.file_path:
+                try:
+                    resolved = ImageUtils.resolve_picture_path(
+                        vault_root, snap_pic.file_path
+                    )
+                    file_ok = os.path.isfile(resolved)
+                except Exception:
+                    file_ok = False
+
+            if not file_ok:
+                missing_files += 1
+                preview.warnings.append(
+                    f"Picture id={snap_pic.id} file missing on disk; "
+                    "row will be removed after restore."
+                )
+                continue
+
+            exists_in_live = snap_pic.id in live_ids_result
+            if exists_in_live:
+                pictures_to_revert += 1
+            else:
+                pictures_to_recreate += 1
+
+            if len(preview.resources) < MAX_RESOURCES:
+                changed = self._diff_picture(snap_pic, exists_in_live)
+                preview.resources.append(
+                    ResourcePreview(
+                        type="picture",
+                        id=snap_pic.id,
+                        exists_in_live=exists_in_live,
+                        exists_in_snapshot=True,
+                        file_on_disk=True,
+                        changed_fields=changed,
+                        dependent_counts=self._picture_dependent_counts(
+                            snap_session, snap_pic.id
+                        ),
+                    )
+                )
+
+        # Pictures in live but not in snapshot (will be deleted by full restore).
+        for live_id in live_ids_result - snap_ids:
+            pictures_to_delete += 1
+            if len(preview.resources) < MAX_RESOURCES:
+                preview.resources.append(
+                    ResourcePreview(
+                        type="picture",
+                        id=live_id,
+                        exists_in_live=True,
+                        exists_in_snapshot=False,
+                        file_on_disk=True,
+                        changed_fields=[],
+                        dependent_counts={},
+                    )
+                )
+
+        total_shown = len(preview.resources)
+        total_affected = len(snap_pictures) + len(live_ids_result - snap_ids)
+        if total_affected > total_shown:
+            preview.warnings.append(
+                f"Showing {total_shown} of {total_affected} affected resources."
+            )
+
+        if missing_files:
+            preview.warnings.append(
+                f"{missing_files} picture file(s) missing on disk; "
+                "those rows will be removed after restore."
+            )
+
+        preview.summary = {
+            "pictures_to_revert": pictures_to_revert,
+            "pictures_to_recreate": pictures_to_recreate,
+            "pictures_to_delete": pictures_to_delete,
+            "missing_files": missing_files,
+        }
+
+    def _compute_resource_preview(
+        self,
+        snap_session: Session,
+        preview: RestorePreview,
+        resource_type: str,
+        resource_id: int,
+        vault_root: str,
+    ) -> None:
+        """Populate *preview* for a single resource.
+
+        For picture resources, diffs the snapshot row against the live DB.
+        For set/project/character, adds a single summary entry.  Mutates
+        *preview* in place; does NOT call ``_finalise_preview_summary`` (the
+        caller does that for batch previews; single-resource callers should
+        call it after this method).
+
+        Args:
+            snap_session: Read session on the snapshot.
+            preview: Preview object to mutate.
+            resource_type: Resource type string.
+            resource_id: Primary key of the resource.
+            vault_root: Vault root for file-existence checks.
+        """
+        from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+        if resource_type == "picture":
+            snap_pic = snap_session.get(Picture, resource_id)
+            exists_in_snapshot = snap_pic is not None
+            exists_in_live = False
+            file_ok = True
+            changed: list[str] = []
+            dep_counts: dict = {}
+
+            if snap_pic:
+                if snap_pic.file_path:
+                    try:
+                        resolved = ImageUtils.resolve_picture_path(
+                            vault_root, snap_pic.file_path
+                        )
+                        file_ok = os.path.isfile(resolved)
+                    except Exception:
+                        file_ok = False
+                if not file_ok:
+                    preview.warnings.append(
+                        f"Picture id={resource_id} file missing on disk."
+                    )
+                exists_in_live = self._vault.db.run_immediate_read_task(
+                    lambda session: session.get(Picture, resource_id) is not None
+                )
+                changed = self._diff_picture(snap_pic, exists_in_live)
+                dep_counts = self._picture_dependent_counts(
+                    snap_session, resource_id
+                )
+
+            preview.resources.append(
+                ResourcePreview(
+                    type="picture",
+                    id=resource_id,
+                    exists_in_live=exists_in_live,
+                    exists_in_snapshot=exists_in_snapshot,
+                    file_on_disk=file_ok,
+                    changed_fields=changed,
+                    dependent_counts=dep_counts,
+                )
+            )
+
+        elif resource_type == "picture_set":
+            exists_snap = snap_session.get(PictureSet, resource_id) is not None
+            exists_live = self._vault.db.run_immediate_read_task(
+                lambda session: session.get(PictureSet, resource_id) is not None
+            )
+            members = snap_session.exec(
+                select(PictureSetMember).where(
+                    PictureSetMember.picture_set_id == resource_id
+                )
+            ).all()
+            preview.resources.append(
+                ResourcePreview(
+                    type="picture_set",
+                    id=resource_id,
+                    exists_in_live=exists_live,
+                    exists_in_snapshot=exists_snap,
+                    file_on_disk=True,
+                    changed_fields=[],
+                    dependent_counts={"pictures": len(members)},
+                )
+            )
+
+        elif resource_type == "project":
+            from pixlstash.db_models.picture_project import (
+                PictureProjectMember as PPM,
+            )
+
+            exists_snap = snap_session.get(Project, resource_id) is not None
+            exists_live = self._vault.db.run_immediate_read_task(
+                lambda session: session.get(Project, resource_id) is not None
+            )
+            ppm_rows = snap_session.exec(
+                select(PPM).where(PPM.project_id == resource_id)
+            ).all()
+            preview.resources.append(
+                ResourcePreview(
+                    type="project",
+                    id=resource_id,
+                    exists_in_live=exists_live,
+                    exists_in_snapshot=exists_snap,
+                    file_on_disk=True,
+                    changed_fields=[],
+                    dependent_counts={"pictures": len(ppm_rows)},
+                )
+            )
+
+        elif resource_type == "character":
+            exists_snap = snap_session.get(Character, resource_id) is not None
+            exists_live = self._vault.db.run_immediate_read_task(
+                lambda session: session.get(Character, resource_id) is not None
+            )
+            preview.resources.append(
+                ResourcePreview(
+                    type="character",
+                    id=resource_id,
+                    exists_in_live=exists_live,
+                    exists_in_snapshot=exists_snap,
+                    file_on_disk=True,
+                    changed_fields=[],
+                    dependent_counts={},
+                )
+            )
+
+        self._finalise_preview_summary(preview)
+
+    def _diff_picture(
+        self, snap_pic: Picture, exists_in_live: bool
+    ) -> list[str]:
+        """Return list of column names that differ between snapshot and live.
+
+        Args:
+            snap_pic: Picture row from the snapshot.
+            exists_in_live: Whether the picture exists in the live DB.
+
+        Returns:
+            List of field names that differ (or all fields if new).
+        """
+        if not exists_in_live:
+            return ["(new)"]
+
+        live_pic = self._vault.db.run_immediate_read_task(
+            lambda session: session.get(Picture, snap_pic.id)
+        )
+        if live_pic is None:
+            return ["(new)"]
+
+        _SKIP = {
+            "text_embedding", "image_embedding", "id", "file_path",
+            "created_at",
+        }
+        changed: list[str] = []
+        for col in snap_pic.__fields__:
+            if col in _SKIP:
+                continue
+            snap_val = getattr(snap_pic, col, None)
+            live_val = getattr(live_pic, col, None)
+            if snap_val != live_val:
+                changed.append(col)
+        return changed
+
+    def _picture_dependent_counts(
+        self, snap_session: Session, picture_id: int
+    ) -> dict:
+        """Return counts of dependent rows for a picture in the snapshot.
+
+        Args:
+            snap_session: Read session on the snapshot.
+            picture_id: Picture primary key.
+
+        Returns:
+            Dict with 'faces' and 'tags' counts.
+        """
+        from sqlalchemy import func
+
+        face_count = snap_session.exec(
+            select(func.count(Face.id)).where(Face.picture_id == picture_id)
+        ).one()
+        tag_count = snap_session.exec(
+            select(func.count(Tag.id)).where(Tag.picture_id == picture_id)
+        ).one()
+        return {"faces": face_count or 0, "tags": tag_count or 0}
+
+    def _finalise_preview_summary(self, preview: RestorePreview) -> None:
+        """Compute the summary dict on *preview* from its resources list.
+
+        Idempotent — safe to call multiple times.
+
+        Args:
+            preview: Preview to update.
+        """
+        counts: dict = {
+            "pictures_to_revert": 0,
+            "pictures_to_recreate": 0,
+            "pictures_to_delete": 0,
+            "missing_files": 0,
+            "picture_sets_to_revert": 0,
+            "projects_to_revert": 0,
+            "characters_to_revert": 0,
+        }
+        for r in preview.resources:
+            if not r.file_on_disk:
+                counts["missing_files"] += 1
+                continue
+            if r.type == "picture":
+                if not r.exists_in_snapshot:
+                    counts["pictures_to_delete"] += 1
+                elif r.exists_in_live:
+                    counts["pictures_to_revert"] += 1
+                else:
+                    counts["pictures_to_recreate"] += 1
+            elif r.type == "picture_set":
+                counts["picture_sets_to_revert"] += 1
+            elif r.type == "project":
+                counts["projects_to_revert"] += 1
+            elif r.type == "character":
+                counts["characters_to_revert"] += 1
+        preview.summary = counts
