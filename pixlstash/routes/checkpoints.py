@@ -118,9 +118,7 @@ def create_router(server) -> APIRouter:
 
         ``active_job`` is ``null`` when no job is in progress.
         """
-        active_job = getattr(
-            server.vault.restore_service, "_active_job", None
-        )
+        active_job = getattr(server.vault.restore_service, "_active_job", None)
         return {"active_job": active_job}
 
     # ------------------------------------------------------------------
@@ -163,9 +161,7 @@ def create_router(server) -> APIRouter:
         Authentication is required.  Works for all checkpoint kinds.
         """
         server.auth.require_user_id(request)
-        cp = server.vault.checkpoint_service.rename_checkpoint(
-            checkpoint_id, label
-        )
+        cp = server.vault.checkpoint_service.rename_checkpoint(checkpoint_id, label)
         if cp is None:
             raise HTTPException(status_code=404, detail="Checkpoint not found.")
         manifest = server.vault.checkpoint_service.load_manifest(cp.id)
@@ -202,7 +198,9 @@ def create_router(server) -> APIRouter:
             server.vault.checkpoint_service.delete_checkpoint(checkpoint_id)
         except Exception as exc:
             logger.error(
-                "Failed to delete checkpoint %d: %s", checkpoint_id, exc,
+                "Failed to delete checkpoint %d: %s",
+                checkpoint_id,
+                exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -237,8 +235,7 @@ def create_router(server) -> APIRouter:
     # ------------------------------------------------------------------
 
     @router.get(
-        "/checkpoints/{checkpoint_id}/restore"
-        "/{resource_type}/{resource_id}/preview"
+        "/checkpoints/{checkpoint_id}/restore/{resource_type}/{resource_id}/preview"
     )
     def preview_resource_restore(
         checkpoint_id: int,
@@ -319,7 +316,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
-                "Full restore of checkpoint %d failed: %s", checkpoint_id, exc,
+                "Full restore of checkpoint %d failed: %s",
+                checkpoint_id,
+                exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc

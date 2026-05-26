@@ -200,11 +200,7 @@ def _before_flush_handler(session, flush_context, instances) -> None:
         table = _cl_table_name(obj)
         excluded = table in CHANGE_LOG_EXCLUDED_TABLES
         pk_json = _cl_pk_json(obj)
-        before_json = (
-            None
-            if excluded
-            else _cl_serialize_state(_cl_current_state(obj))
-        )
+        before_json = None if excluded else _cl_serialize_state(_cl_current_state(obj))
         pending.append(
             {
                 "op": "DELETE",
@@ -252,12 +248,16 @@ def _after_flush_handler(session, flush_context) -> None:
         if op == "INSERT":
             pk_json = _cl_pk_json(obj) if obj is not None else "{}"
             after_json = (
-                None if excluded else (_cl_serialize_state(_cl_current_state(obj)) if obj else None)
+                None
+                if excluded
+                else (_cl_serialize_state(_cl_current_state(obj)) if obj else None)
             )
         elif op == "UPDATE":
             pk_json = entry.get("row_pk_json") or "{}"
             after_json = (
-                None if excluded else (_cl_serialize_state(_cl_current_state(obj)) if obj else None)
+                None
+                if excluded
+                else (_cl_serialize_state(_cl_current_state(obj)) if obj else None)
             )
         else:  # DELETE
             pk_json = entry.get("row_pk_json") or "{}"
@@ -285,9 +285,7 @@ def _after_flush_handler(session, flush_context) -> None:
         try:
             session.execute(_ChangeLog.__table__.insert(), rows)
         except Exception as exc:
-            logger.warning(
-                "ChangeLog: failed to insert %d row(s): %s", len(rows), exc
-            )
+            logger.warning("ChangeLog: failed to insert %d row(s): %s", len(rows), exc)
 
 
 def _attach_change_log_hooks(session: Session) -> None:
@@ -796,7 +794,6 @@ class VaultDatabase:
             raise RuntimeError("VaultDatabase is closed.")
         with Session(self._engine) as session:
             return func(session, *args, **kwargs)
-
 
     @contextmanager
     def write_reason(self, reason: str, actor_user_id=None):

@@ -58,9 +58,7 @@ def _add_picture(server, filename="test.jpg", description=None) -> Picture:
 
 
 def _get_picture(server, pic_id: int):
-    return server.vault.db.run_immediate_read_task(
-        lambda s: s.get(Picture, pic_id)
-    )
+    return server.vault.db.run_immediate_read_task(lambda s: s.get(Picture, pic_id))
 
 
 def _create_file(server, relative_path: str):
@@ -118,7 +116,9 @@ def test_full_restore_drops_row_for_missing_file(server):
         f"Expected 1 missing-file picture, got {report.missing_files_count}"
     )
     remaining = _get_picture(server, pic.id)
-    assert remaining is None, "Row for missing-file picture must be removed after restore"
+    assert remaining is None, (
+        "Row for missing-file picture must be removed after restore"
+    )
 
 
 # ---------------------------------------------------------------------------

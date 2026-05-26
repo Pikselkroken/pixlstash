@@ -49,6 +49,7 @@ def clean_db(server):
 
 def _count_db_checkpoints(server) -> int:
     from sqlmodel import func, select
+
     return server.vault.db.run_immediate_read_task(
         lambda s: s.exec(select(func.count()).select_from(Checkpoint)).one()
     )

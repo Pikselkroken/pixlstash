@@ -75,9 +75,7 @@ class UndoService:
 
         def _find_last_txn(session):
             row = session.exec(
-                select(ChangeLog)
-                .order_by(ChangeLog.id.desc())
-                .limit(1)
+                select(ChangeLog).order_by(ChangeLog.id.desc()).limit(1)
             ).first()
             return row.txn_id if row else None
 
@@ -106,6 +104,7 @@ class UndoService:
 
         try:
             from pixlstash.event_types import EventType
+
             self._vault.emit_event(
                 EventType.UNDO_APPLIED,
                 {
@@ -248,6 +247,7 @@ class UndoService:
 
         def _load_entries_to_undo(session):
             from pixlstash.database import CHANGE_LOG_EXCLUDED_TABLES
+
             return session.exec(
                 select(ChangeLog)
                 .where(ChangeLog.id > max_changelog_id)
@@ -274,7 +274,9 @@ class UndoService:
 
         with db.write_reason(f"undo to checkpoint {checkpoint_id}"):
             for txn_id, entries in txns:
-                entries_sorted = sorted(entries, key=lambda e: e.seq_in_txn, reverse=True)
+                entries_sorted = sorted(
+                    entries, key=lambda e: e.seq_in_txn, reverse=True
+                )
                 db.run_task(
                     lambda session, _entries=entries_sorted: self._apply_undo_entries(
                         session, _entries, report
@@ -284,6 +286,7 @@ class UndoService:
 
         try:
             from pixlstash.event_types import EventType
+
             self._vault.emit_event(
                 EventType.UNDO_APPLIED,
                 {

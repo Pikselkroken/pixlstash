@@ -118,6 +118,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/checkpoint_service.py",  # vault-injection pattern; owns checkpoint lifecycle
         "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
         "pixlstash/services/undo_service.py",  # vault-injection pattern; orchestrates DB reads/writes
+        "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
     }
 
     violations = []

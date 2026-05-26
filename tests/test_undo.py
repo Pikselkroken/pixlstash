@@ -58,13 +58,12 @@ def _add_picture(server, filename="undo.jpg", description="original") -> Picture
 
 
 def _get_picture(server, pic_id: int):
-    return server.vault.db.run_immediate_read_task(
-        lambda s: s.get(Picture, pic_id)
-    )
+    return server.vault.db.run_immediate_read_task(lambda s: s.get(Picture, pic_id))
 
 
 def _changelog_count(server) -> int:
     from sqlmodel import func
+
     return server.vault.db.run_immediate_read_task(
         lambda s: s.exec(select(func.count()).select_from(ChangeLog)).one()
     )
@@ -200,7 +199,9 @@ def test_undo_to_checkpoint_reverts_post_checkpoint_changes(server):
     assert report.reverted_txn_count >= 2
     assert not report.errors
     final_desc = _get_picture(server, pic.id).description
-    assert final_desc == "v0", f"Expected 'v0' after undo-to-checkpoint, got '{final_desc}'"
+    assert final_desc == "v0", (
+        f"Expected 'v0' after undo-to-checkpoint, got '{final_desc}'"
+    )
 
 
 # ---------------------------------------------------------------------------

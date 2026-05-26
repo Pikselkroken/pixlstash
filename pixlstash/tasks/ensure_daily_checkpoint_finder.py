@@ -63,7 +63,10 @@ class EnsureDailyCheckpointFinder(BaseTaskFinder):
             "EnsureDailyCheckpointFinder: no DAILY checkpoint for %s — scheduling one",
             today.isoformat(),
         )
-        from pixlstash.tasks.ensure_daily_checkpoint_task import EnsureDailyCheckpointTask
+        from pixlstash.tasks.ensure_daily_checkpoint_task import (
+            EnsureDailyCheckpointTask,
+        )
+
         return EnsureDailyCheckpointTask(self._vault)
 
     def _today_checkpoint_exists(self, session, today: date) -> bool:
@@ -76,13 +79,12 @@ class EnsureDailyCheckpointFinder(BaseTaskFinder):
         Returns:
             True if a matching checkpoint row exists.
         """
-        rows = session.exec(
-            select(Checkpoint).where(Checkpoint.kind == "DAILY")
-        ).all()
+        rows = session.exec(select(Checkpoint).where(Checkpoint.kind == "DAILY")).all()
         for cp in rows:
             cp_date = cp.created_at
             if cp_date.tzinfo is None:
                 from datetime import timezone as _tz
+
                 cp_date = cp_date.replace(tzinfo=_tz.utc)
             if cp_date.date() == today:
                 return True

@@ -135,9 +135,7 @@ class RestoreService:
     # Public API
     # ------------------------------------------------------------------
 
-    def restore_full(
-        self, checkpoint_id: int, dry_run: bool = False
-    ) -> RestoreReport:
+    def restore_full(self, checkpoint_id: int, dry_run: bool = False) -> RestoreReport:
         """Replace the live database with a checkpoint snapshot.
 
         Steps:
@@ -169,6 +167,7 @@ class RestoreService:
         )
 
         from datetime import datetime, timezone
+
         self._active_job = {
             "kind": "RESTORE",
             "checkpoint_id": checkpoint_id,
@@ -176,9 +175,7 @@ class RestoreService:
             "progress": 0.0,
         }
         try:
-            return self._restore_full_inner(
-                checkpoint_id, dry_run, vault_root, report
-            )
+            return self._restore_full_inner(checkpoint_id, dry_run, vault_root, report)
         finally:
             self._active_job = None
 
@@ -205,9 +202,7 @@ class RestoreService:
         cp = self._get_checkpoint_or_raise(checkpoint_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
-            raise ValueError(
-                f"Snapshot file not found on disk: {abs_snapshot}"
-            )
+            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
         # 1. Safety checkpoint of current state.
         try:
@@ -300,6 +295,7 @@ class RestoreService:
 
         try:
             from pixlstash.event_types import EventType
+
             self._vault.emit_event(
                 EventType.RESTORE_COMPLETED,
                 {
@@ -309,9 +305,7 @@ class RestoreService:
                 },
             )
         except Exception as exc:
-            logger.warning(
-                "RestoreService: failed to emit RESTORE_COMPLETED: %s", exc
-            )
+            logger.warning("RestoreService: failed to emit RESTORE_COMPLETED: %s", exc)
 
         logger.info(
             "RestoreService: full restore from checkpoint %d completed "
@@ -355,9 +349,7 @@ class RestoreService:
         cp = self._get_checkpoint_or_raise(checkpoint_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
-            raise ValueError(
-                f"Snapshot file not found on disk: {abs_snapshot}"
-            )
+            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
         if resource_type not in ("picture", "picture_set", "project", "character"):
             raise ValueError(
@@ -391,6 +383,7 @@ class RestoreService:
 
         try:
             from pixlstash.event_types import EventType
+
             self._vault.emit_event(
                 EventType.RESTORE_COMPLETED,
                 {
@@ -402,9 +395,7 @@ class RestoreService:
                 },
             )
         except Exception as exc:
-            logger.warning(
-                "RestoreService: failed to emit RESTORE_COMPLETED: %s", exc
-            )
+            logger.warning("RestoreService: failed to emit RESTORE_COMPLETED: %s", exc)
 
         return report
 
@@ -440,9 +431,7 @@ class RestoreService:
         try:
             snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
             with Session(snap_engine) as snap_session:
-                self._compute_full_preview(
-                    snap_session, preview, vault_root
-                )
+                self._compute_full_preview(snap_session, preview, vault_root)
             snap_engine.dispose()
         except Exception as exc:
             logger.error(
@@ -508,8 +497,7 @@ class RestoreService:
             snap_engine.dispose()
         except Exception as exc:
             logger.error(
-                "RestoreService: preview_resource failed for checkpoint %d "
-                "(%s/%s): %s",
+                "RestoreService: preview_resource failed for checkpoint %d (%s/%s): %s",
                 checkpoint_id,
                 resource_type,
                 resource_id,
@@ -606,9 +594,7 @@ class RestoreService:
         # Upgrade schema once for the whole batch.
         upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
         if upgraded_snapshot is None:
-            report = RestoreReport(
-                checkpoint_id=checkpoint_id, resource_type="batch"
-            )
+            report = RestoreReport(checkpoint_id=checkpoint_id, resource_type="batch")
             report.errors.append("Schema upgrade failed; aborting batch restore.")
             return report
 
@@ -621,12 +607,8 @@ class RestoreService:
                 for item in resources:
                     rtype = item.get("type", "")
                     rid = int(item.get("id", 0))
-                    if rtype not in (
-                        "picture", "picture_set", "project", "character"
-                    ):
-                        total.errors.append(
-                            f"Skipped unknown resource type '{rtype}'."
-                        )
+                    if rtype not in ("picture", "picture_set", "project", "character"):
+                        total.errors.append(f"Skipped unknown resource type '{rtype}'.")
                         continue
                     try:
                         sub = self._restore_resource_from_snapshot(
@@ -650,14 +632,13 @@ class RestoreService:
         finally:
             try:
                 os.remove(upgraded_snapshot)
-                shutil.rmtree(
-                    os.path.dirname(upgraded_snapshot), ignore_errors=True
-                )
+                shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
             except Exception:
                 pass
 
         try:
             from pixlstash.event_types import EventType
+
             self._vault.emit_event(
                 EventType.RESTORE_COMPLETED,
                 {
@@ -668,9 +649,7 @@ class RestoreService:
                 },
             )
         except Exception as exc:
-            logger.warning(
-                "RestoreService: failed to emit RESTORE_COMPLETED: %s", exc
-            )
+            logger.warning("RestoreService: failed to emit RESTORE_COMPLETED: %s", exc)
 
         return total
 
@@ -699,7 +678,8 @@ class RestoreService:
             shutil.copy2(abs_snapshot, tmp_snapshot)
         except Exception as exc:
             logger.error(
-                "RestoreService: failed to copy snapshot to temp dir: %s", exc,
+                "RestoreService: failed to copy snapshot to temp dir: %s",
+                exc,
                 exc_info=True,
             )
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -730,6 +710,7 @@ class RestoreService:
             # Checkpoint and convert back to rollback journal so the
             # main file contains all data without a WAL sidecar.
             import sqlite3
+
             with sqlite3.connect(tmp_snapshot) as _conn:
                 _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 _conn.execute("PRAGMA journal_mode=DELETE")
@@ -740,15 +721,14 @@ class RestoreService:
             return tmp_snapshot
         except Exception as exc:
             logger.error(
-                "RestoreService: snapshot schema upgrade failed: %s", exc,
+                "RestoreService: snapshot schema upgrade failed: %s",
+                exc,
                 exc_info=True,
             )
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return None
 
-    def _find_missing_file_ids(
-        self, abs_snapshot: str, vault_root: str
-    ) -> list[int]:
+    def _find_missing_file_ids(self, abs_snapshot: str, vault_root: str) -> list[int]:
         """Return Picture IDs from the snapshot whose files are absent on disk.
 
         Args:
@@ -812,15 +792,14 @@ class RestoreService:
             # Recreate engine
             from sqlalchemy import event as sa_event
             from pixlstash.database import init_database
-            db._engine = create_engine(f"sqlite:///{live_db_path}", echo=False, connect_args={"timeout": 30})
+
+            db._engine = create_engine(
+                f"sqlite:///{live_db_path}", echo=False, connect_args={"timeout": 30}
+            )
             sa_event.listen(db._engine, "connect", init_database)
-            logger.info(
-                "RestoreService: DB swap complete, engine re-created."
-            )
+            logger.info("RestoreService: DB swap complete, engine re-created.")
         except Exception as exc:
-            logger.error(
-                "RestoreService: DB swap failed: %s", exc, exc_info=True
-            )
+            logger.error("RestoreService: DB swap failed: %s", exc, exc_info=True)
             raise
         finally:
             try:
@@ -871,7 +850,10 @@ class RestoreService:
                     picture_ids = [m.picture_id for m in members]
                 elif resource_type == "project":
                     # Collect all picture_set_ids in the project.
-                    from pixlstash.db_models.picture_project import PictureProjectMember as PPM
+                    from pixlstash.db_models.picture_project import (
+                        PictureProjectMember as PPM,
+                    )
+
                     ppm_rows = snap_session.exec(
                         select(PPM).where(PPM.project_id == resource_id)
                     ).all()
@@ -921,7 +903,9 @@ class RestoreService:
             f"restore checkpoint {checkpoint_id} {resource_type} {resource_id}"
         ):
             upserted = self._vault.db.run_task(
-                lambda session: self._upsert_rows(session, snap_rows, valid_picture_ids),
+                lambda session: self._upsert_rows(
+                    session, snap_rows, valid_picture_ids
+                ),
                 priority=0,
             )
         report.upserted_count = upserted
@@ -961,13 +945,9 @@ class RestoreService:
             pic = snap_session.get(Picture, pid)
             if pic:
                 rows["pictures"].append(pic)
-            faces = snap_session.exec(
-                select(Face).where(Face.picture_id == pid)
-            ).all()
+            faces = snap_session.exec(select(Face).where(Face.picture_id == pid)).all()
             rows["faces"].extend(faces)
-            tags = snap_session.exec(
-                select(Tag).where(Tag.picture_id == pid)
-            ).all()
+            tags = snap_session.exec(select(Tag).where(Tag.picture_id == pid)).all()
             rows["tags"].extend(tags)
             psms = snap_session.exec(
                 select(PictureSetMember).where(PictureSetMember.picture_id == pid)
@@ -1206,9 +1186,7 @@ class RestoreService:
                     lambda session: session.get(Picture, resource_id) is not None
                 )
                 changed = self._diff_picture(snap_pic, exists_in_live)
-                dep_counts = self._picture_dependent_counts(
-                    snap_session, resource_id
-                )
+                dep_counts = self._picture_dependent_counts(snap_session, resource_id)
 
             preview.resources.append(
                 ResourcePreview(
@@ -1287,9 +1265,7 @@ class RestoreService:
 
         self._finalise_preview_summary(preview)
 
-    def _diff_picture(
-        self, snap_pic: Picture, exists_in_live: bool
-    ) -> list[str]:
+    def _diff_picture(self, snap_pic: Picture, exists_in_live: bool) -> list[str]:
         """Return list of column names that differ between snapshot and live.
 
         Args:
@@ -1309,7 +1285,10 @@ class RestoreService:
             return ["(new)"]
 
         _SKIP = {
-            "text_embedding", "image_embedding", "id", "file_path",
+            "text_embedding",
+            "image_embedding",
+            "id",
+            "file_path",
             "created_at",
         }
         changed: list[str] = []
@@ -1322,9 +1301,7 @@ class RestoreService:
                 changed.append(col)
         return changed
 
-    def _picture_dependent_counts(
-        self, snap_session: Session, picture_id: int
-    ) -> dict:
+    def _picture_dependent_counts(self, snap_session: Session, picture_id: int) -> dict:
         """Return counts of dependent rows for a picture in the snapshot.
 
         Args:

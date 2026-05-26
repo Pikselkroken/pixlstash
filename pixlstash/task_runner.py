@@ -424,7 +424,9 @@ class TaskRunner:
                 queued_task.status = TaskStatus.CANCELLED
                 queued_task.completed_at = datetime.now(UTC)
                 cancelled += 1
-        logger.debug("TaskRunner %s: cancelled %d pending task(s).", self._name, cancelled)
+        logger.debug(
+            "TaskRunner %s: cancelled %d pending task(s).", self._name, cancelled
+        )
         return cancelled
 
     def cancel_pending_tasks_for_pictures(self, picture_ids: set) -> int:
@@ -450,9 +452,7 @@ class TaskRunner:
                 if isinstance(queued_task, _StopTask):
                     kept.append(item)
                     continue
-                task_pids = set(
-                    (queued_task.params or {}).get("picture_ids") or []
-                )
+                task_pids = set((queued_task.params or {}).get("picture_ids") or [])
                 if task_pids & picture_ids:
                     try:
                         queued_task.on_cancel()

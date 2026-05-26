@@ -154,7 +154,10 @@ class Vault:
             path_mapper=path_mapper,
         )
         from pixlstash.tasks import TaskType, EnsureDailyCheckpointFinder
-        self._planner_work_finders[TaskType.DAILY_CHECKPOINT] = EnsureDailyCheckpointFinder(vault=self)
+
+        self._planner_work_finders[TaskType.DAILY_CHECKPOINT] = (
+            EnsureDailyCheckpointFinder(vault=self)
+        )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,

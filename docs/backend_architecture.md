@@ -815,6 +815,11 @@ Selected milestones:
 | `CHANGED_FACES`        | ✓ broadcast |
 | `QUALITY_UPDATED`      | ✗ internal  |
 | `CLEARED_TAGS`         | ✓ broadcast |
+| `CHECKPOINT_CREATED`   | ✗ internal  |
+| `CHECKPOINT_DELETED`   | ✗ internal  |
+| `RESTORE_STARTED`      | ✗ internal  |
+| `RESTORE_COMPLETED`    | ✗ internal  |
+| `UNDO_APPLIED`         | ✗ internal  |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to all connected clients.

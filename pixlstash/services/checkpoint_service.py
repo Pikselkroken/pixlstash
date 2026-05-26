@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 # GFS retention constants (v1 — not user-configurable yet)
 # ---------------------------------------------------------------------------
 GFS_KEEP_DAILY: int = 7
-GFS_KEEP_WEEKLY: int = 4   # most-recent Sunday of each of the last 4 weeks
+GFS_KEEP_WEEKLY: int = 4  # most-recent Sunday of each of the last 4 weeks
 GFS_KEEP_MONTHLY: int = 12  # first-of-month snapshot for the last 12 months
 
 # Minimum hours between opportunistic checkpoints.
@@ -54,9 +54,7 @@ class CheckpointService:
     # Public API
     # ------------------------------------------------------------------
 
-    def create_checkpoint(
-        self, kind: str, label: Optional[str] = None
-    ) -> Checkpoint:
+    def create_checkpoint(self, kind: str, label: Optional[str] = None) -> Checkpoint:
         """Create a full SQLite snapshot of the live vault database.
 
         The snapshot is written to
@@ -146,9 +144,14 @@ class CheckpointService:
         # --- Emit event ---------------------------------------------------
         try:
             from pixlstash.event_types import EventType
-            self._vault.emit_event(EventType.CHECKPOINT_CREATED, {"id": checkpoint.id, "kind": kind})
+
+            self._vault.emit_event(
+                EventType.CHECKPOINT_CREATED, {"id": checkpoint.id, "kind": kind}
+            )
         except Exception as exc:
-            logger.warning("CheckpointService: failed to emit CHECKPOINT_CREATED: %s", exc)
+            logger.warning(
+                "CheckpointService: failed to emit CHECKPOINT_CREATED: %s", exc
+            )
 
         logger.info(
             "CheckpointService: checkpoint %d created (%d bytes, %d pictures)",
@@ -216,14 +219,19 @@ class CheckpointService:
         if deleted:
             try:
                 from pixlstash.event_types import EventType
-                self._vault.emit_event(EventType.CHECKPOINT_DELETED, {"id": checkpoint_id})
+
+                self._vault.emit_event(
+                    EventType.CHECKPOINT_DELETED, {"id": checkpoint_id}
+                )
             except Exception as exc:
                 logger.warning(
                     "CheckpointService: failed to emit CHECKPOINT_DELETED: %s", exc
                 )
         return deleted
 
-    def rename_checkpoint(self, checkpoint_id: int, label: Optional[str]) -> Optional[Checkpoint]:
+    def rename_checkpoint(
+        self, checkpoint_id: int, label: Optional[str]
+    ) -> Optional[Checkpoint]:
         """Update the label of an existing checkpoint.
 
         Args:
@@ -233,6 +241,7 @@ class CheckpointService:
         Returns:
             The updated Checkpoint row, or None if not found.
         """
+
         def _rename(session):
             cp = session.get(Checkpoint, checkpoint_id)
             if cp is None:
@@ -257,9 +266,7 @@ class CheckpointService:
         cp = self.get_checkpoint(checkpoint_id)
         if cp is None:
             return {}
-        abs_manifest = os.path.join(
-            self._vault.image_root, cp.manifest_relative_path
-        )
+        abs_manifest = os.path.join(self._vault.image_root, cp.manifest_relative_path)
         try:
             with open(abs_manifest, encoding="utf-8") as fh:
                 return json.load(fh)
@@ -279,10 +286,14 @@ class CheckpointService:
         """
         try:
             from sqlalchemy import text
+
             return self._vault.db.run_immediate_read_task(
-                lambda session: session.exec(
-                    text("SELECT version_num FROM alembic_version LIMIT 1")
-                ).scalar() or ""
+                lambda session: (
+                    session.exec(
+                        text("SELECT version_num FROM alembic_version LIMIT 1")
+                    ).scalar()
+                    or ""
+                )
             )
         except Exception as exc:
             logger.warning(
@@ -314,9 +325,7 @@ class CheckpointService:
                     OPPORTUNISTIC_MIN_HOURS,
                 )
                 return None
-        logger.info(
-            "CheckpointService: creating opportunistic checkpoint (%s)", reason
-        )
+        logger.info("CheckpointService: creating opportunistic checkpoint (%s)", reason)
         return self.create_checkpoint("OPPORTUNISTIC")
 
     # ------------------------------------------------------------------
@@ -347,7 +356,9 @@ class CheckpointService:
 
         # schema_version from alembic_version table
         try:
-            result = session.exec(text("SELECT version_num FROM alembic_version LIMIT 1"))
+            result = session.exec(
+                text("SELECT version_num FROM alembic_version LIMIT 1")
+            )
             schema_version = result.scalar() or ""
         except Exception:
             schema_version = ""
@@ -385,6 +396,7 @@ class CheckpointService:
         Args:
             now: Current UTC datetime (used only for logging).
         """
+
         def _prune(session):
             for kind, keep in (
                 ("DAILY", GFS_KEEP_DAILY),
@@ -434,6 +446,7 @@ class CheckpointService:
                     min_cl_id = manifest.get("max_changelog_id")
                     if min_cl_id is not None:
                         from sqlmodel import delete as sm_delete
+
                         session.exec(
                             sm_delete(ChangeLog).where(ChangeLog.id < min_cl_id)
                         )

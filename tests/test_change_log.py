@@ -59,9 +59,7 @@ def _all_changelog(server) -> list[ChangeLog]:
 
 
 def _clear_changelog(server):
-    server.vault.db.run_task(
-        lambda s: (s.exec(delete(ChangeLog)), s.commit())
-    )
+    server.vault.db.run_task(lambda s: (s.exec(delete(ChangeLog)), s.commit()))
 
 
 # ---------------------------------------------------------------------------
