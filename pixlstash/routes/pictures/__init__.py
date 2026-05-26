@@ -7,6 +7,7 @@ from ._listing import select_pictures_for_listing  # noqa: F401
 from . import (
     _crud,
     _export,
+    _face_search,
     _import,
     _likeness_search,
     _listing,
@@ -24,6 +25,7 @@ def create_router(server) -> APIRouter:
     _export.register_routes(router, server)
     _search.register_routes(router, server)
     _likeness_search.register_routes(router, server)
+    _face_search.register_routes(router, server)
     _import.register_routes(router, server)
     _crud.register_routes(router, server)
     _listing.register_routes(router, server)

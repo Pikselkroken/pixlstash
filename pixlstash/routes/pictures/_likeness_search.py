@@ -2,25 +2,36 @@
 
 POST /pictures/likeness-search
 
-Accepts an image upload and returns picture IDs from the vault ranked by
-visual similarity (cosine distance on CLIP embeddings), optionally drawing a
-random sample from the top-M results.
+Accepts one or more image uploads and returns picture IDs from the vault
+ranked by visual similarity (cosine similarity on CLIP embeddings).  When
+multiple query images are provided their per-candidate scores are combined
+according to the ``combine`` parameter before ranking.
 """
 
 from __future__ import annotations
 
 import random as _random
 from io import BytesIO
+from typing import List
 
 import numpy as np
 from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Face, Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.filter_helpers import (
+    collect_set_filter_ids,
+    combine_likeness_scores,
+    fetch_scope_allowed_picture_ids,
+    fetch_set_candidate_ids,
+    normalize_set_mode,
+    project_membership_exists_clause,
+    project_unassigned_clause,
+    VALID_COMBINE_MODES,
+)
 
 logger = get_logger(__name__)
 
@@ -105,9 +116,17 @@ def register_routes(router, server):
         "/pictures/likeness-search",
         summary="Search by image likeness",
         description=(
-            "Upload an image and retrieve vault pictures ranked by visual similarity "
-            "(cosine similarity on CLIP embeddings).\n\n"
-            "**Modes**\n"
+            "Upload one or more images and retrieve vault pictures ranked by visual "
+            "similarity (cosine similarity on CLIP embeddings).\n\n"
+            "When multiple query images are provided, per-candidate scores from each "
+            "image are combined using the ``combine`` strategy before ranking.\n\n"
+            "**Combine modes**\n"
+            "- `mean` (default): arithmetic mean across query images.\n"
+            "- `max`: best match to any query image.\n"
+            "- `min`: must match all query images.\n"
+            "- `harmonic_mean`: emphasises the worst-matching query.\n"
+            "- `geometric_mean`: product-like balance.\n\n"
+            "**Random modes**\n"
             "- `random=false` (default): returns the top `top_n` most similar pictures.\n"
             "- `random=true`: selects `top_n` pictures at random from the `pool_m` "
             "most similar candidates.\n\n"
@@ -118,7 +137,7 @@ def register_routes(router, server):
     )
     async def search_by_image_likeness(
         request: Request,
-        file: UploadFile = File(..., description="Query image to search against."),
+        files: List[UploadFile] = File(..., description="One or more query images to search against."),
         top_n: int = Query(
             _DEFAULT_TOP_N,
             ge=1,
@@ -146,40 +165,140 @@ def register_routes(router, server):
             le=1.0,
             description="Minimum cosine similarity required to include a result.",
         ),
+        combine: str = Query(
+            "mean",
+            description=(
+                "How to combine scores when multiple query images are uploaded. "
+                "One of: mean, max, min, harmonic_mean, geometric_mean."
+            ),
+        ),
+        project_id: str | None = Query(None, description="Filter to pictures in a specific project (numeric ID or 'UNASSIGNED')."),
+        set_id: str | None = Query(None, description="Filter to pictures in a specific set."),
+        set_ids: List[str] = Query([], description="Filter to pictures in multiple sets."),
+        set_mode: str = Query("union", description="How to combine set filters: union, intersection, difference, xor."),
+        character_id: str | None = Query(None, description="Filter to pictures containing a specific character (numeric ID)."),
     ):
         # ── Authentication ────────────────────────────────────────────────
         server.auth.require_user_id(request)
 
-        # ── Scope-based candidate restriction ────────────────────────────
-        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
-        candidate_ids = list(scope_allowed) if scope_allowed is not None else None
-
-        # ── Load and validate uploaded image ─────────────────────────────
-        content_type = file.content_type or ""
-        if not content_type.startswith("image/"):
+        if combine not in VALID_COMBINE_MODES:
             raise HTTPException(
                 status_code=400,
-                detail="Uploaded file must be an image.",
+                detail=f"Invalid combine mode {combine!r}. Must be one of: {', '.join(sorted(VALID_COMBINE_MODES))}",
             )
 
-        raw_bytes = await file.read()
-        if not raw_bytes:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        # ── Optional filters: set / project / character ────────────────────────
+        set_filter_ids = collect_set_filter_ids(
+            set_id_value=set_id,
+            set_ids_values=list(set_ids),
+        )
+        normalized_set_mode = normalize_set_mode(set_mode)
 
-        try:
-            pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
-        except Exception as exc:
-            logger.warning(
-                "likeness-search: could not open uploaded image (%s bytes): %s",
-                len(raw_bytes),
-                exc,
+        filter_candidate_ids: set[int] | None = None
+
+        if set_filter_ids:
+            filter_candidate_ids = server.vault.db.run_immediate_read_task(
+                fetch_set_candidate_ids,
+                set_ids=set_filter_ids,
+                set_mode=normalized_set_mode,
+                deleted_only=False,
             )
-            raise HTTPException(
-                status_code=400, detail="Could not decode uploaded image."
-            ) from exc
 
-        # ── Encode query image ───────────────────────────────────────────
-        query_emb = _encode_query_image(server, pil_image)
+        if project_id is not None:
+            def _fetch_project_ids(session, project_id_value: str):
+                if project_id_value == "UNASSIGNED":
+                    stmt = select(Picture.id).where(
+                        Picture.deleted.is_(False),
+                        project_unassigned_clause(Picture),
+                    )
+                else:
+                    try:
+                        parsed_project_id = int(project_id_value)
+                    except (TypeError, ValueError):
+                        raise HTTPException(status_code=400, detail="Invalid project_id")
+                    stmt = select(Picture.id).where(
+                        Picture.deleted.is_(False),
+                        project_membership_exists_clause(parsed_project_id, Picture),
+                    )
+                return {int(r) for r in session.exec(stmt).all()}
+
+            project_candidate_ids = server.vault.db.run_immediate_read_task(
+                _fetch_project_ids, project_id
+            )
+            filter_candidate_ids = (
+                project_candidate_ids if filter_candidate_ids is None
+                else filter_candidate_ids & project_candidate_ids
+            )
+
+        if character_id is not None and character_id not in ("ALL", ""):
+            try:
+                char_id_int = int(character_id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid character_id")
+
+            def _fetch_character_picture_ids(session, cid: int):
+                return {
+                    int(r)
+                    for r in session.exec(
+                        select(Face.picture_id).where(Face.character_id == cid)
+                    ).all()
+                }
+
+            char_candidate_ids = server.vault.db.run_immediate_read_task(
+                _fetch_character_picture_ids, char_id_int
+            )
+            filter_candidate_ids = (
+                char_candidate_ids if filter_candidate_ids is None
+                else filter_candidate_ids & char_candidate_ids
+            )
+
+        # ── Scope-based candidate restriction ────────────────────────────
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            merged: set[int] | None = (
+                filter_candidate_ids & scope_allowed
+                if filter_candidate_ids is not None
+                else scope_allowed
+            )
+        else:
+            merged = filter_candidate_ids  # None means unrestricted
+        candidate_ids = list(merged) if merged is not None else None
+
+        # ── Load and validate uploaded images ─────────────────────────────
+        if not files:
+            raise HTTPException(status_code=400, detail="At least one file must be uploaded.")
+
+        query_embeddings: list[np.ndarray] = []
+        for idx, file in enumerate(files):
+            content_type = file.content_type or ""
+            if not content_type.startswith("image/"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: uploaded file must be an image.",
+                )
+
+            raw_bytes = await file.read()
+            if not raw_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: uploaded file is empty.",
+                )
+
+            try:
+                pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
+            except Exception as exc:
+                logger.warning(
+                    "likeness-search: could not open uploaded image %d (%s bytes): %s",
+                    idx + 1,
+                    len(raw_bytes),
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: could not decode uploaded image.",
+                ) from exc
+
+            query_embeddings.append(_encode_query_image(server, pil_image))
 
         # ── Fetch candidate embeddings from DB ───────────────────────────
         candidates = _fetch_candidate_embeddings(server, candidate_ids)
@@ -189,7 +308,13 @@ def register_routes(router, server):
         # ── Compute cosine similarities ──────────────────────────────────
         ids_arr = np.array([c[0] for c in candidates], dtype=np.int64)
         emb_matrix = np.stack([c[1] for c in candidates])  # (N, D)
-        similarities = emb_matrix @ query_emb  # (N,) — both sides already normalised
+        query_matrix = np.stack(query_embeddings)           # (Q, D)
+
+        # (N, Q) — one similarity per candidate per query
+        sim_matrix = emb_matrix @ query_matrix.T
+
+        # Combine across Q queries → (N,)
+        similarities = combine_likeness_scores(sim_matrix.T, combine)
 
         # Apply threshold
         mask = similarities >= threshold

@@ -1,9 +1,15 @@
 import ast
+import asyncio
 import json
 import os
+import random as _random
 import time
+from io import BytesIO
+from typing import List
+
 import cv2
-from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+import numpy as np
+from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
 from sqlalchemy import case as sa_case, exists, func
@@ -29,12 +35,101 @@ from pixlstash.picture_scoring import (
     select_reference_faces_for_character,
 )
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
+from pixlstash.utils.service.filter_helpers import (
+    combine_likeness_scores,
+    fetch_scope_allowed_character_ids,
+    VALID_COMBINE_MODES,
+)
 from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 
 logger = get_logger(__name__)
 
 _UNSET = object()
+
+_LIKENESS_SEARCH_DEFAULT_TOP_N = 20
+_LIKENESS_SEARCH_MAX_TOP_N = 500
+_LIKENESS_SEARCH_MAX_POOL_M = 2000
+# Maximum reference faces loaded per character for query-time likeness scoring.
+_MAX_REFS_PER_CHARACTER = 10
+
+
+def _fetch_character_candidate_embeddings(
+    server, scope_allowed: set[int] | None
+) -> list[tuple[int, list[np.ndarray]]]:
+    """Fetch reference face embeddings for all candidate characters.
+
+    Args:
+        server: The server instance providing DB access.
+        scope_allowed: Optional set of character IDs to restrict results to.
+            ``None`` means all characters are eligible.
+
+    Returns:
+        A list of ``(character_id, [embedding, ...])`` tuples.  Characters
+        with no usable face embeddings are excluded.
+    """
+
+    def _fetch(session) -> list[tuple[int, list[np.ndarray]]]:
+        from sqlalchemy import select as sa_select
+
+        query = (
+            sa_select(Face.character_id, Face.features)
+            .join(Picture, Face.picture_id == Picture.id)
+            .where(
+                Face.character_id.is_not(None),
+                Face.features.is_not(None),
+                Picture.deleted.is_(False),
+            )
+        )
+        if scope_allowed is not None:
+            if not scope_allowed:
+                return []
+            query = query.where(Face.character_id.in_(scope_allowed))
+
+        rows = session.execute(query).all()
+
+        char_embs: dict[int, list[np.ndarray]] = {}
+        for char_id, features in rows:
+            char_id = int(char_id)
+            if len(char_embs.get(char_id, [])) >= _MAX_REFS_PER_CHARACTER:
+                continue
+            emb = np.frombuffer(features, dtype=np.float32).copy()
+            if emb.size > 0:
+                char_embs.setdefault(char_id, []).append(emb)
+
+        return list(char_embs.items())
+
+    return server.vault.db.run_immediate_read_task(_fetch)
+
+
+def _compute_character_query_likeness(
+    query_emb: np.ndarray, ref_embs: list[np.ndarray]
+) -> float:
+    """Compute softmax-weighted cosine similarity of a query face against reference faces.
+
+    Uses the same alpha=5 softmax weighting as the database
+    ``character_face_likeness`` scalar function so scores are consistent.
+
+    Args:
+        query_emb: Normalised query face embedding (float32 array).
+        ref_embs: List of reference face embeddings for one character.
+
+    Returns:
+        Softmax-weighted cosine similarity in ``[-1, 1]``, or ``0.0`` on
+        any error.
+    """
+    if not ref_embs:
+        return 0.0
+    ref = np.stack(ref_embs)
+    ref_norm = ref / np.maximum(np.linalg.norm(ref, axis=1, keepdims=True), 1e-8)
+    sims = ref_norm @ query_emb  # (n_refs,)
+    sims = np.clip(sims, -1.0, 1.0)
+    alpha = 5.0
+    weights = np.exp(alpha * sims)
+    denom = weights.sum()
+    if denom < 1e-8:
+        return 0.0
+    return float((weights * sims).sum() / denom)
 
 
 def create_router(server) -> APIRouter:
@@ -1134,5 +1229,229 @@ def create_router(server) -> APIRouter:
             "face_ids": face_ids,
             "character_id": character_id,
         }
+
+    @router.post(
+        "/characters/likeness-search",
+        summary="Search characters by face likeness",
+        description=(
+            "Upload one or more images and retrieve vault characters ranked by face "
+            "similarity (softmax-weighted cosine similarity on InsightFace ArcFace "
+            "embeddings).\n\n"
+            "When multiple query images are provided, per-character scores from each "
+            "image are combined using the ``combine`` strategy before ranking.\n\n"
+            "**Combine modes**\n"
+            "- `mean` (default): arithmetic mean across query images.\n"
+            "- `max`: best match to any query image.\n"
+            "- `min`: must match all query images.\n"
+            "- `harmonic_mean`: emphasises the worst-matching query.\n"
+            "- `geometric_mean`: product-like balance.\n\n"
+            "**Random modes**\n"
+            "- `random=false` (default): returns the top `top_n` most similar characters.\n"
+            "- `random=true`: selects `top_n` characters at random from the `pool_m` "
+            "most similar candidates.\n\n"
+            "Results are ordered by descending similarity score. "
+            "Only characters with at least one pre-computed face embedding are considered. "
+            "The most prominent face (largest bounding box) in each uploaded image is used "
+            "as the query. Images with no detectable face are skipped; returns 422 when "
+            "no face is detected in any image."
+        ),
+        tags=["characters"],
+    )
+    async def search_by_character_likeness(
+        request: Request,
+        files: List[UploadFile] = File(..., description="One or more query images containing a face to search against."),
+        top_n: int = Query(
+            _LIKENESS_SEARCH_DEFAULT_TOP_N,
+            ge=1,
+            le=_LIKENESS_SEARCH_MAX_TOP_N,
+            description="Maximum number of results to return.",
+        ),
+        pool_m: int = Query(
+            0,
+            ge=0,
+            le=_LIKENESS_SEARCH_MAX_POOL_M,
+            description=(
+                "Pool size for random mode. When >0 and `random=true`, the top "
+                "`pool_m` matches are collected first and then `top_n` are drawn "
+                "at random. Ignored when `random=false`."
+            ),
+        ),
+        use_random: bool = Query(
+            False,
+            alias="random",
+            description="When true, return a random sample from the top-M pool.",
+        ),
+        threshold: float = Query(
+            0.0,
+            ge=0.0,
+            le=1.0,
+            description="Minimum similarity score required to include a result.",
+        ),
+        combine: str = Query(
+            "mean",
+            description=(
+                "How to combine scores when multiple query images are uploaded. "
+                "One of: mean, max, min, harmonic_mean, geometric_mean."
+            ),
+        ),
+    ):
+        # ── Authentication ────────────────────────────────────────────────
+        server.auth.require_user_id(request)
+
+        if combine not in VALID_COMBINE_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid combine mode {combine!r}. Must be one of: {', '.join(sorted(VALID_COMBINE_MODES))}",
+            )
+
+        # ── Scope-based candidate restriction ────────────────────────────
+        scope_allowed = fetch_scope_allowed_character_ids(server, request)
+
+        # ── Load images and detect faces ──────────────────────────────────
+        if not files:
+            raise HTTPException(status_code=400, detail="At least one file must be uploaded.")
+
+        bgr_images: list[np.ndarray] = []
+        for idx, file in enumerate(files):
+            content_type = file.content_type or ""
+            if not content_type.startswith("image/"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: uploaded file must be an image.",
+                )
+
+            raw_bytes = await file.read()
+            if not raw_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: uploaded file is empty.",
+                )
+
+            try:
+                pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
+            except Exception as exc:
+                logger.warning(
+                    "characters/likeness-search: could not open uploaded image %d (%s bytes): %s",
+                    idx + 1,
+                    len(raw_bytes),
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: could not decode uploaded image.",
+                ) from exc
+
+            bgr_images.append(cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR))
+
+        # ── Run face detection via the GPU task queue ─────────────────────
+        from pixlstash.tasks.face_detection_task import FaceDetectionTask
+
+        engine = getattr(server.vault, "_engine", None)
+        if engine is None:
+            raise HTTPException(status_code=503, detail="Inference engine not available.")
+        task_runner = getattr(server.vault, "_task_runner", None)
+        if task_runner is None:
+            raise HTTPException(status_code=503, detail="Task runner not available.")
+
+        detection_task = FaceDetectionTask(engine, bgr_images)
+        loop = asyncio.get_event_loop()
+        try:
+            all_face_results = await loop.run_in_executor(
+                None, task_runner.submit_and_wait, detection_task, 60.0
+            )
+        except TimeoutError as exc:
+            logger.error("characters/likeness-search: face detection timed out: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Face detection timed out; the server may be under heavy load.",
+            ) from exc
+        except RuntimeError as exc:
+            logger.error("characters/likeness-search: face detection task failed: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Face detection failed.",
+            ) from exc
+
+        query_embeddings: list[np.ndarray] = []
+        for idx, face_results in enumerate(all_face_results):
+            if not face_results:
+                logger.debug(
+                    "characters/likeness-search: no face detected in file %d; skipping",
+                    idx + 1,
+                )
+                continue
+
+            # Pick the face with the largest bounding box area.
+            best_face_result = max(
+                face_results,
+                key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+            )
+            if best_face_result.embedding is None:
+                logger.warning(
+                    "characters/likeness-search: face in file %d has no embedding; skipping",
+                    idx + 1,
+                )
+                continue
+
+            q_emb = best_face_result.embedding.astype(np.float32)
+            norm = np.linalg.norm(q_emb)
+            if norm > 1e-8:
+                q_emb = q_emb / norm
+            query_embeddings.append(q_emb)
+
+        if not query_embeddings:
+            raise HTTPException(
+                status_code=422,
+                detail="No face detected in any of the uploaded images.",
+            )
+
+        # ── Fetch candidate character embeddings from DB ──────────────────
+        candidates = _fetch_character_candidate_embeddings(server, scope_allowed)
+        if not candidates:
+            return []
+
+        # ── Compute per-character, per-query similarity ───────────────────
+        char_ids = [cid for cid, _ in candidates]
+        char_ref_embs = [refs for _, refs in candidates]
+
+        # scores_matrix shape: (Q, N_chars)
+        scores_matrix = np.array(
+            [
+                [_compute_character_query_likeness(q_emb, refs) for refs in char_ref_embs]
+                for q_emb in query_embeddings
+            ],
+            dtype=np.float32,
+        )
+
+        # Combine across queries → (N_chars,)
+        combined = combine_likeness_scores(scores_matrix, combine)
+
+        scored: list[tuple[int, float]] = [
+            (char_ids[i], float(combined[i]))
+            for i in range(len(char_ids))
+            if combined[i] >= threshold
+        ]
+
+        if not scored:
+            return []
+
+        # Sort descending by similarity.
+        scored.sort(key=lambda x: -x[1])
+
+        # ── Select results ────────────────────────────────────────────────
+        effective_pool = top_n if not use_random or pool_m <= 0 else pool_m
+        pool = scored[:effective_pool]
+
+        if use_random and pool_m > 0 and len(pool) > top_n:
+            indices = _random.sample(range(len(pool)), top_n)
+            indices.sort(key=lambda i: -pool[i][1])
+            pool = [pool[i] for i in indices]
+        else:
+            pool = pool[:top_n]
+
+        return [
+            {"character_id": cid, "likeness": round(sim, 6)}
+            for cid, sim in pool
+        ]
 
     return router

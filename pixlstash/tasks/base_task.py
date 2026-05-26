@@ -1,3 +1,4 @@
+import threading
 import uuid
 
 from abc import ABC, abstractmethod
@@ -55,6 +56,7 @@ class BaseTask(ABC):
         self.created_at = datetime.utcnow()
         self.started_at: Optional[datetime] = None
         self.completed_at: Optional[datetime] = None
+        self._done_event = threading.Event()
 
     def run(self) -> Any:
         self.started_at = datetime.utcnow()
@@ -69,6 +71,7 @@ class BaseTask(ABC):
             raise
         finally:
             self.completed_at = datetime.utcnow()
+            self._done_event.set()
 
     @property
     def priority(self) -> TaskPriority:

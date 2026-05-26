@@ -509,6 +509,36 @@ class TaskRunner:
         )
         return task.id
 
+    def submit_and_wait(self, task: BaseTask, timeout_s: float = 60.0) -> Any:
+        """Submit *task* and block until it completes, then return its result.
+
+        This is intended for interactive, user-triggered tasks that need a
+        result before the caller can continue (e.g. face detection during a
+        search request).  It should be called from a background thread (e.g.
+        via ``asyncio.run_in_executor``) so the event loop is not blocked.
+
+        Args:
+            task: The task to submit and wait for.
+            timeout_s: Maximum seconds to wait before raising ``TimeoutError``.
+
+        Returns:
+            The value stored in ``task.result`` after successful completion.
+
+        Raises:
+            TimeoutError: The task did not complete within *timeout_s* seconds.
+            RuntimeError: The task failed; the original error message is included.
+        """
+        self.submit(task)
+        if not task._done_event.wait(timeout=timeout_s):
+            raise TimeoutError(
+                f"Task {task.id} ({task.type}) did not complete within {timeout_s}s"
+            )
+        if task.status == TaskStatus.FAILED:
+            raise RuntimeError(
+                f"Task {task.id} ({task.type}) failed: {task.error}"
+            )
+        return task.result
+
     def is_running(self) -> bool:
         return any(t.is_alive() for t in self._threads)
 
