@@ -132,6 +132,7 @@ export function useGridFetch(
       importSourceFolderFilter: props.importSourceFolderFilter ?? null,
       unassignedOnlyFilter: props.unassignedOnlyFilter ?? false,
       reverseImageSearchPictureIds: reverseImageSearchPictureIds?.value ?? [],
+      faceLikenessSearchFaceId: faceLikenessSearchFaceId?.value ?? null,
     });
   }
 
