@@ -3,11 +3,51 @@
 from fastapi import HTTPException
 from sqlalchemy import exists, select
 from sqlmodel import Session
+import numpy as np
 
-from pixlstash.db_models import Face, Picture, PictureProjectMember, PictureSetMember
+from pixlstash.db_models import Character, Face, Picture, PictureProjectMember, PictureSetMember
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+VALID_COMBINE_MODES: frozenset[str] = frozenset(
+    {"mean", "max", "min", "harmonic_mean", "geometric_mean"}
+)
+
+
+def combine_likeness_scores(scores: np.ndarray, combine: str) -> np.ndarray:
+    """Combine per-query similarity scores across multiple query images.
+
+    Args:
+        scores: Shape ``(Q, N)`` — Q query images, N candidates.  For a
+            single query pass shape ``(1, N)``; the result is still ``(N,)``.
+        combine: One of ``"mean"``, ``"max"``, ``"min"``,
+            ``"harmonic_mean"``, or ``"geometric_mean"``.
+
+    Returns:
+        Shape ``(N,)`` combined scores in the same range as the input.
+    """
+    if scores.shape[0] == 1:
+        return scores[0]
+
+    if combine == "max":
+        return scores.max(axis=0)
+    if combine == "min":
+        return scores.min(axis=0)
+
+    # For harmonic and geometric mean, shift to (0, 1] to ensure positivity.
+    # Cosine similarities are in [-1, 1]; (x + 1) / 2 maps them to [0, 1].
+    if combine in ("harmonic_mean", "geometric_mean"):
+        shifted = (scores + 1.0) / 2.0  # (Q, N) in [0, 1]
+        shifted = np.maximum(shifted, 1e-10)
+        if combine == "geometric_mean":
+            combined_shifted = np.exp(np.log(shifted).mean(axis=0))
+        else:  # harmonic_mean
+            combined_shifted = 1.0 / (1.0 / shifted).mean(axis=0)
+        return combined_shifted * 2.0 - 1.0  # unshift back to [-1, 1]
+
+    # Default: arithmetic mean
+    return scores.mean(axis=0)
 
 
 def normalize_set_mode(value: str | None) -> str:
@@ -237,6 +277,81 @@ def fetch_scope_allowed_picture_ids(server, request) -> set[int] | None:
 
     logger.warning(
         "fetch_scope_allowed_picture_ids: unrecognised token_scope resource_type %r;"
+        " returning empty set (no access)",
+        token_scope.resource_type,
+    )
+    return set()
+
+
+def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
+    """Return character IDs accessible to the current token scope.
+
+    Args:
+        server: The server instance.
+        request: The current FastAPI request.
+
+    Returns:
+        ``None`` when the token has unrestricted access (no scope set).
+        A ``set[int]`` of allowed character IDs for scoped tokens.
+        An empty ``set`` when the scope resource type is unrecognised
+        (fail-safe: grants no access rather than full access).
+    """
+    token_scope = getattr(request.state, "token_scope", None)
+    if token_scope is None or token_scope.resource_type is None:
+        return None
+
+    resource_id = token_scope.resource_id
+
+    if token_scope.resource_type == "character":
+        return {int(resource_id)}
+
+    if token_scope.resource_type == "project":
+
+        def _fetch_project_chars(session: Session, project_id: int) -> set[int]:
+            return {
+                int(r[0])
+                for r in session.exec(
+                    select(Character.id).where(Character.project_id == project_id)
+                ).all()
+            }
+
+        return server.vault.db.run_immediate_read_task(_fetch_project_chars, resource_id)
+
+    if token_scope.resource_type == "picture_set":
+
+        def _fetch_set_chars(session: Session, set_id: int) -> set[int]:
+            return {
+                int(r[0])
+                for r in session.exec(
+                    select(Face.character_id)
+                    .join(PictureSetMember, Face.picture_id == PictureSetMember.picture_id)
+                    .where(
+                        PictureSetMember.set_id == set_id,
+                        Face.character_id.is_not(None),
+                    )
+                    .distinct()
+                ).all()
+            }
+
+        return server.vault.db.run_immediate_read_task(_fetch_set_chars, resource_id)
+
+    if token_scope.resource_type == "picture":
+
+        def _fetch_picture_chars(session: Session, picture_id: int) -> set[int]:
+            return {
+                int(r[0])
+                for r in session.exec(
+                    select(Face.character_id).where(
+                        Face.picture_id == picture_id,
+                        Face.character_id.is_not(None),
+                    )
+                ).all()
+            }
+
+        return server.vault.db.run_immediate_read_task(_fetch_picture_chars, resource_id)
+
+    logger.warning(
+        "fetch_scope_allowed_character_ids: unrecognised token_scope resource_type %r;"
         " returning empty set (no access)",
         token_scope.resource_type,
     )

@@ -287,36 +287,49 @@ class FaceExtractionTask(BaseTask):
         except Exception as exc:
             logger.debug("malloc_trim call failed: %s", exc)
 
-    def _init_insightface_app(self):
-        if self._insightface_app is not None:
-            return
+    @classmethod
+    def get_or_init_insightface(cls, engine, cpu_spillover: bool = False):
+        """Return a ready-to-use InsightFace app, initialising it if necessary.
 
-        if self._cpu_spillover_enabled:
-            with FaceExtractionTask._cpu_insightface_lock:
-                if FaceExtractionTask._global_cpu_insightface_app is None:
+        This is the single authoritative initialisation path shared by
+        :class:`FaceExtractionTask` and :class:`~pixlstash.tasks.face_detection_task.FaceDetectionTask`.
+        It should be called from the GPU worker thread so that model loading is
+        serialised and VRAM gating applies.
+
+        Args:
+            engine: :class:`~pixlstash.inference.engine.InferenceEngine` used to
+                determine whether to use CUDA or CPU-only execution.
+            cpu_spillover: When ``True`` use the CPU-only fallback app instead
+                of the GPU app.
+
+        Returns:
+            An initialised :class:`insightface.app.FaceAnalysis` instance.
+        """
+        if cpu_spillover:
+            with cls._cpu_insightface_lock:
+                if cls._global_cpu_insightface_app is None:
                     logger.debug(
                         "FaceExtractionTask: initialising CPU spillover InsightFace app (ctx_id=-1)."
                     )
                     app = FaceAnalysis(providers=["CPUExecutionProvider"])
                     app.prepare(ctx_id=-1, det_thresh=0.25, det_size=(256, 256))
-                    FaceExtractionTask._global_cpu_insightface_app = app
+                    cls._global_cpu_insightface_app = app
                 else:
                     logger.debug(
                         "FaceExtractionTask: reusing CPU spillover InsightFace app."
                     )
-                self._insightface_app = FaceExtractionTask._global_cpu_insightface_app
-            return
+                return cls._global_cpu_insightface_app
 
-        if FaceExtractionTask._global_insightface_app is not None:
+        if cls._global_insightface_app is not None:
             logger.debug("Reusing global InsightFace app")
-            self._insightface_app = FaceExtractionTask._global_insightface_app
-            return
+            return cls._global_insightface_app
 
-        use_cuda = not self._engine.force_cpu and torch.cuda.is_available()
-        if use_cuda:
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        else:
-            providers = ["CPUExecutionProvider"]
+        use_cuda = not engine.force_cpu and torch.cuda.is_available()
+        providers = (
+            ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if use_cuda
+            else ["CPUExecutionProvider"]
+        )
         logger.debug(
             "Initialising InsightFace with providers=%s (ctx_id=%d)",
             providers,
@@ -328,8 +341,15 @@ class FaceExtractionTask(BaseTask):
             det_thresh=0.25,
             det_size=(256, 256),
         )
-        FaceExtractionTask._global_insightface_app = app
-        self._insightface_app = app
+        cls._global_insightface_app = app
+        return app
+
+    def _init_insightface_app(self):
+        if self._insightface_app is not None:
+            return
+        self._insightface_app = FaceExtractionTask.get_or_init_insightface(
+            self._engine, cpu_spillover=self._cpu_spillover_enabled
+        )
 
     @staticmethod
     def _get_loaded_relationship(obj, name):

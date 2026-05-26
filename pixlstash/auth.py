@@ -85,6 +85,8 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
         "/api/v1/characters/membership",
         # Reverse image search — POST only because it accepts a file upload.
         "/api/v1/pictures/likeness-search",
+        "/api/v1/pictures/face-search",
+        "/api/v1/characters/likeness-search",
     }
 )
 
