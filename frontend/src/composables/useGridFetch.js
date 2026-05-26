@@ -43,6 +43,8 @@ export function useGridFetch(
     primarySelectedSetId,
     smartScoreProgress,
     exportProgress,
+    reverseImageSearchPictureIds,
+    faceLikenessSearchFaceId,
   },
   props,
   {
@@ -129,6 +131,7 @@ export function useGridFetch(
       filePathPrefixFilter: props.filePathPrefixFilter ?? null,
       importSourceFolderFilter: props.importSourceFolderFilter ?? null,
       unassignedOnlyFilter: props.unassignedOnlyFilter ?? false,
+      reverseImageSearchPictureIds: reverseImageSearchPictureIds?.value ?? [],
     });
   }
 
@@ -429,6 +432,10 @@ export function useGridFetch(
 
       const _hasSearch = !!props.searchQuery?.trim();
       const _isLikenessSort = props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
+      const _hasReverseImageSearch =
+        !_hasSearch && !!reverseImageSearchPictureIds?.value?.length;
+      const _hasFaceLikenessSearch =
+        !_hasSearch && !_hasReverseImageSearch && !!faceLikenessSearchFaceId?.value;
 
       if (_isLikenessSort) {
         const threshold = getStackThreshold(props.stackThreshold);
@@ -460,6 +467,63 @@ export function useGridFetch(
               typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
           };
         });
+      } else if (_hasFaceLikenessSearch) {
+        // Face likeness search: POST to face-search with source_face_id.
+        const queryFaceId = faceLikenessSearchFaceId.value;
+        const faceRes = await apiClient.post(
+          `${props.backendUrl}/pictures/face-search?source_face_id=${queryFaceId}&top_n=500`,
+        );
+        const faceResults = Array.isArray(faceRes.data) ? faceRes.data : [];
+        if (!faceResults.length) {
+          images = [];
+        } else {
+          const idOrder = faceResults.map((r) => r.picture_id);
+          const idParams = new URLSearchParams();
+          idOrder.forEach((id) => idParams.append("id", id));
+          idParams.append("fields", "grid");
+          const picturesRes = await apiClient.get(
+            `${props.backendUrl}/pictures?${idParams.toString()}`,
+          );
+          const picturesById = {};
+          for (const pic of Array.isArray(picturesRes.data)
+            ? picturesRes.data
+            : []) {
+            picturesById[pic.id] = pic;
+          }
+          images = idOrder.map((id) => picturesById[id]).filter(Boolean);
+        }
+      } else if (_hasReverseImageSearch) {
+        // Reverse image search: POST to likeness-search with stored CLIP embeddings.
+        // Multiple IDs are combined with min similarity (must match all sources).
+        const queryPicIds = reverseImageSearchPictureIds.value;
+        const likenessParams = new URLSearchParams();
+        queryPicIds.forEach((id) => likenessParams.append("source_picture_ids", id));
+        likenessParams.append("top_n", "500");
+        likenessParams.append("threshold", "0.05");
+        const likenessRes = await apiClient.post(
+          `${props.backendUrl}/pictures/likeness-search?${likenessParams.toString()}`,
+        );
+        const likenessResults = Array.isArray(likenessRes.data)
+          ? likenessRes.data
+          : [];
+        if (!likenessResults.length) {
+          images = [];
+        } else {
+          const idOrder = likenessResults.map((r) => r.picture_id);
+          const idParams = new URLSearchParams();
+          idOrder.forEach((id) => idParams.append("id", id));
+          idParams.append("fields", "grid");
+          const picturesRes = await apiClient.get(
+            `${props.backendUrl}/pictures?${idParams.toString()}`,
+          );
+          const picturesById = {};
+          for (const pic of Array.isArray(picturesRes.data)
+            ? picturesRes.data
+            : []) {
+            picturesById[pic.id] = pic;
+          }
+          images = idOrder.map((id) => picturesById[id]).filter(Boolean);
+        }
       } else if (_hasSearch) {
         // Use /pictures/search endpoint for text search
         const params = buildPictureIdsQueryParams();

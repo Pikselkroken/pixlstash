@@ -5,7 +5,13 @@ from sqlalchemy import exists, select
 from sqlmodel import Session
 import numpy as np
 
-from pixlstash.db_models import Character, Face, Picture, PictureProjectMember, PictureSetMember
+from pixlstash.db_models import (
+    Character,
+    Face,
+    Picture,
+    PictureProjectMember,
+    PictureSetMember,
+)
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -315,7 +321,9 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
                 ).all()
             }
 
-        return server.vault.db.run_immediate_read_task(_fetch_project_chars, resource_id)
+        return server.vault.db.run_immediate_read_task(
+            _fetch_project_chars, resource_id
+        )
 
     if token_scope.resource_type == "picture_set":
 
@@ -324,7 +332,9 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
                 int(r[0])
                 for r in session.exec(
                     select(Face.character_id)
-                    .join(PictureSetMember, Face.picture_id == PictureSetMember.picture_id)
+                    .join(
+                        PictureSetMember, Face.picture_id == PictureSetMember.picture_id
+                    )
                     .where(
                         PictureSetMember.set_id == set_id,
                         Face.character_id.is_not(None),
@@ -348,7 +358,9 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
                 ).all()
             }
 
-        return server.vault.db.run_immediate_read_task(_fetch_picture_chars, resource_id)
+        return server.vault.db.run_immediate_read_task(
+            _fetch_picture_chars, resource_id
+        )
 
     logger.warning(
         "fetch_scope_allowed_character_ids: unrecognised token_scope resource_type %r;"

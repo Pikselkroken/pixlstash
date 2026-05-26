@@ -534,9 +534,7 @@ class TaskRunner:
                 f"Task {task.id} ({task.type}) did not complete within {timeout_s}s"
             )
         if task.status == TaskStatus.FAILED:
-            raise RuntimeError(
-                f"Task {task.id} ({task.type}) failed: {task.error}"
-            )
+            raise RuntimeError(f"Task {task.id} ({task.type}) failed: {task.error}")
         return task.result
 
     def is_running(self) -> bool:

@@ -9,7 +9,16 @@ from typing import List
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Body,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from PIL import Image
 from sqlalchemy import case as sa_case, exists, func
@@ -1259,7 +1268,10 @@ def create_router(server) -> APIRouter:
     )
     async def search_by_character_likeness(
         request: Request,
-        files: List[UploadFile] = File(..., description="One or more query images containing a face to search against."),
+        files: List[UploadFile] = File(
+            ...,
+            description="One or more query images containing a face to search against.",
+        ),
         top_n: int = Query(
             _LIKENESS_SEARCH_DEFAULT_TOP_N,
             ge=1,
@@ -1309,7 +1321,9 @@ def create_router(server) -> APIRouter:
 
         # ── Load images and detect faces ──────────────────────────────────
         if not files:
-            raise HTTPException(status_code=400, detail="At least one file must be uploaded.")
+            raise HTTPException(
+                status_code=400, detail="At least one file must be uploaded."
+            )
 
         bgr_images: list[np.ndarray] = []
         for idx, file in enumerate(files):
@@ -1348,7 +1362,9 @@ def create_router(server) -> APIRouter:
 
         engine = getattr(server.vault, "_engine", None)
         if engine is None:
-            raise HTTPException(status_code=503, detail="Inference engine not available.")
+            raise HTTPException(
+                status_code=503, detail="Inference engine not available."
+            )
         task_runner = getattr(server.vault, "_task_runner", None)
         if task_runner is None:
             raise HTTPException(status_code=503, detail="Task runner not available.")
@@ -1360,13 +1376,17 @@ def create_router(server) -> APIRouter:
                 None, task_runner.submit_and_wait, detection_task, 60.0
             )
         except TimeoutError as exc:
-            logger.error("characters/likeness-search: face detection timed out: %s", exc)
+            logger.error(
+                "characters/likeness-search: face detection timed out: %s", exc
+            )
             raise HTTPException(
                 status_code=503,
                 detail="Face detection timed out; the server may be under heavy load.",
             ) from exc
         except RuntimeError as exc:
-            logger.error("characters/likeness-search: face detection task failed: %s", exc)
+            logger.error(
+                "characters/likeness-search: face detection task failed: %s", exc
+            )
             raise HTTPException(
                 status_code=503,
                 detail="Face detection failed.",
@@ -1417,7 +1437,10 @@ def create_router(server) -> APIRouter:
         # scores_matrix shape: (Q, N_chars)
         scores_matrix = np.array(
             [
-                [_compute_character_query_likeness(q_emb, refs) for refs in char_ref_embs]
+                [
+                    _compute_character_query_likeness(q_emb, refs)
+                    for refs in char_ref_embs
+                ]
                 for q_emb in query_embeddings
             ],
             dtype=np.float32,
@@ -1449,9 +1472,6 @@ def create_router(server) -> APIRouter:
         else:
             pool = pool[:top_n]
 
-        return [
-            {"character_id": cid, "likeness": round(sim, 6)}
-            for cid, sim in pool
-        ]
+        return [{"character_id": cid, "likeness": round(sim, 6)} for cid, sim in pool]
 
     return router
