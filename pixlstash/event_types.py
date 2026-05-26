@@ -11,3 +11,8 @@ class EventType(Enum):
     CHANGED_FACES = auto()
     QUALITY_UPDATED = auto()
     CLEARED_TAGS = auto()
+    CHECKPOINT_CREATED = auto()
+    CHECKPOINT_DELETED = auto()
+    RESTORE_STARTED = auto()
+    RESTORE_COMPLETED = auto()
+    UNDO_APPLIED = auto()

@@ -28,8 +28,9 @@
 15. [Frontend Integration](#15-frontend-integration)
 16. [Authentication & Authorization](#16-authentication--authorization)
 17. [Data Flow Pipeline](#17-data-flow-pipeline)
-18. [Mermaid Diagrams](#18-mermaid-diagrams)
-19. [Architectural Patterns](#19-architectural-patterns)
+18. [Checkpoints & History](#18-checkpoints--history)
+19. [Mermaid Diagrams](#19-mermaid-diagrams)
+20. [Architectural Patterns](#20-architectural-patterns)
 
 ---
 
@@ -862,7 +863,114 @@ Failure handling: if a task raises, its work column stays `NULL` so the correspo
 
 ---
 
-## 18. Mermaid Diagrams
+## 18. Checkpoints & History
+
+### 18.1 Overview
+
+The Checkpoints & History subsystem provides three user-facing capabilities:
+
+1. **ChangeLog** — an audit trail of every INSERT/UPDATE/DELETE that passes through the writer session.
+2. **Checkpoints** — full SQLite snapshots used as restore points.
+3. **Restore/Undo** — mechanisms to roll back changes either to a snapshot or by replaying ChangeLog entries in reverse.
+
+### 18.2 ChangeLog
+
+**Model** — `pixlstash/db_models/change_log.py` (`__tablename__ = "changelog"`)
+
+| Column | Type | Description |
+|---|---|---|
+| `txn_id` | String (UUID, indexed) | Shared by all rows produced in one writer task. |
+| `seq_in_txn` | Integer | 0-based ordering within a transaction. |
+| `table_name` | String (indexed) | SQLite table that was mutated. |
+| `row_pk_json` | String | JSON-encoded dict of PK columns. |
+| `op` | String | `'INSERT'`, `'UPDATE'`, or `'DELETE'`. |
+| `before_json` | String? | Column values before change (NULL for INSERT / excluded tables). |
+| `after_json` | String? | Column values after change (NULL for DELETE / excluded tables). |
+| `created_at` | DateTime (indexed) | UTC timestamp of the flush. |
+| `actor_user_id` | Integer? (FK→user) | User who triggered the write, if known. |
+| `reason` | String? | Human-readable label from `write_reason()`. |
+
+**Flush hooks** — `_before_flush_handler` and `_after_flush_handler` are attached to each writer session via `_attach_change_log_hooks(session)`. They capture object state before and after each flush, then insert ChangeLog rows atomically via core SQL inside the same writer task.
+
+**Table classification** — Every SQLModel `table=True` class must be classified in exactly one of:
+
+- `CHANGE_LOG_INCLUDED_TABLES` — core user-editable metadata (`picture`, `face`, `character`, `tag`, `user`, `pictureset`, `project`, etc.). Full before/after JSON is stored.
+- `CHANGE_LOG_EXCLUDED_TABLES` — regenerable/ephemeral/system tables (`quality`, `likeness`, embeddings queue, `guest_session`, `alembic_version`, `changelog`, `checkpoint`). Metadata-only entries are produced (no before/after payload).
+
+Guardrail `test_change_log_dual_list_covers_all_tables` enforces completeness at test time. When adding a new SQLModel table, add it to exactly one list in `pixlstash/database.py`.
+
+**write_reason()** — `VaultDatabase.write_reason(reason, actor_user_id=None)` is a context manager. Call it around any write that should be labelled in the audit trail:
+
+```python
+with vault.db.write_reason("delete picture", actor_user_id=user_id):
+    vault.db.run_task(lambda session: ...)
+```
+
+The `reason` and `actor_user_id` values are propagated to the writer thread via `contextvars.copy_context()` in `DatabaseTask.__init__` and read by the flush hooks.
+
+### 18.3 Checkpoints
+
+**Model** — `pixlstash/db_models/checkpoint.py` (`__tablename__ = "checkpoint"`)
+
+**Service** — `pixlstash/services/checkpoint_service.py`
+
+A checkpoint is a full copy of the live SQLite database taken via `VACUUM INTO`. Stored at:
+
+```
+<vault_root>/checkpoints/YYYY/MM/DD/<uuid>.sqlite
+<vault_root>/checkpoints/YYYY/MM/DD/<uuid>.manifest.json
+```
+
+The manifest JSON contains: `picture_count`, `picture_ids`, `schema_version`, `max_changelog_id`.
+
+**GFS retention policy** (Grandfather-Father-Son):
+
+| Tier | Count kept |
+|---|---|
+| `DAILY` | 7 most recent |
+| `WEEKLY` | 4 most recent Sundays |
+| `MONTHLY` | 12 most recent first-of-month snapshots |
+
+`MANUAL` and `OPPORTUNISTIC` checkpoints are never pruned automatically.
+
+**Automatic checkpoints** — `EnsureDailyCheckpointFinder` / `EnsureDailyCheckpointTask` run at LOW priority every 5 minutes to ensure a DAILY checkpoint exists for today. `checkpoint_if_due()` also accepts an `OPPORTUNISTIC` kind for route-triggered checkpoints (rate-limited to once per hour).
+
+### 18.4 RestoreService
+
+**Service** — `pixlstash/services/restore_service.py`
+
+| Method | Behaviour |
+|---|---|
+| `restore_full(checkpoint_id, dry_run=False)` | Upgrades snapshot schema, checks for missing files, swaps live DB. Returns `RestoreReport`. |
+| `restore_resource(checkpoint_id, resource_type, resource_id)` | Upserts one resource (picture, picture_set, project, or character) from the snapshot into the live DB. |
+
+Full restore disposes the current SQLAlchemy engine, copies the upgraded snapshot over the live DB path, and re-creates the engine. `RESTORE_STARTED` / `RESTORE_COMPLETED` events are broadcast. `_PICTURE_DERIVED_COLUMNS` (`smart_score`, `text_score`, `text_embedding`, `image_embedding`) are NULL-reset after restore so the WorkPlanner regenerates them.
+
+### 18.5 UndoService
+
+**Service** — `pixlstash/services/undo_service.py`
+
+| Method | Behaviour |
+|---|---|
+| `undo_last_transaction()` | Finds the highest `txn_id` in the ChangeLog and applies its entries in reverse. |
+| `undo_to_checkpoint(checkpoint_id)` | Reverts all ChangeLog entries after `max_changelog_id` from the checkpoint manifest. |
+
+Each ChangeLog entry is reversed: `INSERT` → DELETE, `UPDATE` → restore `before_json`, `DELETE` → INSERT from `before_json`. Raw `text()` SQL is used to avoid ORM dependency on table classes at undo time.
+
+### 18.6 API Endpoints (checkpoints tag)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/checkpoints` | List all checkpoints. |
+| `POST` | `/api/v1/checkpoints` | Create a MANUAL checkpoint. |
+| `DELETE` | `/api/v1/checkpoints/{id}` | Delete a checkpoint and its files. |
+| `POST` | `/api/v1/checkpoints/{id}/restore` | Full restore (body: `dry_run`). |
+| `POST` | `/api/v1/checkpoints/{id}/restore/{resource_type}/{resource_id}` | Per-resource restore. |
+| `POST` | `/api/v1/undo` | Undo last transaction or undo to checkpoint (body: `checkpoint_id?`). |
+
+---
+
+## 19. Mermaid Diagrams
 
 ### 18.1 Full backend data-flow
 
@@ -1083,7 +1191,7 @@ sequenceDiagram
 
 ---
 
-## 19. Architectural Patterns
+## 20. Architectural Patterns
 
 1. **Task + Finder pattern** — every async work item has a paired finder that queries the DB for missing data and claims rows; results are written back and claims released.
 2. **DB write serialisation** — `VaultDatabase` funnels all writes through a single task queue; reads run in parallel for throughput.
@@ -1099,7 +1207,7 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-05-21. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+*Last updated: 2026-05-26. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
 

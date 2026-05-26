@@ -44,6 +44,9 @@ from . import worker_config
 
 from pixlstash.event_types import EventType
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+from pixlstash.services.checkpoint_service import CheckpointService
+from pixlstash.services.restore_service import RestoreService
+from pixlstash.services.undo_service import UndoService
 
 
 logger = get_logger(__name__)
@@ -100,6 +103,10 @@ class Vault:
         self.db = VaultDatabase(self._db_path)
         self.set_description(description or "")
 
+        self.checkpoint_service = CheckpointService(self)
+        self.restore_service = RestoreService(self)
+        self.undo_service = UndoService(self)
+
         self._engine: InferenceEngine | None = None
         self._force_cpu = force_cpu
         self._fast_captions = fast_captions
@@ -146,6 +153,8 @@ class Vault:
             image_root=self.image_root,
             path_mapper=path_mapper,
         )
+        from pixlstash.tasks import TaskType, EnsureDailyCheckpointFinder
+        self._planner_work_finders[TaskType.DAILY_CHECKPOINT] = EnsureDailyCheckpointFinder(vault=self)
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,
@@ -225,6 +234,17 @@ class Vault:
                 and hasattr(plugin, "bind_service")
             ):
                 plugin.bind_service(service)
+
+    def emit_event(self, event_type: EventType, data=None):
+        """Emit an event to all registered listeners and wake the work planner.
+
+        Alias for ``notify()`` used by the service layer.
+
+        Args:
+            event_type: The event type to emit.
+            data: Optional data payload.
+        """
+        self.notify(event_type, data)
 
     def notify(self, event_type: EventType, data=None):
         """

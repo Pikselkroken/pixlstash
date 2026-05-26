@@ -115,6 +115,9 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
         "pixlstash/services/share_service.py",  # vault-injection pattern
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
+        "pixlstash/services/checkpoint_service.py",  # vault-injection pattern; owns checkpoint lifecycle
+        "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
+        "pixlstash/services/undo_service.py",  # vault-injection pattern; orchestrates DB reads/writes
     }
 
     violations = []
@@ -249,6 +252,11 @@ def test_event_types_fully_classified():
         {
             EventType.CHANGED_DESCRIPTIONS.name,  # description updates do not trigger WS refresh
             EventType.QUALITY_UPDATED.name,  # used only to invalidate the stats cache
+            EventType.CHECKPOINT_CREATED.name,  # checkpoint lifecycle event, not a picture change
+            EventType.CHECKPOINT_DELETED.name,  # checkpoint lifecycle event
+            EventType.RESTORE_STARTED.name,  # restore lifecycle event
+            EventType.RESTORE_COMPLETED.name,  # restore lifecycle event; frontend can react via polling
+            EventType.UNDO_APPLIED.name,  # undo lifecycle event; triggers CHANGED_PICTURES separately
         }
     )
 

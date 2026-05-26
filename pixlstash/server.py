@@ -61,6 +61,7 @@ from pixlstash.routes.filesystem import create_router as create_filesystem_route
 from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
+from pixlstash.routes.checkpoints import create_router as create_checkpoints_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -1047,6 +1048,11 @@ class Server:
             create_taggers_router(self),
             prefix=API_V1_PREFIX,
             tags=["taggers"],
+        )
+        self.api.include_router(
+            create_checkpoints_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["checkpoints"],
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.
         self.api.include_router(
