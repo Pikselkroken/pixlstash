@@ -186,6 +186,73 @@
         <div class="ctx-sep" />
       </template>
 
+      <!-- ── Find similar faces ─────────────────────────────── -->
+      <template
+        v-if="
+          contextImage?.id &&
+          !isScrapheapView &&
+          selectedImageIds.length === 1 &&
+          contextImageFaces.length
+        "
+      >
+        <!-- Direct action when a specific face was right-clicked, or only one face exists -->
+        <button
+          v-if="contextClickedFace || contextImageFaces.length === 1"
+          class="ctx-item"
+          title="Find pictures with similar faces"
+          @click="
+            onAction(
+              'find-similar-faces',
+              (contextClickedFace ?? contextImageFaces[0]).id,
+            )
+          "
+        >
+          <v-icon class="ctx-icon" size="15">mdi-face-recognition</v-icon>
+          Find similar faces
+        </button>
+        <!-- Submenu to pick a face when not right-clicking on one -->
+        <div
+          v-else
+          class="ctx-submenu-wrap"
+          @mouseenter="openFaceSubmenu"
+          @mouseleave="findFacesSubmenuOpen = false"
+        >
+          <button class="ctx-item">
+            <v-icon class="ctx-icon" size="15">mdi-face-recognition</v-icon>
+            Find similar faces
+            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="findFacesSubmenuOpen" class="ctx-submenu ctx-face-submenu">
+            <button
+              v-for="(face, idx) in contextImageFaces"
+              :key="face.id ?? idx"
+              class="ctx-item ctx-face-item"
+              @click="onAction('find-similar-faces', face.id)"
+            >
+              <div
+                class="ctx-face-thumb"
+                :style="getFaceThumbStyle(face, idx)"
+              />
+              <span>{{ faceLabel(face, idx) }}</span>
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── Reverse image search ────────────────────────────── -->
+      <template v-if="contextImage?.id && !isScrapheapView">
+        <button
+          class="ctx-item"
+          :disabled="!selectedImageIds.length"
+          title="Find visually similar images"
+          @click="onAction('reverse-image-search')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
+          Reverse image search
+        </button>
+        <div class="ctx-sep" />
+      </template>
+
       <!-- ── Share image ──────────────────────────────────────────── -->
       <template v-if="contextImage?.id && selectedImageIds.length === 1">
         <button
@@ -239,7 +306,8 @@ import {
   ref,
   watch,
 } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { faceBoxColor } from "../../utils/utils.js";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({
@@ -266,6 +334,7 @@ const props = defineProps({
   taggerPlugins: { type: Array, default: () => [] },
   captionerPlugins: { type: Array, default: () => [] },
   contextImage: { type: Object, default: null },
+  contextClickedFace: { type: Object, default: null },
   isShared: { type: Boolean, default: false },
 });
 
@@ -288,6 +357,8 @@ const emit = defineEmits([
   "generate-description",
   "share-picture",
   "remove-picture-shares",
+  "reverse-image-search",
+  "find-similar-faces",
 ]);
 
 const menuRef = ref(null);
@@ -296,6 +367,83 @@ const adjustedY = ref(props.y);
 const submenusFlip = ref(false);
 const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
+const findFacesSubmenuOpen = ref(false);
+const faceCharacterNames = ref({}); // face.id -> character name string or null
+
+// ── Face helpers ───────────────────────────────────────────────────────────
+
+const contextImageFaces = computed(() => {
+  if (!props.contextImage?.faces) return [];
+  return props.contextImage.faces.filter(
+    (f) => f.frame_index === 0 && f.id != null,
+  );
+});
+
+async function loadFaceCharacterNames() {
+  const faces = contextImageFaces.value;
+  if (!faces.length || !props.backendUrl) return;
+  const pending = faces.filter(
+    (f) => f.character_id && !(f.id in faceCharacterNames.value),
+  );
+  await Promise.all(
+    pending.map(async (face) => {
+      try {
+        const res = await apiClient.get(
+          `${props.backendUrl}/characters/${face.character_id}/name`,
+        );
+        faceCharacterNames.value = {
+          ...faceCharacterNames.value,
+          [face.id]: res.data?.name || null,
+        };
+      } catch {
+        faceCharacterNames.value = {
+          ...faceCharacterNames.value,
+          [face.id]: null,
+        };
+      }
+    }),
+  );
+}
+
+function openFaceSubmenu() {
+  findFacesSubmenuOpen.value = true;
+  loadFaceCharacterNames();
+}
+
+function faceLabel(face, idx) {
+  if (face.character_id) {
+    const name = faceCharacterNames.value[face.id];
+    if (name) return name.charAt(0).toUpperCase() + name.slice(1);
+    if (name === undefined) return `Face ${idx + 1}`; // still loading
+  }
+  return "Unassigned";
+}
+
+function getFaceThumbStyle(face, idx) {
+  const color = faceBoxColor(idx);
+  const img = props.contextImage;
+  const bbox = Array.isArray(face?.bbox) ? face.bbox : null;
+  if (!img?.thumbnail || !bbox || bbox.length !== 4) {
+    return { width: "34px", height: "34px", borderColor: color };
+  }
+  const [x1, y1, x2, y2] = bbox;
+  const imageW = img.thumbnail_width || img.width || 1;
+  const imageH = img.thumbnail_height || img.height || 1;
+  const faceW = Math.max(1, x2 - x1);
+  const faceH = Math.max(1, y2 - y1);
+  const targetMax = 34;
+  const scale = targetMax / Math.max(faceW, faceH);
+  const targetW = Math.max(1, Math.round(faceW * scale));
+  const targetH = Math.max(1, Math.round(faceH * scale));
+  return {
+    width: `${targetW}px`,
+    height: `${targetH}px`,
+    borderColor: color,
+    backgroundImage: `url(${img.thumbnail})`,
+    backgroundSize: `${Math.round(imageW * scale)}px ${Math.round(imageH * scale)}px`,
+    backgroundPosition: `${Math.round(-x1 * scale)}px ${Math.round(-y1 * scale)}px`,
+  };
+}
 
 // ── Position clamping ──────────────────────────────────────────────────────
 
@@ -475,5 +623,22 @@ onBeforeUnmount(() => {
   max-width: 260px;
   user-select: none;
   outline: none;
+}
+
+.ctx-face-submenu {
+  min-width: 160px;
+}
+
+.ctx-face-item {
+  gap: 10px;
+  align-items: center;
+}
+
+.ctx-face-thumb {
+  flex-shrink: 0;
+  border: 2px solid;
+  border-radius: 3px;
+  background-color: rgba(var(--v-theme-on-surface), 0.08);
+  background-repeat: no-repeat;
 }
 </style>

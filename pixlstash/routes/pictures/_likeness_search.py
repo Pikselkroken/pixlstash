@@ -137,7 +137,17 @@ def register_routes(router, server):
     )
     async def search_by_image_likeness(
         request: Request,
-        files: List[UploadFile] = File(..., description="One or more query images to search against."),
+        files: List[UploadFile] = File(
+            default=[], description="One or more query images to search against."
+        ),
+        source_picture_id: int | None = Query(
+            None,
+            description="Use the stored embedding of this picture ID as the query (single ID, kept for backward compatibility).",
+        ),
+        source_picture_ids: List[int] = Query(
+            default=[],
+            description="Use the stored embeddings of these picture IDs as the query. When multiple IDs are supplied results are ranked by the minimum similarity across all sources.",
+        ),
         top_n: int = Query(
             _DEFAULT_TOP_N,
             ge=1,
@@ -172,11 +182,24 @@ def register_routes(router, server):
                 "One of: mean, max, min, harmonic_mean, geometric_mean."
             ),
         ),
-        project_id: str | None = Query(None, description="Filter to pictures in a specific project (numeric ID or 'UNASSIGNED')."),
-        set_id: str | None = Query(None, description="Filter to pictures in a specific set."),
-        set_ids: List[str] = Query([], description="Filter to pictures in multiple sets."),
-        set_mode: str = Query("union", description="How to combine set filters: union, intersection, difference, xor."),
-        character_id: str | None = Query(None, description="Filter to pictures containing a specific character (numeric ID)."),
+        project_id: str | None = Query(
+            None,
+            description="Filter to pictures in a specific project (numeric ID or 'UNASSIGNED').",
+        ),
+        set_id: str | None = Query(
+            None, description="Filter to pictures in a specific set."
+        ),
+        set_ids: List[str] = Query(
+            [], description="Filter to pictures in multiple sets."
+        ),
+        set_mode: str = Query(
+            "union",
+            description="How to combine set filters: union, intersection, difference, xor.",
+        ),
+        character_id: str | None = Query(
+            None,
+            description="Filter to pictures containing a specific character (numeric ID).",
+        ),
     ):
         # ── Authentication ────────────────────────────────────────────────
         server.auth.require_user_id(request)
@@ -205,6 +228,7 @@ def register_routes(router, server):
             )
 
         if project_id is not None:
+
             def _fetch_project_ids(session, project_id_value: str):
                 if project_id_value == "UNASSIGNED":
                     stmt = select(Picture.id).where(
@@ -215,7 +239,9 @@ def register_routes(router, server):
                     try:
                         parsed_project_id = int(project_id_value)
                     except (TypeError, ValueError):
-                        raise HTTPException(status_code=400, detail="Invalid project_id")
+                        raise HTTPException(
+                            status_code=400, detail="Invalid project_id"
+                        )
                     stmt = select(Picture.id).where(
                         Picture.deleted.is_(False),
                         project_membership_exists_clause(parsed_project_id, Picture),
@@ -226,7 +252,8 @@ def register_routes(router, server):
                 _fetch_project_ids, project_id
             )
             filter_candidate_ids = (
-                project_candidate_ids if filter_candidate_ids is None
+                project_candidate_ids
+                if filter_candidate_ids is None
                 else filter_candidate_ids & project_candidate_ids
             )
 
@@ -248,7 +275,8 @@ def register_routes(router, server):
                 _fetch_character_picture_ids, char_id_int
             )
             filter_candidate_ids = (
-                char_candidate_ids if filter_candidate_ids is None
+                char_candidate_ids
+                if filter_candidate_ids is None
                 else filter_candidate_ids & char_candidate_ids
             )
 
@@ -264,41 +292,96 @@ def register_routes(router, server):
             merged = filter_candidate_ids  # None means unrestricted
         candidate_ids = list(merged) if merged is not None else None
 
-        # ── Load and validate uploaded images ─────────────────────────────
-        if not files:
-            raise HTTPException(status_code=400, detail="At least one file must be uploaded.")
+        # ── Load and validate query embeddings ──────────────────────────
+        # Merge source_picture_ids and the legacy single source_picture_id.
+        effective_source_ids: list[int] = list(source_picture_ids)
+        if (
+            source_picture_id is not None
+            and source_picture_id not in effective_source_ids
+        ):
+            effective_source_ids.insert(0, source_picture_id)
 
-        query_embeddings: list[np.ndarray] = []
-        for idx, file in enumerate(files):
-            content_type = file.content_type or ""
-            if not content_type.startswith("image/"):
+        if effective_source_ids:
+            # Fast path: fetch stored CLIP embeddings for all source pictures.
+            def _fetch_source_embeddings(session: Session) -> list[tuple[int, bytes]]:
+                rows = session.exec(
+                    select(Picture.id, Picture.image_embedding)
+                    .where(Picture.id.in_(effective_source_ids))
+                    .where(Picture.deleted.is_(False))
+                    .where(Picture.image_embedding.is_not(None))
+                ).all()
+                return list(rows)
+
+            source_rows = server.vault.db.run_immediate_read_task(
+                _fetch_source_embeddings
+            )
+            if not source_rows:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"File {idx + 1}: uploaded file must be an image.",
+                    status_code=404,
+                    detail="None of the supplied source picture IDs were found or have stored embeddings.",
                 )
 
-            raw_bytes = await file.read()
-            if not raw_bytes:
+            query_embeddings: list[np.ndarray] = []
+            for pic_id, raw_blob in source_rows:
+                emb = LikenessUtils.decode_embedding(raw_blob)
+                if emb is None or emb.size == 0:
+                    logger.warning(
+                        "likeness-search: picture %d has an invalid stored embedding; skipping",
+                        pic_id,
+                    )
+                    continue
+                norm = float(np.linalg.norm(emb))
+                if norm > 0:
+                    emb = emb / norm
+                query_embeddings.append(emb.astype(np.float32))
+
+            if not query_embeddings:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"File {idx + 1}: uploaded file is empty.",
+                    status_code=422,
+                    detail="None of the supplied source pictures have a valid stored embedding.",
                 )
 
-            try:
-                pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
-            except Exception as exc:
-                logger.warning(
-                    "likeness-search: could not open uploaded image %d (%s bytes): %s",
-                    idx + 1,
-                    len(raw_bytes),
-                    exc,
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"File {idx + 1}: could not decode uploaded image.",
-                ) from exc
+            # When multiple source pictures are supplied, rank by the minimum
+            # similarity (each candidate must be similar to *all* sources).
+            if len(query_embeddings) > 1:
+                combine = "min"
+        elif files:
+            query_embeddings = []
+            for idx, file in enumerate(files):
+                content_type = file.content_type or ""
+                if not content_type.startswith("image/"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"File {idx + 1}: uploaded file must be an image.",
+                    )
 
-            query_embeddings.append(_encode_query_image(server, pil_image))
+                raw_bytes = await file.read()
+                if not raw_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"File {idx + 1}: uploaded file is empty.",
+                    )
+
+                try:
+                    pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
+                except Exception as exc:
+                    logger.warning(
+                        "likeness-search: could not open uploaded image %d (%s bytes): %s",
+                        idx + 1,
+                        len(raw_bytes),
+                        exc,
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"File {idx + 1}: could not decode uploaded image.",
+                    ) from exc
+
+                query_embeddings.append(_encode_query_image(server, pil_image))
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either 'source_picture_id', 'source_picture_ids', or upload at least one image file.",
+            )
 
         # ── Fetch candidate embeddings from DB ───────────────────────────
         candidates = _fetch_candidate_embeddings(server, candidate_ids)
@@ -308,7 +391,7 @@ def register_routes(router, server):
         # ── Compute cosine similarities ──────────────────────────────────
         ids_arr = np.array([c[0] for c in candidates], dtype=np.int64)
         emb_matrix = np.stack([c[1] for c in candidates])  # (N, D)
-        query_matrix = np.stack(query_embeddings)           # (Q, D)
+        query_matrix = np.stack(query_embeddings)  # (Q, D)
 
         # (N, Q) — one similarity per candidate per query
         sim_matrix = emb_matrix @ query_matrix.T

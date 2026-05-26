@@ -119,6 +119,7 @@
       :tagger-plugins="taggerPlugins"
       :captioner-plugins="captionerPlugins"
       :context-image="contextMenuImage"
+      :context-clicked-face="contextMenuClickedFace"
       :is-shared="
         contextMenuImage ? sharedPictureIds.has(contextMenuImage.id) : false
       "
@@ -140,6 +141,8 @@
       @generate-description="handleGenerateDescription"
       @share-picture="sharePicture"
       @remove-picture-shares="openRevokeSharesDialog"
+      @reverse-image-search="handleReverseImageSearch"
+      @find-similar-faces="handleFindSimilarFaces"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -589,6 +592,9 @@
                     draggable="true"
                     @pointerdown.stop
                     @mousedown.stop
+                    @contextmenu.prevent.stop="
+                      handleFaceBboxContextMenu(img, overlay, $event)
+                    "
                     @click.stop="
                       toggleFaceSelection(
                         img.id,
@@ -706,11 +712,28 @@
 
     <!-- Search Result Bar -->
     <SearchResultBar
-      v-if="props.searchQuery && props.searchQuery.length > 0"
+      v-if="
+        (props.searchQuery && props.searchQuery.length > 0) ||
+        reverseImageSearchPictureIds.length ||
+        faceLikenessSearchFaceId
+      "
       :images-loading="imagesLoading"
       :count="allGridImages.length"
       :category-label="props.activeCategoryLabel"
-      :is-all-pictures-active="props.isAllPicturesActive"
+      :is-all-pictures-active="
+        reverseImageSearchPictureIds.length || faceLikenessSearchFaceId
+          ? true
+          : props.isAllPicturesActive
+      "
+      :status-text="
+        faceLikenessSearchFaceId
+          ? `Similar faces: ${allGridImages.length} results`
+          : reverseImageSearchPictureIds.length > 1
+            ? `Multi-image search: ${allGridImages.length} results`
+            : reverseImageSearchPictureIds.length
+              ? `Reverse image search: ${allGridImages.length} results`
+              : null
+      "
       @search-all="emit('search-all')"
       @clear="clearSearchQuery"
     />
@@ -1005,6 +1028,9 @@ const contextMenuVisible = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuImage = ref(null);
+const contextMenuClickedFace = ref(null);
+const reverseImageSearchPictureIds = ref([]);
+const faceLikenessSearchFaceId = ref(null);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
@@ -3616,6 +3642,8 @@ const {
     primarySelectedSetId,
     smartScoreProgress,
     exportProgress,
+    reverseImageSearchPictureIds,
+    faceLikenessSearchFaceId,
   },
   props,
   {
@@ -5110,6 +5138,20 @@ function handleImageContextMenu(img, event) {
     lastSelectedImageId.value = img.id;
   }
   contextMenuImage.value = img;
+  contextMenuClickedFace.value = null;
+  contextMenuX.value = event.clientX;
+  contextMenuY.value = event.clientY;
+  contextMenuVisible.value = true;
+}
+
+function handleFaceBboxContextMenu(img, overlay, event) {
+  if (!img?.id) return;
+  if (!selectedImageIds.value.includes(img.id)) {
+    selectedImageIds.value = [img.id];
+    lastSelectedImageId.value = img.id;
+  }
+  contextMenuImage.value = img;
+  contextMenuClickedFace.value = overlay.face;
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
@@ -5542,12 +5584,58 @@ function abortExportZip() {
 // SEARCH
 // ============================================================
 function clearSearchQuery() {
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = null;
   emit("clear-search", "");
 }
+
+function handleReverseImageSearch() {
+  const ids = selectedImageIds.value?.length
+    ? selectedImageIds.value.slice()
+    : [];
+  if (!ids.length) {
+    // Fallback: just the right-clicked image
+    const imgId = contextMenuImage.value?.id;
+    if (!imgId) return;
+    ids.push(imgId);
+  }
+  faceLikenessSearchFaceId.value = null;
+  reverseImageSearchPictureIds.value = ids;
+  // Clear any active text search so the two modes don't overlap.
+  emit("clear-search", "");
+}
+
+function handleFindSimilarFaces(faceId) {
+  if (!faceId) return;
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = faceId;
+  emit("clear-search", "");
+}
+
+// Clear reverse image search / face search when the user starts a text search or navigates.
+watch(
+  () => props.searchQuery,
+  (newVal) => {
+    if (newVal && newVal.trim()) {
+      reverseImageSearchPictureIds.value = [];
+      faceLikenessSearchFaceId.value = null;
+    }
+  },
+);
+watch([() => props.selectedCharacter, () => props.selectedSet], () => {
+  if (reverseImageSearchPictureIds.value?.length) {
+    reverseImageSearchPictureIds.value = [];
+  }
+  if (faceLikenessSearchFaceId.value !== null) {
+    faceLikenessSearchFaceId.value = null;
+  }
+});
 
 function handleEmptyStateReset() {
   gridReady.value = false;
   emptyStateDelayPassed.value = false;
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = null;
   emit("reset-to-all");
 }
 </script>

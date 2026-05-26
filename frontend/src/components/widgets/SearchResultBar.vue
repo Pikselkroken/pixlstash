@@ -12,7 +12,7 @@
         <span>Searching...</span>
       </template>
       <template v-else>
-        <span>Search result found {{ count }} items</span>
+        <span>{{ statusText ?? `Search result found ${count} items` }}</span>
         <span v-if="showScopeNote" class="search-result-scope">
           Searched {{ categoryLabel }} only
         </span>
@@ -45,6 +45,7 @@ const props = defineProps({
   count: { type: Number, default: 0 },
   categoryLabel: { type: String, default: "Category" },
   isAllPicturesActive: { type: Boolean, default: false },
+  statusText: { type: String, default: null },
 });
 
 defineEmits(["clear", "search-all"]);
