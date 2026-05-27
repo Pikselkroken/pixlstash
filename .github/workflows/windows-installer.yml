@@ -82,5 +82,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # Publish with a PAT, not the default GITHUB_TOKEN. Releases created by
+          # GITHUB_TOKEN do not emit a `release: published` event that can trigger
+          # other workflows, which is why release-version.yml (docs + latest-version)
+          # never ran for tag-pushed releases. A PAT-created release does trigger it.
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
           files: installer/windows/installer-output/*.exe
           prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
