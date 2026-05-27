@@ -35,6 +35,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.user import User
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
     select_reference_faces_for_character,
@@ -1029,10 +1030,17 @@ def register_routes(router, server):
                 query = query.where(Picture.id.in_(ids))
             pics = session.exec(query).all()
             restored_count = 0
+            affected_stack_ids: set[int] = set()
             for pic in pics:
                 pic.deleted = False
                 session.add(pic)
+                if pic.stack_id is not None:
+                    affected_stack_ids.add(pic.stack_id)
                 restored_count += 1
+            # Re-fold restored pictures into their stack ordering so a restored
+            # member is not left behind a (now lower-ranked) deleted leader.
+            for stack_id in affected_stack_ids:
+                normalize_stack_positions(session, stack_id)
             session.commit()
             return restored_count
 
@@ -1203,6 +1211,10 @@ def register_routes(router, server):
                 return True
             pic.deleted = True
             session.add(pic)
+            # Promote a live member to the leader slot: a soft-deleted picture
+            # must not keep stack_position 0, or the whole stack disappears from
+            # the grid (no-op when the picture is not stacked).
+            normalize_stack_positions(session, pic.stack_id)
             session.commit()
             return True
 

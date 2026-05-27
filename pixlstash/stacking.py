@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from typing import Optional, Tuple
 
+from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack
@@ -41,6 +42,47 @@ def parse_stack_tags_from_filename(
                 source_id = int(value)
 
     return stack_id, source_id
+
+
+def normalize_stack_positions(session: Session, stack_id: int) -> None:
+    """Renumber a stack's members to contiguous, 0-based ``stack_position``.
+
+    Enforces the invariant that every non-empty stack has a *non-deleted* member
+    at ``stack_position == 0``. The grid's fast SQL leader filter
+    (``deleted = 0 AND (stack_id IS NULL OR stack_position = 0)``) depends on
+    this — a stack whose position-0 member is missing or soft-deleted would
+    silently vanish from the grid even when it still has visible members.
+
+    Ordering (and therefore which member becomes the position-0 leader):
+
+    1. non-deleted members rank before soft-deleted ones, so deleting the leader
+       promotes the next live member to position 0;
+    2. within each group, members with an explicit position rank first
+       (ascending), then NULL-position members;
+    3. ties broken by ``id``.
+
+    Does not commit; the caller is responsible for committing.
+
+    Args:
+        session: Active DB session.
+        stack_id: The stack to renumber. A ``None`` value is a no-op.
+    """
+    if stack_id is None:
+        return
+    pics = session.exec(
+        select(Picture)
+        .where(Picture.stack_id == stack_id)
+        .order_by(
+            Picture.deleted,
+            case((Picture.stack_position.is_(None), 1), else_=0),
+            Picture.stack_position,
+            Picture.id,
+        )
+    ).all()
+    for idx, pic in enumerate(pics):
+        if pic.stack_position != idx:
+            pic.stack_position = idx
+            session.add(pic)
 
 
 def get_or_create_stack_for_picture(
@@ -84,22 +126,14 @@ def assign_picture_to_stack(session: Session, picture_id: int, stack_id: int) ->
     if pic.stack_id == stack_id:
         return True
 
-    next_position = None
-    rows = session.exec(
-        select(Picture.stack_position).where(
-            Picture.stack_id == stack_id,
-            Picture.stack_position.is_not(None),
-        )
-    ).all()
-    existing_positions = [row for row in rows if row is not None]
-    if existing_positions:
-        next_position = max(existing_positions) + 1
-
+    # Append to the end of the stack (NULL sorts last), then renumber so the
+    # stack keeps a contiguous 0-based ordering and therefore always has a
+    # position-0 leader for the grid's SQL filter.
     pic.stack_id = stack_id
-    if next_position is not None:
-        pic.stack_position = next_position
-    stack.updated_at = datetime.utcnow()
+    pic.stack_position = None
     session.add(pic)
+    normalize_stack_positions(session, stack_id)
+    stack.updated_at = datetime.utcnow()
     session.add(stack)
     session.commit()
     return True

@@ -36,6 +36,7 @@ from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.stacking import (
     build_stack_filename_prefix,
     get_or_create_stack_for_picture,
+    normalize_stack_positions,
 )
 from platformdirs import user_data_dir
 
@@ -706,6 +707,10 @@ def _assign_outputs_to_stack_top(
             pic.stack_id = stack_id
             pic.stack_position = idx
             session.add(pic)
+
+        # Guarantee a contiguous 0-based ordering (and a position-0 leader for
+        # the grid) regardless of any pre-existing NULL/gapped positions.
+        normalize_stack_positions(session, stack_id)
 
         stack.updated_at = datetime.utcnow()
         session.add(stack)

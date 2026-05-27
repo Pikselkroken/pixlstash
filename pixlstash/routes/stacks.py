@@ -7,6 +7,7 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
+from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
     fetch_smart_score_data,
     get_smart_score_penalised_tags_from_request,
@@ -149,25 +150,11 @@ def create_router(server) -> APIRouter:
     def _compact_stack_positions_in_session(session: Session, stack_id: int) -> None:
         """Re-number all pictures in a stack to contiguous 0..N-1 positions.
 
-        Preserves relative ordering: pictures with an explicit position are
-        ranked first (ascending), pictures with NULL positions follow ordered
-        by id.  The caller is responsible for committing after this call.
+        Thin wrapper around :func:`pixlstash.stacking.normalize_stack_positions`,
+        the single canonical implementation of the position-0 invariant.  The
+        caller is responsible for committing after this call.
         """
-        pics = session.exec(
-            select(Picture)
-            .where(Picture.stack_id == stack_id)
-            .order_by(
-                case(
-                    (Picture.stack_position.is_(None), 1),
-                    else_=0,
-                ),
-                Picture.stack_position,
-                Picture.id,
-            )
-        ).all()
-        for idx, pic in enumerate(pics):
-            pic.stack_position = idx
-            session.add(pic)
+        normalize_stack_positions(session, stack_id)
 
     @router.get(
         "/stacks/{stack_id}",
@@ -550,6 +537,11 @@ def create_router(server) -> APIRouter:
                     pic.stack_position = next_position
                     next_position += 1
                 session.add(pic)
+
+            # Compact to guarantee unique, contiguous 0-based positions after the
+            # append above (which may have left gaps, duplicates, or no position-0
+            # member if the stack previously had NULL positions).
+            _compact_stack_positions_in_session(session, stack_id)
 
             stack.updated_at = datetime.utcnow()
             session.add(stack)

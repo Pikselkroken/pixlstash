@@ -3,10 +3,12 @@ import sys
 from datetime import datetime
 
 from fastapi import (
+    Depends,
     HTTPException,
     Query,
     Request,
 )
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     or_,
     text,
@@ -43,6 +45,222 @@ from ._helpers import (
 
 
 logger = get_logger(__name__)
+
+
+class GridPicture(BaseModel):
+    """A single picture row as returned by the grid listing endpoints.
+
+    Fields are the projection used when ``fields=grid``; all are optional
+    because the exact set returned depends on the requested ``fields`` and on
+    server-side enrichment (stack counts, guest-score overlay, thumbnail/face
+    data added by ``POST /pictures/thumbnails``). Documented for the OpenAPI
+    schema only — responses are not filtered against this model, so additional
+    fields may be present.
+    """
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": 12345,
+                "width": 1024,
+                "height": 1536,
+                "format": "PNG",
+                "score": 4,
+                "smart_score": 3.87,
+                "created_at": "2026-01-14T09:30:00",
+                "imported_at": "2026-01-15T18:02:11",
+                "stack_id": 87,
+                "stack_position": 0,
+                "stack_count": 5,
+                "file_path": "01a43b7e-dda4-45bb-a912-2ed4b786260d.png",
+            }
+        },
+    )
+
+    id: int | None = Field(None, description="Picture id (primary key).")
+    width: int | None = Field(None, description="Image width in pixels.")
+    height: int | None = Field(None, description="Image height in pixels.")
+    format: str | None = Field(None, description="File format, e.g. PNG, JPEG, MP4.")
+    score: int | None = Field(None, description="Manual star rating (0-5).")
+    smart_score: float | None = Field(
+        None, description="Model-predicted aesthetic score."
+    )
+    smartScore: float | None = Field(
+        None, description="camelCase alias of smart_score (legacy clients)."
+    )
+    created_at: datetime | None = Field(
+        None, description="When the source file was created."
+    )
+    imported_at: datetime | None = Field(
+        None, description="When the picture was imported into the vault."
+    )
+    stack_id: int | None = Field(
+        None, description="Id of the stack this picture belongs to, if any."
+    )
+    stack_position: int | None = Field(
+        None, description="Position within its stack; 0 is the stack leader."
+    )
+    stack_count: int | None = Field(
+        None,
+        description="Number of pictures in the stack (only set on stack leaders "
+        "when stack_leaders_only is used).",
+    )
+    tag_uncertainty: float | None = Field(
+        None, description="Aggregate tag-prediction uncertainty."
+    )
+    anomaly_tag_uncertainty: float | None = Field(
+        None, description="Uncertainty restricted to anomaly/problem tags."
+    )
+    text_score: float | None = Field(
+        None, description="Relevance score for the active text search, if any."
+    )
+    reference_folder_id: int | None = Field(
+        None, description="Source reference-folder id for externally-referenced files."
+    )
+    file_path: str | None = Field(
+        None,
+        description="Path relative to the image root (omitted when grid_lite=true).",
+    )
+
+
+class StreamPicturesResponse(BaseModel):
+    """One batch of the streaming listing plus pagination state."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "pictures": [GridPicture.model_config["json_schema_extra"]["example"]],
+                "done": False,
+                "next_offset": 1000,
+            }
+        }
+    )
+
+    pictures: list[GridPicture] = Field(
+        description="Pictures in this batch, in sort order."
+    )
+    done: bool = Field(
+        description="True when the underlying SQL row count for this batch was "
+        "<= batch_limit, i.e. there are no further rows to fetch.",
+    )
+    next_offset: int = Field(
+        description="Offset to pass on the next request to continue paginating.",
+    )
+
+
+class PictureCountResponse(BaseModel):
+    """Total number of pictures matching the listing filters.
+
+    ``count`` is ``null`` for sorts where a total cannot be computed cheaply
+    (e.g. CHARACTER_LIKENESS)."""
+
+    model_config = ConfigDict(json_schema_extra={"example": {"count": 28259}})
+
+    count: int | None = Field(
+        None,
+        description="Total matching pictures, or null when not cheaply computable.",
+    )
+
+
+class PictureListFilters:
+    """Shared query-param filters for the picture listing endpoints.
+
+    These were previously parsed directly out of ``request.query_params`` and so
+    were invisible in the OpenAPI schema. Declaring them here as a ``Depends``
+    dependency surfaces them in the generated docs (and validates the typed
+    ones) without changing behaviour: the handlers still read the raw values
+    from ``request.query_params``.
+    """
+
+    def __init__(
+        self,
+        character_id: str | None = Query(
+            None,
+            description="Character filter: a character id, or 'UNASSIGNED'.",
+            examples=["42"],
+        ),
+        character_ids: list[str] = Query(
+            default=[], description="Multi-character filter (repeatable)."
+        ),
+        character_mode: str | None = Query(
+            None, description="union | intersection | difference | xor"
+        ),
+        set_id: str | None = Query(None, description="Single picture-set filter."),
+        set_ids: list[str] = Query(
+            default=[], description="Multi-set filter (repeatable)."
+        ),
+        set_mode: str | None = Query(
+            None, description="union | intersection | difference"
+        ),
+        base_set_id: str | None = Query(
+            None, description="Base set for set_mode=difference."
+        ),
+        reference_character_id: str | None = Query(
+            None, description="Required reference for sort=CHARACTER_LIKENESS."
+        ),
+        min_score: int | None = Query(
+            None, description="Minimum star score.", examples=[3]
+        ),
+        max_score: int | None = Query(
+            None, description="Maximum star score.", examples=[5]
+        ),
+        smart_score_bucket: str | None = Query(
+            None, description="unscored | 1-2 | 2-3 | 3-4 | 4-5"
+        ),
+        resolution_bucket: str | None = Query(
+            None,
+            description="unknown | lt1mp | 1-4mp | 4-8mp | 8-16mp | 16plus",
+        ),
+        file_path_prefix: str | None = Query(
+            None, description="Restrict to file paths starting with this prefix."
+        ),
+        face_filter: str | None = Query(
+            None, description="with_face | without_face", examples=["with_face"]
+        ),
+        shared_only: bool = Query(
+            False, description="Only pictures shared with the current user."
+        ),
+        apply_tag_filter: bool = Query(
+            False, description="Apply the user's hidden-tag filter."
+        ),
+        format: list[str] = Query(
+            default=[], description="Filter by file format (repeatable)."
+        ),
+        tag: list[str] = Query(
+            default=[],
+            description="Require these tags (repeatable).",
+            examples=["sunset"],
+        ),
+        rejected_tag: list[str] = Query(
+            default=[], description="Exclude these tags (repeatable)."
+        ),
+        tag_confidence_above: list[str] = Query(
+            default=[], description="'tag:threshold' prediction filter (repeatable)."
+        ),
+        tag_confidence_below: list[str] = Query(
+            default=[], description="'tag:threshold' prediction filter (repeatable)."
+        ),
+        comfyui_model: list[str] = Query(
+            default=[], description="Filter by ComfyUI model (repeatable)."
+        ),
+        comfyui_lora: list[str] = Query(
+            default=[], description="Filter by ComfyUI LoRA (repeatable)."
+        ),
+        reference_folder_id: str | None = Query(
+            None, description="Filter by reference-folder id."
+        ),
+        import_source_folder: str | None = Query(
+            None, description="Filter by import source folder."
+        ),
+        id: list[str] = Query(
+            default=[], description="Restrict to specific picture ids (repeatable)."
+        ),
+    ):
+        # Values are intentionally not stored: the handlers read them from
+        # request.query_params. This dependency exists purely to document and
+        # validate the query surface in OpenAPI.
+        pass
 
 
 def select_pictures_for_listing(
@@ -97,9 +315,7 @@ def select_pictures_for_listing(
         for pic in pictures:
             pic_d = safe_model_dict(pic)
             d = {
-                field: pic_d.get(field)
-                for field in metadata_fields
-                if field != "tags"
+                field: pic_d.get(field) for field in metadata_fields if field != "tags"
             }
             if "tags" in metadata_fields:
                 d["tags"] = [t.tag for t in getattr(pic, "tags", [])]
@@ -1047,22 +1263,47 @@ def register_routes(router, server):
         "/pictures",
         summary="List pictures",
         description="Lists pictures with filtering, sort, pagination, and optional grid field projection.",
+        responses={
+            200: {
+                "model": list[GridPicture],
+                "description": "Matching pictures (field set depends on `fields`).",
+            },
+            400: {"description": "Invalid sort mechanism."},
+        },
     )
     def list_pictures(
         request: Request,
-        sort: str = Query(None),
-        descending: bool = Query(True),
-        offset: int = Query(0),
-        limit: int = Query(sys.maxsize),
-        fields: str = Query(None),
+        sort: str = Query(
+            None,
+            description="Sort mechanism. One of: DATE, IMPORTED_AT, SCORE, "
+            "SMART_SCORE, IMAGE_SIZE, TEXT_CONTENT, CHARACTER_LIKENESS. "
+            "Omit for natural (id) order.",
+            examples=["DATE"],
+        ),
+        descending: bool = Query(
+            True, description="Sort direction; true = newest/highest first."
+        ),
+        offset: int = Query(0, description="Number of rows to skip (pagination)."),
+        limit: int = Query(
+            sys.maxsize, description="Maximum rows to return.", examples=[200]
+        ),
+        fields: str = Query(
+            None,
+            description="Field projection: 'grid' for the minimal grid set, a "
+            "comma-separated field list, or omit for full metadata.",
+            examples=["grid"],
+        ),
         project_id: str | None = Query(
-            None, description="Filter by project id or 'UNASSIGNED'"
+            None,
+            description="Filter by project id or 'UNASSIGNED'",
+            examples=["UNASSIGNED"],
         ),
         only_deleted: bool = Query(
             False,
             description="Return only deleted (scrapheap) pictures. "
             "Replaces the deprecated character_id=SCRAPHEAP.",
         ),
+        filters: PictureListFilters = Depends(),
     ):
         if fields == "grid":
             metadata_fields = list(Picture.grid_fields())
@@ -1111,14 +1352,36 @@ def register_routes(router, server):
             "(not the post-filter row count). Callers paginate by passing the "
             "returned `next_offset` until `done` is true."
         ),
+        responses={
+            200: {"model": StreamPicturesResponse},
+            400: {"description": "Invalid sort mechanism."},
+        },
     )
     def stream_pictures(
         request: Request,
-        sort: str = Query(None),
-        descending: bool = Query(True),
-        offset: int = Query(0, ge=0),
-        batch_limit: int = Query(1000, ge=1, le=5000),
-        fields: str = Query(None),
+        sort: str = Query(
+            None,
+            description="Sort mechanism (see /pictures). Omit for natural order.",
+            examples=["DATE"],
+        ),
+        descending: bool = Query(
+            True, description="Sort direction; true = newest/highest first."
+        ),
+        offset: int = Query(
+            0, ge=0, description="Row offset for this batch (use next_offset)."
+        ),
+        batch_limit: int = Query(
+            1000,
+            ge=1,
+            le=5000,
+            description="Rows per batch (1-5000).",
+            examples=[1000],
+        ),
+        fields: str = Query(
+            None,
+            description="Field projection: 'grid', a comma list, or omit.",
+            examples=["grid"],
+        ),
         grid_lite: bool = Query(
             False,
             description=(
@@ -1126,15 +1389,20 @@ def register_routes(router, server):
                 "such as `file_path` to reduce payload size for streaming."
             ),
         ),
-        stack_leaders_only: bool = Query(False),
+        stack_leaders_only: bool = Query(
+            False, description="Collapse stacks to their leader only."
+        ),
         project_id: str | None = Query(
-            None, description="Filter by project id or 'UNASSIGNED'"
+            None,
+            description="Filter by project id or 'UNASSIGNED'",
+            examples=["UNASSIGNED"],
         ),
         only_deleted: bool = Query(
             False,
             description="Return only deleted (scrapheap) pictures. "
             "Replaces the deprecated character_id=SCRAPHEAP.",
         ),
+        filters: PictureListFilters = Depends(),
     ):
         if fields == "grid":
             metadata_fields = list(Picture.grid_fields())
@@ -1196,21 +1464,36 @@ def register_routes(router, server):
             "Returns the total number of pictures matching the same filter "
             "set used by `/pictures` and `/pictures/stream`."
         ),
+        response_model=PictureCountResponse,
     )
     def count_pictures(
         request: Request,
-        sort: str = Query(None),
-        descending: bool = Query(True),
-        fields: str = Query(None),
-        stack_leaders_only: bool = Query(False),
+        sort: str = Query(
+            None,
+            description="Sort mechanism; only affects whether a count is "
+            "computable (CHARACTER_LIKENESS returns null).",
+            examples=["DATE"],
+        ),
+        descending: bool = Query(
+            True, description="Unused for counting; accepted for parity with /pictures."
+        ),
+        fields: str = Query(
+            None, description="Unused for counting; accepted for parity."
+        ),
+        stack_leaders_only: bool = Query(
+            False, description="Count stacks as one (their leader)."
+        ),
         project_id: str | None = Query(
-            None, description="Filter by project id or 'UNASSIGNED'"
+            None,
+            description="Filter by project id or 'UNASSIGNED'",
+            examples=["UNASSIGNED"],
         ),
         only_deleted: bool = Query(
             False,
             description="Return only deleted (scrapheap) pictures. "
             "Replaces the deprecated character_id=SCRAPHEAP.",
         ),
+        filters: PictureListFilters = Depends(),
     ):
         token_scope = getattr(request.state, "token_scope", None)
         scope_set_id = (

@@ -79,8 +79,7 @@ def upgrade() -> None:
         if index_name not in existing_indexes:
             col_sql = ", ".join(columns)
             op.execute(
-                f"CREATE INDEX {index_name} ON picture ({col_sql})"
-                f" WHERE {where_clause}"
+                f"CREATE INDEX {index_name} ON picture ({col_sql}) WHERE {where_clause}"
             )
 
 
