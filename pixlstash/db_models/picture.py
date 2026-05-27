@@ -1340,6 +1340,9 @@ class Picture(SQLModel, table=True):
                 )
             )
 
+        if stack_leaders_only:
+            query = query.where(or_(Picture.stack_id.is_(None), Picture.stack_position == 0))
+
         select_fields = metadata_fields or cls.metadata_fields()
         if count_only:
             return session.execute(query).scalar_one()
@@ -1395,33 +1398,10 @@ class Picture(SQLModel, table=True):
                         Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                     )
 
-        if (not stack_leaders_only) and (offset > 0 or limit != sys.maxsize):
+        if offset > 0 or limit != sys.maxsize:
             query = query.offset(offset).limit(limit)
 
-        results = session.exec(query).all()
-
-        if stack_leaders_only:
-            seen_stack_ids = set()
-            deduped = []
-            for pic in results:
-                stack_id = getattr(pic, "stack_id", None)
-                if stack_id is None:
-                    deduped.append(pic)
-                    continue
-                if stack_id in seen_stack_ids:
-                    continue
-                seen_stack_ids.add(stack_id)
-                deduped.append(pic)
-
-            if offset > 0 or limit != sys.maxsize:
-                start = max(0, offset)
-                if limit == sys.maxsize:
-                    deduped = deduped[start:]
-                else:
-                    deduped = deduped[start : start + max(0, limit)]
-            return deduped
-
-        return results
+        return session.exec(query).all()
 
     @classmethod
     def build_unassigned_conditions(

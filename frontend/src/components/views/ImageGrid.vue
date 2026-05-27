@@ -3628,11 +3628,13 @@ function onGridFetchDone(payload) {
   const loadId = Number(payload?.loadId) || 0;
   const record = gridFetchTelemetryByLoadId.get(loadId);
   if (record) {
-    record.endedAtMs = getNowMs();
-    record.fetchMode = payload?.fetchMode ?? null;
-    record.success = payload?.success === true;
-    record.elapsedMs = Number(payload?.elapsedMs) || 0;
-    record.resultCount = Number(payload?.resultCount) || 0;
+    Object.assign(record, payload || {}, {
+      endedAtMs: getNowMs(),
+      fetchMode: payload?.fetchMode ?? null,
+      success: payload?.success === true,
+      elapsedMs: Number(payload?.elapsedMs) || 0,
+      resultCount: Number(payload?.resultCount) || 0,
+    });
     gridFetchTelemetryByLoadId.delete(loadId);
   }
   console.debug("[GridFetchTelemetry]", {
@@ -3641,6 +3643,19 @@ function onGridFetchDone(payload) {
     success: payload?.success === true,
     elapsedMs: Number(payload?.elapsedMs) || 0,
     resultCount: Number(payload?.resultCount) || 0,
+    countMs: payload?.countMs ?? null,
+    placeholderMs: payload?.placeholderMs ?? null,
+    firstBatchMs: payload?.firstBatchMs ?? null,
+    tailBatchMs: payload?.tailBatchMs ?? null,
+    backgroundTotalMs: payload?.backgroundTotalMs ?? 0,
+    backgroundNetworkTotalMs: payload?.backgroundNetworkTotalMs ?? 0,
+    backgroundUiTotalMs: payload?.backgroundUiTotalMs ?? 0,
+    backgroundSlowestBatchMs: payload?.backgroundSlowestBatchMs ?? 0,
+    backgroundSlowestNetworkBatchMs:
+      payload?.backgroundSlowestNetworkBatchMs ?? 0,
+    backgroundSlowestUiBatchMs: payload?.backgroundSlowestUiBatchMs ?? 0,
+    backgroundBatchCount: payload?.backgroundBatchCount ?? 0,
+    postProcessMs: payload?.postProcessMs ?? null,
   });
 }
 
@@ -3657,6 +3672,18 @@ if (
         mode: row.fetchMode,
         success: row.success,
         elapsedMs: row.elapsedMs,
+        countMs: row.countMs,
+        placeholderMs: row.placeholderMs,
+        firstBatchMs: row.firstBatchMs,
+        tailBatchMs: row.tailBatchMs,
+        backgroundTotalMs: row.backgroundTotalMs,
+        backgroundNetworkTotalMs: row.backgroundNetworkTotalMs,
+        backgroundUiTotalMs: row.backgroundUiTotalMs,
+        backgroundSlowestBatchMs: row.backgroundSlowestBatchMs,
+        backgroundSlowestNetworkBatchMs: row.backgroundSlowestNetworkBatchMs,
+        backgroundSlowestUiBatchMs: row.backgroundSlowestUiBatchMs,
+        backgroundBatchCount: row.backgroundBatchCount,
+        postProcessMs: row.postProcessMs,
         visibleMetadataMs: row.visibleMetadataMs,
         firstBatchCount: row.firstBatchCount,
         total: row.total,

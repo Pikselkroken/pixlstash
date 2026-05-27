@@ -95,8 +95,9 @@ def select_pictures_for_listing(
     def serialize_metadata(pictures):
         result = []
         for pic in pictures:
+            pic_d = safe_model_dict(pic)
             d = {
-                field: safe_model_dict(pic).get(field)
+                field: pic_d.get(field)
                 for field in metadata_fields
                 if field != "tags"
             }
@@ -1118,6 +1119,13 @@ def register_routes(router, server):
         offset: int = Query(0, ge=0),
         batch_limit: int = Query(1000, ge=1, le=5000),
         fields: str = Query(None),
+        grid_lite: bool = Query(
+            False,
+            description=(
+                "When `fields=grid`, omit high-cardinality string fields "
+                "such as `file_path` to reduce payload size for streaming."
+            ),
+        ),
         stack_leaders_only: bool = Query(False),
         project_id: str | None = Query(
             None, description="Filter by project id or 'UNASSIGNED'"
@@ -1130,6 +1138,8 @@ def register_routes(router, server):
     ):
         if fields == "grid":
             metadata_fields = list(Picture.grid_fields())
+            if grid_lite:
+                metadata_fields = [f for f in metadata_fields if f != "file_path"]
         elif fields:
             metadata_fields = [f.strip() for f in fields.split(",") if f.strip()]
         else:
