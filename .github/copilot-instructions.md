@@ -89,6 +89,10 @@ When making changes to architecture or integration patterns, always update the r
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 
+## Reviews
+
+If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_BRANCH.md
+
 ## Conventions & Patterns
 
 - **Batching:** Group images and face crops by size for efficient quality calculation.
