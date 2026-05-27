@@ -112,6 +112,7 @@ def test_services_no_direct_db_calls():
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
+        "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
         "pixlstash/services/share_service.py",  # vault-injection pattern
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
     }
