@@ -52,6 +52,41 @@ def _write_redoc_html(target_dir: str) -> None:
         f.write(html)
 
 
+def _write_latest_redirect(output_dir: str) -> None:
+    """Point ``output_dir/index.html`` at the highest available version dir.
+
+    The public ``/api`` link loads this file. Without it the entry page stays
+    pinned to whatever spec was first written there. We scan the sibling version
+    directories and redirect to the highest one (rather than assuming the
+    just-generated version is newest), so backfilling an older release does not
+    downgrade the canonical link.
+    """
+    versions = []
+    for name in os.listdir(output_dir):
+        m = re.fullmatch(r"v(\d+)\.(\d+)", name)
+        if m and os.path.isdir(os.path.join(output_dir, name)):
+            versions.append((int(m.group(1)), int(m.group(2)), name))
+    if not versions:
+        return
+    latest = max(versions)[2]
+    html = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PixlStash API Reference</title>
+    <meta http-equiv="refresh" content="0; url=./{latest}/" />
+    <link rel="canonical" href="./{latest}/" />
+  </head>
+  <body>
+    <p>Redirecting to the latest API reference
+       (<a href="./{latest}/">{latest}</a>)…</p>
+  </body>
+</html>
+"""
+    with open(os.path.join(output_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(html)
+
+
 def _get_api_version() -> str:
     """Return 'v{major}.{minor}' derived from pyproject.toml in the project root."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -89,6 +124,7 @@ def generate_docs(output_dir: str) -> None:
         json.dump(schema, f, indent=2)
 
     _write_redoc_html(versioned_dir)
+    _write_latest_redirect(output_dir)
     print(f"Generated OpenAPI docs for {api_version} in {versioned_dir}")
 
 
