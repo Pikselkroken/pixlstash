@@ -542,6 +542,14 @@ def select_pictures_for_listing(
         only_deleted = True
         character_id = None
 
+    # The scrapheap (deleted) view never collapses stacks: every deleted picture
+    # is listed individually. A soft-deleted stack member (e.g. a former leader,
+    # which normalize_stack_positions sorts behind its live siblings) is therefore
+    # always visible and restorable, instead of being hidden because it is no
+    # longer at stack_position == 0.
+    if only_deleted:
+        stack_leaders_only = False
+
     def fetch_smart_score_candidate_ids(
         session: Session,
         character_id_value,

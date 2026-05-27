@@ -829,6 +829,7 @@ import {
 import {
   getStackBadgeCount,
   getPictureStackId,
+  getStackPositionValue,
   selectNewestStackMember,
   shouldShowStackBadge,
   stackBadgeTitle,
@@ -2846,6 +2847,10 @@ async function deleteSelected() {
   // For non-scrapheap deletions, expand collapsed stacks to all their members
   // while only deleting the selected pictures from expanded stacks.
   let idsToRemove;
+  // Set when an expanded stack's leader is deleted: the backend promotes the
+  // next live member to leader, but our base fetch (lastFetchedGridImages)
+  // holds only leaders, so we refetch to bring the promoted leader/members back.
+  let deletedExpandedStackLeader = false;
   if (!isScrapheapSelection) {
     const imageById = new Map(
       (allGridImages.value || [])
@@ -2862,6 +2867,12 @@ async function deleteSelected() {
       if (!stackId || expandedStackIds.value.has(stackId)) {
         // No stack, or stack is expanded: delete only this picture.
         resolved.add(id);
+        if (stackId && getStackPositionValue(img) === 0) {
+          // Deleting the leader of an expanded stack: a refetch is needed so the
+          // backend-promoted new leader (absent from the leaders-only base list)
+          // and the stack's remaining members reappear.
+          deletedExpandedStackLeader = true;
+        }
       } else {
         // Collapsed stack: delete all members.
         collapsedStackIds.add(stackId);
@@ -2925,6 +2936,12 @@ async function deleteSelected() {
     lastSelectedImageId.value = null;
     if (isScrapheapSelection) {
       updateVisibleThumbnails();
+    }
+    if (deletedExpandedStackLeader) {
+      // Repopulate so the promoted stack leader and remaining members reappear
+      // (same pattern as create/dissolve/remove-from-stack).
+      preserveScrollOnNextFetch.value = true;
+      debouncedFetchAllGridImages();
     }
     emit("refresh-sidebar");
   } catch (err) {

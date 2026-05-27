@@ -1341,9 +1341,51 @@ class Picture(SQLModel, table=True):
             )
 
         if stack_leaders_only:
-            query = query.where(
-                or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
-            )
+            project_scope_active = project_id is not None or only_unassigned_project
+            if not project_scope_active:
+                # Fast path: the stack leader is simply stack_position == 0,
+                # backed by the partial ix_picture_grid_leaders_* indexes (0047).
+                # Left unchanged so the common (unscoped) grid stays fast.
+                query = query.where(
+                    or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
+                )
+            else:
+                # Project-scoped grid: the global position-0 leader may belong to
+                # a different project and be filtered out, which would wrongly drop
+                # the whole stack. Represent each stack by its lowest-positioned
+                # member that is itself in this project scope. This correlated check
+                # runs only over the already project-narrowed candidate set, so the
+                # common (unscoped) grid still hits the fast path above.
+                sibling = aliased(Picture)
+                sibling_project = select(PictureProjectMember.picture_id).where(
+                    PictureProjectMember.picture_id == sibling.id
+                )
+                if only_unassigned_project:
+                    sibling_in_scope = ~exists(sibling_project)
+                else:
+                    sibling_in_scope = exists(
+                        sibling_project.where(
+                            PictureProjectMember.project_id == project_id
+                        )
+                    )
+                # NULL positions sort last, matching normalize_stack_positions and
+                # the global "leader == position 0" convention.
+                cur_pos = func.coalesce(Picture.stack_position, 999999)
+                sib_pos = func.coalesce(sibling.stack_position, 999999)
+                has_higher_ranked_sibling = exists(
+                    select(sibling.id).where(
+                        sibling.stack_id == Picture.stack_id,
+                        sibling.deleted.is_(False),
+                        sibling_in_scope,
+                        or_(
+                            sib_pos < cur_pos,
+                            (sib_pos == cur_pos) & (sibling.id < Picture.id),
+                        ),
+                    )
+                )
+                query = query.where(
+                    or_(Picture.stack_id.is_(None), ~has_higher_ranked_sibling)
+                )
 
         select_fields = metadata_fields or cls.metadata_fields()
         if count_only:
