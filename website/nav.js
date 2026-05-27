@@ -5,7 +5,7 @@
     { href: "features.html", label: "Features" },
     {
       href: "whatsnew.html",
-      label: "What's New in 1.3",
+      label: "What's New in 1.4",
       className: "nav-link--whatsnew",
     },
     { href: "api.html", label: "API" },
