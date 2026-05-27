@@ -240,7 +240,9 @@
       </template>
 
       <!-- ── Restore from checkpoint ─────────────────────────── -->
-      <template v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView">
+      <template
+        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
+      >
         <div
           class="ctx-submenu-wrap"
           @mouseenter="restoreSubmenuOpen = true"
@@ -259,16 +261,23 @@
               v-for="cp in recentCheckpoints"
               :key="cp.id"
               class="ctx-item"
+              :disabled="identicalCheckpointIds.has(cp.id)"
+              :title="
+                identicalCheckpointIds.has(cp.id)
+                  ? 'Selection is identical to this checkpoint'
+                  : undefined
+              "
               @click="handleRestoreFromCheckpoint(cp.id)"
             >
               <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
               {{ cp.label || cp.kind }}
-              <span class="ctx-default-pill">{{ cp.created_at ? new Date(cp.created_at + 'Z').toLocaleDateString() : '' }}</span>
+              <span class="ctx-default-pill">{{
+                cp.created_at
+                  ? new Date(cp.created_at + "Z").toLocaleDateString()
+                  : ""
+              }}</span>
             </button>
-            <button
-              class="ctx-item"
-              @click="handleRestoreMore"
-            >
+            <button class="ctx-item" @click="handleRestoreMore">
               <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
               More…
             </button>
@@ -408,22 +417,54 @@ const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
 const findFacesSubmenuOpen = ref(false);
 const restoreSubmenuOpen = ref(false);
+const identicalCheckpointIds = ref(new Set());
+
+watch(restoreSubmenuOpen, async (isOpen) => {
+  if (!isOpen || !props.selectedImageIds.length) {
+    return;
+  }
+  identicalCheckpointIds.value = new Set();
+  const pictureIds = props.selectedImageIds;
+  await Promise.all(
+    recentCheckpoints.value.map(async (cp) => {
+      try {
+        const res = await apiClient.post(`/checkpoints/${cp.id}/hash-compare`, {
+          picture_ids: pictureIds,
+        });
+        const identicalSet = new Set(res.data.identical_ids);
+        const allIdentical = pictureIds.every((id) => identicalSet.has(id));
+        if (allIdentical) {
+          identicalCheckpointIds.value = new Set([
+            ...identicalCheckpointIds.value,
+            cp.id,
+          ]);
+        }
+      } catch {
+        // On error, leave the checkpoint enabled (conservative)
+      }
+    }),
+  );
+});
 
 const checkpointsStore = useCheckpointsStore();
 const recentCheckpoints = computed(() =>
-  checkpointsStore.checkpoints
-    .filter((cp) => cp.is_compatible)
-    .slice(0, 5)
+  checkpointsStore.checkpoints.filter((cp) => cp.is_compatible).slice(0, 5),
 );
 
 function handleRestoreFromCheckpoint(cpId) {
-  const resources = props.selectedImageIds.map((id) => ({ type: "picture", id }));
+  const resources = props.selectedImageIds.map((id) => ({
+    type: "picture",
+    id,
+  }));
   checkpointsStore.openRestoreDialog(cpId, resources);
   onAction("restore-from-checkpoint", { checkpointId: cpId, resources });
 }
 
 function handleRestoreMore() {
-  const resources = props.selectedImageIds.map((id) => ({ type: "picture", id }));
+  const resources = props.selectedImageIds.map((id) => ({
+    type: "picture",
+    id,
+  }));
   checkpointsStore.openRestoreDialog(null, resources);
   onAction("restore-from-checkpoint", { checkpointId: null, resources });
 }

@@ -274,6 +274,15 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("caption_file_mtime", Float, default=None, nullable=True),
     )
+    # SHA-256 hex digest of the picture's user-visible metadata (column values
+    # + sorted tag strings).  Recomputed automatically via an after_flush hook
+    # in database.py whenever Picture/Tag rows change.  NULL means the hash
+    # has not been computed yet.  Used for fast checkpoint-identity comparisons
+    # in the context-menu submenu.
+    metadata_hash: Optional[str] = Field(
+        default=None,
+        sa_column=Column("metadata_hash", String, default=None, nullable=True),
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(

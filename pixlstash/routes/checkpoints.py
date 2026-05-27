@@ -393,6 +393,35 @@ def create_router(server) -> APIRouter:
         }
 
     # ------------------------------------------------------------------
+    # POST /checkpoints/{id}/hash-compare
+    # ------------------------------------------------------------------
+
+    @router.post("/checkpoints/{checkpoint_id}/hash-compare")
+    def hash_compare(
+        checkpoint_id: int,
+        request: Request,
+        picture_ids: List[int] = Body(embed=True),
+    ):
+        """Compare live metadata_hash values against a checkpoint snapshot.
+
+        For each requested picture ID, compares the ``metadata_hash`` stored
+        in the live DB against the value in the snapshot.  A NULL hash on
+        either side means "potentially changed" (conservative).
+
+        Body: ``{"picture_ids": [42, 43, …]}``
+
+        Returns:
+            ``{"identical_ids": [...], "changed_ids": [...]}``
+        """
+        try:
+            result = server.vault.restore_service.compare_hashes(
+                checkpoint_id, picture_ids
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return result
+
+    # ------------------------------------------------------------------
     # POST /checkpoints/{id}/restore/{resource_type}/{resource_id}
     # ------------------------------------------------------------------
 

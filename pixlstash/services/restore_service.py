@@ -8,10 +8,12 @@ the snapshot file before any data work to handle cross-version snapshots.
 import os
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 from sqlmodel import Session, create_engine, select
+from sqlalchemy import update as sa_update
 
 from pixlstash.db_models import (
     Character,
@@ -23,6 +25,7 @@ from pixlstash.db_models import (
     Project,
     Tag,
 )
+from pixlstash.database import _compute_picture_metadata_hash
 from pixlstash.db_models.checkpoint import Checkpoint
 from pixlstash.pixl_logging import get_logger
 
@@ -30,6 +33,10 @@ if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
+
+# Alembic's EnvironmentContext is not thread-safe (uses module globals).
+# Serialise all snapshot schema upgrades with this lock.
+_ALEMBIC_UPGRADE_LOCK = threading.Lock()
 
 # Columns on Picture that are regenerable and should be NULL-reset after any
 # restore so the WorkPlanner reprocesses them automatically.
@@ -428,19 +435,31 @@ class RestoreService:
             checkpoint_created_at=cp.created_at.isoformat(),
         )
 
+        upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
+        if upgraded_snapshot is None:
+            preview.warnings.append("Schema upgrade failed; preview unavailable.")
+            return preview
+
         try:
-            snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
-            with Session(snap_engine) as snap_session:
-                self._compute_full_preview(snap_session, preview, vault_root)
-            snap_engine.dispose()
-        except Exception as exc:
-            logger.error(
-                "RestoreService: preview_full failed for checkpoint %d: %s",
-                checkpoint_id,
-                exc,
-                exc_info=True,
-            )
-            preview.warnings.append(f"Preview computation error: {exc}")
+            snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+            try:
+                with Session(snap_engine) as snap_session:
+                    self._compute_full_preview(snap_session, preview, vault_root)
+            except Exception as exc:
+                logger.error(
+                    "RestoreService: preview_full failed for checkpoint %d: %s",
+                    checkpoint_id,
+                    exc,
+                    exc_info=True,
+                )
+                preview.warnings.append(f"Preview computation error: {exc}")
+            finally:
+                snap_engine.dispose()
+        finally:
+            try:
+                shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
+            except Exception:
+                pass
 
         return preview
 
@@ -484,27 +503,39 @@ class RestoreService:
             checkpoint_created_at=cp.created_at.isoformat(),
         )
 
+        upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
+        if upgraded_snapshot is None:
+            preview.warnings.append("Schema upgrade failed; preview unavailable.")
+            return preview
+
         try:
-            snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
-            with Session(snap_engine) as snap_session:
-                self._compute_resource_preview(
-                    snap_session,
-                    preview,
+            snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+            try:
+                with Session(snap_engine) as snap_session:
+                    self._compute_resource_preview(
+                        snap_session,
+                        preview,
+                        resource_type,
+                        resource_id,
+                        vault_root,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "RestoreService: preview_resource failed for checkpoint %d (%s/%s): %s",
+                    checkpoint_id,
                     resource_type,
                     resource_id,
-                    vault_root,
+                    exc,
+                    exc_info=True,
                 )
-            snap_engine.dispose()
-        except Exception as exc:
-            logger.error(
-                "RestoreService: preview_resource failed for checkpoint %d (%s/%s): %s",
-                checkpoint_id,
-                resource_type,
-                resource_id,
-                exc,
-                exc_info=True,
-            )
-            preview.warnings.append(f"Preview computation error: {exc}")
+                preview.warnings.append(f"Preview computation error: {exc}")
+            finally:
+                snap_engine.dispose()
+        finally:
+            try:
+                shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
+            except Exception:
+                pass
 
         return preview
 
@@ -538,26 +569,39 @@ class RestoreService:
             checkpoint_created_at=cp.created_at.isoformat(),
         )
 
+        upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
+        if upgraded_snapshot is None:
+            preview.warnings.append("Schema upgrade failed; preview unavailable.")
+            self._finalise_preview_summary(preview)
+            return preview
+
         try:
-            snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
-            with Session(snap_engine) as snap_session:
-                for item in resources:
-                    self._compute_resource_preview(
-                        snap_session,
-                        preview,
-                        item.get("type", ""),
-                        int(item.get("id", 0)),
-                        vault_root,
-                    )
-            snap_engine.dispose()
-        except Exception as exc:
-            logger.error(
-                "RestoreService: preview_batch failed for checkpoint %d: %s",
-                checkpoint_id,
-                exc,
-                exc_info=True,
-            )
-            preview.warnings.append(f"Preview computation error: {exc}")
+            snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+            try:
+                with Session(snap_engine) as snap_session:
+                    for item in resources:
+                        self._compute_resource_preview(
+                            snap_session,
+                            preview,
+                            item.get("type", ""),
+                            int(item.get("id", 0)),
+                            vault_root,
+                        )
+            except Exception as exc:
+                logger.error(
+                    "RestoreService: preview_batch failed for checkpoint %d: %s",
+                    checkpoint_id,
+                    exc,
+                    exc_info=True,
+                )
+                preview.warnings.append(f"Preview computation error: {exc}")
+            finally:
+                snap_engine.dispose()
+        finally:
+            try:
+                shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
+            except Exception:
+                pass
 
         self._finalise_preview_summary(preview)
         return preview
@@ -653,9 +697,264 @@ class RestoreService:
 
         return total
 
+    def compare_hashes(
+        self, checkpoint_id: int, picture_ids: list[int]
+    ) -> dict:
+        """Compare live ``metadata_hash`` values against a checkpoint snapshot.
+
+        Opens the snapshot file read-only and looks up the ``metadata_hash``
+        column for the requested picture IDs in both the live DB and the
+        snapshot.  A NULL hash on either side is treated conservatively as
+        "potentially changed" so the checkpoint stays enabled.
+
+        Args:
+            checkpoint_id: ID of the checkpoint to compare against.
+            picture_ids: List of live picture IDs to check.
+
+        Returns:
+            ``{"identical_ids": [...], "changed_ids": [...]}`` where each
+            input ID appears in exactly one list.
+
+        Raises:
+            ValueError: If the checkpoint or its snapshot file cannot be found.
+        """
+        if not picture_ids:
+            return {"identical_ids": [], "changed_ids": []}
+
+        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        snapshot_path = os.path.join(self._vault.image_root, cp.relative_path)
+        if not os.path.exists(snapshot_path):
+            raise ValueError(
+                f"Snapshot file not found for checkpoint {checkpoint_id}"
+            )
+
+        # Fetch live hashes, computing and persisting any that are NULL so
+        # existing pictures (pre-migration) can be compared correctly.
+        def _get_live_hashes(session: Session) -> dict[int, str | None]:
+            rows = session.execute(
+                select(Picture.id, Picture.metadata_hash).where(
+                    Picture.id.in_(picture_ids)
+                )
+            ).all()
+            hashes: dict[int, str | None] = {pid: h for pid, h in rows}
+            for pid, h in list(hashes.items()):
+                if h is None:
+                    computed = _compute_picture_metadata_hash(session, pid)
+                    if computed is not None:
+                        # Persist via Core SQL so the after_flush hook is not
+                        # re-triggered and the ChangeLog is not polluted.
+                        session.execute(
+                            sa_update(Picture)
+                            .where(Picture.id == pid)
+                            .values(metadata_hash=computed)
+                        )
+                        hashes[pid] = computed
+            return hashes
+
+        live_hashes: dict[int, str | None] = self._vault.db.run_task(_get_live_hashes)
+
+        # Open snapshot directly — backfilling schema + hashes in-place for
+        # old snapshots that predate the metadata_hash migration.
+        from sqlalchemy import inspect as sa_inspect
+
+        _probe_engine = None
+        try:
+            _probe_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
+            snap_has_col = "metadata_hash" in {
+                c["name"] for c in sa_inspect(_probe_engine).get_columns("picture")
+            }
+        except Exception:
+            snap_has_col = False
+        finally:
+            if _probe_engine is not None:
+                try:
+                    _probe_engine.dispose()
+                except Exception:
+                    pass
+
+        if not snap_has_col:
+            # One-time fix: write migration + hashes into the original snapshot.
+            self._backfill_snapshot(snapshot_path)
+
+        # Fetch snapshot hashes directly from the (possibly just backfilled) file.
+        _snap_engine = None
+        try:
+            _snap_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
+            with Session(_snap_engine) as snap_session:
+                snap_rows = snap_session.execute(
+                    select(Picture.id, Picture.metadata_hash).where(
+                        Picture.id.in_(picture_ids)
+                    )
+                ).all()
+                snap_hashes: dict[int, str | None] = {}
+                for pid, h in snap_rows:
+                    if h is not None:
+                        snap_hashes[pid] = h
+                    else:
+                        # Safety fallback — should not occur after backfill.
+                        snap_hashes[pid] = _compute_picture_metadata_hash(
+                            snap_session, pid
+                        )
+        except Exception as exc:
+            logger.warning(
+                "RestoreService.compare_hashes: failed to read snapshot %d: %s",
+                checkpoint_id,
+                exc,
+            )
+            # Treat all as changed on error (conservative / keep enabled)
+            return {"identical_ids": [], "changed_ids": list(picture_ids)}
+        finally:
+            if _snap_engine is not None:
+                try:
+                    _snap_engine.dispose()
+                except Exception:
+                    pass
+
+        identical_ids: list[int] = []
+        changed_ids: list[int] = []
+        for pid in picture_ids:
+            live_h = live_hashes.get(pid)
+            snap_h = snap_hashes.get(pid)
+            if live_h is not None and snap_h is not None and live_h == snap_h:
+                identical_ids.append(pid)
+            else:
+                changed_ids.append(pid)
+
+        return {"identical_ids": identical_ids, "changed_ids": changed_ids}
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def backfill_all_snapshot_hashes(self, reset_all: bool = False) -> None:
+        """Permanently compute and save metadata_hash for all checkpoint snapshot files.
+
+        Per-snapshot errors are logged and skipped so a single corrupt file
+        does not abort the sweep.
+
+        Args:
+            reset_all: When True, clear existing hashes before recomputing so
+                that every picture gets a fresh hash (use this after the hash
+                algorithm changes).  When False (default), only fill NULLs.
+        """
+        checkpoints = self._vault.db.run_immediate_read_task(
+            lambda session: session.exec(select(Checkpoint)).all()
+        )
+        for cp in checkpoints:
+            abs_snapshot = os.path.join(self._vault.image_root, cp.relative_path)
+            if not os.path.exists(abs_snapshot):
+                continue
+            try:
+                self._backfill_snapshot(abs_snapshot, reset_all=reset_all)
+            except Exception as exc:
+                logger.warning(
+                    "RestoreService.backfill_all_snapshot_hashes: failed for %s: %s",
+                    abs_snapshot,
+                    exc,
+                    exc_info=True,
+                )
+
+    def _backfill_snapshot(self, abs_snapshot: str, reset_all: bool = False) -> None:
+        """Compute and permanently write metadata_hash for pictures in *abs_snapshot*.
+
+        If the snapshot predates the metadata_hash migration (column missing),
+        the file is upgraded in-place via a temp copy that replaces the
+        original.  After the column exists, all rows whose metadata_hash IS
+        NULL are filled and committed directly to the snapshot file.
+
+        Args:
+            abs_snapshot: Absolute path to the snapshot .sqlite file to update.
+            reset_all: When True, clear all existing hashes before recomputing.
+        """
+        from sqlalchemy import inspect as sa_inspect
+
+        _probe = None
+        try:
+            _probe = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            col_names = {
+                col["name"] for col in sa_inspect(_probe).get_columns("picture")
+            }
+        finally:
+            if _probe is not None:
+                try:
+                    _probe.dispose()
+                except Exception:
+                    pass
+
+        if "metadata_hash" not in col_names:
+            # Upgrade via a temp copy, then atomically replace the original.
+            upgraded = self._upgrade_snapshot_schema(abs_snapshot)
+            if upgraded is None:
+                logger.warning(
+                    "RestoreService._backfill_snapshot: schema upgrade failed for %s",
+                    abs_snapshot,
+                )
+                return
+            tmp_dir = os.path.dirname(upgraded)
+            try:
+                self._fill_snapshot_hashes_at(upgraded, reset_all=reset_all)
+                shutil.copy2(upgraded, abs_snapshot)
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            return
+
+        # Column already exists — fill in any NULL hashes directly on the original.
+        self._fill_snapshot_hashes_at(abs_snapshot, reset_all=reset_all)
+
+    def _fill_snapshot_hashes_at(self, db_path: str, reset_all: bool = False) -> None:
+        """Compute and commit metadata_hash for Pictures in *db_path*.
+
+        Opens a standalone SQLite session on *db_path* (independent of the
+        vault DB), computes SHA-256 metadata hashes, and commits the results.
+        A WAL checkpoint is issued afterwards to keep the snapshot as a
+        self-contained single file.
+
+        Args:
+            db_path: Absolute path to a writable SQLite file.
+            reset_all: When True, reset all existing hashes to NULL first so
+                every picture is recomputed (use after algorithm changes).
+        """
+        import sqlite3 as _sqlite3
+
+        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        try:
+            with Session(engine) as session:
+                if reset_all:
+                    session.execute(
+                        sa_update(Picture).values(metadata_hash=None)
+                    )
+                    session.commit()
+                null_pids = (
+                    session.execute(
+                        select(Picture.id).where(
+                            Picture.metadata_hash == None  # noqa: E711
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if not null_pids:
+                    return
+                for pid in null_pids:
+                    new_hash = _compute_picture_metadata_hash(session, pid)
+                    if new_hash is not None:
+                        session.execute(
+                            sa_update(Picture)
+                            .where(Picture.id == pid)
+                            .values(metadata_hash=new_hash)
+                        )
+                session.commit()
+            # Flush WAL to main file for a clean single-file snapshot.
+            with _sqlite3.connect(db_path) as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("PRAGMA journal_mode=DELETE")
+            logger.info(
+                "RestoreService: filled %d metadata hashes in %s",
+                len(null_pids),
+                db_path,
+            )
+        finally:
+            engine.dispose()
 
     def _get_checkpoint_or_raise(self, checkpoint_id: int) -> Checkpoint:
         cp = self._vault.checkpoint_service.get_checkpoint(checkpoint_id)
@@ -706,7 +1005,8 @@ class RestoreService:
             config = Config(str(alembic_ini))
             config.set_main_option("script_location", str(migrations_dir))
             config.set_main_option("sqlalchemy.url", f"sqlite:///{tmp_snapshot}")
-            command.upgrade(config, "head")
+            with _ALEMBIC_UPGRADE_LOCK:
+                command.upgrade(config, "head")
             # Checkpoint and convert back to rollback journal so the
             # main file contains all data without a WAL sidecar.
             import sqlite3
@@ -1332,6 +1632,12 @@ class RestoreService:
             "id",
             "file_path",
             "created_at",
+            # Derived/regenerable scores and internal hash — not user-controlled
+            # metadata, so they should not surface as differences in the preview.
+            "aesthetic_score",
+            "smart_score",
+            "text_score",
+            "metadata_hash",
         }
         changed: list[str] = []
         for col in snap_pic.__fields__:

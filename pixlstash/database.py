@@ -15,7 +15,7 @@ from pathlib import Path
 from concurrent.futures import Future
 from enum import IntEnum
 from typing import Optional
-from sqlalchemy import event, inspect as sa_inspect
+from sqlalchemy import event, inspect as sa_inspect, update as sa_update, select as sa_select
 from sqlalchemy.orm import attributes as orm_attributes
 from sqlmodel import create_engine, Session
 from rapidfuzz.distance import Levenshtein
@@ -288,10 +288,118 @@ def _after_flush_handler(session, flush_context) -> None:
             logger.warning("ChangeLog: failed to insert %d row(s): %s", len(rows), exc)
 
 
+# ---------------------------------------------------------------------------
+# Picture metadata-hash helpers
+# ---------------------------------------------------------------------------
+
+# Columns excluded from the metadata hash; matches _diff_picture's _SKIP set
+# in restore_service.py so that the hash detects exactly what the preview does.
+_HASH_SKIP_COLS: frozenset = frozenset({
+    "id",
+    "file_path",
+    "created_at",
+    "text_embedding",
+    "image_embedding",
+    "metadata_hash",
+    # Derived/regenerable scores — excluded so that recalculating them
+    # does not make a checkpoint appear as changed.
+    "aesthetic_score",
+    "smart_score",
+    "text_score",
+})
+
+
+def _compute_picture_metadata_hash(
+    session: Session, picture_id: int
+) -> Optional[str]:
+    """Return a SHA-256 hex digest of a picture's user-visible metadata.
+
+    Covers all Picture columns not in ``_HASH_SKIP_COLS`` plus the sorted list
+    of associated tag strings.  Called inside ``after_flush`` so all pending
+    writes are already visible on the connection.
+
+    Args:
+        session: Active DB session (must be within an open transaction).
+        picture_id: Primary key of the picture.
+
+    Returns:
+        Hex-encoded SHA-256 string, or None if the picture is not found.
+    """
+    pic = session.get(Picture, picture_id)
+    if pic is None:
+        return None
+    col_vals: dict = {}
+    for col in pic.__fields__:
+        if col in _HASH_SKIP_COLS:
+            continue
+        val = getattr(pic, col, None)
+        if isinstance(val, np.ndarray):
+            continue
+        if hasattr(val, "isoformat"):
+            val = val.isoformat()
+        col_vals[col] = val
+    tags = sorted(
+        session.execute(
+            sa_select(Tag.tag).where(Tag.picture_id == picture_id)
+        ).scalars().all()
+    )
+    state = {"cols": col_vals, "tags": tags}
+    return hashlib.sha256(
+        json.dumps(state, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
+def _before_flush_hash_tracker(session, flush_context, instances) -> None:
+    """Record picture IDs whose metadata hash needs recomputing after flush."""
+    dirty_pids: set = session.info.setdefault("_hash_dirty_pids", set())
+    new_pics: list = session.info.setdefault("_hash_new_pics", [])
+    for obj in itertools.chain(session.new, session.dirty, session.deleted):
+        if isinstance(obj, Picture):
+            if obj.id is not None:
+                dirty_pids.add(obj.id)
+            else:
+                new_pics.append(obj)
+        elif isinstance(obj, Tag) and obj.picture_id is not None:
+            dirty_pids.add(obj.picture_id)
+        elif isinstance(obj, Face) and obj.picture_id is not None:
+            dirty_pids.add(obj.picture_id)
+
+
+def _after_flush_hash_updater(session, flush_context) -> None:
+    """Recompute and persist metadata_hash for dirty pictures in the same txn.
+
+    Uses Core SQL UPDATE so the change is committed with the same transaction
+    without triggering a second ORM flush cycle.
+    """
+    dirty_pids: set = session.info.pop("_hash_dirty_pids", set())
+    new_pics: list = session.info.pop("_hash_new_pics", [])
+    for pic in new_pics:
+        if pic.id is not None:
+            dirty_pids.add(pic.id)
+    if not dirty_pids:
+        return
+    with session.no_autoflush:
+        for pid in dirty_pids:
+            new_hash = _compute_picture_metadata_hash(session, pid)
+            if new_hash is not None:
+                session.execute(
+                    sa_update(Picture)
+                    .where(Picture.id == pid)
+                    .values(metadata_hash=new_hash)
+                )
+                # Expire the in-memory attribute so it reflects the new value
+                # on next access (the Core UPDATE bypasses ORM tracking).
+                cached = session.identity_map.get((Picture, (pid,)))
+                if cached is not None:
+                    session.expire(cached, ["metadata_hash"])
+
+
 def _attach_change_log_hooks(session: Session) -> None:
     """Attach per-session before_flush / after_flush event listeners."""
     event.listen(session, "before_flush", _before_flush_handler)
     event.listen(session, "after_flush", _after_flush_handler)
+    event.listen(session, "before_flush", _before_flush_hash_tracker)
+    event.listen(session, "after_flush", _after_flush_hash_updater)
 
 
 # Priority enum for DB operations
