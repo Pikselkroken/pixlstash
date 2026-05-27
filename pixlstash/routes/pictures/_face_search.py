@@ -26,18 +26,14 @@ from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.face_detection_task import FaceDetectionTask
-from sqlmodel import select
 
-from pixlstash.db_models import Face, Picture
+from pixlstash.services import search_query_service
 from pixlstash.utils.service.filter_helpers import (
     VALID_COMBINE_MODES,
     collect_set_filter_ids,
     combine_likeness_scores,
     fetch_scope_allowed_picture_ids,
-    fetch_set_candidate_ids,
     normalize_set_mode,
-    project_membership_exists_clause,
-    project_unassigned_clause,
 )
 
 logger = get_logger(__name__)
@@ -45,53 +41,6 @@ logger = get_logger(__name__)
 _DEFAULT_TOP_N = 20
 _MAX_TOP_N = 500
 _MAX_POOL_M = 2000
-
-
-def _fetch_face_candidates(
-    server, candidate_ids: set[int] | None
-) -> list[tuple[int, list[np.ndarray]]]:
-    """Fetch ArcFace embeddings grouped by picture from the DB.
-
-    Args:
-        server: The server instance providing DB access.
-        candidate_ids: Optional set of picture IDs to restrict to.
-            ``None`` means all non-deleted pictures are eligible.
-
-    Returns:
-        A list of ``(picture_id, [embedding, ...])`` tuples.  Pictures with
-        no usable face embeddings are excluded.
-    """
-
-    def _fetch(session) -> list[tuple[int, list[np.ndarray]]]:
-        from sqlalchemy import select as sa_select
-
-        from pixlstash.db_models import Face, Picture
-
-        query = (
-            sa_select(Face.picture_id, Face.features)
-            .join(Picture, Face.picture_id == Picture.id)
-            .where(
-                Face.features.is_not(None),
-                Picture.deleted.is_(False),
-            )
-        )
-        if candidate_ids is not None:
-            if not candidate_ids:
-                return []
-            query = query.where(Face.picture_id.in_(candidate_ids))
-
-        rows = session.execute(query).all()
-
-        pic_embs: dict[int, list[np.ndarray]] = {}
-        for pic_id, features in rows:
-            pic_id = int(pic_id)
-            emb = np.frombuffer(features, dtype=np.float32).copy()
-            if emb.size > 0:
-                pic_embs.setdefault(pic_id, []).append(emb)
-
-        return list(pic_embs.items())
-
-    return server.vault.db.run_immediate_read_task(_fetch)
 
 
 def _picture_face_score(query_emb: np.ndarray, face_embs: list[np.ndarray]) -> float:
@@ -232,36 +181,15 @@ def register_routes(router, server):
         filter_candidate_ids: set[int] | None = None
 
         if set_filter_ids:
-            filter_candidate_ids = server.vault.db.run_immediate_read_task(
-                fetch_set_candidate_ids,
+            filter_candidate_ids = search_query_service.fetch_set_filter_candidate_ids(
+                server.vault.db,
                 set_ids=set_filter_ids,
                 set_mode=normalized_set_mode,
-                deleted_only=False,
             )
 
         if project_id is not None:
-
-            def _fetch_project_ids(session, project_id_value: str):
-                if project_id_value == "UNASSIGNED":
-                    stmt = select(Picture.id).where(
-                        Picture.deleted.is_(False),
-                        project_unassigned_clause(Picture),
-                    )
-                else:
-                    try:
-                        parsed_project_id = int(project_id_value)
-                    except (TypeError, ValueError):
-                        raise HTTPException(
-                            status_code=400, detail="Invalid project_id"
-                        )
-                    stmt = select(Picture.id).where(
-                        Picture.deleted.is_(False),
-                        project_membership_exists_clause(parsed_project_id, Picture),
-                    )
-                return {int(r) for r in session.exec(stmt).all()}
-
-            project_candidate_ids = server.vault.db.run_immediate_read_task(
-                _fetch_project_ids, project_id
+            project_candidate_ids = search_query_service.fetch_project_candidate_ids(
+                server.vault.db, project_id
             )
             filter_candidate_ids = (
                 project_candidate_ids
@@ -275,16 +203,8 @@ def register_routes(router, server):
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid character_id")
 
-            def _fetch_character_picture_ids(session, cid: int):
-                return {
-                    int(r)
-                    for r in session.exec(
-                        select(Face.picture_id).where(Face.character_id == cid)
-                    ).all()
-                }
-
-            char_candidate_ids = server.vault.db.run_immediate_read_task(
-                _fetch_character_picture_ids, char_id_int
+            char_candidate_ids = search_query_service.fetch_character_candidate_ids(
+                server.vault.db, char_id_int
             )
             filter_candidate_ids = (
                 char_candidate_ids
@@ -326,24 +246,8 @@ def register_routes(router, server):
         query_embeddings: list[np.ndarray] = []
 
         if source_face_id is not None:
-            # Fetch just this one face's embedding by its DB ID.
-            def _fetch_single_face_embedding(session, face_id: int) -> list[np.ndarray]:
-                from sqlalchemy import select as sa_select
-
-                rows = session.execute(
-                    sa_select(Face.features).where(
-                        Face.id == face_id, Face.features.is_not(None)
-                    )
-                ).all()
-                result = []
-                for (features,) in rows:
-                    emb = np.frombuffer(features, dtype=np.float32).copy()
-                    if emb.size > 0:
-                        result.append(emb)
-                return result
-
-            source_embs = server.vault.db.run_immediate_read_task(
-                _fetch_single_face_embedding, source_face_id
+            source_embs = search_query_service.fetch_face_embedding_by_face_id(
+                server.vault.db, source_face_id
             )
             if not source_embs:
                 raise HTTPException(
@@ -359,24 +263,8 @@ def register_routes(router, server):
                 query_embeddings.append(emb)
 
         elif source_picture_id is not None:
-            # Fetch stored ArcFace embeddings directly from the DB.
-            def _fetch_source_embeddings(session, pic_id: int) -> list[np.ndarray]:
-                from sqlalchemy import select as sa_select
-
-                rows = session.execute(
-                    sa_select(Face.features).where(
-                        Face.picture_id == pic_id, Face.features.is_not(None)
-                    )
-                ).all()
-                result = []
-                for (features,) in rows:
-                    emb = np.frombuffer(features, dtype=np.float32).copy()
-                    if emb.size > 0:
-                        result.append(emb)
-                return result
-
-            source_embs = server.vault.db.run_immediate_read_task(
-                _fetch_source_embeddings, source_picture_id
+            source_embs = search_query_service.fetch_face_embeddings_by_picture(
+                server.vault.db, source_picture_id
             )
             if not source_embs:
                 raise HTTPException(
@@ -493,7 +381,9 @@ def register_routes(router, server):
                 )
 
         # ── Fetch candidate face embeddings from DB ───────────────────────
-        candidates = _fetch_face_candidates(server, candidate_ids)
+        candidates = search_query_service.fetch_face_candidates(
+            server.vault.db, candidate_ids
+        )
         if not candidates:
             return []
 

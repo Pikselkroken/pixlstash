@@ -17,19 +17,15 @@ from typing import List
 import numpy as np
 from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
-from sqlmodel import Session, select
 
-from pixlstash.db_models import Face, Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
+from pixlstash.services import search_query_service
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
     combine_likeness_scores,
     fetch_scope_allowed_picture_ids,
-    fetch_set_candidate_ids,
     normalize_set_mode,
-    project_membership_exists_clause,
-    project_unassigned_clause,
     VALID_COMBINE_MODES,
 )
 
@@ -74,39 +70,6 @@ def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
     if norm > 0:
         emb = emb / norm
     return emb
-
-
-def _fetch_candidate_embeddings(
-    server, candidate_ids: list[int] | None
-) -> list[tuple[int, np.ndarray]]:
-    """Return ``(picture_id, normalised_embedding)`` pairs from the DB.
-
-    Filters to non-deleted pictures that have a stored image embedding.
-    When *candidate_ids* is provided only those IDs are considered.
-    """
-
-    def _query(session: Session) -> list[tuple[int, bytes]]:
-        stmt = (
-            select(Picture.id, Picture.image_embedding)
-            .where(Picture.deleted.is_(False))
-            .where(Picture.image_embedding.is_not(None))
-        )
-        if candidate_ids is not None:
-            stmt = stmt.where(Picture.id.in_(candidate_ids))
-        return session.exec(stmt).all()
-
-    rows = server.vault.db.run_immediate_read_task(_query)
-
-    results: list[tuple[int, np.ndarray]] = []
-    for pic_id, blob in rows:
-        emb = LikenessUtils.decode_embedding(blob)
-        if emb is None or emb.size == 0:
-            continue
-        norm = float(np.linalg.norm(emb))
-        if norm > 0:
-            emb = emb / norm
-        results.append((int(pic_id), emb))
-    return results
 
 
 def register_routes(router, server):
@@ -220,36 +183,15 @@ def register_routes(router, server):
         filter_candidate_ids: set[int] | None = None
 
         if set_filter_ids:
-            filter_candidate_ids = server.vault.db.run_immediate_read_task(
-                fetch_set_candidate_ids,
+            filter_candidate_ids = search_query_service.fetch_set_filter_candidate_ids(
+                server.vault.db,
                 set_ids=set_filter_ids,
                 set_mode=normalized_set_mode,
-                deleted_only=False,
             )
 
         if project_id is not None:
-
-            def _fetch_project_ids(session, project_id_value: str):
-                if project_id_value == "UNASSIGNED":
-                    stmt = select(Picture.id).where(
-                        Picture.deleted.is_(False),
-                        project_unassigned_clause(Picture),
-                    )
-                else:
-                    try:
-                        parsed_project_id = int(project_id_value)
-                    except (TypeError, ValueError):
-                        raise HTTPException(
-                            status_code=400, detail="Invalid project_id"
-                        )
-                    stmt = select(Picture.id).where(
-                        Picture.deleted.is_(False),
-                        project_membership_exists_clause(parsed_project_id, Picture),
-                    )
-                return {int(r) for r in session.exec(stmt).all()}
-
-            project_candidate_ids = server.vault.db.run_immediate_read_task(
-                _fetch_project_ids, project_id
+            project_candidate_ids = search_query_service.fetch_project_candidate_ids(
+                server.vault.db, project_id
             )
             filter_candidate_ids = (
                 project_candidate_ids
@@ -263,16 +205,8 @@ def register_routes(router, server):
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid character_id")
 
-            def _fetch_character_picture_ids(session, cid: int):
-                return {
-                    int(r)
-                    for r in session.exec(
-                        select(Face.picture_id).where(Face.character_id == cid)
-                    ).all()
-                }
-
-            char_candidate_ids = server.vault.db.run_immediate_read_task(
-                _fetch_character_picture_ids, char_id_int
+            char_candidate_ids = search_query_service.fetch_character_candidate_ids(
+                server.vault.db, char_id_int
             )
             filter_candidate_ids = (
                 char_candidate_ids
@@ -303,17 +237,8 @@ def register_routes(router, server):
 
         if effective_source_ids:
             # Fast path: fetch stored CLIP embeddings for all source pictures.
-            def _fetch_source_embeddings(session: Session) -> list[tuple[int, bytes]]:
-                rows = session.exec(
-                    select(Picture.id, Picture.image_embedding)
-                    .where(Picture.id.in_(effective_source_ids))
-                    .where(Picture.deleted.is_(False))
-                    .where(Picture.image_embedding.is_not(None))
-                ).all()
-                return list(rows)
-
-            source_rows = server.vault.db.run_immediate_read_task(
-                _fetch_source_embeddings
+            source_rows = search_query_service.fetch_source_clip_embeddings(
+                server.vault.db, effective_source_ids
             )
             if not source_rows:
                 raise HTTPException(
@@ -384,7 +309,9 @@ def register_routes(router, server):
             )
 
         # ── Fetch candidate embeddings from DB ───────────────────────────
-        candidates = _fetch_candidate_embeddings(server, candidate_ids)
+        candidates = search_query_service.fetch_candidate_clip_embeddings(
+            server.vault.db, candidate_ids
+        )
         if not candidates:
             return []
 
