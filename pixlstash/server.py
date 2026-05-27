@@ -219,6 +219,7 @@ class Server:
             ),
             force_cpu=bool(_force_cpu),
             fast_captions=Server.DEFAULT_FAST_CAPTIONS,
+            daily_checkpoints_enabled=self._server_config.get("daily_checkpoints", True),
         )
 
         self._ws_clients = []
@@ -690,6 +691,8 @@ class Server:
                     server_config["generate_thumbnails_on_startup"] = True
                 if "filesystem_roots" not in server_config:
                     server_config["filesystem_roots"] = []
+                if "daily_checkpoints" not in server_config:
+                    server_config["daily_checkpoints"] = True
 
         # Resolve SSL paths that are relative: interpret them relative to the
         # config file's directory, not the process's CWD, so that the certs

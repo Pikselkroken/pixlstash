@@ -416,6 +416,40 @@ def create_router(server) -> APIRouter:
         ]
         return {"status": "success", "filesystem_roots": roots}
 
+    import json as _json
+
+    @router.get(
+        "/server-config/checkpoints",
+        summary="Get checkpoint configuration",
+        description="Returns server-level checkpoint configuration.",
+    )
+    def get_checkpoint_config(request: Request):
+        _ensure_secure_when_required(request)
+        server.auth.require_user_id(request)
+        return {
+            "status": "success",
+            "daily_checkpoints": server._server_config.get("daily_checkpoints", True),
+        }
+
+    class CheckpointConfigPatch(BaseModel):
+        daily_checkpoints: bool
+
+    @router.patch(
+        "/server-config/checkpoints",
+        summary="Update checkpoint configuration",
+        description="Updates checkpoint configuration. Changes take effect immediately and are persisted to server-config.json.",
+    )
+    def patch_checkpoint_config(request: Request, body: CheckpointConfigPatch):
+        _ensure_secure_when_required(request)
+        server.auth.require_user_id(request)
+        server._server_config["daily_checkpoints"] = body.daily_checkpoints
+        server.vault.set_daily_checkpoints_enabled(body.daily_checkpoints)
+        config_path = getattr(server, "_server_config_path", None)
+        if config_path:
+            with open(config_path, "w") as f:
+                _json.dump(server._server_config, f, indent=2)
+        return {"status": "success", "daily_checkpoints": body.daily_checkpoints}
+
     @router.post(
         "/server-config/open",
         summary="Open server config location",

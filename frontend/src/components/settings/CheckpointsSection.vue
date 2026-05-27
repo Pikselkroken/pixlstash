@@ -34,6 +34,7 @@ watch(
     if (isOpen) {
       store.fetchCheckpoints();
       store.fetchStatus();
+      store.fetchCheckpointSettings();
     }
   },
 );
@@ -69,7 +70,9 @@ function humanBytes(bytes) {
 function relativeDate(isoStr) {
   if (!isoStr) return "";
   const normalized =
-    isoStr.includes("T") && !isoStr.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(isoStr)
+    isoStr.includes("T") &&
+    !isoStr.endsWith("Z") &&
+    !/[+-]\d{2}:\d{2}$/.test(isoStr)
       ? isoStr + "Z"
       : isoStr;
   const diff = (Date.now() - new Date(normalized).getTime()) / 1000;
@@ -89,11 +92,14 @@ async function handleCreate() {
     createLabel.value = "";
     createSuccess.value = "Checkpoint created.";
     setTimeout(() => {
-      if (createSuccess.value === "Checkpoint created.") createSuccess.value = "";
+      if (createSuccess.value === "Checkpoint created.")
+        createSuccess.value = "";
     }, 3000);
   } catch (err) {
     createError.value =
-      err?.response?.data?.detail || err?.message || "Failed to create checkpoint.";
+      err?.response?.data?.detail ||
+      err?.message ||
+      "Failed to create checkpoint.";
   } finally {
     creating.value = false;
   }
@@ -135,7 +141,7 @@ const deleteError = ref("");
 async function handleDelete(cp) {
   if (
     !window.confirm(
-      `Delete checkpoint "${cp.label || cp.kind + " " + relativeDate(cp.created_at)}"? This cannot be undone.`
+      `Delete checkpoint "${cp.label || cp.kind + " " + relativeDate(cp.created_at)}"? This cannot be undone.`,
     )
   ) {
     return;
@@ -173,6 +179,18 @@ function handleRestore(cp) {
       </span>
     </div>
 
+    <!-- ── Daily checkpoint toggle ──────────────────────────────────────── -->
+    <div class="checkpoint-settings-row">
+      <v-switch
+        :model-value="store.dailyCheckpointsEnabled"
+        label="Automatic daily checkpoints"
+        density="compact"
+        hide-details
+        color="primary"
+        @update:model-value="store.setDailyCheckpointsEnabled($event)"
+      />
+    </div>
+
     <!-- ── Create checkpoint ─────────────────────────────────────────────── -->
     <div class="checkpoint-create-row">
       <v-text-field
@@ -196,15 +214,19 @@ function handleRestore(cp) {
         Create now
       </v-btn>
     </div>
-    <div v-if="createError" class="checkpoint-inline-error">{{ createError }}</div>
-    <div v-if="createSuccess" class="checkpoint-inline-success">{{ createSuccess }}</div>
+    <div v-if="createError" class="checkpoint-inline-error">
+      {{ createError }}
+    </div>
+    <div v-if="createSuccess" class="checkpoint-inline-success">
+      {{ createSuccess }}
+    </div>
 
     <!-- ── Retention info ────────────────────────────────────────────────── -->
     <div class="checkpoint-retention-card">
       <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
       <span>
-        GFS retention: 7 daily, 4 weekly, 12 monthly.
-        Manual &amp; opportunistic checkpoints are kept until deleted.
+        GFS retention: 7 daily, 4 weekly, 12 monthly. Manual &amp; opportunistic
+        checkpoints are kept until deleted.
       </span>
     </div>
 
@@ -275,10 +297,7 @@ function handleRestore(cp) {
               @keydown.esc="cancelEditing(cp.id)"
               @blur="saveLabel(cp.id)"
             />
-            <div
-              v-if="saveLabelError[cp.id]"
-              class="checkpoint-inline-error"
-            >
+            <div v-if="saveLabelError[cp.id]" class="checkpoint-inline-error">
               {{ saveLabelError[cp.id] }}
             </div>
           </template>
@@ -353,7 +372,9 @@ function handleRestore(cp) {
                   variant="text"
                   density="compact"
                   color="error"
-                  :disabled="cp.kind !== 'MANUAL' || !!activeJob || deletingId === cp.id"
+                  :disabled="
+                    cp.kind !== 'MANUAL' || !!activeJob || deletingId === cp.id
+                  "
                   :loading="deletingId === cp.id"
                   title="Delete this checkpoint"
                   @click="handleDelete(cp)"
@@ -391,6 +412,10 @@ function handleRestore(cp) {
   font-size: 0.8rem;
   display: flex;
   align-items: center;
+}
+
+.checkpoint-settings-row {
+  margin-bottom: 4px;
 }
 
 .checkpoint-create-row {

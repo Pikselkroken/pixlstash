@@ -46,6 +46,8 @@ class EnsureDailyCheckpointFinder(BaseTaskFinder):
         return 1
 
     def find_task(self):
+        if not self._vault.daily_checkpoints_enabled:
+            return None
         now = time.monotonic()
         if now - self._last_check_at < _CHECK_INTERVAL_S:
             return None

@@ -14,6 +14,8 @@ export const useCheckpointsStore = defineStore("checkpoints", () => {
   const restoreDialogCheckpointId = ref(null);
   const restoreDialogResources = ref(null); // null → full restore
 
+  const dailyCheckpointsEnabled = ref(true);
+
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async function fetchCheckpoints() {
@@ -146,6 +148,28 @@ export const useCheckpointsStore = defineStore("checkpoints", () => {
     fetchCheckpoints();
   }
 
+  async function fetchCheckpointSettings() {
+    try {
+      const res = await apiClient.get("/api/v1/server-config/checkpoints");
+      dailyCheckpointsEnabled.value = res.data?.daily_checkpoints ?? true;
+    } catch (err) {
+      // Non-fatal; leave current value as-is.
+    }
+  }
+
+  async function setDailyCheckpointsEnabled(enabled) {
+    const previous = dailyCheckpointsEnabled.value;
+    dailyCheckpointsEnabled.value = enabled; // optimistic update
+    try {
+      await apiClient.patch("/api/v1/server-config/checkpoints", {
+        daily_checkpoints: enabled,
+      });
+    } catch (err) {
+      dailyCheckpointsEnabled.value = previous; // roll back
+      throw err;
+    }
+  }
+
   return {
     // state
     checkpoints,
@@ -155,6 +179,7 @@ export const useCheckpointsStore = defineStore("checkpoints", () => {
     restoreDialogOpen,
     restoreDialogCheckpointId,
     restoreDialogResources,
+    dailyCheckpointsEnabled,
     // actions
     fetchCheckpoints,
     fetchStatus,
@@ -165,6 +190,8 @@ export const useCheckpointsStore = defineStore("checkpoints", () => {
     previewResourceRestore,
     executeRestore,
     openRestoreDialog,
+    fetchCheckpointSettings,
+    setDailyCheckpointsEnabled,
     // ws handlers
     onCheckpointCreated,
     onCheckpointDeleted,

@@ -77,6 +77,7 @@ class Vault:
         disable_background_workers: bool = False,
         force_cpu: bool = False,
         fast_captions: bool = False,
+        daily_checkpoints_enabled: bool = True,
     ):
         """
         Initialize a Vault instance.
@@ -120,6 +121,7 @@ class Vault:
         self._tagger_settings: dict | None = None
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
+        self._daily_checkpoints_enabled: bool = daily_checkpoints_enabled
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -436,6 +438,22 @@ class Vault:
             del self.db
             self.db = None
         self._started = False
+
+    def set_daily_checkpoints_enabled(self, enabled: bool) -> None:
+        """Enable or disable automatic daily checkpoints at runtime.
+
+        Takes effect immediately; the next EnsureDailyCheckpointFinder cycle
+        will skip checkpoint creation when ``enabled`` is False.
+
+        Args:
+            enabled: True to allow automatic daily checkpoints, False to suppress them.
+        """
+        self._daily_checkpoints_enabled = bool(enabled)
+
+    @property
+    def daily_checkpoints_enabled(self) -> bool:
+        """Whether automatic daily checkpoints are enabled."""
+        return self._daily_checkpoints_enabled
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory
