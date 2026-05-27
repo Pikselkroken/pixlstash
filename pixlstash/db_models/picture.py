@@ -1341,7 +1341,9 @@ class Picture(SQLModel, table=True):
             )
 
         if stack_leaders_only:
-            query = query.where(or_(Picture.stack_id.is_(None), Picture.stack_position == 0))
+            query = query.where(
+                or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
+            )
 
         select_fields = metadata_fields or cls.metadata_fields()
         if count_only:

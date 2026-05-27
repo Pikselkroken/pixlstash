@@ -21,7 +21,10 @@ from pixlstash.db_models import (
 from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
-from pixlstash.stacking import get_or_create_stack_for_picture
+from pixlstash.stacking import (
+    get_or_create_stack_for_picture,
+    normalize_stack_positions,
+)
 
 logger = get_logger(__name__)
 
@@ -366,6 +369,10 @@ def _assign_outputs_to_stack_top(server, stack_id: int, picture_ids: list[int]) 
             pic.stack_id = stack_id
             pic.stack_position = idx
             session.add(pic)
+
+        # Guarantee a contiguous 0-based ordering (and a position-0 leader for
+        # the grid) regardless of any pre-existing NULL/gapped positions.
+        normalize_stack_positions(session, stack_id)
 
         stack.updated_at = datetime.utcnow()
         session.add(stack)
