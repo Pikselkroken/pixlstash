@@ -20,7 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pillow_heif import register_heif_opener
@@ -929,6 +929,25 @@ class Server:
                 "install_type": install_type,
                 "docker_variant": docker_variant,
             }
+
+        @self.api.get("/scalar", include_in_schema=False)
+        async def scalar_reference():
+            # Scalar API reference UI, rendered client-side from the live
+            # OpenAPI schema. Served alongside the built-in /docs and /redoc.
+            html = """<!doctype html>
+<html lang="en">
+  <head>
+    <title>PixlStash API Reference</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <script id="api-reference" data-url="/openapi.json"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  </body>
+</html>
+"""
+            return HTMLResponse(content=html)
 
         @self.api.get("/favicon.ico")
         def favicon():

@@ -52,6 +52,7 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
         "/login",
         "/docs",
         "/redoc",
+        "/scalar",
         "/openapi.json",
         "/docs/oauth2-redirect",
         "/favicon.ico",
