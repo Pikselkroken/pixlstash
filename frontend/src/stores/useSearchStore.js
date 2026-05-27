@@ -10,6 +10,8 @@ export const useSearchStore = defineStore("search", () => {
   const isSearchHistoryOpen = ref(false);
   const searchOverlayVisible = ref(false);
 
+  const isSearchActive = computed(() => !!searchQuery.value?.trim());
+
   const filteredSearchHistory = computed(() => {
     const needle = (searchInput.value || "").trim().toLowerCase();
     if (!needle) return searchHistory.value;
@@ -54,6 +56,7 @@ export const useSearchStore = defineStore("search", () => {
     searchHistory,
     isSearchHistoryOpen,
     searchOverlayVisible,
+    isSearchActive,
     filteredSearchHistory,
     addToSearchHistory,
     clearSearchHistory,
