@@ -1,3 +1,7 @@
+# [1.4.0rc1]
+- Add reverse picture search and face search to both UI and API
+- Further improve grid loading speed
+
 # [1.3.1]
 - Remove out-of-scope read access from several API endpoints [Security:Moderate]
 
