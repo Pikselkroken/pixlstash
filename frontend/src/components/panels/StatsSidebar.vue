@@ -271,6 +271,16 @@ async function fetchStats() {
 const coocLoaded = ref(false);
 const confLoaded = ref(false);
 
+// Penalised-filter state is used by immediate watchers below, so it must be
+// declared before those watchers are created.
+const penalisedOnlyTags = ref(false);
+// 0 = all, 1 = at least one penalised, 2 = both penalised
+const penalisedOnlyCooc = ref(0);
+const statsPenalised = ref(null);
+const loadingPenalised = ref(false);
+const statsPenalisedBoth = ref(null);
+const loadingPenalisedBoth = ref(false);
+
 async function fetchCooc() {
   const qs = buildQueryParams();
   try {
@@ -753,15 +763,6 @@ function barWidth(count) {
 }
 
 // ─── Penalised filter ─────────────────────────────────────────────────────────
-const penalisedOnlyTags = ref(false);
-// 0 = all, 1 = at least one penalised, 2 = both penalised
-const penalisedOnlyCooc = ref(0);
-
-const statsPenalised = ref(null);
-const loadingPenalised = ref(false);
-const statsPenalisedBoth = ref(null);
-const loadingPenalisedBoth = ref(false);
-
 function isPenalised(tag) {
   return Object.prototype.hasOwnProperty.call(
     props.penalisedTagWeights,

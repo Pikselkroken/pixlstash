@@ -59,6 +59,9 @@ export function useGridFetch(
     maybeRefreshOverlayForComfyui,
     startSmartScoreProgress,
     completeSmartScoreProgress,
+    onGridFetchStart,
+    onGridVisibleMetadataReady,
+    onGridFetchDone,
   },
 ) {
   // ============================================================
@@ -380,6 +383,9 @@ export function useGridFetch(
     const force = options?.force === true;
     const activeSortKey = getActiveSortKey();
     const isSortedFetch = !!activeSortKey;
+    const fetchStartedAt = getNowMs();
+    let fetchMode = "default";
+    let fetchSucceeded = false;
     let sortedFetchStartedAt = 0;
     // Capture scroll-preservation intent *synchronously* before any await so
     // that it is not affected by the gridVersion watcher clearing it later.
@@ -419,6 +425,18 @@ export function useGridFetch(
     }
     lastFetchKey.value = fetchKey;
     const loadId = (gridLoadEpoch.value += 1);
+    if (typeof onGridFetchStart === "function") {
+      onGridFetchStart({
+        loadId,
+        fetchKey,
+        force,
+        selectedSort: props.selectedSort ?? null,
+        selectedCharacter: props.selectedCharacter ?? null,
+        selectedSet: props.selectedSet ?? null,
+        visibleStart: visibleStart.value,
+        visibleEnd: visibleEnd.value,
+      });
+    }
     gridReady.value = false;
     imagesLoading.value = true;
     imagesError.value = null;
@@ -439,6 +457,7 @@ export function useGridFetch(
         !_hasSearch && !_hasReverseImageSearch && !!faceLikenessSearchFaceId?.value;
 
       if (_isLikenessSort) {
+        fetchMode = "likeness-groups";
         const threshold = getStackThreshold(props.stackThreshold);
         const likenessGroupParams = buildLikenessGroupQueryParams();
         const url = `${
@@ -469,6 +488,7 @@ export function useGridFetch(
           };
         });
       } else if (_hasFaceLikenessSearch) {
+        fetchMode = "face-likeness-search";
         // Face likeness search: POST to face-search with source_face_id.
         const queryFaceId = faceLikenessSearchFaceId.value;
         const faceRes = await apiClient.post(
@@ -494,6 +514,7 @@ export function useGridFetch(
           images = idOrder.map((id) => picturesById[id]).filter(Boolean);
         }
       } else if (_hasReverseImageSearch) {
+        fetchMode = "reverse-image-search";
         // Reverse image search: POST to likeness-search with stored CLIP embeddings.
         // Multiple IDs are combined with min similarity (must match all sources).
         const queryPicIds = reverseImageSearchPictureIds.value;
@@ -526,6 +547,7 @@ export function useGridFetch(
           images = idOrder.map((id) => picturesById[id]).filter(Boolean);
         }
       } else if (_hasSearch) {
+        fetchMode = "text-search";
         // Use /pictures/search endpoint for text search
         const params = buildPictureIdsQueryParams();
         const url = `${
@@ -537,6 +559,7 @@ export function useGridFetch(
         const data = await res.data;
         images = data;
       } else {
+        fetchMode = "stream";
         // Streaming: COUNT(*) → placeholder grid → parallel first/last batches → background fill.
         //   1. Fast SELECT COUNT(*) → total
         //   2. Pre-build placeholder grid so END key works before streaming starts
@@ -777,7 +800,18 @@ export function useGridFetch(
           total,
           visibleEnd.value + (divisibleViewWindow.value || windowCount),
         );
-        fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
+        fetchThumbnailsBatch(visibleStart.value, prefetchEnd, {
+          reason: "initial-visible-prefetch",
+        });
+        if (typeof onGridVisibleMetadataReady === "function") {
+          onGridVisibleMetadataReady({
+            loadId,
+            total,
+            firstBatchCount: firstPics.length,
+            visibleStart: visibleStart.value,
+            visibleEnd: prefetchEnd,
+          });
+        }
 
         if (lastRes) {
           const lastPics = lastRes?.data?.pictures ?? [];
@@ -818,6 +852,7 @@ export function useGridFetch(
         lastFetchedGridImages.value = allGridImages.value.filter(
           (img) => img && img.id != null,
         );
+        fetchSucceeded = true;
         return;
       }
 
@@ -926,6 +961,7 @@ export function useGridFetch(
         const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
         completeSmartScoreProgress(loadId, elapsedMs, true);
       }
+      fetchSucceeded = true;
     } catch (e) {
       if (fetchAllGridImages.lastRequestId !== requestId) {
         if (isSortedFetch && options?.showProgress === true)
@@ -944,6 +980,17 @@ export function useGridFetch(
         completeSmartScoreProgress(loadId, elapsedMs, false);
       }
     } finally {
+      if (typeof onGridFetchDone === "function") {
+        onGridFetchDone({
+          loadId,
+          fetchMode,
+          success: fetchSucceeded,
+          elapsedMs: Math.max(0, getNowMs() - fetchStartedAt),
+          resultCount: Array.isArray(allGridImages.value)
+            ? allGridImages.value.length
+            : 0,
+        });
+      }
       if (loadId === gridLoadEpoch.value) {
         imagesLoading.value = false;
         gridReady.value = true;

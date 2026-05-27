@@ -1864,7 +1864,10 @@ async function shareResource(resourceType, resourceId, label) {
 
 function createCharacter() {
   // Find the next available unique name in the format "Character 0001"
-  const existingNames = new Set(characters.value.map((c) => c.name));
+  const existingCharacters = Array.isArray(characters.value)
+    ? characters.value
+    : [];
+  const existingNames = new Set(existingCharacters.map((c) => c.name));
   let num = 1;
   let name;
   do {
@@ -2163,8 +2166,12 @@ async function fetchCharacters() {
   try {
     const res = await apiClient.get(`${props.backendUrl}/characters`);
     const chars = await res.data;
-    characters.value = chars;
-    for (const char of chars) {
+    const nextCharacters = Array.isArray(chars) ? chars : [];
+    if (!Array.isArray(chars)) {
+      console.warn("Unexpected /characters response; expected an array:", chars);
+    }
+    characters.value = nextCharacters;
+    for (const char of nextCharacters) {
       fetchCharacterThumbnail(char.id);
     }
   } catch (e) {
@@ -2205,7 +2212,14 @@ async function fetchSortOptions() {
   try {
     const res = await apiClient.get(`${props.backendUrl}/sort_mechanisms`);
 
-    const options = await res.data;
+    const payload = res.data;
+    const options = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.sort_mechanisms)
+        ? payload.sort_mechanisms
+        : Array.isArray(payload?.options)
+          ? payload.options
+          : [];
 
     // Filter out CHARACTER_LIKENESS if there are no characters
     const filteredOptions = options.filter((opt) => {

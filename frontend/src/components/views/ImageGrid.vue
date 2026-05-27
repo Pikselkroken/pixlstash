@@ -3548,6 +3548,128 @@ const pendingOverlayGridRefresh = ref(false);
 const pendingGridImages = ref(null);
 
 // ============================================================
+// GRID FETCH TELEMETRY
+// ============================================================
+const GRID_FETCH_TELEMETRY_MAX_ENTRIES = 400;
+const gridFetchTelemetryByLoadId = new Map();
+
+function getGridFetchTelemetryStore() {
+  if (typeof window === "undefined") return null;
+  if (!Array.isArray(window.__PIXLSTASH_GRID_FETCH_TELEMETRY__)) {
+    window.__PIXLSTASH_GRID_FETCH_TELEMETRY__ = [];
+  }
+  return window.__PIXLSTASH_GRID_FETCH_TELEMETRY__;
+}
+
+function trimGridFetchTelemetryStore(store) {
+  while (store.length > GRID_FETCH_TELEMETRY_MAX_ENTRIES) {
+    store.shift();
+  }
+}
+
+function getGridFetchContextSummary(fetchKey) {
+  if (!fetchKey || typeof fetchKey !== "string") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(fetchKey);
+    return {
+      selectedSort: parsed?.selectedSort ?? null,
+      selectedCharacter: parsed?.selectedCharacter ?? null,
+      selectedSet: parsed?.selectedSet ?? null,
+      searchQuery: parsed?.searchQuery ?? "",
+      mediaTypeFilter: parsed?.mediaTypeFilter ?? "all",
+    };
+  } catch (_err) {
+    return {};
+  }
+}
+
+function onGridFetchStart(payload) {
+  const loadId = Number(payload?.loadId) || 0;
+  const startedAtMs = getNowMs();
+  const context = getGridFetchContextSummary(payload?.fetchKey);
+  const record = {
+    loadId,
+    startedAtMs,
+    endedAtMs: null,
+    elapsedMs: null,
+    visibleMetadataMs: null,
+    firstBatchCount: null,
+    total: null,
+    fetchMode: null,
+    force: payload?.force === true,
+    success: null,
+    resultCount: null,
+    visibleStart: payload?.visibleStart ?? null,
+    visibleEnd: payload?.visibleEnd ?? null,
+    ...context,
+  };
+  gridFetchTelemetryByLoadId.set(loadId, record);
+  const store = getGridFetchTelemetryStore();
+  if (store) {
+    store.push(record);
+    trimGridFetchTelemetryStore(store);
+  }
+}
+
+function onGridVisibleMetadataReady(payload) {
+  const loadId = Number(payload?.loadId) || 0;
+  const record = gridFetchTelemetryByLoadId.get(loadId);
+  if (!record) return;
+  record.visibleMetadataMs = Math.max(0, getNowMs() - record.startedAtMs);
+  record.firstBatchCount = Number(payload?.firstBatchCount) || 0;
+  if (Number.isFinite(Number(payload?.total))) {
+    record.total = Number(payload.total);
+  }
+}
+
+function onGridFetchDone(payload) {
+  const loadId = Number(payload?.loadId) || 0;
+  const record = gridFetchTelemetryByLoadId.get(loadId);
+  if (record) {
+    record.endedAtMs = getNowMs();
+    record.fetchMode = payload?.fetchMode ?? null;
+    record.success = payload?.success === true;
+    record.elapsedMs = Number(payload?.elapsedMs) || 0;
+    record.resultCount = Number(payload?.resultCount) || 0;
+    gridFetchTelemetryByLoadId.delete(loadId);
+  }
+  console.debug("[GridFetchTelemetry]", {
+    loadId,
+    fetchMode: payload?.fetchMode ?? null,
+    success: payload?.success === true,
+    elapsedMs: Number(payload?.elapsedMs) || 0,
+    resultCount: Number(payload?.resultCount) || 0,
+  });
+}
+
+if (
+  typeof window !== "undefined" &&
+  typeof window.__PIXLSTASH_DUMP_GRID_FETCH_TELEMETRY__ !== "function"
+) {
+  window.__PIXLSTASH_DUMP_GRID_FETCH_TELEMETRY__ = (limit = 40) => {
+    const parsedLimit = Math.max(1, Number(limit) || 40);
+    const rows = (window.__PIXLSTASH_GRID_FETCH_TELEMETRY__ || [])
+      .slice(-parsedLimit)
+      .map((row) => ({
+        loadId: row.loadId,
+        mode: row.fetchMode,
+        success: row.success,
+        elapsedMs: row.elapsedMs,
+        visibleMetadataMs: row.visibleMetadataMs,
+        firstBatchCount: row.firstBatchCount,
+        total: row.total,
+        resultCount: row.resultCount,
+        selectedSort: row.selectedSort,
+        searchQuery: row.searchQuery,
+      }));
+    console.table(rows);
+    return rows;
+  };
+}
+
+// ============================================================
 // DRAG & DROP STATE + SOURCE HELPERS
 // (moved to useGridDragDrop composable)
 // ============================================================
@@ -3660,6 +3782,9 @@ const {
     maybeRefreshOverlayForComfyui,
     startSmartScoreProgress,
     completeSmartScoreProgress,
+    onGridFetchStart,
+    onGridVisibleMetadataReady,
+    onGridFetchDone,
   },
 );
 

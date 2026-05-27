@@ -27,7 +27,8 @@ function appendShareToken(url) {
 }
 
 const DEFAULT_BACKEND_PORT = 9537;
-const environmentBaseUrl = import.meta?.env?.VITE_BACKEND_URL;
+const environmentBaseUrl = import.meta.env.VITE_BACKEND_URL;
+const isDev = import.meta.env.DEV;
 const API_PREFIX = '/api/v1';
 
 function deriveBackendUrl() {
@@ -36,15 +37,16 @@ function deriveBackendUrl() {
     return `http://localhost:${DEFAULT_BACKEND_PORT}`;
   }
   const {protocol, hostname, port} = window.location;
-  // The SPA is always served by the PixlStash server itself, so the backend
-  // is always on the same origin as the page — regardless of port.
+  // In development the SPA is commonly served by Vite on 5173 while the API
+  // server runs separately on 9537. Default to the backend port unless an
+  // explicit VITE_BACKEND_URL is provided.
+  if (isDev) {
+    return `${protocol}//${hostname}:${DEFAULT_BACKEND_PORT}`;
+  }
   const isStandardPort =
       (protocol === 'https:' && (port === '' || port === '443')) ||
       (protocol === 'http:' && (port === '' || port === '80'));
-  if (isStandardPort) {
-    return `${protocol}//${hostname}`;
-  }
-  return `${protocol}//${hostname}:${port}`;
+  return isStandardPort ? `${protocol}//${hostname}` : `${protocol}//${hostname}:${port}`;
 }
 
 const resolvedBaseUrl = deriveBackendUrl();
