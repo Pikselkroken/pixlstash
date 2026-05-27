@@ -387,6 +387,20 @@ export function useGridFetch(
     let fetchMode = "default";
     let fetchSucceeded = false;
     let sortedFetchStartedAt = 0;
+    const fetchPhaseTimings = {
+      countMs: null,
+      placeholderMs: null,
+      firstBatchMs: null,
+      tailBatchMs: null,
+      backgroundTotalMs: 0,
+      backgroundNetworkTotalMs: 0,
+      backgroundUiTotalMs: 0,
+      backgroundSlowestBatchMs: 0,
+      backgroundSlowestNetworkBatchMs: 0,
+      backgroundSlowestUiBatchMs: 0,
+      backgroundBatchCount: 0,
+      postProcessMs: null,
+    };
     // Capture scroll-preservation intent *synchronously* before any await so
     // that it is not affected by the gridVersion watcher clearing it later.
     const fetchStartedWithPreserveScroll = preserveScrollOnNextFetch.value;
@@ -590,7 +604,6 @@ export function useGridFetch(
           : 0;
         const FIRST_BATCH = Math.max(200, _fbVisibleItems + _fbCols * 2);
         const LAST_BATCH = Math.max(200, _fbVisibleItems + _fbCols * 2);
-        const BG_BATCH = 1000;   // background fill rate
         // Pass sort/descending to the stream so pictures arrive in the right
         // order.  Count URL stays param-free — sort never affects COUNT(*).
         const _sort = props.selectedSort?.trim();
@@ -705,7 +718,16 @@ export function useGridFetch(
         if (props.applyTagFilter) _filterP.set('apply_tag_filter', 'true');
         const _filterSuffix = _filterP.size ? `&${_filterP.toString()}` : '';
         const streamBase =
-          `${props.backendUrl}/pictures/stream?fields=grid&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`;
+          `${props.backendUrl}/pictures/stream?fields=grid&grid_lite=true&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`;
+
+        async function timeRequest(requestPromise) {
+          const startedAt = getNowMs();
+          const response = await requestPromise;
+          return {
+            response,
+            elapsedMs: Math.max(0, getNowMs() - startedAt),
+          };
+        }
 
         // Splice raw picture metadata into the placeholder grid at `offset`,
         // preserving thumbnail/face data for cells already loaded.
@@ -732,12 +754,15 @@ export function useGridFetch(
         };
 
         // 1. Fast total count — single indexed SQL query.
+        const countStartedAt = getNowMs();
         const countRes = await apiClient.get(`${props.backendUrl}/pictures/count?stack_leaders_only=true${_charSuffix}${_formatSuffix}${_filterSuffix}`);
         if (fetchAllGridImages.lastRequestId !== requestId) return;
+        fetchPhaseTimings.countMs = Math.max(0, getNowMs() - countStartedAt);
         const total =
           typeof countRes.data?.count === 'number' ? countRes.data.count : 0;
 
         // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
+        const placeholderStartedAt = getNowMs();
         const cols = props.columns || 1;
         // Compute window count from actual viewport capacity so visibleEnd covers
         // all initially visible items even when the viewport shows more than VIEW_WINDOW.
@@ -769,6 +794,7 @@ export function useGridFetch(
           visibleEnd.value = Math.min(total, windowCount);
         }
         gridReady.value = true; // render placeholder grid immediately
+        fetchPhaseTimings.placeholderMs = Math.max(0, getNowMs() - placeholderStartedAt);
 
         if (total === 0) {
           hasLoadedOnce.value = true;
@@ -777,22 +803,37 @@ export function useGridFetch(
           return;
         }
 
-        // 3. First + last batches in parallel.
-        // lastBatchStart: where the tail batch begins.  When total fits inside
-        // FIRST_BATCH + LAST_BATCH the tail immediately follows the head.
-        const lastBatchStart = Math.max(FIRST_BATCH, total - LAST_BATCH);
-        const [firstRes, lastRes] = await Promise.all([
-          apiClient.get(`${streamBase}&offset=0&batch_limit=${FIRST_BATCH}`),
-          // Tail batch: needed whenever there are any cells beyond the first batch.
-          total > FIRST_BATCH
-            ? apiClient.get(
-                `${streamBase}&offset=${lastBatchStart}&batch_limit=${LAST_BATCH}`,
-              )
+        // 3. First (+ optional tail) batches + pre-launch background.
+        //
+        // API enforces batch_limit <= 5000.
+        const BG_BATCH = 5000;
+        // potentialLastBatchStart: where a dedicated tail batch would begin.
+        const potentialLastBatchStart = Math.max(FIRST_BATCH, total - LAST_BATCH);
+        const backgroundGap = Math.max(0, potentialLastBatchStart - FIRST_BATCH);
+        // Fetch tail in parallel with the first batch only when the background
+        // gap itself spans more than one batch (large collections).  For smaller
+        // sets the background loop extends to `total`, covering the tail region
+        // without an extra request.
+        const shouldFetchTailEarly = total > FIRST_BATCH && backgroundGap > BG_BATCH;
+        // Effective end of the background region: extends to `total` when we
+        // skip the early tail so every item is eventually fetched.
+        const lastBatchStart = shouldFetchTailEarly ? potentialLastBatchStart : total;
+
+        const [firstResTimed, lastResTimed] = await Promise.all([
+          timeRequest(apiClient.get(`${streamBase}&offset=0&batch_limit=${FIRST_BATCH}`)),
+          // Tail batch: only for large sets where background gap > one BG_BATCH.
+          shouldFetchTailEarly
+            ? timeRequest(apiClient.get(
+                `${streamBase}&offset=${potentialLastBatchStart}&batch_limit=${LAST_BATCH}`,
+              ))
             : Promise.resolve(null),
         ]);
         if (fetchAllGridImages.lastRequestId !== requestId) return;
 
-        const firstPics = firstRes?.data?.pictures ?? [];
+        fetchPhaseTimings.firstBatchMs = firstResTimed?.elapsedMs ?? null;
+        fetchPhaseTimings.tailBatchMs = lastResTimed?.elapsedMs ?? null;
+
+        const firstPics = firstResTimed?.response?.data?.pictures ?? [];
         splicePictures(firstPics, 0);
         hasLoadedOnce.value = true;
         initialRender.value = false;
@@ -813,9 +854,9 @@ export function useGridFetch(
           });
         }
 
-        if (lastRes) {
-          const lastPics = lastRes?.data?.pictures ?? [];
-          splicePictures(lastPics, lastBatchStart);
+        if (lastResTimed?.response) {
+          const lastPics = lastResTimed?.response?.data?.pictures ?? [];
+          splicePictures(lastPics, potentialLastBatchStart);
         }
 
         lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
@@ -827,31 +868,56 @@ export function useGridFetch(
           (img) => img && img.id != null,
         );
 
-        // 4. Background stream: fill the gap between first and last batches.
-        let bgOffset = FIRST_BATCH;
-        while (bgOffset < lastBatchStart) {
+        // 4. Background stream: fill remaining items sequentially after first
+        // batch is rendered.  Sequential (not parallel) to avoid DB contention
+        // that would slow the already-visible first-batch response.
+        let bgOff = FIRST_BATCH;
+        while (bgOff < lastBatchStart) {
           if (fetchAllGridImages.lastRequestId !== requestId) return;
-          const limit = Math.min(BG_BATCH, lastBatchStart - bgOffset);
-          const res = await apiClient.get(
-            `${streamBase}&offset=${bgOffset}&batch_limit=${limit}`,
-          );
+          const limit = Math.min(BG_BATCH, lastBatchStart - bgOff);
+          const bgResTimed = await timeRequest(apiClient.get(
+            `${streamBase}&offset=${bgOff}&batch_limit=${limit}`,
+          ));
           if (fetchAllGridImages.lastRequestId !== requestId) return;
-          const bgPics = res?.data?.pictures ?? [];
+          const bgOffset = bgOff;
+          bgOff += limit;
+          const bgNetworkElapsedMs = bgResTimed.elapsedMs;
+          const bgUiStartedAt = getNowMs();
+          const bgPics = bgResTimed?.response?.data?.pictures ?? [];
           splicePictures(bgPics, bgOffset);
           updateVisibleThumbnails();
-          bgOffset += limit;
           // Keep lastFetchedGridImages current so deletes during streaming work.
           lastFetchedGridImages.value = allGridImages.value.filter(
             (img) => img && img.id != null,
           );
           await nextTick();
+          const bgUiElapsedMs = Math.max(0, getNowMs() - bgUiStartedAt);
+          const bgElapsedMs = bgNetworkElapsedMs + bgUiElapsedMs;
+          fetchPhaseTimings.backgroundTotalMs += bgElapsedMs;
+          fetchPhaseTimings.backgroundNetworkTotalMs += bgNetworkElapsedMs;
+          fetchPhaseTimings.backgroundUiTotalMs += bgUiElapsedMs;
+          fetchPhaseTimings.backgroundSlowestBatchMs = Math.max(
+            fetchPhaseTimings.backgroundSlowestBatchMs,
+            bgElapsedMs,
+          );
+          fetchPhaseTimings.backgroundSlowestNetworkBatchMs = Math.max(
+            fetchPhaseTimings.backgroundSlowestNetworkBatchMs,
+            bgNetworkElapsedMs,
+          );
+          fetchPhaseTimings.backgroundSlowestUiBatchMs = Math.max(
+            fetchPhaseTimings.backgroundSlowestUiBatchMs,
+            bgUiElapsedMs,
+          );
+          fetchPhaseTimings.backgroundBatchCount += 1;
         }
 
         // Sync lastFetchedGridImages so that removeImagesById/rebuildGridImagesFromLastFetch
         // works correctly after a delete during streaming.
+        const postProcessStartedAt = getNowMs();
         lastFetchedGridImages.value = allGridImages.value.filter(
           (img) => img && img.id != null,
         );
+        fetchPhaseTimings.postProcessMs = Math.max(0, getNowMs() - postProcessStartedAt);
         fetchSucceeded = true;
         return;
       }
@@ -989,6 +1055,7 @@ export function useGridFetch(
           resultCount: Array.isArray(allGridImages.value)
             ? allGridImages.value.length
             : 0,
+          ...fetchPhaseTimings,
         });
       }
       if (loadId === gridLoadEpoch.value) {
