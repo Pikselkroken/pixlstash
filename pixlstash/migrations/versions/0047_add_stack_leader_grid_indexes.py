@@ -14,8 +14,8 @@ These new partial indexes embed the stack-leader condition in the index itself s
 that SQLite only visits rows that would pass all three filters, eliminating the
 extra scan work.
 
-Revision ID: 0049_add_stack_leader_grid_indexes
-Revises: 0048_add_checkpoint
+Revision ID: 0047_add_stack_leader_grid_indexes
+Revises: 0046_tag_sentinel_rename
 Create Date: 2026-05-27 00:00:00.000000
 
 """
@@ -28,8 +28,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0049_add_stack_leader_grid_indexes"
-down_revision: Union[str, None] = "0048_add_checkpoint"
+revision: str = "0047_add_stack_leader_grid_indexes"
+down_revision: Union[str, None] = "0046_tag_sentinel_rename"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
