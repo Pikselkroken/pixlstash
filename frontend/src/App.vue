@@ -1266,18 +1266,22 @@ async function patchConfigUIOptions() {
 }
 
 function handleGlobalKeydown(e) {
-  const keys = ["Home", "End", "PageUp", "PageDown"];
-  if (keys.includes(e.key)) {
-    const grid = gridContainer.value;
-    if (grid && typeof grid.onGlobalKeyPress === "function") {
-      grid.onGlobalKeyPress(e.key, e);
-    }
-  }
   const tag = document.activeElement?.tagName?.toLowerCase();
   const isEditable =
     tag === "input" ||
     tag === "textarea" ||
     document.activeElement?.isContentEditable;
+
+  const keys = ["Home", "End", "PageUp", "PageDown"];
+  if (keys.includes(e.key) && !isEditable) {
+    // These keys drive grid scrolling only. Prevent the browser's default
+    // scroll so they don't also scroll the sidebar (or the page).
+    e.preventDefault();
+    const grid = gridContainer.value;
+    if (grid && typeof grid.onGlobalKeyPress === "function") {
+      grid.onGlobalKeyPress(e.key, e);
+    }
+  }
   if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (!isEditable) {
       e.preventDefault();
