@@ -134,6 +134,7 @@ export function useGridFetch(
       filePathPrefixFilter: props.filePathPrefixFilter ?? null,
       importSourceFolderFilter: props.importSourceFolderFilter ?? null,
       unassignedOnlyFilter: props.unassignedOnlyFilter ?? false,
+      applyTagFilter: props.applyTagFilter ?? false,
       reverseImageSearchPictureIds: reverseImageSearchPictureIds?.value ?? [],
       faceLikenessSearchFaceId: faceLikenessSearchFaceId?.value ?? null,
     });
@@ -810,28 +811,41 @@ export function useGridFetch(
         // potentialLastBatchStart: where a dedicated tail batch would begin.
         const potentialLastBatchStart = Math.max(FIRST_BATCH, total - LAST_BATCH);
         const backgroundGap = Math.max(0, potentialLastBatchStart - FIRST_BATCH);
-        // Fetch tail in parallel with the first batch only when the background
-        // gap itself spans more than one batch (large collections).  For smaller
-        // sets the background loop extends to `total`, covering the tail region
-        // without an extra request.
-        const shouldFetchTailEarly = total > FIRST_BATCH && backgroundGap > BG_BATCH;
+        // Fetch tail in parallel with the first batch whenever the gap is large
+        // enough to matter for user responsiveness.  Use a fixed threshold of
+        // 1000 items — independent of BG_BATCH — so that medium-sized
+        // collections (gap 1000–5000) still get the tail batch early instead of
+        // waiting for a single large background request to complete.
+        const TAIL_THRESHOLD = 1000;
+        const shouldFetchTailEarly = total > FIRST_BATCH && backgroundGap > TAIL_THRESHOLD;
         // Effective end of the background region: extends to `total` when we
         // skip the early tail so every item is eventually fetched.
         const lastBatchStart = shouldFetchTailEarly ? potentialLastBatchStart : total;
 
-        const [firstResTimed, lastResTimed] = await Promise.all([
-          timeRequest(apiClient.get(`${streamBase}&offset=0&batch_limit=${FIRST_BATCH}`)),
-          // Tail batch: only for large sets where background gap > one BG_BATCH.
-          shouldFetchTailEarly
-            ? timeRequest(apiClient.get(
+        // Kick off the first batch and the optional tail batch concurrently, but
+        // do NOT block visible-thumbnail loading on the tail (which fills
+        // off-screen end-of-grid cells and is often the slower of the two).
+        // Await the first batch alone, splice it and request its thumbnails, then
+        // await the tail. Both requests are already in flight, so the tail is not
+        // delayed by this ordering.
+        const firstReqPromise = timeRequest(
+          apiClient.get(`${streamBase}&offset=0&batch_limit=${FIRST_BATCH}`),
+        );
+        // Tail batch: for collections where the gap exceeds TAIL_THRESHOLD.
+        // `.catch` keeps it from becoming an unhandled rejection if we bail out
+        // (stale requestId) before awaiting it below.
+        const tailReqPromise = (shouldFetchTailEarly
+          ? timeRequest(
+              apiClient.get(
                 `${streamBase}&offset=${potentialLastBatchStart}&batch_limit=${LAST_BATCH}`,
-              ))
-            : Promise.resolve(null),
-        ]);
-        if (fetchAllGridImages.lastRequestId !== requestId) return;
+              ),
+            )
+          : Promise.resolve(null)
+        ).catch(() => null);
 
+        const firstResTimed = await firstReqPromise;
+        if (fetchAllGridImages.lastRequestId !== requestId) return;
         fetchPhaseTimings.firstBatchMs = firstResTimed?.elapsedMs ?? null;
-        fetchPhaseTimings.tailBatchMs = lastResTimed?.elapsedMs ?? null;
 
         const firstPics = firstResTimed?.response?.data?.pictures ?? [];
         splicePictures(firstPics, 0);
@@ -841,9 +855,21 @@ export function useGridFetch(
           total,
           visibleEnd.value + (divisibleViewWindow.value || windowCount),
         );
-        fetchThumbnailsBatch(visibleStart.value, prefetchEnd, {
+        // Request thumbnails for the actually-visible cells first; defer the
+        // off-screen margin by a frame so the visible thumbnails are not queued
+        // behind margin ones over the browser's limited per-origin connections.
+        fetchThumbnailsBatch(visibleStart.value, visibleEnd.value, {
           reason: "initial-visible-prefetch",
         });
+        if (prefetchEnd > visibleEnd.value) {
+          const marginStart = visibleEnd.value;
+          requestAnimationFrame(() => {
+            if (fetchAllGridImages.lastRequestId !== requestId) return;
+            fetchThumbnailsBatch(marginStart, prefetchEnd, {
+              reason: "initial-margin-prefetch",
+            });
+          });
+        }
         if (typeof onGridVisibleMetadataReady === "function") {
           onGridVisibleMetadataReady({
             loadId,
@@ -854,6 +880,9 @@ export function useGridFetch(
           });
         }
 
+        const lastResTimed = await tailReqPromise;
+        if (fetchAllGridImages.lastRequestId !== requestId) return;
+        fetchPhaseTimings.tailBatchMs = lastResTimed?.elapsedMs ?? null;
         if (lastResTimed?.response) {
           const lastPics = lastResTimed?.response?.data?.pictures ?? [];
           splicePictures(lastPics, potentialLastBatchStart);
