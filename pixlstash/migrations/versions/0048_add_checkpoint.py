@@ -1,6 +1,6 @@
-"""Add checkpoint table for full-database snapshot metadata.
+"""Add snapshot table for full-database snapshot metadata.
 
-Creates the `checkpoint` table used by the checkpoint engine to track
+Creates the `snapshot` table used by the snapshot engine to track
 vault snapshots created by VACUUM INTO.
 
 Revision ID: 0048_add_checkpoint
@@ -30,9 +30,9 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     existing_tables = inspector.get_table_names()
 
-    if "checkpoint" not in existing_tables:
+    if "snapshot" not in existing_tables:
         op.create_table(
-            "checkpoint",
+            "snapshot",
             sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
             sa.Column("kind", sa.String, nullable=False, index=True),
             sa.Column("created_at", sa.DateTime, nullable=False, index=True),
@@ -48,5 +48,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    if "checkpoint" in inspector.get_table_names():
-        op.drop_table("checkpoint")
+    if "snapshot" in inspector.get_table_names():
+        op.drop_table("snapshot")

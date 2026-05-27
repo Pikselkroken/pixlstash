@@ -3,7 +3,7 @@
 The hash previously included derived scores (aesthetic_score, smart_score,
 text_score) which are regenerable and not user-controlled metadata.  These
 columns have now been excluded from the hash so that recalculating them does
-not make a checkpoint appear as changed.  Setting metadata_hash to NULL forces
+not make a snapshot appear as changed.  Setting metadata_hash to NULL forces
 recomputation on the next compare_hashes call.
 
 Revision ID: 0050_reset_metadata_hash

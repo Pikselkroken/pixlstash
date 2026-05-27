@@ -1,11 +1,11 @@
 <script setup>
 /**
- * Shared restore-from-checkpoint confirmation dialog.
+ * Shared restore-from-snapshot confirmation dialog.
  *
  * Usage:
  *   <RestoreConfirmDialog
  *     v-model:open="open"
- *     :checkpoint-id="id"      // null → show picker step first
+ *     :snapshot-id="id"      // null → show picker step first
  *     :resources="[{type,id}]" // null → full-vault restore
  *     @confirmed="onRestoreConfirmed"
  *   />
@@ -14,16 +14,16 @@
  * After the user clicks "Restore", it calls executeRestore() on the store.
  */
 import { computed, ref, watch } from "vue";
-import { useCheckpointsStore } from "../../stores/useCheckpointsStore";
+import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   /**
-   * The checkpoint to restore from.  When null, a picker step is shown so
+   * The snapshot to restore from.  When null, a picker step is shown so
    * the user can choose one from the store's cached list.
    */
-  checkpointId: { type: Number, default: null },
+  snapshotId: { type: Number, default: null },
   /**
    * Specific resources to restore.  When null, a full-vault restore is
    * performed.  Each item is ``{type: string, id: number}``.
@@ -33,11 +33,11 @@ const props = defineProps({
 
 const emit = defineEmits(["update:open", "confirmed"]);
 
-const store = useCheckpointsStore();
+const store = useSnapshotsStore();
 
 // ── Internal state ─────────────────────────────────────────────────────────
-// Which checkpoint the user has chosen (may come from props or picker step).
-const selectedCheckpointId = ref(null);
+// Which snapshot the user has chosen (may come from props or picker step).
+const selectedSnapshotId = ref(null);
 
 // Preview data fetched from the server.
 const preview = ref(null);
@@ -58,14 +58,14 @@ const dialogOpen = computed({
 });
 
 const isPickerStep = computed(
-  () => selectedCheckpointId.value == null && props.checkpointId == null
+  () => selectedSnapshotId.value == null && props.snapshotId == null,
 );
 
-const effectiveCheckpointId = computed(
-  () => selectedCheckpointId.value ?? props.checkpointId
+const effectiveSnapshotId = computed(
+  () => selectedSnapshotId.value ?? props.snapshotId,
 );
 
-const checkpoints = computed(() => store.checkpoints);
+const snapshots = computed(() => store.snapshots);
 
 function kindChipColor(kind) {
   const map = {
@@ -81,7 +81,9 @@ function kindChipColor(kind) {
 function relativeDate(isoStr) {
   if (!isoStr) return "";
   const normalized =
-    isoStr.includes("T") && !isoStr.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(isoStr)
+    isoStr.includes("T") &&
+    !isoStr.endsWith("Z") &&
+    !/[+-]\d{2}:\d{2}$/.test(isoStr)
       ? isoStr + "Z"
       : isoStr;
   const diff = (Date.now() - new Date(normalized).getTime()) / 1000;
@@ -115,19 +117,19 @@ watch(
   (isOpen) => {
     if (isOpen) {
       // Reset to initial state each time the dialog opens.
-      selectedCheckpointId.value = null;
+      selectedSnapshotId.value = null;
       preview.value = null;
       previewLoading.value = false;
       previewError.value = "";
       restoring.value = false;
       restoreError.value = "";
       showDiffTable.value = false;
-      // If a checkpoint is already known, go straight to the preview.
-      if (props.checkpointId != null) {
-        fetchPreview(props.checkpointId);
+      // If a snapshot is already known, go straight to the preview.
+      if (props.snapshotId != null) {
+        fetchPreview(props.snapshotId);
       } else {
-        // Load checkpoint list for the picker.
-        if (!store.checkpoints.length) store.fetchCheckpoints();
+        // Load snapshot list for the picker.
+        if (!store.snapshots.length) store.fetchSnapshots();
       }
     }
   },
@@ -148,14 +150,14 @@ async function fetchPreview(cpId) {
 }
 
 // ── Picker step ────────────────────────────────────────────────────────────
-function selectCheckpoint(cp) {
+function selectSnapshot(cp) {
   if (!cp.is_compatible) return;
-  selectedCheckpointId.value = cp.id;
+  selectedSnapshotId.value = cp.id;
   fetchPreview(cp.id);
 }
 
 function backToPicker() {
-  selectedCheckpointId.value = null;
+  selectedSnapshotId.value = null;
   preview.value = null;
   previewError.value = "";
 }
@@ -166,8 +168,8 @@ async function handleRestore() {
   restoreError.value = "";
   try {
     const report = await store.executeRestore(
-      effectiveCheckpointId.value,
-      props.resources
+      effectiveSnapshotId.value,
+      props.resources,
     );
     emit("confirmed", report);
     dialogOpen.value = false;
@@ -184,7 +186,7 @@ const canRestore = computed(
     !previewLoading.value &&
     !restoring.value &&
     preview.value != null &&
-    preview.value?.checkpoint?.is_compatible !== false
+    preview.value?.snapshot?.is_compatible !== false,
 );
 </script>
 
@@ -198,7 +200,7 @@ const canRestore = computed(
       <!-- ── Header ─────────────────────────────────────────────────────── -->
       <v-card-title class="restore-dialog-title">
         <v-icon size="20" class="mr-2">mdi-restore</v-icon>
-        Restore from checkpoint
+        Restore from snapshot
         <v-btn
           icon
           size="28px"
@@ -211,29 +213,27 @@ const canRestore = computed(
       </v-card-title>
 
       <v-card-text class="restore-dialog-body">
-        <!-- ── Step 1: Checkpoint picker ──────────────────────────────── -->
+        <!-- ── Step 1: Snapshot picker ──────────────────────────────── -->
         <template v-if="isPickerStep">
-          <p class="restore-picker-hint">
-            Select a checkpoint to restore from:
-          </p>
+          <p class="restore-picker-hint">Select a snapshot to restore from:</p>
           <div
-            v-if="store.loading && !checkpoints.length"
+            v-if="store.loading && !snapshots.length"
             class="restore-loading"
           >
             <v-progress-circular indeterminate size="20" class="mr-2" />
-            Loading checkpoints…
+            Loading snapshots…
           </div>
-          <div v-else-if="!checkpoints.length" class="restore-empty">
-            No checkpoints found.
+          <div v-else-if="!snapshots.length" class="restore-empty">
+            No snapshots found.
           </div>
           <div
-            v-for="cp in checkpoints"
+            v-for="cp in snapshots"
             :key="cp.id"
             class="restore-picker-row"
             :class="{
               'restore-picker-row--disabled': !cp.is_compatible,
             }"
-            @click="selectCheckpoint(cp)"
+            @click="selectSnapshot(cp)"
           >
             <v-chip
               :color="kindChipColor(cp.kind)"
@@ -269,7 +269,7 @@ const canRestore = computed(
         <template v-else>
           <!-- Back button (only when we came through the picker) -->
           <v-btn
-            v-if="!props.checkpointId"
+            v-if="!props.snapshotId"
             size="x-small"
             variant="text"
             density="compact"
@@ -280,24 +280,24 @@ const canRestore = computed(
             Back
           </v-btn>
 
-          <!-- Checkpoint header -->
+          <!-- Snapshot header -->
           <div v-if="preview" class="restore-preview-header">
             <v-chip
-              :color="kindChipColor(preview.checkpoint?.kind)"
+              :color="kindChipColor(preview.snapshot?.kind)"
               size="small"
               variant="tonal"
               class="mr-2"
             >
-              {{ preview.checkpoint?.kind }}
+              {{ preview.snapshot?.kind }}
             </v-chip>
             <span class="restore-preview-cp-label">
-              {{ preview.checkpoint?.label || "—" }}
+              {{ preview.snapshot?.label || "—" }}
             </span>
             <span
               class="restore-preview-cp-date"
-              :title="formatUserDate(preview.checkpoint?.created_at, 'iso')"
+              :title="formatUserDate(preview.snapshot?.created_at, 'iso')"
             >
-              {{ relativeDate(preview.checkpoint?.created_at) }}
+              {{ relativeDate(preview.snapshot?.created_at) }}
             </span>
           </div>
 
@@ -327,10 +327,7 @@ const canRestore = computed(
 
             <!-- Summary blocks -->
             <div class="restore-summary-grid">
-              <template
-                v-for="(val, key) in preview.summary"
-                :key="key"
-              >
+              <template v-for="(val, key) in preview.summary" :key="key">
                 <div
                   v-if="val > 0"
                   class="restore-summary-card"
@@ -348,21 +345,18 @@ const canRestore = computed(
             </div>
 
             <!-- Per-resource diff table -->
-            <div
-              v-if="preview.resources?.length"
-              class="restore-diff-section"
-            >
+            <div v-if="preview.resources?.length" class="restore-diff-section">
               <button
                 class="restore-diff-toggle"
                 @click="showDiffTable = !showDiffTable"
               >
                 <v-icon size="14" class="mr-1">
-                  {{
-                    showDiffTable ? "mdi-chevron-up" : "mdi-chevron-down"
-                  }}
+                  {{ showDiffTable ? "mdi-chevron-up" : "mdi-chevron-down" }}
                 </v-icon>
-                {{ showDiffTable ? "Hide" : "Show" }} details
-                ({{ preview.resources.length }} resources)
+                {{ showDiffTable ? "Hide" : "Show" }} details ({{
+                  preview.resources.length
+                }}
+                resources)
               </button>
               <div v-if="showDiffTable" class="restore-diff-table">
                 <div
@@ -389,13 +383,17 @@ const canRestore = computed(
                     <template v-else>no changes</template>
                   </span>
                   <span
-                    v-if="r.dependent_counts && Object.keys(r.dependent_counts).length"
+                    v-if="
+                      r.dependent_counts &&
+                      Object.keys(r.dependent_counts).length
+                    "
                     class="diff-deps"
                   >
                     <span
                       v-for="(cnt, depKey) in r.dependent_counts"
                       :key="depKey"
-                    >{{ depKey }}: {{ cnt }}</span>
+                      >{{ depKey }}: {{ cnt }}</span
+                    >
                   </span>
                 </div>
               </div>

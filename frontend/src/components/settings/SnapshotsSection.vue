@@ -1,20 +1,20 @@
 <script setup>
 /**
- * Settings section for browsing, creating, renaming, and deleting checkpoints,
+ * Settings section for browsing, creating, renaming, and deleting snapshots,
  * and triggering a full-vault restore.
  *
- * Requires the `useCheckpointsStore` and `useCheckpointsStore.openRestoreDialog`.
+ * Requires the `useSnapshotsStore` and `useSnapshotsStore.openRestoreDialog`.
  * Gated behind `isReadOnly === false` at the tab level in UserSettingsDialog.
  */
 import { computed, ref, watch } from "vue";
-import { useCheckpointsStore } from "../../stores/useCheckpointsStore";
+import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
 });
 
-const store = useCheckpointsStore();
+const store = useSnapshotsStore();
 
 // ── Local UI state ─────────────────────────────────────────────────────────
 const createLabel = ref("");
@@ -22,7 +22,7 @@ const creating = ref(false);
 const createError = ref("");
 const createSuccess = ref("");
 
-// Map of checkpoint id → editing state.
+// Map of snapshot id → editing state.
 const editingLabel = ref({});
 const savingLabel = ref({});
 const saveLabelError = ref({});
@@ -32,15 +32,15 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
-      store.fetchCheckpoints();
+      store.fetchSnapshots();
       store.fetchStatus();
-      store.fetchCheckpointSettings();
+      store.fetchSnapshotSettings();
     }
   },
 );
 
 // ── Computed ──────────────────────────────────────────────────────────────
-const checkpoints = computed(() => store.checkpoints);
+const snapshots = computed(() => store.snapshots);
 const isLoading = computed(() => store.loading);
 const activeJob = computed(() => store.activeJob);
 
@@ -88,18 +88,18 @@ async function handleCreate() {
   createError.value = "";
   createSuccess.value = "";
   try {
-    await store.createCheckpoint(createLabel.value.trim() || null);
+    await store.createSnapshot(createLabel.value.trim() || null);
     createLabel.value = "";
-    createSuccess.value = "Checkpoint created.";
+    createSuccess.value = "Snapshot created.";
     setTimeout(() => {
-      if (createSuccess.value === "Checkpoint created.")
+      if (createSuccess.value === "Snapshot created.")
         createSuccess.value = "";
     }, 3000);
   } catch (err) {
     createError.value =
       err?.response?.data?.detail ||
       err?.message ||
-      "Failed to create checkpoint.";
+      "Failed to create snapshot.";
   } finally {
     creating.value = false;
   }
@@ -122,7 +122,7 @@ async function saveLabel(id) {
   savingLabel.value = { ...savingLabel.value, [id]: true };
   saveLabelError.value = { ...saveLabelError.value, [id]: "" };
   try {
-    await store.renameCheckpoint(id, label);
+    await store.renameSnapshot(id, label);
     cancelEditing(id);
   } catch (err) {
     saveLabelError.value = {
@@ -141,7 +141,7 @@ const deleteError = ref("");
 async function handleDelete(cp) {
   if (
     !window.confirm(
-      `Delete checkpoint "${cp.label || cp.kind + " " + relativeDate(cp.created_at)}"? This cannot be undone.`,
+      `Delete snapshot "${cp.label || cp.kind + " " + relativeDate(cp.created_at)}"? This cannot be undone.`,
     )
   ) {
     return;
@@ -149,7 +149,7 @@ async function handleDelete(cp) {
   deletingId.value = cp.id;
   deleteError.value = "";
   try {
-    await store.deleteCheckpoint(cp.id);
+    await store.deleteSnapshot(cp.id);
   } catch (err) {
     deleteError.value =
       err?.response?.data?.detail || err?.message || "Delete failed.";
@@ -165,34 +165,34 @@ function handleRestore(cp) {
 </script>
 
 <template>
-  <div class="settings-section checkpoints-section">
+  <div class="settings-section snapshots-section">
     <!-- ── Active job banner ─────────────────────────────────────────────── -->
-    <div v-if="activeJob" class="checkpoint-job-banner">
+    <div v-if="activeJob" class="snapshot-job-banner">
       <v-progress-linear indeterminate color="primary" class="mb-2" />
-      <span class="checkpoint-job-label">
+      <span class="snapshot-job-label">
         <v-icon size="16" class="mr-1">mdi-restore</v-icon>
         {{
           activeJob.kind === "RESTORE"
             ? "Restore in progress…"
-            : "Creating checkpoint…"
+            : "Creating snapshot…"
         }}
       </span>
     </div>
 
-    <!-- ── Daily checkpoint toggle ──────────────────────────────────────── -->
-    <div class="checkpoint-settings-row">
+    <!-- ── Daily snapshot toggle ──────────────────────────────────────── -->
+    <div class="snapshot-settings-row">
       <v-switch
-        :model-value="store.dailyCheckpointsEnabled"
-        label="Automatic daily checkpoints"
+        :model-value="store.dailySnapshotsEnabled"
+        label="Automatic daily snapshots"
         density="compact"
         hide-details
         color="primary"
-        @update:model-value="store.setDailyCheckpointsEnabled($event)"
+        @update:model-value="store.setDailySnapshotsEnabled($event)"
       />
     </div>
 
-    <!-- ── Create checkpoint ─────────────────────────────────────────────── -->
-    <div class="checkpoint-create-row">
+    <!-- ── Create snapshot ─────────────────────────────────────────────── -->
+    <div class="snapshot-create-row">
       <v-text-field
         v-model="createLabel"
         label="Label (optional)"
@@ -200,7 +200,7 @@ function handleRestore(cp) {
         variant="outlined"
         hide-details
         :disabled="!!activeJob || creating"
-        class="checkpoint-label-field"
+        class="snapshot-label-field"
         @keydown.enter="handleCreate"
       />
       <v-btn
@@ -214,48 +214,48 @@ function handleRestore(cp) {
         Create now
       </v-btn>
     </div>
-    <div v-if="createError" class="checkpoint-inline-error">
+    <div v-if="createError" class="snapshot-inline-error">
       {{ createError }}
     </div>
-    <div v-if="createSuccess" class="checkpoint-inline-success">
+    <div v-if="createSuccess" class="snapshot-inline-success">
       {{ createSuccess }}
     </div>
 
     <!-- ── Retention info ────────────────────────────────────────────────── -->
-    <div class="checkpoint-retention-card">
+    <div class="snapshot-retention-card">
       <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
       <span>
         GFS retention: 7 daily, 4 weekly, 12 monthly. Manual &amp; opportunistic
-        checkpoints are kept until deleted.
+        snapshots are kept until deleted.
       </span>
     </div>
 
     <!-- ── Error / Loading ───────────────────────────────────────────────── -->
-    <div v-if="store.error" class="checkpoint-inline-error mt-2">
+    <div v-if="store.error" class="snapshot-inline-error mt-2">
       {{ store.error }}
     </div>
 
-    <!-- ── Checkpoint list ───────────────────────────────────────────────── -->
-    <div v-if="isLoading && !checkpoints.length" class="checkpoint-loading">
+    <!-- ── Snapshot list ───────────────────────────────────────────────── -->
+    <div v-if="isLoading && !snapshots.length" class="snapshot-loading">
       <v-progress-circular indeterminate size="20" class="mr-2" />
-      Loading checkpoints…
+      Loading snapshots…
     </div>
 
-    <div v-else-if="!checkpoints.length && !isLoading" class="checkpoint-empty">
+    <div v-else-if="!snapshots.length && !isLoading" class="snapshot-empty">
       <v-icon size="36" class="mb-2">mdi-camera-off</v-icon>
-      <p>No checkpoints yet.</p>
-      <p class="checkpoint-empty-hint">Create your first checkpoint above.</p>
+      <p>No snapshots yet.</p>
+      <p class="snapshot-empty-hint">Create your first snapshot above.</p>
     </div>
 
     <template v-else>
       <div
-        v-for="cp in checkpoints"
+        v-for="cp in snapshots"
         :key="cp.id"
-        class="checkpoint-row"
-        :class="{ 'checkpoint-row--incompatible': !cp.is_compatible }"
+        class="snapshot-row"
+        :class="{ 'snapshot-row--incompatible': !cp.is_compatible }"
       >
         <!-- Kind chip + created -->
-        <div class="checkpoint-row-meta">
+        <div class="snapshot-row-meta">
           <v-chip
             :color="kindChipColor(cp.kind)"
             size="x-small"
@@ -275,7 +275,7 @@ function handleRestore(cp) {
             incompatible
           </v-chip>
           <span
-            class="checkpoint-created-at"
+            class="snapshot-created-at"
             :title="formatUserDate(cp.created_at, 'iso')"
           >
             {{ relativeDate(cp.created_at) }}
@@ -283,7 +283,7 @@ function handleRestore(cp) {
         </div>
 
         <!-- Label (inline edit or display) -->
-        <div class="checkpoint-row-label">
+        <div class="snapshot-row-label">
           <template v-if="editingLabel[cp.id] !== undefined">
             <v-text-field
               v-model="editingLabel[cp.id]"
@@ -291,23 +291,23 @@ function handleRestore(cp) {
               variant="outlined"
               hide-details
               autofocus
-              class="checkpoint-edit-field"
+              class="snapshot-edit-field"
               :loading="savingLabel[cp.id]"
               @keydown.enter="saveLabel(cp.id)"
               @keydown.esc="cancelEditing(cp.id)"
               @blur="saveLabel(cp.id)"
             />
-            <div v-if="saveLabelError[cp.id]" class="checkpoint-inline-error">
+            <div v-if="saveLabelError[cp.id]" class="snapshot-inline-error">
               {{ saveLabelError[cp.id] }}
             </div>
           </template>
-          <span v-else class="checkpoint-label-text">
+          <span v-else class="snapshot-label-text">
             {{ cp.label || "—" }}
           </span>
         </div>
 
         <!-- Stats -->
-        <div class="checkpoint-row-stats">
+        <div class="snapshot-row-stats">
           <span title="Pictures">
             <v-icon size="12">mdi-image-multiple-outline</v-icon>
             {{ cp.picture_count }}
@@ -328,7 +328,7 @@ function handleRestore(cp) {
         </div>
 
         <!-- Actions -->
-        <div class="checkpoint-row-actions">
+        <div class="snapshot-row-actions">
           <v-btn
             size="x-small"
             variant="text"
@@ -349,7 +349,7 @@ function handleRestore(cp) {
             :title="
               !cp.is_compatible
                 ? 'Restore not available: snapshot schema is newer than live DB'
-                : 'Restore everything from this checkpoint'
+                : 'Restore everything from this snapshot'
             "
             @click="handleRestore(cp)"
           >
@@ -360,7 +360,7 @@ function handleRestore(cp) {
           <v-tooltip
             :text="
               cp.kind !== 'MANUAL'
-                ? `${cp.kind} checkpoints are managed by GFS retention and cannot be deleted manually.`
+                ? `${cp.kind} snapshots are managed by GFS retention and cannot be deleted manually.`
                 : ''
             "
             :disabled="cp.kind === 'MANUAL'"
@@ -376,7 +376,7 @@ function handleRestore(cp) {
                     cp.kind !== 'MANUAL' || !!activeJob || deletingId === cp.id
                   "
                   :loading="deletingId === cp.id"
-                  title="Delete this checkpoint"
+                  title="Delete this snapshot"
                   @click="handleDelete(cp)"
                 >
                   <v-icon size="14">mdi-delete-outline</v-icon>
@@ -388,19 +388,19 @@ function handleRestore(cp) {
       </div>
     </template>
 
-    <div v-if="deleteError" class="checkpoint-inline-error mt-2">
+    <div v-if="deleteError" class="snapshot-inline-error mt-2">
       {{ deleteError }}
     </div>
   </div>
 </template>
 
 <style scoped>
-.checkpoints-section {
+.snapshots-section {
   padding: 12px 0;
   min-height: 200px;
 }
 
-.checkpoint-job-banner {
+.snapshot-job-banner {
   background: rgba(var(--v-theme-primary), 0.1);
   border: 1px solid rgba(var(--v-theme-primary), 0.3);
   border-radius: 6px;
@@ -408,29 +408,29 @@ function handleRestore(cp) {
   margin-bottom: 12px;
 }
 
-.checkpoint-job-label {
+.snapshot-job-label {
   font-size: 0.8rem;
   display: flex;
   align-items: center;
 }
 
-.checkpoint-settings-row {
+.snapshot-settings-row {
   margin-bottom: 4px;
 }
 
-.checkpoint-create-row {
+.snapshot-create-row {
   display: flex;
   gap: 8px;
   align-items: flex-start;
   margin-bottom: 8px;
 }
 
-.checkpoint-label-field {
+.snapshot-label-field {
   flex: 1;
   max-width: 280px;
 }
 
-.checkpoint-retention-card {
+.snapshot-retention-card {
   display: flex;
   align-items: center;
   font-size: 0.73rem;
@@ -442,8 +442,8 @@ function handleRestore(cp) {
   line-height: 1.4;
 }
 
-.checkpoint-loading,
-.checkpoint-empty {
+.snapshot-loading,
+.snapshot-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -454,12 +454,12 @@ function handleRestore(cp) {
   text-align: center;
 }
 
-.checkpoint-empty-hint {
+.snapshot-empty-hint {
   font-size: 0.75rem;
   margin-top: 4px;
 }
 
-.checkpoint-row {
+.snapshot-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -468,43 +468,43 @@ function handleRestore(cp) {
   flex-wrap: wrap;
 }
 
-.checkpoint-row:last-child {
+.snapshot-row:last-child {
   border-bottom: none;
 }
 
-.checkpoint-row--incompatible {
+.snapshot-row--incompatible {
   opacity: 0.55;
 }
 
-.checkpoint-row-meta {
+.snapshot-row-meta {
   display: flex;
   align-items: center;
   flex-shrink: 0;
   min-width: 140px;
 }
 
-.checkpoint-created-at {
+.snapshot-created-at {
   font-size: 0.73rem;
   opacity: 0.7;
   white-space: nowrap;
 }
 
-.checkpoint-row-label {
+.snapshot-row-label {
   flex: 1;
   min-width: 80px;
   font-size: 0.8rem;
 }
 
-.checkpoint-label-text {
+.snapshot-label-text {
   opacity: 0.8;
   font-style: italic;
 }
 
-.checkpoint-edit-field {
+.snapshot-edit-field {
   max-width: 220px;
 }
 
-.checkpoint-row-stats {
+.snapshot-row-stats {
   display: flex;
   gap: 10px;
   align-items: center;
@@ -514,26 +514,26 @@ function handleRestore(cp) {
   flex-shrink: 0;
 }
 
-.checkpoint-row-stats span {
+.snapshot-row-stats span {
   display: flex;
   align-items: center;
   gap: 2px;
 }
 
-.checkpoint-row-actions {
+.snapshot-row-actions {
   display: flex;
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
 }
 
-.checkpoint-inline-error {
+.snapshot-inline-error {
   font-size: 0.75rem;
   color: rgb(var(--v-theme-error));
   margin-top: 2px;
 }
 
-.checkpoint-inline-success {
+.snapshot-inline-success {
   font-size: 0.75rem;
   color: rgb(var(--v-theme-success));
   margin-top: 2px;

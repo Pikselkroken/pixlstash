@@ -2,31 +2,31 @@ import { ref } from "vue";
 import { defineStore } from "pinia";
 import { apiClient } from "../utils/apiClient";
 
-export const useCheckpointsStore = defineStore("checkpoints", () => {
+export const useSnapshotsStore = defineStore("snapshots", () => {
   // ── State ─────────────────────────────────────────────────────────────────
-  const checkpoints = ref([]);
+  const snapshots = ref([]);
   const loading = ref(false);
   const activeJob = ref(null);
   const error = ref(null);
 
   // Drives the shared RestoreConfirmDialog instance hoisted in App.vue.
   const restoreDialogOpen = ref(false);
-  const restoreDialogCheckpointId = ref(null);
+  const restoreDialogSnapshotId = ref(null);
   const restoreDialogResources = ref(null); // null → full restore
 
-  const dailyCheckpointsEnabled = ref(true);
+  const dailySnapshotsEnabled = ref(true);
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  async function fetchCheckpoints() {
+  async function fetchSnapshots() {
     loading.value = true;
     error.value = null;
     try {
-      const res = await apiClient.get("/api/v1/checkpoints");
-      checkpoints.value = res.data;
+      const res = await apiClient.get("/api/v1/snapshots");
+      snapshots.value = res.data;
     } catch (err) {
       error.value =
-        err?.response?.data?.detail || err?.message || "Failed to load checkpoints.";
+        err?.response?.data?.detail || err?.message || "Failed to load snapshots.";
     } finally {
       loading.value = false;
     }
@@ -34,74 +34,74 @@ export const useCheckpointsStore = defineStore("checkpoints", () => {
 
   async function fetchStatus() {
     try {
-      const res = await apiClient.get("/api/v1/checkpoints/status");
+      const res = await apiClient.get("/api/v1/snapshots/status");
       activeJob.value = res.data?.active_job ?? null;
     } catch (err) {
       // Non-fatal; silently leave activeJob as-is.
     }
   }
 
-  async function createCheckpoint(label) {
+  async function createSnapshot(label) {
     const body = label ? { label } : {};
-    const res = await apiClient.post("/api/v1/checkpoints", body);
+    const res = await apiClient.post("/api/v1/snapshots", body);
     const cp = res.data;
     // Prepend to local list (newest first).
-    checkpoints.value = [cp, ...checkpoints.value];
+    snapshots.value = [cp, ...snapshots.value];
     return cp;
   }
 
-  async function renameCheckpoint(id, label) {
+  async function renameSnapshot(id, label) {
     // Optimistic update.
-    const idx = checkpoints.value.findIndex((c) => c.id === id);
-    const prev = idx >= 0 ? checkpoints.value[idx].label : undefined;
-    if (idx >= 0) checkpoints.value[idx] = { ...checkpoints.value[idx], label };
+    const idx = snapshots.value.findIndex((c) => c.id === id);
+    const prev = idx >= 0 ? snapshots.value[idx].label : undefined;
+    if (idx >= 0) snapshots.value[idx] = { ...snapshots.value[idx], label };
     try {
-      const res = await apiClient.patch(`/api/v1/checkpoints/${id}`, { label });
-      if (idx >= 0) checkpoints.value[idx] = res.data;
+      const res = await apiClient.patch(`/api/v1/snapshots/${id}`, { label });
+      if (idx >= 0) snapshots.value[idx] = res.data;
       return res.data;
     } catch (err) {
       // Roll back optimistic update.
-      if (idx >= 0) checkpoints.value[idx] = { ...checkpoints.value[idx], label: prev };
+      if (idx >= 0) snapshots.value[idx] = { ...snapshots.value[idx], label: prev };
       throw err;
     }
   }
 
-  async function deleteCheckpoint(id) {
-    await apiClient.delete(`/api/v1/checkpoints/${id}`);
-    checkpoints.value = checkpoints.value.filter((c) => c.id !== id);
+  async function deleteSnapshot(id) {
+    await apiClient.delete(`/api/v1/snapshots/${id}`);
+    snapshots.value = snapshots.value.filter((c) => c.id !== id);
   }
 
-  async function previewRestore(checkpointId, resources) {
+  async function previewRestore(snapshotId, resources) {
     if (resources && resources.length > 0) {
       const res = await apiClient.post(
-        `/api/v1/checkpoints/${checkpointId}/restore/preview/batch`,
+        `/api/v1/snapshots/${snapshotId}/restore/preview/batch`,
         { resources }
       );
       return res.data;
     }
     const res = await apiClient.get(
-      `/api/v1/checkpoints/${checkpointId}/restore/preview`
+      `/api/v1/snapshots/${snapshotId}/restore/preview`
     );
     return res.data;
   }
 
-  async function previewResourceRestore(checkpointId, resourceType, resourceId) {
+  async function previewResourceRestore(snapshotId, resourceType, resourceId) {
     const res = await apiClient.get(
-      `/api/v1/checkpoints/${checkpointId}/restore/${resourceType}/${resourceId}/preview`
+      `/api/v1/snapshots/${snapshotId}/restore/${resourceType}/${resourceId}/preview`
     );
     return res.data;
   }
 
-  async function executeRestore(checkpointId, resources) {
+  async function executeRestore(snapshotId, resources) {
     if (resources && resources.length > 0) {
       const res = await apiClient.post(
-        `/api/v1/checkpoints/${checkpointId}/restore/batch`,
+        `/api/v1/snapshots/${snapshotId}/restore/batch`,
         { resources }
       );
       return res.data;
     }
     const res = await apiClient.post(
-      `/api/v1/checkpoints/${checkpointId}/restore`,
+      `/api/v1/snapshots/${snapshotId}/restore`,
       {}
     );
     return res.data;
@@ -109,33 +109,33 @@ export const useCheckpointsStore = defineStore("checkpoints", () => {
 
   /**
    * Open the shared RestoreConfirmDialog (hoisted in App.vue).
-   * @param {number|null} checkpointId - null means "let user pick".
+   * @param {number|null} snapshotId - null means "let user pick".
    * @param {Array|null} resources - null means full-vault restore.
    */
-  function openRestoreDialog(checkpointId, resources) {
-    restoreDialogCheckpointId.value = checkpointId ?? null;
+  function openRestoreDialog(snapshotId, resources) {
+    restoreDialogSnapshotId.value = snapshotId ?? null;
     restoreDialogResources.value = resources ?? null;
     restoreDialogOpen.value = true;
   }
 
   // ── WebSocket event handlers (called from App.vue) ─────────────────────────
 
-  function onCheckpointCreated(payload) {
+  function onSnapshotCreated(payload) {
     // Refresh the full list so ordering / counts are correct.
-    fetchCheckpoints();
+    fetchSnapshots();
   }
 
-  function onCheckpointDeleted(payload) {
+  function onSnapshotDeleted(payload) {
     const id = payload?.id;
     if (id != null) {
-      checkpoints.value = checkpoints.value.filter((c) => c.id !== id);
+      snapshots.value = snapshots.value.filter((c) => c.id !== id);
     }
   }
 
   function onRestoreStarted(payload) {
     activeJob.value = {
       kind: "RESTORE",
-      checkpoint_id: payload?.checkpoint_id ?? null,
+      snapshot_id: payload?.snapshot_id ?? null,
       started_at: new Date().toISOString(),
       progress: 0,
     };
@@ -143,58 +143,58 @@ export const useCheckpointsStore = defineStore("checkpoints", () => {
 
   function onRestoreCompleted(payload) {
     activeJob.value = null;
-    // Refresh checkpoint list in case a safety OPPORTUNISTIC checkpoint was
+    // Refresh snapshot list in case a safety OPPORTUNISTIC snapshot was
     // created during the restore.
-    fetchCheckpoints();
+    fetchSnapshots();
   }
 
-  async function fetchCheckpointSettings() {
+  async function fetchSnapshotSettings() {
     try {
-      const res = await apiClient.get("/api/v1/server-config/checkpoints");
-      dailyCheckpointsEnabled.value = res.data?.daily_checkpoints ?? true;
+      const res = await apiClient.get("/api/v1/server-config/snapshots");
+      dailySnapshotsEnabled.value = res.data?.daily_snapshots ?? true;
     } catch (err) {
       // Non-fatal; leave current value as-is.
     }
   }
 
-  async function setDailyCheckpointsEnabled(enabled) {
-    const previous = dailyCheckpointsEnabled.value;
-    dailyCheckpointsEnabled.value = enabled; // optimistic update
+  async function setDailySnapshotsEnabled(enabled) {
+    const previous = dailySnapshotsEnabled.value;
+    dailySnapshotsEnabled.value = enabled; // optimistic update
     try {
-      await apiClient.patch("/api/v1/server-config/checkpoints", {
-        daily_checkpoints: enabled,
+      await apiClient.patch("/api/v1/server-config/snapshots", {
+        daily_snapshots: enabled,
       });
     } catch (err) {
-      dailyCheckpointsEnabled.value = previous; // roll back
+      dailySnapshotsEnabled.value = previous; // roll back
       throw err;
     }
   }
 
   return {
     // state
-    checkpoints,
+    snapshots,
     loading,
     activeJob,
     error,
     restoreDialogOpen,
-    restoreDialogCheckpointId,
+    restoreDialogSnapshotId,
     restoreDialogResources,
-    dailyCheckpointsEnabled,
+    dailySnapshotsEnabled,
     // actions
-    fetchCheckpoints,
+    fetchSnapshots,
     fetchStatus,
-    createCheckpoint,
-    renameCheckpoint,
-    deleteCheckpoint,
+    createSnapshot,
+    renameSnapshot,
+    deleteSnapshot,
     previewRestore,
     previewResourceRestore,
     executeRestore,
     openRestoreDialog,
-    fetchCheckpointSettings,
-    setDailyCheckpointsEnabled,
+    fetchSnapshotSettings,
+    setDailySnapshotsEnabled,
     // ws handlers
-    onCheckpointCreated,
-    onCheckpointDeleted,
+    onSnapshotCreated,
+    onSnapshotDeleted,
     onRestoreStarted,
     onRestoreCompleted,
   };

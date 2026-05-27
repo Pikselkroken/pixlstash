@@ -1,4 +1,4 @@
-"""Tests for UndoService — reversing individual transactions and checkpoint undo."""
+"""Tests for UndoService — reversing individual transactions and snapshot undo."""
 
 import os
 import shutil
@@ -10,7 +10,7 @@ from sqlmodel import delete, select
 
 from pixlstash.db_models import Picture
 from pixlstash.db_models.change_log import ChangeLog
-from pixlstash.db_models.checkpoint import Checkpoint
+from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 
 
@@ -23,11 +23,11 @@ def server():
 
 @pytest.fixture(autouse=True)
 def clean_db(server):
-    """Wipe all relevant tables and checkpoint files before each test."""
+    """Wipe all relevant tables and snapshot files before each test."""
 
     def _wipe(session):
         session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Checkpoint))
+        session.exec(delete(Snapshot))
         session.exec(delete(ChangeLog))
         session.exec(delete(Picture))
         session.exec(text("PRAGMA foreign_keys = ON"))
@@ -35,7 +35,7 @@ def clean_db(server):
 
     server.vault.db.run_task(_wipe)
 
-    cp_dir = os.path.join(server.vault.image_root, "checkpoints")
+    cp_dir = os.path.join(server.vault.image_root, "snapshots")
     if os.path.isdir(cp_dir):
         shutil.rmtree(cp_dir)
     yield
@@ -173,13 +173,13 @@ def test_undo_only_reverts_last_transaction(server):
 
 
 # ---------------------------------------------------------------------------
-# undo_to_checkpoint: reverts multiple transactions made after checkpoint
+# undo_to_snapshot: reverts multiple transactions made after snapshot
 # ---------------------------------------------------------------------------
 
 
-def test_undo_to_checkpoint_reverts_post_checkpoint_changes(server):
+def test_undo_to_snapshot_reverts_post_snapshot_changes(server):
     pic = _add_picture(server, description="v0")
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     def _upd1(session):
         session.get(Picture, pic.id).description = "v1"
@@ -189,37 +189,37 @@ def test_undo_to_checkpoint_reverts_post_checkpoint_changes(server):
         session.get(Picture, pic.id).description = "v2"
         session.commit()
 
-    server.vault.db.run_task(_upd1)  # post-checkpoint txn 1
-    server.vault.db.run_task(_upd2)  # post-checkpoint txn 2
+    server.vault.db.run_task(_upd1)  # post-snapshot txn 1
+    server.vault.db.run_task(_upd2)  # post-snapshot txn 2
 
     assert _get_picture(server, pic.id).description == "v2"
 
-    report = server.vault.undo_service.undo_to_checkpoint(cp.id)
+    report = server.vault.undo_service.undo_to_snapshot(cp.id)
 
     assert report.reverted_txn_count >= 2
     assert not report.errors
     final_desc = _get_picture(server, pic.id).description
     assert final_desc == "v0", (
-        f"Expected 'v0' after undo-to-checkpoint, got '{final_desc}'"
+        f"Expected 'v0' after undo-to-snapshot, got '{final_desc}'"
     )
 
 
 # ---------------------------------------------------------------------------
-# undo_to_checkpoint: no changes after checkpoint → no-op
+# undo_to_snapshot: no changes after snapshot → no-op
 # ---------------------------------------------------------------------------
 
 
-def test_undo_to_checkpoint_noop_when_no_changes(server):
+def test_undo_to_snapshot_noop_when_no_changes(server):
     # Background tasks (ComfyUI extraction, text scoring, etc.) may write to
-    # included columns (comfyui_models, text_embedding, etc.) between checkpoint
+    # included columns (comfyui_models, text_embedding, etc.) between snapshot
     # creation and the undo call.  Those writes are correctly reversed by
-    # undo_to_checkpoint (restoring the picture to its exact checkpoint state).
+    # undo_to_snapshot (restoring the picture to its exact snapshot state).
     # What matters is that user-visible state (description) is preserved and
     # that no errors are reported.
     pic = _add_picture(server, description="stable")
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    report = server.vault.undo_service.undo_to_checkpoint(cp.id)
+    report = server.vault.undo_service.undo_to_snapshot(cp.id)
 
     assert not report.errors
     final_desc = _get_picture(server, pic.id).description
@@ -227,10 +227,10 @@ def test_undo_to_checkpoint_noop_when_no_changes(server):
 
 
 # ---------------------------------------------------------------------------
-# undo_to_checkpoint: invalid checkpoint raises ValueError
+# undo_to_snapshot: invalid snapshot raises ValueError
 # ---------------------------------------------------------------------------
 
 
-def test_undo_to_checkpoint_invalid_id_raises(server):
+def test_undo_to_snapshot_invalid_id_raises(server):
     with pytest.raises(ValueError, match="not found"):
-        server.vault.undo_service.undo_to_checkpoint(9999)
+        server.vault.undo_service.undo_to_snapshot(9999)

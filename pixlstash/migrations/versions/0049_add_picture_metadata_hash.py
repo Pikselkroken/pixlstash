@@ -1,7 +1,7 @@
 """Add metadata_hash column to picture table.
 
 Stores a SHA-256 fingerprint of each picture's user-visible metadata
-(column values + sorted tag strings).  Used for fast checkpoint-identity
+(column values + sorted tag strings).  Used for fast snapshot-identity
 comparisons in the context-menu submenu without opening every snapshot.
 
 Revision ID: 0049_add_picture_metadata_hash

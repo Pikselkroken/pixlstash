@@ -6,11 +6,11 @@ import tempfile
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import delete, select
+from sqlmodel import delete
 
 from pixlstash.db_models import Picture
 from pixlstash.db_models.change_log import ChangeLog
-from pixlstash.db_models.checkpoint import Checkpoint
+from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 
 
@@ -23,11 +23,11 @@ def server():
 
 @pytest.fixture(autouse=True)
 def clean_db(server):
-    """Wipe all relevant tables and checkpoint files before each test."""
+    """Wipe all relevant tables and snapshot files before each test."""
 
     def _wipe(session):
         session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Checkpoint))
+        session.exec(delete(Snapshot))
         session.exec(delete(ChangeLog))
         session.exec(delete(Picture))
         session.exec(text("PRAGMA foreign_keys = ON"))
@@ -35,7 +35,7 @@ def clean_db(server):
 
     server.vault.db.run_task(_wipe)
 
-    cp_dir = os.path.join(server.vault.image_root, "checkpoints")
+    cp_dir = os.path.join(server.vault.image_root, "snapshots")
     if os.path.isdir(cp_dir):
         shutil.rmtree(cp_dir)
     yield
@@ -76,7 +76,7 @@ def _create_file(server, relative_path: str):
 def test_full_restore_reverts_mutation(server):
     _create_file(server, "original.jpg")
     pic = _add_picture(server, filename="original.jpg", description="before")
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     def _mutate(session):
         p = session.get(Picture, pic.id)
@@ -108,7 +108,7 @@ def test_full_restore_reverts_mutation(server):
 def test_full_restore_drops_row_for_missing_file(server):
     # Add a picture whose file does NOT exist on disk.
     pic = _add_picture(server, filename="ghost.jpg")
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     report = server.vault.restore_service.restore_full(cp.id)
 
@@ -129,7 +129,7 @@ def test_full_restore_drops_row_for_missing_file(server):
 def test_full_restore_dry_run_leaves_db_unchanged(server):
     _create_file(server, "dry.jpg")
     pic = _add_picture(server, filename="dry.jpg", description="original")
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     def _mutate(session):
         p = session.get(Picture, pic.id)
@@ -156,7 +156,7 @@ def test_full_restore_dry_run_leaves_db_unchanged(server):
 def test_restore_resource_re_inserts_deleted_picture(server):
     _create_file(server, "restorable.jpg")
     pic = _add_picture(server, filename="restorable.jpg", description="original")
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     # Delete the picture from the live DB.
     def _del(session):
@@ -184,7 +184,7 @@ def test_restore_resource_re_inserts_deleted_picture(server):
 def test_restore_resource_reverts_description_change(server):
     _create_file(server, "revert_desc.jpg")
     pic = _add_picture(server, filename="revert_desc.jpg", description="v1")
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     def _mutate(session):
         p = session.get(Picture, pic.id)
@@ -210,6 +210,6 @@ def test_restore_resource_reverts_description_change(server):
 
 
 def test_restore_resource_invalid_type_raises(server):
-    cp = server.vault.checkpoint_service.create_checkpoint("MANUAL")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
     with pytest.raises(ValueError, match="Invalid resource_type"):
         server.vault.restore_service.restore_resource(cp.id, "unknown_type", 1)

@@ -44,7 +44,7 @@ from . import worker_config
 
 from pixlstash.event_types import EventType
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
-from pixlstash.services.checkpoint_service import CheckpointService
+from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore_service import RestoreService
 from pixlstash.services.undo_service import UndoService
 
@@ -77,7 +77,7 @@ class Vault:
         disable_background_workers: bool = False,
         force_cpu: bool = False,
         fast_captions: bool = False,
-        daily_checkpoints_enabled: bool = True,
+        daily_snapshots_enabled: bool = True,
     ):
         """
         Initialize a Vault instance.
@@ -104,7 +104,7 @@ class Vault:
         self.db = VaultDatabase(self._db_path)
         self.set_description(description or "")
 
-        self.checkpoint_service = CheckpointService(self)
+        self.snapshot_service = SnapshotService(self)
         self.restore_service = RestoreService(self)
         self.undo_service = UndoService(self)
 
@@ -121,7 +121,7 @@ class Vault:
         self._tagger_settings: dict | None = None
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
-        self._daily_checkpoints_enabled: bool = daily_checkpoints_enabled
+        self._daily_snapshots_enabled: bool = daily_snapshots_enabled
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -155,10 +155,10 @@ class Vault:
             image_root=self.image_root,
             path_mapper=path_mapper,
         )
-        from pixlstash.tasks import TaskType, EnsureDailyCheckpointFinder
+        from pixlstash.tasks import TaskType, EnsureDailySnapshotFinder
 
-        self._planner_work_finders[TaskType.DAILY_CHECKPOINT] = (
-            EnsureDailyCheckpointFinder(vault=self)
+        self._planner_work_finders[TaskType.DAILY_SNAPSHOT] = EnsureDailySnapshotFinder(
+            vault=self
         )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
@@ -439,21 +439,21 @@ class Vault:
             self.db = None
         self._started = False
 
-    def set_daily_checkpoints_enabled(self, enabled: bool) -> None:
-        """Enable or disable automatic daily checkpoints at runtime.
+    def set_daily_snapshots_enabled(self, enabled: bool) -> None:
+        """Enable or disable automatic daily snapshots at runtime.
 
-        Takes effect immediately; the next EnsureDailyCheckpointFinder cycle
-        will skip checkpoint creation when ``enabled`` is False.
+        Takes effect immediately; the next EnsureDailySnapshotFinder cycle
+        will skip snapshot creation when ``enabled`` is False.
 
         Args:
-            enabled: True to allow automatic daily checkpoints, False to suppress them.
+            enabled: True to allow automatic daily snapshots, False to suppress them.
         """
-        self._daily_checkpoints_enabled = bool(enabled)
+        self._daily_snapshots_enabled = bool(enabled)
 
     @property
-    def daily_checkpoints_enabled(self) -> bool:
-        """Whether automatic daily checkpoints are enabled."""
-        return self._daily_checkpoints_enabled
+    def daily_snapshots_enabled(self) -> bool:
+        """Whether automatic daily snapshots are enabled."""
+        return self._daily_snapshots_enabled
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory

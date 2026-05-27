@@ -61,7 +61,7 @@ from pixlstash.routes.filesystem import create_router as create_filesystem_route
 from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
-from pixlstash.routes.checkpoints import create_router as create_checkpoints_router
+from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -219,7 +219,7 @@ class Server:
             ),
             force_cpu=bool(_force_cpu),
             fast_captions=Server.DEFAULT_FAST_CAPTIONS,
-            daily_checkpoints_enabled=self._server_config.get("daily_checkpoints", True),
+            daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
         )
 
         self._ws_clients = []
@@ -691,8 +691,8 @@ class Server:
                     server_config["generate_thumbnails_on_startup"] = True
                 if "filesystem_roots" not in server_config:
                     server_config["filesystem_roots"] = []
-                if "daily_checkpoints" not in server_config:
-                    server_config["daily_checkpoints"] = True
+                if "daily_snapshots" not in server_config:
+                    server_config["daily_snapshots"] = True
 
         # Resolve SSL paths that are relative: interpret them relative to the
         # config file's directory, not the process's CWD, so that the certs
@@ -1053,9 +1053,9 @@ class Server:
             tags=["taggers"],
         )
         self.api.include_router(
-            create_checkpoints_router(self),
+            create_snapshots_router(self),
             prefix=API_V1_PREFIX,
-            tags=["checkpoints"],
+            tags=["snapshots"],
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.
         self.api.include_router(

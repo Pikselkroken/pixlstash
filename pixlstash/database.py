@@ -15,7 +15,12 @@ from pathlib import Path
 from concurrent.futures import Future
 from enum import IntEnum
 from typing import Optional
-from sqlalchemy import event, inspect as sa_inspect, update as sa_update, select as sa_select
+from sqlalchemy import (
+    event,
+    inspect as sa_inspect,
+    update as sa_update,
+    select as sa_select,
+)
 from sqlalchemy.orm import attributes as orm_attributes
 from sqlmodel import create_engine, Session
 from rapidfuzz.distance import Levenshtein
@@ -31,7 +36,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 # They may appear unused, but are necessary for correct table creation and ORM operation.
 from pixlstash.db_models import Character, Face  # noqa: F401
 from pixlstash.db_models import PictureLikeness, PictureSet, Picture, Quality, Tag, User  # noqa: F401
-from pixlstash.db_models import ChangeLog, Checkpoint  # noqa: F401
+from pixlstash.db_models import ChangeLog, Snapshot  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +45,7 @@ from pixlstash.db_models import ChangeLog, Checkpoint  # noqa: F401
 
 # Tables whose data payloads are NOT stored in ChangeLog (regenerable or
 # ephemeral). A lightweight metadata-only entry is still created for these so
-# that undo_to_checkpoint can apply its timing heuristic.
+# that undo_to_snapshot can apply its timing heuristic.
 CHANGE_LOG_EXCLUDED_TABLES: frozenset[str] = frozenset(
     {
         "picturelikeness",
@@ -52,7 +57,7 @@ CHANGE_LOG_EXCLUDED_TABLES: frozenset[str] = frozenset(
         "guest_score",
         "deleted_file_log",
         "changelog",
-        "checkpoint",
+        "snapshot",
         "alembic_version",
     }
 )
@@ -294,24 +299,24 @@ def _after_flush_handler(session, flush_context) -> None:
 
 # Columns excluded from the metadata hash; matches _diff_picture's _SKIP set
 # in restore_service.py so that the hash detects exactly what the preview does.
-_HASH_SKIP_COLS: frozenset = frozenset({
-    "id",
-    "file_path",
-    "created_at",
-    "text_embedding",
-    "image_embedding",
-    "metadata_hash",
-    # Derived/regenerable scores — excluded so that recalculating them
-    # does not make a checkpoint appear as changed.
-    "aesthetic_score",
-    "smart_score",
-    "text_score",
-})
+_HASH_SKIP_COLS: frozenset = frozenset(
+    {
+        "id",
+        "file_path",
+        "created_at",
+        "text_embedding",
+        "image_embedding",
+        "metadata_hash",
+        # Derived/regenerable scores — excluded so that recalculating them
+        # does not make a snapshot appear as changed.
+        "aesthetic_score",
+        "smart_score",
+        "text_score",
+    }
+)
 
 
-def _compute_picture_metadata_hash(
-    session: Session, picture_id: int
-) -> Optional[str]:
+def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optional[str]:
     """Return a SHA-256 hex digest of a picture's user-visible metadata.
 
     Covers all Picture columns not in ``_HASH_SKIP_COLS`` plus the sorted list
@@ -339,9 +344,9 @@ def _compute_picture_metadata_hash(
             val = val.isoformat()
         col_vals[col] = val
     tags = sorted(
-        session.execute(
-            sa_select(Tag.tag).where(Tag.picture_id == picture_id)
-        ).scalars().all()
+        session.execute(sa_select(Tag.tag).where(Tag.picture_id == picture_id))
+        .scalars()
+        .all()
     )
     state = {"cols": col_vals, "tags": tags}
     return hashlib.sha256(

@@ -5,7 +5,7 @@ from sqlalchemy import Column, DateTime
 from sqlmodel import Field, SQLModel
 
 
-class Checkpoint(SQLModel, table=True):
+class Snapshot(SQLModel, table=True):
     """A full SQLite snapshot of the vault database, retained under GFS policy.
 
     Attributes:
@@ -14,16 +14,16 @@ class Checkpoint(SQLModel, table=True):
             'OPPORTUNISTIC'.
         created_at: UTC timestamp when the snapshot was taken.
         relative_path: Path to the snapshot .sqlite file relative to the
-            vault root (e.g. 'checkpoints/2026/01/15/<uuid>.sqlite').
+            vault root (e.g. 'snapshots/2026/01/15/<uuid>.sqlite').
         manifest_relative_path: Path to the JSON sidecar relative to the
             vault root.
         byte_size: Size of the snapshot file in bytes.
         picture_count: Number of Picture rows at snapshot time.
         schema_version: Alembic head revision at snapshot time.
-        label: Optional user-supplied label for MANUAL checkpoints.
+        label: Optional user-supplied label for MANUAL snapshots.
     """
 
-    __tablename__ = "checkpoint"
+    __tablename__ = "snapshot"
 
     id: Optional[int] = Field(default=None, primary_key=True)
     kind: str = Field(nullable=False, index=True)

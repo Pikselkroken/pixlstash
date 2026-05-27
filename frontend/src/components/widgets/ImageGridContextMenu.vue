@@ -239,7 +239,7 @@
         </div>
       </template>
 
-      <!-- ── Restore from checkpoint ─────────────────────────── -->
+      <!-- ── Restore from snapshot ─────────────────────────── -->
       <template
         v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
       >
@@ -253,21 +253,21 @@
             :disabled="!selectedImageIds.length || isReadOnly"
           >
             <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
-            Restore from checkpoint
+            Restore from snapshot
             <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
           </button>
           <div v-if="restoreSubmenuOpen" class="ctx-submenu">
             <button
-              v-for="cp in recentCheckpoints"
+              v-for="cp in recentSnapshots"
               :key="cp.id"
               class="ctx-item"
-              :disabled="identicalCheckpointIds.has(cp.id)"
+              :disabled="identicalSnapshotIds.has(cp.id)"
               :title="
-                identicalCheckpointIds.has(cp.id)
-                  ? 'Selection is identical to this checkpoint'
+                identicalSnapshotIds.has(cp.id)
+                  ? 'Selection is identical to this snapshot'
                   : undefined
               "
-              @click="handleRestoreFromCheckpoint(cp.id)"
+              @click="handleRestoreFromSnapshot(cp.id)"
             >
               <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
               {{ cp.label || cp.kind }}
@@ -354,7 +354,7 @@ import {
 } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { faceBoxColor } from "../../utils/utils.js";
-import { useCheckpointsStore } from "../../stores/useCheckpointsStore";
+import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({
@@ -406,7 +406,7 @@ const emit = defineEmits([
   "remove-picture-shares",
   "reverse-image-search",
   "find-similar-faces",
-  "restore-from-checkpoint",
+  "restore-from-snapshot",
 ]);
 
 const menuRef = ref(null);
@@ -417,47 +417,47 @@ const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
 const findFacesSubmenuOpen = ref(false);
 const restoreSubmenuOpen = ref(false);
-const identicalCheckpointIds = ref(new Set());
+const identicalSnapshotIds = ref(new Set());
 
 watch(restoreSubmenuOpen, async (isOpen) => {
   if (!isOpen || !props.selectedImageIds.length) {
     return;
   }
-  identicalCheckpointIds.value = new Set();
+  identicalSnapshotIds.value = new Set();
   const pictureIds = props.selectedImageIds;
   await Promise.all(
-    recentCheckpoints.value.map(async (cp) => {
+    recentSnapshots.value.map(async (cp) => {
       try {
-        const res = await apiClient.post(`/checkpoints/${cp.id}/hash-compare`, {
+        const res = await apiClient.post(`/snapshots/${cp.id}/hash-compare`, {
           picture_ids: pictureIds,
         });
         const identicalSet = new Set(res.data.identical_ids);
         const allIdentical = pictureIds.every((id) => identicalSet.has(id));
         if (allIdentical) {
-          identicalCheckpointIds.value = new Set([
-            ...identicalCheckpointIds.value,
+          identicalSnapshotIds.value = new Set([
+            ...identicalSnapshotIds.value,
             cp.id,
           ]);
         }
       } catch {
-        // On error, leave the checkpoint enabled (conservative)
+        // On error, leave the snapshot enabled (conservative)
       }
     }),
   );
 });
 
-const checkpointsStore = useCheckpointsStore();
-const recentCheckpoints = computed(() =>
-  checkpointsStore.checkpoints.filter((cp) => cp.is_compatible).slice(0, 5),
+const snapshotsStore = useSnapshotsStore();
+const recentSnapshots = computed(() =>
+  snapshotsStore.snapshots.filter((cp) => cp.is_compatible).slice(0, 5),
 );
 
-function handleRestoreFromCheckpoint(cpId) {
+function handleRestoreFromSnapshot(cpId) {
   const resources = props.selectedImageIds.map((id) => ({
     type: "picture",
     id,
   }));
-  checkpointsStore.openRestoreDialog(cpId, resources);
-  onAction("restore-from-checkpoint", { checkpointId: cpId, resources });
+  snapshotsStore.openRestoreDialog(cpId, resources);
+  onAction("restore-from-snapshot", { snapshotId: cpId, resources });
 }
 
 function handleRestoreMore() {
@@ -465,8 +465,8 @@ function handleRestoreMore() {
     type: "picture",
     id,
   }));
-  checkpointsStore.openRestoreDialog(null, resources);
-  onAction("restore-from-checkpoint", { checkpointId: null, resources });
+  snapshotsStore.openRestoreDialog(null, resources);
+  onAction("restore-from-snapshot", { snapshotId: null, resources });
 }
 const faceCharacterNames = ref({}); // face.id -> character name string or null
 

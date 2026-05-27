@@ -1,6 +1,6 @@
-"""One-off script: populate metadata_hash for all pictures in checkpoint snapshots.
+"""One-off script: populate metadata_hash for all pictures in snapshot snapshots.
 
-Iterates every checkpoint snapshot file, runs the schema migration if the
+Iterates every snapshot snapshot file, runs the schema migration if the
 metadata_hash column is missing, then computes and persists the SHA-256
 metadata hash for each picture that does not have one yet.
 
@@ -18,7 +18,7 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Backfill metadata_hash in all checkpoint snapshot files."
+        description="Backfill metadata_hash in all snapshot snapshot files."
     )
     parser.add_argument(
         "image_root",

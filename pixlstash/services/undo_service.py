@@ -1,7 +1,7 @@
 """Service layer for undoing recent metadata changes using the ChangeLog.
 
 Provides ``undo_last_transaction()`` (ChangeLog-only) and
-``undo_to_checkpoint()`` (hybrid: ChangeLog for included tables, snapshot
+``undo_to_snapshot()`` (hybrid: ChangeLog for included tables, snapshot
 for excluded tables based on timing heuristics).
 """
 
@@ -117,30 +117,30 @@ class UndoService:
 
         return report
 
-    def undo_to_checkpoint(self, checkpoint_id: int) -> UndoReport:
-        """Undo all changes back to the state at a given checkpoint.
+    def undo_to_snapshot(self, snapshot_id: int) -> UndoReport:
+        """Undo all changes back to the state at a given snapshot.
 
         Strategy:
         - For **included** tables: walk the ChangeLog backward from the
-          current head to the checkpoint's ``max_changelog_id`` (read from the
+          current head to the snapshot's ``max_changelog_id`` (read from the
           manifest sidecar) and reverse-apply each transaction in reverse
           chronological order.
         - For **excluded** tables (regenerable: quality, likeness, embeddings,
           etc.): use a timing heuristic per table.  If the most-recent
-          excluded-table mutation happened *closer to the checkpoint* than to
+          excluded-table mutation happened *closer to the snapshot* than to
           now, the snapshot's data is considered closer to ground truth and a
           full restore is triggered for those tables via
           ``RestoreService.restore_full()``.  Otherwise the current values are
           kept and the WorkPlanner will re-derive them.
 
         Args:
-            checkpoint_id: The ID of the checkpoint to rewind to.
+            snapshot_id: The ID of the snapshot to rewind to.
 
         Returns:
             An ``UndoReport`` summarising the operation.
 
         Raises:
-            ValueError: If the checkpoint is not found or its manifest is
+            ValueError: If the snapshot is not found or its manifest is
                 missing.
         """
         import os
@@ -148,9 +148,9 @@ class UndoService:
         db = self._vault.db
         vault_root = self._vault.image_root
 
-        cp = self._vault.checkpoint_service.get_checkpoint(checkpoint_id)
+        cp = self._vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
-            raise ValueError(f"Checkpoint id={checkpoint_id} not found.")
+            raise ValueError(f"Snapshot id={snapshot_id} not found.")
 
         abs_manifest = os.path.join(vault_root, cp.manifest_relative_path)
         try:
@@ -158,13 +158,13 @@ class UndoService:
                 manifest = json.load(fh)
         except Exception as exc:
             raise ValueError(
-                f"Cannot read manifest for checkpoint {checkpoint_id}: {exc}"
+                f"Cannot read manifest for snapshot {snapshot_id}: {exc}"
             ) from exc
 
         max_changelog_id: Optional[int] = manifest.get("max_changelog_id")
-        checkpoint_dt = cp.created_at
-        if checkpoint_dt.tzinfo is None:
-            checkpoint_dt = checkpoint_dt.replace(tzinfo=timezone.utc)
+        snapshot_dt = cp.created_at
+        if snapshot_dt.tzinfo is None:
+            snapshot_dt = snapshot_dt.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
 
         # --- Handle excluded tables via timing heuristic -----------------
@@ -192,18 +192,18 @@ class UndoService:
 
         excluded_latest = db.run_immediate_read_task(_load_excluded_mutations)
 
-        # For excluded tables mutated closer to the checkpoint than to now:
+        # For excluded tables mutated closer to the snapshot than to now:
         # trigger a full restore (which resets those columns to NULL so the
         # WorkPlanner regenerates them).
         excluded_tables_needing_restore: list[str] = []
         for table_name, mutation_ts in excluded_latest.items():
-            age_from_cp = (mutation_ts - checkpoint_dt).total_seconds()
+            age_from_cp = (mutation_ts - snapshot_dt).total_seconds()
             age_to_now = (now - mutation_ts).total_seconds()
             if age_from_cp < age_to_now:
                 excluded_tables_needing_restore.append(table_name)
                 logger.info(
                     "UndoService: excluded table %s: mutation closer to "
-                    "checkpoint (%.0fs after cp vs %.0fs before now) — will restore",
+                    "snapshot (%.0fs after cp vs %.0fs before now) — will restore",
                     table_name,
                     age_from_cp,
                     age_to_now,
@@ -225,7 +225,7 @@ class UndoService:
                 excluded_tables_needing_restore,
             )
             try:
-                self._vault.restore_service.restore_full(checkpoint_id)
+                self._vault.restore_service.restore_full(snapshot_id)
                 report.errors.append(
                     f"Full restore triggered for excluded tables: "
                     f"{excluded_tables_needing_restore}"
@@ -239,9 +239,9 @@ class UndoService:
         # --- Undo included-table changes via ChangeLog -------------------
         if max_changelog_id is None:
             logger.info(
-                "UndoService: checkpoint %d has no max_changelog_id in manifest; "
+                "UndoService: snapshot %d has no max_changelog_id in manifest; "
                 "nothing to undo via ChangeLog.",
-                checkpoint_id,
+                snapshot_id,
             )
             return report
 
@@ -272,7 +272,7 @@ class UndoService:
                 txns.append((entry.txn_id, seen[entry.txn_id]))
             seen[entry.txn_id].append(entry)
 
-        with db.write_reason(f"undo to checkpoint {checkpoint_id}"):
+        with db.write_reason(f"undo to snapshot {snapshot_id}"):
             for txn_id, entries in txns:
                 entries_sorted = sorted(
                     entries, key=lambda e: e.seq_in_txn, reverse=True
@@ -290,7 +290,7 @@ class UndoService:
             self._vault.emit_event(
                 EventType.UNDO_APPLIED,
                 {
-                    "checkpoint_id": checkpoint_id,
+                    "snapshot_id": snapshot_id,
                     "reverted_txn_count": report.reverted_txn_count,
                     "reverted_row_count": report.reverted_row_count,
                 },
@@ -349,9 +349,6 @@ class UndoService:
             entry: The ChangeLog row to reverse.
         """
         pk: dict = json.loads(entry.row_pk_json) if entry.row_pk_json else {}
-
-        table = session.get_bind().dialect.identifier_preparer.quote(entry.table_name)
-        meta = session.get_bind().dialect
 
         if entry.op == "INSERT":
             self._delete_by_pk(session, entry.table_name, pk)

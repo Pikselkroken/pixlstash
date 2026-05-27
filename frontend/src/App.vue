@@ -26,7 +26,7 @@ import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
-import { useCheckpointsStore } from "./stores/useCheckpointsStore";
+import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 
 import SideBar from "./components/panels/SideBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
@@ -51,7 +51,7 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
-const checkpointsStore = useCheckpointsStore();
+const snapshotsStore = useSnapshotsStore();
 
 // --- Router ---
 const route = useRoute();
@@ -233,7 +233,11 @@ function connectUpdatesSocket() {
         wsStore.wsTagUpdate = { key: nextKey, pictureIds };
         return;
       }
-      if (payload?.type === "picture_imported" && payload?.source !== "user" && !wsStore.isUploadInProgress) {
+      if (
+        payload?.type === "picture_imported" &&
+        payload?.source !== "user" &&
+        !wsStore.isUploadInProgress
+      ) {
         // External import (API, watch-folder): show pill, don't auto-refresh
         wsStore.pendingExternalImportCount += Math.max(1, pictureIds.length);
       } else if (
@@ -262,18 +266,18 @@ function connectUpdatesSocket() {
         key: Date.now(),
         payload,
       };
-    } else if (payload?.type === "checkpoint_created") {
-      wsStore.wsCheckpointEvent = { key: Date.now(), payload };
-      checkpointsStore.onCheckpointCreated();
-    } else if (payload?.type === "checkpoint_deleted") {
-      wsStore.wsCheckpointEvent = { key: Date.now(), payload };
-      checkpointsStore.onCheckpointDeleted(payload);
+    } else if (payload?.type === "snapshot_created") {
+      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
+      snapshotsStore.onSnapshotCreated();
+    } else if (payload?.type === "snapshot_deleted") {
+      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
+      snapshotsStore.onSnapshotDeleted(payload);
     } else if (payload?.type === "restore_started") {
       wsStore.wsRestoreEvent = { key: Date.now(), payload };
-      checkpointsStore.onRestoreStarted(payload);
+      snapshotsStore.onRestoreStarted(payload);
     } else if (payload?.type === "restore_completed") {
       wsStore.wsRestoreEvent = { key: Date.now(), payload };
-      checkpointsStore.onRestoreCompleted();
+      snapshotsStore.onRestoreCompleted();
       gridStore.wsUpdateKey = Date.now();
       gridStore.refreshGridVersion();
       refreshSidebar();
@@ -1651,7 +1655,7 @@ onMounted(async () => {
     })
     .catch(() => {});
   await fetchConfig();
-  checkpointsStore.fetchCheckpoints();
+  snapshotsStore.fetchSnapshots();
   // Navigate to the scoped resource when a share token is active
   if (ctx && ctx.scope !== "ALL") {
     if (ctx.resource_type === "picture_set") {
@@ -1845,9 +1849,9 @@ defineExpose({
           @project-created="refreshSidebar"
         />
         <RestoreConfirmDialog
-          v-model:open="checkpointsStore.restoreDialogOpen"
-          :checkpoint-id="checkpointsStore.restoreDialogCheckpointId"
-          :resources="checkpointsStore.restoreDialogResources"
+          v-model:open="snapshotsStore.restoreDialogOpen"
+          :snapshot-id="snapshotsStore.restoreDialogSnapshotId"
+          :resources="snapshotsStore.restoreDialogResources"
           @confirmed="onRestoreConfirmed"
         />
         <main :class="['main-area']" ref="mainAreaRef">

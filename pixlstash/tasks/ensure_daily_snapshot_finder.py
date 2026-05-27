@@ -1,4 +1,4 @@
-"""Scheduled finder that ensures a DAILY checkpoint exists for today's slot."""
+"""Scheduled finder that ensures a DAILY snapshot exists for today's slot."""
 
 import time
 from datetime import datetime, timezone, date
@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from pixlstash.db_models.checkpoint import Checkpoint
+from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 
@@ -19,11 +19,11 @@ logger = get_logger(__name__)
 _CHECK_INTERVAL_S: float = 300.0  # 5 minutes
 
 
-class EnsureDailyCheckpointFinder(BaseTaskFinder):
-    """Periodically check whether a DAILY checkpoint exists for today.
+class EnsureDailySnapshotFinder(BaseTaskFinder):
+    """Periodically check whether a DAILY snapshot exists for today.
 
-    If no DAILY checkpoint has been taken on the current calendar date (UTC)
-    the finder triggers ``CheckpointService.create_checkpoint('DAILY')``.
+    If no DAILY snapshot has been taken on the current calendar date (UTC)
+    the finder triggers ``SnapshotService.create_snapshot('DAILY')``.
     The check runs at most once every ``_CHECK_INTERVAL_S`` seconds so it
     does not busy-poll the DB.
     """
@@ -33,20 +33,20 @@ class EnsureDailyCheckpointFinder(BaseTaskFinder):
 
         Args:
             vault: The owning Vault instance used to access the DB and
-                CheckpointService.
+                SnapshotService.
         """
         super().__init__()
         self._vault = vault
         self._last_check_at: float = 0.0
 
     def finder_name(self) -> str:
-        return "EnsureDailyCheckpointFinder"
+        return "EnsureDailySnapshotFinder"
 
     def max_inflight_tasks(self) -> int:
         return 1
 
     def find_task(self):
-        if not self._vault.daily_checkpoints_enabled:
+        if not self._vault.daily_snapshots_enabled:
             return None
         now = time.monotonic()
         if now - self._last_check_at < _CHECK_INTERVAL_S:
@@ -56,32 +56,32 @@ class EnsureDailyCheckpointFinder(BaseTaskFinder):
         today: date = datetime.now(timezone.utc).date()
 
         already_done = self._vault.db.run_immediate_read_task(
-            lambda session: self._today_checkpoint_exists(session, today)
+            lambda session: self._today_snapshot_exists(session, today)
         )
         if already_done:
             return None
 
         logger.info(
-            "EnsureDailyCheckpointFinder: no DAILY checkpoint for %s — scheduling one",
+            "EnsureDailySnapshotFinder: no DAILY snapshot for %s — scheduling one",
             today.isoformat(),
         )
-        from pixlstash.tasks.ensure_daily_checkpoint_task import (
-            EnsureDailyCheckpointTask,
+        from pixlstash.tasks.ensure_daily_snapshot_task import (
+            EnsureDailySnapshotTask,
         )
 
-        return EnsureDailyCheckpointTask(self._vault)
+        return EnsureDailySnapshotTask(self._vault)
 
-    def _today_checkpoint_exists(self, session, today: date) -> bool:
-        """Return True if a DAILY checkpoint was created on *today* (UTC).
+    def _today_snapshot_exists(self, session, today: date) -> bool:
+        """Return True if a DAILY snapshot was created on *today* (UTC).
 
         Args:
             session: Read-only database session.
             today: The UTC calendar date to check.
 
         Returns:
-            True if a matching checkpoint row exists.
+            True if a matching snapshot row exists.
         """
-        rows = session.exec(select(Checkpoint).where(Checkpoint.kind == "DAILY")).all()
+        rows = session.exec(select(Snapshot).where(Snapshot.kind == "DAILY")).all()
         for cp in rows:
             cp_date = cp.created_at
             if cp_date.tzinfo is None:

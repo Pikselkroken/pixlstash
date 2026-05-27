@@ -419,36 +419,36 @@ def create_router(server) -> APIRouter:
     import json as _json
 
     @router.get(
-        "/server-config/checkpoints",
-        summary="Get checkpoint configuration",
-        description="Returns server-level checkpoint configuration.",
+        "/server-config/snapshots",
+        summary="Get snapshot configuration",
+        description="Returns server-level snapshot configuration.",
     )
-    def get_checkpoint_config(request: Request):
+    def get_snapshot_config(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
         return {
             "status": "success",
-            "daily_checkpoints": server._server_config.get("daily_checkpoints", True),
+            "daily_snapshots": server._server_config.get("daily_snapshots", True),
         }
 
-    class CheckpointConfigPatch(BaseModel):
-        daily_checkpoints: bool
+    class SnapshotConfigPatch(BaseModel):
+        daily_snapshots: bool
 
     @router.patch(
-        "/server-config/checkpoints",
-        summary="Update checkpoint configuration",
-        description="Updates checkpoint configuration. Changes take effect immediately and are persisted to server-config.json.",
+        "/server-config/snapshots",
+        summary="Update snapshot configuration",
+        description="Updates snapshot configuration. Changes take effect immediately and are persisted to server-config.json.",
     )
-    def patch_checkpoint_config(request: Request, body: CheckpointConfigPatch):
+    def patch_snapshot_config(request: Request, body: SnapshotConfigPatch):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
-        server._server_config["daily_checkpoints"] = body.daily_checkpoints
-        server.vault.set_daily_checkpoints_enabled(body.daily_checkpoints)
+        server._server_config["daily_snapshots"] = body.daily_snapshots
+        server.vault.set_daily_snapshots_enabled(body.daily_snapshots)
         config_path = getattr(server, "_server_config_path", None)
         if config_path:
             with open(config_path, "w") as f:
                 _json.dump(server._server_config, f, indent=2)
-        return {"status": "success", "daily_checkpoints": body.daily_checkpoints}
+        return {"status": "success", "daily_snapshots": body.daily_snapshots}
 
     @router.post(
         "/server-config/open",

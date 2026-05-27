@@ -1,4 +1,4 @@
-"""HTTP routes for checkpoint creation, listing, deletion, and restore/undo."""
+"""HTTP routes for snapshot creation, listing, deletion, and restore/undo."""
 
 from typing import List, Optional
 
@@ -13,12 +13,12 @@ logger = get_logger(__name__)
 _PREVIEW_RESOURCE_LIMIT = 200
 
 
-def _serialize_checkpoint(cp, manifest: dict, live_schema: str) -> dict:
-    """Serialize a Checkpoint row, enriched with manifest counts and compat flag.
+def _serialize_snapshot(cp, manifest: dict, live_schema: str) -> dict:
+    """Serialize a Snapshot row, enriched with manifest counts and compat flag.
 
     Args:
-        cp: Checkpoint ORM row.
-        manifest: Sidecar manifest dict (may be empty for old checkpoints).
+        cp: Snapshot ORM row.
+        manifest: Sidecar manifest dict (may be empty for old snapshots).
         live_schema: Current live-DB alembic schema version.
 
     Returns:
@@ -48,18 +48,18 @@ def _serialize_preview(preview, is_compatible: bool = True) -> dict:
 
     Args:
         preview: RestorePreview dataclass instance.
-        is_compatible: Whether the checkpoint schema is compatible with the
+        is_compatible: Whether the snapshot schema is compatible with the
             live DB (False when the snapshot is newer than the live DB).
 
     Returns:
         JSON-serialisable dict.
     """
     return {
-        "checkpoint": {
-            "id": preview.checkpoint_id,
-            "kind": preview.checkpoint_kind,
-            "label": preview.checkpoint_label,
-            "created_at": preview.checkpoint_created_at,
+        "snapshot": {
+            "id": preview.snapshot_id,
+            "kind": preview.snapshot_kind,
+            "label": preview.snapshot_label,
+            "created_at": preview.snapshot_created_at,
             "is_compatible": is_compatible,
         },
         "resources": [
@@ -80,7 +80,7 @@ def _serialize_preview(preview, is_compatible: bool = True) -> dict:
 
 
 def create_router(server) -> APIRouter:
-    """Create the checkpoints APIRouter.
+    """Create the snapshots APIRouter.
 
     Args:
         server: The Server instance providing ``vault`` and ``auth``.
@@ -91,33 +91,33 @@ def create_router(server) -> APIRouter:
     router = APIRouter()
 
     # ------------------------------------------------------------------
-    # GET /checkpoints
+    # GET /snapshots
     # ------------------------------------------------------------------
 
-    @router.get("/checkpoints")
-    def list_checkpoints(request: Request):
-        """Return all checkpoints ordered by creation date (newest first).
+    @router.get("/snapshots")
+    def list_snapshots(request: Request):
+        """Return all snapshots ordered by creation date (newest first).
 
         Each row is enriched with manifest resource counts and an
         ``is_compatible`` flag (``false`` when the snapshot schema version is
         newer than the live DB — restore would require a downgrade, which is
         unsupported).
         """
-        checkpoints = server.vault.checkpoint_service.list_checkpoints()
-        live_schema = server.vault.checkpoint_service.get_live_schema_version()
+        snapshots = server.vault.snapshot_service.list_snapshots()
+        live_schema = server.vault.snapshot_service.get_live_schema_version()
         result = []
-        for cp in checkpoints:
-            manifest = server.vault.checkpoint_service.load_manifest(cp.id)
-            result.append(_serialize_checkpoint(cp, manifest, live_schema))
+        for cp in snapshots:
+            manifest = server.vault.snapshot_service.load_manifest(cp.id)
+            result.append(_serialize_snapshot(cp, manifest, live_schema))
         return result
 
     # ------------------------------------------------------------------
-    # GET /checkpoints/status
+    # GET /snapshots/status
     # ------------------------------------------------------------------
 
-    @router.get("/checkpoints/status")
-    def checkpoints_status(request: Request):
-        """Return the currently-running restore or checkpoint job, if any.
+    @router.get("/snapshots/status")
+    def snapshots_status(request: Request):
+        """Return the currently-running restore or snapshot job, if any.
 
         ``active_job`` is ``null`` when no job is in progress.
         """
@@ -125,128 +125,128 @@ def create_router(server) -> APIRouter:
         return {"active_job": active_job}
 
     # ------------------------------------------------------------------
-    # POST /checkpoints
+    # POST /snapshots
     # ------------------------------------------------------------------
 
-    @router.post("/checkpoints", status_code=201)
-    def create_checkpoint(
+    @router.post("/snapshots", status_code=201)
+    def create_snapshot(
         request: Request,
         label: Optional[str] = Body(default=None, embed=True),
     ):
-        """Create a manual checkpoint snapshot.
+        """Create a manual snapshot snapshot.
 
-        Authentication is required.  Returns the new checkpoint record.
+        Authentication is required.  Returns the new snapshot record.
         """
         server.auth.require_user_id(request)
         try:
-            cp = server.vault.checkpoint_service.create_checkpoint(
+            cp = server.vault.snapshot_service.create_snapshot(
                 kind="MANUAL", label=label
             )
         except Exception as exc:
-            logger.error("Failed to create checkpoint: %s", exc, exc_info=True)
+            logger.error("Failed to create snapshot: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        manifest = server.vault.checkpoint_service.load_manifest(cp.id)
-        live_schema = server.vault.checkpoint_service.get_live_schema_version()
-        return _serialize_checkpoint(cp, manifest, live_schema)
+        manifest = server.vault.snapshot_service.load_manifest(cp.id)
+        live_schema = server.vault.snapshot_service.get_live_schema_version()
+        return _serialize_snapshot(cp, manifest, live_schema)
 
     # ------------------------------------------------------------------
-    # PATCH /checkpoints/{id}  — rename label
+    # PATCH /snapshots/{id}  — rename label
     # ------------------------------------------------------------------
 
-    @router.patch("/checkpoints/{checkpoint_id}")
-    def rename_checkpoint(
-        checkpoint_id: int,
+    @router.patch("/snapshots/{snapshot_id}")
+    def rename_snapshot(
+        snapshot_id: int,
         request: Request,
         label: Optional[str] = Body(default=None, embed=True),
     ):
-        """Update the label of a checkpoint.
+        """Update the label of a snapshot.
 
-        Authentication is required.  Works for all checkpoint kinds.
+        Authentication is required.  Works for all snapshot kinds.
         """
         server.auth.require_user_id(request)
-        cp = server.vault.checkpoint_service.rename_checkpoint(checkpoint_id, label)
+        cp = server.vault.snapshot_service.rename_snapshot(snapshot_id, label)
         if cp is None:
-            raise HTTPException(status_code=404, detail="Checkpoint not found.")
-        manifest = server.vault.checkpoint_service.load_manifest(cp.id)
-        live_schema = server.vault.checkpoint_service.get_live_schema_version()
-        return _serialize_checkpoint(cp, manifest, live_schema)
+            raise HTTPException(status_code=404, detail="Snapshot not found.")
+        manifest = server.vault.snapshot_service.load_manifest(cp.id)
+        live_schema = server.vault.snapshot_service.get_live_schema_version()
+        return _serialize_snapshot(cp, manifest, live_schema)
 
     # ------------------------------------------------------------------
-    # DELETE /checkpoints/{id}
+    # DELETE /snapshots/{id}
     # ------------------------------------------------------------------
 
-    @router.delete("/checkpoints/{checkpoint_id}", status_code=204)
-    def delete_checkpoint(checkpoint_id: int, request: Request):
-        """Delete a MANUAL checkpoint and its snapshot files.
+    @router.delete("/snapshots/{snapshot_id}", status_code=204)
+    def delete_snapshot(snapshot_id: int, request: Request):
+        """Delete a MANUAL snapshot and its snapshot files.
 
         Returns ``403 Forbidden`` for DAILY/WEEKLY/MONTHLY/OPPORTUNISTIC
-        checkpoints (those are managed by the GFS schedule).
+        snapshots (those are managed by the GFS schedule).
 
         Authentication is required.
         """
         server.auth.require_user_id(request)
-        cp = server.vault.checkpoint_service.get_checkpoint(checkpoint_id)
+        cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
-            raise HTTPException(status_code=404, detail="Checkpoint not found.")
+            raise HTTPException(status_code=404, detail="Snapshot not found.")
         if cp.kind != "MANUAL":
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    f"Cannot delete a {cp.kind} checkpoint. "
-                    "Only MANUAL checkpoints may be deleted by the user; "
-                    "GFS-scheduled checkpoints are pruned automatically."
+                    f"Cannot delete a {cp.kind} snapshot. "
+                    "Only MANUAL snapshots may be deleted by the user; "
+                    "GFS-scheduled snapshots are pruned automatically."
                 ),
             )
         try:
-            server.vault.checkpoint_service.delete_checkpoint(checkpoint_id)
+            server.vault.snapshot_service.delete_snapshot(snapshot_id)
         except Exception as exc:
             logger.error(
-                "Failed to delete checkpoint %d: %s",
-                checkpoint_id,
+                "Failed to delete snapshot %d: %s",
+                snapshot_id,
                 exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     # ------------------------------------------------------------------
-    # GET /checkpoints/{id}/restore/preview  (full-restore dry-run preview)
+    # GET /snapshots/{id}/restore/preview  (full-restore dry-run preview)
     # ------------------------------------------------------------------
 
-    @router.get("/checkpoints/{checkpoint_id}/restore/preview")
-    def preview_full_restore(checkpoint_id: int, request: Request):
+    @router.get("/snapshots/{snapshot_id}/restore/preview")
+    def preview_full_restore(snapshot_id: int, request: Request):
         """Return a dry-run preview of a full restore.
 
         No data is written.  The response includes a summary of what would
         change and per-resource diff entries (capped at 200).
         """
         try:
-            preview = server.vault.restore_service.preview_full(checkpoint_id)
+            preview = server.vault.restore_service.preview_full(snapshot_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
-                "preview_full for checkpoint %d failed: %s",
-                checkpoint_id,
+                "preview_full for snapshot %d failed: %s",
+                snapshot_id,
                 exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        cp = server.vault.checkpoint_service.get_checkpoint(checkpoint_id)
-        live_schema = server.vault.checkpoint_service.get_live_schema_version()
+        cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
+        live_schema = server.vault.snapshot_service.get_live_schema_version()
         is_compatible = True
         if cp and cp.schema_version and live_schema:
             is_compatible = cp.schema_version <= live_schema
         return _serialize_preview(preview, is_compatible=is_compatible)
 
     # ------------------------------------------------------------------
-    # GET /checkpoints/{id}/restore/{resource_type}/{resource_id}/preview
+    # GET /snapshots/{id}/restore/{resource_type}/{resource_id}/preview
     # ------------------------------------------------------------------
 
     @router.get(
-        "/checkpoints/{checkpoint_id}/restore/{resource_type}/{resource_id}/preview"
+        "/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview"
     )
     def preview_resource_restore(
-        checkpoint_id: int,
+        snapshot_id: int,
         resource_type: str,
         resource_id: int,
         request: Request,
@@ -254,34 +254,34 @@ def create_router(server) -> APIRouter:
         """Return a dry-run preview of a single-resource restore."""
         try:
             preview = server.vault.restore_service.preview_resource(
-                checkpoint_id, resource_type, resource_id
+                snapshot_id, resource_type, resource_id
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
-                "preview_resource for checkpoint %d (%s/%s) failed: %s",
-                checkpoint_id,
+                "preview_resource for snapshot %d (%s/%s) failed: %s",
+                snapshot_id,
                 resource_type,
                 resource_id,
                 exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        cp = server.vault.checkpoint_service.get_checkpoint(checkpoint_id)
-        live_schema = server.vault.checkpoint_service.get_live_schema_version()
+        cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
+        live_schema = server.vault.snapshot_service.get_live_schema_version()
         is_compatible = True
         if cp and cp.schema_version and live_schema:
             is_compatible = cp.schema_version <= live_schema
         return _serialize_preview(preview, is_compatible=is_compatible)
 
     # ------------------------------------------------------------------
-    # POST /checkpoints/{id}/restore/preview/batch
+    # POST /snapshots/{id}/restore/preview/batch
     # ------------------------------------------------------------------
 
-    @router.post("/checkpoints/{checkpoint_id}/restore/preview/batch")
+    @router.post("/snapshots/{snapshot_id}/restore/preview/batch")
     def preview_batch_restore(
-        checkpoint_id: int,
+        snapshot_id: int,
         request: Request,
         resources: List[dict] = Body(embed=True),
     ):
@@ -290,58 +290,56 @@ def create_router(server) -> APIRouter:
         Body: ``{"resources": [{"type": "picture", "id": 42}, …]}``
         """
         try:
-            preview = server.vault.restore_service.preview_batch(
-                checkpoint_id, resources
-            )
+            preview = server.vault.restore_service.preview_batch(snapshot_id, resources)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
-                "preview_batch for checkpoint %d failed: %s",
-                checkpoint_id,
+                "preview_batch for snapshot %d failed: %s",
+                snapshot_id,
                 exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        cp = server.vault.checkpoint_service.get_checkpoint(checkpoint_id)
-        live_schema = server.vault.checkpoint_service.get_live_schema_version()
+        cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
+        live_schema = server.vault.snapshot_service.get_live_schema_version()
         is_compatible = True
         if cp and cp.schema_version and live_schema:
             is_compatible = cp.schema_version <= live_schema
         return _serialize_preview(preview, is_compatible=is_compatible)
 
     # ------------------------------------------------------------------
-    # POST /checkpoints/{id}/restore  (full restore)
+    # POST /snapshots/{id}/restore  (full restore)
     # ------------------------------------------------------------------
 
-    @router.post("/checkpoints/{checkpoint_id}/restore")
-    def restore_checkpoint(
-        checkpoint_id: int,
+    @router.post("/snapshots/{snapshot_id}/restore")
+    def restore_snapshot(
+        snapshot_id: int,
         request: Request,
         dry_run: bool = Body(default=False, embed=True),
     ):
-        """Replace the live database with the given checkpoint snapshot.
+        """Replace the live database with the given snapshot snapshot.
 
         Authentication is required.  Returns a summary of the restore.
         """
         server.auth.require_user_id(request)
-        server.vault.notify(EventType.RESTORE_STARTED, {"checkpoint_id": checkpoint_id})
+        server.vault.notify(EventType.RESTORE_STARTED, {"snapshot_id": snapshot_id})
         try:
             report = server.vault.restore_service.restore_full(
-                checkpoint_id, dry_run=dry_run
+                snapshot_id, dry_run=dry_run
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
-                "Full restore of checkpoint %d failed: %s",
-                checkpoint_id,
+                "Full restore of snapshot %d failed: %s",
+                snapshot_id,
                 exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {
-            "checkpoint_id": report.checkpoint_id,
+            "snapshot_id": report.snapshot_id,
             "resource_type": report.resource_type,
             "missing_files_count": report.missing_files_count,
             "upserted_count": report.upserted_count,
@@ -350,16 +348,16 @@ def create_router(server) -> APIRouter:
         }
 
     # ------------------------------------------------------------------
-    # POST /checkpoints/{id}/restore/batch
+    # POST /snapshots/{id}/restore/batch
     # ------------------------------------------------------------------
 
-    @router.post("/checkpoints/{checkpoint_id}/restore/batch")
+    @router.post("/snapshots/{snapshot_id}/restore/batch")
     def restore_batch(
-        checkpoint_id: int,
+        snapshot_id: int,
         request: Request,
         resources: List[dict] = Body(embed=True),
     ):
-        """Restore a batch of resources from a checkpoint in one operation.
+        """Restore a batch of resources from a snapshot in one operation.
 
         Body: ``{"resources": [{"type": "picture", "id": 42}, …]}``
 
@@ -368,24 +366,22 @@ def create_router(server) -> APIRouter:
         server.auth.require_user_id(request)
         server.vault.notify(
             EventType.RESTORE_STARTED,
-            {"checkpoint_id": checkpoint_id, "resource_type": "batch"},
+            {"snapshot_id": snapshot_id, "resource_type": "batch"},
         )
         try:
-            report = server.vault.restore_service.restore_batch(
-                checkpoint_id, resources
-            )
+            report = server.vault.restore_service.restore_batch(snapshot_id, resources)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
-                "Batch restore from checkpoint %d failed: %s",
-                checkpoint_id,
+                "Batch restore from snapshot %d failed: %s",
+                snapshot_id,
                 exc,
                 exc_info=True,
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {
-            "checkpoint_id": report.checkpoint_id,
+            "snapshot_id": report.snapshot_id,
             "resource_type": report.resource_type,
             "missing_files_count": report.missing_files_count,
             "upserted_count": report.upserted_count,
@@ -393,16 +389,16 @@ def create_router(server) -> APIRouter:
         }
 
     # ------------------------------------------------------------------
-    # POST /checkpoints/{id}/hash-compare
+    # POST /snapshots/{id}/hash-compare
     # ------------------------------------------------------------------
 
-    @router.post("/checkpoints/{checkpoint_id}/hash-compare")
+    @router.post("/snapshots/{snapshot_id}/hash-compare")
     def hash_compare(
-        checkpoint_id: int,
+        snapshot_id: int,
         request: Request,
         picture_ids: List[int] = Body(embed=True),
     ):
-        """Compare live metadata_hash values against a checkpoint snapshot.
+        """Compare live metadata_hash values against a snapshot snapshot.
 
         For each requested picture ID, compares the ``metadata_hash`` stored
         in the live DB against the value in the snapshot.  A NULL hash on
@@ -415,24 +411,24 @@ def create_router(server) -> APIRouter:
         """
         try:
             result = server.vault.restore_service.compare_hashes(
-                checkpoint_id, picture_ids
+                snapshot_id, picture_ids
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return result
 
     # ------------------------------------------------------------------
-    # POST /checkpoints/{id}/restore/{resource_type}/{resource_id}
+    # POST /snapshots/{id}/restore/{resource_type}/{resource_id}
     # ------------------------------------------------------------------
 
-    @router.post("/checkpoints/{checkpoint_id}/restore/{resource_type}/{resource_id}")
+    @router.post("/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}")
     def restore_resource(
-        checkpoint_id: int,
+        snapshot_id: int,
         resource_type: str,
         resource_id: int,
         request: Request,
     ):
-        """Restore a single resource from a checkpoint snapshot.
+        """Restore a single resource from a snapshot snapshot.
 
         ``resource_type`` must be one of ``picture``, ``picture_set``,
         ``project``, or ``character``.
@@ -443,21 +439,21 @@ def create_router(server) -> APIRouter:
         server.vault.notify(
             EventType.RESTORE_STARTED,
             {
-                "checkpoint_id": checkpoint_id,
+                "snapshot_id": snapshot_id,
                 "resource_type": resource_type,
                 "resource_id": resource_id,
             },
         )
         try:
             report = server.vault.restore_service.restore_resource(
-                checkpoint_id, resource_type, resource_id
+                snapshot_id, resource_type, resource_id
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
-                "Per-resource restore of checkpoint %d (%s/%s) failed: %s",
-                checkpoint_id,
+                "Per-resource restore of snapshot %d (%s/%s) failed: %s",
+                snapshot_id,
                 resource_type,
                 resource_id,
                 exc,
@@ -465,7 +461,7 @@ def create_router(server) -> APIRouter:
             )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {
-            "checkpoint_id": report.checkpoint_id,
+            "snapshot_id": report.snapshot_id,
             "resource_type": report.resource_type,
             "resource_id": report.resource_id,
             "missing_files_count": report.missing_files_count,
@@ -480,20 +476,20 @@ def create_router(server) -> APIRouter:
     @router.post("/undo")
     def undo(
         request: Request,
-        checkpoint_id: Optional[int] = Body(default=None, embed=True),
+        snapshot_id: Optional[int] = Body(default=None, embed=True),
     ):
         """Undo recent metadata changes.
 
-        If ``checkpoint_id`` is provided, undo all changes back to that
-        checkpoint (hybrid ChangeLog + snapshot strategy).  Otherwise undo
+        If ``snapshot_id`` is provided, undo all changes back to that
+        snapshot (hybrid ChangeLog + snapshot strategy).  Otherwise undo
         only the most recent writer transaction.
 
         Authentication is required.
         """
         server.auth.require_user_id(request)
         try:
-            if checkpoint_id is not None:
-                report = server.vault.undo_service.undo_to_checkpoint(checkpoint_id)
+            if snapshot_id is not None:
+                report = server.vault.undo_service.undo_to_snapshot(snapshot_id)
             else:
                 report = server.vault.undo_service.undo_last_transaction()
         except ValueError as exc:

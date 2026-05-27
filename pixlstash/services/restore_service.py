@@ -1,4 +1,4 @@
-"""Service layer for restoring vault state from a checkpoint snapshot.
+"""Service layer for restoring vault state from a snapshot snapshot.
 
 Supports full-database restore and per-resource (picture, picture_set,
 project, character) restore.  All restores run ``alembic upgrade head`` on
@@ -26,7 +26,7 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.database import _compute_picture_metadata_hash
-from pixlstash.db_models.checkpoint import Checkpoint
+from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
@@ -53,7 +53,7 @@ class RestoreReport:
     """Summary of a completed restore operation.
 
     Attributes:
-        checkpoint_id: ID of the checkpoint that was restored.
+        snapshot_id: ID of the snapshot that was restored.
         resource_type: ``'full'``, ``'picture'``, ``'picture_set'``,
             ``'project'``, or ``'character'``.
         resource_id: Primary key of the specific resource (None for full
@@ -64,7 +64,7 @@ class RestoreReport:
         errors: Non-fatal error messages accumulated during the restore.
     """
 
-    checkpoint_id: int
+    snapshot_id: int
     resource_type: str
     resource_id: Optional[int] = None
     missing_files_count: int = 0
@@ -103,26 +103,26 @@ class RestorePreview:
     """Dry-run preview of a restore operation.
 
     Attributes:
-        checkpoint_id: ID of the checkpoint to be restored.
-        checkpoint_kind: Kind of the checkpoint.
-        checkpoint_label: Optional user label.
-        checkpoint_created_at: ISO timestamp string.
+        snapshot_id: ID of the snapshot to be restored.
+        snapshot_kind: Kind of the snapshot.
+        snapshot_label: Optional user label.
+        snapshot_created_at: ISO timestamp string.
         resources: Per-resource preview entries (capped at 200).
         summary: High-level counts of what would change.
         warnings: Human-readable warning strings (e.g. missing files).
     """
 
-    checkpoint_id: int
-    checkpoint_kind: str
-    checkpoint_label: Optional[str]
-    checkpoint_created_at: str
+    snapshot_id: int
+    snapshot_kind: str
+    snapshot_label: Optional[str]
+    snapshot_created_at: str
     resources: list[ResourcePreview] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
 class RestoreService:
-    """Restores vault metadata from a checkpoint snapshot.
+    """Restores vault metadata from a snapshot snapshot.
 
     Attributes:
         _vault: Back-reference to the owning Vault.
@@ -135,18 +135,18 @@ class RestoreService:
             vault: The owning Vault instance.
         """
         self._vault = vault
-        # Tracks the currently executing restore job for /checkpoints/status.
+        # Tracks the currently executing restore job for /snapshots/status.
         self._active_job: Optional[dict] = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def restore_full(self, checkpoint_id: int, dry_run: bool = False) -> RestoreReport:
-        """Replace the live database with a checkpoint snapshot.
+    def restore_full(self, snapshot_id: int, dry_run: bool = False) -> RestoreReport:
+        """Replace the live database with a snapshot snapshot.
 
         Steps:
-        1. Take an OPPORTUNISTIC safety checkpoint of the current state.
+        1. Take an OPPORTUNISTIC safety snapshot of the current state.
         2. Upgrade the snapshot schema to the current Alembic head.
         3. Scan snapshot Picture rows; collect missing-file IDs.
         4. Dispose the live engine, copy the snapshot over the live DB, and
@@ -156,7 +156,7 @@ class RestoreService:
         7. Resume the TaskRunner and emit ``RESTORE_COMPLETED``.
 
         Args:
-            checkpoint_id: ID of the checkpoint to restore.
+            snapshot_id: ID of the snapshot to restore.
             dry_run: If True, perform all steps except the actual DB swap and
                 return a report without modifying the live database.
 
@@ -164,12 +164,12 @@ class RestoreService:
             A ``RestoreReport`` summarising the operation.
 
         Raises:
-            ValueError: If the checkpoint is not found or the snapshot file is
+            ValueError: If the snapshot is not found or the snapshot file is
                 missing from disk.
         """
         vault_root = self._vault.image_root
         report = RestoreReport(
-            checkpoint_id=checkpoint_id,
+            snapshot_id=snapshot_id,
             resource_type="full",
         )
 
@@ -177,18 +177,18 @@ class RestoreService:
 
         self._active_job = {
             "kind": "RESTORE",
-            "checkpoint_id": checkpoint_id,
+            "snapshot_id": snapshot_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "progress": 0.0,
         }
         try:
-            return self._restore_full_inner(checkpoint_id, dry_run, vault_root, report)
+            return self._restore_full_inner(snapshot_id, dry_run, vault_root, report)
         finally:
             self._active_job = None
 
     def _restore_full_inner(
         self,
-        checkpoint_id: int,
+        snapshot_id: int,
         dry_run: bool,
         vault_root: str,
         report: "RestoreReport",
@@ -196,7 +196,7 @@ class RestoreService:
         """Inner implementation of full restore (called from restore_full).
 
         Args:
-            checkpoint_id: Checkpoint ID.
+            snapshot_id: Snapshot ID.
             dry_run: If True skip DB swap.
             vault_root: Vault root path.
             report: Pre-constructed RestoreReport to populate.
@@ -206,17 +206,17 @@ class RestoreService:
         """
         db = self._vault.db
 
-        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        cp = self._get_snapshot_or_raise(snapshot_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
-        # 1. Safety checkpoint of current state.
+        # 1. Safety snapshot of current state.
         try:
-            self._vault.checkpoint_service.create_checkpoint("OPPORTUNISTIC")
+            self._vault.snapshot_service.create_snapshot("OPPORTUNISTIC")
         except Exception as exc:
             logger.warning(
-                "RestoreService: safety checkpoint failed (continuing): %s", exc
+                "RestoreService: safety snapshot failed (continuing): %s", exc
             )
 
         # 2. Upgrade snapshot schema to head.
@@ -260,15 +260,15 @@ class RestoreService:
                 )
 
         logger.info(
-            "RestoreService: swapping live DB with snapshot (checkpoint id=%d)",
-            checkpoint_id,
+            "RestoreService: swapping live DB with snapshot (snapshot id=%d)",
+            snapshot_id,
         )
 
         def _do_swap(session):
             # Close this task's session connection so no lock remains on the
             # live DB file when we dispose the engine and copy the snapshot.
             session.close()
-            with db.write_reason(f"restore checkpoint {checkpoint_id}"):
+            with db.write_reason(f"restore snapshot {snapshot_id}"):
                 self._swap_database(live_db_path, upgraded_snapshot)
 
         db.run_task(_do_swap, priority=0)
@@ -306,7 +306,7 @@ class RestoreService:
             self._vault.emit_event(
                 EventType.RESTORE_COMPLETED,
                 {
-                    "checkpoint_id": checkpoint_id,
+                    "snapshot_id": snapshot_id,
                     "resource_type": "full",
                     "missing_files_count": report.missing_files_count,
                 },
@@ -315,20 +315,20 @@ class RestoreService:
             logger.warning("RestoreService: failed to emit RESTORE_COMPLETED: %s", exc)
 
         logger.info(
-            "RestoreService: full restore from checkpoint %d completed "
+            "RestoreService: full restore from snapshot %d completed "
             "(%d missing files).",
-            checkpoint_id,
+            snapshot_id,
             report.missing_files_count,
         )
         return report
 
     def restore_resource(
         self,
-        checkpoint_id: int,
+        snapshot_id: int,
         resource_type: str,
         resource_id: int,
     ) -> RestoreReport:
-        """Restore a single resource from a checkpoint snapshot.
+        """Restore a single resource from a snapshot snapshot.
 
         Supported *resource_type* values:
         - ``'picture'``  — restores the Picture row plus Face, Tag,
@@ -340,7 +340,7 @@ class RestoreService:
         - ``'character'`` — restores the Character row.
 
         Args:
-            checkpoint_id: ID of the checkpoint to restore from.
+            snapshot_id: ID of the snapshot to restore from.
             resource_type: One of ``'picture'``, ``'picture_set'``,
                 ``'project'``, or ``'character'``.
             resource_id: Primary key of the resource to restore.
@@ -349,11 +349,11 @@ class RestoreService:
             A ``RestoreReport`` summarising the operation.
 
         Raises:
-            ValueError: If the checkpoint is not found or ``resource_type`` is
+            ValueError: If the snapshot is not found or ``resource_type`` is
                 invalid.
         """
         vault_root = self._vault.image_root
-        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        cp = self._get_snapshot_or_raise(snapshot_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
@@ -367,7 +367,7 @@ class RestoreService:
         upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
         if upgraded_snapshot is None:
             report = RestoreReport(
-                checkpoint_id=checkpoint_id,
+                snapshot_id=snapshot_id,
                 resource_type=resource_type,
                 resource_id=resource_id,
             )
@@ -377,7 +377,7 @@ class RestoreService:
         try:
             report = self._restore_resource_from_snapshot(
                 upgraded_snapshot,
-                checkpoint_id,
+                snapshot_id,
                 resource_type,
                 resource_id,
                 vault_root,
@@ -394,7 +394,7 @@ class RestoreService:
             self._vault.emit_event(
                 EventType.RESTORE_COMPLETED,
                 {
-                    "checkpoint_id": checkpoint_id,
+                    "snapshot_id": snapshot_id,
                     "resource_type": resource_type,
                     "resource_id": resource_id,
                     "missing_files_count": report.missing_files_count,
@@ -406,33 +406,33 @@ class RestoreService:
 
         return report
 
-    def preview_full(self, checkpoint_id: int) -> RestorePreview:
+    def preview_full(self, snapshot_id: int) -> RestorePreview:
         """Compute a dry-run preview of a full restore without modifying the DB.
 
         Opens the snapshot read-only, diffs picture rows against the live DB,
         checks file presence on disk, and returns a ``RestorePreview``.
 
         Args:
-            checkpoint_id: ID of the checkpoint to preview.
+            snapshot_id: ID of the snapshot to preview.
 
         Returns:
             A ``RestorePreview`` with summary, per-resource entries (capped at
             200), and warnings.
 
         Raises:
-            ValueError: If the checkpoint or snapshot file is not found.
+            ValueError: If the snapshot or snapshot file is not found.
         """
         vault_root = self._vault.image_root
-        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        cp = self._get_snapshot_or_raise(snapshot_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
         preview = RestorePreview(
-            checkpoint_id=checkpoint_id,
-            checkpoint_kind=cp.kind,
-            checkpoint_label=cp.label,
-            checkpoint_created_at=cp.created_at.isoformat(),
+            snapshot_id=snapshot_id,
+            snapshot_kind=cp.kind,
+            snapshot_label=cp.label,
+            snapshot_created_at=cp.created_at.isoformat(),
         )
 
         upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
@@ -447,8 +447,8 @@ class RestoreService:
                     self._compute_full_preview(snap_session, preview, vault_root)
             except Exception as exc:
                 logger.error(
-                    "RestoreService: preview_full failed for checkpoint %d: %s",
-                    checkpoint_id,
+                    "RestoreService: preview_full failed for snapshot %d: %s",
+                    snapshot_id,
                     exc,
                     exc_info=True,
                 )
@@ -465,14 +465,14 @@ class RestoreService:
 
     def preview_resource(
         self,
-        checkpoint_id: int,
+        snapshot_id: int,
         resource_type: str,
         resource_id: int,
     ) -> RestorePreview:
         """Compute a dry-run preview of a single-resource restore.
 
         Args:
-            checkpoint_id: ID of the checkpoint.
+            snapshot_id: ID of the snapshot.
             resource_type: One of ``'picture'``, ``'picture_set'``,
                 ``'project'``, or ``'character'``.
             resource_id: Primary key of the resource.
@@ -481,7 +481,7 @@ class RestoreService:
             A ``RestorePreview`` for the targeted resource.
 
         Raises:
-            ValueError: If the checkpoint/snapshot is not found or
+            ValueError: If the snapshot/snapshot is not found or
                 ``resource_type`` is invalid.
         """
         if resource_type not in ("picture", "picture_set", "project", "character"):
@@ -491,16 +491,16 @@ class RestoreService:
             )
 
         vault_root = self._vault.image_root
-        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        cp = self._get_snapshot_or_raise(snapshot_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
         preview = RestorePreview(
-            checkpoint_id=checkpoint_id,
-            checkpoint_kind=cp.kind,
-            checkpoint_label=cp.label,
-            checkpoint_created_at=cp.created_at.isoformat(),
+            snapshot_id=snapshot_id,
+            snapshot_kind=cp.kind,
+            snapshot_label=cp.label,
+            snapshot_created_at=cp.created_at.isoformat(),
         )
 
         upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
@@ -521,8 +521,8 @@ class RestoreService:
                     )
             except Exception as exc:
                 logger.error(
-                    "RestoreService: preview_resource failed for checkpoint %d (%s/%s): %s",
-                    checkpoint_id,
+                    "RestoreService: preview_resource failed for snapshot %d (%s/%s): %s",
+                    snapshot_id,
                     resource_type,
                     resource_id,
                     exc,
@@ -541,32 +541,32 @@ class RestoreService:
 
     def preview_batch(
         self,
-        checkpoint_id: int,
+        snapshot_id: int,
         resources: list[dict],
     ) -> RestorePreview:
         """Compute a dry-run preview for a batch of resources.
 
         Args:
-            checkpoint_id: ID of the checkpoint.
+            snapshot_id: ID of the snapshot.
             resources: List of ``{"type": str, "id": int}`` dicts.
 
         Returns:
             A combined ``RestorePreview`` for all specified resources.
 
         Raises:
-            ValueError: If the checkpoint/snapshot is not found.
+            ValueError: If the snapshot/snapshot is not found.
         """
         vault_root = self._vault.image_root
-        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        cp = self._get_snapshot_or_raise(snapshot_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
         preview = RestorePreview(
-            checkpoint_id=checkpoint_id,
-            checkpoint_kind=cp.kind,
-            checkpoint_label=cp.label,
-            checkpoint_created_at=cp.created_at.isoformat(),
+            snapshot_id=snapshot_id,
+            snapshot_kind=cp.kind,
+            snapshot_label=cp.label,
+            snapshot_created_at=cp.created_at.isoformat(),
         )
 
         upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
@@ -589,8 +589,8 @@ class RestoreService:
                         )
             except Exception as exc:
                 logger.error(
-                    "RestoreService: preview_batch failed for checkpoint %d: %s",
-                    checkpoint_id,
+                    "RestoreService: preview_batch failed for snapshot %d: %s",
+                    snapshot_id,
                     exc,
                     exc_info=True,
                 )
@@ -608,45 +608,44 @@ class RestoreService:
 
     def restore_batch(
         self,
-        checkpoint_id: int,
+        snapshot_id: int,
         resources: list[dict],
     ) -> RestoreReport:
-        """Restore a batch of resources from a checkpoint.
+        """Restore a batch of resources from a snapshot.
 
         Args:
-            checkpoint_id: ID of the checkpoint.
+            snapshot_id: ID of the snapshot.
             resources: List of ``{"type": str, "id": int}`` dicts.
 
         Returns:
             A ``RestoreReport`` with aggregate counts.
 
         Raises:
-            ValueError: If the checkpoint/snapshot is not found.
+            ValueError: If the snapshot/snapshot is not found.
         """
         vault_root = self._vault.image_root
-        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        cp = self._get_snapshot_or_raise(snapshot_id)
         abs_snapshot = os.path.join(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
         if not resources:
             return RestoreReport(
-                checkpoint_id=checkpoint_id,
+                snapshot_id=snapshot_id,
                 resource_type="batch",
             )
 
         # Upgrade schema once for the whole batch.
         upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
         if upgraded_snapshot is None:
-            report = RestoreReport(checkpoint_id=checkpoint_id, resource_type="batch")
+            report = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
             report.errors.append("Schema upgrade failed; aborting batch restore.")
             return report
 
-        total = RestoreReport(checkpoint_id=checkpoint_id, resource_type="batch")
+        total = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
         try:
             with self._vault.db.write_reason(
-                f"restore checkpoint {checkpoint_id} batch of "
-                f"{len(resources)} resources"
+                f"restore snapshot {snapshot_id} batch of {len(resources)} resources"
             ):
                 for item in resources:
                     rtype = item.get("type", "")
@@ -657,7 +656,7 @@ class RestoreService:
                     try:
                         sub = self._restore_resource_from_snapshot(
                             upgraded_snapshot,
-                            checkpoint_id,
+                            snapshot_id,
                             rtype,
                             rid,
                             vault_root,
@@ -686,7 +685,7 @@ class RestoreService:
             self._vault.emit_event(
                 EventType.RESTORE_COMPLETED,
                 {
-                    "checkpoint_id": checkpoint_id,
+                    "snapshot_id": snapshot_id,
                     "resource_type": "batch",
                     "upserted_count": total.upserted_count,
                     "missing_files_count": total.missing_files_count,
@@ -697,18 +696,16 @@ class RestoreService:
 
         return total
 
-    def compare_hashes(
-        self, checkpoint_id: int, picture_ids: list[int]
-    ) -> dict:
-        """Compare live ``metadata_hash`` values against a checkpoint snapshot.
+    def compare_hashes(self, snapshot_id: int, picture_ids: list[int]) -> dict:
+        """Compare live ``metadata_hash`` values against a snapshot snapshot.
 
         Opens the snapshot file read-only and looks up the ``metadata_hash``
         column for the requested picture IDs in both the live DB and the
         snapshot.  A NULL hash on either side is treated conservatively as
-        "potentially changed" so the checkpoint stays enabled.
+        "potentially changed" so the snapshot stays enabled.
 
         Args:
-            checkpoint_id: ID of the checkpoint to compare against.
+            snapshot_id: ID of the snapshot to compare against.
             picture_ids: List of live picture IDs to check.
 
         Returns:
@@ -716,17 +713,15 @@ class RestoreService:
             input ID appears in exactly one list.
 
         Raises:
-            ValueError: If the checkpoint or its snapshot file cannot be found.
+            ValueError: If the snapshot or its snapshot file cannot be found.
         """
         if not picture_ids:
             return {"identical_ids": [], "changed_ids": []}
 
-        cp = self._get_checkpoint_or_raise(checkpoint_id)
+        cp = self._get_snapshot_or_raise(snapshot_id)
         snapshot_path = os.path.join(self._vault.image_root, cp.relative_path)
         if not os.path.exists(snapshot_path):
-            raise ValueError(
-                f"Snapshot file not found for checkpoint {checkpoint_id}"
-            )
+            raise ValueError(f"Snapshot file not found for snapshot {snapshot_id}")
 
         # Fetch live hashes, computing and persisting any that are NULL so
         # existing pictures (pre-migration) can be compared correctly.
@@ -798,7 +793,7 @@ class RestoreService:
         except Exception as exc:
             logger.warning(
                 "RestoreService.compare_hashes: failed to read snapshot %d: %s",
-                checkpoint_id,
+                snapshot_id,
                 exc,
             )
             # Treat all as changed on error (conservative / keep enabled)
@@ -827,7 +822,7 @@ class RestoreService:
     # ------------------------------------------------------------------
 
     def backfill_all_snapshot_hashes(self, reset_all: bool = False) -> None:
-        """Permanently compute and save metadata_hash for all checkpoint snapshot files.
+        """Permanently compute and save metadata_hash for all snapshot snapshot files.
 
         Per-snapshot errors are logged and skipped so a single corrupt file
         does not abort the sweep.
@@ -837,10 +832,10 @@ class RestoreService:
                 that every picture gets a fresh hash (use this after the hash
                 algorithm changes).  When False (default), only fill NULLs.
         """
-        checkpoints = self._vault.db.run_immediate_read_task(
-            lambda session: session.exec(select(Checkpoint)).all()
+        snapshots = self._vault.db.run_immediate_read_task(
+            lambda session: session.exec(select(Snapshot)).all()
         )
-        for cp in checkpoints:
+        for cp in snapshots:
             abs_snapshot = os.path.join(self._vault.image_root, cp.relative_path)
             if not os.path.exists(abs_snapshot):
                 continue
@@ -906,7 +901,7 @@ class RestoreService:
 
         Opens a standalone SQLite session on *db_path* (independent of the
         vault DB), computes SHA-256 metadata hashes, and commits the results.
-        A WAL checkpoint is issued afterwards to keep the snapshot as a
+        A WAL snapshot is issued afterwards to keep the snapshot as a
         self-contained single file.
 
         Args:
@@ -920,9 +915,7 @@ class RestoreService:
         try:
             with Session(engine) as session:
                 if reset_all:
-                    session.execute(
-                        sa_update(Picture).values(metadata_hash=None)
-                    )
+                    session.execute(sa_update(Picture).values(metadata_hash=None))
                     session.commit()
                 null_pids = (
                     session.execute(
@@ -946,7 +939,7 @@ class RestoreService:
                 session.commit()
             # Flush WAL to main file for a clean single-file snapshot.
             with _sqlite3.connect(db_path) as conn:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("PRAGMA wal_snapshot(TRUNCATE)")
                 conn.execute("PRAGMA journal_mode=DELETE")
             logger.info(
                 "RestoreService: filled %d metadata hashes in %s",
@@ -956,10 +949,10 @@ class RestoreService:
         finally:
             engine.dispose()
 
-    def _get_checkpoint_or_raise(self, checkpoint_id: int) -> Checkpoint:
-        cp = self._vault.checkpoint_service.get_checkpoint(checkpoint_id)
+    def _get_snapshot_or_raise(self, snapshot_id: int) -> Snapshot:
+        cp = self._vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
-            raise ValueError(f"Checkpoint id={checkpoint_id} not found.")
+            raise ValueError(f"Snapshot id={snapshot_id} not found.")
         return cp
 
     def _upgrade_snapshot_schema(self, abs_snapshot: str) -> Optional[str]:
@@ -1007,12 +1000,12 @@ class RestoreService:
             config.set_main_option("sqlalchemy.url", f"sqlite:///{tmp_snapshot}")
             with _ALEMBIC_UPGRADE_LOCK:
                 command.upgrade(config, "head")
-            # Checkpoint and convert back to rollback journal so the
+            # Snapshot and convert back to rollback journal so the
             # main file contains all data without a WAL sidecar.
             import sqlite3
 
             with sqlite3.connect(tmp_snapshot) as _conn:
-                _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                _conn.execute("PRAGMA wal_snapshot(TRUNCATE)")
                 _conn.execute("PRAGMA journal_mode=DELETE")
             logger.info(
                 "RestoreService: snapshot schema upgraded to head at %s",
@@ -1111,7 +1104,7 @@ class RestoreService:
     def _restore_resource_from_snapshot(
         self,
         abs_snapshot: str,
-        checkpoint_id: int,
+        snapshot_id: int,
         resource_type: str,
         resource_id: int,
         vault_root: str,
@@ -1120,7 +1113,7 @@ class RestoreService:
 
         Args:
             abs_snapshot: Absolute path to the upgraded snapshot.
-            checkpoint_id: Original checkpoint ID.
+            snapshot_id: Original snapshot ID.
             resource_type: Resource type string.
             resource_id: Primary key.
             vault_root: Vault root directory for file existence checks.
@@ -1131,7 +1124,7 @@ class RestoreService:
         from pixlstash.utils.image_processing.image_utils import ImageUtils
 
         report = RestoreReport(
-            checkpoint_id=checkpoint_id,
+            snapshot_id=snapshot_id,
             resource_type=resource_type,
             resource_id=resource_id,
         )
@@ -1200,7 +1193,7 @@ class RestoreService:
 
         # Upsert in the live DB.
         with self._vault.db.write_reason(
-            f"restore checkpoint {checkpoint_id} {resource_type} {resource_id}"
+            f"restore snapshot {snapshot_id} {resource_type} {resource_id}"
         ):
             upserted = self._vault.db.run_task(
                 lambda session: self._upsert_rows(
