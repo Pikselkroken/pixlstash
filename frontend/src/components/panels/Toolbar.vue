@@ -330,7 +330,7 @@
         <!-- ── Toolbar: Search ──────────────────────────────────────── -->
         <button
           class="bar-btn bar-btn--icon"
-          :class="{ 'bar-btn--active': gb?.isSearchActive?.value }"
+          :class="{ 'bar-btn--active': searchStore.isSearchActive }"
           type="button"
           title="Search (F)"
           @click="searchStore.searchOverlayVisible = true"

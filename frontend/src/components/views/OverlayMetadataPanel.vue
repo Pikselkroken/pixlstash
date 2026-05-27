@@ -170,15 +170,6 @@ const props = defineProps({
 const metadataCollapsed = ref(false);
 const metadataTab = ref("info");
 
-watch(
-  [() => !!props.comfyMetadata, () => !!pictureInfoEntries.value?.length],
-  ([hasComfy, hasInfo]) => {
-    if (metadataTab.value === "comfy" && !hasComfy) metadataTab.value = "info";
-    if (metadataTab.value === "info" && !hasInfo && hasComfy)
-      metadataTab.value = "comfy";
-  },
-);
-
 function parseMetadataValue(value) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -436,6 +427,15 @@ const pictureInfoEntries = computed(() => {
 
   return entries;
 });
+
+watch(
+  [() => !!props.comfyMetadata, () => !!pictureInfoEntries.value?.length],
+  ([hasComfy, hasInfo]) => {
+    if (metadataTab.value === "comfy" && !hasComfy) metadataTab.value = "info";
+    if (metadataTab.value === "info" && !hasInfo && hasComfy)
+      metadataTab.value = "comfy";
+  },
+);
 </script>
 
 <style scoped>
