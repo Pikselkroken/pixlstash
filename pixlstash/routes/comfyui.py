@@ -507,9 +507,10 @@ def _wait_for_comfyui_outputs(
     base_url: str,
     prompt_id: str,
     output_node_ids: list[str] | None,
-    timeout_s: float = 180.0,
+    timeout_s: float = 300.0,
     poll_s: float = 1.0,
 ) -> list[dict]:
+    # 5 min budget covers cold model loading plus generation before giving up.
     deadline = time.time() + timeout_s
     last_images = []
     while time.time() < deadline:

@@ -103,7 +103,9 @@ const comfyuiCompletedPromptIds = ref(new Set());
 const comfyuiPromptPictureMap = reactive({});
 const comfyuiPromptLastSeen = reactive({});
 const comfyuiLastMessageAt = ref(0);
-const COMFYUI_STALE_MS = 30000;
+// Allow long WebSocket silences (up to 5 min) so cold model loads, which emit
+// no progress messages while loading, are not mistaken for a dead run.
+const COMFYUI_STALE_MS = 300000;
 const COMFYUI_WATCHDOG_MS = 2000;
 const comfyuiPendingOverlayRefresh = ref(false);
 const comfyuiSourcePictureId = ref(null);
