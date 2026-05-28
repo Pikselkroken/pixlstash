@@ -1,26 +1,11 @@
-# Copilot Instructions for PixlStash
+# Copilot and Claude Instructions for PixlStash
 
 ## Patch Reliability Policy
 
-- **Always read file context before making changes:**
-  - Before generating or applying any code patch, you must always read enough lines around the target location (and at very least 20 lines before and after) to fully understand the code structure, logic, and dependencies.
-  - Never create or apply a patch without first inspecting the relevant file context.
-  - If the code region is ambiguous, read additional context until the correct placement is certain.
-  - You must always check a patch for illogical and abrupt changes that don't fit the surrounding code.
-  - An example of an illogical change is a class method being placed outside of its class definition or code being placed above the top import statements.
-  - An illogical change is placing a class method above the class docstring or above the __init__ method, rather than after the docstring and any class-level variables. All methods must be defined within the class block, following the established order and indentation.
-  - All schema upgrade steps in Alembic migrations must be placed in strictly increasing version order. Never insert a new migration out of sequence. This ensures upgrades are applied in the correct order and the code remains maintainable and logical.
-  - Always ensure correct indentation and placement within the class block. Read surrounding code to confirm the proper structure.
-  - Always ensure a blank line between top-level functions and class definitions
-  - For any class the code order must be:
-    1. import statements
-    2. Class definition
-    3. Class docstring (always in Google style)
-    4. Class-level variables
-    5. __init__ method including initialisation of object properties
-    6. Properties (getters/setters)
-    7. Public methods in logical order
-    8. Private methods in logical order
+- **Read before you edit.** Read enough surrounding context (at least 20 lines before and after the target) to understand structure, logic, and dependencies before generating a patch. If placement is ambiguous, read more until it is certain.
+- **Don't assess what you haven't read.** Never critique, judge, or make claims about the adequacy of a file, document, or module you have not actually read. Read it first, or explicitly scope your statement to what you did read and flag the gap.
+- **Reject illogical edits.** Check every patch for abrupt changes that don't fit the surrounding code — e.g. a method placed outside its class, code inserted above the top imports, or a missing blank line between top-level definitions.
+- **Class member order:** imports → class definition → Google-style docstring → class-level variables → `__init__` (including property initialisation) → properties (getters/setters) → public methods → private methods. Keep everything correctly indented within the class block.
 
 ## Project Architecture
 
@@ -49,7 +34,7 @@ When making changes to architecture or integration patterns, always update the r
 
 ## Exception handling
 - Always log exceptions with as much context as possible (e.g., variable values, file paths, operation being performed) to facilitate debugging.
-- Avoid silent failures. If an exception is caught, it should either be handled in a way
+- Avoid silent failures. If an exception is caught, it should either be handled in a way that resolves the issue or logged with sufficient detail to understand the impact.
 - Using `pass` to ignore exceptions is not acceptable. If you need to ignore an exception, you must log it with a warning or error level log message explaining why it is being ignored and what the potential implications are.
 
 ## Task System
@@ -69,7 +54,10 @@ When making changes to architecture or integration patterns, always update the r
 - If you cannot resolve the root cause, document findings, blockers, and attempted fixes, then ask for direction instead of applying an unverified workaround.
 
 ## Alembic migrations
-- Always create a new migration file for each schema change, with a descriptive name.
+- Always create a new migration file for each schema change, with a descriptive name. **The branch decides how strict to be:**
+  - **Feature branch (schema still in flux):** it's fine to amend, squash, or merge migrations rather than stacking multiple migrations for the same change. Keep the migration history tidy before it lands.
+  - **`main` branch:** strict patterns apply. A migration on `main` must never be modified; all subsequent schema changes go in new migration files. (Reason: anything on `main` may already have been deployed and run, so altering an existing migration would leave those databases divergent.)
+- Place schema upgrade steps in strictly increasing version order; never insert a migration out of sequence, so upgrades always apply in the correct order.
 - The Alembic revision identifier variables (`revision`, `down_revision`, `branch_labels`, `depends_on`) are read by Alembic at runtime via module import, not by explicit code references. Declare them as exported by including `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]` after the `depends_on` line. This prevents false "unused variable" warnings from static analysers (including CodeQL) without needing `# noqa` comments. The script template (`migrations/script.py.mako`) already includes this line, so new migrations will have it automatically.
 - When a code change requires existing data to be regenerated (e.g. tags, embeddings, quality scores), trigger reprocessing by resetting the relevant column(s) to `NULL` in the Alembic migration script. The `Missing*Finder` classes in `pixlstash/tasks/` query for pictures with `NULL` values and will automatically pick up those rows for reprocessing when the server next runs. Alembic migrations should only contain schema changes and this kind of targeted `NULL`-reset; no application logic should be placed in migrations.
 - **All `op.add_column` calls must be conditional.** Always use `sa.inspect(op.get_bind())` to fetch existing columns and skip the `add_column` if the column already exists. The baseline migration (`0001_baseline`) uses `SQLModel.metadata.create_all()`, which creates tables with all current model columns; later migrations that blindly run `ALTER TABLE … ADD COLUMN` will therefore fail on a fresh database. The standard pattern is:
@@ -95,7 +83,7 @@ If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_
 
 ## Conventions & Patterns
 
-- **Batching:** Group images and face crops by size for efficient quality calculation.
+- **Throughput & batching:** Always think about throughput and concurrency. Evaluate whether a piece of work is best handled as a batch following ML best practices — for images this usually means sorting and grouping by size so each batch is composed of equally-sized tensors (e.g. image and face-crop quality calculation).
 - **Error Handling:** Always set metrics to -1.0 if calculation fails; log detailed warnings for OpenCV errors (file path, bbox, crop shape, error).
 - **Database Updates:** Log before updating metrics; ensure all metrics are set to avoid repeated selection.
 - **Bounding Boxes:** Clamp to image edges before cropping/resizing.
@@ -104,13 +92,6 @@ If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_
 
 - **External:** Uses OpenCV, NumPy, PIL, FastAPI, rapidfuzz, and Vue 3.
 - **Cross-component:** Backend serves REST API; frontend consumes API and displays images/metrics.
-
-## Example: Reliable Patch Workflow
-
-1. Read 20-50 lines around the target code region.
-2. Confirm logic, dependencies, and placement.
-3. Generate patch only after context is clear.
-4. If unsure, read more or ask for clarification.
 
 ---
 
