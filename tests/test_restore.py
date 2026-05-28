@@ -1,5 +1,6 @@
 """Tests for RestoreService — full and per-resource restore."""
 
+import json
 import os
 import shutil
 import tempfile
@@ -17,7 +18,13 @@ from pixlstash.server import Server
 @pytest.fixture(scope="module")
 def server():
     with tempfile.TemporaryDirectory() as tmp:
-        with Server(f"{tmp}/server-config.json") as srv:
+        config_path = f"{tmp}/server-config.json"
+        # Disable background workers so finders (QualityTask etc.) don't write
+        # to `picture` between a test's last write and the undo/restore call,
+        # which would break exact ChangeLog count assertions.
+        with open(config_path, "w") as fh:
+            json.dump({"disable_background_workers": True}, fh)
+        with Server(config_path) as srv:
             yield srv
 
 

@@ -439,8 +439,9 @@ watch(restoreSubmenuOpen, async (isOpen) => {
             cp.id,
           ]);
         }
-      } catch {
+      } catch (err) {
         // On error, leave the snapshot enabled (conservative)
+        console.warn(`Hash-compare failed for snapshot ${cp.id}:`, err);
       }
     }),
   );

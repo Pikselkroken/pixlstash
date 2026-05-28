@@ -281,6 +281,12 @@ function connectUpdatesSocket() {
       gridStore.wsUpdateKey = Date.now();
       gridStore.refreshGridVersion();
       refreshSidebar();
+    } else if (payload?.type === "undo_applied") {
+      // An undo (triggered via the API or by another client) mutates picture
+      // metadata, so refresh the grid and sidebar counts.
+      gridStore.wsUpdateKey = Date.now();
+      gridStore.refreshGridVersion();
+      refreshSidebar();
     }
   };
 

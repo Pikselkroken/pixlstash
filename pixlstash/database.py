@@ -117,7 +117,12 @@ def _cl_pk_json(obj) -> str:
                     pk[attr.key] = getattr(obj, attr.key, None)
                     break
         return json.dumps(pk)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "ChangeLog: failed to encode primary key for %s: %s",
+            type(obj).__name__,
+            exc,
+        )
         return "{}"
 
 
@@ -148,10 +153,19 @@ def _cl_current_state(obj) -> dict:
         for attr in mapper.column_attrs:
             try:
                 result[attr.key] = getattr(obj, attr.key, None)
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                logger.warning(
+                    "ChangeLog: failed to read attribute %s on %s: %s",
+                    attr.key,
+                    type(obj).__name__,
+                    exc,
+                )
+    except Exception as exc:
+        logger.warning(
+            "ChangeLog: failed to capture current state for %s: %s",
+            type(obj).__name__,
+            exc,
+        )
     return result
 
 
@@ -170,10 +184,19 @@ def _cl_before_state_from_history(obj) -> dict:
                     result[key] = hist.unchanged[0]
                 elif hist.added:
                     result[key] = hist.added[0]
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                logger.warning(
+                    "ChangeLog: failed to read history for attribute %s on %s: %s",
+                    key,
+                    type(obj).__name__,
+                    exc,
+                )
+    except Exception as exc:
+        logger.warning(
+            "ChangeLog: failed to capture before-state for %s: %s",
+            type(obj).__name__,
+            exc,
+        )
     return result
 
 
@@ -405,6 +428,54 @@ def _attach_change_log_hooks(session: Session) -> None:
     event.listen(session, "after_flush", _after_flush_handler)
     event.listen(session, "before_flush", _before_flush_hash_tracker)
     event.listen(session, "after_flush", _after_flush_hash_updater)
+
+
+class _EngineRWLock:
+    """A small writer-preferring readers/writer lock.
+
+    Any number of readers may hold it concurrently, but a writer gets
+    exclusive access.  Once a writer is waiting it blocks new readers, so a
+    steady stream of reads cannot starve it.  Used to fence the live-DB file
+    swap (the writer) against ``run_immediate_read_task`` reads so no session
+    is opened on the engine while it is being disposed and re-created.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._readers = 0
+        self._writers_waiting = 0
+        self._writer_active = False
+
+    @contextmanager
+    def read(self):
+        with self._cond:
+            while self._writer_active or self._writers_waiting > 0:
+                self._cond.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._cond.notify_all()
+
+    @contextmanager
+    def write(self):
+        with self._cond:
+            self._writers_waiting += 1
+            try:
+                while self._writer_active or self._readers > 0:
+                    self._cond.wait()
+            finally:
+                self._writers_waiting -= 1
+            self._writer_active = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._writer_active = False
+                self._cond.notify_all()
 
 
 # Priority enum for DB operations
@@ -784,6 +855,9 @@ class VaultDatabase:
         self._task_queue = queue.PriorityQueue()
         self._task_worker_stop_event = threading.Event()
         self._close_lock = threading.Lock()
+        # Fences immediate reads against the live-DB file swap (see
+        # exclusive_engine_access / run_immediate_read_task).
+        self._engine_rwlock = _EngineRWLock()
         self._closed = False
         self._task_worker = threading.Thread(target=self._task_worker_loop, daemon=True)
         self._task_worker.start()
@@ -903,10 +977,26 @@ class VaultDatabase:
             select(Picture).where(Picture.quality > 0.9)
         ).all())
         """
-        if self._closed or self._engine is None:
-            raise RuntimeError("VaultDatabase is closed.")
-        with Session(self._engine) as session:
-            return func(session, *args, **kwargs)
+        # Hold the read side of the engine lock for the whole read so the live
+        # engine cannot be disposed/swapped out from under an open session
+        # during a restore DB-file swap.
+        with self._engine_rwlock.read():
+            if self._closed or self._engine is None:
+                raise RuntimeError("VaultDatabase is closed.")
+            with Session(self._engine) as session:
+                return func(session, *args, **kwargs)
+
+    @contextmanager
+    def exclusive_engine_access(self):
+        """Block all ``run_immediate_read_task`` reads for the duration of the block.
+
+        Acquires the writer side of the engine lock, waiting for in-flight
+        reads to drain and preventing new ones from starting.  The restore
+        DB-file swap holds this while it disposes, replaces, and re-creates the
+        engine so no read can touch a disposed engine or the file mid-copy.
+        """
+        with self._engine_rwlock.write():
+            yield
 
     @contextmanager
     def write_reason(self, reason: str, actor_user_id=None):

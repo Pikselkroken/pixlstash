@@ -21,6 +21,7 @@ const createLabel = ref("");
 const creating = ref(false);
 const createError = ref("");
 const createSuccess = ref("");
+const dailyToggleError = ref("");
 
 // Map of snapshot id → editing state.
 const editingLabel = ref({});
@@ -118,6 +119,13 @@ function cancelEditing(id) {
 }
 
 async function saveLabel(id) {
+  // The field is bound to both @keydown.enter and @blur. An enter-save calls
+  // cancelEditing(), which removes the editing entry and unmounts the input —
+  // that unmount fires @blur and re-invokes saveLabel. Bail out when there is
+  // no active edit so the second call can't PATCH the just-saved label to null.
+  if (editingLabel.value[id] === undefined) {
+    return;
+  }
   const label = (editingLabel.value[id] ?? "").trim() || null;
   savingLabel.value = { ...savingLabel.value, [id]: true };
   saveLabelError.value = { ...saveLabelError.value, [id]: "" };
@@ -131,6 +139,20 @@ async function saveLabel(id) {
     };
   } finally {
     savingLabel.value = { ...savingLabel.value, [id]: false };
+  }
+}
+
+// ── Daily snapshot toggle ───────────────────────────────────────────────────
+async function handleToggleDailySnapshots(enabled) {
+  dailyToggleError.value = "";
+  try {
+    await store.setDailySnapshotsEnabled(enabled);
+  } catch (err) {
+    // The store already rolled back the optimistic value; surface why.
+    dailyToggleError.value =
+      err?.response?.data?.detail ||
+      err?.message ||
+      "Failed to update daily snapshot setting.";
   }
 }
 
@@ -187,8 +209,11 @@ function handleRestore(cp) {
         density="compact"
         hide-details
         color="primary"
-        @update:model-value="store.setDailySnapshotsEnabled($event)"
+        @update:model-value="handleToggleDailySnapshots($event)"
       />
+      <div v-if="dailyToggleError" class="snapshot-inline-error">
+        {{ dailyToggleError }}
+      </div>
     </div>
 
     <!-- ── Create snapshot ─────────────────────────────────────────────── -->

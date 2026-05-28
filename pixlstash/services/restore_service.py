@@ -1065,41 +1065,61 @@ class RestoreService:
     def _swap_database(self, live_db_path: str, new_db_path: str) -> None:
         """Replace the live SQLite file with *new_db_path*.
 
-        Disposes the live engine, copies the new file over the live path, and
-        re-creates the engine.
+        Disposes the live engine, atomically swaps the new file into the live
+        path, and re-creates the engine.
+
+        The new DB is first copied to a sibling temp file on the same
+        filesystem and then moved into place with ``os.replace`` (an atomic
+        rename within a filesystem).  This guarantees the live file is always
+        either the old or the new database — a crash mid-copy can never leave
+        it truncated or partially written.
 
         Args:
             live_db_path: Absolute path to the live database file.
             new_db_path: Absolute path to the replacement database file.
         """
         db = self._vault.db
+        staged_db_path = live_db_path + ".new"
         try:
-            # Dispose engine and all pooled connections before touching the file.
-            db._engine.dispose()
-            # Remove stale WAL/SHM files so the new DB starts clean.
-            for suffix in ("-wal", "-shm"):
-                stale = live_db_path + suffix
-                if os.path.exists(stale):
-                    os.remove(stale)
-            shutil.copy2(new_db_path, live_db_path)
-            # Recreate engine
-            from sqlalchemy import event as sa_event
-            from pixlstash.database import init_database
+            # Fence out immediate reads for the whole swap: this waits for any
+            # in-flight run_immediate_read_task to finish and blocks new ones,
+            # so none opens a session on the disposed engine or hits the file
+            # while it is being replaced.
+            with db.exclusive_engine_access():
+                # Dispose engine and all pooled connections before touching the file.
+                db._engine.dispose()
+                # Remove stale WAL/SHM files so the new DB starts clean.
+                for suffix in ("-wal", "-shm"):
+                    stale = live_db_path + suffix
+                    if os.path.exists(stale):
+                        os.remove(stale)
+                shutil.copy2(new_db_path, staged_db_path)
+                os.replace(staged_db_path, live_db_path)
+                # Recreate engine
+                from sqlalchemy import event as sa_event
+                from pixlstash.database import init_database
 
-            db._engine = create_engine(
-                f"sqlite:///{live_db_path}", echo=False, connect_args={"timeout": 30}
-            )
-            sa_event.listen(db._engine, "connect", init_database)
+                db._engine = create_engine(
+                    f"sqlite:///{live_db_path}",
+                    echo=False,
+                    connect_args={"timeout": 30},
+                )
+                sa_event.listen(db._engine, "connect", init_database)
             logger.info("RestoreService: DB swap complete, engine re-created.")
         except Exception as exc:
             logger.error("RestoreService: DB swap failed: %s", exc, exc_info=True)
             raise
         finally:
             try:
+                if os.path.exists(staged_db_path):
+                    os.remove(staged_db_path)
                 os.remove(new_db_path)
                 shutil.rmtree(os.path.dirname(new_db_path), ignore_errors=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "RestoreService: failed to clean up temp DB swap files: %s",
+                    exc,
+                )
 
     def _restore_resource_from_snapshot(
         self,

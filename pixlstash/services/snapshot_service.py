@@ -92,24 +92,25 @@ class SnapshotService:
         rel_manifest = os.path.join(rel_dir, f"{snapshot_uuid}.manifest.json")
         abs_manifest = os.path.join(vault_root, rel_manifest)
 
-        # --- VACUUM INTO snapshot -----------------------------------------
+        # --- VACUUM + manifest + Snapshot row (one atomic writer task) --------
+        # The VACUUM INTO, the manifest read (counts + max_changelog_id), and the
+        # Snapshot INSERT all run in a single writer-thread task so they describe
+        # one consistent point-in-time: no other write can interleave between the
+        # snapshot file and the manifest it is paired with.  VACUUM must run first
+        # because SQLite forbids VACUUM inside an open transaction.
         logger.info(
             "SnapshotService: creating %s snapshot → %s",
             kind,
             rel_snapshot,
         )
-        db.run_task(
-            lambda session: self._vacuum_into(session, abs_snapshot),
-            priority=DBPriority.IMMEDIATE,
-        )
 
-        byte_size = os.path.getsize(abs_snapshot) if os.path.exists(abs_snapshot) else 0
+        def _create_and_record(session):
+            self._vacuum_into(session, abs_snapshot)
 
-        # --- Build manifest + insert Snapshot row (one atomic writer task) ------
-        # Running both in the same writer-thread task ensures max_changelog_id is
-        # captured with no background writes interleaved between the read and the
-        # Snapshot INSERT.
-        def _build_and_insert(session):
+            byte_size = (
+                os.path.getsize(abs_snapshot) if os.path.exists(abs_snapshot) else 0
+            )
+
             manifest = self._build_manifest(session)
             manifest["snapshot_uuid"] = snapshot_uuid
             manifest["kind"] = kind
@@ -118,17 +119,14 @@ class SnapshotService:
             with open(abs_manifest, "w", encoding="utf-8") as _fh:
                 json.dump(manifest, _fh, indent=2)
 
-            _schema_version = manifest.get("schema_version", "")
-            _picture_count = manifest.get("picture_count", 0)
-
             cp = Snapshot(
                 kind=kind,
                 created_at=now,
                 relative_path=rel_snapshot,
                 manifest_relative_path=rel_manifest,
                 byte_size=byte_size,
-                picture_count=_picture_count,
-                schema_version=_schema_version,
+                picture_count=manifest.get("picture_count", 0),
+                schema_version=manifest.get("schema_version", ""),
                 label=label,
             )
             session.add(cp)
@@ -136,7 +134,7 @@ class SnapshotService:
             session.refresh(cp)
             return cp
 
-        snapshot = db.run_task(_build_and_insert, priority=DBPriority.IMMEDIATE)
+        snapshot = db.run_task(_create_and_record, priority=DBPriority.IMMEDIATE)
 
         # --- GFS retention ------------------------------------------------
         self._apply_gfs_retention(now)
@@ -154,7 +152,7 @@ class SnapshotService:
         logger.info(
             "SnapshotService: snapshot %d created (%d bytes, %d pictures)",
             snapshot.id,
-            byte_size,
+            snapshot.byte_size,
             snapshot.picture_count,
         )
         return snapshot
@@ -356,7 +354,11 @@ class SnapshotService:
                 text("SELECT version_num FROM alembic_version LIMIT 1")
             )
             schema_version = result.scalar() or ""
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "SnapshotService: failed to read schema_version for manifest: %s",
+                exc,
+            )
             schema_version = ""
 
         # max ChangeLog id at snapshot time
@@ -367,7 +369,11 @@ class SnapshotService:
             max_changelog_id = session.exec(
                 select(func.max(ChangeLog.id))
             ).one_or_none()
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "SnapshotService: failed to read max_changelog_id for manifest: %s",
+                exc,
+            )
             max_changelog_id = None
 
         return {

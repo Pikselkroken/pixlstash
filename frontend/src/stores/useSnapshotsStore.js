@@ -37,7 +37,8 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
       const res = await apiClient.get("/api/v1/snapshots/status");
       activeJob.value = res.data?.active_job ?? null;
     } catch (err) {
-      // Non-fatal; silently leave activeJob as-is.
+      // Non-fatal; leave activeJob as-is.
+      console.warn("Failed to fetch snapshot status:", err);
     }
   }
 
@@ -154,6 +155,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
       dailySnapshotsEnabled.value = res.data?.daily_snapshots ?? true;
     } catch (err) {
       // Non-fatal; leave current value as-is.
+      console.warn("Failed to fetch snapshot settings:", err);
     }
   }
 

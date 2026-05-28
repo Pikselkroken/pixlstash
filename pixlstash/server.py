@@ -70,6 +70,18 @@ from pixlstash.utils.rate_limiter import RateLimitMiddleware
 # Logging will be set up after config is loaded
 logger = get_logger(__name__)
 
+# Snapshot / restore / undo vault events mapped to the WebSocket ``type`` string
+# the frontend listens for.  Keeping this as a single map keeps the delivery
+# whitelist (_should_send_ws_update) and the payload builder (_broadcast_ws_event)
+# in sync.
+_WS_SNAPSHOT_EVENT_TYPES = {
+    EventType.SNAPSHOT_CREATED: "snapshot_created",
+    EventType.SNAPSHOT_DELETED: "snapshot_deleted",
+    EventType.RESTORE_STARTED: "restore_started",
+    EventType.RESTORE_COMPLETED: "restore_completed",
+    EventType.UNDO_APPLIED: "undo_applied",
+}
+
 
 def _get_lan_ip() -> str | None:
     """Return the machine's primary LAN IP by probing an outbound UDP route.
@@ -339,7 +351,7 @@ class Server:
             EventType.CHANGED_CHARACTERS,
             EventType.CHANGED_FACES,
             EventType.CHANGED_DESCRIPTIONS,
-        )
+        ) or event_type in _WS_SNAPSHOT_EVENT_TYPES
 
     async def _broadcast_ws_event(self, event_type: EventType, data=None):
         with self._ws_clients_lock:
@@ -384,6 +396,13 @@ class Server:
                 "type": "plugin_progress",
                 "event": event_type.name,
                 **progress_payload,
+            }
+        elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
+            info = data if isinstance(data, dict) else {}
+            payload = {
+                **info,
+                "type": _WS_SNAPSHOT_EVENT_TYPES[event_type],
+                "event": event_type.name,
             }
         else:
             picture_ids = data if isinstance(data, (list, tuple, set)) else []

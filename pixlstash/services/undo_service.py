@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlmodel import Session, select, text
+from sqlalchemy import inspect as sa_inspect
+from sqlmodel import Session, select
 
 from pixlstash.db_models.change_log import ChangeLog
 from pixlstash.pixl_logging import get_logger
@@ -19,6 +20,57 @@ if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
+
+# Lazily-populated caches mapping SQLite table names to their ORM model class
+# and each model to its {attribute-key: Column} map.  Used by the undo path to
+# reverse-apply ChangeLog entries through the ORM (so the change-log / hash
+# flush hooks in database.py fire) rather than via raw Core DML.
+_MODEL_BY_TABLE: dict[str, type] = {}
+_COLUMN_BY_ATTR: dict[type, dict[str, Any]] = {}
+
+
+def _resolve_model(table_name: str) -> Optional[type]:
+    """Return the ORM model class mapped to *table_name*, or None if unmapped."""
+    if not _MODEL_BY_TABLE:
+        from sqlmodel import SQLModel
+
+        for mapper in SQLModel._sa_registry.mappers:
+            local_table = mapper.local_table
+            if local_table is not None:
+                _MODEL_BY_TABLE[local_table.name] = mapper.class_
+    return _MODEL_BY_TABLE.get(table_name)
+
+
+def _column_by_attr(model: type) -> dict[str, Any]:
+    """Return a cached {attribute-key: Column} map for *model*."""
+    cached = _COLUMN_BY_ATTR.get(model)
+    if cached is None:
+        mapper = sa_inspect(model)
+        cached = {attr.key: attr.columns[0] for attr in mapper.column_attrs}
+        _COLUMN_BY_ATTR[model] = cached
+    return cached
+
+
+def _coerce_serialized_value(column: Any, value: Any) -> tuple[bool, Any]:
+    """Coerce a serialized ChangeLog value back to an ORM-assignable value.
+
+    The change-log serializes BLOB columns as ``"sha256:<digest>"`` markers and
+    datetimes as ISO strings (see ``_cl_serialize_state`` in database.py).
+
+    Returns:
+        ``(should_set, coerced_value)``.  ``should_set`` is False for blob
+        markers, whose original bytes cannot be reconstructed — those columns
+        are left untouched (regenerable derived data the WorkPlanner refills).
+    """
+    if isinstance(value, str) and value.startswith("sha256:"):
+        return (False, None)
+    if isinstance(value, str) and value:
+        try:
+            if column.type.python_type is datetime:
+                return (True, datetime.fromisoformat(value))
+        except (NotImplementedError, AttributeError, ValueError):
+            pass
+    return (True, value)
 
 
 @dataclass
@@ -29,11 +81,20 @@ class UndoReport:
         reverted_txn_count: Number of ChangeLog transactions reversed.
         reverted_row_count: Total ChangeLog rows processed.
         errors: Non-fatal error messages.
+        escalated_to_full_restore: True when ``undo_to_snapshot`` escalated to a
+            whole-database file swap via ``RestoreService.restore_full`` instead
+            of a metadata-only undo (because an excluded table was last mutated
+            closer to the snapshot than to now).  Callers should treat this as a
+            materially larger operation than a metadata revert.
+        escalated_tables: The excluded tables whose timing triggered the
+            escalation.
     """
 
     reverted_txn_count: int = 0
     reverted_row_count: int = 0
     errors: list[str] = field(default_factory=list)
+    escalated_to_full_restore: bool = False
+    escalated_tables: list[str] = field(default_factory=list)
 
 
 class UndoService:
@@ -96,11 +157,27 @@ class UndoService:
             return UndoReport()
 
         report = UndoReport()
+
+        def _apply(session):
+            self._apply_undo_entries(session, entries, report)
+            session.commit()
+
         with db.write_reason(f"undo txn {txn_id}"):
-            db.run_task(
-                lambda session: self._apply_undo_entries(session, entries, report),
-                priority=0,
-            )
+            try:
+                db.run_task(_apply, priority=0)
+            except Exception as exc:
+                # The transaction was rolled back, so nothing was applied.
+                logger.error(
+                    "UndoService: undo txn %s rolled back: %s",
+                    txn_id,
+                    exc,
+                    exc_info=True,
+                )
+                report.reverted_row_count = 0
+                report.reverted_txn_count = 0
+                if not report.errors:
+                    report.errors.append(f"Undo rolled back: {exc}")
+                return report
 
         try:
             from pixlstash.event_types import EventType
@@ -220,16 +297,17 @@ class UndoService:
         report = UndoReport()
 
         if excluded_tables_needing_restore:
-            logger.info(
-                "UndoService: delegating full restore for excluded tables: %s",
+            logger.warning(
+                "UndoService: escalating undo_to_snapshot(%d) to a full database "
+                "restore because excluded table(s) %s were last mutated closer to "
+                "the snapshot than to now.",
+                snapshot_id,
                 excluded_tables_needing_restore,
             )
             try:
                 self._vault.restore_service.restore_full(snapshot_id)
-                report.errors.append(
-                    f"Full restore triggered for excluded tables: "
-                    f"{excluded_tables_needing_restore}"
-                )
+                report.escalated_to_full_restore = True
+                report.escalated_tables = excluded_tables_needing_restore
             except Exception as exc:
                 msg = f"Full restore for excluded tables failed: {exc}"
                 logger.error("UndoService: %s", msg, exc_info=True)
@@ -272,17 +350,34 @@ class UndoService:
                 txns.append((entry.txn_id, seen[entry.txn_id]))
             seen[entry.txn_id].append(entry)
 
-        with db.write_reason(f"undo to snapshot {snapshot_id}"):
-            for txn_id, entries in txns:
+        # Reverse every transaction in a single writer task so the whole undo
+        # is one atomic transaction: either it all commits or (on any failure)
+        # the worker rolls it back, leaving the database untouched rather than
+        # partially undone.
+        def _apply_all(session):
+            for _txn_id, entries in txns:
                 entries_sorted = sorted(
                     entries, key=lambda e: e.seq_in_txn, reverse=True
                 )
-                db.run_task(
-                    lambda session, _entries=entries_sorted: self._apply_undo_entries(
-                        session, _entries, report
-                    ),
-                    priority=0,
+                self._apply_undo_entries(session, entries_sorted, report)
+            session.commit()
+
+        with db.write_reason(f"undo to snapshot {snapshot_id}"):
+            try:
+                db.run_task(_apply_all, priority=0)
+            except Exception as exc:
+                # The transaction was rolled back, so nothing was applied.
+                logger.error(
+                    "UndoService: undo_to_snapshot(%d) rolled back: %s",
+                    snapshot_id,
+                    exc,
+                    exc_info=True,
                 )
+                report.reverted_row_count = 0
+                report.reverted_txn_count = 0
+                if not report.errors:
+                    report.errors.append(f"Undo rolled back: {exc}")
+                return report
 
         try:
             from pixlstash.event_types import EventType
@@ -309,11 +404,23 @@ class UndoService:
     ) -> None:
         """Reverse-apply a list of ChangeLog entries within *session*.
 
+        Does **not** commit — the caller owns the transaction so that an entire
+        undo (one transaction or many) commits atomically.  If any entry fails
+        to reverse, the error is recorded in ``report.errors`` and re-raised so
+        the caller's transaction is rolled back whole: the undo is all-or-nothing
+        rather than leaving the database partially reverted.  (Per-entry
+        SAVEPOINTs are not used because pysqlite mishandles nested-transaction
+        release, which would let already-applied entries leak past a later
+        rollback.)
+
         Args:
             session: Active writer session.
             entries: ChangeLog rows, already sorted in reverse seq_in_txn
                 order.
-            report: Accumulates counts and errors in place.
+            report: Accumulates counts in place.
+
+        Raises:
+            Exception: Re-raised from the first entry that fails to reverse.
         """
         from pixlstash.database import CHANGE_LOG_EXCLUDED_TABLES
 
@@ -325,7 +432,6 @@ class UndoService:
                 continue
             try:
                 self._reverse_entry(session, entry)
-                report.reverted_row_count += 1
             except Exception as exc:
                 msg = (
                     f"Failed to undo ChangeLog id={entry.id} "
@@ -333,25 +439,36 @@ class UndoService:
                 )
                 logger.error("UndoService: %s", msg, exc_info=True)
                 report.errors.append(msg)
+                raise
+            report.reverted_row_count += 1
 
-        session.commit()
         report.reverted_txn_count += 1
 
     def _reverse_entry(self, session: Session, entry: ChangeLog) -> None:
-        """Reverse a single ChangeLog row.
+        """Reverse a single ChangeLog row through the ORM.
 
         - INSERT → delete the row.
         - UPDATE → restore ``before_json`` values.
         - DELETE → re-insert from ``before_json``.
+
+        Reverse-applying via the ORM (rather than raw Core DML) keeps the
+        ``before_flush``/``after_flush`` hooks in database.py firing, so the
+        undo is itself recorded in the ChangeLog (making it redoable) and
+        ``Picture.metadata_hash`` is recomputed for touched rows.
 
         Args:
             session: Active writer session.
             entry: The ChangeLog row to reverse.
         """
         pk: dict = json.loads(entry.row_pk_json) if entry.row_pk_json else {}
+        model = _resolve_model(entry.table_name)
+        if model is None:
+            raise RuntimeError(f"No ORM model is mapped to table '{entry.table_name}'")
 
         if entry.op == "INSERT":
-            self._delete_by_pk(session, entry.table_name, pk)
+            obj = self._get_by_pk(session, model, pk)
+            if obj is not None:
+                session.delete(obj)
 
         elif entry.op == "UPDATE":
             if not entry.before_json:
@@ -360,8 +477,25 @@ class UndoService:
                     entry.id,
                 )
                 return
+            obj = self._get_by_pk(session, model, pk)
+            if obj is None:
+                logger.warning(
+                    "UndoService: row %s of table '%s' not found for UPDATE undo "
+                    "(ChangeLog id=%d); skipping",
+                    pk,
+                    entry.table_name,
+                    entry.id,
+                )
+                return
             before: dict = json.loads(entry.before_json)
-            self._update_by_pk(session, entry.table_name, pk, before)
+            col_map = _column_by_attr(model)
+            for key, value in before.items():
+                column = col_map.get(key)
+                if column is None:
+                    continue
+                should_set, coerced = _coerce_serialized_value(column, value)
+                if should_set:
+                    setattr(obj, key, coerced)
 
         elif entry.op == "DELETE":
             if not entry.before_json:
@@ -371,44 +505,22 @@ class UndoService:
                 )
                 return
             before = json.loads(entry.before_json)
-            self._insert_row(session, entry.table_name, before)
+            col_map = _column_by_attr(model)
+            kwargs: dict[str, Any] = {}
+            for key, value in before.items():
+                column = col_map.get(key)
+                if column is None:
+                    continue
+                should_set, coerced = _coerce_serialized_value(column, value)
+                if should_set:
+                    kwargs[key] = coerced
+            session.merge(model(**kwargs))
 
-    def _delete_by_pk(
-        self, session: Session, table_name: str, pk: dict[str, Any]
-    ) -> None:
-        where_clauses = " AND ".join(f'"{k}" = :{k}' for k in pk)
-        session.exec(
-            text(f'DELETE FROM "{table_name}" WHERE {where_clauses}'),
-            params=pk,
-        )
-
-    def _update_by_pk(
-        self,
-        session: Session,
-        table_name: str,
-        pk: dict[str, Any],
-        values: dict[str, Any],
-    ) -> None:
-        non_pk = {k: v for k, v in values.items() if k not in pk}
-        if not non_pk:
-            return
-        set_clauses = ", ".join(f'"{k}" = :set_{k}' for k in non_pk)
-        where_clauses = " AND ".join(f'"{k}" = :pk_{k}' for k in pk)
-        params = {f"set_{k}": v for k, v in non_pk.items()}
-        params.update({f"pk_{k}": v for k, v in pk.items()})
-        session.exec(
-            text(f'UPDATE "{table_name}" SET {set_clauses} WHERE {where_clauses}'),
-            params=params,
-        )
-
-    def _insert_row(
-        self, session: Session, table_name: str, values: dict[str, Any]
-    ) -> None:
-        cols = ", ".join(f'"{k}"' for k in values)
-        placeholders = ", ".join(f":{k}" for k in values)
-        session.exec(
-            text(
-                f'INSERT OR REPLACE INTO "{table_name}" ({cols}) VALUES ({placeholders})'
-            ),
-            params=values,
-        )
+    @staticmethod
+    def _get_by_pk(session: Session, model: type, pk: dict[str, Any]):
+        """Load *model* by its primary key, given a {attr-key: value} dict."""
+        if not pk:
+            return None
+        if len(pk) == 1:
+            return session.get(model, next(iter(pk.values())))
+        return session.get(model, pk)

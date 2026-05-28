@@ -501,6 +501,8 @@ def create_router(server) -> APIRouter:
             "reverted_txn_count": report.reverted_txn_count,
             "reverted_row_count": report.reverted_row_count,
             "errors": report.errors,
+            "escalated_to_full_restore": report.escalated_to_full_restore,
+            "escalated_tables": report.escalated_tables,
         }
 
     return router
