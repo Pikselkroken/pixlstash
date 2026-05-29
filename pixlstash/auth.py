@@ -51,7 +51,6 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
     {
         "/login",
         "/docs",
-        "/redoc",
         "/scalar",
         "/openapi.json",
         "/docs/oauth2-redirect",
@@ -67,9 +66,9 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
 )
 AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/assets/",
+    "/scalar-assets/",
     "/share/",
     "/docs/",
-    "/redoc/",
 )
 AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
 

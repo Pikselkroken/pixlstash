@@ -91,7 +91,7 @@ def create_router(server) -> APIRouter:
         summary="List import folders",
         description="Returns all folders used by the automatic import watcher.",
         response_model=ImportFoldersListResponse,
-        tags=["config"],
+        tags=["folders"],
     )
     def list_import_folders(request: Request):
         server.auth.require_user_id(request)
@@ -134,7 +134,7 @@ def create_router(server) -> APIRouter:
         summary="Add an import folder",
         description="Adds a folder watched for automatic imports.",
         response_model=ImportFolderResponse,
-        tags=["config"],
+        tags=["folders"],
     )
     def create_import_folder(
         request: Request,
@@ -200,7 +200,7 @@ def create_router(server) -> APIRouter:
         summary="Update an import folder",
         description="Updates label and import behavior for an import folder.",
         response_model=ImportFolderResponse,
-        tags=["config"],
+        tags=["folders"],
     )
     def update_import_folder(
         folder_id: int,
@@ -235,7 +235,7 @@ def create_router(server) -> APIRouter:
         "/import-folders/{folder_id}",
         summary="Remove an import folder",
         description="Removes an import folder from automatic monitoring.",
-        tags=["config"],
+        tags=["folders"],
     )
     def delete_import_folder(folder_id: int, request: Request):
         server.auth.require_user_id(request)

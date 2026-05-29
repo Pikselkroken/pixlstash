@@ -33,7 +33,7 @@ from pixlstash.db_models import (
 )
 
 from pixlstash.event_types import EventType
-from pixlstash.auth import AuthService, LoginRequest
+from pixlstash.auth import AuthService, LoginRequest, is_auth_excluded_path
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.vault import Vault
@@ -100,6 +100,10 @@ def _get_lan_ip() -> str | None:
 
 API_OPENAPI_TAGS = [
     {
+        "name": "pictures",
+        "description": "Picture listing, metadata, thumbnails, import/export and media operations.",
+    },
+    {
         "name": "config",
         "description": "User configuration, auth helpers, worker progress and server config utilities.",
     },
@@ -120,10 +124,6 @@ API_OPENAPI_TAGS = [
         "description": "Stack creation, ordering and membership operations.",
     },
     {
-        "name": "pictures",
-        "description": "Picture listing, metadata, thumbnails, import/export and media operations.",
-    },
-    {
         "name": "comfyui",
         "description": "ComfyUI workflow management and image-to-image execution.",
     },
@@ -135,9 +135,291 @@ API_OPENAPI_TAGS = [
         "name": "taggers",
         "description": "Tagger plugin registry, artifact downloads and deletion.",
     },
+    {
+        "name": "snapshots",
+        "description": "Library snapshots: create, list, restore and manage point-in-time backups.",
+    },
+    {
+        "name": "tag_predictions",
+        "description": "Automatic tag prediction and suggestion endpoints.",
+    },
+    {
+        "name": "guest_scores",
+        "description": "Guest scoring sessions and submitted picture scores.",
+    },
+    {
+        "name": "folders",
+        "description": "Reference and import folders: list, add, update, remove and open on disk.",
+    },
+    {
+        "name": "auth",
+        "description": "Login, logout and session checks.",
+    },
+    {
+        "name": "server",
+        "description": "Server status and control: version, network info and restart.",
+    },
 ]
 
 API_V1_PREFIX = "/api/v1"
+
+# Rendered as Markdown at the top of the API reference (Scalar / Swagger). Image
+# URLs are page-relative to ``scalar-assets/`` — served from the bundled package
+# on a live server and copied next to each published page by the docs generator.
+API_DESCRIPTION = """\
+<div align="center">
+  <a href="https://pixlstash.dev" target="_blank" rel="noopener">
+    <img src="scalar-assets/logo.png" alt="PixlStash" width="150" />
+  </a>
+</div>
+
+# Simplify your image workflow
+
+**PixlStash is a self-hosted, open-source image library for creators.** It imports your
+pictures and videos, auto-tags and captions them with local AI models, recognises
+characters and faces, scores image quality, runs natural-language semantic search and
+drives ComfyUI workflows — all on your own hardware, with no cloud and no lock-in.
+
+**Integrate with scripts, pipelines and external tools** — fetch images, metadata, tags and
+more. This REST API exposes everything the app can do — **pictures, tags, stacks, sets,
+characters, projects, taggers and ComfyUI integration** — so you can script imports, build
+integrations and automate your pipeline.
+
+### → Learn more and download at **[pixlstash.dev](https://pixlstash.dev)**
+
+---
+
+## Quick start
+
+Create an API token (steps below), then fetch your first 50 pictures — replace
+`your-pixlstash-host` with your server's address:
+
+```bash
+curl "https://your-pixlstash-host/api/v1/pictures?limit=50" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+## Authentication
+
+Every request authenticates with a personal **API token**, sent as a Bearer header:
+
+```http
+Authorization: Bearer YOUR_TOKEN
+```
+
+Tokens have one of two access types:
+
+| Access type | Can do | Notes |
+| --- | --- | --- |
+| **Full access** | Read **and** write — everything your account can do | Never put a full-access token in a URL |
+| **Read-only** | `GET` requests only | May also be passed as a `?token=…` query parameter (handy for share links) |
+
+## Creating a token
+
+**1. Open Settings** — click the gear icon in the top toolbar.
+
+![Open Settings from the top toolbar](scalar-assets/WhereIsUserSettings.jpg)
+
+**2. Open the *Account Settings* tab.**
+
+![The Account Settings tab](scalar-assets/ScreenshotsUserSettings.jpg)
+
+**3. Create the token** — in the **API Tokens** section, type a description, choose an
+access type (*Full access* or *Read-only*), optionally tick *Apply watermark*, then click
+**Create Token**.
+
+![The API Tokens section in Account Settings](scalar-assets/ScreenshotTokens.jpg)
+
+**4. Copy it now** — the token is shown **only once**. Copy it and store it somewhere safe;
+you won't be able to see it again.
+
+![Copy the newly created token](scalar-assets/ScreenshotToken.jpg)
+
+## Using the token
+
+The API is served under `/api/v1`. Send your token in the `Authorization` header on every
+request, replacing `your-pixlstash-host` with the address of your PixlStash server. To
+confirm a token is valid:
+
+```bash
+curl https://your-pixlstash-host/api/v1/check-session \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+A **read-only** token may instead be passed in the query string for quick read requests
+(never do this with a full-access token):
+
+```bash
+curl "https://your-pixlstash-host/api/v1/pictures?limit=50&token=YOUR_READ_TOKEN"
+```
+
+Browse the endpoints below for full request and response details.
+"""
+
+# Scalar theme overrides matching the PixlStash dark UI (see frontend/src/main.js).
+# Custom properties carry !important so they win over Scalar's own ``.dark-mode``
+# rules regardless of stylesheet load order.
+_SCALAR_THEME_CSS = """\
+    <style>
+      .dark-mode {
+        --scalar-font: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif !important;
+        --scalar-font-code: 'IBM Plex Mono', ui-monospace, monospace !important;
+        --scalar-background-1: #2a2f36 !important;
+        --scalar-background-2: #2b3138 !important;
+        --scalar-background-3: #313337 !important;
+        --scalar-background-accent: rgba(142, 166, 4, 0.16) !important;
+        --scalar-color-1: #f2e5da !important;
+        --scalar-color-2: rgba(242, 229, 218, 0.72) !important;
+        --scalar-color-3: rgba(242, 229, 218, 0.5) !important;
+        --scalar-color-accent: #8ea604 !important;
+        --scalar-border-color: #3a4047 !important;
+      }
+      .dark-mode .sidebar {
+        --scalar-sidebar-background-1: #1f2328 !important;
+        --scalar-sidebar-color-1: #f2e5da !important;
+        --scalar-sidebar-color-2: rgba(242, 229, 218, 0.7) !important;
+        --scalar-sidebar-border-color: #3a4047 !important;
+        --scalar-sidebar-item-hover-background: rgba(255, 255, 255, 0.06) !important;
+        --scalar-sidebar-item-hover-color: #f2e5da !important;
+        --scalar-sidebar-item-active-background: rgba(142, 166, 4, 0.16) !important;
+        --scalar-sidebar-color-active: #8ea604 !important;
+        --scalar-sidebar-search-background: #2b3138 !important;
+        --scalar-sidebar-search-border-color: #3a4047 !important;
+        --scalar-sidebar-search--color: rgba(242, 229, 218, 0.6) !important;
+      }
+    </style>"""
+
+
+def render_scalar_html(spec_url: str) -> str:
+    """Return the Scalar API-reference page wired to *spec_url*, forced to the
+    PixlStash dark theme.
+
+    Shared by the live ``/scalar`` route and the static docs generator so both
+    stay in sync. *spec_url* is a trusted internal literal (``/openapi.json`` for
+    the live server, ``openapi.json`` for the published per-version page).
+    """
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <title>PixlStash API Reference</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+{_SCALAR_THEME_CSS}
+  </head>
+  <body>
+    <script
+      id="api-reference"
+      data-url="{spec_url}"
+      data-configuration='{{"forceDarkModeState":"dark","hideDarkModeToggle":true,"hideModels":true,"persistAuth":true,"authentication":{{"preferredSecurityScheme":"bearerAuth"}}}}'
+    ></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  </body>
+</html>
+"""
+
+
+def _example_for_schema(schema, schemas, seen=()):
+    """Best-effort representative example value for an OpenAPI schema.
+
+    Most response models are Pydantic ``Optional[...]`` fields, which serialize
+    as ``anyOf: [T, null]`` with no example. Scalar then renders the whole
+    response example as ``null`` — useless in the docs. We synthesize a
+    shape-correct example (picking the non-null branch, recursing through
+    ``$ref``/objects/arrays) so every endpoint shows its response structure.
+
+    Returns ``None`` when nothing meaningful can be produced (e.g. a circular
+    ref or an empty schema); callers skip injecting an example in that case.
+    """
+    if not isinstance(schema, dict):
+        return None
+
+    ref = schema.get("$ref")
+    if ref:
+        name = ref.split("/")[-1]
+        if name in seen:  # circular reference — stop descending
+            return None
+        return _example_for_schema(schemas.get(name, {}), schemas, seen + (name,))
+
+    if "example" in schema:
+        return schema["example"]
+    examples = schema.get("examples")
+    if isinstance(examples, list) and examples:
+        return examples[0]
+    if "default" in schema:
+        return schema["default"]
+    enum = schema.get("enum")
+    if enum:
+        return enum[0]
+
+    for combinator in ("anyOf", "oneOf"):
+        for sub in schema.get(combinator, []):
+            if isinstance(sub, dict) and sub.get("type") == "null":
+                continue
+            value = _example_for_schema(sub, schemas, seen)
+            if value is not None:
+                return value
+
+    if "allOf" in schema:
+        merged = {}
+        for sub in schema["allOf"]:
+            value = _example_for_schema(sub, schemas, seen)
+            if isinstance(value, dict):
+                merged.update(value)
+        return merged or None
+
+    schema_type = schema.get("type")
+    if schema_type == "object" or "properties" in schema:
+        return {
+            key: _example_for_schema(prop, schemas, seen)
+            for key, prop in schema.get("properties", {}).items()
+        }
+    if schema_type == "array":
+        item = _example_for_schema(schema.get("items", {}), schemas, seen)
+        return [item] if item is not None else []
+    if schema_type == "string":
+        return {
+            "date-time": "2026-01-01T00:00:00Z",
+            "date": "2026-01-01",
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "email": "user@example.com",
+            "binary": "",
+        }.get(schema.get("format"), "string")
+    if schema_type == "integer":
+        return 0
+    if schema_type == "number":
+        return 0.0
+    if schema_type == "boolean":
+        return True
+    return None
+
+
+def _inject_response_examples(operation, schemas):
+    """Attach a synthesized ``example`` to an operation's 2xx JSON responses.
+
+    Media types that already carry an ``example``/``examples`` are left alone so
+    any hand-authored example always wins.
+    """
+    for code, response in operation.get("responses", {}).items():
+        if not str(code).startswith("2"):
+            continue
+        for media in response.get("content", {}).values():
+            if "example" in media or "examples" in media:
+                continue
+            media_schema = media.get("schema")
+            if not media_schema:
+                continue
+            try:
+                example = _example_for_schema(media_schema, schemas)
+            except Exception:
+                example = None
+            if example is not None:
+                media["example"] = example
 
 
 class Server:
@@ -278,12 +560,10 @@ class Server:
         self.api = FastAPI(
             title="PixlStash API",
             version=self._get_version(),
-            description=(
-                "PixlStash backend API for picture management, tagging, stacks, "
-                "sets, character workflows and ComfyUI integration."
-            ),
+            description=API_DESCRIPTION,
             openapi_tags=API_OPENAPI_TAGS,
             lifespan=self.lifespan,
+            redoc_url=None,
         )
         # CORS: always allow localhost/127.0.0.1 on any port plus the machine's
         # own LAN IP (any port) so the Vite dev server works over LAN without
@@ -304,6 +584,7 @@ class Server:
         )
         self._add_cors_exception_handler()
         self._setup_routes()
+        self._install_custom_openapi()
 
         # Temporary storage for export tasks
         self.export_tasks = {}
@@ -909,6 +1190,70 @@ class Server:
             return None
         return index_path
 
+    def _install_custom_openapi(self):
+        """Post-process the generated OpenAPI schema for the reference UI.
+
+        Two fixes, both stemming from the schema FastAPI emits by default:
+
+        * **Bearer auth** — auth is enforced by middleware, not per-route
+          dependencies, so FastAPI declares no ``securitySchemes`` and the docs'
+          example code omits the ``Authorization`` header. We declare an HTTP
+          Bearer scheme and attach it to every operation that actually requires
+          auth (same public-path rules as the middleware).
+        * **Response examples** — most response models are Pydantic
+          ``Optional[...]`` (``anyOf: [T, null]``) with no example, which Scalar
+          renders as a bare ``null``. We synthesize a shape-correct example for
+          each 2xx JSON response so endpoints show their actual structure.
+        """
+
+        build_schema = self.api.openapi
+
+        def custom_openapi():
+            if self.api.openapi_schema:
+                return self.api.openapi_schema
+            schema = build_schema()
+            # A server entry lets the reference UI build concrete request URLs
+            # for its code samples; without one Scalar renders an empty example.
+            # Relative so it resolves against whatever origin serves the docs.
+            schema.setdefault("servers", [{"url": "/", "description": "This server"}])
+            components = schema.setdefault("components", {})
+            components.setdefault("securitySchemes", {})["bearerAuth"] = {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": (
+                    "Personal API token from Account Settings → API Tokens. "
+                    "Read-only tokens may also be passed as a `?token=` query "
+                    "parameter."
+                ),
+            }
+            requirement = [{"bearerAuth": []}]
+            all_schemas = components.get("schemas", {})
+            http_methods = {"get", "post", "put", "patch", "delete"}
+            for path, path_item in schema.get("paths", {}).items():
+                public = is_auth_excluded_path(path)
+                for method, operation in path_item.items():
+                    if method.lower() not in http_methods:
+                        continue
+                    if not public:
+                        operation["security"] = requirement
+                    _inject_response_examples(operation, all_schemas)
+
+            # Lead the reference with the picture listing (the most useful
+            # starting point) by ordering its path first. This is presentation
+            # only — it does not affect route matching.
+            paths = schema.get("paths", {})
+            lead_path = f"{API_V1_PREFIX}/pictures"
+            if lead_path in paths:
+                schema["paths"] = {
+                    lead_path: paths[lead_path],
+                    **{p: item for p, item in paths.items() if p != lead_path},
+                }
+            self.api.openapi_schema = schema
+            return schema
+
+        self.api.openapi = custom_openapi
+
     def _setup_routes(self):
         ###############################
         # Rate limiting              ##
@@ -928,7 +1273,22 @@ class Server:
                     name="frontend-assets",
                 )
 
-        @self.api.get("/")
+        # Images embedded in the API reference description (logo + token
+        # screenshots). Bundled with the package and served same-origin so
+        # /scalar works offline, without depending on pixlstash.dev. The
+        # static docs generator copies the same files next to each published
+        # page, so the page-relative URLs resolve there too.
+        scalar_assets_dir = os.path.join(
+            os.path.dirname(__file__), "data", "scalar-assets"
+        )
+        if os.path.isdir(scalar_assets_dir):
+            self.api.mount(
+                "/scalar-assets",
+                StaticFiles(directory=scalar_assets_dir),
+                name="scalar-assets",
+            )
+
+        @self.api.get("/", include_in_schema=False)
         async def read_root():
             index_path = self._get_frontend_index_path()
             if index_path:
@@ -936,7 +1296,7 @@ class Server:
             version = self._get_version()
             return {"message": "PixlStash REST API", "version": version}
 
-        @self.api.get("/version")
+        @self.api.get("/version", tags=["server"])
         async def read_version():
             version = self._get_version()
             install_type = "docker" if Server.running_in_docker() else "pip"
@@ -956,23 +1316,10 @@ class Server:
         @self.api.get("/scalar", include_in_schema=False)
         async def scalar_reference():
             # Scalar API reference UI, rendered client-side from the live
-            # OpenAPI schema. Served alongside the built-in /docs and /redoc.
-            html = """<!doctype html>
-<html lang="en">
-  <head>
-    <title>PixlStash API Reference</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-  </head>
-  <body>
-    <script id="api-reference" data-url="/openapi.json"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-  </body>
-</html>
-"""
-            return HTMLResponse(content=html)
+            # OpenAPI schema. Served alongside the built-in Swagger /docs.
+            return HTMLResponse(content=render_scalar_html("/openapi.json"))
 
-        @self.api.get("/favicon.ico")
+        @self.api.get("/favicon.ico", include_in_schema=False)
         def favicon():
             index_path = self._get_frontend_index_path()
             if index_path:
@@ -1077,12 +1424,10 @@ class Server:
         self.api.include_router(
             create_reference_folders_router(self),
             prefix=API_V1_PREFIX,
-            tags=["config"],
         )
         self.api.include_router(
             create_import_folders_router(self),
             prefix=API_V1_PREFIX,
-            tags=["config"],
         )
         self.api.include_router(
             create_filesystem_router(self),
@@ -1114,11 +1459,11 @@ class Server:
                 self.allow_origin_regex,
             )
 
-        @self.api.get(f"{API_V1_PREFIX}/check-session")
+        @self.api.get(f"{API_V1_PREFIX}/check-session", tags=["auth"])
         async def check_session(request: Request):
             return self.auth.check_session(request)
 
-        @self.api.get(f"{API_V1_PREFIX}/network/info")
+        @self.api.get(f"{API_V1_PREFIX}/network/info", tags=["server"])
         def network_info(request: Request):
             self.auth.require_user_id(request)
             try:
@@ -1134,25 +1479,25 @@ class Server:
                 is_private = True
             return {"lan_ip": lan_ip, "is_private": is_private}
 
-        @self.api.post(f"{API_V1_PREFIX}/login")
+        @self.api.post(f"{API_V1_PREFIX}/login", tags=["auth"])
         def login(login_request: LoginRequest, http_request: Request):
             response = self.auth.login(login_request, http_request)
             self._user = self.auth.user
             return response
 
-        @self.api.get(f"{API_V1_PREFIX}/login")
+        @self.api.get(f"{API_V1_PREFIX}/login", tags=["auth"])
         def check_registration():
             return self.auth.check_registration()
 
-        @self.api.post(f"{API_V1_PREFIX}/logout")
+        @self.api.post(f"{API_V1_PREFIX}/logout", tags=["auth"])
         def logout(response: Response, request: Request):
             return self.auth.logout(response, request)
 
-        @self.api.get(f"{API_V1_PREFIX}/protected")
+        @self.api.get(f"{API_V1_PREFIX}/protected", include_in_schema=False)
         async def protected():
             return {"message": "You are authenticated!"}
 
-        @self.api.get("/{full_path:path}")
+        @self.api.get("/{full_path:path}", include_in_schema=False)
         async def frontend_fallback(full_path: str):
             dist_dir = self._get_frontend_dist_dir()
             if not dist_dir:

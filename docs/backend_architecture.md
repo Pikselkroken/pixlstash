@@ -856,9 +856,9 @@ Public paths (no auth) — defined as `AUTH_EXCLUDED_PATHS` / `AUTH_EXCLUDED_PRE
 
 ```
 Exact:    /, /login, /logout, /check-session, /version,
-          /docs, /redoc, /openapi.json, /docs/oauth2-redirect,
+          /docs, /scalar, /openapi.json, /docs/oauth2-redirect,
           /favicon.ico, /Logo.png, /Empty.png, /EmptyTrash.png
-Prefix:   /assets/, /share/, /docs/, /redoc/
+Prefix:   /assets/, /share/, /docs/
 ```
 
 In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
