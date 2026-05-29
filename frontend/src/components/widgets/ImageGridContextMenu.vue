@@ -186,6 +186,53 @@
         <div class="ctx-sep" />
       </template>
 
+      <!-- ── Restore from snapshot ─────────────────────────── -->
+      <template
+        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
+      >
+        <div
+          class="ctx-submenu-wrap"
+          @mouseenter="restoreSubmenuOpen = true"
+          @mouseleave="restoreSubmenuOpen = false"
+        >
+          <button
+            class="ctx-item"
+            :disabled="!selectedImageIds.length || isReadOnly"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+            Restore from snapshot
+            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+            <button
+              v-for="cp in recentSnapshots"
+              :key="cp.id"
+              class="ctx-item"
+              :disabled="identicalSnapshotIds.has(cp.id)"
+              :title="
+                identicalSnapshotIds.has(cp.id)
+                  ? 'Selection is identical to this snapshot'
+                  : undefined
+              "
+              @click="handleRestoreFromSnapshot(cp.id)"
+            >
+              <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+              {{ cp.label || cp.kind }}
+              <span class="ctx-default-pill">{{
+                cp.created_at
+                  ? new Date(cp.created_at + "Z").toLocaleDateString()
+                  : ""
+              }}</span>
+            </button>
+            <button class="ctx-item" @click="handleRestoreMore">
+              <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+              More…
+            </button>
+          </div>
+        </div>
+      </template>
+
+
       <!-- ── Find similar faces ─────────────────────────────── -->
       <template
         v-if="
@@ -239,51 +286,6 @@
         </div>
       </template>
 
-      <!-- ── Restore from snapshot ─────────────────────────── -->
-      <template
-        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
-      >
-        <div
-          class="ctx-submenu-wrap"
-          @mouseenter="restoreSubmenuOpen = true"
-          @mouseleave="restoreSubmenuOpen = false"
-        >
-          <button
-            class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly"
-          >
-            <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
-            Restore from snapshot
-            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
-          </button>
-          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
-            <button
-              v-for="cp in recentSnapshots"
-              :key="cp.id"
-              class="ctx-item"
-              :disabled="identicalSnapshotIds.has(cp.id)"
-              :title="
-                identicalSnapshotIds.has(cp.id)
-                  ? 'Selection is identical to this snapshot'
-                  : undefined
-              "
-              @click="handleRestoreFromSnapshot(cp.id)"
-            >
-              <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
-              {{ cp.label || cp.kind }}
-              <span class="ctx-default-pill">{{
-                cp.created_at
-                  ? new Date(cp.created_at + "Z").toLocaleDateString()
-                  : ""
-              }}</span>
-            </button>
-            <button class="ctx-item" @click="handleRestoreMore">
-              <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
-              More…
-            </button>
-          </div>
-        </div>
-      </template>
 
       <!-- ── Reverse image search ────────────────────────────── -->
       <template v-if="contextImage?.id && !isScrapheapView">
