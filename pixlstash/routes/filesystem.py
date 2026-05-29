@@ -67,7 +67,6 @@ def create_router(server) -> APIRouter:
             "Requires authentication."
         ),
         response_model=FilesystemBrowseResponse,
-        tags=["config"],
     )
     def browse_filesystem(
         request: Request,

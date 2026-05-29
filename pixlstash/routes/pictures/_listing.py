@@ -1271,13 +1271,8 @@ def register_routes(router, server):
         "/pictures",
         summary="List pictures",
         description="Lists pictures with filtering, sort, pagination, and optional grid field projection.",
-        responses={
-            200: {
-                "model": list[GridPicture],
-                "description": "Matching pictures (field set depends on `fields`).",
-            },
-            400: {"description": "Invalid sort mechanism."},
-        },
+        response_model=list[GridPicture],
+        responses={400: {"description": "Invalid sort mechanism."}},
     )
     def list_pictures(
         request: Request,
@@ -1360,8 +1355,8 @@ def register_routes(router, server):
             "(not the post-filter row count). Callers paginate by passing the "
             "returned `next_offset` until `done` is true."
         ),
+        response_model=StreamPicturesResponse,
         responses={
-            200: {"model": StreamPicturesResponse},
             400: {"description": "Invalid sort mechanism."},
         },
     )

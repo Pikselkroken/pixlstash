@@ -13,7 +13,10 @@ import requests
 import websockets
 from fastapi import APIRouter, Body, HTTPException, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
+
+from typing import Optional
 
 from datetime import datetime
 
@@ -1053,6 +1056,91 @@ def _comfyui_abort(base_url: str) -> dict:
     return result
 
 
+class ComfyUIWorkflowItemResponse(BaseModel):
+    """A single discovered ComfyUI workflow with placeholder validation metadata."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    display_name: Optional[str] = None
+    valid: bool = False
+    missing_placeholders: list[str] = []
+    source: Optional[str] = None
+    workflow_type: Optional[str] = None
+
+
+class ComfyUIWorkflowListResponse(BaseModel):
+    """List of ComfyUI workflows plus the directories they were discovered in."""
+
+    model_config = ConfigDict(extra="allow")
+
+    workflows: list[ComfyUIWorkflowItemResponse] = []
+    workflow_dirs: dict[str, str] = {}
+
+
+class ComfyUIWorkflowDeleteResponse(BaseModel):
+    """Result of deleting a user workflow."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    name: str
+
+
+class ComfyUIAbortResponse(BaseModel):
+    """Result of aborting the active ComfyUI run."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    interrupted: bool = False
+    queue_cleared: bool = False
+
+
+class ComfyUIPromptItemResponse(BaseModel):
+    """A single submitted ComfyUI prompt entry."""
+
+    model_config = ConfigDict(extra="allow")
+
+    prompt_id: Optional[str] = None
+    picture_id: Optional[int] = None
+    workflow: Optional[str] = None
+
+
+class ComfyUIRunResponse(BaseModel):
+    """Result of submitting one or more ComfyUI prompts."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    prompts: list[ComfyUIPromptItemResponse] = []
+    workflow: Optional[str] = None
+
+
+class ComfyUIWorkflowImportResponse(BaseModel):
+    """Result of importing/saving a user workflow."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    name: str
+    workflow_dir: str
+
+
+class ComfyUIPictureWorkflowResponse(BaseModel):
+    """ComfyUI workflow info extracted from a picture's embedded metadata."""
+
+    model_config = ConfigDict(extra="allow")
+
+    workflow: dict
+    is_api_format: bool = False
+    summary: Optional[str] = None
+    models: list[str] = []
+    loras: list[str] = []
+    positive_prompt: Optional[str] = None
+    seed: Optional[int] = None
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -1143,6 +1231,7 @@ def create_router(server) -> APIRouter:
         "/comfyui/workflows",
         summary="List ComfyUI workflows",
         description="Lists discovered built-in and user workflows with placeholder validation metadata.",
+        response_model=ComfyUIWorkflowListResponse,
     )
     async def list_comfyui_workflows():
         workflow_dirs = {
@@ -1190,6 +1279,7 @@ def create_router(server) -> APIRouter:
         "/comfyui/workflows/{workflow_name}",
         summary="Delete user workflow",
         description="Deletes a workflow JSON from the user workflow directory.",
+        response_model=ComfyUIWorkflowDeleteResponse,
     )
     async def delete_comfyui_workflow(workflow_name: str):
         normalized = _normalize_workflow_name(workflow_name)
@@ -1213,6 +1303,7 @@ def create_router(server) -> APIRouter:
         "/comfyui/abort",
         summary="Abort ComfyUI execution",
         description="Interrupts the currently running ComfyUI prompt and clears the pending queue.",
+        response_model=ComfyUIAbortResponse,
     )
     async def abort_comfyui(request: Request):
         user = server.auth.get_user_for_request(request)
@@ -1225,6 +1316,7 @@ def create_router(server) -> APIRouter:
         "/comfyui/run_i2i",
         summary="Run ComfyUI image-to-image",
         description="Submits i2i prompts for one or more picture ids and imports generated outputs back into PixlStash.",
+        response_model=ComfyUIRunResponse,
     )
     async def run_comfyui_i2i(request: Request, payload: dict = Body(...)):
         workflow_name = _normalize_workflow_name(payload.get("workflow_name"))
@@ -1349,6 +1441,7 @@ def create_router(server) -> APIRouter:
         "/comfyui/run_t2i",
         summary="Run ComfyUI text-to-image",
         description="Submits a t2i prompt using only a caption and imports generated outputs back into PixlStash.",
+        response_model=ComfyUIRunResponse,
     )
     async def run_comfyui_t2i(request: Request, payload: dict = Body(...)):
         workflow_name = _normalize_workflow_name(payload.get("workflow_name"))
@@ -1481,6 +1574,7 @@ def create_router(server) -> APIRouter:
         "/comfyui/workflows/import",
         summary="Import ComfyUI workflow",
         description="Saves a workflow JSON into the user workflow directory, optionally overwriting an existing file.",
+        response_model=ComfyUIWorkflowImportResponse,
     )
     async def import_comfyui_workflow(payload: dict = Body(...)):
         name = _normalize_workflow_name(payload.get("name"))
@@ -1516,6 +1610,7 @@ def create_router(server) -> APIRouter:
             "Extracts and returns the ComfyUI workflow embedded in a picture's "
             "file metadata, if present."
         ),
+        response_model=ComfyUIPictureWorkflowResponse,
     )
     def get_picture_comfyui_workflow(picture_id: str):
         pics = server.vault.db.run_immediate_read_task(

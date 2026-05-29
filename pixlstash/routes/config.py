@@ -5,7 +5,8 @@ import time
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, UploadFile
-from pydantic import BaseModel, Field
+from fastapi.responses import Response as FastAPIResponse
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import update
 from sqlmodel import Session
 
@@ -62,9 +63,172 @@ def create_router(server) -> APIRouter:
         include_attachments: bool = False
         watermark: bool = True
 
+    # ── Response models ───────────────────────────────────────────────────────
+    # All response models use extra="allow" so that no field is ever silently
+    # dropped during serialization, while still documenting the known keys.
+
+    class UserConfigResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        description: Optional[str] = None
+        sort: Optional[str] = None
+        sort_order: Optional[str] = None
+        descending: Optional[bool] = None
+        columns: Optional[int] = None
+        sidebar_thumbnail_size: Optional[int] = None
+        show_stars: Optional[bool] = None
+        show_face_bboxes: Optional[bool] = None
+        show_hand_bboxes: Optional[bool] = None
+        show_format: Optional[bool] = None
+        show_resolution: Optional[bool] = None
+        show_problem_icon: Optional[bool] = None
+        compact_mode: Optional[bool] = None
+        expand_all_stacks: Optional[bool] = None
+        date_format: Optional[str] = None
+        theme_mode: Optional[str] = None
+        comfyui_url: Optional[str] = None
+        public_url: Optional[str] = None
+        similarity_character: Optional[int] = None
+        stack_strictness: Optional[float] = None
+        apply_tag_filter: Optional[bool] = None
+        keep_models_in_memory: Optional[bool] = None
+        max_vram_gb: Optional[float] = None
+        check_for_updates: Optional[bool] = None
+        show_keyboard_hint: Optional[bool] = None
+        embed_watermark: Optional[bool] = None
+        smart_score_penalised_tags: Optional[dict] = None
+        hidden_tags: Optional[list] = None
+        tagger_settings: Optional[dict] = None
+
+    class PenalisedTagsResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        smart_score_penalised_tags: Optional[dict] = None
+
+    class PatchUserConfigResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        updated: bool
+        config: UserConfigResponse
+
+    class ChangePasswordResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+
+    class MeAuthResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        username: Optional[str] = None
+        has_password: bool
+
+    class CreateTokenResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        token: str
+        token_id: int
+        scope: str
+        resource_type: Optional[str] = None
+        resource_id: Optional[int] = None
+        expires_at: Optional[datetime] = None
+        include_attachments: bool
+        watermark: bool
+
+    class TokenListItemResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        id: int
+        description: Optional[str] = None
+        scope: str
+        resource_type: Optional[str] = None
+        resource_id: Optional[int] = None
+        resource_name: Optional[str] = None
+        expires_at: Optional[datetime] = None
+        created_at: Optional[datetime] = None
+        last_used_at: Optional[datetime] = None
+        include_attachments: bool
+        watermark: bool
+
+    class DeleteTokenResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        deleted_id: int
+
+    class PatchTokenResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        id: int
+        watermark: bool
+
+    class WatermarkUploadResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+
+    class SharedResourceIdsResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        resource_type: str
+        ids: list[int]
+
+    class BatchSharedPictureIdsResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        shared_ids: list[int]
+
+    class RevokeTokensResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        deleted_count: int
+
+    class SessionContextResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        is_owner: bool
+        scope: str
+        resource_type: Optional[str] = None
+        resource_id: Optional[int] = None
+        expires_at: Optional[datetime] = None
+        include_attachments: Optional[bool] = None
+
+    class WorkersProgressResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        workers: dict
+        process: dict
+
+    class WatchFoldersResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        watch_folders: list[str]
+
+    class FilesystemRootsResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        filesystem_roots: list[str]
+
+    class SnapshotConfigResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        daily_snapshots: bool
+
+    class OpenServerConfigResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+
     @router.get(
         "/users/me/config",
         summary="Get current user config",
+        response_model=UserConfigResponse,
         description="Returns the authenticated user's UI and behavior configuration payload.",
     )
     def get_me_config(request: Request):
@@ -75,6 +239,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/users/me/penalised-tags",
         summary="Get penalised tags",
+        response_model=PenalisedTagsResponse,
         description="Returns the smart-score penalised tags for the authenticated user. Accessible to READ-scoped tokens.",
     )
     def get_me_penalised_tags(request: Request):
@@ -86,6 +251,7 @@ def create_router(server) -> APIRouter:
     @router.patch(
         "/users/me/config",
         summary="Update current user config",
+        response_model=PatchUserConfigResponse,
         description="Applies a partial config patch for the authenticated user and returns updated settings.",
     )
     async def patch_me_config(request: Request):
@@ -158,6 +324,7 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/users/me/auth",
         summary="Change current user password",
+        response_model=ChangePasswordResponse,
         description="Changes the authenticated user's password according to auth policy.",
     )
     def change_me_password(payload: ChangePasswordRequest, request: Request):
@@ -168,6 +335,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/users/me/auth",
         summary="Get auth state",
+        response_model=MeAuthResponse,
         description="Returns authentication and session-related information for the current request.",
     )
     def get_me_auth(request: Request):
@@ -176,6 +344,7 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/users/me/token",
         summary="Create API token",
+        response_model=CreateTokenResponse,
         description="Creates a personal access token for the authenticated user.",
     )
     def create_me_token(payload: CreateTokenRequest, request: Request):
@@ -193,6 +362,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/users/me/token",
         summary="List API tokens",
+        response_model=list[TokenListItemResponse],
         description="Lists personal access tokens owned by the authenticated user.",
     )
     def list_me_tokens(request: Request):
@@ -201,6 +371,7 @@ def create_router(server) -> APIRouter:
     @router.delete(
         "/users/me/token/{token_id}",
         summary="Delete API token",
+        response_model=DeleteTokenResponse,
         description="Deletes one personal access token by id for the authenticated user.",
     )
     def delete_me_token(token_id: int, request: Request):
@@ -212,6 +383,7 @@ def create_router(server) -> APIRouter:
     @router.patch(
         "/users/me/token/{token_id}",
         summary="Update API token",
+        response_model=PatchTokenResponse,
         description="Updates mutable fields on a personal access token (currently: watermark).",
     )
     def patch_me_token(token_id: int, payload: UpdateTokenRequest, request: Request):
@@ -222,11 +394,11 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/users/me/watermark",
         summary="Get watermark image",
+        response_class=FastAPIResponse,
+        responses={200: {"content": {"image/png": {}}}},
         description="Returns the user's watermark as a PNG. Returns the default if no custom watermark is set.",
     )
     def get_me_watermark(request: Request):
-        from fastapi.responses import Response as FastAPIResponse
-
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
         img_bytes = getattr(user, "watermark_image", None) if user else None
@@ -239,6 +411,7 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/users/me/watermark",
         summary="Upload custom watermark",
+        response_model=WatermarkUploadResponse,
         description="Uploads a PNG/JPEG/WebP image to use as the user's watermark.",
     )
     async def post_me_watermark(file: UploadFile, request: Request):
@@ -288,6 +461,7 @@ def create_router(server) -> APIRouter:
     @router.delete(
         "/users/me/watermark",
         summary="Remove custom watermark",
+        response_model=WatermarkUploadResponse,
         description="Removes the user's custom watermark; the default will be used for new shares.",
     )
     def delete_me_watermark(request: Request):
@@ -308,6 +482,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/users/me/shared-resource-ids",
         summary="Get shared resource IDs",
+        response_model=SharedResourceIdsResponse,
         description=(
             "Returns the IDs of resources of the given type that have at least one "
             "active READ share token. Accepts ?resource_type= (character, picture_set, project, picture)."
@@ -328,6 +503,7 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/users/me/shared-picture-ids/batch",
         summary="Batch check shared picture IDs",
+        response_model=BatchSharedPictureIdsResponse,
         description="Given a list of picture IDs, returns which ones have active READ share tokens.",
     )
     def batch_shared_picture_ids(
@@ -338,6 +514,7 @@ def create_router(server) -> APIRouter:
     @router.delete(
         "/users/me/tokens/by-resource",
         summary="Revoke all tokens for a resource",
+        response_model=RevokeTokensResponse,
         description="Deletes all READ tokens scoped to a specific resource (by type and id).",
     )
     def revoke_tokens_for_resource(
@@ -350,6 +527,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/session/context",
         summary="Get session access context",
+        response_model=SessionContextResponse,
         description=(
             "Returns the access scope for the current session or token. "
             "Accepts ?token= query parameter so unauthenticated share-link "
@@ -362,6 +540,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/workers/progress",
         summary="Get worker progress",
+        response_model=WorkersProgressResponse,
         description="Returns background worker progress plus process CPU, RAM, and VRAM usage metrics.",
     )
     def get_workers_progress(request: Request):
@@ -376,6 +555,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/server-config/watch-folders",
         summary="List watch folders",
+        response_model=WatchFoldersResponse,
         description="Returns watch-folder paths from import-folder records in the database.",
     )
     def get_watch_folders(request: Request):
@@ -395,6 +575,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/server-config/filesystem-roots",
         summary="List filesystem browser roots",
+        response_model=FilesystemRootsResponse,
         description=(
             "Returns the configured filesystem browser root paths. "
             "When non-empty, the filesystem browser is restricted to these directories. "
@@ -421,6 +602,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/server-config/snapshots",
         summary="Get snapshot configuration",
+        response_model=SnapshotConfigResponse,
         description="Returns server-level snapshot configuration.",
     )
     def get_snapshot_config(request: Request):
@@ -437,6 +619,7 @@ def create_router(server) -> APIRouter:
     @router.patch(
         "/server-config/snapshots",
         summary="Update snapshot configuration",
+        response_model=SnapshotConfigResponse,
         description="Updates snapshot configuration. Changes take effect immediately and are persisted to server-config.json.",
     )
     def patch_snapshot_config(request: Request, body: SnapshotConfigPatch):
@@ -453,6 +636,7 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/server-config/open",
         summary="Open server config location",
+        response_model=OpenServerConfigResponse,
         description="Opens the server config path in the operating system file browser.",
     )
     def open_server_config(request: Request):

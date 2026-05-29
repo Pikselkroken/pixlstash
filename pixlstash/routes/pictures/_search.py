@@ -6,7 +6,9 @@ from fastapi import (
     Query,
     Request,
 )
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
+from typing import Optional
 
 from pixlstash.db_models import (
     Face,
@@ -31,11 +33,27 @@ from ._helpers import (
 logger = get_logger(__name__)
 
 
+class PictureMetadataResponse(BaseModel):
+    """Serialized picture metadata as returned by search/CRUD endpoints.
+
+    The full picture model is large and dynamic; common fields are enumerated
+    here for documentation and ``extra="allow"`` preserves every other field
+    (including the search-only ``likeness_score`` overlay)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    format: Optional[str] = None
+    score: Optional[int] = None
+    likeness_score: Optional[float] = None
+
+
 def register_routes(router, server):
     @router.get(
         "/pictures/search",
         summary="Search pictures by text",
         description="Performs semantic text search across pictures with optional sort, filtering, and candidate scoping.",
+        response_model=list[PictureMetadataResponse],
     )
     def search_pictures(
         request: Request,

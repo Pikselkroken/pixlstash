@@ -47,6 +47,13 @@ class ImportFoldersListResponse(BaseModel):
     folders: list[ImportFolderResponse]
 
 
+class ImportFolderDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    id: int
+
+
 def create_router(server) -> APIRouter:
     """Create the import-folders API router.
 
@@ -236,6 +243,7 @@ def create_router(server) -> APIRouter:
         summary="Remove an import folder",
         description="Removes an import folder from automatic monitoring.",
         tags=["folders"],
+        response_model=ImportFolderDeleteResponse,
     )
     def delete_import_folder(folder_id: int, request: Request):
         server.auth.require_user_id(request)

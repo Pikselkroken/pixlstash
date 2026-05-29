@@ -10,13 +10,50 @@ from __future__ import annotations
 
 import json
 import threading
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 
 logger = get_logger(__name__)
+
+
+class TaggerPluginResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    supports_tags: bool = False
+    supports_descriptions: bool = False
+    requires_download: bool = False
+    default_enabled: bool = False
+    parameter_schema: list[dict] = []
+    downloaded_artifacts: list[dict] = []
+    is_loaded: bool = False
+    load_error: Optional[str] = None
+
+
+class TaggerListResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    plugins: list[TaggerPluginResponse] = []
+    settings: dict = {}
+
+
+class TaggerDownloadResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
+class TaggerArtifactDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
 
 
 def create_router(server) -> APIRouter:
@@ -46,7 +83,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/taggers",
         summary="List tagger plugins and current settings",
-        tags=["taggers"],
+        response_model=TaggerListResponse,
     )
     def list_taggers(request: Request):
         """Return every registered tagger/captioner plugin together with
@@ -121,8 +158,8 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/taggers/{name}/download",
         summary="Start artifact download for a tagger plugin",
-        tags=["taggers"],
         status_code=202,
+        response_model=TaggerDownloadResponse,
     )
     def download_plugin(name: str, request: Request):
         """Kick off a background download for the named plugin.
@@ -155,7 +192,7 @@ def create_router(server) -> APIRouter:
     @router.delete(
         "/taggers/{name}/artifacts/{artifact_id}",
         summary="Delete a downloaded artifact for a tagger plugin",
-        tags=["taggers"],
+        response_model=TaggerArtifactDeleteResponse,
     )
     def delete_artifact(name: str, artifact_id: str, request: Request):
         """Remove a downloaded artifact and unload the plugin if currently loaded.

@@ -1,8 +1,9 @@
 """HTTP routes for snapshot creation, listing, deletion, and restore/undo."""
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
@@ -11,6 +12,83 @@ logger = get_logger(__name__)
 
 # Maximum number of resources returned in preview responses.
 _PREVIEW_RESOURCE_LIMIT = 200
+
+
+# ----------------------------------------------------------------------
+# Response models (declared so Scalar renders real 200 bodies, not null)
+# ----------------------------------------------------------------------
+
+
+class SnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    kind: Optional[str] = None
+    label: Optional[str] = None
+    created_at: Optional[str] = None
+    byte_size: Optional[int] = None
+    picture_count: Optional[int] = None
+    picture_set_count: Optional[int] = None
+    project_count: Optional[int] = None
+    character_count: Optional[int] = None
+    schema_version: Optional[str] = None
+    is_compatible: Optional[bool] = None
+
+
+class SnapshotsStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    active_job: Optional[Any] = None
+
+
+class RestorePreviewSnapshot(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    kind: Optional[str] = None
+    label: Optional[str] = None
+    created_at: Optional[str] = None
+    is_compatible: Optional[bool] = None
+
+
+class RestorePreviewResource(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Optional[str] = None
+    id: Optional[int] = None
+    exists_in_live: Optional[bool] = None
+    exists_in_snapshot: Optional[bool] = None
+    file_on_disk: Optional[bool] = None
+    changed_fields: Optional[Any] = None
+    dependent_counts: Optional[Any] = None
+
+
+class RestorePreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    snapshot: Optional[RestorePreviewSnapshot] = None
+    resources: Optional[List[RestorePreviewResource]] = None
+    summary: Optional[Any] = None
+    warnings: Optional[Any] = None
+
+
+class RestoreReportResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    snapshot_id: Optional[int] = None
+    resource_type: Optional[str] = None
+    resource_id: Optional[int] = None
+    missing_files_count: Optional[int] = None
+    upserted_count: Optional[int] = None
+    errors: Optional[Any] = None
+    dry_run: Optional[bool] = None
+
+
+class HashCompareResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    identical_ids: Optional[List[int]] = None
+    changed_ids: Optional[List[int]] = None
 
 
 def _serialize_snapshot(cp, manifest: dict, live_schema: str) -> dict:
@@ -94,7 +172,7 @@ def create_router(server) -> APIRouter:
     # GET /snapshots
     # ------------------------------------------------------------------
 
-    @router.get("/snapshots")
+    @router.get("/snapshots", response_model=list[SnapshotResponse])
     def list_snapshots(request: Request):
         """Return all snapshots ordered by creation date (newest first).
 
@@ -115,7 +193,7 @@ def create_router(server) -> APIRouter:
     # GET /snapshots/status
     # ------------------------------------------------------------------
 
-    @router.get("/snapshots/status")
+    @router.get("/snapshots/status", response_model=SnapshotsStatusResponse)
     def snapshots_status(request: Request):
         """Return the currently-running restore or snapshot job, if any.
 
@@ -128,7 +206,7 @@ def create_router(server) -> APIRouter:
     # POST /snapshots
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots", status_code=201)
+    @router.post("/snapshots", status_code=201, response_model=SnapshotResponse)
     def create_snapshot(
         request: Request,
         label: Optional[str] = Body(default=None, embed=True),
@@ -153,7 +231,7 @@ def create_router(server) -> APIRouter:
     # PATCH /snapshots/{id}  — rename label
     # ------------------------------------------------------------------
 
-    @router.patch("/snapshots/{snapshot_id}")
+    @router.patch("/snapshots/{snapshot_id}", response_model=SnapshotResponse)
     def rename_snapshot(
         snapshot_id: int,
         request: Request,
@@ -177,10 +255,12 @@ def create_router(server) -> APIRouter:
 
     @router.delete("/snapshots/{snapshot_id}", status_code=204)
     def delete_snapshot(snapshot_id: int, request: Request):
-        """Delete a MANUAL snapshot and its snapshot files.
+        """Delete a snapshot and its snapshot files.
 
-        Returns ``403 Forbidden`` for DAILY/WEEKLY/MONTHLY/OPPORTUNISTIC
-        snapshots (those are managed by the GFS schedule).
+        MANUAL and OPPORTUNISTIC snapshots may always be deleted.  For
+        GFS-scheduled kinds (DAILY, WEEKLY, MONTHLY) deletion is refused
+        when this is the last remaining snapshot of that kind — the system
+        always keeps at least one of each GFS tier.
 
         Authentication is required.
         """
@@ -188,15 +268,20 @@ def create_router(server) -> APIRouter:
         cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
-        if cp.kind != "MANUAL":
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Cannot delete a {cp.kind} snapshot. "
-                    "Only MANUAL snapshots may be deleted by the user; "
-                    "GFS-scheduled snapshots are pruned automatically."
-                ),
-            )
+        if cp.kind in ("DAILY", "WEEKLY", "MONTHLY"):
+            all_of_kind = [
+                s
+                for s in server.vault.snapshot_service.list_snapshots()
+                if s.kind == cp.kind
+            ]
+            if len(all_of_kind) <= 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot delete the only remaining {cp.kind} snapshot. "
+                        "The system keeps at least one of each GFS tier."
+                    ),
+                )
         try:
             server.vault.snapshot_service.delete_snapshot(snapshot_id)
         except Exception as exc:
@@ -212,7 +297,10 @@ def create_router(server) -> APIRouter:
     # GET /snapshots/{id}/restore/preview  (full-restore dry-run preview)
     # ------------------------------------------------------------------
 
-    @router.get("/snapshots/{snapshot_id}/restore/preview")
+    @router.get(
+        "/snapshots/{snapshot_id}/restore/preview",
+        response_model=RestorePreviewResponse,
+    )
     def preview_full_restore(snapshot_id: int, request: Request):
         """Return a dry-run preview of a full restore.
 
@@ -243,7 +331,8 @@ def create_router(server) -> APIRouter:
     # ------------------------------------------------------------------
 
     @router.get(
-        "/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview"
+        "/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview",
+        response_model=RestorePreviewResponse,
     )
     def preview_resource_restore(
         snapshot_id: int,
@@ -279,7 +368,10 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/restore/preview/batch
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore/preview/batch")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore/preview/batch",
+        response_model=RestorePreviewResponse,
+    )
     def preview_batch_restore(
         snapshot_id: int,
         request: Request,
@@ -312,7 +404,9 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/restore  (full restore)
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore", response_model=RestoreReportResponse
+    )
     def restore_snapshot(
         snapshot_id: int,
         request: Request,
@@ -351,7 +445,9 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/restore/batch
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore/batch")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore/batch", response_model=RestoreReportResponse
+    )
     def restore_batch(
         snapshot_id: int,
         request: Request,
@@ -392,7 +488,9 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/hash-compare
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/hash-compare")
+    @router.post(
+        "/snapshots/{snapshot_id}/hash-compare", response_model=HashCompareResponse
+    )
     def hash_compare(
         snapshot_id: int,
         request: Request,
@@ -421,7 +519,10 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/restore/{resource_type}/{resource_id}
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}",
+        response_model=RestoreReportResponse,
+    )
     def restore_resource(
         snapshot_id: int,
         resource_type: str,

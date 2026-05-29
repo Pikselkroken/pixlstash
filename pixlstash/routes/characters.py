@@ -5,7 +5,7 @@ import os
 import random as _random
 import time
 from io import BytesIO
-from typing import List
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -21,6 +21,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from PIL import Image
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import case as sa_case, exists, func
 from sqlmodel import Session, select
 
@@ -141,6 +142,98 @@ def _compute_character_query_likeness(
     return float((weights * sims).sum() / denom)
 
 
+class CharacterResponse(BaseModel):
+    """A single character record (scalar fields of the Character model)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    extra_metadata: Optional[str] = None
+    reference_picture_set_id: Optional[int] = None
+    project_id: Optional[int] = None
+
+
+class CharacterListItemResponse(BaseModel):
+    """A character in the list endpoint, annotated with reference-face presence."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    extra_metadata: Optional[str] = None
+    reference_picture_set_id: Optional[int] = None
+    project_id: Optional[int] = None
+    has_reference_faces: bool = False
+
+
+class CharacterSummaryResponse(BaseModel):
+    """Category summary counts and thumbnail reference for a character/category."""
+
+    model_config = ConfigDict(extra="allow")
+
+    character_id: Optional[int] = None
+    image_count: int = 0
+    thumbnail_url: Optional[str] = None
+
+
+class CharacterReferencePicturesResponse(BaseModel):
+    """Reference picture ids selected for a character."""
+
+    model_config = ConfigDict(extra="allow")
+
+    reference_picture_ids: list[int] = []
+
+
+class CharacterMutationResponse(BaseModel):
+    """Result of creating or updating a character."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    character: Optional[CharacterResponse] = None
+
+
+class CharacterDeleteResponse(BaseModel):
+    """Result of deleting a character."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    deleted_id: int
+
+
+class CharacterMembershipResponse(BaseModel):
+    """Batch character membership lookup result."""
+
+    model_config = ConfigDict(extra="allow")
+
+    character_assignments: dict[str, list[int]] = {}
+    pictures_with_faces: list[int] = []
+
+
+class CharacterFaceAssignmentResponse(BaseModel):
+    """Result of assigning or unassigning faces for a character."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    face_ids: Optional[list[int]] = None
+    character_id: int
+    already_assigned_ids: Optional[list[int]] = None
+
+
+class CharacterLikenessResultResponse(BaseModel):
+    """A single character likeness-search result."""
+
+    model_config = ConfigDict(extra="allow")
+
+    character_id: int
+    likeness: float
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -226,6 +319,7 @@ def create_router(server) -> APIRouter:
         "/characters/{id}/summary",
         summary="Get character category summary",
         description="Returns summary counts and thumbnail reference for ALL, UNASSIGNED, SCRAPHEAP, or a specific character id.",
+        response_model=CharacterSummaryResponse,
     )
     def get_characters_summary(
         request: Request,
@@ -369,6 +463,7 @@ def create_router(server) -> APIRouter:
         "/characters/{id}/reference_pictures",
         summary="List reference pictures",
         description="Returns picture ids selected as reference faces for the given character.",
+        response_model=CharacterReferencePicturesResponse,
     )
     def get_character_reference_pictures(request: Request, id: int):
         """Return reference picture ids for a character.
@@ -413,6 +508,7 @@ def create_router(server) -> APIRouter:
         "/characters/{id}",
         summary="Update character",
         description="Updates character fields and clears dependent picture text embeddings when identity data changes.",
+        response_model=CharacterMutationResponse,
     )
     async def patch_character(id: int, request: Request):
         data = await request.json()
@@ -520,7 +616,13 @@ def create_router(server) -> APIRouter:
                             session.add(pic)
 
                     session.commit()
-                return character, local_project_membership_updated
+                    session.refresh(character)
+                # Serialize while the session is open; the row may be detached
+                # (and its attributes expired) by the time the handler returns.
+                return (
+                    character.model_dump(exclude_unset=False),
+                    local_project_membership_updated,
+                )
 
             char, project_membership_updated = server.vault.db.run_task(
                 alter_char,
@@ -543,6 +645,7 @@ def create_router(server) -> APIRouter:
         "/characters/{id}",
         summary="Delete character",
         description="Deletes a character, clears character assignment from faces, and removes its reference set when present.",
+        response_model=CharacterDeleteResponse,
     )
     def delete_character(id: int):
         try:
@@ -596,6 +699,7 @@ def create_router(server) -> APIRouter:
             "(character_id → [picture_ids]) and pictures_with_faces ([picture_ids]). "
             "Used by the AddToCharacter menu to load membership in a single request."
         ),
+        response_model=CharacterMembershipResponse,
     )
     def get_batch_character_membership(
         picture_ids: list[int] = Body(default=[], embed=True),
@@ -627,6 +731,7 @@ def create_router(server) -> APIRouter:
         "/characters/{id}",
         summary="Get character by id",
         description="Returns a single character record by id.",
+        response_model=Optional[CharacterResponse],
     )
     def get_character_by_id(request: Request, id: int):
         _require_scope_allows_character(request, id)
@@ -642,6 +747,7 @@ def create_router(server) -> APIRouter:
         "/projects/{project_name}/characters/{character_name}",
         summary="Get character by project name and character name",
         description="Returns a character record by name within a named project.",
+        response_model=CharacterResponse,
     )
     def get_character_by_project_and_name(project_name: str, character_name: str):
         def fetch(session):
@@ -666,6 +772,16 @@ def create_router(server) -> APIRouter:
         "/characters/{id}/{field}",
         summary="Get character field",
         description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
+        responses={
+            200: {
+                "content": {
+                    "application/json": {
+                        "schema": {"type": "object", "additionalProperties": True}
+                    },
+                    "image/png": {},
+                }
+            }
+        },
     )
     def get_character_field_by_id(request: Request, id: int, field: str):
         _require_scope_allows_character(request, id)
@@ -903,6 +1019,7 @@ def create_router(server) -> APIRouter:
         description="Lists characters, optionally filtered by exact name or project. "
         "Pass ``project_id`` as a numeric ID to restrict to one project, "
         "or ``UNASSIGNED`` for characters with no project.",
+        response_model=list[CharacterListItemResponse],
     )
     def get_characters(
         request: Request,
@@ -981,6 +1098,7 @@ def create_router(server) -> APIRouter:
         "/characters",
         summary="Create character",
         description="Creates a character and its linked reference picture set.",
+        response_model=CharacterMutationResponse,
     )
     def create_character(payload: dict = Body(...)):
         try:
@@ -1023,6 +1141,7 @@ def create_router(server) -> APIRouter:
         "/characters/{character_id}/faces",
         summary="Assign faces to character",
         description="Assigns provided face ids or largest faces from picture ids to a character.",
+        response_model=CharacterFaceAssignmentResponse,
     )
     def assign_face_to_character(character_id: int, payload: dict = Body(...)):
         face_ids = payload.get("face_ids")
@@ -1187,6 +1306,7 @@ def create_router(server) -> APIRouter:
         "/characters/{character_id}/faces",
         summary="Unassign faces from character",
         description="Removes character assignment from provided face ids or from faces in provided picture ids.",
+        response_model=CharacterFaceAssignmentResponse,
     )
     def remove_character_from_faces(character_id: int, payload: dict = Body(...)):
         face_ids = payload.get("face_ids", None)
@@ -1264,7 +1384,7 @@ def create_router(server) -> APIRouter:
             "as the query. Images with no detectable face are skipped; returns 422 when "
             "no face is detected in any image."
         ),
-        tags=["characters"],
+        response_model=list[CharacterLikenessResultResponse],
     )
     async def search_by_character_likeness(
         request: Request,

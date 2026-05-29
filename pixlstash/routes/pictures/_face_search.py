@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
+from pydantic import BaseModel, ConfigDict
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.face_detection_task import FaceDetectionTask
@@ -41,6 +42,13 @@ logger = get_logger(__name__)
 _DEFAULT_TOP_N = 20
 _MAX_TOP_N = 500
 _MAX_POOL_M = 2000
+
+
+class FaceLikenessMatchResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    picture_id: int
+    likeness: float
 
 
 def _picture_face_score(query_emb: np.ndarray, face_embs: list[np.ndarray]) -> float:
@@ -93,7 +101,7 @@ def register_routes(router, server):
             "Only pictures that contain at least one pre-computed face embedding are "
             "considered."
         ),
-        tags=["pictures"],
+        response_model=list[FaceLikenessMatchResponse],
     )
     async def search_by_face_likeness(
         request: Request,

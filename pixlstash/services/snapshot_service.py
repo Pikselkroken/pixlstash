@@ -298,15 +298,22 @@ class SnapshotService:
     def snapshot_if_due(self, reason: str = "opportunistic") -> Optional[Snapshot]:
         """Take an opportunistic snapshot if more than OPPORTUNISTIC_MIN_HOURS have passed.
 
+        Only automatic snapshots (DAILY, WEEKLY, MONTHLY, OPPORTUNISTIC) are
+        considered when checking timing — MANUAL snapshots are user-curated
+        archives and should not suppress the opportunistic schedule.
+
         Args:
             reason: Short label for logging.
 
         Returns:
             A new Snapshot if one was created, or None if skipped.
         """
-        snapshots = self.list_snapshots()
-        if snapshots:
-            last = snapshots[0]
+        auto_kinds = {"DAILY", "WEEKLY", "MONTHLY", "OPPORTUNISTIC"}
+        auto_snapshots = [
+            s for s in self.list_snapshots() if s.kind in auto_kinds
+        ]
+        if auto_snapshots:
+            last = auto_snapshots[0]
             last_dt = last.created_at
             if last_dt.tzinfo is None:
                 last_dt = last_dt.replace(tzinfo=timezone.utc)
@@ -330,7 +337,8 @@ class SnapshotService:
         """Run VACUUM INTO via a raw SQLite connection in the writer session."""
         conn = session.connection()
         raw = conn.connection.driver_connection  # underlying sqlite3.Connection
-        raw.execute(f"VACUUM INTO '{abs_snapshot}'")
+        escaped = abs_snapshot.replace("'", "''")
+        raw.execute(f"VACUUM INTO '{escaped}'")
 
     def _build_manifest(self, session) -> dict:
         """Build the manifest dict capturing resource counts and ChangeLog head.

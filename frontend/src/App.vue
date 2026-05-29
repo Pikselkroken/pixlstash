@@ -267,16 +267,12 @@ function connectUpdatesSocket() {
         payload,
       };
     } else if (payload?.type === "snapshot_created") {
-      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
       snapshotsStore.onSnapshotCreated();
     } else if (payload?.type === "snapshot_deleted") {
-      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
       snapshotsStore.onSnapshotDeleted(payload);
     } else if (payload?.type === "restore_started") {
-      wsStore.wsRestoreEvent = { key: Date.now(), payload };
       snapshotsStore.onRestoreStarted(payload);
     } else if (payload?.type === "restore_completed") {
-      wsStore.wsRestoreEvent = { key: Date.now(), payload };
       snapshotsStore.onRestoreCompleted();
       gridStore.wsUpdateKey = Date.now();
       gridStore.refreshGridVersion();

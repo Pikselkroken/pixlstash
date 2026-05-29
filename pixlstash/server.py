@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict
 from pillow_heif import register_heif_opener
 
 from sqlmodel import select
@@ -96,6 +97,50 @@ def _get_lan_ip() -> str | None:
         return ip
     except Exception:
         return None
+
+
+class VersionResponse(BaseModel):
+    """Body of ``GET /version``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    message: str
+    version: str
+    install_type: str
+    docker_variant: str
+
+
+class SessionStatusResponse(BaseModel):
+    """Body of ``GET /check-session`` (returned as a JSONResponse)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
+class NetworkInfoResponse(BaseModel):
+    """Body of ``GET /network/info``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    lan_ip: str
+    is_private: bool
+
+
+class MessageResponse(BaseModel):
+    """Generic ``{"message": ...}`` body (login / logout)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    message: str
+
+
+class RegistrationStatusResponse(BaseModel):
+    """Body of ``GET /login`` (registration check)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    needs_registration: bool
 
 
 API_OPENAPI_TAGS = [
@@ -261,6 +306,33 @@ Browse the endpoints below for full request and response details.
 # rules regardless of stylesheet load order.
 _SCALAR_THEME_CSS = """\
     <style>
+      /* With the developer-tools toolbar disabled the top header strip is
+         empty, but Scalar still reserves its height — collapse it so the
+         content title sits at the top of the page. */
+      :root,
+      .scalar-app,
+      .dark-mode {
+        --scalar-header-height: 0px !important;
+      }
+      /* Every Scalar ``.section`` carries generous vertical padding to space
+         sections apart; on the first one (the introduction) that top padding
+         becomes ~90px of dead space above the title. Trim it to 12px for the
+         intro only (matching the sidebar's top inset; other sections keep
+         their spacing), and tighten the section's ``gap-12`` flex gap. */
+      .scalar-app section.introduction-section {
+        padding-top: 12px !important;
+        gap: 1rem !important;
+      }
+      .scalar-app section.introduction-section > .section-content {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+      }
+      /* The main column wrapper ships ``padding: 0 60px``, leaving a wide gap
+         between the sidebar and the content. Tighten the horizontal inset. */
+      .scalar-app .section-container {
+        padding-left: 20px !important;
+        padding-right: 20px !important;
+      }
       .dark-mode {
         --scalar-font: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif !important;
         --scalar-font-code: 'IBM Plex Mono', ui-monospace, monospace !important;
@@ -290,14 +362,45 @@ _SCALAR_THEME_CSS = """\
     </style>"""
 
 
-def render_scalar_html(spec_url: str) -> str:
+def render_scalar_html(
+    spec_url: str,
+    default_server: "str | None" = None,
+    default_token: "str | None" = None,
+) -> str:
     """Return the Scalar API-reference page wired to *spec_url*, forced to the
     PixlStash dark theme.
 
     Shared by the live ``/scalar`` route and the static docs generator so both
     stay in sync. *spec_url* is a trusted internal literal (``/openapi.json`` for
     the live server, ``openapi.json`` for the published per-version page).
+
+    *default_server* / *default_token* are used only by the published static
+    docs: they point Scalar's interactive client at the public demo server and
+    prefill its read-only token, so the online reference can run read requests
+    out of the box. The live ``/scalar`` route omits both, keeping the
+    same-origin ``/`` server and no prefilled credentials. (The demo server must
+    allow the docs origin in its ``cors_origins`` for those requests to
+    succeed.)
     """
+    config = {
+        "forceDarkModeState": "dark",
+        "hideDarkModeToggle": True,
+        "hideModels": True,
+        "persistAuth": True,
+        "showDeveloperTools": "never",
+        "authentication": {"preferredSecurityScheme": "bearerAuth"},
+    }
+    if default_server:
+        config["servers"] = [
+            {"url": default_server, "description": "PixlStash demo server"}
+        ]
+    if default_token:
+        config["authentication"]["securitySchemes"] = {
+            "bearerAuth": {"token": default_token}
+        }
+    # JSON uses double quotes, so it embeds cleanly in the single-quoted
+    # attribute; neutralise any stray apostrophe so it can't terminate it early.
+    config_attr = json.dumps(config).replace("'", "&#39;")
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -316,7 +419,7 @@ def render_scalar_html(spec_url: str) -> str:
     <script
       id="api-reference"
       data-url="{spec_url}"
-      data-configuration='{{"forceDarkModeState":"dark","hideDarkModeToggle":true,"hideModels":true,"persistAuth":true,"authentication":{{"preferredSecurityScheme":"bearerAuth"}}}}'
+      data-configuration='{config_attr}'
     ></script>
     <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
   </body>
@@ -420,6 +523,78 @@ def _inject_response_examples(operation, schemas):
                 example = None
             if example is not None:
                 media["example"] = example
+
+
+def _strip_query_param_defaults(operation):
+    """Drop ``default`` from an operation's query-parameter schemas.
+
+    FastAPI serialises every optional query param's Python default into its
+    OpenAPI schema, and Scalar pre-fills the "try it" example URL with all of
+    them — so a plain ``GET /pictures`` renders as
+    ``?limit=<MAXINT>&offset=0&descending=true&...``. That just restates the
+    defaults, so we remove them from the published schema. Runtime is
+    unaffected (FastAPI applies the Python default regardless), and any curated
+    per-param ``examples`` are preserved.
+    """
+    for param in operation.get("parameters", []):
+        if param.get("in") != "query":
+            continue
+        param_schema = param.get("schema")
+        if not isinstance(param_schema, dict):
+            continue
+        param_schema.pop("default", None)
+        # Optional[...] params render as ``anyOf: [T, null]``; clear any default
+        # tucked into a branch too.
+        for branch in param_schema.get("anyOf", []):
+            if isinstance(branch, dict):
+                branch.pop("default", None)
+
+
+# Sensible sample values for common path-parameter names, so the docs' example
+# URLs read naturally (e.g. ``/pictures/1.jpg`` instead of ``/pictures/1.ext``).
+# Anything not listed falls back to a type-based default (1 / "example").
+_PATH_PARAM_EXAMPLES = {
+    "ext": "jpg",
+    "resource_type": "picture",
+}
+
+
+def _inject_path_param_examples(operation):
+    """Give every path parameter an example value.
+
+    Without one, Scalar can't fill the ``{name}`` template and renders the
+    literal placeholder URL-encoded into the example request — e.g.
+    ``/api/v1/pictures/%7Bid%7D.%7Bext%7D``. We set a sample (by known name, then
+    by type) so the example URLs are valid. Curated examples are left untouched.
+    """
+    for param in operation.get("parameters", []):
+        if param.get("in") != "path":
+            continue
+        schema = param.get("schema")
+        if not isinstance(schema, dict):
+            continue
+        if (
+            param.get("example") is not None
+            or param.get("examples")
+            or "example" in schema
+            or schema.get("examples")
+        ):
+            continue
+        name = param.get("name", "")
+        name_l = name.lower()
+        if name in _PATH_PARAM_EXAMPLES:
+            value = _PATH_PARAM_EXAMPLES[name]
+        elif schema.get("type") in ("integer", "number"):
+            value = 1
+        elif name_l == "id" or name_l.endswith("_id") or "id_or_name" in name_l:
+            # id-like params that are typed as strings still read best as a number.
+            value = "1"
+        else:
+            value = "example"
+        # Set both parameter- and schema-level example so whichever Scalar reads
+        # when substituting the path template gets a value.
+        param["example"] = value
+        schema["examples"] = [value]
 
 
 class Server:
@@ -1204,6 +1379,13 @@ class Server:
           ``Optional[...]`` (``anyOf: [T, null]``) with no example, which Scalar
           renders as a bare ``null``. We synthesize a shape-correct example for
           each 2xx JSON response so endpoints show their actual structure.
+        * **Query-parameter defaults** — FastAPI emits each optional query
+          param's default into its schema, and Scalar then pre-fills the
+          "try it" example URL with every one of them (e.g. ``?limit=<MAXINT>``
+          ``&offset=0&descending=true``). That redundant noise just restates
+          the defaults, so we drop ``default`` from query-param schemas. Runtime
+          is unaffected (FastAPI still applies the Python default); curated
+          per-param ``examples`` are preserved.
         """
 
         build_schema = self.api.openapi
@@ -1238,6 +1420,8 @@ class Server:
                     if not public:
                         operation["security"] = requirement
                     _inject_response_examples(operation, all_schemas)
+                    _strip_query_param_defaults(operation)
+                    _inject_path_param_examples(operation)
 
             # Lead the reference with the picture listing (the most useful
             # starting point) by ordering its path first. This is presentation
@@ -1296,7 +1480,7 @@ class Server:
             version = self._get_version()
             return {"message": "PixlStash REST API", "version": version}
 
-        @self.api.get("/version", tags=["server"])
+        @self.api.get("/version", tags=["server"], response_model=VersionResponse)
         async def read_version():
             version = self._get_version()
             install_type = "docker" if Server.running_in_docker() else "pip"
@@ -1459,11 +1643,19 @@ class Server:
                 self.allow_origin_regex,
             )
 
-        @self.api.get(f"{API_V1_PREFIX}/check-session", tags=["auth"])
+        @self.api.get(
+            f"{API_V1_PREFIX}/check-session",
+            tags=["auth"],
+            response_model=SessionStatusResponse,
+        )
         async def check_session(request: Request):
             return self.auth.check_session(request)
 
-        @self.api.get(f"{API_V1_PREFIX}/network/info", tags=["server"])
+        @self.api.get(
+            f"{API_V1_PREFIX}/network/info",
+            tags=["server"],
+            response_model=NetworkInfoResponse,
+        )
         def network_info(request: Request):
             self.auth.require_user_id(request)
             try:
@@ -1479,17 +1671,25 @@ class Server:
                 is_private = True
             return {"lan_ip": lan_ip, "is_private": is_private}
 
-        @self.api.post(f"{API_V1_PREFIX}/login", tags=["auth"])
+        @self.api.post(
+            f"{API_V1_PREFIX}/login", tags=["auth"], response_model=MessageResponse
+        )
         def login(login_request: LoginRequest, http_request: Request):
             response = self.auth.login(login_request, http_request)
             self._user = self.auth.user
             return response
 
-        @self.api.get(f"{API_V1_PREFIX}/login", tags=["auth"])
+        @self.api.get(
+            f"{API_V1_PREFIX}/login",
+            tags=["auth"],
+            response_model=RegistrationStatusResponse,
+        )
         def check_registration():
             return self.auth.check_registration()
 
-        @self.api.post(f"{API_V1_PREFIX}/logout", tags=["auth"])
+        @self.api.post(
+            f"{API_V1_PREFIX}/logout", tags=["auth"], response_model=MessageResponse
+        )
         def logout(response: Response, request: Request):
             return self.auth.logout(response, request)
 

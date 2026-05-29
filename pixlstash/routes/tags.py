@@ -1,5 +1,7 @@
+from typing import Optional
+
 from fastapi import APIRouter, Body, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import (
@@ -22,6 +24,51 @@ from pixlstash.utils.service.tag_prediction_utils import (
 logger = get_logger(__name__)
 
 
+class TagItemResponse(BaseModel):
+    """A single tag attached to a picture."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    tag: str
+
+
+class PictureTagsResponse(BaseModel):
+    """Result of mutating a picture's tags (add/remove/clear)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    tags: list[TagItemResponse] = []
+
+
+class ListPictureTagsResponse(BaseModel):
+    """Result of listing a single picture's tags."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    tags: list[TagItemResponse] = []
+
+
+class TagCountResponse(BaseModel):
+    """A unique tag value with its usage count."""
+
+    model_config = ConfigDict(extra="allow")
+
+    tag: str
+    count: int
+
+
+class BulkPictureTagsResponse(BaseModel):
+    """Tags for a single picture in a bulk-fetch response."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    tags: list[TagItemResponse] = []
+
+
 def _sync_sidecar(server, pic_id: int) -> list[dict]:
     return sync_picture_sidecar(server, pic_id)
 
@@ -33,6 +80,7 @@ def create_router(server) -> APIRouter:
         "/pictures/{id}/tags",
         summary="Add tag to picture",
         description="Adds a tag to a picture and removes empty-tag sentinel when appropriate.",
+        response_model=PictureTagsResponse,
     )
     def add_tag_to_picture(id: str, payload: dict = Body(...)):
         try:
@@ -99,6 +147,7 @@ def create_router(server) -> APIRouter:
         "/pictures/{id}/tags",
         summary="List picture tags",
         description="Returns all tags currently attached to a picture.",
+        response_model=ListPictureTagsResponse,
     )
     def list_picture_tags(id: str):
         try:
@@ -134,6 +183,7 @@ def create_router(server) -> APIRouter:
         "/pictures/{id}/tags/{tag_id}",
         summary="Remove picture tag",
         description="Removes one tag from a picture by numeric tag id and restores empty-tag sentinel when needed.",
+        response_model=PictureTagsResponse,
     )
     def remove_tag_from_picture(id: str, tag_id: str):
         try:
@@ -186,6 +236,7 @@ def create_router(server) -> APIRouter:
         "/pictures/{id}/tags/remove_all",
         summary="Remove tag everywhere on picture",
         description="Removes a tag value from the picture and its face/hand associations for that picture.",
+        response_model=PictureTagsResponse,
     )
     def remove_tag_from_picture_everywhere(id: str, payload: dict = Body(...)):
         try:
@@ -227,6 +278,7 @@ def create_router(server) -> APIRouter:
         "/pictures/{id}/tags",
         summary="Clear all tags on picture",
         description="Removes all tags from a picture in a single operation and restores the empty-tag sentinel.",
+        response_model=PictureTagsResponse,
     )
     def clear_all_tags_on_picture(id: str):
         try:
@@ -261,6 +313,7 @@ def create_router(server) -> APIRouter:
         "/tags",
         summary="List all tags",
         description="Returns all unique tag values with their usage count, sorted by count descending then alphabetically.",
+        response_model=list[TagCountResponse],
     )
     def list_all_tags():
         try:
@@ -292,6 +345,7 @@ def create_router(server) -> APIRouter:
         "/pictures/tags/bulk_fetch",
         summary="Fetch tags for multiple pictures",
         description="Returns tags for each requested picture id. At most 200 ids accepted per call.",
+        response_model=list[BulkPictureTagsResponse],
     )
     def bulk_fetch_tags(payload: BulkFetchTagsRequest):
         try:

@@ -17,6 +17,13 @@ _SCALAR_ASSETS_SRC = os.path.join(
     os.path.dirname(os.path.abspath(pixlstash.__file__)), "data", "scalar-assets"
 )
 
+# Published docs default Scalar's interactive client at the public demo server
+# and prefill its read-only token, so the online reference can run live read
+# requests out of the box. This token is intentionally public (read-only, demo
+# data); the demo server must list the docs origin in its ``cors_origins``.
+_DEMO_SERVER_URL = "https://demo.pixlstash.dev"
+_DEMO_READONLY_TOKEN = "MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE"
+
 
 def _build_server_config(config_path: str, image_root: str) -> None:
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
@@ -45,8 +52,13 @@ def _build_server_config(config_path: str, image_root: str) -> None:
 
 def _write_scalar_html(target_dir: str) -> None:
     # Relative spec URL: the page sits next to its own openapi.json in the
-    # versioned directory.
-    html = render_scalar_html("openapi.json")
+    # versioned directory. Point the client at the demo server + read-only token
+    # so the published reference can run live read requests.
+    html = render_scalar_html(
+        "openapi.json",
+        default_server=_DEMO_SERVER_URL,
+        default_token=_DEMO_READONLY_TOKEN,
+    )
     with open(os.path.join(target_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(html)
     if os.path.isdir(_SCALAR_ASSETS_SRC):

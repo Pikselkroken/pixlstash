@@ -7,9 +7,6 @@ export const useWsStore = defineStore("ws", () => {
   const wsPluginProgress = ref({ key: 0, payload: null });
   const pendingExternalImportCount = ref(0);
   const isUploadInProgress = ref(false);
-  // Snapshot / restore events — updated from App.vue's WS handler.
-  const wsSnapshotEvent = ref({ key: 0, payload: null });
-  const wsRestoreEvent = ref({ key: 0, payload: null });
 
   return {
     wsTagUpdate,
@@ -17,7 +14,5 @@ export const useWsStore = defineStore("ws", () => {
     wsPluginProgress,
     pendingExternalImportCount,
     isUploadInProgress,
-    wsSnapshotEvent,
-    wsRestoreEvent,
   };
 });

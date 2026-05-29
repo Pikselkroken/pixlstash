@@ -16,7 +16,9 @@ from fastapi import (
 from sqlalchemy import (
     delete,
 )
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
+from typing import Optional
 
 from pixlstash.db_models import (
     Picture,
@@ -43,11 +45,38 @@ from ._helpers import (
 logger = get_logger(__name__)
 
 
+class ImportStartResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+
+
+class ImportResultEntry(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    picture_id: Optional[int] = None
+    file: Optional[str] = None
+
+
+class ImportStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    stage: str
+    total: int
+    processed: int
+    progress: float
+    results: Optional[list[ImportResultEntry]] = None
+    error: Optional[str] = None
+
+
 def register_routes(router, server):
     @router.post(
         "/pictures/import",
         summary="Import media files",
         description="Starts an asynchronous import of uploaded image/video files (or zip contents) and returns a task id.",
+        response_model=ImportStartResponse,
     )
     async def import_pictures(
         file: list[UploadFile] = File(None),
@@ -547,6 +576,7 @@ def register_routes(router, server):
         "/pictures/import/status",
         summary="Get import job status",
         description="Returns progress and result information for a previously started import task.",
+        response_model=ImportStatusResponse,
     )
     def import_status(task_id: str):
         task = server.import_tasks.get(task_id)

@@ -357,7 +357,7 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
     if pic is None:
         return None
     col_vals: dict = {}
-    for col in pic.__fields__:
+    for col in type(pic).model_fields:
         if col in _HASH_SKIP_COLS:
             continue
         val = getattr(pic, col, None)

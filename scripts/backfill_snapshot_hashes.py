@@ -37,9 +37,12 @@ def main():
 
     print(f"Opening vault at {image_root} …")
     vault = Vault(image_root=image_root, disable_background_workers=True)
-    print("Backfilling snapshot hashes …")
-    vault.restore_service.backfill_all_snapshot_hashes(reset_all=True)
-    print("Done.")
+    try:
+        print("Backfilling snapshot hashes …")
+        vault.restore_service.backfill_all_snapshot_hashes(reset_all=False)
+        print("Done.")
+    finally:
+        vault.close()
 
 
 if __name__ == "__main__":

@@ -58,7 +58,7 @@ function kindChipColor(kind) {
 
 function humanBytes(bytes) {
   if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
+  const units = ["B", "KB", "MB", "GB", "TB"];
   let v = bytes;
   let u = 0;
   while (v >= 1024 && u < units.length - 1) {
@@ -84,6 +84,7 @@ function relativeDate(isoStr) {
 }
 
 // ── Create ─────────────────────────────────────────────────────────────────
+let _createSuccessToken = 0;
 async function handleCreate() {
   creating.value = true;
   createError.value = "";
@@ -91,10 +92,10 @@ async function handleCreate() {
   try {
     await store.createSnapshot(createLabel.value.trim() || null);
     createLabel.value = "";
+    const token = ++_createSuccessToken;
     createSuccess.value = "Snapshot created.";
     setTimeout(() => {
-      if (createSuccess.value === "Snapshot created.")
-        createSuccess.value = "";
+      if (_createSuccessToken === token) createSuccess.value = "";
     }, 3000);
   } catch (err) {
     createError.value =

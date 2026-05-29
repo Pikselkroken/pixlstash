@@ -961,7 +961,7 @@ class RestoreService:
                 session.commit()
             # Flush WAL to main file for a clean single-file snapshot.
             with _sqlite3.connect(db_path) as conn:
-                conn.execute("PRAGMA wal_snapshot(TRUNCATE)")
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 conn.execute("PRAGMA journal_mode=DELETE")
             logger.info(
                 "RestoreService: filled %d metadata hashes in %s",
@@ -1027,7 +1027,7 @@ class RestoreService:
             import sqlite3
 
             with sqlite3.connect(tmp_snapshot) as _conn:
-                _conn.execute("PRAGMA wal_snapshot(TRUNCATE)")
+                _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 _conn.execute("PRAGMA journal_mode=DELETE")
             logger.info(
                 "RestoreService: snapshot schema upgraded to head at %s",

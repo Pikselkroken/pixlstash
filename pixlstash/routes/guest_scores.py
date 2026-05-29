@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, text
 from sqlmodel import Session, select
 
@@ -30,6 +31,24 @@ _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 _COOKIE_MAX_AGE = 7_776_000
 
 
+class GuestScoresResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    scores: dict[str, int] = {}
+
+
+class GuestSessionClearedResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    ok: bool
+
+
+class GuestScoresSubmitResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    ok: bool
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -37,7 +56,7 @@ def create_router(server) -> APIRouter:
     # GET /pictures/guest-scores
     # ------------------------------------------------------------------
 
-    @router.get("/pictures/guest-scores")
+    @router.get("/pictures/guest-scores", response_model=GuestScoresResponse)
     def get_guest_scores(request: Request):
         """Return all scores submitted by this guest session.
 
@@ -72,7 +91,10 @@ def create_router(server) -> APIRouter:
     # POST /pictures/guest-scores
     # ------------------------------------------------------------------
 
-    @router.delete("/pictures/guest-scores/session")
+    @router.delete(
+        "/pictures/guest-scores/session",
+        response_model=GuestSessionClearedResponse,
+    )
     def clear_guest_session(request: Request):
         """Clear the guest session cookies for this browser.
 
@@ -98,7 +120,10 @@ def create_router(server) -> APIRouter:
         response.delete_cookie("guest_session_active", httponly=False, **cookie_kwargs)
         return response
 
-    @router.post("/pictures/guest-scores")
+    @router.post(
+        "/pictures/guest-scores",
+        response_model=GuestScoresSubmitResponse,
+    )
     async def submit_guest_scores(request: Request):
         """Submit or update star scores for one or more pictures.
 
