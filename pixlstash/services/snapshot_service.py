@@ -309,9 +309,7 @@ class SnapshotService:
             A new Snapshot if one was created, or None if skipped.
         """
         auto_kinds = {"DAILY", "WEEKLY", "MONTHLY", "OPPORTUNISTIC"}
-        auto_snapshots = [
-            s for s in self.list_snapshots() if s.kind in auto_kinds
-        ]
+        auto_snapshots = [s for s in self.list_snapshots() if s.kind in auto_kinds]
         if auto_snapshots:
             last = auto_snapshots[0]
             last_dt = last.created_at

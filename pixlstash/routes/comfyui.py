@@ -1277,6 +1277,7 @@ def create_router(server) -> APIRouter:
 
     @router.delete(
         "/comfyui/workflows/{workflow_name}",
+        include_in_schema=False,
         summary="Delete user workflow",
         description="Deletes a workflow JSON from the user workflow directory.",
         response_model=ComfyUIWorkflowDeleteResponse,
@@ -1301,6 +1302,7 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/comfyui/abort",
+        include_in_schema=False,
         summary="Abort ComfyUI execution",
         description="Interrupts the currently running ComfyUI prompt and clears the pending queue.",
         response_model=ComfyUIAbortResponse,
@@ -1572,6 +1574,7 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/comfyui/workflows/import",
+        include_in_schema=False,
         summary="Import ComfyUI workflow",
         description="Saves a workflow JSON into the user workflow directory, optionally overwriting an existing file.",
         response_model=ComfyUIWorkflowImportResponse,

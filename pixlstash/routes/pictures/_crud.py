@@ -720,6 +720,7 @@ def register_routes(router, server):
 
     @router.post(
         "/pictures/{id}/face",
+        include_in_schema=False,
         summary="Create manual face entry",
         description="Adds a face bounding box to a picture and frame index, updating sentinel/ordering behavior for manual annotations.",
         response_model=PictureFaceResponse,
@@ -782,6 +783,7 @@ def register_routes(router, server):
 
     @router.delete(
         "/pictures/{id}/face/{index}",
+        include_in_schema=False,
         summary="Delete face by index",
         description="Deletes a face at frame 0 by index and reindexes remaining faces for stable ordering.",
         response_model=FaceDeleteResponse,
@@ -845,6 +847,7 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/{id}/character_likeness",
+        include_in_schema=False,
         summary="Get picture character likeness",
         description="Computes max character-likeness score for faces in a picture against a reference character.",
         response_model=PictureCharacterLikenessResponse,
@@ -954,6 +957,7 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/{id}/{field}",
+        include_in_schema=False,
         summary="Get raw picture field",
         description="Returns a single picture field value; large binary fields are base64 encoded and thumbnail returns image bytes.",
         responses={

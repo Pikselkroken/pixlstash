@@ -64,8 +64,8 @@ def test_no_endpoint_has_null_success_response():
                             f"{method.upper()} {path} [{code}] {media}: empty schema"
                         )
 
-    assert not offenders, "Endpoints render a null/empty success body in Scalar:\n" + "\n".join(
-        offenders
+    assert not offenders, (
+        "Endpoints render a null/empty success body in Scalar:\n" + "\n".join(offenders)
     )
 
 

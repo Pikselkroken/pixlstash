@@ -574,7 +574,7 @@ def create_router(server) -> APIRouter:
     # POST /undo
     # ------------------------------------------------------------------
 
-    @router.post("/undo")
+    @router.post("/undo", include_in_schema=False)
     def undo(
         request: Request,
         snapshot_id: Optional[int] = Body(default=None, embed=True),

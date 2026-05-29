@@ -128,6 +128,7 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/plugins",
+        include_in_schema=False,
         summary="List image plugins",
         description="Lists available image plugins and their parameter schemas.",
         response_model=ImagePluginListResponse,
@@ -137,6 +138,7 @@ def register_routes(router, server):
 
     @router.post(
         "/pictures/plugins/{name}",
+        include_in_schema=False,
         summary="Run image plugin",
         description="Runs a named image plugin on selected pictures and imports outputs into stacks.",
         response_model=PicturePluginRunResponse,
@@ -187,6 +189,7 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/comfyui_models",
+        include_in_schema=False,
         summary="List distinct ComfyUI model names",
         response_model=list[str],
     )
@@ -205,6 +208,7 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/comfyui_loras",
+        include_in_schema=False,
         summary="List distinct ComfyUI LoRA names",
         response_model=list[str],
     )
@@ -223,6 +227,7 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/likeness-groups",
+        include_in_schema=False,
         summary="List computed likeness groups",
         description="Builds groups from likeness edges using filtering options such as character, set, format, and threshold.",
         response_model=list[LikenessGroupResponse],
@@ -776,6 +781,7 @@ def register_routes(router, server):
 
     @router.post(
         "/pictures/{id}/open-location",
+        include_in_schema=False,
         summary="Open picture location",
         description="Opens the containing folder of a reference picture in the OS file manager.",
         response_model=OpenLocationResponse,
@@ -813,6 +819,7 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/stats",
+        include_in_schema=False,
         summary="Get picture statistics",
         description="Returns tag statistics for the current view filter, cached for 60 seconds.",
         response_model=PictureStatsResponse,

@@ -149,10 +149,6 @@ API_OPENAPI_TAGS = [
         "description": "Picture listing, metadata, thumbnails, import/export and media operations.",
     },
     {
-        "name": "config",
-        "description": "User configuration, auth helpers, worker progress and server config utilities.",
-    },
-    {
         "name": "characters",
         "description": "Character CRUD, summaries, reference pictures and face assignment endpoints.",
     },
@@ -169,32 +165,8 @@ API_OPENAPI_TAGS = [
         "description": "Stack creation, ordering and membership operations.",
     },
     {
-        "name": "comfyui",
-        "description": "ComfyUI workflow management and image-to-image execution.",
-    },
-    {
         "name": "projects",
         "description": "Project management, including character/set scoping and file attachments.",
-    },
-    {
-        "name": "taggers",
-        "description": "Tagger plugin registry, artifact downloads and deletion.",
-    },
-    {
-        "name": "snapshots",
-        "description": "Library snapshots: create, list, restore and manage point-in-time backups.",
-    },
-    {
-        "name": "tag_predictions",
-        "description": "Automatic tag prediction and suggestion endpoints.",
-    },
-    {
-        "name": "guest_scores",
-        "description": "Guest scoring sessions and submitted picture scores.",
-    },
-    {
-        "name": "folders",
-        "description": "Reference and import folders: list, add, update, remove and open on disk.",
     },
     {
         "name": "auth",
@@ -1553,7 +1525,7 @@ class Server:
         self.api.include_router(
             create_config_router(self),
             prefix=API_V1_PREFIX,
-            tags=["config"],
+            include_in_schema=False,
         )
         self.api.include_router(
             create_characters_router(self),
@@ -1586,14 +1558,14 @@ class Server:
         self.api.include_router(
             create_tag_predictions_router(self),
             prefix=API_V1_PREFIX,
-            tags=["tag_predictions"],
+            include_in_schema=False,
         )
         # guest_scores must be registered before pictures for the same reason:
         # /pictures/guest-scores must not be swallowed by /pictures/{id}/{field}.
         self.api.include_router(
             create_guest_scores_router(self),
             prefix=API_V1_PREFIX,
-            tags=["guest_scores"],
+            include_in_schema=False,
         )
         self.api.include_router(
             create_pictures_router(self),
@@ -1603,30 +1575,32 @@ class Server:
         self.api.include_router(
             create_comfyui_router(self),
             prefix=API_V1_PREFIX,
-            tags=["comfyui"],
+            include_in_schema=False,
         )
         self.api.include_router(
             create_reference_folders_router(self),
             prefix=API_V1_PREFIX,
+            include_in_schema=False,
         )
         self.api.include_router(
             create_import_folders_router(self),
             prefix=API_V1_PREFIX,
+            include_in_schema=False,
         )
         self.api.include_router(
             create_filesystem_router(self),
             prefix=API_V1_PREFIX,
-            tags=["config"],
+            include_in_schema=False,
         )
         self.api.include_router(
             create_taggers_router(self),
             prefix=API_V1_PREFIX,
-            tags=["taggers"],
+            include_in_schema=False,
         )
         self.api.include_router(
             create_snapshots_router(self),
             prefix=API_V1_PREFIX,
-            tags=["snapshots"],
+            include_in_schema=False,
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.
         self.api.include_router(
@@ -1653,7 +1627,7 @@ class Server:
 
         @self.api.get(
             f"{API_V1_PREFIX}/network/info",
-            tags=["server"],
+            include_in_schema=False,
             response_model=NetworkInfoResponse,
         )
         def network_info(request: Request):
