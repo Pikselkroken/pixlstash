@@ -408,7 +408,6 @@ const emit = defineEmits([
   "remove-picture-shares",
   "reverse-image-search",
   "find-similar-faces",
-  "restore-from-snapshot",
 ]);
 
 const menuRef = ref(null);
@@ -430,7 +429,7 @@ watch(restoreSubmenuOpen, async (isOpen) => {
   await Promise.all(
     recentSnapshots.value.map(async (cp) => {
       try {
-        const res = await apiClient.post(`/snapshots/${cp.id}/hash-compare`, {
+        const res = await apiClient.post(`/api/v1/snapshots/${cp.id}/hash-compare`, {
           picture_ids: pictureIds,
         });
         const identicalSet = new Set(res.data.identical_ids);
@@ -460,7 +459,6 @@ function handleRestoreFromSnapshot(cpId) {
     id,
   }));
   snapshotsStore.openRestoreDialog(cpId, resources);
-  onAction("restore-from-snapshot", { snapshotId: cpId, resources });
 }
 
 function handleRestoreMore() {
@@ -469,7 +467,6 @@ function handleRestoreMore() {
     id,
   }));
   snapshotsStore.openRestoreDialog(null, resources);
-  onAction("restore-from-snapshot", { snapshotId: null, resources });
 }
 const faceCharacterNames = ref({}); // face.id -> character name string or null
 
