@@ -136,7 +136,8 @@ def test_picture_scoped_all_token_rejected_on_snapshot_routes():
     tmp, server, client = _setup_server_with_owner_session()
     try:
         # Need a picture to scope the token to.
-        r = client.post(f"{API}/snapshots", json={"label": "seed-picture-for-scoping"})
+        client.post(f"{API}/snapshots", json={"label": "seed-picture-for-scoping"})
+
         # If POST /snapshots fails because there are no pictures, that's fine —
         # we only need a token scoped to a (real or synthesized) picture id.
         from pixlstash.db_models import Picture
