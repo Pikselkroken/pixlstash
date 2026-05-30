@@ -386,7 +386,10 @@ class RestoreService:
             try:
                 os.remove(upgraded_snapshot)
             except Exception:
-                pass
+                logger.warning(
+                    "RestoreService: failed to remove temp upgraded snapshot: %s",
+                    upgraded_snapshot,
+                )
 
         try:
             from pixlstash.event_types import EventType
@@ -459,7 +462,10 @@ class RestoreService:
             try:
                 shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
             except Exception:
-                pass
+                logger.warning(
+                    "RestoreService: failed to remove temp upgraded snapshot dir: %s",
+                    os.path.dirname(upgraded_snapshot),
+                )
 
         return preview
 
@@ -535,7 +541,10 @@ class RestoreService:
             try:
                 shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
             except Exception:
-                pass
+                logger.warning(
+                    "RestoreService: failed to remove temp upgraded snapshot dir: %s",
+                    os.path.dirname(upgraded_snapshot),
+                )
 
         return preview
 
@@ -601,7 +610,10 @@ class RestoreService:
             try:
                 shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
             except Exception:
-                pass
+                logger.warning(
+                    "RestoreService: failed to remove temp upgraded snapshot dir: %s",
+                    os.path.dirname(upgraded_snapshot),
+                )
 
         self._finalise_preview_summary(preview)
         return preview
@@ -677,7 +689,10 @@ class RestoreService:
                 os.remove(upgraded_snapshot)
                 shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
             except Exception:
-                pass
+                logger.warning(
+                    "RestoreService: failed to remove temp upgraded snapshot and dir: %s",
+                    upgraded_snapshot,
+                )
 
         try:
             from pixlstash.event_types import EventType
@@ -765,7 +780,10 @@ class RestoreService:
                 try:
                     _probe_engine.dispose()
                 except Exception:
-                    pass
+                    logger.warning(
+                        "RestoreService.compare_hashes: failed to dispose probe engine for snapshot %d",
+                        snapshot_id,
+                    )
 
         if not snap_has_col:
             # One-time fix: write migration + hashes into the original snapshot.
@@ -803,7 +821,10 @@ class RestoreService:
                 try:
                     _snap_engine.dispose()
                 except Exception:
-                    pass
+                    logger.warning(
+                        "RestoreService.compare_hashes: failed to dispose snapshot engine for snapshot %d",
+                        snapshot_id,
+                    )
 
         identical_ids: list[int] = []
         changed_ids: list[int] = []
@@ -874,7 +895,10 @@ class RestoreService:
                 try:
                     _probe.dispose()
                 except Exception:
-                    pass
+                    logger.warning(
+                        "RestoreService._backfill_snapshot: failed to dispose probe engine for %s",
+                        abs_snapshot,
+                    )
 
         if "metadata_hash" not in col_names:
             # Upgrade via a temp copy, then atomically replace the original.
@@ -919,9 +943,7 @@ class RestoreService:
                     session.commit()
                 null_pids = (
                     session.execute(
-                        select(Picture.id).where(
-                            Picture.metadata_hash == None  # noqa: E711
-                        )
+                        select(Picture.id).where(Picture.metadata_hash.is_(None))
                     )
                     .scalars()
                     .all()

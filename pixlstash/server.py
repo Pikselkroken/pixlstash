@@ -342,16 +342,20 @@ class Server:
             coro.close()  # prevent 'coroutine never awaited' ResourceWarning
 
     def _should_send_ws_update(self, event_type: EventType, filters: dict) -> bool:
-        return event_type in (
-            EventType.CHANGED_PICTURES,
-            EventType.PICTURE_IMPORTED,
-            EventType.PLUGIN_PROGRESS,
-            EventType.CHANGED_TAGS,
-            EventType.CLEARED_TAGS,
-            EventType.CHANGED_CHARACTERS,
-            EventType.CHANGED_FACES,
-            EventType.CHANGED_DESCRIPTIONS,
-        ) or event_type in _WS_SNAPSHOT_EVENT_TYPES
+        return (
+            event_type
+            in (
+                EventType.CHANGED_PICTURES,
+                EventType.PICTURE_IMPORTED,
+                EventType.PLUGIN_PROGRESS,
+                EventType.CHANGED_TAGS,
+                EventType.CLEARED_TAGS,
+                EventType.CHANGED_CHARACTERS,
+                EventType.CHANGED_FACES,
+                EventType.CHANGED_DESCRIPTIONS,
+            )
+            or event_type in _WS_SNAPSHOT_EVENT_TYPES
+        )
 
     async def _broadcast_ws_event(self, event_type: EventType, data=None):
         with self._ws_clients_lock:

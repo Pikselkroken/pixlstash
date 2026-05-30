@@ -69,6 +69,9 @@ def _coerce_serialized_value(column: Any, value: Any) -> tuple[bool, Any]:
             if column.type.python_type is datetime:
                 return (True, datetime.fromisoformat(value))
         except (NotImplementedError, AttributeError, ValueError):
+            # Column type doesn't expose a python_type (NotImplementedError /
+            # AttributeError) or the stored string isn't a parseable datetime
+            # (ValueError) — fall through and return the raw string value as-is.
             pass
     return (True, value)
 

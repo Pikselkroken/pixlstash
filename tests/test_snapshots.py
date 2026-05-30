@@ -94,7 +94,8 @@ def test_snapshot_manifest_contains_expected_keys(server):
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     abs_manifest = os.path.join(server.vault.image_root, cp.manifest_relative_path)
-    manifest = json.loads(open(abs_manifest).read())
+    with open(abs_manifest) as fh:
+        manifest = json.load(fh)
 
     assert "max_changelog_id" in manifest
     assert "picture_count" in manifest
@@ -109,7 +110,8 @@ def test_snapshot_picture_count_matches(server):
     assert cp.picture_count == 4
 
     abs_manifest = os.path.join(server.vault.image_root, cp.manifest_relative_path)
-    manifest = json.loads(open(abs_manifest).read())
+    with open(abs_manifest) as fh:
+        manifest = json.load(fh)
     assert manifest["picture_count"] == 4
     assert len(manifest["picture_ids"]) == 4
 
