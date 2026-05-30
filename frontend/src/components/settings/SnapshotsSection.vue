@@ -48,7 +48,7 @@ const activeJob = computed(() => store.activeJob);
 
 function humanBytes(bytes) {
   if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
+  const units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"];
   let v = bytes;
   let u = 0;
   while (v >= 1024 && u < units.length - 1) {

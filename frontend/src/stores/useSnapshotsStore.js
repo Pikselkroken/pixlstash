@@ -86,13 +86,6 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     return res.data;
   }
 
-  async function previewResourceRestore(snapshotId, resourceType, resourceId) {
-    const res = await apiClient.get(
-      `/api/v1/snapshots/${snapshotId}/restore/${resourceType}/${resourceId}/preview`
-    );
-    return res.data;
-  }
-
   async function executeRestore(snapshotId, resources) {
     if (resources && resources.length > 0) {
       const res = await apiClient.post(
@@ -189,7 +182,6 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     renameSnapshot,
     deleteSnapshot,
     previewRestore,
-    previewResourceRestore,
     executeRestore,
     openRestoreDialog,
     fetchSnapshotSettings,

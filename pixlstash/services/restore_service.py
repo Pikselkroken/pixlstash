@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 from sqlmodel import Session, create_engine, select
-from sqlalchemy import delete as sa_delete, update as sa_update
+from sqlalchemy import (
+    bindparam as sa_bindparam,
+    delete as sa_delete,
+    update as sa_update,
+)
 
 from pixlstash.db_models import (
     Character,
@@ -59,6 +63,18 @@ _PICTURE_DERIVED_COLUMNS: tuple[str, ...] = (
     "text_embedding",
     "image_embedding",
 )
+
+# Resource types currently supported by ``restore_resource`` / ``preview_resource``.
+#
+# ``"project"`` is intentionally excluded for this release:
+# Project's graph spans ``ProjectAttachment`` (CASCADE FK), ``Character.project_id``,
+# ``PictureSet.project_id``, and ``PictureProjectMember`` rows. The current
+# per-resource path only touches Project + pictures-via-PPM, and the PPM
+# bulk-delete is keyed by ``picture_id`` rather than by ``project_id`` — which
+# would over-delete PPMs to *other* projects for any picture also in the
+# restored project. Use the full restore for project-level recovery until the
+# proper graph-replace is implemented + tested.
+_SUPPORTED_RESOURCE_TYPES: tuple[str, ...] = ("picture", "picture_set", "character")
 
 
 @dataclass
@@ -149,6 +165,7 @@ class RestoreService:
         """
         self._vault = vault
         # Tracks the currently executing restore job for /snapshots/status.
+        # Read via ``get_active_job()`` from outside this module.
         self._active_job: Optional[dict] = None
         # Mutual exclusion for restore_full / restore_resource / restore_batch.
         # Held for the entire duration of a restore (including the queued
@@ -167,6 +184,15 @@ class RestoreService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def get_active_job(self) -> Optional[dict]:
+        """Return the in-flight restore job descriptor, or ``None`` if idle.
+
+        The shape is ``{"kind": "RESTORE", "snapshot_id": int,
+        "started_at": isoformat, "progress": float}`` while a restore runs.
+        Used by ``GET /snapshots/status``.
+        """
+        return self._active_job
 
     def restore_full(self, snapshot_id: int, dry_run: bool = False) -> RestoreReport:
         """Replace the live database with a snapshot snapshot.
@@ -386,14 +412,17 @@ class RestoreService:
           PictureSetMember, and PictureProjectMember dependents.
         - ``'picture_set'`` — restores the PictureSet row and all member
           pictures (recursive picture restore).
-        - ``'project'`` — restores the Project row plus all PictureSets,
-          Characters, and Picture members.
-        - ``'character'`` — restores the Character row.
+        - ``'character'`` — restores the Character row only. **Does not
+          re-attach faces**: if a character was deleted live, the cascading
+          ``Face.character_id = NULL`` is not reversed by this path. Use the
+          full restore for a faithful character revert.
+
+        ``'project'`` is **not** supported in this release — use the full
+        restore. See ``_SUPPORTED_RESOURCE_TYPES`` for the reasoning.
 
         Args:
             snapshot_id: ID of the snapshot to restore from.
-            resource_type: One of ``'picture'``, ``'picture_set'``,
-                ``'project'``, or ``'character'``.
+            resource_type: One of the strings in ``_SUPPORTED_RESOURCE_TYPES``.
             resource_id: Primary key of the resource to restore.
 
         Returns:
@@ -401,7 +430,7 @@ class RestoreService:
 
         Raises:
             ValueError: If the snapshot is not found or ``resource_type`` is
-                invalid.
+                unsupported.
             RestoreInProgressError: If another restore is already running.
         """
         if not self._restore_lock.acquire(blocking=False):
@@ -416,10 +445,11 @@ class RestoreService:
             if not os.path.exists(abs_snapshot):
                 raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
-            if resource_type not in ("picture", "picture_set", "project", "character"):
+            if resource_type not in _SUPPORTED_RESOURCE_TYPES:
                 raise ValueError(
-                    f"Invalid resource_type '{resource_type}'. "
-                    "Must be one of: picture, picture_set, project, character."
+                    f"Unsupported resource_type '{resource_type}'. "
+                    f"Supported: {', '.join(_SUPPORTED_RESOURCE_TYPES)}. "
+                    "Use the full restore for project-level recovery."
                 )
 
             upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
@@ -552,10 +582,11 @@ class RestoreService:
             ValueError: If the snapshot/snapshot is not found or
                 ``resource_type`` is invalid.
         """
-        if resource_type not in ("picture", "picture_set", "project", "character"):
+        if resource_type not in _SUPPORTED_RESOURCE_TYPES:
             raise ValueError(
-                f"Invalid resource_type '{resource_type}'. "
-                "Must be one of: picture, picture_set, project, character."
+                f"Unsupported resource_type '{resource_type}'. "
+                f"Supported: {', '.join(_SUPPORTED_RESOURCE_TYPES)}. "
+                "Use the full restore for project-level recovery."
             )
 
         vault_root = self._vault.image_root
@@ -731,14 +762,10 @@ class RestoreService:
                     for item in resources:
                         rtype = item.get("type", "")
                         rid = int(item.get("id", 0))
-                        if rtype not in (
-                            "picture",
-                            "picture_set",
-                            "project",
-                            "character",
-                        ):
+                        if rtype not in _SUPPORTED_RESOURCE_TYPES:
                             total.errors.append(
-                                f"Skipped unknown resource type '{rtype}'."
+                                f"Skipped unsupported resource type '{rtype}' "
+                                f"(supported: {', '.join(_SUPPORTED_RESOURCE_TYPES)})."
                             )
                             continue
                         try:
@@ -821,7 +848,11 @@ class RestoreService:
             raise ValueError(f"Snapshot file not found for snapshot {snapshot_id}")
 
         # Fetch live hashes, computing and persisting any that are NULL so
-        # existing pictures (pre-migration) can be compared correctly.
+        # existing pictures (pre-migration) can be compared correctly. NULL
+        # rows are batched into a single bulk Core UPDATE rather than one
+        # UPDATE per picture — the context-menu fans out N pictures × M recent
+        # snapshots and the per-row execute path saturated the writer queue
+        # with single-row updates.
         def _get_live_hashes(session: Session) -> dict[int, str | None]:
             rows = session.execute(
                 select(Picture.id, Picture.metadata_hash).where(
@@ -829,18 +860,31 @@ class RestoreService:
                 )
             ).all()
             hashes: dict[int, str | None] = {pid: h for pid, h in rows}
+            to_persist: list[dict] = []
             for pid, h in list(hashes.items()):
                 if h is None:
                     computed = _compute_picture_metadata_hash(session, pid)
                     if computed is not None:
-                        # Persist via Core SQL so the after_flush hook is not
-                        # re-triggered and the ChangeLog is not polluted.
-                        session.execute(
-                            sa_update(Picture)
-                            .where(Picture.id == pid)
-                            .values(metadata_hash=computed)
-                        )
                         hashes[pid] = computed
+                        to_persist.append({"_pid": pid, "_hash": computed})
+            if to_persist:
+                # Bulk Core UPDATE: one prepared statement, N parameter sets.
+                # Target ``Picture.__table__`` (Core ``Table``) rather than the
+                # ORM ``Picture`` mapper so SQLAlchemy doesn't try to route this
+                # through the ORM "bulk by primary key" path — that path
+                # requires ``id`` in every row and clashes with our explicit
+                # WHERE bindparam. Core DML also keeps the after_flush
+                # ChangeLog/hash hooks from re-firing on this backfill write.
+                stmt = (
+                    sa_update(Picture.__table__)
+                    .where(Picture.__table__.c.id == sa_bindparam("_pid"))
+                    .values(metadata_hash=sa_bindparam("_hash"))
+                )
+                session.execute(stmt, to_persist)
+                # ``run_task`` wraps the callable in ``with Session(...)``
+                # which rolls back on close without an explicit commit; the
+                # backfilled hashes would otherwise be discarded.
+                session.commit()
             return hashes
 
         live_hashes: dict[int, str | None] = self._vault.db.run_task(_get_live_hashes)
@@ -1809,7 +1853,7 @@ class RestoreService:
             "metadata_hash",
         }
         changed: list[str] = []
-        for col in snap_pic.__fields__:
+        for col in type(snap_pic).model_fields:
             if col in _SKIP:
                 continue
             snap_val = getattr(snap_pic, col, None)

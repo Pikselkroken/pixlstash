@@ -30,6 +30,11 @@ logger = get_logger(__name__)
 GFS_KEEP_DAILY: int = 7
 GFS_KEEP_WEEKLY: int = 4  # most-recent Sunday of each of the last 4 weeks
 GFS_KEEP_MONTHLY: int = 12  # first-of-month snapshot for the last 12 months
+# OPPORTUNISTIC snapshots accumulate from safety-snapshot-before-restore and
+# from snapshot_if_due() — without a cap they pin the ChangeLog truncation
+# floor forever (see _apply_gfs_retention) and grow without bound. MANUAL
+# snapshots are intentionally not capped: they are user-curated archives.
+GFS_KEEP_OPPORTUNISTIC: int = 5
 
 # Minimum hours between opportunistic snapshots.
 OPPORTUNISTIC_MIN_HOURS: float = 1.0
@@ -399,7 +404,8 @@ class SnapshotService:
         - ``GFS_KEEP_DAILY`` most-recent DAILY snapshots.
         - ``GFS_KEEP_WEEKLY`` most-recent WEEKLY snapshots.
         - ``GFS_KEEP_MONTHLY`` most-recent MONTHLY snapshots.
-        - All MANUAL and OPPORTUNISTIC snapshots (user-managed).
+        - ``GFS_KEEP_OPPORTUNISTIC`` most-recent OPPORTUNISTIC snapshots.
+        - All MANUAL snapshots (user-curated; user must delete them manually).
 
         Args:
             now: Current UTC datetime (used only for logging).
@@ -410,6 +416,7 @@ class SnapshotService:
                 ("DAILY", GFS_KEEP_DAILY),
                 ("WEEKLY", GFS_KEEP_WEEKLY),
                 ("MONTHLY", GFS_KEEP_MONTHLY),
+                ("OPPORTUNISTIC", GFS_KEEP_OPPORTUNISTIC),
             ):
                 rows = session.exec(
                     select(Snapshot)

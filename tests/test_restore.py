@@ -234,7 +234,7 @@ def test_restore_resource_reverts_description_change(server):
 
 def test_restore_resource_invalid_type_raises(server):
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
-    with pytest.raises(ValueError, match="Invalid resource_type"):
+    with pytest.raises(ValueError, match="Unsupported resource_type"):
         server.vault.restore_service.restore_resource(cp.id, "unknown_type", 1)
 
 
@@ -551,3 +551,199 @@ def test_upgrade_snapshot_schema_runs_alembic_on_old_snapshot(server):
         )
     finally:
         shutil.rmtree(os.path.dirname(upgraded), ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Per-resource restore: "project" is intentionally unsupported in this release
+# ---------------------------------------------------------------------------
+
+
+def test_restore_resource_project_rejected(server):
+    """``resource_type='project'`` must raise ``ValueError`` and the route
+    handler must map that to a 400. Project's graph (ProjectAttachment +
+    Character.project_id + PictureSet.project_id + PPM) isn't yet rebuilt by
+    the per-resource path; use the full restore until that's implemented.
+    """
+    _create_file(server, "proj.jpg")
+    pic = _add_picture(server, filename="proj.jpg")
+
+    def _setup(session):
+        proj = Project(name="MyProject", description="snap")
+        session.add(proj)
+        session.commit()
+        session.refresh(proj)
+        session.add(PictureProjectMember(project_id=proj.id, picture_id=pic.id))
+        session.commit()
+        return proj.id
+
+    proj_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    with pytest.raises(ValueError, match="Unsupported resource_type 'project'"):
+        server.vault.restore_service.restore_resource(cp.id, "project", proj_id)
+
+    # preview_resource must also reject.
+    with pytest.raises(ValueError, match="Unsupported resource_type 'project'"):
+        server.vault.restore_service.preview_resource(cp.id, "project", proj_id)
+
+
+def test_restore_batch_skips_project_entries(server):
+    """Mixed batch with a project entry must record an error for the project
+    and complete the supported entries (no halt-on-first-error)."""
+    _create_file(server, "batch_pic.jpg")
+    pic = _add_picture(server, filename="batch_pic.jpg", description="orig")
+
+    def _setup(session):
+        proj = Project(name="BatchProject")
+        session.add(proj)
+        session.commit()
+        session.refresh(proj)
+        return proj.id
+
+    proj_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Mutate the picture so the batch restore has something to undo.
+    def _mutate(session):
+        session.get(Picture, pic.id).description = "mutated"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+
+    report = server.vault.restore_service.restore_batch(
+        cp.id,
+        [
+            {"type": "project", "id": proj_id},
+            {"type": "picture", "id": pic.id},
+        ],
+    )
+    assert any("project" in e for e in report.errors), (
+        f"Expected a 'project' rejection in errors, got {report.errors}"
+    )
+    assert report.upserted_count >= 1, (
+        "The picture entry must still have been restored despite the "
+        "project entry being rejected."
+    )
+    restored = _get_picture(server, pic.id)
+    assert restored.description == "orig"
+
+
+# ---------------------------------------------------------------------------
+# compare_hashes: NULL backfill on live + snapshot, identical vs changed
+# ---------------------------------------------------------------------------
+
+
+def test_compare_hashes_backfills_null_live_and_returns_identical(server):
+    """Both sides start with NULL metadata_hash (the migration leaves them
+    NULL on existing rows). ``compare_hashes`` must compute and persist both,
+    then report the picture as identical because the underlying metadata
+    matches.
+    """
+    from sqlalchemy import update as sa_update
+
+    _create_file(server, "cmp.jpg")
+    pic = _add_picture(server, filename="cmp.jpg", description="same")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Force both live and snapshot to NULL so we exercise both backfill paths.
+    def _null_live(session):
+        session.execute(sa_update(Picture).values(metadata_hash=None))
+        session.commit()
+
+    server.vault.db.run_task(_null_live)
+
+    import sqlite3
+
+    abs_snapshot = os.path.join(server.vault.image_root, cp.relative_path)
+    with sqlite3.connect(abs_snapshot) as conn:
+        conn.execute("UPDATE picture SET metadata_hash = NULL")
+        conn.commit()
+
+    result = server.vault.restore_service.compare_hashes(cp.id, [pic.id])
+    assert result["identical_ids"] == [pic.id], (
+        f"Picture must be reported identical after backfill on both sides; got {result}"
+    )
+    assert result["changed_ids"] == []
+
+    # The live hash must have been persisted by the bulk Core UPDATE.
+    persisted = server.vault.db.run_immediate_read_task(
+        lambda s: s.get(Picture, pic.id).metadata_hash
+    )
+    assert persisted is not None, "compare_hashes must persist the backfilled live hash"
+
+
+def test_compare_hashes_detects_mutation(server):
+    """A picture mutated after the snapshot must land in ``changed_ids``."""
+    _create_file(server, "cmp_diff.jpg")
+    pic = _add_picture(server, filename="cmp_diff.jpg", description="orig")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _mutate(session):
+        session.get(Picture, pic.id).description = "different"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+
+    result = server.vault.restore_service.compare_hashes(cp.id, [pic.id])
+    assert result["changed_ids"] == [pic.id], (
+        f"Mutated picture must be reported as changed; got {result}"
+    )
+    assert result["identical_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# Restore preview: ``is_compatible`` flag reflects schema_version comparison
+# ---------------------------------------------------------------------------
+
+
+def test_preview_is_compatible_false_when_snapshot_newer_than_live(server):
+    """``is_compatible`` must be ``false`` when the snapshot's
+    ``schema_version`` sorts strictly above the live alembic head — a
+    snapshot from a future schema cannot be downgraded.
+    """
+    from pixlstash.routes.snapshots import _serialize_snapshot
+
+    _create_file(server, "compat.jpg")
+    _add_picture(server, filename="compat.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    live_schema = server.vault.snapshot_service.get_live_schema_version()
+    assert live_schema, "Pre-test: live schema_version must be populated"
+
+    # Force a synthetic schema_version that sorts above the live one.
+    future_version = "zzzz_future_schema"
+
+    def _bump(session):
+        s = session.get(Snapshot, cp.id)
+        s.schema_version = future_version
+        session.commit()
+
+    server.vault.db.run_task(_bump)
+
+    cp_reloaded = server.vault.snapshot_service.get_snapshot(cp.id)
+    payload = _serialize_snapshot(
+        cp_reloaded,
+        server.vault.snapshot_service.load_manifest(cp.id),
+        live_schema,
+    )
+    assert payload["is_compatible"] is False, (
+        f"Snapshot {future_version} > live {live_schema} must be reported "
+        f"incompatible; got {payload}"
+    )
+
+
+def test_preview_is_compatible_true_when_schemas_match(server):
+    """The happy path: snapshot schema == live schema → is_compatible=True."""
+    from pixlstash.routes.snapshots import _serialize_snapshot
+
+    _create_file(server, "compat_ok.jpg")
+    _add_picture(server, filename="compat_ok.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    live_schema = server.vault.snapshot_service.get_live_schema_version()
+    payload = _serialize_snapshot(
+        cp,
+        server.vault.snapshot_service.load_manifest(cp.id),
+        live_schema,
+    )
+    assert payload["is_compatible"] is True

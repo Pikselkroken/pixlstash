@@ -20,6 +20,11 @@ logger = get_logger(__name__)
 # Maximum number of resources returned in preview responses.
 _PREVIEW_RESOURCE_LIMIT = 200
 
+# Maximum picture IDs accepted by POST /snapshots/{id}/hash-compare.
+# The context menu fans out N pictures × ~5 recent snapshots; without a cap a
+# 10k-image selection floods the writer queue with metadata-hash backfills.
+_HASH_COMPARE_PICTURE_LIMIT = 1000
+
 
 # ----------------------------------------------------------------------
 # Response models (declared so Scalar renders real 200 bodies, not null)
@@ -212,8 +217,7 @@ def create_router(server) -> APIRouter:
         Requires owner-level (full, unscoped) access.
         """
         server.auth.require_unscoped_owner(request)
-        active_job = getattr(server.vault.restore_service, "_active_job", None)
-        return {"active_job": active_job}
+        return {"active_job": server.vault.restore_service.get_active_job()}
 
     # ------------------------------------------------------------------
     # POST /snapshots
@@ -537,6 +541,15 @@ def create_router(server) -> APIRouter:
         Requires owner-level (full, unscoped) access.
         """
         server.auth.require_unscoped_owner(request)
+        if len(picture_ids) > _HASH_COMPARE_PICTURE_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"picture_ids may contain at most "
+                    f"{_HASH_COMPARE_PICTURE_LIMIT} entries "
+                    f"(got {len(picture_ids)})."
+                ),
+            )
         try:
             result = server.vault.restore_service.compare_hashes(
                 snapshot_id, picture_ids

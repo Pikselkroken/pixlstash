@@ -301,3 +301,71 @@ def test_undo_to_snapshot_escalates_when_changelog_truncated(server):
     assert report.escalated_tables == ["<changelog-truncated>"], (
         f"Expected escalation marker, got: {report.escalated_tables}"
     )
+
+
+# ---------------------------------------------------------------------------
+# GFS retention: OPPORTUNISTIC snapshots are capped to GFS_KEEP_OPPORTUNISTIC
+# ---------------------------------------------------------------------------
+
+
+def test_gfs_retention_prunes_oldest_opportunistic(server):
+    """OPPORTUNISTIC snapshots accumulate from safety-snapshot-before-restore
+    and ``snapshot_if_due()``. Without a cap they pin the ChangeLog
+    truncation floor (see ``_apply_gfs_retention``) and grow unbounded.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from pixlstash.services.snapshot_service import GFS_KEEP_OPPORTUNISTIC
+
+    cps = []
+    for i in range(GFS_KEEP_OPPORTUNISTIC + 2):
+        cp = server.vault.snapshot_service.create_snapshot("OPPORTUNISTIC")
+        cps.append(cp)
+
+        def _backdate(session, cp_id=cp.id, i=i):
+            row = session.get(Snapshot, cp_id)
+            if row is not None:
+                row.created_at = datetime.now(timezone.utc) - timedelta(
+                    hours=GFS_KEEP_OPPORTUNISTIC + 2 - i
+                )
+                session.add(row)
+                session.commit()
+
+        server.vault.db.run_task(_backdate)
+
+    # Trigger one more prune by creating a final OPPORTUNISTIC.
+    server.vault.snapshot_service.create_snapshot("OPPORTUNISTIC")
+
+    surviving = [
+        s
+        for s in server.vault.snapshot_service.list_snapshots()
+        if s.kind == "OPPORTUNISTIC"
+    ]
+    assert len(surviving) == GFS_KEEP_OPPORTUNISTIC, (
+        f"Expected exactly {GFS_KEEP_OPPORTUNISTIC} OPPORTUNISTIC after prune, "
+        f"got {len(surviving)}"
+    )
+    surviving_ids = {s.id for s in surviving}
+    assert cps[0].id not in surviving_ids
+    assert cps[1].id not in surviving_ids
+
+
+def test_gfs_retention_does_not_prune_manual(server):
+    """MANUAL snapshots are user-curated and must never be auto-pruned, even
+    when many of them exist."""
+    cps = [
+        server.vault.snapshot_service.create_snapshot("MANUAL", label=f"m{i}")
+        for i in range(10)
+    ]
+    # Triggering another snapshot must not touch the MANUAL ones.
+    server.vault.snapshot_service.create_snapshot("MANUAL", label="trigger")
+
+    surviving_manual = [
+        s for s in server.vault.snapshot_service.list_snapshots() if s.kind == "MANUAL"
+    ]
+    assert len(surviving_manual) == 11
+    surviving_ids = {s.id for s in surviving_manual}
+    for cp in cps:
+        assert cp.id in surviving_ids, (
+            f"MANUAL snapshot {cp.id} was pruned but MANUAL must never auto-prune"
+        )
