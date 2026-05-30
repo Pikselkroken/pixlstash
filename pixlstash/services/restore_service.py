@@ -32,6 +32,10 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.database import _compute_picture_metadata_hash
+from pixlstash.db_models.picture_likeness import (
+    PictureLikenessFrontier,
+    PictureLikenessQueue,
+)
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
@@ -97,10 +101,13 @@ class MissingDependenciesError(RuntimeError):
 
 
 # Columns on Picture that are regenerable and should be NULL-reset after any
-# restore so the WorkPlanner reprocesses them automatically.
+# restore so the WorkPlanner reprocesses them automatically.  Kept in sync
+# with ``SnapshotService._strip_regenerable_blobs`` so the snapshot does not
+# carry bytes that the restore would immediately discard.
 _PICTURE_DERIVED_COLUMNS: tuple[str, ...] = (
     "smart_score",
     "text_score",
+    "aesthetic_score",
     "text_embedding",
     "image_embedding",
 )
@@ -456,6 +463,25 @@ class RestoreService:
             shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
             return report
 
+        # 3b. Capture the live likeness pipeline state BEFORE the swap so
+        #     the file swap doesn't reset progress-tracking to whatever
+        #     was in the (now-stripped) snapshot file. The snapshot
+        #     deliberately ships these tables empty; we replay the live
+        #     state into the swapped DB during cleanup, reconciled with
+        #     the post-restore picture set.
+        live_likeness_queue = self._vault.db.run_immediate_read_task(
+            lambda s: [
+                (r.picture_id, r.queued_at)
+                for r in s.exec(select(PictureLikenessQueue)).all()
+            ]
+        )
+        live_likeness_frontier = self._vault.db.run_immediate_read_task(
+            lambda s: [
+                (r.picture_id_a, r.j_max)
+                for r in s.exec(select(PictureLikenessFrontier)).all()
+            ]
+        )
+
         # 4. Pause background work, then route the DB swap through the writer
         #    queue so it is serialised with all other DB operations and no
         #    competing connection can hold a lock during the file swap.
@@ -521,7 +547,28 @@ class RestoreService:
                     **{col: None for col in _PICTURE_DERIVED_COLUMNS}
                 )
             )
+
+            # Replay the pre-swap likeness pipeline state into the swapped
+            # DB, dropping entries for pictures that no longer exist in
+            # the post-restore picture set. Then ensure every (possibly
+            # new) picture has a frontier row so the pipeline picks them
+            # up.
+            live_pic_ids = set(session.exec(select(Picture.id)).all())
+            for pic_id, queued_at in live_likeness_queue:
+                if pic_id in live_pic_ids:
+                    session.add(
+                        PictureLikenessQueue(picture_id=pic_id, queued_at=queued_at)
+                    )
+            for pic_id_a, j_max in live_likeness_frontier:
+                if pic_id_a in live_pic_ids:
+                    session.add(
+                        PictureLikenessFrontier(picture_id_a=pic_id_a, j_max=j_max)
+                    )
             session.commit()
+            # ensure_all does its own commit; runs AFTER replay so existing
+            # frontier rows aren't double-inserted (it skips keys already
+            # present in the table).
+            PictureLikenessFrontier.ensure_all(session)
 
         # Steps 4-6 wrapped in try/finally so the planner always restarts —
         # if _do_swap or the cleanup raises, leaving the planner stopped

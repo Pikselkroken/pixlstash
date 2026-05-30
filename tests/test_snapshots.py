@@ -10,6 +10,11 @@ from sqlalchemy import text
 from sqlmodel import delete
 
 from pixlstash.db_models import Picture
+from pixlstash.db_models.picture_likeness import (
+    PictureLikeness,
+    PictureLikenessFrontier,
+    PictureLikenessQueue,
+)
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 
@@ -33,6 +38,9 @@ def clean_db(server):
     def _wipe(session):
         session.exec(text("PRAGMA foreign_keys = OFF"))
         session.exec(delete(Snapshot))
+        session.exec(delete(PictureLikeness))
+        session.exec(delete(PictureLikenessQueue))
+        session.exec(delete(PictureLikenessFrontier))
         session.exec(delete(Picture))
         session.exec(text("PRAGMA foreign_keys = ON"))
         session.commit()
@@ -310,3 +318,145 @@ def test_gfs_retention_does_not_prune_manual(server):
         assert cp.id in surviving_ids, (
             f"MANUAL snapshot {cp.id} was pruned but MANUAL must never auto-prune"
         )
+
+
+# ---------------------------------------------------------------------------
+# Snapshot regenerable-BLOB stripping
+# ---------------------------------------------------------------------------
+
+
+def test_create_snapshot_strips_regenerable_picture_columns(server):
+    """Snapshots must NOT carry regenerable Picture BLOBs/scores — those
+    are NULL-reset by every restore path anyway, so keeping them in the
+    snapshot file is pure disk waste (on a real vault dominated by CLIP
+    embeddings this can mean GBs per snapshot).
+
+    Set the regenerable columns on a live picture, take a snapshot, then
+    open the snapshot file directly and verify those columns are NULL
+    while user-editable fields (description) are preserved.
+    """
+    import sqlite3
+    from sqlalchemy import update as sa_update
+
+    from pixlstash.db_models import Picture
+
+    pic_id = _add_picture_with_blobs(server)
+
+    def _populate_derived(session):
+        session.execute(
+            sa_update(Picture)
+            .where(Picture.id == pic_id)
+            .values(
+                description="user-set",
+                text_embedding=b"\x01" * 4096,
+                image_embedding=b"\x02" * 4096,
+                smart_score=0.42,
+                text_score=0.31,
+                aesthetic_score=0.55,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_populate_derived)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+    snap_path = os.path.join(server.vault.image_root, cp.relative_path)
+    assert os.path.isfile(snap_path)
+
+    with sqlite3.connect(snap_path) as conn:
+        row = conn.execute(
+            "SELECT description, text_embedding, image_embedding, "
+            "smart_score, text_score, aesthetic_score "
+            "FROM picture WHERE id = ?",
+            (pic_id,),
+        ).fetchone()
+
+    assert row is not None, "Snapshot must contain the picture row"
+    desc, te, ie, ss, ts, aest = row
+    assert desc == "user-set", (
+        f"user-editable column must survive the strip; got description={desc!r}"
+    )
+    assert te is None, "text_embedding must be stripped from the snapshot"
+    assert ie is None, "image_embedding must be stripped from the snapshot"
+    assert ss is None, "smart_score must be stripped from the snapshot"
+    assert ts is None, "text_score must be stripped from the snapshot"
+    assert aest is None, "aesthetic_score must be stripped from the snapshot"
+
+
+def test_create_snapshot_drops_likeness_pipeline_tables(server):
+    """The likeness graph (``picturelikeness``) plus its progress-tracking
+    siblings (``picturelikenessqueue`` / ``picturelikenessfrontier``)
+    must be dropped from the snapshot file. The graph is regenerable
+    and O(N²); the progress tables are LIVE pipeline state that the
+    restore replays from a fresh capture rather than from the snapshot.
+    """
+    import sqlite3
+
+    pic_id = _add_picture_with_blobs(server)
+
+    # Seed the three tables with live rows so we can prove they
+    # disappear in the snapshot file.
+    pic_id_b = _add_picture_with_blobs_named(server, "blobs_b.jpg")
+
+    def _seed(session):
+        a, b = sorted([pic_id, pic_id_b])
+        session.add(
+            PictureLikeness(
+                picture_id_a=a, picture_id_b=b, likeness=0.77, metric="clip_cosine"
+            )
+        )
+        session.add(PictureLikenessQueue(picture_id=pic_id))
+        session.add(PictureLikenessFrontier(picture_id_a=pic_id, j_max=pic_id_b))
+        session.commit()
+
+    server.vault.db.run_task(_seed)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+    snap_path = os.path.join(server.vault.image_root, cp.relative_path)
+
+    with sqlite3.connect(snap_path) as conn:
+        likeness_n = conn.execute("SELECT COUNT(*) FROM picturelikeness").fetchone()[0]
+        queue_n = conn.execute("SELECT COUNT(*) FROM picturelikenessqueue").fetchone()[
+            0
+        ]
+        frontier_n = conn.execute(
+            "SELECT COUNT(*) FROM picturelikenessfrontier"
+        ).fetchone()[0]
+        pic_n = conn.execute("SELECT COUNT(*) FROM picture").fetchone()[0]
+
+    assert pic_n >= 2, "Snapshot must still contain the picture rows"
+    assert likeness_n == 0, (
+        f"picturelikeness must be empty in snapshot; got {likeness_n}"
+    )
+    assert queue_n == 0, (
+        f"picturelikenessqueue must be empty in snapshot; got {queue_n}"
+    )
+    assert frontier_n == 0, (
+        f"picturelikenessfrontier must be empty in snapshot; got {frontier_n}"
+    )
+
+
+def _add_picture_with_blobs(server) -> int:
+    """Helper: add one picture and return its id."""
+
+    def _do(session):
+        p = Picture(file_path="blobs.jpg", filename="blobs.jpg")
+        session.add(p)
+        session.commit()
+        session.refresh(p)
+        return p.id
+
+    return server.vault.db.run_task(_do)
+
+
+def _add_picture_with_blobs_named(server, filename: str) -> int:
+    """Helper: add one picture with the given filename, return its id."""
+
+    def _do(session):
+        p = Picture(file_path=filename, filename=filename)
+        session.add(p)
+        session.commit()
+        session.refresh(p)
+        return p.id
+
+    return server.vault.db.run_task(_do)

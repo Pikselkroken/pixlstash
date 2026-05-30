@@ -7,6 +7,7 @@ old snapshots according to the GFS retention constants.
 
 import json
 import os
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
@@ -108,6 +109,15 @@ class SnapshotService:
 
         def _create_and_record(session):
             self._vacuum_into(session, abs_snapshot)
+
+            # Strip regenerable bytes from the freshly-VACUUMed snapshot
+            # file. These columns are NULL-reset by every restore path
+            # anyway (see ``restore_service._PICTURE_DERIVED_COLUMNS``),
+            # so carrying them in the snapshot just wastes disk — on a
+            # large vault with CLIP embeddings this dominates the file
+            # size. Failure here is non-fatal: the snapshot is still
+            # correct, just larger than ideal.
+            self._strip_regenerable_blobs(abs_snapshot)
 
             byte_size = (
                 os.path.getsize(abs_snapshot) if os.path.exists(abs_snapshot) else 0
@@ -339,6 +349,96 @@ class SnapshotService:
         raw = conn.connection.driver_connection  # underlying sqlite3.Connection
         escaped = abs_snapshot.replace("'", "''")
         raw.execute(f"VACUUM INTO '{escaped}'")
+
+    # Picture columns NULLed when stripping a snapshot. Kept in sync with
+    # ``restore_service._PICTURE_DERIVED_COLUMNS`` — the restore path NULL-
+    # resets these on the live DB regardless of what the snapshot held, so
+    # carrying them around in the snapshot file is pure waste.
+    _STRIP_PICTURE_COLUMNS: tuple[str, ...] = (
+        "text_embedding",
+        "image_embedding",
+        "smart_score",
+        "text_score",
+        "aesthetic_score",
+    )
+
+    # Tables whose entire contents are dropped from a snapshot. These are
+    # all regenerable / pipeline-state tables — keeping the snapshot's
+    # rows would either waste disk on values the workers will recompute
+    # (``picturelikeness``) or stomp on the live pipeline's progress
+    # tracking when the restore swaps the file in (``picturelikenessqueue``
+    # / ``picturelikenessfrontier``).  The full-restore path captures the
+    # live queue + frontier before the swap and reinserts a reconciled
+    # set after.
+    _STRIP_TABLES_DELETE_ALL: tuple[str, ...] = (
+        "picturelikeness",
+        "picturelikenessqueue",
+        "picturelikenessfrontier",
+    )
+
+    @classmethod
+    def _strip_regenerable_blobs(cls, abs_snapshot: str) -> None:
+        """NULL the regenerable Picture columns in *abs_snapshot* and re-VACUUM.
+
+        Failure is logged and swallowed: a non-stripped snapshot is still
+        correct, just larger.  The file is opened with a dedicated
+        connection so the writer thread's session isn't disturbed.
+
+        Args:
+            abs_snapshot: Absolute path to the freshly-VACUUMed snapshot.
+        """
+        try:
+            conn = sqlite3.connect(abs_snapshot)
+        except Exception as exc:
+            logger.warning(
+                "SnapshotService: could not open snapshot %s for stripping: %s",
+                abs_snapshot,
+                exc,
+            )
+            return
+        try:
+            # Probe existing columns so we never UPDATE a column the
+            # snapshot's schema doesn't have (older snapshots restored
+            # via the alembic-upgrade path may pre-date some columns).
+            cols_present = {
+                row[1] for row in conn.execute("PRAGMA table_info(picture)").fetchall()
+            }
+            null_cols = [c for c in cls._STRIP_PICTURE_COLUMNS if c in cols_present]
+            if null_cols:
+                set_clause = ", ".join(f"{c} = NULL" for c in null_cols)
+                conn.execute(f"UPDATE picture SET {set_clause}")
+
+            # Drop regenerable / pipeline-state tables. Only those that
+            # actually exist in this snapshot's schema — older snapshots
+            # may pre-date some of them.
+            existing_tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            for table_name in cls._STRIP_TABLES_DELETE_ALL:
+                if table_name in existing_tables:
+                    conn.execute(f"DELETE FROM {table_name}")
+
+            conn.commit()
+            # VACUUM reclaims the pages freed by the UPDATEs and DELETEs
+            # above. SQLite requires VACUUM outside a transaction; the
+            # explicit commit above plus isolation_level reset handle that.
+            conn.isolation_level = None
+            conn.execute("VACUUM")
+        except Exception as exc:
+            logger.warning(
+                "SnapshotService: failed to strip regenerable blobs from %s: %s",
+                abs_snapshot,
+                exc,
+                exc_info=True,
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _build_manifest(self, session) -> dict:
         """Build the manifest dict capturing resource counts.

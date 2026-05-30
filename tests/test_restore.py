@@ -17,6 +17,11 @@ from pixlstash.db_models import (
     PictureSetMember,
     Project,
 )
+from pixlstash.db_models.picture_likeness import (
+    PictureLikeness,
+    PictureLikenessFrontier,
+    PictureLikenessQueue,
+)
 from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
@@ -42,6 +47,13 @@ def clean_db(server):
     def _wipe(session):
         session.exec(text("PRAGMA foreign_keys = OFF"))
         session.exec(delete(Snapshot))
+        # Likeness pipeline rows are populated by restore_full (via
+        # ensure_all), so they accumulate across tests. Without an
+        # explicit wipe — FKs are OFF here, so CASCADE doesn't fire —
+        # they orphan and collide with the next test's replay.
+        session.exec(delete(PictureLikeness))
+        session.exec(delete(PictureLikenessQueue))
+        session.exec(delete(PictureLikenessFrontier))
         session.exec(delete(PictureProjectMember))
         session.exec(delete(PictureSetMember))
         session.exec(delete(Face))
@@ -1022,4 +1034,113 @@ def test_restore_batch_confirm_restores_all_missing_parents_once(server):
     )
     assert chars_after == {c1_id: "char_c", c2_id: "char_d"}, (
         f"Confirmed batch must restore BOTH missing characters; got {chars_after}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Full restore preserves live likeness pipeline state across the swap
+# ---------------------------------------------------------------------------
+
+
+def test_full_restore_preserves_live_likeness_queue_and_frontier(server):
+    """The snapshot strip drops the likeness queue + frontier (they're LIVE
+    pipeline progress, not user data). Full restore must capture the live
+    state BEFORE the swap and replay it AFTER — for pictures that survive
+    the restore. Pictures dropped by the restore must lose their queue/
+    frontier rows; pictures new in the snapshot must gain frontier rows
+    via ensure_all.
+    """
+    from pixlstash.db_models.picture_likeness import (
+        PictureLikeness,
+        PictureLikenessFrontier,
+        PictureLikenessQueue,
+    )
+
+    # Live state at snapshot time: pictures {survivor, soon_to_be_added}.
+    _create_file(server, "survivor.jpg")
+    _create_file(server, "soon.jpg")
+    survivor = _add_picture(server, filename="survivor.jpg", description="v1")
+    soon_added = _add_picture(server, filename="soon.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Post-snapshot: add a NEW picture that doesn't exist in the snapshot.
+    # After restore this picture gets dropped (the swap replaces the live
+    # DB with the snapshot's picture set).
+    _create_file(server, "future.jpg")
+    future = _add_picture(server, filename="future.jpg")
+
+    # Mutate the live likeness pipeline state: survivor + future are
+    # both in the queue and have frontier rows. soon_added (in snapshot)
+    # has no live progress yet — it should still get a frontier row
+    # post-restore via ensure_all.
+    def _seed_live_state(session):
+        a, b = sorted([survivor.id, future.id])
+        session.add(
+            PictureLikeness(
+                picture_id_a=a, picture_id_b=b, likeness=0.5, metric="clip_cosine"
+            )
+        )
+        session.add(PictureLikenessQueue(picture_id=survivor.id))
+        session.add(PictureLikenessQueue(picture_id=future.id))
+        session.add(PictureLikenessFrontier(picture_id_a=survivor.id, j_max=future.id))
+        session.add(PictureLikenessFrontier(picture_id_a=future.id, j_max=future.id))
+        session.commit()
+
+    server.vault.db.run_task(_seed_live_state)
+
+    # Sanity: pre-restore state.
+    pre = server.vault.db.run_immediate_read_task(
+        lambda s: (
+            set(s.exec(select(PictureLikenessQueue.picture_id)).all()),
+            {
+                r.picture_id_a: r.j_max
+                for r in s.exec(select(PictureLikenessFrontier)).all()
+            },
+            s.exec(select(PictureLikeness)).all(),
+        )
+    )
+    pre_queue, pre_frontier, pre_likeness = pre
+    assert pre_queue == {survivor.id, future.id}
+    assert pre_frontier == {survivor.id: future.id, future.id: future.id}
+    assert len(pre_likeness) == 1
+
+    # Restore. Snapshot's picture set is {survivor, soon_added}; future
+    # gets dropped by the swap.
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    post = server.vault.db.run_immediate_read_task(
+        lambda s: (
+            set(s.exec(select(PictureLikenessQueue.picture_id)).all()),
+            {
+                r.picture_id_a: r.j_max
+                for r in s.exec(select(PictureLikenessFrontier)).all()
+            },
+            s.exec(select(PictureLikeness)).all(),
+        )
+    )
+    post_queue, post_frontier, post_likeness = post
+
+    # Survivor's queue entry is preserved; future's is gone (FK on a
+    # dropped picture).
+    assert post_queue == {survivor.id}, (
+        f"Queue must preserve survivor and drop future; got {post_queue}"
+    )
+    # Survivor's frontier row + j_max is preserved.
+    assert post_frontier.get(survivor.id) == future.id, (
+        f"survivor frontier j_max must survive the swap; got {post_frontier}"
+    )
+    # Future's frontier row is gone (its picture no longer exists).
+    assert future.id not in post_frontier, (
+        f"future picture's frontier row must be cleared; got {post_frontier}"
+    )
+    # soon_added gained a frontier row via ensure_all (initialised to its
+    # own id — see PictureLikenessFrontier.ensure_all).
+    assert post_frontier.get(soon_added.id) == soon_added.id, (
+        f"soon_added must gain a frontier row via ensure_all; got {post_frontier}"
+    )
+    # The snapshot's picturelikeness was stripped, so post-restore has zero
+    # likeness rows — the pipeline will recompute.
+    assert post_likeness == [], (
+        f"likeness rows must be empty after restore; got {post_likeness}"
     )
