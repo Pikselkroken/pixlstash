@@ -560,7 +560,7 @@ def create_router(server) -> APIRouter:
     )
     def get_watch_folders(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         if getattr(request.state, "token_scope", None) is not None:
             raise HTTPException(
                 status_code=403,
@@ -584,7 +584,7 @@ def create_router(server) -> APIRouter:
     )
     def get_filesystem_roots(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         if getattr(request.state, "token_scope", None) is not None:
             raise HTTPException(
                 status_code=403,
@@ -607,7 +607,7 @@ def create_router(server) -> APIRouter:
     )
     def get_snapshot_config(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         return {
             "status": "success",
             "daily_snapshots": server._server_config.get("daily_snapshots", True),
@@ -624,7 +624,7 @@ def create_router(server) -> APIRouter:
     )
     def patch_snapshot_config(request: Request, body: SnapshotConfigPatch):
         _ensure_secure_when_required(request)
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         server._server_config["daily_snapshots"] = body.daily_snapshots
         server.vault.set_daily_snapshots_enabled(body.daily_snapshots)
         config_path = getattr(server, "_server_config_path", None)
@@ -641,7 +641,7 @@ def create_router(server) -> APIRouter:
     )
     def open_server_config(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         config_path = getattr(server, "_server_config_path", None)
         opened = _open_in_os(config_path)
         return {"status": "success" if opened else "failed"}
