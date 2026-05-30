@@ -1,3 +1,9 @@
+# [1.4.1]
+- Bump axios package in frontend due to a vulnerability [Security:Low]
+
+# [1.4.0]
+- Increase ComfyUI timeouts
+
 # [1.4.0rc1]
 - Add reverse picture search and face search to both UI and API
 - Further improve grid loading speed
