@@ -143,38 +143,270 @@ class RegistrationStatusResponse(BaseModel):
     needs_registration: bool
 
 
+# Rich Markdown for the "pictures" section header (rendered by Scalar in the
+# space beside the operations list). Acts as the template for fleshing out the
+# other sections.
+_PICTURES_TAG_DESCRIPTION = """\
+Browse, search, import, export and edit the pictures and videos in your library — the core of the API.
+
+**Listing.** `GET /pictures` returns matching rows. Page with `offset` + `limit`, order with
+`sort` (plus `descending`), and control how much data comes back per row with `fields`:
+
+- `fields=grid` — compact set tuned for thumbnail grids (stack leaders only)
+- `fields=id,score,width,height` — only the columns you name
+- *(omit `fields`)* — full metadata for every row
+
+Most filters (tags, characters, sets, score ranges, …) are passed as additional query parameters.
+
+### Common workflow
+
+```bash
+# 1) Newest 50, compact projection
+curl "https://your-pixlstash-host/api/v1/pictures?sort=DATE&limit=50&fields=grid" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# 2) Full metadata for one picture
+curl "https://your-pixlstash-host/api/v1/pictures/123/metadata" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# 3) Download the original file
+curl "https://your-pixlstash-host/api/v1/pictures/123.jpg" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -o 123.jpg
+
+# 4) Set a manual 5-star score
+curl -X PATCH "https://your-pixlstash-host/api/v1/pictures/123" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"score": 5}'
+```
+
+### Sort values (`sort=`)
+
+| Value | Orders by |
+| --- | --- |
+| `DATE` | Capture / file date |
+| `IMPORTED_AT` | Import time |
+| `SCORE` | Manual star rating |
+| `SMART_SCORE` | Model-predicted aesthetic score |
+| `IMAGE_SIZE` | Pixel dimensions |
+| `TEXT_CONTENT` | Relevance to a text `query` |
+| `CHARACTER_LIKENESS` | Likeness to a chosen character |
+
+Omit `sort` for natural (id) order; add `descending=false` to reverse.
+
+### Exporting (async)
+
+Exports run as a background job — start it, poll status, then download the ZIP:
+
+```bash
+task=$(curl -s "https://your-pixlstash-host/api/v1/pictures/export?set_id=7&resolution=original" \\
+  -H "Authorization: Bearer YOUR_TOKEN" | jq -r .task_id)
+
+curl "https://your-pixlstash-host/api/v1/pictures/export/status?task_id=$task" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+curl "https://your-pixlstash-host/api/v1/pictures/export/download/$task" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -o export.zip
+```
+
+> **Trash:** `DELETE /pictures/{id}` moves a picture to the *scrapheap* (recoverable via
+> `POST /pictures/scrapheap/restore`); `DELETE /pictures/scrapheap` purges it for good.
+"""
+
+
+_CHARACTERS_TAG_DESCRIPTION = """\
+Create characters, assign detected faces to them, and search by face likeness.
+
+A *character* groups faces across your library. Assign faces (by `face_ids`, or whole
+`picture_ids`) and PixlStash builds a likeness model used for search and scoring.
+
+### Common workflow
+
+```bash
+# Create a character
+cid=$(curl -s -X POST "https://your-pixlstash-host/api/v1/characters" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"name": "Ada"}' | jq -r .id)
+
+# Assign faces from some pictures
+curl -X POST "https://your-pixlstash-host/api/v1/characters/$cid/faces" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"picture_ids": [123, 124, 125]}'
+
+# Reference pictures + category summary
+curl "https://your-pixlstash-host/api/v1/characters/$cid/reference_pictures" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Find characters whose faces resemble an image with `POST /characters/likeness-search`, or look
+one up by project with `GET /projects/{project_name}/characters/{character_name}`.
+"""
+
+
+_PICTURE_SETS_TAG_DESCRIPTION = """\
+Curated, manually-orderable collections of pictures. Create a set, then add, replace or remove members.
+
+### Common workflow
+
+```bash
+# Create a set
+sid=$(curl -s -X POST "https://your-pixlstash-host/api/v1/picture_sets" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"name": "Best of 2026"}' | jq -r .id)
+
+# Bulk-add pictures
+curl -X POST "https://your-pixlstash-host/api/v1/picture_sets/$sid/members" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"picture_ids": [123, 124, 125]}'
+
+# List members
+curl "https://your-pixlstash-host/api/v1/picture_sets/$sid/members" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+`POST .../members` adds, `PUT .../members` **replaces** the whole membership, and
+`DELETE .../members/{picture_id}` removes one. `POST /picture_sets/membership` checks set
+membership for many pictures in a single call.
+"""
+
+
+_TAGS_TAG_DESCRIPTION = """\
+Read and edit the tags on pictures, and list every tag in the library.
+
+### Common workflow
+
+```bash
+# Every distinct tag
+curl "https://your-pixlstash-host/api/v1/tags" -H "Authorization: Bearer YOUR_TOKEN"
+
+# Tags on one picture
+curl "https://your-pixlstash-host/api/v1/pictures/123/tags" -H "Authorization: Bearer YOUR_TOKEN"
+
+# Add a tag
+curl -X POST "https://your-pixlstash-host/api/v1/pictures/123/tags" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"tag": "sunset"}'
+
+# Tags for many pictures at once (max 200 ids)
+curl -X POST "https://your-pixlstash-host/api/v1/pictures/tags/bulk_fetch" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"picture_ids": [123, 124, 125]}'
+```
+
+`DELETE /pictures/{id}/tags/{tag_id}` removes one tag; `DELETE /pictures/{id}/tags` clears them all.
+"""
+
+
+_STACKS_TAG_DESCRIPTION = """\
+Stacks group related shots (bursts, edits, variants) under one leader, with a manual order.
+
+### Common workflow
+
+```bash
+# Create a stack from some pictures
+stack=$(curl -s -X POST "https://your-pixlstash-host/api/v1/stacks" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"picture_ids": [123, 124, 125]}' | jq -r .id)
+
+# Add a member
+curl -X POST "https://your-pixlstash-host/api/v1/stacks/$stack/members" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"picture_ids": [126]}'
+
+# Set the display order
+curl -X PATCH "https://your-pixlstash-host/api/v1/stacks/$stack/order" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"picture_ids": [124, 123, 125, 126]}'
+```
+
+Find the stack a picture belongs to with `GET /pictures/{picture_id}/stack`, and move a single
+member with `PATCH /stacks/{stack_id}/members/{picture_id}`.
+"""
+
+
+_PROJECTS_TAG_DESCRIPTION = """\
+Top-level workspaces that scope characters and picture sets and hold file/URL attachments.
+Endpoints accept a project **id or name**.
+
+### Common workflow
+
+```bash
+# Create a project
+pid=$(curl -s -X POST "https://your-pixlstash-host/api/v1/projects" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"name": "Album cover", "description": "2026 shoot"}' | jq -r .id)
+
+# Attach a reference file (multipart)
+curl -X POST "https://your-pixlstash-host/api/v1/projects/$pid/attachments" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -F "file=@moodboard.pdf"
+
+# ...or bookmark a URL
+curl -X POST "https://your-pixlstash-host/api/v1/projects/$pid/attachments/url" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"url": "https://example.com/ref", "title": "Reference"}'
+
+# Export the whole project as a ZIP
+curl "https://your-pixlstash-host/api/v1/projects/$pid/export" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -o project.zip
+```
+
+`GET /projects/{id_or_name}/summary` returns the picture count; the nested
+`/picture_sets` lists the sets scoped to the project.
+"""
+
+
+_AUTH_TAG_DESCRIPTION = """\
+Session login for the web UI. **For API access, prefer a personal token** (see *Authentication*
+at the top) and send it as `Authorization: Bearer …` on every request.
+
+- `POST /login` — authenticate a username/password and set a session cookie.
+- `GET /login` — report whether first-run registration is still needed.
+- `GET /check-session` — validate the current session or token.
+- `POST /logout` — end the session.
+"""
+
+
+_SERVER_TAG_DESCRIPTION = """\
+Server status. `GET /version` is public (no token) and returns the running version and install
+type — handy as a health / compatibility check:
+
+```bash
+curl "https://your-pixlstash-host/version"
+```
+"""
+
+
 API_OPENAPI_TAGS = [
     {
         "name": "pictures",
-        "description": "Picture listing, metadata, thumbnails, import/export and media operations.",
+        "description": _PICTURES_TAG_DESCRIPTION,
     },
     {
         "name": "characters",
-        "description": "Character CRUD, summaries, reference pictures and face assignment endpoints.",
+        "description": _CHARACTERS_TAG_DESCRIPTION,
     },
     {
         "name": "picture_sets",
-        "description": "Picture set CRUD and picture membership management.",
+        "description": _PICTURE_SETS_TAG_DESCRIPTION,
     },
     {
         "name": "tags",
-        "description": "Tag management for pictures, faces",
+        "description": _TAGS_TAG_DESCRIPTION,
     },
     {
         "name": "stacks",
-        "description": "Stack creation, ordering and membership operations.",
+        "description": _STACKS_TAG_DESCRIPTION,
     },
     {
         "name": "projects",
-        "description": "Project management, including character/set scoping and file attachments.",
+        "description": _PROJECTS_TAG_DESCRIPTION,
     },
     {
         "name": "auth",
-        "description": "Login, logout and session checks.",
+        "description": _AUTH_TAG_DESCRIPTION,
     },
     {
         "name": "server",
-        "description": "Server status and control: version, network info and restart.",
+        "description": _SERVER_TAG_DESCRIPTION,
     },
 ]
 
@@ -184,11 +416,14 @@ API_V1_PREFIX = "/api/v1"
 # URLs are page-relative to ``scalar-assets/`` — served from the bundled package
 # on a live server and copied next to each published page by the docs generator.
 API_DESCRIPTION = """\
-<div align="center">
-  <a href="https://pixlstash.dev" target="_blank" rel="noopener">
-    <img src="scalar-assets/logo.png" alt="PixlStash" width="150" />
-  </a>
-</div>
+<a href="https://pixlstash.dev" target="_blank" rel="noopener">
+  <img
+    src="scalar-assets/logo.png"
+    alt="PixlStash"
+    width="120"
+    style="float: right; margin: 0 0 16px 24px"
+  />
+</a>
 
 # Simplify your image workflow
 
@@ -199,10 +434,11 @@ drives ComfyUI workflows — all on your own hardware, with no cloud and no lock
 
 **Integrate with scripts, pipelines and external tools** — fetch images, metadata, tags and
 more. This REST API exposes everything the app can do — **pictures, tags, stacks, sets,
-characters, projects, taggers and ComfyUI integration** — so you can script imports, build
-integrations and automate your pipeline.
+characters and projects** — so you can script imports, build integrations and automate your pipeline.
 
 ### → Learn more and download at **[pixlstash.dev](https://pixlstash.dev)**
+
+<div style="clear: both"></div>
 
 ---
 
@@ -330,6 +566,19 @@ _SCALAR_THEME_CSS = """\
         --scalar-sidebar-search-background: #2b3138 !important;
         --scalar-sidebar-search-border-color: #3a4047 !important;
         --scalar-sidebar-search--color: rgba(242, 229, 218, 0.6) !important;
+      }
+      /* Float the logo (rendered from the OpenAPI description) so the intro
+         heading and paragraphs flow around it — Scalar's markdown sanitizer
+         strips inline style attributes, so we target the image by src here. */
+      img[src$="scalar-assets/logo.png"] {
+        float: right !important;
+        margin: 0 0 16px 24px !important;
+        max-width: 120px;
+      }
+      /* Make the markdown divider (`---`) end the logo's float so the Quick
+         start block never wraps beside it. */
+      hr {
+        clear: both !important;
       }
     </style>"""
 

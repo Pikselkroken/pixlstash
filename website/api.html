@@ -62,10 +62,42 @@
         border-radius: var(--radius-md);
         padding: 18px;
         border: 1px solid rgba(34, 38, 44, 0.1);
+        display: block;
+        color: inherit;
+        text-decoration: none;
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease,
+          border-color 0.18s ease;
+      }
+
+      .feature-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        border-color: var(--accent);
       }
 
       .feature-card h3 {
         margin: 0 0 8px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .feature-card h3::after {
+        content: "→";
+        color: var(--accent);
+        opacity: 0.6;
+        font-weight: 400;
+        transition:
+          transform 0.18s ease,
+          opacity 0.18s ease;
+      }
+
+      .feature-card:hover h3::after {
+        transform: translateX(3px);
+        opacity: 1;
       }
 
       .feature-card p {
@@ -73,6 +105,184 @@
         color: var(--muted);
         line-height: 1.5;
         font-size: 0.95rem;
+      }
+
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        justify-content: center;
+        margin-top: 20px;
+      }
+
+      .btn {
+        padding: 13px 22px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 1rem;
+        border: 1px solid transparent;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+
+      .btn-primary {
+        background: linear-gradient(130deg, var(--accent), var(--accent-2));
+        color: #ffffff;
+        box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
+      }
+
+      .btn-secondary {
+        background: rgba(34, 38, 44, 0.06);
+        color: var(--text);
+        border-color: rgba(34, 38, 44, 0.16);
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 26px rgba(142, 166, 4, 0.28);
+      }
+
+      .cta-banner {
+        margin-top: 28px;
+        padding: 28px;
+        border-radius: var(--radius-lg);
+        background: linear-gradient(
+          120deg,
+          rgba(159, 177, 31, 0.18),
+          rgba(47, 139, 95, 0.18)
+        );
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      /* ── Per-section showcase blocks ───────────────────────────────────── */
+      .showcase {
+        margin-top: 28px;
+      }
+
+      .showcase + .showcase {
+        margin-top: 40px;
+        padding-top: 28px;
+        border-top: 1px solid rgba(34, 38, 44, 0.1);
+      }
+
+      .showcase-title {
+        text-align: center;
+        margin: 0 0 6px;
+        font-size: 1.25rem;
+      }
+
+      .showcase-blurb {
+        max-width: 720px;
+        margin: 0 auto 18px;
+        text-align: center;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .media-frame {
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        max-width: 820px;
+        margin: 0 auto;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+      }
+
+      .media-link {
+        display: block;
+        text-align: center;
+        margin-top: 14px;
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      /* ── Carousel ──────────────────────────────────────────────────────── */
+      .carousel {
+        position: relative;
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        max-width: 820px;
+        margin: 0 auto;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+        background: #000;
+        user-select: none;
+      }
+
+      .carousel-slides {
+        display: flex;
+        transition: transform 0.4s ease;
+      }
+
+      .carousel-slides img {
+        flex: 0 0 100%;
+        width: 100%;
+        display: block;
+        object-fit: contain;
+        max-height: 520px;
+        background: #000;
+      }
+
+      .carousel-arrow {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        border: 0;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font-size: 22px;
+        line-height: 1;
+        cursor: pointer;
+        z-index: 2;
+        transition: background 0.18s ease;
+      }
+
+      .carousel-arrow:hover {
+        background: rgba(0, 0, 0, 0.82);
+      }
+
+      .carousel-arrow.prev {
+        left: 10px;
+      }
+
+      .carousel-arrow.next {
+        right: 10px;
+      }
+
+      .carousel-dots {
+        position: absolute;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 7px;
+        z-index: 2;
+      }
+
+      .carousel-dots .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        border: 0;
+        background: rgba(255, 255, 255, 0.45);
+        cursor: pointer;
+        padding: 0;
+        transition: background 0.18s ease;
+      }
+
+      .carousel-dots .dot.active {
+        background: #fff;
       }
 
       @media (max-width: 700px) {
@@ -93,55 +303,102 @@
           Integrate with scripts, pipelines and external tools. Fetch images,
           metadata, tags and more.
         </p>
+        <div class="cta-row">
+          <a
+            class="btn btn-primary"
+            href="api/"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Open the API reference →</a
+          >
+          <a class="btn btn-secondary" href="#api-features">Browse features</a>
+        </div>
       </div>
 
       <section class="section">
         <div class="section-header">
           <h2 class="section-title">What can you do with this?</h2>
           <p class="section-subtitle">
-            The API makes it easy to plug PixlStash into your own tooling. As an
-            example, our
+            The API makes it easy to plug PixlStash into your own tooling. Two
+            integrations we've built so far:
+          </p>
+        </div>
+
+        <div class="showcase">
+          <h3 class="showcase-title">ai-toolkit — feed a LoRA training run</h3>
+          <p class="showcase-blurb">
+            Our
             <a
               href="https://github.com/Pikselkroken/ai-toolkit/"
               target="_blank"
               rel="noopener noreferrer"
               >ai-toolkit fork</a
             >
-            can pull a curated dataset straight from a PixlStash vault and feed
-            it into a LoRA training run — no manual file juggling required.
+            pulls a curated dataset straight from a PixlStash vault and feeds it
+            into a LoRA training run — no manual file juggling required.
           </p>
-        </div>
-        <div
-          style="
-            border-radius: var(--radius-md);
-            overflow: hidden;
-            max-width: 820px;
-            margin: 0 auto;
-            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
-          "
-        >
-          <video
-            src="assets/ai-toolkit.mp4"
-            autoplay
-            loop
-            muted
-            playsinline
-            style="width: 100%; display: block"
-          ></video>
-        </div>
-        <p style="text-align: center; margin-top: 16px">
+          <div class="media-frame">
+            <video
+              src="assets/ai-toolkit.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+              style="width: 100%; display: block"
+            ></video>
+          </div>
           <a
+            class="media-link"
             href="https://github.com/Pikselkroken/ai-toolkit/"
             target="_blank"
             rel="noopener noreferrer"
-            style="
-              color: var(--accent);
-              text-decoration: underline;
-              text-underline-offset: 2px;
-            "
             >View the ai-toolkit fork on GitHub →</a
           >
-        </p>
+        </div>
+
+        <div class="showcase">
+          <h3 class="showcase-title">
+            LM-Studio — your library inside the chat
+          </h3>
+          <p class="showcase-blurb">
+            Point an LM-Studio chat at your PixlStash server and the assistant
+            can pull in matching pictures as it answers — reference shots,
+            mood-board lookups and search-by-tag all happen without leaving the
+            conversation.
+          </p>
+          <div class="carousel" data-carousel>
+            <div class="carousel-slides">
+              <img
+                src="assets/ScreenshotChat1.jpg"
+                alt="LM-Studio chat showing PixlStash pictures inline"
+              />
+              <img
+                src="assets/ScreenshotChat2.jpg"
+                alt="LM-Studio chat displaying matching reference images"
+              />
+              <img
+                src="assets/ScreenshotChat3.jpg"
+                alt="LM-Studio chat with PixlStash search results"
+              />
+              <img
+                src="assets/ScreenshotLmStudio.jpg"
+                alt="LM-Studio configured to talk to a PixlStash server"
+              />
+            </div>
+            <button class="carousel-arrow prev" aria-label="Previous slide">
+              ‹
+            </button>
+            <button class="carousel-arrow next" aria-label="Next slide">
+              ›
+            </button>
+            <div class="carousel-dots">
+              <button class="dot" aria-label="Slide 1"></button>
+              <button class="dot" aria-label="Slide 2"></button>
+              <button class="dot" aria-label="Slide 3"></button>
+              <button class="dot" aria-label="Slide 4"></button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="section">
@@ -161,18 +418,28 @@
             workflow embedding.
           </p>
         </div>
-        <div
-          style="
-            border-radius: var(--radius-md);
-            overflow: hidden;
-            max-width: 820px;
-            margin: 0 auto;
-            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
-          "
-        >
+        <div class="media-frame">
           <img
             src="assets/ComfyWorkflow.png"
             alt="ComfyUI-PixlStash workflow screenshot"
+            style="width: 100%; display: block"
+          />
+        </div>
+        <p
+          style="
+            text-align: center;
+            margin-top: 24px;
+            color: var(--muted);
+            font-size: 0.95rem;
+          "
+        >
+          Save results back to your vault from the same graph with the
+          PhotographySaver node:
+        </p>
+        <div class="media-frame">
+          <img
+            src="assets/ScreenshotPhotographySaver.jpg"
+            alt="ComfyUI-PixlStash PhotographySaver node — saves outputs to a vault with metadata"
             style="width: 100%; display: block"
           />
         </div>
@@ -191,45 +458,141 @@
         </p>
       </section>
 
-      <section class="section">
+      <section class="section" id="api-features">
         <div class="section-header">
           <h2 class="section-title">API features</h2>
           <p class="section-subtitle">
-            Read the generated
-            <a href="api/" target="_blank" rel="noopener noreferrer"
-              >API reference docs</a
-            >.
+            Jump straight into a section of the reference docs.
           </p>
         </div>
         <div class="feature-grid">
-          <div class="feature-card">
-            <h3>Picture management</h3>
-            <p>List, filter, and update image metadata programmatically.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Tags and labels</h3>
-            <p>Add, remove, and audit tags for images and faces.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Sets and exports</h3>
-            <p>Build sets and trigger filtered exports from the API.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Authentication</h3>
-            <p>Use username/password or API tokens.</p>
-          </div>
+          <a
+            class="feature-card"
+            href="api/#tag/pictures"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <h3>Pictures</h3>
+            <p>
+              List, search, filter, import, export and edit your library's
+              pictures and videos.
+            </p>
+          </a>
+          <a
+            class="feature-card"
+            href="api/#tag/characters"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <h3>Characters</h3>
+            <p>
+              Group detected faces into characters and search by face likeness.
+            </p>
+          </a>
+          <a
+            class="feature-card"
+            href="api/#tag/picture_sets"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <h3>Picture sets</h3>
+            <p>Curated, manually-orderable collections of pictures.</p>
+          </a>
+          <a
+            class="feature-card"
+            href="api/#tag/tags"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <h3>Tags</h3>
+            <p>Read and edit the tags on pictures across your library.</p>
+          </a>
+          <a
+            class="feature-card"
+            href="api/#tag/stacks"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <h3>Stacks</h3>
+            <p>
+              Group bursts, edits and variants under a single leader with a
+              manual order.
+            </p>
+          </a>
+          <a
+            class="feature-card"
+            href="api/#tag/projects"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <h3>Projects</h3>
+            <p>
+              Top-level workspaces that scope sets and characters and hold
+              attachments.
+            </p>
+          </a>
+        </div>
+      </section>
+
+      <section class="cta-banner">
+        <div>
+          <h2 class="section-title" style="margin: 0 0 4px">
+            Explore the full API reference
+          </h2>
+          <p style="margin: 0; color: var(--muted)">
+            Every endpoint, grouped by resource, with live examples and
+            copy-paste <code>curl</code> snippets.
+          </p>
+        </div>
+        <div class="cta-row" style="justify-content: flex-start; margin-top: 0">
+          <a
+            class="btn btn-primary"
+            href="api/"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Open the API reference →</a
+          >
         </div>
       </section>
 
       <div class="page-footer">
         <p>
-          <a href="api/" target="_blank" rel="noopener noreferrer"
-            >Open API reference docs</a
-          >
-          &nbsp;·&nbsp;
           <a href="index.html">Back to PixlStash home</a>
         </p>
       </div>
     </div>
+    <script>
+      // Tiny vanilla carousel driver — wires arrows + dots on any
+      // [data-carousel] block and exposes left/right arrow-key navigation
+      // while the carousel is in view.
+      document.querySelectorAll("[data-carousel]").forEach(function (root) {
+        var track = root.querySelector(".carousel-slides");
+        if (!track) return;
+        var slides = track.children;
+        var dots = root.querySelectorAll(".carousel-dots .dot");
+        var count = slides.length;
+        var i = 0;
+        function go(n) {
+          i = ((n % count) + count) % count;
+          track.style.transform = "translateX(-" + i * 100 + "%)";
+          dots.forEach(function (d, k) {
+            d.classList.toggle("active", k === i);
+          });
+        }
+        var prev = root.querySelector(".carousel-arrow.prev");
+        var next = root.querySelector(".carousel-arrow.next");
+        if (prev) prev.addEventListener("click", function () { go(i - 1); });
+        if (next) next.addEventListener("click", function () { go(i + 1); });
+        dots.forEach(function (d, k) {
+          d.addEventListener("click", function () { go(k); });
+        });
+        root.tabIndex = 0;
+        root.addEventListener("keydown", function (e) {
+          if (e.key === "ArrowLeft") { e.preventDefault(); go(i - 1); }
+          else if (e.key === "ArrowRight") { e.preventDefault(); go(i + 1); }
+        });
+        go(0);
+      });
+    </script>
   </body>
 </html>

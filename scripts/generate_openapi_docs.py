@@ -114,8 +114,14 @@ def _write_latest_redirect(output_dir: str) -> None:
   <head>
     <meta charset="utf-8" />
     <title>PixlStash API Reference</title>
-    <meta http-equiv="refresh" content="0; url=./{latest}/" />
     <link rel="canonical" href="./{latest}/" />
+    <script>
+      // Preserve any deep-link hash (e.g. #tag/pictures) through the redirect.
+      location.replace("./{latest}/" + (location.hash || ""));
+    </script>
+    <noscript>
+      <meta http-equiv="refresh" content="0; url=./{latest}/" />
+    </noscript>
   </head>
   <body>
     <p>Redirecting to the latest API reference
