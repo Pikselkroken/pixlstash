@@ -442,6 +442,13 @@ characters and projects** — so you can script imports, build integrations and 
 
 ---
 
+## What can you do with this?
+
+Drive any tool or pipeline you can script. For a worked example, see the
+[**PixlStash LM Studio plugin**](https://github.com/pikselkroken/pixlstash-lmstudio) —
+it uses this API to let a locally-running LLM illustrate its chat replies with
+matching pictures from your PixlStash library.
+
 ## Quick start
 
 Create an API token (steps below), then fetch your first 50 pictures — replace
