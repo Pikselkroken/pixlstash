@@ -3,7 +3,7 @@
   "info": {
     "title": "PixlStash API",
     "description": "PixlStash backend API for picture management, tagging, stacks, sets, character workflows and ComfyUI integration.",
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "paths": {
     "/": {
