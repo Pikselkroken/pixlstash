@@ -1,4 +1,10 @@
-"""HTTP routes for snapshot creation, listing, deletion, and restore/undo."""
+"""HTTP routes for snapshot creation, listing, deletion, and restore.
+
+Undo (ChangeLog-based reversal via ``UndoService``) is intentionally **not**
+exposed as an HTTP route in this release — the implementation is kept in
+``services/undo_service.py`` for future use but the surface is too fragile to
+ship. Snapshots + restore are the only supported recovery path for now.
+"""
 
 from typing import Any, List, Optional
 
@@ -604,40 +610,8 @@ def create_router(server) -> APIRouter:
             "errors": report.errors,
         }
 
-    # ------------------------------------------------------------------
-    # POST /undo
-    # ------------------------------------------------------------------
-
-    @router.post("/undo", include_in_schema=False)
-    def undo(
-        request: Request,
-        snapshot_id: Optional[int] = Body(default=None, embed=True),
-    ):
-        """Undo recent metadata changes.
-
-        If ``snapshot_id`` is provided, undo all changes back to that
-        snapshot (hybrid ChangeLog + snapshot strategy).  Otherwise undo
-        only the most recent writer transaction.
-
-        Authentication is required.
-        """
-        server.auth.require_unscoped_owner(request)
-        try:
-            if snapshot_id is not None:
-                report = server.vault.undo_service.undo_to_snapshot(snapshot_id)
-            else:
-                report = server.vault.undo_service.undo_last_transaction()
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
-            logger.error("Undo failed: %s", exc, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {
-            "reverted_txn_count": report.reverted_txn_count,
-            "reverted_row_count": report.reverted_row_count,
-            "errors": report.errors,
-            "escalated_to_full_restore": report.escalated_to_full_restore,
-            "escalated_tables": report.escalated_tables,
-        }
+    # NOTE: POST /undo is intentionally not registered — see the module
+    # docstring. ``UndoService`` is still wired on the Vault for future use,
+    # but no HTTP surface exposes it in this release.
 
     return router
