@@ -239,6 +239,52 @@
         </div>
       </template>
 
+      <!-- ── Restore from snapshot ─────────────────────────── -->
+      <template
+        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
+      >
+        <div
+          class="ctx-submenu-wrap"
+          @mouseenter="restoreSubmenuOpen = true"
+          @mouseleave="restoreSubmenuOpen = false"
+        >
+          <button
+            class="ctx-item"
+            :disabled="!selectedImageIds.length || isReadOnly"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+            Restore from snapshot
+            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+            <button
+              v-for="cp in recentSnapshots"
+              :key="cp.id"
+              class="ctx-item"
+              :disabled="identicalSnapshotIds.has(cp.id)"
+              :title="
+                identicalSnapshotIds.has(cp.id)
+                  ? 'Selection is identical to this snapshot'
+                  : undefined
+              "
+              @click="handleRestoreFromSnapshot(cp.id)"
+            >
+              <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+              {{ cp.label || cp.kind }}
+              <span class="ctx-default-pill">{{
+                cp.created_at
+                  ? new Date(cp.created_at + "Z").toLocaleDateString()
+                  : ""
+              }}</span>
+            </button>
+            <button class="ctx-item" @click="handleRestoreMore">
+              <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+              More…
+            </button>
+          </div>
+        </div>
+      </template>
+
       <!-- ── Reverse image search ────────────────────────────── -->
       <template v-if="contextImage?.id && !isScrapheapView">
         <button
@@ -308,6 +354,7 @@ import {
 } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { faceBoxColor } from "../../utils/utils.js";
+import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({
@@ -359,6 +406,7 @@ const emit = defineEmits([
   "remove-picture-shares",
   "reverse-image-search",
   "find-similar-faces",
+  "restore-from-snapshot",
 ]);
 
 const menuRef = ref(null);
@@ -368,6 +416,59 @@ const submenusFlip = ref(false);
 const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
 const findFacesSubmenuOpen = ref(false);
+const restoreSubmenuOpen = ref(false);
+const identicalSnapshotIds = ref(new Set());
+
+watch(restoreSubmenuOpen, async (isOpen) => {
+  if (!isOpen || !props.selectedImageIds.length) {
+    return;
+  }
+  identicalSnapshotIds.value = new Set();
+  const pictureIds = props.selectedImageIds;
+  await Promise.all(
+    recentSnapshots.value.map(async (cp) => {
+      try {
+        const res = await apiClient.post(`/snapshots/${cp.id}/hash-compare`, {
+          picture_ids: pictureIds,
+        });
+        const identicalSet = new Set(res.data.identical_ids);
+        const allIdentical = pictureIds.every((id) => identicalSet.has(id));
+        if (allIdentical) {
+          identicalSnapshotIds.value = new Set([
+            ...identicalSnapshotIds.value,
+            cp.id,
+          ]);
+        }
+      } catch (err) {
+        // On error, leave the snapshot enabled (conservative)
+        console.warn(`Hash-compare failed for snapshot ${cp.id}:`, err);
+      }
+    }),
+  );
+});
+
+const snapshotsStore = useSnapshotsStore();
+const recentSnapshots = computed(() =>
+  snapshotsStore.snapshots.filter((cp) => cp.is_compatible).slice(0, 5),
+);
+
+function handleRestoreFromSnapshot(cpId) {
+  const resources = props.selectedImageIds.map((id) => ({
+    type: "picture",
+    id,
+  }));
+  snapshotsStore.openRestoreDialog(cpId, resources);
+  onAction("restore-from-snapshot", { snapshotId: cpId, resources });
+}
+
+function handleRestoreMore() {
+  const resources = props.selectedImageIds.map((id) => ({
+    type: "picture",
+    id,
+  }));
+  snapshotsStore.openRestoreDialog(null, resources);
+  onAction("restore-from-snapshot", { snapshotId: null, resources });
+}
 const faceCharacterNames = ref({}); // face.id -> character name string or null
 
 // ── Face helpers ───────────────────────────────────────────────────────────

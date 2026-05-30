@@ -44,6 +44,9 @@ from . import worker_config
 
 from pixlstash.event_types import EventType
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+from pixlstash.services.snapshot_service import SnapshotService
+from pixlstash.services.restore_service import RestoreService
+from pixlstash.services.undo_service import UndoService
 
 
 logger = get_logger(__name__)
@@ -74,6 +77,7 @@ class Vault:
         disable_background_workers: bool = False,
         force_cpu: bool = False,
         fast_captions: bool = False,
+        daily_snapshots_enabled: bool = True,
     ):
         """
         Initialize a Vault instance.
@@ -100,6 +104,10 @@ class Vault:
         self.db = VaultDatabase(self._db_path)
         self.set_description(description or "")
 
+        self.snapshot_service = SnapshotService(self)
+        self.restore_service = RestoreService(self)
+        self.undo_service = UndoService(self)
+
         self._engine: InferenceEngine | None = None
         self._force_cpu = force_cpu
         self._fast_captions = fast_captions
@@ -113,6 +121,7 @@ class Vault:
         self._tagger_settings: dict | None = None
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
+        self._daily_snapshots_enabled: bool = daily_snapshots_enabled
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -145,6 +154,11 @@ class Vault:
             engine_getter=lambda: self._engine,
             image_root=self.image_root,
             path_mapper=path_mapper,
+        )
+        from pixlstash.tasks import TaskType, EnsureDailySnapshotFinder
+
+        self._planner_work_finders[TaskType.DAILY_SNAPSHOT] = EnsureDailySnapshotFinder(
+            vault=self
         )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
@@ -225,6 +239,17 @@ class Vault:
                 and hasattr(plugin, "bind_service")
             ):
                 plugin.bind_service(service)
+
+    def emit_event(self, event_type: EventType, data=None):
+        """Emit an event to all registered listeners and wake the work planner.
+
+        Alias for ``notify()`` used by the service layer.
+
+        Args:
+            event_type: The event type to emit.
+            data: Optional data payload.
+        """
+        self.notify(event_type, data)
 
     def notify(self, event_type: EventType, data=None):
         """
@@ -413,6 +438,22 @@ class Vault:
             del self.db
             self.db = None
         self._started = False
+
+    def set_daily_snapshots_enabled(self, enabled: bool) -> None:
+        """Enable or disable automatic daily snapshots at runtime.
+
+        Takes effect immediately; the next EnsureDailySnapshotFinder cycle
+        will skip snapshot creation when ``enabled`` is False.
+
+        Args:
+            enabled: True to allow automatic daily snapshots, False to suppress them.
+        """
+        self._daily_snapshots_enabled = bool(enabled)
+
+    @property
+    def daily_snapshots_enabled(self) -> bool:
+        """Whether automatic daily snapshots are enabled."""
+        return self._daily_snapshots_enabled
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory

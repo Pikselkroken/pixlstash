@@ -26,9 +26,11 @@ import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
+import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 
 import SideBar from "./components/panels/SideBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
+import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import SearchOverlay from "./components/views/SearchOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
@@ -49,6 +51,7 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
+const snapshotsStore = useSnapshotsStore();
 
 // --- Router ---
 const route = useRoute();
@@ -230,7 +233,11 @@ function connectUpdatesSocket() {
         wsStore.wsTagUpdate = { key: nextKey, pictureIds };
         return;
       }
-      if (payload?.type === "picture_imported" && payload?.source !== "user" && !wsStore.isUploadInProgress) {
+      if (
+        payload?.type === "picture_imported" &&
+        payload?.source !== "user" &&
+        !wsStore.isUploadInProgress
+      ) {
         // External import (API, watch-folder): show pill, don't auto-refresh
         wsStore.pendingExternalImportCount += Math.max(1, pictureIds.length);
       } else if (
@@ -259,6 +266,27 @@ function connectUpdatesSocket() {
         key: Date.now(),
         payload,
       };
+    } else if (payload?.type === "snapshot_created") {
+      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
+      snapshotsStore.onSnapshotCreated();
+    } else if (payload?.type === "snapshot_deleted") {
+      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
+      snapshotsStore.onSnapshotDeleted(payload);
+    } else if (payload?.type === "restore_started") {
+      wsStore.wsRestoreEvent = { key: Date.now(), payload };
+      snapshotsStore.onRestoreStarted(payload);
+    } else if (payload?.type === "restore_completed") {
+      wsStore.wsRestoreEvent = { key: Date.now(), payload };
+      snapshotsStore.onRestoreCompleted();
+      gridStore.wsUpdateKey = Date.now();
+      gridStore.refreshGridVersion();
+      refreshSidebar();
+    } else if (payload?.type === "undo_applied") {
+      // An undo (triggered via the API or by another client) mutates picture
+      // metadata, so refresh the grid and sidebar counts.
+      gridStore.wsUpdateKey = Date.now();
+      gridStore.refreshGridVersion();
+      refreshSidebar();
     }
   };
 
@@ -288,6 +316,12 @@ function disconnectUpdatesSocket() {
 function loadPendingExternalImports() {
   gridStore.wsUpdateKey = Date.now();
   gridStore.refreshGridVersion();
+}
+
+function onRestoreConfirmed() {
+  gridStore.wsUpdateKey = Date.now();
+  gridStore.refreshGridVersion();
+  refreshSidebar();
 }
 
 function refreshSidebar(options = {}) {
@@ -1627,8 +1661,8 @@ onMounted(async () => {
     })
     .catch(() => {});
   await fetchConfig();
+  snapshotsStore.fetchSnapshots();
   // Navigate to the scoped resource when a share token is active
-  const ctx = sessionContext.value;
   if (ctx && ctx.scope !== "ALL") {
     if (ctx.resource_type === "picture_set") {
       selectionStore.selectedSet = ctx.resource_id;
@@ -1819,6 +1853,12 @@ defineExpose({
           :backend-url="BACKEND_URL"
           @local-import="handleLocalImport"
           @project-created="refreshSidebar"
+        />
+        <RestoreConfirmDialog
+          v-model:open="snapshotsStore.restoreDialogOpen"
+          :snapshot-id="snapshotsStore.restoreDialogSnapshotId"
+          :resources="snapshotsStore.restoreDialogResources"
+          @confirmed="onRestoreConfirmed"
         />
         <main :class="['main-area']" ref="mainAreaRef">
           <div

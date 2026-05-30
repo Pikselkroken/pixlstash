@@ -81,6 +81,21 @@ When making changes to architecture or integration patterns, always update the r
 
 If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_BRANCH.md
 
+## ChangeLog & write_reason
+
+The `ChangeLog` table (`pixlstash/db_models/change_log.py`, `__tablename__ = "changelog"`) records every INSERT/UPDATE/DELETE that passes through the writer session. This powers undo and checkpoint restore.
+
+- **Wrap significant write operations** in `vault.db.write_reason(reason, actor_user_id=None)` so they are labelled in the audit trail:
+  ```python
+  with vault.db.write_reason("delete picture", actor_user_id=user_id):
+      vault.db.run_task(lambda session: ...)
+  ```
+- The `reason` string appears in `ChangeLog.reason` for every row produced by that task.
+- Every SQLModel `table=True` class must be classified in exactly one of `CHANGE_LOG_EXCLUDED_TABLES` or `CHANGE_LOG_INCLUDED_TABLES` in `pixlstash/database.py`.
+  - **`CHANGE_LOG_INCLUDED_TABLES`** — core user-editable metadata (`picture`, `face`, `character`, `tag`, `user`, `pictureset`, `project`, etc.). Full before/after JSON is stored.
+  - **`CHANGE_LOG_EXCLUDED_TABLES`** — regenerable/ephemeral/system tables (`quality`, `likeness`, embeddings queue, `guest_session`, `alembic_version`, `changelog`, `checkpoint`). No data payload is stored.
+- When **adding a new SQLModel table**, add its `__tablename__` to exactly one list. The guardrail test `test_change_log_dual_list_covers_all_tables` will fail if the table is missing or appears in both lists.
+
 ## Conventions & Patterns
 
 - **Throughput & batching:** Always think about throughput and concurrency. Evaluate whether a piece of work is best handled as a batch following ML best practices — for images this usually means sorting and grouping by size so each batch is composed of equally-sized tensors (e.g. image and face-crop quality calculation).

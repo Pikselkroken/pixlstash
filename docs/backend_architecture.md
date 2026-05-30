@@ -28,8 +28,9 @@
 15. [Frontend Integration](#15-frontend-integration)
 16. [Authentication & Authorization](#16-authentication--authorization)
 17. [Data Flow Pipeline](#17-data-flow-pipeline)
-18. [Mermaid Diagrams](#18-mermaid-diagrams)
-19. [Architectural Patterns](#19-architectural-patterns)
+18. [Checkpoints & History](#18-checkpoints--history)
+19. [Mermaid Diagrams](#19-mermaid-diagrams)
+20. [Architectural Patterns](#20-architectural-patterns)
 
 ---
 
@@ -345,159 +346,174 @@ Public guest scoring and shared-link endpoints.
 > Auto-generated from `server.api.openapi()`. Regenerate with `python scripts/render_backend_architecture.py`.
 
 <!-- AUTOGEN:start name="routes" -->
-| Method | Path                                                            | Tags                   | Summary                                           |
-| ------ | --------------------------------------------------------------- | ---------------------- | ------------------------------------------------- |
-| GET    | /                                                               |                        | Read Root                                         |
-| GET    | /api/v1/characters                                              | characters             | List characters                                   |
-| POST   | /api/v1/characters                                              | characters             | Create character                                  |
-| POST   | /api/v1/characters/likeness-search                              | characters, characters | Search characters by face likeness                |
-| POST   | /api/v1/characters/membership                                   | characters             | Batch character membership lookup                 |
-| POST   | /api/v1/characters/{character_id}/faces                         | characters             | Assign faces to character                         |
-| DELETE | /api/v1/characters/{character_id}/faces                         | characters             | Unassign faces from character                     |
-| PATCH  | /api/v1/characters/{id}                                         | characters             | Update character                                  |
-| DELETE | /api/v1/characters/{id}                                         | characters             | Delete character                                  |
-| GET    | /api/v1/characters/{id}                                         | characters             | Get character by id                               |
-| GET    | /api/v1/characters/{id}/reference_pictures                      | characters             | List reference pictures                           |
-| GET    | /api/v1/characters/{id}/summary                                 | characters             | Get character category summary                    |
-| GET    | /api/v1/characters/{id}/{field}                                 | characters             | Get character field                               |
-| GET    | /api/v1/check-session                                           |                        | Check Session                                     |
-| POST   | /api/v1/comfyui/abort                                           | comfyui                | Abort ComfyUI execution                           |
-| GET    | /api/v1/comfyui/pictures/{picture_id}/workflow                  | comfyui                | Get ComfyUI workflow for a picture                |
-| POST   | /api/v1/comfyui/run_i2i                                         | comfyui                | Run ComfyUI image-to-image                        |
-| POST   | /api/v1/comfyui/run_t2i                                         | comfyui                | Run ComfyUI text-to-image                         |
-| GET    | /api/v1/comfyui/workflows                                       | comfyui                | List ComfyUI workflows                            |
-| POST   | /api/v1/comfyui/workflows/import                                | comfyui                | Import ComfyUI workflow                           |
-| DELETE | /api/v1/comfyui/workflows/{workflow_name}                       | comfyui                | Delete user workflow                              |
-| GET    | /api/v1/filesystem/browse                                       | config, config         | Browse server filesystem                          |
-| GET    | /api/v1/import-folders                                          | config, config         | List import folders                               |
-| POST   | /api/v1/import-folders                                          | config, config         | Add an import folder                              |
-| PATCH  | /api/v1/import-folders/{folder_id}                              | config, config         | Update an import folder                           |
-| DELETE | /api/v1/import-folders/{folder_id}                              | config, config         | Remove an import folder                           |
-| GET    | /api/v1/login                                                   |                        | Check Registration                                |
-| POST   | /api/v1/login                                                   |                        | Login                                             |
-| POST   | /api/v1/logout                                                  |                        | Logout                                            |
-| GET    | /api/v1/network/info                                            |                        | Network Info                                      |
-| GET    | /api/v1/picture_sets                                            | picture_sets           | List picture sets                                 |
-| POST   | /api/v1/picture_sets                                            | picture_sets           | Create picture set                                |
-| POST   | /api/v1/picture_sets/membership                                 | picture_sets           | Batch set membership lookup                       |
-| GET    | /api/v1/picture_sets/{id}                                       | picture_sets           | Get picture set                                   |
-| PATCH  | /api/v1/picture_sets/{id}                                       | picture_sets           | Update picture set                                |
-| DELETE | /api/v1/picture_sets/{id}                                       | picture_sets           | Delete picture set                                |
-| GET    | /api/v1/picture_sets/{id}/members                               | picture_sets           | List picture set members                          |
-| POST   | /api/v1/picture_sets/{id}/members                               | picture_sets           | Bulk add pictures to set                          |
-| PUT    | /api/v1/picture_sets/{id}/members                               | picture_sets           | Bulk replace picture set members                  |
-| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                  | picture_sets           | Add picture to set                                |
-| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                  | picture_sets           | Remove picture from set                           |
-| GET    | /api/v1/picture_sets/{id}/thumbnail                             | picture_sets           | Get picture set thumbnail                         |
-| GET    | /api/v1/pictures                                                | pictures               | List pictures                                     |
-| POST   | /api/v1/pictures/apply-scores                                   | pictures               | Batch apply manual scores                         |
-| GET    | /api/v1/pictures/comfyui_loras                                  | pictures               | List distinct ComfyUI LoRA names                  |
-| GET    | /api/v1/pictures/comfyui_models                                 | pictures               | List distinct ComfyUI model names                 |
-| GET    | /api/v1/pictures/count                                          | pictures               | Total picture count for a listing filter          |
-| GET    | /api/v1/pictures/export                                         | pictures               | Start picture export job                          |
-| GET    | /api/v1/pictures/export/download/{task_id}                      | pictures               | Download completed export                         |
-| GET    | /api/v1/pictures/export/status                                  | pictures               | Get export job status                             |
-| POST   | /api/v1/pictures/face-search                                    | pictures, pictures     | Search by face likeness                           |
-| GET    | /api/v1/pictures/guest-scores                                   | guest_scores           | Get Guest Scores                                  |
-| POST   | /api/v1/pictures/guest-scores                                   | guest_scores           | Submit Guest Scores                               |
-| DELETE | /api/v1/pictures/guest-scores/session                           | guest_scores           | Clear Guest Session                               |
-| POST   | /api/v1/pictures/import                                         | pictures               | Import media files                                |
-| GET    | /api/v1/pictures/import/status                                  | pictures               | Get import job status                             |
-| GET    | /api/v1/pictures/likeness-groups                                | pictures               | List computed likeness groups                     |
-| POST   | /api/v1/pictures/likeness-search                                | pictures, pictures     | Search by image likeness                          |
-| GET    | /api/v1/pictures/plugins                                        | pictures               | List image plugins                                |
-| POST   | /api/v1/pictures/plugins/{name}                                 | pictures               | Run image plugin                                  |
-| PATCH  | /api/v1/pictures/project                                        | pictures               | Set project for pictures                          |
-| DELETE | /api/v1/pictures/scrapheap                                      | pictures               | Permanently delete scrapheap pictures             |
-| POST   | /api/v1/pictures/scrapheap/restore                              | pictures               | Restore deleted pictures                          |
-| GET    | /api/v1/pictures/search                                         | pictures               | Search pictures by text                           |
-| GET    | /api/v1/pictures/stats                                          | pictures               | Get picture statistics                            |
-| GET    | /api/v1/pictures/stream                                         | pictures               | Stream pictures in batches                        |
-| POST   | /api/v1/pictures/tags/bulk_fetch                                | tags                   | Fetch tags for multiple pictures                  |
-| POST   | /api/v1/pictures/thumbnails                                     | pictures               | Get batch thumbnail metadata                      |
-| GET    | /api/v1/pictures/thumbnails/{id}.webp                           | pictures               | Get picture thumbnail image                       |
-| PATCH  | /api/v1/pictures/{id}                                           | pictures               | Patch picture fields                              |
-| DELETE | /api/v1/pictures/{id}                                           | pictures               | Move picture to scrapheap                         |
-| GET    | /api/v1/pictures/{id}.{ext}                                     | pictures               | Get original picture file                         |
-| GET    | /api/v1/pictures/{id}/character_likeness                        | pictures               | Get picture character likeness                    |
-| POST   | /api/v1/pictures/{id}/face                                      | pictures               | Create manual face entry                          |
-| DELETE | /api/v1/pictures/{id}/face/{index}                              | pictures               | Delete face by index                              |
-| GET    | /api/v1/pictures/{id}/metadata                                  | pictures               | Get picture metadata                              |
-| POST   | /api/v1/pictures/{id}/open-location                             | pictures               | Open picture location                             |
-| POST   | /api/v1/pictures/{id}/reset_description                         | tag_predictions        | Reset description for a picture                   |
-| POST   | /api/v1/pictures/{id}/reset_tags                                | tag_predictions        | Reset tags and predictions for a picture          |
-| GET    | /api/v1/pictures/{id}/tag_predictions                           | tag_predictions        | Get tag predictions for a picture                 |
-| POST   | /api/v1/pictures/{id}/tag_predictions/delete                    | tag_predictions        | Delete tag predictions for a picture              |
-| POST   | /api/v1/pictures/{id}/tag_predictions/{tag}/confirm             | tag_predictions        | Confirm a tag prediction                          |
-| POST   | /api/v1/pictures/{id}/tag_predictions/{tag}/reject              | tag_predictions        | Reject a tag prediction                           |
-| POST   | /api/v1/pictures/{id}/tags                                      | tags                   | Add tag to picture                                |
-| GET    | /api/v1/pictures/{id}/tags                                      | tags                   | List picture tags                                 |
-| DELETE | /api/v1/pictures/{id}/tags                                      | tags                   | Clear all tags on picture                         |
-| POST   | /api/v1/pictures/{id}/tags/remove_all                           | tags                   | Remove tag everywhere on picture                  |
-| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                             | tags                   | Remove picture tag                                |
-| GET    | /api/v1/pictures/{id}/{field}                                   | pictures               | Get raw picture field                             |
-| GET    | /api/v1/pictures/{picture_id}/stack                             | stacks                 | Get picture's stack                               |
-| GET    | /api/v1/projects                                                | projects               | List all projects                                 |
-| POST   | /api/v1/projects                                                | projects               | Create a project                                  |
-| POST   | /api/v1/projects/membership                                     | projects               | Batch project membership lookup                   |
-| GET    | /api/v1/projects/{id_or_name}                                   | projects               | Get a project by ID or name                       |
-| GET    | /api/v1/projects/{id_or_name}/picture_sets                      | projects               | List picture sets for a project                   |
-| PUT    | /api/v1/projects/{project_id}                                   | projects               | Update a project                                  |
-| DELETE | /api/v1/projects/{project_id}                                   | projects               | Delete a project                                  |
-| GET    | /api/v1/projects/{project_id}/attachments                       | projects               | List attachments for a project                    |
-| POST   | /api/v1/projects/{project_id}/attachments                       | projects               | Upload an attachment to a project                 |
-| POST   | /api/v1/projects/{project_id}/attachments/url                   | projects               | Add a URL bookmark to a project                   |
-| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}       | projects               | Download a project attachment                     |
-| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}       | projects               | Delete a project attachment                       |
-| GET    | /api/v1/projects/{project_id}/export                            | projects               | Export project as ZIP                             |
-| GET    | /api/v1/projects/{project_id}/summary                           | projects               | Get project picture count                         |
-| GET    | /api/v1/projects/{project_name}/characters/{character_name}     | characters             | Get character by project name and character name  |
-| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name} | picture_sets           | Get picture set by project name and set name      |
-| GET    | /api/v1/protected                                               |                        | Protected                                         |
-| GET    | /api/v1/reference-folders                                       | config, config         | List reference folders                            |
-| POST   | /api/v1/reference-folders                                       | config, config         | Add a reference folder                            |
-| PATCH  | /api/v1/reference-folders/{folder_id}                           | config, config         | Update a reference folder                         |
-| DELETE | /api/v1/reference-folders/{folder_id}                           | config, config         | Remove a reference folder                         |
-| POST   | /api/v1/reference-folders/{folder_id}/open                      | config, config         | Open reference folder in file manager             |
-| GET    | /api/v1/server-config/filesystem-roots                          | config                 | List filesystem browser roots                     |
-| POST   | /api/v1/server-config/open                                      | config                 | Open server config location                       |
-| GET    | /api/v1/server-config/watch-folders                             | config                 | List watch folders                                |
-| POST   | /api/v1/server/restart                                          | config, config         | Restart the PixlStash server                      |
-| GET    | /api/v1/session/context                                         | config                 | Get session access context                        |
-| GET    | /api/v1/sort_mechanisms                                         | pictures               | List picture sort mechanisms                      |
-| POST   | /api/v1/stacks                                                  | stacks                 | Create stack                                      |
-| GET    | /api/v1/stacks/{stack_id}                                       | stacks                 | Get stack details                                 |
-| POST   | /api/v1/stacks/{stack_id}/members                               | stacks                 | Add stack members                                 |
-| DELETE | /api/v1/stacks/{stack_id}/members                               | stacks                 | Remove stack members                              |
-| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                  | stacks                 | Set member position                               |
-| PATCH  | /api/v1/stacks/{stack_id}/order                                 | stacks                 | Reorder stack                                     |
-| GET    | /api/v1/stacks/{stack_id}/pictures                              | stacks                 | List pictures in stack                            |
-| GET    | /api/v1/tagger/label-thresholds                                 | tag_predictions        | Get per-label thresholds for the PixlStash tagger |
-| GET    | /api/v1/taggers                                                 | taggers, taggers       | List tagger plugins and current settings          |
-| DELETE | /api/v1/taggers/{name}/artifacts/{artifact_id}                  | taggers, taggers       | Delete a downloaded artifact for a tagger plugin  |
-| POST   | /api/v1/taggers/{name}/download                                 | taggers, taggers       | Start artifact download for a tagger plugin       |
-| GET    | /api/v1/tags                                                    | tags                   | List all tags                                     |
-| GET    | /api/v1/users/me/auth                                           | config                 | Get auth state                                    |
-| POST   | /api/v1/users/me/auth                                           | config                 | Change current user password                      |
-| GET    | /api/v1/users/me/config                                         | config                 | Get current user config                           |
-| PATCH  | /api/v1/users/me/config                                         | config                 | Update current user config                        |
-| GET    | /api/v1/users/me/penalised-tags                                 | config                 | Get penalised tags                                |
-| POST   | /api/v1/users/me/shared-picture-ids/batch                       | config                 | Batch check shared picture IDs                    |
-| GET    | /api/v1/users/me/shared-resource-ids                            | config                 | Get shared resource IDs                           |
-| GET    | /api/v1/users/me/token                                          | config                 | List API tokens                                   |
-| POST   | /api/v1/users/me/token                                          | config                 | Create API token                                  |
-| DELETE | /api/v1/users/me/token/{token_id}                               | config                 | Delete API token                                  |
-| PATCH  | /api/v1/users/me/token/{token_id}                               | config                 | Update API token                                  |
-| DELETE | /api/v1/users/me/tokens/by-resource                             | config                 | Revoke all tokens for a resource                  |
-| GET    | /api/v1/users/me/watermark                                      | config                 | Get watermark image                               |
-| POST   | /api/v1/users/me/watermark                                      | config                 | Upload custom watermark                           |
-| DELETE | /api/v1/users/me/watermark                                      | config                 | Remove custom watermark                           |
-| GET    | /api/v1/workers/progress                                        | config                 | Get worker progress                               |
-| GET    | /favicon.ico                                                    |                        | Favicon                                           |
-| GET    | /version                                                        |                        | Read Version                                      |
-| GET    | /{full_path}                                                    |                        | Frontend Fallback                                 |
-| WS     | /api/v1/ws/updates                                              | config                 | Real-time event stream                            |
-| WS     | /api/v1/ws/comfyui                                              | comfyui                | ComfyUI workflow progress                         |
+| Method | Path                                                                          | Tags                   | Summary                                           |
+| ------ | ----------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------- |
+| GET    | /                                                                             |                        | Read Root                                         |
+| GET    | /api/v1/characters                                                            | characters             | List characters                                   |
+| POST   | /api/v1/characters                                                            | characters             | Create character                                  |
+| POST   | /api/v1/characters/likeness-search                                            | characters, characters | Search characters by face likeness                |
+| POST   | /api/v1/characters/membership                                                 | characters             | Batch character membership lookup                 |
+| POST   | /api/v1/characters/{character_id}/faces                                       | characters             | Assign faces to character                         |
+| DELETE | /api/v1/characters/{character_id}/faces                                       | characters             | Unassign faces from character                     |
+| PATCH  | /api/v1/characters/{id}                                                       | characters             | Update character                                  |
+| DELETE | /api/v1/characters/{id}                                                       | characters             | Delete character                                  |
+| GET    | /api/v1/characters/{id}                                                       | characters             | Get character by id                               |
+| GET    | /api/v1/characters/{id}/reference_pictures                                    | characters             | List reference pictures                           |
+| GET    | /api/v1/characters/{id}/summary                                               | characters             | Get character category summary                    |
+| GET    | /api/v1/characters/{id}/{field}                                               | characters             | Get character field                               |
+| GET    | /api/v1/check-session                                                         |                        | Check Session                                     |
+| POST   | /api/v1/comfyui/abort                                                         | comfyui                | Abort ComfyUI execution                           |
+| GET    | /api/v1/comfyui/pictures/{picture_id}/workflow                                | comfyui                | Get ComfyUI workflow for a picture                |
+| POST   | /api/v1/comfyui/run_i2i                                                       | comfyui                | Run ComfyUI image-to-image                        |
+| POST   | /api/v1/comfyui/run_t2i                                                       | comfyui                | Run ComfyUI text-to-image                         |
+| GET    | /api/v1/comfyui/workflows                                                     | comfyui                | List ComfyUI workflows                            |
+| POST   | /api/v1/comfyui/workflows/import                                              | comfyui                | Import ComfyUI workflow                           |
+| DELETE | /api/v1/comfyui/workflows/{workflow_name}                                     | comfyui                | Delete user workflow                              |
+| GET    | /api/v1/filesystem/browse                                                     | config, config         | Browse server filesystem                          |
+| GET    | /api/v1/import-folders                                                        | config, config         | List import folders                               |
+| POST   | /api/v1/import-folders                                                        | config, config         | Add an import folder                              |
+| PATCH  | /api/v1/import-folders/{folder_id}                                            | config, config         | Update an import folder                           |
+| DELETE | /api/v1/import-folders/{folder_id}                                            | config, config         | Remove an import folder                           |
+| GET    | /api/v1/login                                                                 |                        | Check Registration                                |
+| POST   | /api/v1/login                                                                 |                        | Login                                             |
+| POST   | /api/v1/logout                                                                |                        | Logout                                            |
+| GET    | /api/v1/network/info                                                          |                        | Network Info                                      |
+| GET    | /api/v1/picture_sets                                                          | picture_sets           | List picture sets                                 |
+| POST   | /api/v1/picture_sets                                                          | picture_sets           | Create picture set                                |
+| POST   | /api/v1/picture_sets/membership                                               | picture_sets           | Batch set membership lookup                       |
+| GET    | /api/v1/picture_sets/{id}                                                     | picture_sets           | Get picture set                                   |
+| PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets           | Update picture set                                |
+| DELETE | /api/v1/picture_sets/{id}                                                     | picture_sets           | Delete picture set                                |
+| GET    | /api/v1/picture_sets/{id}/members                                             | picture_sets           | List picture set members                          |
+| POST   | /api/v1/picture_sets/{id}/members                                             | picture_sets           | Bulk add pictures to set                          |
+| PUT    | /api/v1/picture_sets/{id}/members                                             | picture_sets           | Bulk replace picture set members                  |
+| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets           | Add picture to set                                |
+| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets           | Remove picture from set                           |
+| GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets           | Get picture set thumbnail                         |
+| GET    | /api/v1/pictures                                                              | pictures               | List pictures                                     |
+| POST   | /api/v1/pictures/apply-scores                                                 | pictures               | Batch apply manual scores                         |
+| GET    | /api/v1/pictures/comfyui_loras                                                | pictures               | List distinct ComfyUI LoRA names                  |
+| GET    | /api/v1/pictures/comfyui_models                                               | pictures               | List distinct ComfyUI model names                 |
+| GET    | /api/v1/pictures/count                                                        | pictures               | Total picture count for a listing filter          |
+| GET    | /api/v1/pictures/export                                                       | pictures               | Start picture export job                          |
+| GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures               | Download completed export                         |
+| GET    | /api/v1/pictures/export/status                                                | pictures               | Get export job status                             |
+| POST   | /api/v1/pictures/face-search                                                  | pictures, pictures     | Search by face likeness                           |
+| GET    | /api/v1/pictures/guest-scores                                                 | guest_scores           | Get Guest Scores                                  |
+| POST   | /api/v1/pictures/guest-scores                                                 | guest_scores           | Submit Guest Scores                               |
+| DELETE | /api/v1/pictures/guest-scores/session                                         | guest_scores           | Clear Guest Session                               |
+| POST   | /api/v1/pictures/import                                                       | pictures               | Import media files                                |
+| GET    | /api/v1/pictures/import/status                                                | pictures               | Get import job status                             |
+| GET    | /api/v1/pictures/likeness-groups                                              | pictures               | List computed likeness groups                     |
+| POST   | /api/v1/pictures/likeness-search                                              | pictures, pictures     | Search by image likeness                          |
+| GET    | /api/v1/pictures/plugins                                                      | pictures               | List image plugins                                |
+| POST   | /api/v1/pictures/plugins/{name}                                               | pictures               | Run image plugin                                  |
+| PATCH  | /api/v1/pictures/project                                                      | pictures               | Set project for pictures                          |
+| DELETE | /api/v1/pictures/scrapheap                                                    | pictures               | Permanently delete scrapheap pictures             |
+| POST   | /api/v1/pictures/scrapheap/restore                                            | pictures               | Restore deleted pictures                          |
+| GET    | /api/v1/pictures/search                                                       | pictures               | Search pictures by text                           |
+| GET    | /api/v1/pictures/stats                                                        | pictures               | Get picture statistics                            |
+| GET    | /api/v1/pictures/stream                                                       | pictures               | Stream pictures in batches                        |
+| POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags                   | Fetch tags for multiple pictures                  |
+| POST   | /api/v1/pictures/thumbnails                                                   | pictures               | Get batch thumbnail metadata                      |
+| GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures               | Get picture thumbnail image                       |
+| PATCH  | /api/v1/pictures/{id}                                                         | pictures               | Patch picture fields                              |
+| DELETE | /api/v1/pictures/{id}                                                         | pictures               | Move picture to scrapheap                         |
+| GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures               | Get original picture file                         |
+| GET    | /api/v1/pictures/{id}/character_likeness                                      | pictures               | Get picture character likeness                    |
+| POST   | /api/v1/pictures/{id}/face                                                    | pictures               | Create manual face entry                          |
+| DELETE | /api/v1/pictures/{id}/face/{index}                                            | pictures               | Delete face by index                              |
+| GET    | /api/v1/pictures/{id}/metadata                                                | pictures               | Get picture metadata                              |
+| POST   | /api/v1/pictures/{id}/open-location                                           | pictures               | Open picture location                             |
+| POST   | /api/v1/pictures/{id}/reset_description                                       | tag_predictions        | Reset description for a picture                   |
+| POST   | /api/v1/pictures/{id}/reset_tags                                              | tag_predictions        | Reset tags and predictions for a picture          |
+| GET    | /api/v1/pictures/{id}/tag_predictions                                         | tag_predictions        | Get tag predictions for a picture                 |
+| POST   | /api/v1/pictures/{id}/tag_predictions/delete                                  | tag_predictions        | Delete tag predictions for a picture              |
+| POST   | /api/v1/pictures/{id}/tag_predictions/{tag}/confirm                           | tag_predictions        | Confirm a tag prediction                          |
+| POST   | /api/v1/pictures/{id}/tag_predictions/{tag}/reject                            | tag_predictions        | Reject a tag prediction                           |
+| POST   | /api/v1/pictures/{id}/tags                                                    | tags                   | Add tag to picture                                |
+| GET    | /api/v1/pictures/{id}/tags                                                    | tags                   | List picture tags                                 |
+| DELETE | /api/v1/pictures/{id}/tags                                                    | tags                   | Clear all tags on picture                         |
+| POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags                   | Remove tag everywhere on picture                  |
+| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags                   | Remove picture tag                                |
+| GET    | /api/v1/pictures/{id}/{field}                                                 | pictures               | Get raw picture field                             |
+| GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks                 | Get picture's stack                               |
+| GET    | /api/v1/projects                                                              | projects               | List all projects                                 |
+| POST   | /api/v1/projects                                                              | projects               | Create a project                                  |
+| POST   | /api/v1/projects/membership                                                   | projects               | Batch project membership lookup                   |
+| GET    | /api/v1/projects/{id_or_name}                                                 | projects               | Get a project by ID or name                       |
+| GET    | /api/v1/projects/{id_or_name}/picture_sets                                    | projects               | List picture sets for a project                   |
+| PUT    | /api/v1/projects/{project_id}                                                 | projects               | Update a project                                  |
+| DELETE | /api/v1/projects/{project_id}                                                 | projects               | Delete a project                                  |
+| GET    | /api/v1/projects/{project_id}/attachments                                     | projects               | List attachments for a project                    |
+| POST   | /api/v1/projects/{project_id}/attachments                                     | projects               | Upload an attachment to a project                 |
+| POST   | /api/v1/projects/{project_id}/attachments/url                                 | projects               | Add a URL bookmark to a project                   |
+| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects               | Download a project attachment                     |
+| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects               | Delete a project attachment                       |
+| GET    | /api/v1/projects/{project_id}/export                                          | projects               | Export project as ZIP                             |
+| GET    | /api/v1/projects/{project_id}/summary                                         | projects               | Get project picture count                         |
+| GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters             | Get character by project name and character name  |
+| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets           | Get picture set by project name and set name      |
+| GET    | /api/v1/protected                                                             |                        | Protected                                         |
+| GET    | /api/v1/reference-folders                                                     | config, config         | List reference folders                            |
+| POST   | /api/v1/reference-folders                                                     | config, config         | Add a reference folder                            |
+| PATCH  | /api/v1/reference-folders/{folder_id}                                         | config, config         | Update a reference folder                         |
+| DELETE | /api/v1/reference-folders/{folder_id}                                         | config, config         | Remove a reference folder                         |
+| POST   | /api/v1/reference-folders/{folder_id}/open                                    | config, config         | Open reference folder in file manager             |
+| GET    | /api/v1/server-config/filesystem-roots                                        | config                 | List filesystem browser roots                     |
+| POST   | /api/v1/server-config/open                                                    | config                 | Open server config location                       |
+| GET    | /api/v1/server-config/snapshots                                               | config                 | Get snapshot configuration                        |
+| PATCH  | /api/v1/server-config/snapshots                                               | config                 | Update snapshot configuration                     |
+| GET    | /api/v1/server-config/watch-folders                                           | config                 | List watch folders                                |
+| POST   | /api/v1/server/restart                                                        | config, config         | Restart the PixlStash server                      |
+| GET    | /api/v1/session/context                                                       | config                 | Get session access context                        |
+| GET    | /api/v1/snapshots                                                             | snapshots              | List Snapshots                                    |
+| POST   | /api/v1/snapshots                                                             | snapshots              | Create Snapshot                                   |
+| GET    | /api/v1/snapshots/status                                                      | snapshots              | Snapshots Status                                  |
+| PATCH  | /api/v1/snapshots/{snapshot_id}                                               | snapshots              | Rename Snapshot                                   |
+| DELETE | /api/v1/snapshots/{snapshot_id}                                               | snapshots              | Delete Snapshot                                   |
+| POST   | /api/v1/snapshots/{snapshot_id}/hash-compare                                  | snapshots              | Hash Compare                                      |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore                                       | snapshots              | Restore Snapshot                                  |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/batch                                 | snapshots              | Restore Batch                                     |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/preview                               | snapshots              | Preview Full Restore                              |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/preview/batch                         | snapshots              | Preview Batch Restore                             |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}         | snapshots              | Restore Resource                                  |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots              | Preview Resource Restore                          |
+| GET    | /api/v1/sort_mechanisms                                                       | pictures               | List picture sort mechanisms                      |
+| POST   | /api/v1/stacks                                                                | stacks                 | Create stack                                      |
+| GET    | /api/v1/stacks/{stack_id}                                                     | stacks                 | Get stack details                                 |
+| POST   | /api/v1/stacks/{stack_id}/members                                             | stacks                 | Add stack members                                 |
+| DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks                 | Remove stack members                              |
+| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks                 | Set member position                               |
+| PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks                 | Reorder stack                                     |
+| GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks                 | List pictures in stack                            |
+| GET    | /api/v1/tagger/label-thresholds                                               | tag_predictions        | Get per-label thresholds for the PixlStash tagger |
+| GET    | /api/v1/taggers                                                               | taggers, taggers       | List tagger plugins and current settings          |
+| DELETE | /api/v1/taggers/{name}/artifacts/{artifact_id}                                | taggers, taggers       | Delete a downloaded artifact for a tagger plugin  |
+| POST   | /api/v1/taggers/{name}/download                                               | taggers, taggers       | Start artifact download for a tagger plugin       |
+| GET    | /api/v1/tags                                                                  | tags                   | List all tags                                     |
+| POST   | /api/v1/undo                                                                  | snapshots              | Undo                                              |
+| GET    | /api/v1/users/me/auth                                                         | config                 | Get auth state                                    |
+| POST   | /api/v1/users/me/auth                                                         | config                 | Change current user password                      |
+| GET    | /api/v1/users/me/config                                                       | config                 | Get current user config                           |
+| PATCH  | /api/v1/users/me/config                                                       | config                 | Update current user config                        |
+| GET    | /api/v1/users/me/penalised-tags                                               | config                 | Get penalised tags                                |
+| POST   | /api/v1/users/me/shared-picture-ids/batch                                     | config                 | Batch check shared picture IDs                    |
+| GET    | /api/v1/users/me/shared-resource-ids                                          | config                 | Get shared resource IDs                           |
+| GET    | /api/v1/users/me/token                                                        | config                 | List API tokens                                   |
+| POST   | /api/v1/users/me/token                                                        | config                 | Create API token                                  |
+| DELETE | /api/v1/users/me/token/{token_id}                                             | config                 | Delete API token                                  |
+| PATCH  | /api/v1/users/me/token/{token_id}                                             | config                 | Update API token                                  |
+| DELETE | /api/v1/users/me/tokens/by-resource                                           | config                 | Revoke all tokens for a resource                  |
+| GET    | /api/v1/users/me/watermark                                                    | config                 | Get watermark image                               |
+| POST   | /api/v1/users/me/watermark                                                    | config                 | Upload custom watermark                           |
+| DELETE | /api/v1/users/me/watermark                                                    | config                 | Remove custom watermark                           |
+| GET    | /api/v1/workers/progress                                                      | config                 | Get worker progress                               |
+| GET    | /favicon.ico                                                                  |                        | Favicon                                           |
+| GET    | /version                                                                      |                        | Read Version                                      |
+| GET    | /{full_path}                                                                  |                        | Frontend Fallback                                 |
+| WS     | /api/v1/ws/updates                                                            | config                 | Real-time event stream                            |
+| WS     | /api/v1/ws/comfyui                                                            | comfyui                | ComfyUI workflow progress                         |
 <!-- AUTOGEN:end name="routes" -->
 
 ---
@@ -814,6 +830,11 @@ Selected milestones:
 | `CHANGED_FACES`        | ✓ broadcast |
 | `QUALITY_UPDATED`      | ✗ internal  |
 | `CLEARED_TAGS`         | ✓ broadcast |
+| `SNAPSHOT_CREATED`     | ✗ internal  |
+| `SNAPSHOT_DELETED`     | ✗ internal  |
+| `RESTORE_STARTED`      | ✗ internal  |
+| `RESTORE_COMPLETED`    | ✗ internal  |
+| `UNDO_APPLIED`         | ✗ internal  |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to all connected clients.
@@ -862,7 +883,114 @@ Failure handling: if a task raises, its work column stays `NULL` so the correspo
 
 ---
 
-## 18. Mermaid Diagrams
+## 18. Checkpoints & History
+
+### 18.1 Overview
+
+The Checkpoints & History subsystem provides three user-facing capabilities:
+
+1. **ChangeLog** — an audit trail of every INSERT/UPDATE/DELETE that passes through the writer session.
+2. **Checkpoints** — full SQLite snapshots used as restore points.
+3. **Restore/Undo** — mechanisms to roll back changes either to a snapshot or by replaying ChangeLog entries in reverse.
+
+### 18.2 ChangeLog
+
+**Model** — `pixlstash/db_models/change_log.py` (`__tablename__ = "changelog"`)
+
+| Column | Type | Description |
+|---|---|---|
+| `txn_id` | String (UUID, indexed) | Shared by all rows produced in one writer task. |
+| `seq_in_txn` | Integer | 0-based ordering within a transaction. |
+| `table_name` | String (indexed) | SQLite table that was mutated. |
+| `row_pk_json` | String | JSON-encoded dict of PK columns. |
+| `op` | String | `'INSERT'`, `'UPDATE'`, or `'DELETE'`. |
+| `before_json` | String? | Column values before change (NULL for INSERT / excluded tables). |
+| `after_json` | String? | Column values after change (NULL for DELETE / excluded tables). |
+| `created_at` | DateTime (indexed) | UTC timestamp of the flush. |
+| `actor_user_id` | Integer? (FK→user) | User who triggered the write, if known. |
+| `reason` | String? | Human-readable label from `write_reason()`. |
+
+**Flush hooks** — `_before_flush_handler` and `_after_flush_handler` are attached to each writer session via `_attach_change_log_hooks(session)`. They capture object state before and after each flush, then insert ChangeLog rows atomically via core SQL inside the same writer task.
+
+**Table classification** — Every SQLModel `table=True` class must be classified in exactly one of:
+
+- `CHANGE_LOG_INCLUDED_TABLES` — core user-editable metadata (`picture`, `face`, `character`, `tag`, `user`, `pictureset`, `project`, etc.). Full before/after JSON is stored.
+- `CHANGE_LOG_EXCLUDED_TABLES` — regenerable/ephemeral/system tables (`quality`, `likeness`, embeddings queue, `guest_session`, `alembic_version`, `changelog`, `checkpoint`). Metadata-only entries are produced (no before/after payload).
+
+Guardrail `test_change_log_dual_list_covers_all_tables` enforces completeness at test time. When adding a new SQLModel table, add it to exactly one list in `pixlstash/database.py`.
+
+**write_reason()** — `VaultDatabase.write_reason(reason, actor_user_id=None)` is a context manager. Call it around any write that should be labelled in the audit trail:
+
+```python
+with vault.db.write_reason("delete picture", actor_user_id=user_id):
+    vault.db.run_task(lambda session: ...)
+```
+
+The `reason` and `actor_user_id` values are propagated to the writer thread via `contextvars.copy_context()` in `DatabaseTask.__init__` and read by the flush hooks.
+
+### 18.3 Checkpoints
+
+**Model** — `pixlstash/db_models/checkpoint.py` (`__tablename__ = "checkpoint"`)
+
+**Service** — `pixlstash/services/checkpoint_service.py`
+
+A checkpoint is a full copy of the live SQLite database taken via `VACUUM INTO`. Stored at:
+
+```
+<vault_root>/checkpoints/YYYY/MM/DD/<uuid>.sqlite
+<vault_root>/checkpoints/YYYY/MM/DD/<uuid>.manifest.json
+```
+
+The manifest JSON contains: `picture_count`, `picture_ids`, `schema_version`, `max_changelog_id`.
+
+**GFS retention policy** (Grandfather-Father-Son):
+
+| Tier | Count kept |
+|---|---|
+| `DAILY` | 7 most recent |
+| `WEEKLY` | 4 most recent Sundays |
+| `MONTHLY` | 12 most recent first-of-month snapshots |
+
+`MANUAL` and `OPPORTUNISTIC` checkpoints are never pruned automatically.
+
+**Automatic checkpoints** — `EnsureDailyCheckpointFinder` / `EnsureDailyCheckpointTask` run at LOW priority every 5 minutes to ensure a DAILY checkpoint exists for today. `checkpoint_if_due()` also accepts an `OPPORTUNISTIC` kind for route-triggered checkpoints (rate-limited to once per hour).
+
+### 18.4 RestoreService
+
+**Service** — `pixlstash/services/restore_service.py`
+
+| Method | Behaviour |
+|---|---|
+| `restore_full(checkpoint_id, dry_run=False)` | Upgrades snapshot schema, checks for missing files, swaps live DB. Returns `RestoreReport`. |
+| `restore_resource(checkpoint_id, resource_type, resource_id)` | Upserts one resource (picture, picture_set, project, or character) from the snapshot into the live DB. |
+
+Full restore disposes the current SQLAlchemy engine, copies the upgraded snapshot over the live DB path, and re-creates the engine. `RESTORE_STARTED` / `RESTORE_COMPLETED` events are broadcast. `_PICTURE_DERIVED_COLUMNS` (`smart_score`, `text_score`, `text_embedding`, `image_embedding`) are NULL-reset after restore so the WorkPlanner regenerates them.
+
+### 18.5 UndoService
+
+**Service** — `pixlstash/services/undo_service.py`
+
+| Method | Behaviour |
+|---|---|
+| `undo_last_transaction()` | Finds the highest `txn_id` in the ChangeLog and applies its entries in reverse. |
+| `undo_to_checkpoint(checkpoint_id)` | Reverts all ChangeLog entries after `max_changelog_id` from the checkpoint manifest. |
+
+Each ChangeLog entry is reversed: `INSERT` → DELETE, `UPDATE` → restore `before_json`, `DELETE` → INSERT from `before_json`. Raw `text()` SQL is used to avoid ORM dependency on table classes at undo time.
+
+### 18.6 API Endpoints (checkpoints tag)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/checkpoints` | List all checkpoints. |
+| `POST` | `/api/v1/checkpoints` | Create a MANUAL checkpoint. |
+| `DELETE` | `/api/v1/checkpoints/{id}` | Delete a checkpoint and its files. |
+| `POST` | `/api/v1/checkpoints/{id}/restore` | Full restore (body: `dry_run`). |
+| `POST` | `/api/v1/checkpoints/{id}/restore/{resource_type}/{resource_id}` | Per-resource restore. |
+| `POST` | `/api/v1/undo` | Undo last transaction or undo to checkpoint (body: `checkpoint_id?`). |
+
+---
+
+## 19. Mermaid Diagrams
 
 ### 18.1 Full backend data-flow
 
@@ -1083,7 +1211,7 @@ sequenceDiagram
 
 ---
 
-## 19. Architectural Patterns
+## 20. Architectural Patterns
 
 1. **Task + Finder pattern** — every async work item has a paired finder that queries the DB for missing data and claims rows; results are written back and claims released.
 2. **DB write serialisation** — `VaultDatabase` funnels all writes through a single task queue; reads run in parallel for throughput.
@@ -1099,7 +1227,7 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-05-21. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+*Last updated: 2026-05-26. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
 

@@ -20,7 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pillow_heif import register_heif_opener
@@ -61,6 +61,7 @@ from pixlstash.routes.filesystem import create_router as create_filesystem_route
 from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
+from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -68,6 +69,18 @@ from pixlstash.utils.rate_limiter import RateLimitMiddleware
 
 # Logging will be set up after config is loaded
 logger = get_logger(__name__)
+
+# Snapshot / restore / undo vault events mapped to the WebSocket ``type`` string
+# the frontend listens for.  Keeping this as a single map keeps the delivery
+# whitelist (_should_send_ws_update) and the payload builder (_broadcast_ws_event)
+# in sync.
+_WS_SNAPSHOT_EVENT_TYPES = {
+    EventType.SNAPSHOT_CREATED: "snapshot_created",
+    EventType.SNAPSHOT_DELETED: "snapshot_deleted",
+    EventType.RESTORE_STARTED: "restore_started",
+    EventType.RESTORE_COMPLETED: "restore_completed",
+    EventType.UNDO_APPLIED: "undo_applied",
+}
 
 
 def _get_lan_ip() -> str | None:
@@ -218,6 +231,7 @@ class Server:
             ),
             force_cpu=bool(_force_cpu),
             fast_captions=Server.DEFAULT_FAST_CAPTIONS,
+            daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
         )
 
         self._ws_clients = []
@@ -328,15 +342,19 @@ class Server:
             coro.close()  # prevent 'coroutine never awaited' ResourceWarning
 
     def _should_send_ws_update(self, event_type: EventType, filters: dict) -> bool:
-        return event_type in (
-            EventType.CHANGED_PICTURES,
-            EventType.PICTURE_IMPORTED,
-            EventType.PLUGIN_PROGRESS,
-            EventType.CHANGED_TAGS,
-            EventType.CLEARED_TAGS,
-            EventType.CHANGED_CHARACTERS,
-            EventType.CHANGED_FACES,
-            EventType.CHANGED_DESCRIPTIONS,
+        return (
+            event_type
+            in (
+                EventType.CHANGED_PICTURES,
+                EventType.PICTURE_IMPORTED,
+                EventType.PLUGIN_PROGRESS,
+                EventType.CHANGED_TAGS,
+                EventType.CLEARED_TAGS,
+                EventType.CHANGED_CHARACTERS,
+                EventType.CHANGED_FACES,
+                EventType.CHANGED_DESCRIPTIONS,
+            )
+            or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
 
     async def _broadcast_ws_event(self, event_type: EventType, data=None):
@@ -382,6 +400,13 @@ class Server:
                 "type": "plugin_progress",
                 "event": event_type.name,
                 **progress_payload,
+            }
+        elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
+            info = data if isinstance(data, dict) else {}
+            payload = {
+                **info,
+                "type": _WS_SNAPSHOT_EVENT_TYPES[event_type],
+                "event": event_type.name,
             }
         else:
             picture_ids = data if isinstance(data, (list, tuple, set)) else []
@@ -689,6 +714,8 @@ class Server:
                     server_config["generate_thumbnails_on_startup"] = True
                 if "filesystem_roots" not in server_config:
                     server_config["filesystem_roots"] = []
+                if "daily_snapshots" not in server_config:
+                    server_config["daily_snapshots"] = True
 
         # Resolve SSL paths that are relative: interpret them relative to the
         # config file's directory, not the process's CWD, so that the certs
@@ -926,6 +953,25 @@ class Server:
                 "docker_variant": docker_variant,
             }
 
+        @self.api.get("/scalar", include_in_schema=False)
+        async def scalar_reference():
+            # Scalar API reference UI, rendered client-side from the live
+            # OpenAPI schema. Served alongside the built-in /docs and /redoc.
+            html = """<!doctype html>
+<html lang="en">
+  <head>
+    <title>PixlStash API Reference</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <script id="api-reference" data-url="/openapi.json"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  </body>
+</html>
+"""
+            return HTMLResponse(content=html)
+
         @self.api.get("/favicon.ico")
         def favicon():
             index_path = self._get_frontend_index_path()
@@ -1047,6 +1093,11 @@ class Server:
             create_taggers_router(self),
             prefix=API_V1_PREFIX,
             tags=["taggers"],
+        )
+        self.api.include_router(
+            create_snapshots_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["snapshots"],
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.
         self.api.include_router(

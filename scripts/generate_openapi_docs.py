@@ -33,17 +33,17 @@ def _build_server_config(config_path: str, image_root: str) -> None:
         json.dump(config, handle, indent=2)
 
 
-def _write_redoc_html(target_dir: str) -> None:
+def _write_scalar_html(target_dir: str) -> None:
     html = """<!doctype html>
-<html>
+<html lang="en">
   <head>
     <title>PixlStash API Reference</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>
   <body>
-    <redoc spec-url="openapi.json"></redoc>
-    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+    <script id="api-reference" data-url="openapi.json"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
   </body>
 </html>
 """
@@ -123,7 +123,7 @@ def generate_docs(output_dir: str) -> None:
     with open(openapi_path, "w", encoding="utf-8") as f:
         json.dump(schema, f, indent=2)
 
-    _write_redoc_html(versioned_dir)
+    _write_scalar_html(versioned_dir)
     _write_latest_redirect(output_dir)
     print(f"Generated OpenAPI docs for {api_version} in {versioned_dir}")
 
