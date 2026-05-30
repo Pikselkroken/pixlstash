@@ -80,7 +80,6 @@ _WS_SNAPSHOT_EVENT_TYPES = {
     EventType.SNAPSHOT_DELETED: "snapshot_deleted",
     EventType.RESTORE_STARTED: "restore_started",
     EventType.RESTORE_COMPLETED: "restore_completed",
-    EventType.UNDO_APPLIED: "undo_applied",
 }
 
 

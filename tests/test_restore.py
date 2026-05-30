@@ -19,7 +19,6 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.tag import Tag
-from pixlstash.db_models.change_log import ChangeLog
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 
@@ -29,8 +28,7 @@ def server():
     with tempfile.TemporaryDirectory() as tmp:
         config_path = f"{tmp}/server-config.json"
         # Disable background workers so finders (QualityTask etc.) don't write
-        # to `picture` between a test's last write and the undo/restore call,
-        # which would break exact ChangeLog count assertions.
+        # to `picture` between a test's last write and the restore call.
         with open(config_path, "w") as fh:
             json.dump({"disable_background_workers": True}, fh)
         with Server(config_path) as srv:
@@ -44,7 +42,6 @@ def clean_db(server):
     def _wipe(session):
         session.exec(text("PRAGMA foreign_keys = OFF"))
         session.exec(delete(Snapshot))
-        session.exec(delete(ChangeLog))
         session.exec(delete(PictureProjectMember))
         session.exec(delete(PictureSetMember))
         session.exec(delete(Face))

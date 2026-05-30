@@ -15,4 +15,3 @@ class EventType(Enum):
     SNAPSHOT_DELETED = auto()
     RESTORE_STARTED = auto()
     RESTORE_COMPLETED = auto()
-    UNDO_APPLIED = auto()

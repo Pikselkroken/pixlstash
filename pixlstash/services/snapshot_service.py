@@ -15,7 +15,6 @@ from sqlmodel import select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, Picture, PictureSet, Project
-from pixlstash.db_models.change_log import ChangeLog
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
 
@@ -31,8 +30,7 @@ GFS_KEEP_DAILY: int = 7
 GFS_KEEP_WEEKLY: int = 4  # most-recent Sunday of each of the last 4 weeks
 GFS_KEEP_MONTHLY: int = 12  # first-of-month snapshot for the last 12 months
 # OPPORTUNISTIC snapshots accumulate from safety-snapshot-before-restore and
-# from snapshot_if_due() — without a cap they pin the ChangeLog truncation
-# floor forever (see _apply_gfs_retention) and grow without bound. MANUAL
+# from snapshot_if_due() — without a cap they grow without bound. MANUAL
 # snapshots are intentionally not capped: they are user-curated archives.
 GFS_KEEP_OPPORTUNISTIC: int = 5
 
@@ -65,9 +63,8 @@ class SnapshotService:
         The snapshot is written to
         ``<vault_root>/snapshots/YYYY/MM/DD/<uuid>.sqlite`` via
         ``VACUUM INTO``.  A JSON manifest sidecar is written alongside it
-        with resource counts, id-lists, and the ``max(ChangeLog.id)``
-        covered by this snapshot.  The ``Snapshot`` row is then inserted
-        in the live DB, GFS retention is applied, and a
+        with resource counts and id-lists.  The ``Snapshot`` row is then
+        inserted in the live DB, GFS retention is applied, and a
         ``SNAPSHOT_CREATED`` event is emitted.
 
         Args:
@@ -98,9 +95,9 @@ class SnapshotService:
         abs_manifest = os.path.join(vault_root, rel_manifest)
 
         # --- VACUUM + manifest + Snapshot row (one atomic writer task) --------
-        # The VACUUM INTO, the manifest read (counts + max_changelog_id), and the
-        # Snapshot INSERT all run in a single writer-thread task so they describe
-        # one consistent point-in-time: no other write can interleave between the
+        # The VACUUM INTO, the manifest read (resource counts), and the Snapshot
+        # INSERT all run in a single writer-thread task so they describe one
+        # consistent point-in-time: no other write can interleave between the
         # snapshot file and the manifest it is paired with.  VACUUM must run first
         # because SQLite forbids VACUUM inside an open transaction.
         logger.info(
@@ -344,7 +341,7 @@ class SnapshotService:
         raw.execute(f"VACUUM INTO '{escaped}'")
 
     def _build_manifest(self, session) -> dict:
-        """Build the manifest dict capturing resource counts and ChangeLog head.
+        """Build the manifest dict capturing resource counts.
 
         Args:
             session: An active read session.
@@ -372,21 +369,6 @@ class SnapshotService:
             )
             schema_version = ""
 
-        # max ChangeLog id at snapshot time
-        # session.exec() with a scalar aggregate returns the value directly (int
-        # or None), not a Row.  Using [0] on an int raises TypeError that was
-        # previously swallowed, always producing None.
-        try:
-            max_changelog_id = session.exec(
-                select(func.max(ChangeLog.id))
-            ).one_or_none()
-        except Exception as exc:
-            logger.warning(
-                "SnapshotService: failed to read max_changelog_id for manifest: %s",
-                exc,
-            )
-            max_changelog_id = None
-
         return {
             "picture_count": len(picture_ids),
             "picture_ids": picture_ids,
@@ -394,7 +376,6 @@ class SnapshotService:
             "project_count": project_count,
             "character_count": character_count,
             "schema_version": schema_version,
-            "max_changelog_id": max_changelog_id,
         }
 
     def _apply_gfs_retention(self, now: datetime) -> None:
@@ -444,35 +425,5 @@ class SnapshotService:
                         cp.id,
                     )
             session.commit()
-
-            # Truncate old ChangeLog rows beyond the oldest retained snapshot.
-            from pixlstash.db_models.change_log import ChangeLog
-
-            oldest_cp = session.exec(
-                select(Snapshot).order_by(Snapshot.created_at.asc())
-            ).first()
-            if oldest_cp is not None:
-                oldest_manifest_path = os.path.join(
-                    self._vault.image_root, oldest_cp.manifest_relative_path
-                )
-                try:
-                    with open(oldest_manifest_path, encoding="utf-8") as fh:
-                        manifest = json.load(fh)
-                    min_cl_id = manifest.get("max_changelog_id")
-                    if min_cl_id is not None:
-                        from sqlmodel import delete as sm_delete
-
-                        session.exec(
-                            sm_delete(ChangeLog).where(ChangeLog.id < min_cl_id)
-                        )
-                        session.commit()
-                        logger.info(
-                            "SnapshotService: truncated ChangeLog entries with id < %d",
-                            min_cl_id,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "SnapshotService: could not truncate ChangeLog: %s", exc
-                    )
 
         self._vault.db.run_task(_prune, priority=DBPriority.IMMEDIATE)

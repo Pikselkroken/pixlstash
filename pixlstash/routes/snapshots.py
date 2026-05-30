@@ -1,10 +1,4 @@
-"""HTTP routes for snapshot creation, listing, deletion, and restore.
-
-Undo (ChangeLog-based reversal via ``UndoService``) is intentionally **not**
-exposed as an HTTP route in this release — the implementation is kept in
-``services/undo_service.py`` for future use but the surface is too fragile to
-ship. Snapshots + restore are the only supported recovery path for now.
-"""
+"""HTTP routes for snapshot creation, listing, deletion, and restore."""
 
 from typing import Any, List, Optional
 
@@ -622,9 +616,5 @@ def create_router(server) -> APIRouter:
             "upserted_count": report.upserted_count,
             "errors": report.errors,
         }
-
-    # NOTE: POST /undo is intentionally not registered — see the module
-    # docstring. ``UndoService`` is still wired on the Vault for future use,
-    # but no HTTP surface exposes it in this release.
 
     return router

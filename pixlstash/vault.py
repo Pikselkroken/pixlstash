@@ -46,7 +46,6 @@ from pixlstash.event_types import EventType
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore_service import RestoreService
-from pixlstash.services.undo_service import UndoService
 
 
 logger = get_logger(__name__)
@@ -106,7 +105,6 @@ class Vault:
 
         self.snapshot_service = SnapshotService(self)
         self.restore_service = RestoreService(self)
-        self.undo_service = UndoService(self)
 
         self._engine: InferenceEngine | None = None
         self._force_cpu = force_cpu

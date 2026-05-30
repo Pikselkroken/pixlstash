@@ -10,7 +10,6 @@ from sqlalchemy import text
 from sqlmodel import delete
 
 from pixlstash.db_models import Picture
-from pixlstash.db_models.change_log import ChangeLog
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 
@@ -20,8 +19,7 @@ def server():
     with tempfile.TemporaryDirectory() as tmp:
         config_path = f"{tmp}/server-config.json"
         # Disable background workers so finders (QualityTask etc.) don't write
-        # to `picture` between a test's last write and the undo/restore call,
-        # which would break exact ChangeLog count assertions.
+        # to `picture` between a test's last write and the restore call.
         with open(config_path, "w") as fh:
             json.dump({"disable_background_workers": True}, fh)
         with Server(config_path) as srv:
@@ -35,7 +33,6 @@ def clean_db(server):
     def _wipe(session):
         session.exec(text("PRAGMA foreign_keys = OFF"))
         session.exec(delete(Snapshot))
-        session.exec(delete(ChangeLog))
         session.exec(delete(Picture))
         session.exec(text("PRAGMA foreign_keys = ON"))
         session.commit()
@@ -97,7 +94,6 @@ def test_snapshot_manifest_contains_expected_keys(server):
     with open(abs_manifest) as fh:
         manifest = json.load(fh)
 
-    assert "max_changelog_id" in manifest
     assert "picture_count" in manifest
     assert "picture_ids" in manifest
     assert "schema_version" in manifest
@@ -250,68 +246,13 @@ def test_gfs_retention_prunes_oldest_daily(server):
 
 
 # ---------------------------------------------------------------------------
-# undo_to_snapshot: ChangeLog truncated past the target → file restore (H1)
-# ---------------------------------------------------------------------------
-
-
-def test_undo_to_snapshot_escalates_when_changelog_truncated(server):
-    """If ``min(ChangeLog.id) > target.max_changelog_id + 1`` the entries
-    needed to rewind through the change log are gone. ``undo_to_snapshot``
-    must escalate to ``restore_full`` rather than silently produce a partial
-    rewind."""
-    _add_pictures(server, count=1)
-    # Place a file on disk so the full-restore fallback doesn't drop the row.
-    open(os.path.join(server.vault.image_root, "pic_0.jpg"), "wb").close()
-
-    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
-
-    # Read the snapshot's max_changelog_id, then drop the entire ChangeLog
-    # so the next surviving id (currently min — None / 0) is far above the
-    # target's max_changelog_id + 1. We'll also insert a few "ghost" rows
-    # past the target's max to make min(ChangeLog.id) strictly greater than
-    # max_changelog_id + 1.
-    abs_manifest = os.path.join(server.vault.image_root, cp.manifest_relative_path)
-    with open(abs_manifest) as fh:
-        manifest = json.load(fh)
-    target_max = manifest["max_changelog_id"]
-    assert target_max is not None and target_max >= 0
-
-    def _simulate_truncation(session):
-        session.exec(delete(ChangeLog))
-        # Insert a stand-in row whose id is well above target_max + 1 to
-        # mimic a post-prune state where the surviving min is too high.
-        ghost_id = target_max + 1000
-        session.exec(
-            text(
-                "INSERT INTO changelog (id, txn_id, seq_in_txn, table_name, "
-                "row_pk_json, op, before_json, after_json, created_at) VALUES "
-                "(:id, 'ghost', 0, 'picture', '{}', 'UPDATE', NULL, NULL, datetime('now'))"
-            ).bindparams(id=ghost_id)
-        )
-        session.commit()
-
-    server.vault.db.run_task(_simulate_truncation)
-
-    report = server.vault.undo_service.undo_to_snapshot(cp.id)
-
-    assert report.escalated_to_full_restore, (
-        "Expected undo_to_snapshot to escalate to full restore when ChangeLog "
-        f"is truncated past the target. Got report: {report}"
-    )
-    assert report.escalated_tables == ["<changelog-truncated>"], (
-        f"Expected escalation marker, got: {report.escalated_tables}"
-    )
-
-
-# ---------------------------------------------------------------------------
 # GFS retention: OPPORTUNISTIC snapshots are capped to GFS_KEEP_OPPORTUNISTIC
 # ---------------------------------------------------------------------------
 
 
 def test_gfs_retention_prunes_oldest_opportunistic(server):
     """OPPORTUNISTIC snapshots accumulate from safety-snapshot-before-restore
-    and ``snapshot_if_due()``. Without a cap they pin the ChangeLog
-    truncation floor (see ``_apply_gfs_retention``) and grow unbounded.
+    and ``snapshot_if_due()``. Without a cap they grow unbounded.
     """
     from datetime import datetime, timedelta, timezone
 

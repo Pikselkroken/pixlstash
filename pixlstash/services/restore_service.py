@@ -756,37 +756,34 @@ class RestoreService:
 
             total = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
             try:
-                with self._vault.db.write_reason(
-                    f"restore snapshot {snapshot_id} batch of {len(resources)} resources"
-                ):
-                    for item in resources:
-                        rtype = item.get("type", "")
-                        rid = int(item.get("id", 0))
-                        if rtype not in _SUPPORTED_RESOURCE_TYPES:
-                            total.errors.append(
-                                f"Skipped unsupported resource type '{rtype}' "
-                                f"(supported: {', '.join(_SUPPORTED_RESOURCE_TYPES)})."
-                            )
-                            continue
-                        try:
-                            sub = self._restore_resource_from_snapshot(
-                                upgraded_snapshot,
-                                snapshot_id,
-                                rtype,
-                                rid,
+                for item in resources:
+                    rtype = item.get("type", "")
+                    rid = int(item.get("id", 0))
+                    if rtype not in _SUPPORTED_RESOURCE_TYPES:
+                        total.errors.append(
+                            f"Skipped unsupported resource type '{rtype}' "
+                            f"(supported: {', '.join(_SUPPORTED_RESOURCE_TYPES)})."
+                        )
+                        continue
+                    try:
+                        sub = self._restore_resource_from_snapshot(
+                            upgraded_snapshot,
+                            snapshot_id,
+                            rtype,
+                            rid,
                                 vault_root,
-                            )
-                            total.missing_files_count += sub.missing_files_count
-                            total.upserted_count += sub.upserted_count
-                            total.errors.extend(sub.errors)
-                        except Exception as exc:
-                            msg = f"{rtype}/{rid}: {exc}"
-                            logger.error(
-                                "RestoreService: batch item restore failed: %s",
-                                msg,
-                                exc_info=True,
-                            )
-                            total.errors.append(msg)
+                        )
+                        total.missing_files_count += sub.missing_files_count
+                        total.upserted_count += sub.upserted_count
+                        total.errors.extend(sub.errors)
+                    except Exception as exc:
+                        msg = f"{rtype}/{rid}: {exc}"
+                        logger.error(
+                            "RestoreService: batch item restore failed: %s",
+                            msg,
+                            exc_info=True,
+                        )
+                        total.errors.append(msg)
             finally:
                 try:
                     os.remove(upgraded_snapshot)
@@ -873,8 +870,8 @@ class RestoreService:
                 # ORM ``Picture`` mapper so SQLAlchemy doesn't try to route this
                 # through the ORM "bulk by primary key" path — that path
                 # requires ``id`` in every row and clashes with our explicit
-                # WHERE bindparam. Core DML also keeps the after_flush
-                # ChangeLog/hash hooks from re-firing on this backfill write.
+                # WHERE bindparam. Core DML also keeps the after_flush hash
+                # hook from re-firing on this backfill write.
                 stmt = (
                     sa_update(Picture.__table__)
                     .where(Picture.__table__.c.id == sa_bindparam("_pid"))
@@ -1387,15 +1384,12 @@ class RestoreService:
             snap_engine.dispose()
 
         # Upsert in the live DB.
-        with self._vault.db.write_reason(
-            f"restore snapshot {snapshot_id} {resource_type} {resource_id}"
-        ):
-            upserted = self._vault.db.run_task(
-                lambda session: self._upsert_rows(
-                    session, snap_rows, valid_picture_ids
-                ),
-                priority=0,
-            )
+        upserted = self._vault.db.run_task(
+            lambda session: self._upsert_rows(
+                session, snap_rows, valid_picture_ids
+            ),
+            priority=0,
+        )
         report.upserted_count = upserted
         return report
 

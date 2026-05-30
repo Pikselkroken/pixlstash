@@ -8,9 +8,7 @@ import os
 import struct
 import threading
 import queue
-import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import Future
 from enum import IntEnum
@@ -21,7 +19,6 @@ from sqlalchemy import (
     update as sa_update,
     select as sa_select,
 )
-from sqlalchemy.orm import attributes as orm_attributes
 from sqlmodel import create_engine, Session
 from rapidfuzz.distance import Levenshtein
 
@@ -36,295 +33,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 # They may appear unused, but are necessary for correct table creation and ORM operation.
 from pixlstash.db_models import Character, Face  # noqa: F401
 from pixlstash.db_models import PictureLikeness, PictureSet, Picture, Quality, Tag, User  # noqa: F401
-from pixlstash.db_models import ChangeLog, Snapshot  # noqa: F401
-
-
-# ---------------------------------------------------------------------------
-# Change-log configuration
-# ---------------------------------------------------------------------------
-
-# Tables whose data payloads are NOT stored in ChangeLog (regenerable or
-# ephemeral). A lightweight metadata-only entry is still created for these so
-# that undo_to_snapshot can apply its timing heuristic.
-CHANGE_LOG_EXCLUDED_TABLES: frozenset[str] = frozenset(
-    {
-        "picturelikeness",
-        "picturelikenessqueue",
-        "picturelikenessfrontier",
-        "quality",
-        "tag_prediction",
-        "guest_session",
-        "guest_score",
-        "deleted_file_log",
-        "changelog",
-        "snapshot",
-        "alembic_version",
-    }
-)
-
-# Tables whose full before/after data IS captured by the change-log mechanism.
-# Every SQLModel table must appear in exactly one of the two sets; the
-# architecture-guardrail test enforces this.
-CHANGE_LOG_INCLUDED_TABLES: frozenset[str] = frozenset(
-    {
-        "picture",
-        "face",
-        "character",
-        "pictureset",
-        "picturesetmember",
-        "picturestack",
-        "project",
-        "projectattachment",
-        "pictureprojectmember",
-        "tag",
-        "metadata",
-        "user",
-        "usertoken",
-        "import_folder",
-        "reference_folder",
-    }
-)
-
-# Context variables propagated from the call site to the writer-thread task.
-_write_reason_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "_write_reason", default=None
-)
-_actor_user_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
-    "_actor_user_id", default=None
-)
-
-
-# ---------------------------------------------------------------------------
-# Change-log helpers
-# ---------------------------------------------------------------------------
-
-
-def _cl_table_name(obj) -> str:
-    """Return the SQLite table name for a mapped ORM object."""
-    return getattr(obj.__class__, "__tablename__", obj.__class__.__name__.lower())
-
-
-def _cl_pk_json(obj) -> str:
-    """Return a JSON string encoding the primary-key column(s) for *obj*."""
-    try:
-        state = sa_inspect(obj)
-        mapper = state.mapper
-        pk_col_names = {col.name for col in mapper.persist_selectable.primary_key}
-        pk: dict = {}
-        for attr in mapper.column_attrs:
-            for col in attr.columns:
-                if col.name in pk_col_names:
-                    pk[attr.key] = getattr(obj, attr.key, None)
-                    break
-        return json.dumps(pk)
-    except Exception as exc:
-        logger.warning(
-            "ChangeLog: failed to encode primary key for %s: %s",
-            type(obj).__name__,
-            exc,
-        )
-        return "{}"
-
-
-def _cl_serialize_state(state: dict) -> str:
-    """Serialize a column-value dict to JSON, replacing BLOB values with SHA-256 markers."""
-    result: dict = {}
-    for k, v in state.items():
-        if v is None:
-            result[k] = None
-        elif isinstance(v, bytes):
-            result[k] = "sha256:" + hashlib.sha256(v).hexdigest()
-        elif isinstance(v, datetime):
-            result[k] = v.isoformat()
-        else:
-            try:
-                json.dumps(v)
-                result[k] = v
-            except (TypeError, ValueError):
-                result[k] = str(v)
-    return json.dumps(result)
-
-
-def _cl_current_state(obj) -> dict:
-    """Capture all column attribute values of *obj* as a plain dict."""
-    result: dict = {}
-    try:
-        mapper = sa_inspect(obj).mapper
-        for attr in mapper.column_attrs:
-            try:
-                result[attr.key] = getattr(obj, attr.key, None)
-            except Exception as exc:
-                logger.warning(
-                    "ChangeLog: failed to read attribute %s on %s: %s",
-                    attr.key,
-                    type(obj).__name__,
-                    exc,
-                )
-    except Exception as exc:
-        logger.warning(
-            "ChangeLog: failed to capture current state for %s: %s",
-            type(obj).__name__,
-            exc,
-        )
-    return result
-
-
-def _cl_before_state_from_history(obj) -> dict:
-    """Capture pre-flush column values for a dirty object using ORM attribute history."""
-    result: dict = {}
-    try:
-        mapper = sa_inspect(obj).mapper
-        for attr in mapper.column_attrs:
-            key = attr.key
-            try:
-                hist = orm_attributes.get_history(obj, key)
-                if hist.deleted:
-                    result[key] = hist.deleted[0]
-                elif hist.unchanged:
-                    result[key] = hist.unchanged[0]
-                elif hist.added:
-                    result[key] = hist.added[0]
-            except Exception as exc:
-                logger.warning(
-                    "ChangeLog: failed to read history for attribute %s on %s: %s",
-                    key,
-                    type(obj).__name__,
-                    exc,
-                )
-    except Exception as exc:
-        logger.warning(
-            "ChangeLog: failed to capture before-state for %s: %s",
-            type(obj).__name__,
-            exc,
-        )
-    return result
-
-
-def _before_flush_handler(session, flush_context, instances) -> None:
-    """Capture pre-flush state of dirty and deleted objects into session.info."""
-    pending: list = session.info.setdefault("_cl_pending", [])
-
-    for obj in list(session.dirty):
-        table = _cl_table_name(obj)
-        excluded = table in CHANGE_LOG_EXCLUDED_TABLES
-        pk_json = _cl_pk_json(obj)
-        before_json = (
-            None
-            if excluded
-            else _cl_serialize_state(_cl_before_state_from_history(obj))
-        )
-        entry = {
-            "op": "UPDATE",
-            "table_name": table,
-            "row_pk_json": pk_json,
-            "before_json": before_json,
-            "excluded": excluded,
-        }
-        if not excluded:
-            entry["obj_ref"] = obj  # for after-state capture in after_flush
-        pending.append(entry)
-
-    for obj in list(session.deleted):
-        table = _cl_table_name(obj)
-        excluded = table in CHANGE_LOG_EXCLUDED_TABLES
-        pk_json = _cl_pk_json(obj)
-        before_json = None if excluded else _cl_serialize_state(_cl_current_state(obj))
-        pending.append(
-            {
-                "op": "DELETE",
-                "table_name": table,
-                "row_pk_json": pk_json,
-                "before_json": before_json,
-                "excluded": excluded,
-            }
-        )
-
-    for obj in list(session.new):
-        table = _cl_table_name(obj)
-        pending.append(
-            {
-                "op": "INSERT",
-                "table_name": table,
-                "row_pk_json": None,  # PK not yet assigned; filled in after_flush
-                "excluded": table in CHANGE_LOG_EXCLUDED_TABLES,
-                "obj_ref": obj,
-            }
-        )
-
-
-def _after_flush_handler(session, flush_context) -> None:
-    """Finalise ChangeLog entries and bulk-insert them in the same transaction."""
-    from pixlstash.db_models.change_log import ChangeLog as _ChangeLog
-
-    pending: list = session.info.get("_cl_pending", [])
-    if not pending:
-        return
-    session.info["_cl_pending"] = []
-
-    txn_id: str = session.info.get("_cl_txn_id", str(uuid.uuid4()))
-    reason: Optional[str] = _write_reason_var.get(None)
-    actor_user_id: Optional[int] = _actor_user_id_var.get(None)
-    now = datetime.now(timezone.utc)
-    seq: int = session.info.get("_cl_seq", 0)
-
-    rows: list[dict] = []
-    for entry in pending:
-        op = entry["op"]
-        excluded = entry.get("excluded", False)
-        obj = entry.get("obj_ref")
-
-        if op == "INSERT":
-            pk_json = _cl_pk_json(obj) if obj is not None else "{}"
-            after_json = (
-                None
-                if excluded
-                else (_cl_serialize_state(_cl_current_state(obj)) if obj else None)
-            )
-        elif op == "UPDATE":
-            pk_json = entry.get("row_pk_json") or "{}"
-            after_json = (
-                None
-                if excluded
-                else (_cl_serialize_state(_cl_current_state(obj)) if obj else None)
-            )
-        else:  # DELETE
-            pk_json = entry.get("row_pk_json") or "{}"
-            after_json = None
-
-        rows.append(
-            {
-                "txn_id": txn_id,
-                "seq_in_txn": seq,
-                "table_name": entry["table_name"],
-                "row_pk_json": pk_json,
-                "op": op,
-                "before_json": entry.get("before_json"),
-                "after_json": after_json,
-                "created_at": now,
-                "actor_user_id": actor_user_id,
-                "reason": reason,
-            }
-        )
-        seq += 1
-
-    session.info["_cl_seq"] = seq
-
-    if rows:
-        try:
-            session.execute(_ChangeLog.__table__.insert(), rows)
-        except Exception as exc:
-            # Failing the audit write must fail the surrounding write — undo /
-            # restore correctness depend on a complete ChangeLog; a silently
-            # committed write with no corresponding audit row would leave the
-            # user thinking it was undone after a later undo_to_snapshot.
-            logger.error(
-                "ChangeLog: failed to insert %d audit row(s); rolling back the "
-                "surrounding write to keep the audit trail consistent: %s",
-                len(rows),
-                exc,
-                exc_info=True,
-            )
-            raise
+from pixlstash.db_models import Snapshot  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -433,10 +142,14 @@ def _after_flush_hash_updater(session, flush_context) -> None:
                     session.expire(cached, ["metadata_hash"])
 
 
-def _attach_change_log_hooks(session: Session) -> None:
-    """Attach per-session before_flush / after_flush event listeners."""
-    event.listen(session, "before_flush", _before_flush_handler)
-    event.listen(session, "after_flush", _after_flush_handler)
+def _attach_session_hooks(session: Session) -> None:
+    """Attach per-session before_flush / after_flush event listeners.
+
+    Currently only the metadata-hash hooks are attached; the writer thread
+    runs every task inside a session with these listeners so that any picture
+    mutation (or tag/face mutation that affects a picture) refreshes the
+    ``metadata_hash`` column in the same transaction.
+    """
     event.listen(session, "before_flush", _before_flush_hash_tracker)
     event.listen(session, "after_flush", _after_flush_hash_updater)
 
@@ -514,9 +227,8 @@ class DatabaseTask:
         # DB-file swap, which must serialise with normal writes but cannot
         # tolerate a session bound to the soon-to-be-disposed engine.
         self.is_control = is_control
-        # Capture the current execution context so that write_reason() and
-        # actor_user_id context vars set by the caller are visible inside the
-        # worker thread when the task executes.
+        # Capture the current execution context so any context vars set by
+        # the caller are visible inside the worker thread when the task runs.
         self._context = contextvars.copy_context()
 
     def __lt__(self, other):
@@ -1039,22 +751,6 @@ class VaultDatabase:
         with self._engine_rwlock.write():
             yield
 
-    @contextmanager
-    def write_reason(self, reason: str, actor_user_id=None):
-        """Context manager that labels all ChangeLog rows produced within its block.
-
-        Args:
-            reason: Human-readable description of the write operation.
-            actor_user_id: ID of the user triggering the write, if known.
-        """
-        reason_token = _write_reason_var.set(reason)
-        actor_token = _actor_user_id_var.set(actor_user_id)
-        try:
-            yield
-        finally:
-            _write_reason_var.reset(reason_token)
-            _actor_user_id_var.reset(actor_token)
-
     @staticmethod
     def result_or_throw(future: Future):
         """
@@ -1095,7 +791,7 @@ class VaultDatabase:
                 # re-create the engine without leaving an open Session bound
                 # to a now-disposed engine (whose __exit__ would try to return
                 # connections to the disposed pool, possibly via the
-                # after_flush ChangeLog hook).
+                # after_flush metadata-hash hook).
                 try:
                     result = task._context.run(task.func, *task.args, **task.kwargs)
                     task.future.set_result(result)
@@ -1109,10 +805,7 @@ class VaultDatabase:
                 continue
 
             with Session(self._engine) as session:
-                _attach_change_log_hooks(session)
-                session.info["_cl_txn_id"] = str(uuid.uuid4())
-                session.info["_cl_seq"] = 0
-                session.info["_cl_pending"] = []
+                _attach_session_hooks(session)
                 try:
                     result = task._context.run(
                         task.func, session, *task.args, **task.kwargs
