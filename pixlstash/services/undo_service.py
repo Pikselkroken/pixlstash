@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import func, inspect as sa_inspect
 from sqlmodel import Session, select
 
 from pixlstash.db_models.change_log import ChangeLog
@@ -247,6 +247,46 @@ class UndoService:
             snapshot_dt = snapshot_dt.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
 
+        report = UndoReport()
+
+        # --- Guard: ChangeLog truncated past the target ------------------
+        # GFS retention truncates ChangeLog rows with id < oldest_snapshot's
+        # max_changelog_id. If the target snapshot's max_changelog_id sits
+        # BELOW the current minimum ChangeLog id, the entries needed to undo
+        # the (target, current_min) range are gone — a ChangeLog-based undo
+        # would silently produce a partial rewind (reverse only the surviving
+        # subset and report success). The excluded-table timing heuristic and
+        # the per-table mutation scan below also key off
+        # ``WHERE ChangeLog.id > max_changelog_id``, so both paths are equally
+        # unreliable in this state. Escalate to a file-based restore which
+        # rebuilds from the snapshot file directly.
+        if max_changelog_id is not None:
+            min_cl_id = db.run_immediate_read_task(
+                lambda session: session.exec(
+                    select(func.min(ChangeLog.id))
+                ).one_or_none()
+            )
+            if min_cl_id is not None and min_cl_id > max_changelog_id + 1:
+                logger.warning(
+                    "UndoService: ChangeLog truncated past snapshot %d "
+                    "(min surviving id %d > target max_changelog_id %d + 1) — "
+                    "escalating to file-based restore.",
+                    snapshot_id,
+                    min_cl_id,
+                    max_changelog_id,
+                )
+                try:
+                    self._vault.restore_service.restore_full(snapshot_id)
+                    report.escalated_to_full_restore = True
+                    report.escalated_tables = ["<changelog-truncated>"]
+                except Exception as exc:
+                    msg = (
+                        f"Full restore (ChangeLog truncated past target) failed: {exc}"
+                    )
+                    logger.error("UndoService: %s", msg, exc_info=True)
+                    report.errors.append(msg)
+                return report
+
         # --- Handle excluded tables via timing heuristic -----------------
         from pixlstash.database import CHANGE_LOG_EXCLUDED_TABLES
 
@@ -296,8 +336,6 @@ class UndoService:
                     age_from_cp,
                     age_to_now,
                 )
-
-        report = UndoReport()
 
         if excluded_tables_needing_restore:
             logger.warning(
