@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.restore_service import RestoreInProgressError
 
 logger = get_logger(__name__)
 
@@ -440,6 +441,8 @@ def create_router(server) -> APIRouter:
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RestoreInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
                 "Full restore of snapshot %d failed: %s",
@@ -484,6 +487,8 @@ def create_router(server) -> APIRouter:
             report = server.vault.restore_service.restore_batch(snapshot_id, resources)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RestoreInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
                 "Batch restore from snapshot %d failed: %s",
@@ -570,6 +575,8 @@ def create_router(server) -> APIRouter:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RestoreInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
                 "Per-resource restore of snapshot %d (%s/%s) failed: %s",

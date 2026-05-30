@@ -38,6 +38,19 @@ logger = get_logger(__name__)
 # Serialise all snapshot schema upgrades with this lock.
 _ALEMBIC_UPGRADE_LOCK = threading.Lock()
 
+
+class RestoreInProgressError(RuntimeError):
+    """Raised when a restore is requested while another one is still running.
+
+    Two concurrent restores would both stop the planner, take safety snapshots
+    and enqueue swap + cleanup tasks on the writer queue — the cleanups would
+    then run against each other's swapped DB file with stale ``missing_ids``
+    sets, corrupting the live database. Restore is intentionally serialised
+    instead of being made concurrent; callers should retry after the running
+    job (visible at ``GET /snapshots/status``) completes.
+    """
+
+
 # Columns on Picture that are regenerable and should be NULL-reset after any
 # restore so the WorkPlanner reprocesses them automatically.
 _PICTURE_DERIVED_COLUMNS: tuple[str, ...] = (
@@ -137,6 +150,11 @@ class RestoreService:
         self._vault = vault
         # Tracks the currently executing restore job for /snapshots/status.
         self._active_job: Optional[dict] = None
+        # Mutual exclusion for restore_full / restore_resource / restore_batch.
+        # Held for the entire duration of a restore (including the queued
+        # _do_swap + _post_restore_cleanup tasks); any concurrent restore call
+        # short-circuits with RestoreInProgressError → 409.
+        self._restore_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -167,24 +185,34 @@ class RestoreService:
             ValueError: If the snapshot is not found or the snapshot file is
                 missing from disk.
         """
-        vault_root = self._vault.image_root
-        report = RestoreReport(
-            snapshot_id=snapshot_id,
-            resource_type="full",
-        )
-
-        from datetime import datetime, timezone
-
-        self._active_job = {
-            "kind": "RESTORE",
-            "snapshot_id": snapshot_id,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "progress": 0.0,
-        }
+        if not self._restore_lock.acquire(blocking=False):
+            raise RestoreInProgressError(
+                "Another restore operation is already in progress; "
+                "see GET /snapshots/status."
+            )
         try:
-            return self._restore_full_inner(snapshot_id, dry_run, vault_root, report)
+            vault_root = self._vault.image_root
+            report = RestoreReport(
+                snapshot_id=snapshot_id,
+                resource_type="full",
+            )
+
+            from datetime import datetime, timezone
+
+            self._active_job = {
+                "kind": "RESTORE",
+                "snapshot_id": snapshot_id,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "progress": 0.0,
+            }
+            try:
+                return self._restore_full_inner(
+                    snapshot_id, dry_run, vault_root, report
+                )
+            finally:
+                self._active_job = None
         finally:
-            self._active_job = None
+            self._restore_lock.release()
 
     def _restore_full_inner(
         self,
@@ -264,14 +292,14 @@ class RestoreService:
             snapshot_id,
         )
 
-        def _do_swap(session):
-            # Close this task's session connection so no lock remains on the
-            # live DB file when we dispose the engine and copy the snapshot.
-            session.close()
-            with db.write_reason(f"restore snapshot {snapshot_id}"):
-                self._swap_database(live_db_path, upgraded_snapshot)
+        def _do_swap():
+            # Runs as a control task — the writer thread does NOT open a
+            # Session for this op, so there is no session bound to the
+            # soon-to-be-disposed engine. _swap_database holds
+            # exclusive_engine_access internally to fence out readers.
+            self._swap_database(live_db_path, upgraded_snapshot)
 
-        db.run_task(_do_swap, priority=0)
+        db.run_control_task(_do_swap)
 
         # 5 & 6. Drop missing-file rows and NULL-reset derived columns.
         def _post_restore_cleanup(session):
@@ -351,63 +379,74 @@ class RestoreService:
         Raises:
             ValueError: If the snapshot is not found or ``resource_type`` is
                 invalid.
+            RestoreInProgressError: If another restore is already running.
         """
-        vault_root = self._vault.image_root
-        cp = self._get_snapshot_or_raise(snapshot_id)
-        abs_snapshot = os.path.join(vault_root, cp.relative_path)
-        if not os.path.exists(abs_snapshot):
-            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
-
-        if resource_type not in ("picture", "picture_set", "project", "character"):
-            raise ValueError(
-                f"Invalid resource_type '{resource_type}'. "
-                "Must be one of: picture, picture_set, project, character."
+        if not self._restore_lock.acquire(blocking=False):
+            raise RestoreInProgressError(
+                "Another restore operation is already in progress; "
+                "see GET /snapshots/status."
             )
-
-        upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
-        if upgraded_snapshot is None:
-            report = RestoreReport(
-                snapshot_id=snapshot_id,
-                resource_type=resource_type,
-                resource_id=resource_id,
-            )
-            report.errors.append("Schema upgrade failed; aborting restore.")
-            return report
-
         try:
-            report = self._restore_resource_from_snapshot(
-                upgraded_snapshot,
-                snapshot_id,
-                resource_type,
-                resource_id,
-                vault_root,
-            )
-        finally:
-            try:
-                os.remove(upgraded_snapshot)
-            except Exception:
-                logger.warning(
-                    "RestoreService: failed to remove temp upgraded snapshot: %s",
-                    upgraded_snapshot,
+            vault_root = self._vault.image_root
+            cp = self._get_snapshot_or_raise(snapshot_id)
+            abs_snapshot = os.path.join(vault_root, cp.relative_path)
+            if not os.path.exists(abs_snapshot):
+                raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
+
+            if resource_type not in ("picture", "picture_set", "project", "character"):
+                raise ValueError(
+                    f"Invalid resource_type '{resource_type}'. "
+                    "Must be one of: picture, picture_set, project, character."
                 )
 
-        try:
-            from pixlstash.event_types import EventType
+            upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
+            if upgraded_snapshot is None:
+                report = RestoreReport(
+                    snapshot_id=snapshot_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                )
+                report.errors.append("Schema upgrade failed; aborting restore.")
+                return report
 
-            self._vault.emit_event(
-                EventType.RESTORE_COMPLETED,
-                {
-                    "snapshot_id": snapshot_id,
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "missing_files_count": report.missing_files_count,
-                    "upserted_count": report.upserted_count,
-                },
-            )
-        except Exception as exc:
-            logger.warning("RestoreService: failed to emit RESTORE_COMPLETED: %s", exc)
+            try:
+                report = self._restore_resource_from_snapshot(
+                    upgraded_snapshot,
+                    snapshot_id,
+                    resource_type,
+                    resource_id,
+                    vault_root,
+                )
+            finally:
+                try:
+                    os.remove(upgraded_snapshot)
+                except Exception:
+                    logger.warning(
+                        "RestoreService: failed to remove temp upgraded snapshot: %s",
+                        upgraded_snapshot,
+                    )
 
-        return report
+            try:
+                from pixlstash.event_types import EventType
+
+                self._vault.emit_event(
+                    EventType.RESTORE_COMPLETED,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "resource_type": resource_type,
+                        "resource_id": resource_id,
+                        "missing_files_count": report.missing_files_count,
+                        "upserted_count": report.upserted_count,
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "RestoreService: failed to emit RESTORE_COMPLETED: %s", exc
+                )
+
+            return report
+        finally:
+            self._restore_lock.release()
 
     def preview_full(self, snapshot_id: int) -> RestorePreview:
         """Compute a dry-run preview of a full restore without modifying the DB.
@@ -634,82 +673,102 @@ class RestoreService:
 
         Raises:
             ValueError: If the snapshot/snapshot is not found.
+            RestoreInProgressError: If another restore is already running.
         """
-        vault_root = self._vault.image_root
-        cp = self._get_snapshot_or_raise(snapshot_id)
-        abs_snapshot = os.path.join(vault_root, cp.relative_path)
-        if not os.path.exists(abs_snapshot):
-            raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
-
-        if not resources:
-            return RestoreReport(
-                snapshot_id=snapshot_id,
-                resource_type="batch",
+        if not self._restore_lock.acquire(blocking=False):
+            raise RestoreInProgressError(
+                "Another restore operation is already in progress; "
+                "see GET /snapshots/status."
             )
-
-        # Upgrade schema once for the whole batch.
-        upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
-        if upgraded_snapshot is None:
-            report = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
-            report.errors.append("Schema upgrade failed; aborting batch restore.")
-            return report
-
-        total = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
         try:
-            with self._vault.db.write_reason(
-                f"restore snapshot {snapshot_id} batch of {len(resources)} resources"
-            ):
-                for item in resources:
-                    rtype = item.get("type", "")
-                    rid = int(item.get("id", 0))
-                    if rtype not in ("picture", "picture_set", "project", "character"):
-                        total.errors.append(f"Skipped unknown resource type '{rtype}'.")
-                        continue
-                    try:
-                        sub = self._restore_resource_from_snapshot(
-                            upgraded_snapshot,
-                            snapshot_id,
-                            rtype,
-                            rid,
-                            vault_root,
-                        )
-                        total.missing_files_count += sub.missing_files_count
-                        total.upserted_count += sub.upserted_count
-                        total.errors.extend(sub.errors)
-                    except Exception as exc:
-                        msg = f"{rtype}/{rid}: {exc}"
-                        logger.error(
-                            "RestoreService: batch item restore failed: %s",
-                            msg,
-                            exc_info=True,
-                        )
-                        total.errors.append(msg)
-        finally:
-            try:
-                os.remove(upgraded_snapshot)
-                shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
-            except Exception:
-                logger.warning(
-                    "RestoreService: failed to remove temp upgraded snapshot and dir: %s",
-                    upgraded_snapshot,
+            vault_root = self._vault.image_root
+            cp = self._get_snapshot_or_raise(snapshot_id)
+            abs_snapshot = os.path.join(vault_root, cp.relative_path)
+            if not os.path.exists(abs_snapshot):
+                raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
+
+            if not resources:
+                return RestoreReport(
+                    snapshot_id=snapshot_id,
+                    resource_type="batch",
                 )
 
-        try:
-            from pixlstash.event_types import EventType
+            # Upgrade schema once for the whole batch.
+            upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
+            if upgraded_snapshot is None:
+                report = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
+                report.errors.append("Schema upgrade failed; aborting batch restore.")
+                return report
 
-            self._vault.emit_event(
-                EventType.RESTORE_COMPLETED,
-                {
-                    "snapshot_id": snapshot_id,
-                    "resource_type": "batch",
-                    "upserted_count": total.upserted_count,
-                    "missing_files_count": total.missing_files_count,
-                },
-            )
-        except Exception as exc:
-            logger.warning("RestoreService: failed to emit RESTORE_COMPLETED: %s", exc)
+            total = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
+            try:
+                with self._vault.db.write_reason(
+                    f"restore snapshot {snapshot_id} batch of {len(resources)} resources"
+                ):
+                    for item in resources:
+                        rtype = item.get("type", "")
+                        rid = int(item.get("id", 0))
+                        if rtype not in (
+                            "picture",
+                            "picture_set",
+                            "project",
+                            "character",
+                        ):
+                            total.errors.append(
+                                f"Skipped unknown resource type '{rtype}'."
+                            )
+                            continue
+                        try:
+                            sub = self._restore_resource_from_snapshot(
+                                upgraded_snapshot,
+                                snapshot_id,
+                                rtype,
+                                rid,
+                                vault_root,
+                            )
+                            total.missing_files_count += sub.missing_files_count
+                            total.upserted_count += sub.upserted_count
+                            total.errors.extend(sub.errors)
+                        except Exception as exc:
+                            msg = f"{rtype}/{rid}: {exc}"
+                            logger.error(
+                                "RestoreService: batch item restore failed: %s",
+                                msg,
+                                exc_info=True,
+                            )
+                            total.errors.append(msg)
+            finally:
+                try:
+                    os.remove(upgraded_snapshot)
+                    shutil.rmtree(
+                        os.path.dirname(upgraded_snapshot), ignore_errors=True
+                    )
+                except Exception:
+                    logger.warning(
+                        "RestoreService: failed to remove temp upgraded snapshot and dir: %s",
+                        upgraded_snapshot,
+                    )
 
-        return total
+            try:
+                from pixlstash.event_types import EventType
+
+                self._vault.emit_event(
+                    EventType.RESTORE_COMPLETED,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "resource_type": "batch",
+                        "upserted_count": total.upserted_count,
+                        "missing_files_count": total.missing_files_count,
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "RestoreService: failed to emit RESTORE_COMPLETED: %s", exc
+                )
+
+            return total
+        finally:
+            self._restore_lock.release()
 
     def compare_hashes(self, snapshot_id: int, picture_ids: list[int]) -> dict:
         """Compare live ``metadata_hash`` values against a snapshot snapshot.

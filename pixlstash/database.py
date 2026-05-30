@@ -490,13 +490,19 @@ class DBPriority(IntEnum):
 class DatabaseTask:
     _sequence = itertools.count()
 
-    def __init__(self, priority, func, args=(), kwargs=None):
+    def __init__(self, priority, func, args=(), kwargs=None, is_control=False):
         self.priority = priority
         self.sequence = next(self._sequence)
         self.func = func
         self.args = args
         self.kwargs = kwargs or {}
         self.future = Future()
+        # Control tasks run on the writer thread WITHOUT an open Session; the
+        # callable receives only the args it was submitted with (no implicit
+        # ``session``). Use for engine-level operations such as the restore
+        # DB-file swap, which must serialise with normal writes but cannot
+        # tolerate a session bound to the soon-to-be-disposed engine.
+        self.is_control = is_control
         # Capture the current execution context so that write_reason() and
         # actor_user_id context vars set by the caller are visible inside the
         # worker thread when the task executes.
@@ -965,6 +971,30 @@ class VaultDatabase:
             self.submit_task(func, *args, priority=priority, **kwargs)
         )
 
+    def submit_control_task(self, func, *args, **kwargs):
+        """Submit a control task that runs on the writer thread WITHOUT a Session.
+
+        Use for engine-level operations (e.g. the restore DB-file swap) that
+        must serialise with normal writes but cannot tolerate a session bound
+        to the current engine. The callable receives only the args/kwargs it
+        was submitted with — no implicit ``session`` argument.
+
+        Control tasks always run at IMMEDIATE priority and skip the
+        ``self._engine is None`` precondition (a swap is permitted to recreate
+        the engine), but still honor ``self._closed``.
+        """
+        if self._closed:
+            future = Future()
+            future.set_exception(RuntimeError("VaultDatabase is closed."))
+            return future
+        task = DatabaseTask(DBPriority.IMMEDIATE, func, args, kwargs, is_control=True)
+        self._task_queue.put(task)
+        return task.future
+
+    def run_control_task(self, func, *args, **kwargs):
+        """Submit a control task and wait for it to complete. See ``submit_control_task``."""
+        return self.result_or_throw(self.submit_control_task(func, *args, **kwargs))
+
     def run_immediate_read_task(self, func, *args, **kwargs):
         """
         Run a database read operation without queuing.
@@ -1044,7 +1074,25 @@ class VaultDatabase:
             if task.func is None:
                 break
 
-            if self._closed or self._engine is None:
+            if self._closed:
+                if not task.future.done():
+                    task.future.set_exception(RuntimeError("VaultDatabase is closed."))
+                continue
+
+            if task.is_control:
+                # Control op: runs without a session so it can dispose and
+                # re-create the engine without leaving an open Session bound
+                # to a now-disposed engine (whose __exit__ would try to return
+                # connections to the disposed pool, possibly via the
+                # after_flush ChangeLog hook).
+                try:
+                    result = task._context.run(task.func, *task.args, **task.kwargs)
+                    task.future.set_result(result)
+                except Exception as e:
+                    task.future.set_exception(e)
+                continue
+
+            if self._engine is None:
                 if not task.future.done():
                     task.future.set_exception(RuntimeError("VaultDatabase is closed."))
                 continue
