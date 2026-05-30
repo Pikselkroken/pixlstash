@@ -255,6 +255,7 @@ def test_event_types_fully_classified():
             EventType.SNAPSHOT_DELETED.name,  # snapshot lifecycle event
             EventType.RESTORE_STARTED.name,  # restore lifecycle event
             EventType.RESTORE_COMPLETED.name,  # restore lifecycle event; frontend can react via polling
+            EventType.RESTORE_FAILED.name,  # restore lifecycle event; clears activeJob in the UI
         }
     )
 

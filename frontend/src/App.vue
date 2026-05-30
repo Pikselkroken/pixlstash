@@ -266,20 +266,19 @@ function connectUpdatesSocket() {
         key: Date.now(),
         payload,
       };
-    } else if (payload?.type === "snapshot_created") {
+    } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
       snapshotsStore.onSnapshotCreated();
-    } else if (payload?.type === "snapshot_deleted") {
+    } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
       snapshotsStore.onSnapshotDeleted(payload);
-    } else if (payload?.type === "restore_started") {
+    } else if (payload?.type === "restore_started" && !isReadOnly.value) {
       snapshotsStore.onRestoreStarted(payload);
-    } else if (payload?.type === "restore_completed") {
+    } else if (payload?.type === "restore_completed" && !isReadOnly.value) {
       snapshotsStore.onRestoreCompleted();
       gridStore.wsUpdateKey = Date.now();
       gridStore.refreshGridVersion();
       refreshSidebar();
-    } else if (payload?.type === "undo_applied") {
-      // An undo (triggered via the API or by another client) mutates picture
-      // metadata, so refresh the grid and sidebar counts.
+    } else if (payload?.type === "restore_failed" && !isReadOnly.value) {
+      snapshotsStore.onRestoreFailed(payload);
       gridStore.wsUpdateKey = Date.now();
       gridStore.refreshGridVersion();
       refreshSidebar();

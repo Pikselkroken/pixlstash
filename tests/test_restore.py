@@ -470,24 +470,57 @@ def test_restore_batch_mixed_types(server):
 
 
 def test_concurrent_restore_rejected_with_409(server):
-    """A second restore call while one is in flight must short-circuit with
-    ``RestoreInProgressError`` (the in-flight one still completes normally).
-    Guards C2: without the per-instance lock, two swap + cleanup pipelines
-    would interleave on the writer thread."""
+    """Two concurrent ``restore_full`` calls from different threads: one
+    wins, the other raises ``RestoreInProgressError``.
+
+    Guards the production race that the prior single-thread lock-acquire
+    test only mimicked: without the per-service lock, two swap + cleanup
+    pipelines would interleave on the writer thread (live-DB corruption).
+    """
+    import threading
+
     from pixlstash.services.restore_service import RestoreInProgressError
 
-    _create_file(server, "lock_test.jpg")
-    _add_picture(server, filename="lock_test.jpg", description="v1")
+    _create_file(server, "concurrent.jpg")
+    _add_picture(server, filename="concurrent.jpg", description="v1")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     svc = server.vault.restore_service
-    acquired = svc._restore_lock.acquire(blocking=False)
-    assert acquired, "Pre-test: restore lock should be free"
-    try:
-        with pytest.raises(RestoreInProgressError):
-            svc.restore_full(cp.id)
-    finally:
-        svc._restore_lock.release()
+    results: list = [None, None]
+    errors: list = [None, None]
+
+    def _do_restore(idx: int):
+        try:
+            results[idx] = svc.restore_full(cp.id)
+        except Exception as exc:
+            errors[idx] = exc
+
+    t0 = threading.Thread(target=_do_restore, args=(0,))
+    t1 = threading.Thread(target=_do_restore, args=(1,))
+    t0.start()
+    t1.start()
+    t0.join(timeout=30)
+    t1.join(timeout=30)
+
+    assert not t0.is_alive() and not t1.is_alive(), (
+        "Both restore threads must finish in 30s"
+    )
+
+    successes = [r for r in results if r is not None]
+    rejections = [e for e in errors if isinstance(e, RestoreInProgressError)]
+    unexpected = [
+        e for e in errors if e is not None and not isinstance(e, RestoreInProgressError)
+    ]
+
+    assert not unexpected, f"Unexpected error from a restore thread: {unexpected}"
+    assert len(successes) == 1, (
+        f"Exactly one restore must succeed; got {len(successes)} successes, "
+        f"results={results}, errors={errors}"
+    )
+    assert len(rejections) == 1, (
+        f"Exactly one restore must be rejected with RestoreInProgressError; "
+        f"got {len(rejections)}, errors={errors}"
+    )
 
 
 # ---------------------------------------------------------------------------

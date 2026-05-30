@@ -142,6 +142,19 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     fetchSnapshots();
   }
 
+  function onRestoreFailed(payload) {
+    // Terminal event for a restore that started emitting STARTED but
+    // hit an error. Clear activeJob so the UI buttons unlock; the
+    // server's error response (404/409/412/500) already surfaced the
+    // detail to the caller that triggered the restore.
+    activeJob.value = null;
+    if (payload?.error) {
+      error.value = `Restore failed: ${payload.error}`;
+    }
+    // A safety snapshot may have landed before the failure; refresh.
+    fetchSnapshots();
+  }
+
   async function fetchSnapshotSettings() {
     try {
       const res = await apiClient.get("/api/v1/server-config/snapshots");
@@ -191,5 +204,6 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     onSnapshotDeleted,
     onRestoreStarted,
     onRestoreCompleted,
+    onRestoreFailed,
   };
 });

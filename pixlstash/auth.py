@@ -530,8 +530,8 @@ class AuthService:
 
         Rejects READ-scoped tokens *and* ALL-scope tokens that are restricted
         to a specific resource. Use this for system-level operations (e.g.
-        snapshots, restore, undo) where any narrowing of access would expose
-        data outside the token's intended scope.
+        snapshots, restore) where any narrowing of access would expose data
+        outside the token's intended scope.
         """
         user_id = self.require_user_id(request)
         if getattr(request.state, "token_scope", None) is not None:

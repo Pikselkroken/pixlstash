@@ -52,6 +52,12 @@ const restoreError = ref("");
 // Show/hide the per-resource diff table.
 const showDiffTable = ref(false);
 
+// Full-vault restore requires an explicit acknowledgement before the
+// destructive Restore button enables (`resources === null` is the
+// full-vault path). For per-resource restores this is a no-op.
+const fullVaultAcknowledged = ref(false);
+const isFullVaultRestore = computed(() => props.resources == null);
+
 // ── Computed ──────────────────────────────────────────────────────────────
 const dialogOpen = computed({
   get: () => props.open,
@@ -99,6 +105,7 @@ watch(
       restoring.value = false;
       restoreError.value = "";
       showDiffTable.value = false;
+      fullVaultAcknowledged.value = false;
       // If a snapshot is already known, go straight to the preview.
       if (props.snapshotId != null) {
         fetchPreview(props.snapshotId);
@@ -128,6 +135,7 @@ async function fetchPreview(cpId) {
 function selectSnapshot(cp) {
   if (!cp.is_compatible) return;
   selectedSnapshotId.value = cp.id;
+  fullVaultAcknowledged.value = false;
   fetchPreview(cp.id);
 }
 
@@ -135,6 +143,7 @@ function backToPicker() {
   selectedSnapshotId.value = null;
   preview.value = null;
   previewError.value = "";
+  fullVaultAcknowledged.value = false;
 }
 
 // ── Restore ────────────────────────────────────────────────────────────────
@@ -161,7 +170,10 @@ const canRestore = computed(
     !previewLoading.value &&
     !restoring.value &&
     preview.value != null &&
-    preview.value?.snapshot?.is_compatible !== false,
+    preview.value?.snapshot?.is_compatible !== false &&
+    // Full-vault restore is irreversible-grade destructive — require an
+    // explicit acknowledgement that this overwrites the entire DB.
+    (!isFullVaultRestore.value || fullVaultAcknowledged.value),
 );
 </script>
 
@@ -376,6 +388,28 @@ const canRestore = computed(
           </template>
         </template>
       </v-card-text>
+
+      <!-- Full-vault acknowledgement (irreversible destructive action) -->
+      <div
+        v-if="!isPickerStep && isFullVaultRestore && preview != null"
+        class="full-vault-ack"
+      >
+        <v-checkbox
+          v-model="fullVaultAcknowledged"
+          density="compact"
+          hide-details
+          color="error"
+          :disabled="restoring"
+        >
+          <template #label>
+            <span class="full-vault-ack-label">
+              I understand this will <strong>overwrite the entire vault</strong>
+              with the selected snapshot. All metadata changes since the
+              snapshot will be lost.
+            </span>
+          </template>
+        </v-checkbox>
+      </div>
 
       <!-- ── Footer ─────────────────────────────────────────────────────── -->
       <v-card-actions v-if="!isPickerStep" class="restore-dialog-actions">
@@ -623,5 +657,16 @@ const canRestore = computed(
 .restore-inline-error {
   font-size: 0.75rem;
   color: rgb(var(--v-theme-error));
+}
+
+.full-vault-ack {
+  padding: 8px 16px 0;
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.full-vault-ack-label {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: rgb(var(--v-theme-on-surface));
 }
 </style>

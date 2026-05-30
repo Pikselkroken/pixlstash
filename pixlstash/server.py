@@ -71,7 +71,7 @@ from pixlstash.utils.rate_limiter import RateLimitMiddleware
 # Logging will be set up after config is loaded
 logger = get_logger(__name__)
 
-# Snapshot / restore / undo vault events mapped to the WebSocket ``type`` string
+# Snapshot / restore vault events mapped to the WebSocket ``type`` string
 # the frontend listens for.  Keeping this as a single map keeps the delivery
 # whitelist (_should_send_ws_update) and the payload builder (_broadcast_ws_event)
 # in sync.
@@ -80,6 +80,7 @@ _WS_SNAPSHOT_EVENT_TYPES = {
     EventType.SNAPSHOT_DELETED: "snapshot_deleted",
     EventType.RESTORE_STARTED: "restore_started",
     EventType.RESTORE_COMPLETED: "restore_completed",
+    EventType.RESTORE_FAILED: "restore_failed",
 }
 
 
@@ -648,7 +649,11 @@ def render_scalar_html(
       data-url="{spec_url}"
       data-configuration='{config_attr}'
     ></script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    <!-- Pinned to a specific version so a future @scalar release cannot
+         change the bundle served to this self-hosted docs page without an
+         intentional bump. Revisit each release; consider vendoring under
+         data/scalar-assets/ for SRI/offline guarantees. -->
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.32"></script>
   </body>
 </html>
 """

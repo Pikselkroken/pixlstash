@@ -5,9 +5,11 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.restore_service import RestoreInProgressError
+from pixlstash.services.restore_service import (
+    RestoreInProgressError,
+    SafetySnapshotFailedError,
+)
 
 logger = get_logger(__name__)
 
@@ -432,21 +434,34 @@ def create_router(server) -> APIRouter:
         snapshot_id: int,
         request: Request,
         dry_run: bool = Body(default=False, embed=True),
+        allow_without_safety: bool = Body(default=False, embed=True),
     ):
         """Replace the live database with the given snapshot snapshot.
 
         Authentication is required.  Returns a summary of the restore.
+
+        Body params:
+            - ``dry_run``: skip the actual swap; return what the restore
+              would do.
+            - ``allow_without_safety``: proceed even if the pre-restore
+              safety snapshot fails. The safety snapshot is the only
+              rollback path; the default (False) refuses the restore with
+              412 rather than silently leave the user with no recovery
+              point.
         """
         server.auth.require_unscoped_owner(request)
-        server.vault.notify(EventType.RESTORE_STARTED, {"snapshot_id": snapshot_id})
         try:
             report = server.vault.restore_service.restore_full(
-                snapshot_id, dry_run=dry_run
+                snapshot_id,
+                dry_run=dry_run,
+                allow_without_safety=allow_without_safety,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RestoreInProgressError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SafetySnapshotFailedError as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
                 "Full restore of snapshot %d failed: %s",
@@ -483,10 +498,6 @@ def create_router(server) -> APIRouter:
         Authentication is required.  Returns a combined RestoreReport.
         """
         server.auth.require_unscoped_owner(request)
-        server.vault.notify(
-            EventType.RESTORE_STARTED,
-            {"snapshot_id": snapshot_id, "resource_type": "batch"},
-        )
         try:
             report = server.vault.restore_service.restore_batch(snapshot_id, resources)
         except ValueError as exc:
@@ -582,14 +593,6 @@ def create_router(server) -> APIRouter:
         Authentication is required.
         """
         server.auth.require_unscoped_owner(request)
-        server.vault.notify(
-            EventType.RESTORE_STARTED,
-            {
-                "snapshot_id": snapshot_id,
-                "resource_type": resource_type,
-                "resource_id": resource_id,
-            },
-        )
         try:
             report = server.vault.restore_service.restore_resource(
                 snapshot_id, resource_type, resource_id

@@ -76,8 +76,15 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
     pic = session.get(Picture, picture_id)
     if pic is None:
         return None
+    # Iterate only persisted columns — NOT ``model_fields``, which also
+    # contains SQLModel relationship fields (``tags``, ``faces``, ``project``,
+    # ...). ``getattr`` on a relationship triggers a lazy load whose ORM
+    # objects aren't JSON-serialisable; ``json.dumps(..., default=str)``
+    # then digests Python ``repr()`` (memory addresses) and the hash
+    # becomes non-deterministic across reloads.
     col_vals: dict = {}
-    for col in type(pic).model_fields:
+    for col_attr in sa_inspect(type(pic)).column_attrs:
+        col = col_attr.key
         if col in _HASH_SKIP_COLS:
             continue
         val = getattr(pic, col, None)
@@ -91,7 +98,22 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
         .scalars()
         .all()
     )
-    state = {"cols": col_vals, "tags": tags}
+    # Face-derived state: the before-flush hash tracker dirties on Face
+    # mutations (a Face add / remove / character reassignment is a
+    # user-visible change), so the digest must include face state — else
+    # the recompute would round-trip to the same value and the UI's
+    # identical-state detection would lie for face-only edits.  We hash
+    # the bbox + character_id of every face, sorted so the digest is
+    # insensitive to row order.  ``features`` (the embedding BLOB) is
+    # deliberately excluded — it's a derived column the WorkPlanner
+    # regenerates and is not user-visible.
+    faces = sorted(
+        session.execute(
+            sa_select(Face.frame_index, Face.face_index, Face.bbox_, Face.character_id)
+            .where(Face.picture_id == picture_id)
+        ).all()
+    )
+    state = {"cols": col_vals, "tags": tags, "faces": faces}
     return hashlib.sha256(
         json.dumps(state, sort_keys=True, default=str).encode()
     ).hexdigest()

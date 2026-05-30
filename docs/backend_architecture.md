@@ -824,18 +824,18 @@ A snapshot is a full copy of the live SQLite database taken via `VACUUM INTO`. S
 
 The manifest JSON contains: `picture_count`, `picture_ids`, `picture_set_count`, `project_count`, `character_count`, `schema_version`.
 
-**GFS retention policy** (Grandfather-Father-Son):
+**Retention policy:**
 
-| Tier | Count kept |
-|---|---|
-| `DAILY` | 7 most recent |
-| `WEEKLY` | 4 most recent Sundays |
-| `MONTHLY` | 12 most recent first-of-month snapshots |
-| `OPPORTUNISTIC` | 5 most recent (safety + `snapshot_if_due()` snapshots) |
+| Tier | Count kept | How created |
+|---|---|---|
+| `DAILY` | 7 most recent | `EnsureDailySnapshotTask` (one per calendar day) |
+| `OPPORTUNISTIC` | 5 most recent | Safety snapshot before `restore_full` |
+| `MANUAL` | unbounded | User-triggered via `POST /snapshots` (never pruned) |
 
-`MANUAL` snapshots are never pruned automatically — they are user-curated archives.
-
-**Automatic snapshots** — `EnsureDailySnapshotFinder` / `EnsureDailySnapshotTask` run at LOW priority every 5 minutes to ensure a DAILY snapshot exists for today, gated on the server-level `daily_snapshots` config flag. `snapshot_if_due()` also accepts an `OPPORTUNISTIC` kind for route-triggered snapshots (rate-limited to `OPPORTUNISTIC_MIN_HOURS`).
+The codebase reserves `WEEKLY` and `MONTHLY` constants for a future
+DAILY→WEEKLY→MONTHLY promotion scheme, but no promotion logic exists today.
+Effective automatic retention is therefore ~1 week of daily history plus
+whatever the user has explicitly archived as MANUAL.
 
 ### 18.3 `metadata_hash`
 
