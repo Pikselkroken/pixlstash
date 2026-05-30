@@ -180,7 +180,10 @@ def create_router(server) -> APIRouter:
         ``is_compatible`` flag (``false`` when the snapshot schema version is
         newer than the live DB — restore would require a downgrade, which is
         unsupported).
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         snapshots = server.vault.snapshot_service.list_snapshots()
         live_schema = server.vault.snapshot_service.get_live_schema_version()
         result = []
@@ -198,7 +201,10 @@ def create_router(server) -> APIRouter:
         """Return the currently-running restore or snapshot job, if any.
 
         ``active_job`` is ``null`` when no job is in progress.
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         active_job = getattr(server.vault.restore_service, "_active_job", None)
         return {"active_job": active_job}
 
@@ -215,7 +221,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Returns the new snapshot record.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         try:
             cp = server.vault.snapshot_service.create_snapshot(
                 kind="MANUAL", label=label
@@ -241,7 +247,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Works for all snapshot kinds.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         cp = server.vault.snapshot_service.rename_snapshot(snapshot_id, label)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
@@ -264,7 +270,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
@@ -306,7 +312,10 @@ def create_router(server) -> APIRouter:
 
         No data is written.  The response includes a summary of what would
         change and per-resource diff entries (capped at 200).
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_full(snapshot_id)
         except ValueError as exc:
@@ -340,7 +349,11 @@ def create_router(server) -> APIRouter:
         resource_id: int,
         request: Request,
     ):
-        """Return a dry-run preview of a single-resource restore."""
+        """Return a dry-run preview of a single-resource restore.
+
+        Requires owner-level (full, unscoped) access.
+        """
+        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_resource(
                 snapshot_id, resource_type, resource_id
@@ -380,7 +393,10 @@ def create_router(server) -> APIRouter:
         """Return a dry-run preview for a batch of resources.
 
         Body: ``{"resources": [{"type": "picture", "id": 42}, …]}``
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_batch(snapshot_id, resources)
         except ValueError as exc:
@@ -416,7 +432,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Returns a summary of the restore.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         server.vault.notify(EventType.RESTORE_STARTED, {"snapshot_id": snapshot_id})
         try:
             report = server.vault.restore_service.restore_full(
@@ -459,7 +475,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Returns a combined RestoreReport.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         server.vault.notify(
             EventType.RESTORE_STARTED,
             {"snapshot_id": snapshot_id, "resource_type": "batch"},
@@ -506,7 +522,10 @@ def create_router(server) -> APIRouter:
 
         Returns:
             ``{"identical_ids": [...], "changed_ids": [...]}``
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         try:
             result = server.vault.restore_service.compare_hashes(
                 snapshot_id, picture_ids
@@ -536,7 +555,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         server.vault.notify(
             EventType.RESTORE_STARTED,
             {
@@ -587,7 +606,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         try:
             if snapshot_id is not None:
                 report = server.vault.undo_service.undo_to_snapshot(snapshot_id)

@@ -520,6 +520,27 @@ class AuthService:
             return user_id
         raise HTTPException(status_code=401, detail=detail)
 
+    def require_unscoped_owner(
+        self,
+        request: Request,
+        detail: str = "Owner-level (full, unscoped) access required",
+    ) -> int:
+        """Require a fully-unscoped owner: cookie session or ALL-scope token
+        with no resource_type restriction.
+
+        Rejects READ-scoped tokens *and* ALL-scope tokens that are restricted
+        to a specific resource. Use this for system-level operations (e.g.
+        snapshots, restore, undo) where any narrowing of access would expose
+        data outside the token's intended scope.
+        """
+        user_id = self.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(status_code=403, detail=detail)
+        matched_token = getattr(request.state, "matched_token", None)
+        if matched_token is not None and matched_token.resource_type is not None:
+            raise HTTPException(status_code=403, detail=detail)
+        return user_id
+
     def get_user_for_request(self, request: Request) -> User:
         user_id = self.require_user_id(request)
         user = self._db.run_task(
@@ -1134,6 +1155,12 @@ class AuthService:
                                     },
                                 )
                         request.state.auth_user_id = user_id
+                        # Stash the matched token so route-level helpers
+                        # (e.g. require_unscoped_owner) can introspect its
+                        # resource_type — token_scope is only populated for
+                        # non-ALL scopes, so an ALL+resource_type token would
+                        # otherwise look indistinguishable from a cookie session.
+                        request.state.matched_token = matched_token
                         if matched_token.scope != "ALL":
                             request.state.token_scope = TokenScope(
                                 scope=matched_token.scope,
