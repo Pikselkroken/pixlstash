@@ -310,5 +310,3 @@ def test_workers_not_started_at_vault_init():
             assert vault._work_planner.is_running(), (
                 "WorkPlanner must be running after Vault.start()"
             )
-
-

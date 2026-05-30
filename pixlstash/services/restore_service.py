@@ -503,9 +503,7 @@ class RestoreService:
         finally:
             if planner is not None:
                 planner.start()
-                logger.info(
-                    "RestoreService: WorkPlanner restarted after full restore."
-                )
+                logger.info("RestoreService: WorkPlanner restarted after full restore.")
 
         self._emit_lifecycle(
             EventType.RESTORE_COMPLETED,
@@ -875,9 +873,7 @@ class RestoreService:
                 # Upgrade schema once for the whole batch.
                 upgraded_snapshot = self._upgrade_snapshot_schema(abs_snapshot)
                 if upgraded_snapshot is None:
-                    raise RuntimeError(
-                        "Schema upgrade failed; aborting batch restore."
-                    )
+                    raise RuntimeError("Schema upgrade failed; aborting batch restore.")
 
                 total = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
                 try:
@@ -1416,9 +1412,7 @@ class RestoreService:
                 with open(staged_db_path, "rb") as staged_fd:
                     os.fsync(staged_fd.fileno())
                 os.replace(staged_db_path, live_db_path)
-                live_dir_fd = os.open(
-                    os.path.dirname(live_db_path) or ".", os.O_RDONLY
-                )
+                live_dir_fd = os.open(os.path.dirname(live_db_path) or ".", os.O_RDONLY)
                 try:
                     os.fsync(live_dir_fd)
                 finally:
@@ -1541,9 +1535,7 @@ class RestoreService:
 
         # Upsert in the live DB.
         upserted = self._vault.db.run_task(
-            lambda session: self._upsert_rows(
-                session, snap_rows, valid_picture_ids
-            ),
+            lambda session: self._upsert_rows(session, snap_rows, valid_picture_ids),
             priority=0,
         )
         report.upserted_count = upserted

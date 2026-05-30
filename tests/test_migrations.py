@@ -98,7 +98,6 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
                 ).fetchall()
             }
             assert "picture" in tables, "picture table must exist at 0048"
-            assert "changelog" not in tables, "changelog must NOT exist at 0048"
             assert "snapshot" not in tables, "snapshot must NOT exist at 0048"
             picture_cols = {
                 r[1] for r in conn.execute("PRAGMA table_info(picture)").fetchall()
@@ -128,9 +127,7 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
         # Step 4 — verify data preservation and new schema.
         with sqlite3.connect(db_path) as conn:
             rows = list(
-                conn.execute(
-                    "SELECT id, original_file_name FROM picture ORDER BY id"
-                )
+                conn.execute("SELECT id, original_file_name FROM picture ORDER BY id")
             )
             assert rows == [(1001, "c1.jpg"), (1002, "c2.jpg")], (
                 f"Pre-migration picture rows were lost or mutated: {rows}"
@@ -142,8 +139,10 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 ).fetchall()
             }
-            assert "changelog" in tables, "0049 must create changelog table"
             assert "snapshot" in tables, "0049 must create snapshot table"
+            assert "changelog" not in tables, (
+                "0049 must NOT create the now-orphaned changelog table"
+            )
 
             picture_cols = {
                 r[1] for r in conn.execute("PRAGMA table_info(picture)").fetchall()
@@ -156,9 +155,7 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
             # post-flush hash hook (in database.py) regenerates them on the
             # next ORM-level update.
             hashes = list(
-                conn.execute(
-                    "SELECT id, metadata_hash FROM picture ORDER BY id"
-                )
+                conn.execute("SELECT id, metadata_hash FROM picture ORDER BY id")
             )
             assert all(h is None for _, h in hashes), (
                 f"metadata_hash must be NULL on pre-existing rows: {hashes}"

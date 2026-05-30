@@ -109,8 +109,9 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
     # regenerates and is not user-visible.
     faces = sorted(
         session.execute(
-            sa_select(Face.frame_index, Face.face_index, Face.bbox_, Face.character_id)
-            .where(Face.picture_id == picture_id)
+            sa_select(
+                Face.frame_index, Face.face_index, Face.bbox_, Face.character_id
+            ).where(Face.picture_id == picture_id)
         ).all()
     )
     state = {"cols": col_vals, "tags": tags, "faces": faces}
