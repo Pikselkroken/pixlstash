@@ -9,6 +9,7 @@
 import { computed, ref, watch } from "vue";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
+import { kindChipColor, relativeDate } from "../../utils/snapshots";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -45,17 +46,6 @@ const snapshots = computed(() => store.snapshots);
 const isLoading = computed(() => store.loading);
 const activeJob = computed(() => store.activeJob);
 
-function kindChipColor(kind) {
-  const map = {
-    MANUAL: "primary",
-    DAILY: "secondary",
-    WEEKLY: "info",
-    MONTHLY: "success",
-    OPPORTUNISTIC: "warning",
-  };
-  return map[kind] ?? "default";
-}
-
 function humanBytes(bytes) {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -68,20 +58,6 @@ function humanBytes(bytes) {
   return `${v.toFixed(u === 0 ? 0 : 1)} ${units[u]}`;
 }
 
-function relativeDate(isoStr) {
-  if (!isoStr) return "";
-  const normalized =
-    isoStr.includes("T") &&
-    !isoStr.endsWith("Z") &&
-    !/[+-]\d{2}:\d{2}$/.test(isoStr)
-      ? isoStr + "Z"
-      : isoStr;
-  const diff = (Date.now() - new Date(normalized).getTime()) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
 
 // ── Create ─────────────────────────────────────────────────────────────────
 let _createSuccessToken = 0;

@@ -1657,7 +1657,11 @@ onMounted(async () => {
     })
     .catch(() => {});
   await fetchConfig();
-  snapshotsStore.fetchSnapshots();
+  // Snapshots are owner-only (full unscoped access); READ / share sessions
+  // would 403 on every fetch otherwise.
+  if (!isReadOnly.value) {
+    snapshotsStore.fetchSnapshots();
+  }
   // Navigate to the scoped resource when a share token is active
   const ctx = sessionContext.value;
   if (ctx && ctx.scope !== "ALL") {

@@ -472,7 +472,7 @@ class UndoService:
                 report.reverted_row_count += 1
                 continue
             try:
-                self._reverse_entry(session, entry)
+                self._reverse_entry(session, entry, report)
             except Exception as exc:
                 msg = (
                     f"Failed to undo ChangeLog id={entry.id} "
@@ -485,7 +485,9 @@ class UndoService:
 
         report.reverted_txn_count += 1
 
-    def _reverse_entry(self, session: Session, entry: ChangeLog) -> None:
+    def _reverse_entry(
+        self, session: Session, entry: ChangeLog, report: UndoReport
+    ) -> None:
         """Reverse a single ChangeLog row through the ORM.
 
         - INSERT → delete the row.
@@ -500,6 +502,9 @@ class UndoService:
         Args:
             session: Active writer session.
             entry: The ChangeLog row to reverse.
+            report: Accumulates non-fatal warnings (e.g. DELETE re-creations
+                that lost BLOB columns because their bytes weren't kept in
+                the change log).
         """
         pk: dict = json.loads(entry.row_pk_json) if entry.row_pk_json else {}
         model = _resolve_model(entry.table_name)
@@ -548,6 +553,7 @@ class UndoService:
             before = json.loads(entry.before_json)
             col_map = _column_by_attr(model)
             kwargs: dict[str, Any] = {}
+            dropped_blob_cols: list[str] = []
             for key, value in before.items():
                 column = col_map.get(key)
                 if column is None:
@@ -555,7 +561,22 @@ class UndoService:
                 should_set, coerced = _coerce_serialized_value(column, value)
                 if should_set:
                     kwargs[key] = coerced
+                elif isinstance(value, str) and value.startswith("sha256:"):
+                    # BLOB serialized only as a hash marker — original bytes
+                    # aren't recoverable from the change log. Track so the
+                    # caller knows the re-created row is missing this column.
+                    dropped_blob_cols.append(key)
             session.merge(model(**kwargs))
+            if dropped_blob_cols:
+                msg = (
+                    f"Re-created {entry.table_name} pk={pk}: blob column(s) "
+                    f"{sorted(dropped_blob_cols)} reset to NULL (original "
+                    "bytes not stored in ChangeLog; the WorkPlanner's "
+                    "Missing*Finder will regenerate where one applies, "
+                    "e.g. Picture text/image embeddings, Face features)."
+                )
+                logger.warning("UndoService: %s", msg)
+                report.errors.append(msg)
 
     @staticmethod
     def _get_by_pk(session: Session, model: type, pk: dict[str, Any]):

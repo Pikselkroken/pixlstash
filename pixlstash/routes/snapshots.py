@@ -537,6 +537,14 @@ def create_router(server) -> APIRouter:
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error(
+                "hash-compare for snapshot %d failed: %s",
+                snapshot_id,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return result
 
     # ------------------------------------------------------------------

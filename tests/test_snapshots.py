@@ -196,3 +196,108 @@ def test_snapshot_if_due_skips_when_recent(server):
 
     assert result is None, "Should skip — a snapshot was just taken"
     assert _count_db_snapshots(server) == 1
+
+
+# ---------------------------------------------------------------------------
+# GFS retention: DAILY snapshots beyond the keep limit are pruned
+# ---------------------------------------------------------------------------
+
+
+def test_gfs_retention_prunes_oldest_daily(server):
+    """Creating > GFS_KEEP_DAILY DAILY snapshots prunes the oldest.
+
+    The prune happens at the tail of ``create_snapshot``. We backdate the
+    created_at on the older snapshots so the prune has a deterministic
+    notion of "oldest" (creating them back-to-back can collapse to the
+    same microsecond).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from pixlstash.services.snapshot_service import GFS_KEEP_DAILY
+
+    cps = []
+    for i in range(GFS_KEEP_DAILY + 2):
+        cp = server.vault.snapshot_service.create_snapshot("DAILY")
+        cps.append(cp)
+        # Backdate this snapshot so the next create's prune sees clear ordering.
+
+        def _backdate(session, cp_id=cp.id, i=i):
+            row = session.get(Snapshot, cp_id)
+            if row is not None:
+                row.created_at = datetime.now(timezone.utc) - timedelta(
+                    days=GFS_KEEP_DAILY + 2 - i
+                )
+                session.add(row)
+                session.commit()
+
+        server.vault.db.run_task(_backdate)
+
+    # Trigger one more prune by creating a final DAILY snapshot.
+    server.vault.snapshot_service.create_snapshot("DAILY")
+
+    surviving = [
+        s for s in server.vault.snapshot_service.list_snapshots() if s.kind == "DAILY"
+    ]
+    assert len(surviving) == GFS_KEEP_DAILY, (
+        f"Expected exactly {GFS_KEEP_DAILY} DAILY snapshots after prune, "
+        f"got {len(surviving)}"
+    )
+
+    # The two oldest of our original batch must have been pruned.
+    surviving_ids = {s.id for s in surviving}
+    assert cps[0].id not in surviving_ids
+    assert cps[1].id not in surviving_ids
+
+
+# ---------------------------------------------------------------------------
+# undo_to_snapshot: ChangeLog truncated past the target → file restore (H1)
+# ---------------------------------------------------------------------------
+
+
+def test_undo_to_snapshot_escalates_when_changelog_truncated(server):
+    """If ``min(ChangeLog.id) > target.max_changelog_id + 1`` the entries
+    needed to rewind through the change log are gone. ``undo_to_snapshot``
+    must escalate to ``restore_full`` rather than silently produce a partial
+    rewind."""
+    _add_pictures(server, count=1)
+    # Place a file on disk so the full-restore fallback doesn't drop the row.
+    open(os.path.join(server.vault.image_root, "pic_0.jpg"), "wb").close()
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Read the snapshot's max_changelog_id, then drop the entire ChangeLog
+    # so the next surviving id (currently min — None / 0) is far above the
+    # target's max_changelog_id + 1. We'll also insert a few "ghost" rows
+    # past the target's max to make min(ChangeLog.id) strictly greater than
+    # max_changelog_id + 1.
+    abs_manifest = os.path.join(server.vault.image_root, cp.manifest_relative_path)
+    with open(abs_manifest) as fh:
+        manifest = json.load(fh)
+    target_max = manifest["max_changelog_id"]
+    assert target_max is not None and target_max >= 0
+
+    def _simulate_truncation(session):
+        session.exec(delete(ChangeLog))
+        # Insert a stand-in row whose id is well above target_max + 1 to
+        # mimic a post-prune state where the surviving min is too high.
+        ghost_id = target_max + 1000
+        session.exec(
+            text(
+                "INSERT INTO changelog (id, txn_id, seq_in_txn, table_name, "
+                "row_pk_json, op, before_json, after_json, created_at) VALUES "
+                "(:id, 'ghost', 0, 'picture', '{}', 'UPDATE', NULL, NULL, datetime('now'))"
+            ).bindparams(id=ghost_id)
+        )
+        session.commit()
+
+    server.vault.db.run_task(_simulate_truncation)
+
+    report = server.vault.undo_service.undo_to_snapshot(cp.id)
+
+    assert report.escalated_to_full_restore, (
+        "Expected undo_to_snapshot to escalate to full restore when ChangeLog "
+        f"is truncated past the target. Got report: {report}"
+    )
+    assert report.escalated_tables == ["<changelog-truncated>"], (
+        f"Expected escalation marker, got: {report.escalated_tables}"
+    )

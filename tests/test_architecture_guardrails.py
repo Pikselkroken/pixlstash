@@ -311,3 +311,138 @@ def test_workers_not_started_at_vault_init():
             assert vault._work_planner.is_running(), (
                 "WorkPlanner must be running after Vault.start()"
             )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail 7: Every SQLModel table is classified for the ChangeLog
+# ---------------------------------------------------------------------------
+
+
+def test_change_log_dual_list_covers_all_tables():
+    """Every ``table=True`` SQLModel must appear in EXACTLY ONE of
+    ``CHANGE_LOG_INCLUDED_TABLES`` or ``CHANGE_LOG_EXCLUDED_TABLES``.
+
+    The two sets together drive the audit-trail / undo / restore plumbing in
+    ``database.py`` and ``undo_service.py``. A new ``table=True`` model that
+    is added without being classified would silently skip the change-log
+    capture path (so undo couldn't reverse writes to it) and bypass the
+    excluded-table timing heuristic — both correctness-critical for
+    snapshots & undo. This guardrail forces the author to make the
+    classification explicit.
+    """
+    # Import every db_models module so SQLModel.metadata is fully populated.
+    import importlib
+    import pkgutil
+
+    import pixlstash.db_models as db_models_pkg
+    from sqlmodel import SQLModel
+
+    for _, modname, _ in pkgutil.iter_modules(db_models_pkg.__path__):
+        importlib.import_module(f"pixlstash.db_models.{modname}")
+
+    from pixlstash.database import (
+        CHANGE_LOG_EXCLUDED_TABLES,
+        CHANGE_LOG_INCLUDED_TABLES,
+    )
+
+    all_tables = set(SQLModel.metadata.tables.keys())
+    classified = CHANGE_LOG_INCLUDED_TABLES | CHANGE_LOG_EXCLUDED_TABLES
+
+    in_both = CHANGE_LOG_INCLUDED_TABLES & CHANGE_LOG_EXCLUDED_TABLES
+    assert not in_both, (
+        f"Table(s) appear in BOTH CHANGE_LOG_INCLUDED_TABLES and "
+        f"CHANGE_LOG_EXCLUDED_TABLES: {sorted(in_both)}. Pick one."
+    )
+
+    unclassified = all_tables - classified
+    assert not unclassified, (
+        "New SQLModel table(s) added without ChangeLog classification:\n"
+        f"  {sorted(unclassified)}\n"
+        "Add each to EXACTLY ONE of CHANGE_LOG_INCLUDED_TABLES (full "
+        "before/after data captured — core user-editable metadata) or "
+        "CHANGE_LOG_EXCLUDED_TABLES (metadata-only marker — regenerable / "
+        "ephemeral / system tables) in pixlstash/database.py. See CLAUDE.md."
+    )
+
+    # Tables that exist in the live DB but aren't SQLModel-declared (e.g.
+    # alembic's own version table). Listing them in CHANGE_LOG_EXCLUDED_TABLES
+    # is intentional documentation; they never reach the change-log hooks
+    # because those iterate ORM-mapped objects only.
+    external_tables = {"alembic_version"}
+
+    stale = classified - all_tables - external_tables
+    assert not stale, (
+        "Table name(s) appear in CHANGE_LOG_(IN|EX)CLUDED_TABLES but no "
+        f"matching SQLModel exists: {sorted(stale)}. Remove them."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail 8: ChangeLog-tracked columns use immutable types
+# ---------------------------------------------------------------------------
+
+
+def test_changelog_included_tables_have_no_unmanaged_mutable_columns():
+    """Columns on included tables must not use bare JSON / PickleType / ARRAY.
+
+    The change-log's ``_cl_before_state_from_history`` captures the pre-flush
+    value via SQLAlchemy attribute history. That history only fires when the
+    attribute is REASSIGNED — in-place mutation of a JSON/list/dict column
+    leaves history unchanged and would let an UPDATE-undo restore the
+    current (already-mutated) value instead of the pre-mutation one.
+
+    Today the schema has no such columns; this guardrail blocks one from
+    being added without the author either (a) wrapping it in
+    ``MutableDict.as_mutable(JSON)`` / ``MutableList.as_mutable(...)`` so
+    history fires on mutation, or (b) excluding the table from the change
+    log, or (c) updating this allowlist with an explanatory comment.
+    """
+    import importlib
+    import pkgutil
+
+    import pixlstash.db_models as db_models_pkg
+    from sqlalchemy.ext.mutable import MutableDict, MutableList
+    from sqlalchemy.types import ARRAY, JSON, PickleType
+    from sqlmodel import SQLModel
+
+    for _, modname, _ in pkgutil.iter_modules(db_models_pkg.__path__):
+        importlib.import_module(f"pixlstash.db_models.{modname}")
+
+    from pixlstash.database import CHANGE_LOG_INCLUDED_TABLES
+
+    mutable_types = (JSON, PickleType, ARRAY)
+
+    # Format: (table, column). Add entries with a comment when a mutable
+    # column is intentionally introduced AND wrapped in MutableDict/MutableList
+    # (the test cannot distinguish wrapped from bare types via Column.type).
+    allowlist: set[tuple[str, str]] = set()
+
+    offenders: list[str] = []
+    for table_name in CHANGE_LOG_INCLUDED_TABLES:
+        table = SQLModel.metadata.tables.get(table_name)
+        if table is None:
+            continue
+        for col in table.columns:
+            if not isinstance(col.type, mutable_types):
+                continue
+            if (table_name, col.name) in allowlist:
+                continue
+            # Wrapped in MutableDict/MutableList? The Mutable extension
+            # registers a listener on the type; check for the mutation
+            # base-class attribute.
+            if isinstance(col.type, (MutableDict, MutableList)):
+                continue
+            offenders.append(
+                f"{table_name}.{col.name} (type={type(col.type).__name__})"
+            )
+
+    assert not offenders, (
+        "ChangeLog-tracked columns must not store unmanaged mutable values "
+        "(JSON / PickleType / ARRAY without a MutableDict / MutableList "
+        "wrapper). In-place mutation bypasses SQLAlchemy attribute history, "
+        "so UPDATE-undo would silently restore the wrong value. Either "
+        "wrap with MutableDict.as_mutable(...) / MutableList.as_mutable(...), "
+        "exclude the table from the change log, or add the (table, column) "
+        "pair to the allowlist in this test with a comment.\n"
+        + "\n".join(f"  - {o}" for o in offenders)
+    )

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 from sqlmodel import Session, create_engine, select
-from sqlalchemy import update as sa_update
+from sqlalchemy import delete as sa_delete, update as sa_update
 
 from pixlstash.db_models import (
     Character,
@@ -155,6 +155,14 @@ class RestoreService:
         # _do_swap + _post_restore_cleanup tasks); any concurrent restore call
         # short-circuits with RestoreInProgressError → 409.
         self._restore_lock = threading.Lock()
+        # Per-snapshot-file locks. compare_hashes can rewrite an old snapshot
+        # in place to backfill metadata_hash; concurrent compare/preview/
+        # restore on the same path would otherwise race on disk (corrupt
+        # copy, partial read). Reentrant so a caller can hold the file lock
+        # across multiple helpers (e.g. compare_hashes → _backfill_snapshot)
+        # without self-deadlocking. The meta-lock guards the dict itself.
+        self._snapshot_file_locks: dict[str, threading.RLock] = {}
+        self._snapshot_file_locks_meta: threading.Lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -304,14 +312,29 @@ class RestoreService:
         # 5 & 6. Drop missing-file rows and NULL-reset derived columns.
         def _post_restore_cleanup(session):
             if missing_ids:
-                pictures = session.exec(
-                    select(Picture).where(Picture.id.in_(missing_ids))
-                ).all()
-                for pic in pictures:
-                    session.delete(pic)
+                # Drop dependents explicitly in FK-safe order, then the
+                # pictures. SQLite FK CASCADE would normally take care of
+                # this, but doing it explicitly keeps the cleanup robust to
+                # relationship-config drift and prevents one failing ORM
+                # cascade from rolling back the entire post-restore task and
+                # silently leaving the missing-file rows behind.
+                for child_model in (
+                    Tag,
+                    Face,
+                    PictureSetMember,
+                    PictureProjectMember,
+                ):
+                    session.execute(
+                        sa_delete(child_model).where(
+                            child_model.picture_id.in_(missing_ids)
+                        )
+                    )
+                result = session.execute(
+                    sa_delete(Picture).where(Picture.id.in_(missing_ids))
+                )
                 logger.info(
                     "RestoreService: deleted %d missing-file picture rows.",
-                    len(pictures),
+                    result.rowcount,
                 )
             # NULL-reset derived columns.
             all_pictures = session.exec(select(Picture)).all()
@@ -822,68 +845,71 @@ class RestoreService:
 
         live_hashes: dict[int, str | None] = self._vault.db.run_task(_get_live_hashes)
 
-        # Open snapshot directly — backfilling schema + hashes in-place for
-        # old snapshots that predate the metadata_hash migration.
+        # Snapshot-file work (probe → optional backfill → read hashes) is held
+        # under the per-path file lock so a concurrent compare/preview/restore
+        # on the same snapshot can't read a half-rewritten file. The lock is
+        # reentrant, so the nested _backfill_snapshot call re-enters safely.
         from sqlalchemy import inspect as sa_inspect
 
-        _probe_engine = None
-        try:
-            _probe_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
-            snap_has_col = "metadata_hash" in {
-                c["name"] for c in sa_inspect(_probe_engine).get_columns("picture")
-            }
-        except Exception:
-            snap_has_col = False
-        finally:
-            if _probe_engine is not None:
-                try:
-                    _probe_engine.dispose()
-                except Exception:
-                    logger.warning(
-                        "RestoreService.compare_hashes: failed to dispose probe engine for snapshot %d",
-                        snapshot_id,
-                    )
-
-        if not snap_has_col:
-            # One-time fix: write migration + hashes into the original snapshot.
-            self._backfill_snapshot(snapshot_path)
-
-        # Fetch snapshot hashes directly from the (possibly just backfilled) file.
-        _snap_engine = None
-        try:
-            _snap_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
-            with Session(_snap_engine) as snap_session:
-                snap_rows = snap_session.execute(
-                    select(Picture.id, Picture.metadata_hash).where(
-                        Picture.id.in_(picture_ids)
-                    )
-                ).all()
-                snap_hashes: dict[int, str | None] = {}
-                for pid, h in snap_rows:
-                    if h is not None:
-                        snap_hashes[pid] = h
-                    else:
-                        # Safety fallback — should not occur after backfill.
-                        snap_hashes[pid] = _compute_picture_metadata_hash(
-                            snap_session, pid
+        with self._snapshot_file_lock(snapshot_path):
+            _probe_engine = None
+            try:
+                _probe_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
+                snap_has_col = "metadata_hash" in {
+                    c["name"] for c in sa_inspect(_probe_engine).get_columns("picture")
+                }
+            except Exception:
+                snap_has_col = False
+            finally:
+                if _probe_engine is not None:
+                    try:
+                        _probe_engine.dispose()
+                    except Exception:
+                        logger.warning(
+                            "RestoreService.compare_hashes: failed to dispose probe engine for snapshot %d",
+                            snapshot_id,
                         )
-        except Exception as exc:
-            logger.warning(
-                "RestoreService.compare_hashes: failed to read snapshot %d: %s",
-                snapshot_id,
-                exc,
-            )
-            # Treat all as changed on error (conservative / keep enabled)
-            return {"identical_ids": [], "changed_ids": list(picture_ids)}
-        finally:
-            if _snap_engine is not None:
-                try:
-                    _snap_engine.dispose()
-                except Exception:
-                    logger.warning(
-                        "RestoreService.compare_hashes: failed to dispose snapshot engine for snapshot %d",
-                        snapshot_id,
-                    )
+
+            if not snap_has_col:
+                # One-time fix: write migration + hashes into the original snapshot.
+                self._backfill_snapshot(snapshot_path)
+
+            # Fetch snapshot hashes directly from the (possibly just backfilled) file.
+            _snap_engine = None
+            try:
+                _snap_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
+                with Session(_snap_engine) as snap_session:
+                    snap_rows = snap_session.execute(
+                        select(Picture.id, Picture.metadata_hash).where(
+                            Picture.id.in_(picture_ids)
+                        )
+                    ).all()
+                    snap_hashes: dict[int, str | None] = {}
+                    for pid, h in snap_rows:
+                        if h is not None:
+                            snap_hashes[pid] = h
+                        else:
+                            # Safety fallback — should not occur after backfill.
+                            snap_hashes[pid] = _compute_picture_metadata_hash(
+                                snap_session, pid
+                            )
+            except Exception as exc:
+                logger.warning(
+                    "RestoreService.compare_hashes: failed to read snapshot %d: %s",
+                    snapshot_id,
+                    exc,
+                )
+                # Treat all as changed on error (conservative / keep enabled)
+                return {"identical_ids": [], "changed_ids": list(picture_ids)}
+            finally:
+                if _snap_engine is not None:
+                    try:
+                        _snap_engine.dispose()
+                    except Exception:
+                        logger.warning(
+                            "RestoreService.compare_hashes: failed to dispose snapshot engine for snapshot %d",
+                            snapshot_id,
+                        )
 
         identical_ids: list[int] = []
         changed_ids: list[int] = []
@@ -937,47 +963,51 @@ class RestoreService:
         original.  After the column exists, all rows whose metadata_hash IS
         NULL are filled and committed directly to the snapshot file.
 
+        Held under the per-path file lock so concurrent compare/preview/
+        restore on the same snapshot can't read a half-rewritten file.
+
         Args:
             abs_snapshot: Absolute path to the snapshot .sqlite file to update.
             reset_all: When True, clear all existing hashes before recomputing.
         """
         from sqlalchemy import inspect as sa_inspect
 
-        _probe = None
-        try:
-            _probe = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
-            col_names = {
-                col["name"] for col in sa_inspect(_probe).get_columns("picture")
-            }
-        finally:
-            if _probe is not None:
-                try:
-                    _probe.dispose()
-                except Exception:
+        with self._snapshot_file_lock(abs_snapshot):
+            _probe = None
+            try:
+                _probe = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+                col_names = {
+                    col["name"] for col in sa_inspect(_probe).get_columns("picture")
+                }
+            finally:
+                if _probe is not None:
+                    try:
+                        _probe.dispose()
+                    except Exception:
+                        logger.warning(
+                            "RestoreService._backfill_snapshot: failed to dispose probe engine for %s",
+                            abs_snapshot,
+                        )
+
+            if "metadata_hash" not in col_names:
+                # Upgrade via a temp copy, then atomically replace the original.
+                upgraded = self._upgrade_snapshot_schema(abs_snapshot)
+                if upgraded is None:
                     logger.warning(
-                        "RestoreService._backfill_snapshot: failed to dispose probe engine for %s",
+                        "RestoreService._backfill_snapshot: schema upgrade failed for %s",
                         abs_snapshot,
                     )
-
-        if "metadata_hash" not in col_names:
-            # Upgrade via a temp copy, then atomically replace the original.
-            upgraded = self._upgrade_snapshot_schema(abs_snapshot)
-            if upgraded is None:
-                logger.warning(
-                    "RestoreService._backfill_snapshot: schema upgrade failed for %s",
-                    abs_snapshot,
-                )
+                    return
+                tmp_dir = os.path.dirname(upgraded)
+                try:
+                    self._fill_snapshot_hashes_at(upgraded, reset_all=reset_all)
+                    shutil.copy2(upgraded, abs_snapshot)
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
                 return
-            tmp_dir = os.path.dirname(upgraded)
-            try:
-                self._fill_snapshot_hashes_at(upgraded, reset_all=reset_all)
-                shutil.copy2(upgraded, abs_snapshot)
-            finally:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            return
 
-        # Column already exists — fill in any NULL hashes directly on the original.
-        self._fill_snapshot_hashes_at(abs_snapshot, reset_all=reset_all)
+            # Column already exists — fill any NULL hashes on the original.
+            self._fill_snapshot_hashes_at(abs_snapshot, reset_all=reset_all)
 
     def _fill_snapshot_hashes_at(self, db_path: str, reset_all: bool = False) -> None:
         """Compute and commit metadata_hash for Pictures in *db_path*.
@@ -1030,6 +1060,21 @@ class RestoreService:
         finally:
             engine.dispose()
 
+    def _snapshot_file_lock(self, abs_snapshot: str) -> threading.RLock:
+        """Return the per-path lock for *abs_snapshot*, creating it if needed.
+
+        Acquire this around any direct read/write of the snapshot file on
+        disk to keep compare/preview/restore from racing the in-place
+        backfill that ``compare_hashes`` performs on old snapshots.
+        Reentrant — safe to nest across helpers in one thread.
+        """
+        with self._snapshot_file_locks_meta:
+            lock = self._snapshot_file_locks.get(abs_snapshot)
+            if lock is None:
+                lock = threading.RLock()
+                self._snapshot_file_locks[abs_snapshot] = lock
+            return lock
+
     def _get_snapshot_or_raise(self, snapshot_id: int) -> Snapshot:
         cp = self._vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
@@ -1038,6 +1083,10 @@ class RestoreService:
 
     def _upgrade_snapshot_schema(self, abs_snapshot: str) -> Optional[str]:
         """Copy the snapshot to a temp file and run alembic upgrade head on it.
+
+        The initial copy reads the original snapshot file on disk and is held
+        under the per-path file lock (reentrant) so it cannot race with a
+        concurrent in-place backfill.
 
         Args:
             abs_snapshot: Absolute path to the read-only snapshot .sqlite file.
@@ -1048,7 +1097,8 @@ class RestoreService:
         tmp_dir = tempfile.mkdtemp(prefix="pixlstash_restore_")
         tmp_snapshot = os.path.join(tmp_dir, "snapshot.sqlite")
         try:
-            shutil.copy2(abs_snapshot, tmp_snapshot)
+            with self._snapshot_file_lock(abs_snapshot):
+                shutil.copy2(abs_snapshot, tmp_snapshot)
         except Exception as exc:
             logger.error(
                 "RestoreService: failed to copy snapshot to temp dir: %s",
@@ -1238,7 +1288,7 @@ class RestoreService:
                 elif resource_type == "picture_set":
                     members = snap_session.exec(
                         select(PictureSetMember).where(
-                            PictureSetMember.picture_set_id == resource_id
+                            PictureSetMember.set_id == resource_id
                         )
                     ).all()
                     picture_ids = [m.picture_id for m in members]
@@ -1399,24 +1449,51 @@ class RestoreService:
 
         for pic in snap_rows.get("pictures", []):
             _merge(pic)
-        for face in snap_rows.get("faces", []):
-            _merge(face)
-        # Tags are deleted and re-inserted rather than merged to avoid UNIQUE
-        # constraint violations when snapshot and live have different row IDs
-        # for the same (picture_id, tag) pair.
+
+        # Picture-scoped dependents (Face, Tag, PictureSetMember,
+        # PictureProjectMember): replace, don't merge. Merging by the snapshot
+        # row's PK is wrong here because:
+        #   1. Face has a surrogate PK shared across all pictures — a snapshot
+        #      Face.id can land on an unrelated live face that reused that id.
+        #   2. Rows present in live but absent from the snapshot must vanish,
+        #      or the picture isn't really reverted to its snapshot state.
+        #   3. Tag has UNIQUE(picture_id, tag) which bare merge by snapshot PK
+        #      can violate (the original reason this branch existed for tags).
+        # Bulk-delete by picture_id, then insert fresh rows. Faces/PSMs/PPMs
+        # are constructed without a PK so the DB assigns one.
         if valid_picture_ids:
-            for existing_tag in session.exec(
-                select(Tag).where(Tag.picture_id.in_(valid_picture_ids))
-            ).all():
-                session.delete(existing_tag)
+            for child_model in (Face, Tag, PictureSetMember, PictureProjectMember):
+                session.execute(
+                    sa_delete(child_model).where(
+                        child_model.picture_id.in_(valid_picture_ids)
+                    )
+                )
             session.flush()
+        for face in snap_rows.get("faces", []):
+            session.add(
+                Face(
+                    picture_id=face.picture_id,
+                    frame_index=face.frame_index,
+                    face_index=face.face_index,
+                    character_id=face.character_id,
+                    bbox=face.bbox,
+                    features=face.features,
+                )
+            )
+            count += 1
         for tag in snap_rows.get("tags", []):
             session.add(Tag(picture_id=tag.picture_id, tag=tag.tag))
             count += 1
         for psm in snap_rows.get("picture_set_members", []):
-            _merge(psm)
+            session.add(PictureSetMember(set_id=psm.set_id, picture_id=psm.picture_id))
+            count += 1
         for ppm in snap_rows.get("picture_project_members", []):
-            _merge(ppm)
+            session.add(
+                PictureProjectMember(
+                    project_id=ppm.project_id, picture_id=ppm.picture_id
+                )
+            )
+            count += 1
 
         # NULL-reset derived columns for restored pictures.
         for pid in valid_picture_ids:
@@ -1642,9 +1719,7 @@ class RestoreService:
                 lambda session: session.get(PictureSet, resource_id) is not None
             )
             members = snap_session.exec(
-                select(PictureSetMember).where(
-                    PictureSetMember.picture_set_id == resource_id
-                )
+                select(PictureSetMember).where(PictureSetMember.set_id == resource_id)
             ).all()
             preview.resources.append(
                 ResourcePreview(

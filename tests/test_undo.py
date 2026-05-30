@@ -134,7 +134,13 @@ def test_undo_reverses_delete(server):
     report = server.vault.undo_service.undo_last_transaction()
 
     assert report.reverted_row_count >= 1
-    assert not report.errors
+    # A DELETE-undo of a row with BLOB columns (e.g. Picture.likeness_parameters,
+    # text_embedding, image_embedding) is expected to surface a per-row warning
+    # — the original bytes aren't stored in the change log, so the re-inserted
+    # row has NULL for those columns until the WorkPlanner regenerates them.
+    # Other errors are not expected.
+    for err in report.errors:
+        assert "reset to NULL" in err, f"Unexpected undo error: {err}"
     restored = _get_picture(server, pic.id)
     assert restored is not None, "Undoing a DELETE must re-insert the row"
     assert restored.file_path == "deleted_then_undone.jpg"

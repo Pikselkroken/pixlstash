@@ -313,7 +313,18 @@ def _after_flush_handler(session, flush_context) -> None:
         try:
             session.execute(_ChangeLog.__table__.insert(), rows)
         except Exception as exc:
-            logger.warning("ChangeLog: failed to insert %d row(s): %s", len(rows), exc)
+            # Failing the audit write must fail the surrounding write — undo /
+            # restore correctness depend on a complete ChangeLog; a silently
+            # committed write with no corresponding audit row would leave the
+            # user thinking it was undone after a later undo_to_snapshot.
+            logger.error(
+                "ChangeLog: failed to insert %d audit row(s); rolling back the "
+                "surrounding write to keep the audit trail consistent: %s",
+                len(rows),
+                exc,
+                exc_info=True,
+            )
+            raise
 
 
 # ---------------------------------------------------------------------------
