@@ -256,7 +256,7 @@ def create_router(server) -> APIRouter:
     )
     async def patch_me_config(request: Request):
         _ensure_secure_when_required(request)
-        user_id = server.auth.require_user_id(request)
+        user_id = server.auth.require_unscoped_owner(request)
 
         start_time = time.time()
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")

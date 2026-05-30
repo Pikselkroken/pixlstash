@@ -16,6 +16,8 @@ from sqlmodel import Session, create_engine, select
 from sqlalchemy import (
     bindparam as sa_bindparam,
     delete as sa_delete,
+    inspect as sa_inspect,
+    select as sa_select,
     update as sa_update,
 )
 
@@ -64,6 +66,34 @@ class SafetySnapshotFailedError(RuntimeError):
     post-restore cleanup later corrupts the live DB; silently continuing
     without it can turn a recoverable problem into an unrecoverable one.
     """
+
+
+class MissingDependenciesError(RuntimeError):
+    """Raised by ``restore_resource`` / ``restore_batch`` when the snapshot
+    rows reference parent resources (Character / PictureSet / Project) that
+    have been deleted from the live DB since the snapshot was taken.
+
+    Restoring the picture without the parent would trigger ``IntegrityError``
+    on commit (FK violations) and roll back the whole batch.  The caller
+    surfaces ``self.missing`` to the user, who can either re-issue the
+    request with ``confirm_restore_dependencies=True`` (restores the parents
+    from the snapshot first) or decline and leave the live DB untouched.
+
+    Attributes:
+        missing: dict mapping resource-type plural (``"characters"`` /
+            ``"picture_sets"`` / ``"projects"``) → sorted list of IDs that
+            need to be restored from the snapshot before the requested
+            resource can be safely upserted.
+    """
+
+    def __init__(self, missing: dict[str, list[int]]):
+        self.missing = missing
+        super().__init__(
+            "Restore would reference resources that no longer exist in the "
+            f"live DB: {missing}. Retry with confirm_restore_dependencies=True "
+            "to restore them from the snapshot first, or cancel to leave the "
+            "live DB untouched."
+        )
 
 
 # Columns on Picture that are regenerable and should be NULL-reset after any
@@ -527,6 +557,7 @@ class RestoreService:
         snapshot_id: int,
         resource_type: str,
         resource_id: int,
+        confirm_restore_dependencies: bool = False,
     ) -> RestoreReport:
         """Restore a single resource from a snapshot snapshot.
 
@@ -547,6 +578,13 @@ class RestoreService:
             snapshot_id: ID of the snapshot to restore from.
             resource_type: One of the strings in ``_SUPPORTED_RESOURCE_TYPES``.
             resource_id: Primary key of the resource to restore.
+            confirm_restore_dependencies: If the snapshot rows reference
+                parents (Character / PictureSet / Project) that have been
+                deleted from live since the snapshot, ``False`` (the
+                default) raises ``MissingDependenciesError`` without
+                writing anything; ``True`` re-inserts the missing parents
+                from the snapshot before upserting the requested
+                resource.
 
         Returns:
             A ``RestoreReport`` summarising the operation.
@@ -555,6 +593,8 @@ class RestoreService:
             ValueError: If the snapshot is not found or ``resource_type`` is
                 unsupported.
             RestoreInProgressError: If another restore is already running.
+            MissingDependenciesError: If parents are missing in live and
+                ``confirm_restore_dependencies`` is False.
         """
         if not self._restore_lock.acquire(blocking=False):
             raise RestoreInProgressError(
@@ -593,6 +633,7 @@ class RestoreService:
                         resource_type,
                         resource_id,
                         vault_root,
+                        confirm_restore_dependencies=confirm_restore_dependencies,
                     )
                 finally:
                     try:
@@ -835,12 +876,21 @@ class RestoreService:
         self,
         snapshot_id: int,
         resources: list[dict],
+        confirm_restore_dependencies: bool = False,
     ) -> RestoreReport:
         """Restore a batch of resources from a snapshot.
 
         Args:
             snapshot_id: ID of the snapshot.
             resources: List of ``{"type": str, "id": int}`` dicts.
+            confirm_restore_dependencies: If any item in the batch
+                references parents (Character / PictureSet / Project)
+                that have been deleted from live since the snapshot,
+                ``False`` (the default) raises ``MissingDependenciesError``
+                with the *union* of missing parents across the whole
+                batch — no items are restored. ``True`` re-inserts the
+                missing parents from the snapshot first and then runs
+                the batch.
 
         Returns:
             A ``RestoreReport`` with aggregate counts.
@@ -848,6 +898,9 @@ class RestoreService:
         Raises:
             ValueError: If the snapshot/snapshot is not found.
             RestoreInProgressError: If another restore is already running.
+            MissingDependenciesError: If any batch item has parents
+                missing in live and ``confirm_restore_dependencies`` is
+                False. ``missing`` carries the union across the batch.
         """
         if not self._restore_lock.acquire(blocking=False):
             raise RestoreInProgressError(
@@ -875,6 +928,30 @@ class RestoreService:
                 if upgraded_snapshot is None:
                     raise RuntimeError("Schema upgrade failed; aborting batch restore.")
 
+                # Pre-flight: compute the union of parents referenced by
+                # any item in the batch but missing from live. Raise once
+                # for the whole batch if the caller hasn't confirmed —
+                # avoids the "restore item 1, fail on item 2, leave
+                # partial state" trap.
+                union_candidates = self._collect_batch_candidate_parents(
+                    upgraded_snapshot, resources, vault_root
+                )
+                batch_missing = self._vault.db.run_immediate_read_task(
+                    lambda session: self._find_missing_parent_ids(
+                        session, union_candidates
+                    )
+                )
+                if batch_missing and not confirm_restore_dependencies:
+                    raise MissingDependenciesError(batch_missing)
+                if batch_missing:
+                    # Confirmed — restore parents once for the whole batch.
+                    self._vault.db.run_task(
+                        lambda session: self._restore_parent_rows(
+                            session, union_candidates, batch_missing
+                        ),
+                        priority=0,
+                    )
+
                 total = RestoreReport(snapshot_id=snapshot_id, resource_type="batch")
                 try:
                     for item in resources:
@@ -887,12 +964,16 @@ class RestoreService:
                             )
                             continue
                         try:
+                            # Pass confirm=True down because the pre-flight
+                            # already restored any missing parents — the
+                            # per-item dep check is now a no-op.
                             sub = self._restore_resource_from_snapshot(
                                 upgraded_snapshot,
                                 snapshot_id,
                                 rtype,
                                 rid,
                                 vault_root,
+                                confirm_restore_dependencies=True,
                             )
                             total.missing_files_count += sub.missing_files_count
                             total.upserted_count += sub.upserted_count
@@ -1450,6 +1531,7 @@ class RestoreService:
         resource_type: str,
         resource_id: int,
         vault_root: str,
+        confirm_restore_dependencies: bool = False,
     ) -> RestoreReport:
         """Upsert resource rows from the snapshot into the live database.
 
@@ -1530,16 +1612,246 @@ class RestoreService:
                     resource_id,
                     valid_picture_ids,
                 )
+                # Materialise referenced parents (Characters / PictureSets /
+                # Projects) so the live session can either reject the restore
+                # with a structured 409 (if the user hasn't confirmed) or
+                # re-insert the missing ones before upserting children.
+                candidate_parents = self._collect_candidate_parents(
+                    snap_session, snap_rows
+                )
         finally:
             snap_engine.dispose()
 
         # Upsert in the live DB.
-        upserted = self._vault.db.run_task(
-            lambda session: self._upsert_rows(session, snap_rows, valid_picture_ids),
-            priority=0,
-        )
+        # Inside the writer task we first check for parents missing in live
+        # and either short-circuit with ``MissingDependenciesError`` (the
+        # caller has not opted in) or restore them from the snapshot first.
+        # The whole sequence runs in one writer-session transaction so a
+        # mid-flight failure rolls back both the parent inserts and the
+        # subsequent upsert.
+        def _check_deps_and_upsert(session):
+            missing = self._find_missing_parent_ids(session, candidate_parents)
+            if missing:
+                if not confirm_restore_dependencies:
+                    raise MissingDependenciesError(missing)
+                self._restore_parent_rows(session, candidate_parents, missing)
+            return self._upsert_rows(session, snap_rows, valid_picture_ids)
+
+        upserted = self._vault.db.run_task(_check_deps_and_upsert, priority=0)
         report.upserted_count = upserted
         return report
+
+    def _collect_batch_candidate_parents(
+        self,
+        upgraded_snapshot: str,
+        resources: list[dict],
+        vault_root: str,
+    ) -> dict[str, list[dict]]:
+        """Open the snapshot once and union the candidate parents from
+        every item in the batch.
+
+        Args:
+            upgraded_snapshot: Path to the alembic-upgraded snapshot file.
+            resources: Batch items ``[{"type": ..., "id": ...}, ...]``.
+            vault_root: Vault image root (used to skip pictures whose
+                file is missing on disk — those will be dropped by the
+                per-item restore, so their FK refs don't matter).
+
+        Returns:
+            ``{"characters": [{...}, ...], "picture_sets": [...],
+              "projects": [...]}``, deduplicated by parent id.
+        """
+        from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+        seen_ids: dict[str, set] = {
+            "characters": set(),
+            "picture_sets": set(),
+            "projects": set(),
+        }
+        union: dict[str, list[dict]] = {
+            "characters": [],
+            "picture_sets": [],
+            "projects": [],
+        }
+
+        snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+        try:
+            with Session(snap_engine) as snap_session:
+                for item in resources:
+                    rtype = item.get("type", "")
+                    rid = int(item.get("id", 0))
+                    if rtype not in _SUPPORTED_RESOURCE_TYPES:
+                        continue
+                    # Resolve picture_ids for this item.
+                    if rtype == "picture":
+                        picture_ids = [rid]
+                    elif rtype == "picture_set":
+                        members = snap_session.exec(
+                            select(PictureSetMember).where(
+                                PictureSetMember.set_id == rid
+                            )
+                        ).all()
+                        picture_ids = [m.picture_id for m in members]
+                    else:
+                        picture_ids = []
+
+                    # Filter to pictures whose files exist on disk.
+                    valid_pids: list[int] = []
+                    for pid in picture_ids:
+                        pic = snap_session.get(Picture, pid)
+                        if pic is None:
+                            continue
+                        if pic.file_path:
+                            try:
+                                resolved = ImageUtils.resolve_picture_path(
+                                    vault_root, pic.file_path
+                                )
+                                if not os.path.isfile(resolved):
+                                    continue
+                            except Exception:
+                                continue
+                        valid_pids.append(pid)
+
+                    snap_rows = self._collect_rows_for_upsert(
+                        snap_session, rtype, rid, valid_pids
+                    )
+                    candidates = self._collect_candidate_parents(
+                        snap_session, snap_rows
+                    )
+                    for key in ("characters", "picture_sets", "projects"):
+                        for parent in candidates.get(key, []):
+                            pid = parent["id"]
+                            if pid not in seen_ids[key]:
+                                seen_ids[key].add(pid)
+                                union[key].append(parent)
+        finally:
+            snap_engine.dispose()
+
+        return union
+
+    def _collect_candidate_parents(
+        self, snap_session: Session, snap_rows: dict
+    ) -> dict[str, list[dict]]:
+        """Snapshot the parent rows referenced by ``snap_rows`` so we can
+        re-attach them later in the live session if needed.
+
+        We materialise the parent ORM objects as plain dicts here — the
+        snap session closes before the live work runs, and a detached
+        SQLModel object isn't always portable across sessions.
+
+        Args:
+            snap_session: Read session on the snapshot DB.
+            snap_rows: Output of ``_collect_rows_for_upsert``.
+
+        Returns:
+            ``{"characters": [{...}, ...], "picture_sets": [...],
+              "projects": [...]}`` — one dict per parent referenced
+            anywhere in ``snap_rows``.
+        """
+
+        def _as_dict(obj):
+            if obj is None:
+                return None
+            mapper = sa_inspect(type(obj))
+            return {col.key: getattr(obj, col.key) for col in mapper.column_attrs}
+
+        char_ids = {
+            f.character_id
+            for f in snap_rows.get("faces", [])
+            if f.character_id is not None
+        }
+        set_ids = {m.set_id for m in snap_rows.get("picture_set_members", [])}
+        proj_ids = {m.project_id for m in snap_rows.get("picture_project_members", [])}
+
+        characters = [
+            _as_dict(snap_session.get(Character, cid))
+            for cid in sorted(char_ids)
+            if snap_session.get(Character, cid) is not None
+        ]
+        picture_sets = [
+            _as_dict(snap_session.get(PictureSet, sid))
+            for sid in sorted(set_ids)
+            if snap_session.get(PictureSet, sid) is not None
+        ]
+        projects = [
+            _as_dict(snap_session.get(Project, pid))
+            for pid in sorted(proj_ids)
+            if snap_session.get(Project, pid) is not None
+        ]
+        return {
+            "characters": [c for c in characters if c is not None],
+            "picture_sets": [s for s in picture_sets if s is not None],
+            "projects": [p for p in projects if p is not None],
+        }
+
+    @staticmethod
+    def _find_missing_parent_ids(
+        live_session: Session, candidate_parents: dict[str, list[dict]]
+    ) -> dict[str, list[int]]:
+        """Return the subset of candidate parent IDs that don't exist in live.
+
+        Args:
+            live_session: Read session on the live DB.
+            candidate_parents: Output of ``_collect_candidate_parents``.
+
+        Returns:
+            ``{"characters": [missing_ids...], ...}`` — only keys with at
+            least one missing parent are included.
+        """
+        missing: dict[str, list[int]] = {}
+
+        for plural, model in (
+            ("characters", Character),
+            ("picture_sets", PictureSet),
+            ("projects", Project),
+        ):
+            wanted = {p["id"] for p in candidate_parents.get(plural, [])}
+            if not wanted:
+                continue
+            live_ids = set(
+                live_session.execute(sa_select(model.id).where(model.id.in_(wanted)))
+                .scalars()
+                .all()
+            )
+            gone = sorted(wanted - live_ids)
+            if gone:
+                missing[plural] = gone
+        return missing
+
+    @staticmethod
+    def _restore_parent_rows(
+        live_session: Session,
+        candidate_parents: dict[str, list[dict]],
+        missing_ids: dict[str, list[int]],
+    ) -> int:
+        """Re-insert the missing parent rows from the snapshot into live.
+
+        Only rows whose ID is in ``missing_ids`` for their resource type
+        are merged; existing live parents (with the same ID) are not
+        touched.
+
+        Args:
+            live_session: Live writer session.
+            candidate_parents: Output of ``_collect_candidate_parents``.
+            missing_ids: Output of ``_find_missing_parent_ids``.
+
+        Returns:
+            Number of parent rows restored.
+        """
+        restored = 0
+        for plural, model in (
+            ("characters", Character),
+            ("picture_sets", PictureSet),
+            ("projects", Project),
+        ):
+            wanted = set(missing_ids.get(plural, ()))
+            if not wanted:
+                continue
+            for parent in candidate_parents.get(plural, []):
+                if parent["id"] in wanted:
+                    live_session.merge(model(**parent))
+                    restored += 1
+        return restored
 
     def _collect_rows_for_upsert(
         self,

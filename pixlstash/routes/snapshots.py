@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.restore_service import (
+    MissingDependenciesError,
     RestoreInProgressError,
     SafetySnapshotFailedError,
 )
@@ -490,20 +491,42 @@ def create_router(server) -> APIRouter:
         snapshot_id: int,
         request: Request,
         resources: List[dict] = Body(embed=True),
+        confirm_restore_dependencies: bool = Body(default=False, embed=True),
     ):
         """Restore a batch of resources from a snapshot in one operation.
 
-        Body: ``{"resources": [{"type": "picture", "id": 42}, …]}``
+        Body: ``{"resources": [{"type": "picture", "id": 42}, …],
+                  "confirm_restore_dependencies": false}``
+
+        If any item references parents (Character / PictureSet / Project)
+        that have since been deleted from live, the response is HTTP 409
+        with body ``{"code": "missing_dependencies", "missing": {...}}``
+        and nothing is written. Retry with
+        ``confirm_restore_dependencies: true`` to also restore the missing
+        parents from the snapshot first.
 
         Authentication is required.  Returns a combined RestoreReport.
         """
         server.auth.require_unscoped_owner(request)
         try:
-            report = server.vault.restore_service.restore_batch(snapshot_id, resources)
+            report = server.vault.restore_service.restore_batch(
+                snapshot_id,
+                resources,
+                confirm_restore_dependencies=confirm_restore_dependencies,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RestoreInProgressError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except MissingDependenciesError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "missing_dependencies",
+                    "message": str(exc),
+                    "missing": exc.missing,
+                },
+            ) from exc
         except Exception as exc:
             logger.error(
                 "Batch restore from snapshot %d failed: %s",
@@ -584,23 +607,43 @@ def create_router(server) -> APIRouter:
         resource_type: str,
         resource_id: int,
         request: Request,
+        confirm_restore_dependencies: bool = Body(default=False, embed=True),
     ):
         """Restore a single resource from a snapshot snapshot.
 
         ``resource_type`` must be one of ``picture``, ``picture_set``,
         ``project``, or ``character``.
 
+        If the snapshot rows reference parents (Character / PictureSet /
+        Project) that have since been deleted from live, the response
+        is HTTP 409 with body ``{"code": "missing_dependencies",
+        "missing": {...}}`` and nothing is written. Retry with
+        ``confirm_restore_dependencies: true`` to also restore the missing
+        parents from the snapshot first.
+
         Authentication is required.
         """
         server.auth.require_unscoped_owner(request)
         try:
             report = server.vault.restore_service.restore_resource(
-                snapshot_id, resource_type, resource_id
+                snapshot_id,
+                resource_type,
+                resource_id,
+                confirm_restore_dependencies=confirm_restore_dependencies,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RestoreInProgressError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except MissingDependenciesError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "missing_dependencies",
+                    "message": str(exc),
+                    "missing": exc.missing,
+                },
+            ) from exc
         except Exception as exc:
             logger.error(
                 "Per-resource restore of snapshot %d (%s/%s) failed: %s",

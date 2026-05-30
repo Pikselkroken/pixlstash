@@ -86,11 +86,18 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     return res.data;
   }
 
-  async function executeRestore(snapshotId, resources) {
+  async function executeRestore(
+    snapshotId,
+    resources,
+    { confirmRestoreDependencies = false } = {},
+  ) {
     if (resources && resources.length > 0) {
       const res = await apiClient.post(
         `/api/v1/snapshots/${snapshotId}/restore/batch`,
-        { resources }
+        {
+          resources,
+          confirm_restore_dependencies: confirmRestoreDependencies,
+        }
       );
       return res.data;
     }

@@ -7,7 +7,7 @@ import tempfile
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import delete
+from sqlmodel import delete, select
 
 from pixlstash.db_models import (
     Character,
@@ -777,3 +777,249 @@ def test_preview_is_compatible_true_when_schemas_match(server):
         live_schema,
     )
     assert payload["is_compatible"] is True
+
+
+# ---------------------------------------------------------------------------
+# Missing-dependencies prompt (per-resource and batch)
+# ---------------------------------------------------------------------------
+
+
+def test_restore_resource_picture_with_missing_character_raises_without_confirm(
+    server,
+):
+    """Per-A2: a snapshot picture's Face references a character that the user
+    has since deleted. Without ``confirm_restore_dependencies=True``, the
+    service must refuse to write anything and raise
+    ``MissingDependenciesError`` carrying the missing character ids.
+    """
+    from pixlstash.services.restore_service import MissingDependenciesError
+
+    _create_file(server, "with_char.jpg")
+    pic = _add_picture(server, filename="with_char.jpg")
+
+    # Snapshot: picture has a face attached to character 'alice'.
+    def _setup_snapshot_state(session):
+        c = Character(name="alice")
+        session.add(c)
+        session.commit()
+        session.refresh(c)
+        session.add(
+            Face(
+                picture_id=pic.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c.id,
+                bbox_="[0,0,10,10]",
+            )
+        )
+        session.commit()
+        return c.id
+
+    alice_id = server.vault.db.run_task(_setup_snapshot_state)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Live: user deletes the character (Face.character_id cascades to NULL
+    # in the live DB but the snapshot still has the reference).
+    def _delete_char(session):
+        session.exec(delete(Character).where(Character.id == alice_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_char)
+
+    # Default call refuses with MissingDependenciesError.
+    with pytest.raises(MissingDependenciesError) as exc_info:
+        server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
+    assert "characters" in exc_info.value.missing, (
+        f"Expected missing characters, got: {exc_info.value.missing}"
+    )
+    assert alice_id in exc_info.value.missing["characters"]
+
+    # Live state must be untouched: character still absent, face still without
+    # a character (the missing-deps probe must NOT write anything).
+    chars_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(select(Character)).all()
+    )
+    assert chars_after == [], (
+        "Refused restore must leave the live DB untouched; "
+        f"characters now exist: {chars_after}"
+    )
+
+
+def test_restore_resource_picture_confirm_restores_missing_character(server):
+    """With ``confirm_restore_dependencies=True``, the service first re-inserts
+    the missing character from the snapshot and then upserts the picture's
+    faces — both end up in the live DB."""
+    _create_file(server, "with_char2.jpg")
+    pic = _add_picture(server, filename="with_char2.jpg")
+
+    def _setup_snapshot_state(session):
+        c = Character(name="bob")
+        session.add(c)
+        session.commit()
+        session.refresh(c)
+        session.add(
+            Face(
+                picture_id=pic.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c.id,
+                bbox_="[0,0,20,20]",
+            )
+        )
+        session.commit()
+        return c.id
+
+    bob_id = server.vault.db.run_task(_setup_snapshot_state)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_char(session):
+        session.exec(delete(Character).where(Character.id == bob_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_char)
+
+    report = server.vault.restore_service.restore_resource(
+        cp.id,
+        "picture",
+        pic.id,
+        confirm_restore_dependencies=True,
+    )
+    assert report.upserted_count > 0
+
+    # Character must be back, with its name preserved.
+    char_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.get(Character, bob_id)
+    )
+    assert char_after is not None and char_after.name == "bob", (
+        f"Confirmed restore must re-insert the missing character; got {char_after}"
+    )
+
+    # And the picture's face must reference it.
+    face_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(select(Face).where(Face.picture_id == pic.id)).first()
+    )
+    assert face_after is not None and face_after.character_id == bob_id
+
+
+def test_restore_batch_unions_missing_dependencies_across_items(server):
+    """The batch path must collect the union of missing parents across all
+    items and raise once with the combined dict, not item-by-item."""
+    from pixlstash.services.restore_service import MissingDependenciesError
+
+    _create_file(server, "batch_a.jpg")
+    _create_file(server, "batch_b.jpg")
+    pa = _add_picture(server, filename="batch_a.jpg")
+    pb = _add_picture(server, filename="batch_b.jpg")
+
+    def _setup(session):
+        c1 = Character(name="char_a")
+        c2 = Character(name="char_b")
+        session.add(c1)
+        session.add(c2)
+        session.commit()
+        session.refresh(c1)
+        session.refresh(c2)
+        session.add(
+            Face(
+                picture_id=pa.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c1.id,
+                bbox_="[0,0,1,1]",
+            )
+        )
+        session.add(
+            Face(
+                picture_id=pb.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c2.id,
+                bbox_="[0,0,1,1]",
+            )
+        )
+        session.commit()
+        return c1.id, c2.id
+
+    c1_id, c2_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_both(session):
+        session.exec(delete(Character))
+        session.commit()
+
+    server.vault.db.run_task(_delete_both)
+
+    resources = [
+        {"type": "picture", "id": pa.id},
+        {"type": "picture", "id": pb.id},
+    ]
+    with pytest.raises(MissingDependenciesError) as exc_info:
+        server.vault.restore_service.restore_batch(cp.id, resources)
+    missing_chars = set(exc_info.value.missing.get("characters", []))
+    assert {c1_id, c2_id}.issubset(missing_chars), (
+        "Batch missing-deps union must include BOTH characters; "
+        f"got {exc_info.value.missing}"
+    )
+
+
+def test_restore_batch_confirm_restores_all_missing_parents_once(server):
+    """With confirm=True, the batch path restores the union of missing
+    parents in one pre-pass, then upserts each item — no per-item retries."""
+    _create_file(server, "batch_c.jpg")
+    _create_file(server, "batch_d.jpg")
+    pc = _add_picture(server, filename="batch_c.jpg")
+    pd = _add_picture(server, filename="batch_d.jpg")
+
+    def _setup(session):
+        c1 = Character(name="char_c")
+        c2 = Character(name="char_d")
+        session.add(c1)
+        session.add(c2)
+        session.commit()
+        session.refresh(c1)
+        session.refresh(c2)
+        session.add(
+            Face(
+                picture_id=pc.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c1.id,
+                bbox_="[0,0,1,1]",
+            )
+        )
+        session.add(
+            Face(
+                picture_id=pd.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c2.id,
+                bbox_="[0,0,1,1]",
+            )
+        )
+        session.commit()
+        return c1.id, c2.id
+
+    c1_id, c2_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_both(session):
+        session.exec(delete(Character))
+        session.commit()
+
+    server.vault.db.run_task(_delete_both)
+
+    resources = [
+        {"type": "picture", "id": pc.id},
+        {"type": "picture", "id": pd.id},
+    ]
+    report = server.vault.restore_service.restore_batch(
+        cp.id, resources, confirm_restore_dependencies=True
+    )
+    assert report.errors == [], f"batch errors should be empty, got {report.errors}"
+
+    chars_after = server.vault.db.run_immediate_read_task(
+        lambda s: {c.id: c.name for c in s.exec(select(Character)).all()}
+    )
+    assert chars_after == {c1_id: "char_c", c2_id: "char_d"}, (
+        f"Confirmed batch must restore BOTH missing characters; got {chars_after}"
+    )
