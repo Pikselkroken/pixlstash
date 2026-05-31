@@ -129,6 +129,11 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_smart_score_consistency.py
       - name: Test VRAM Batch Budget
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_vram_batch_budget.py
+      # Snapshots / restore / migrations / schema — the 1.5.0 data-loss-critical
+      # surface. These are cheap (no ML models, ~30s total) so they run as one
+      # invocation to share interpreter startup rather than paying it per file.
+      - name: Test Snapshots, Restore, Migrations & API Schema
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_migrations.py tests/test_snapshots.py tests/test_restore.py tests/test_snapshots_auth.py tests/test_metadata_hash.py tests/test_architecture_guardrails.py tests/test_openapi_response_schemas.py
 
   build-windows:
     runs-on: windows-latest
@@ -159,41 +164,32 @@ jobs:
           key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/picture_tagger.py') }}
           restore-keys: hf-models-${{ runner.os }}-
 
-      - name: Test Florence-2 Captioning
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
+      # Windows only validates OS-sensitive behaviour (file/path/process
+      # handling, DB file swap, server startup, image libs). The ML-inference
+      # tests (florence, tag/likeness/image-embedding/facial-features workers,
+      # smart-score, clip-text-embedding, vram-budget, backend-order,
+      # many-to-many-face) are OS-independent — PyTorch/CLIP/InsightFace behave
+      # the same on Windows — so they run on Linux only to keep this job fast.
       - name: Test Server Endpoints and Integration
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_server.py
-      - name: Test Tag Worker and Tagging
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_tag_worker.py
-      - name: Test Picture Likeness Worker
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_likeness_worker.py
-      - name: Test Picture Stack Utilities
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stack_utils.py
-      - name: Test Picture Set Management
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_sets.py
-      - name: Test CLIP Text Embedding Similarity
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_clip_text_embedding_similarity.py
-      - name: Test Backend Order Stability
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_backend_order_stability.py
-      - name: Test Facial Features Worker
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_facial_features_worker.py
-      - name: Test Many-to-Many Face Data
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_many_to_many_face_data.py
-      - name: Test ComfyUI Workflow Extraction
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_comfyui_workflow_extraction.py
       - name: Test Authentication
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_authentication.py
       - name: Test Rate Limiter
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_rate_limiter.py
+      - name: Test Picture Set Management
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_sets.py
+      - name: Test Picture Stack Utilities
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stack_utils.py
       - name: Test Picture Plugins
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_plugins.py
+      - name: Test ComfyUI Workflow Extraction
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_comfyui_workflow_extraction.py
       - name: Test Watch Folder Worker
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_watch_folder_worker.py
       - name: Test Work Planner
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_work_planner.py
-      - name: Test Image Embedding Worker
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_image_embedding_worker.py
-      - name: Test Smart Score Consistency
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_smart_score_consistency.py
-      - name: Test VRAM Batch Budget
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_vram_batch_budget.py
+      # Snapshots / restore / migrations / schema — the highest-value Windows
+      # coverage: the DB file-swap path (os.replace / fsync / VACUUM / WAL) is
+      # the most OS-sensitive code in the release.
+      - name: Test Snapshots, Restore, Migrations & API Schema
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_migrations.py tests/test_snapshots.py tests/test_restore.py tests/test_snapshots_auth.py tests/test_metadata_hash.py tests/test_architecture_guardrails.py tests/test_openapi_response_schemas.py

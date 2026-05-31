@@ -10,6 +10,7 @@ whole vault to share tokens — this file is the dedicated regression guard.
 import json
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.server import Server
@@ -160,6 +161,151 @@ def test_picture_scoped_all_token_rejected_on_snapshot_routes():
             f"Picture-scoped ALL token must be rejected by snapshot routes; "
             f"got {r.status_code}: {r.text}"
         )
+    finally:
+        server.__exit__(None, None, None)
+        tmp.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Parametrized: a picture-scoped ALL token is rejected by EVERY read-shaped
+# snapshot endpoint, not just GET /snapshots (issue #5).
+# ---------------------------------------------------------------------------
+
+# (method, path) for the read-shaped snapshot routes the prior review flagged.
+# preview_resource uses a synthetic id; the auth guard must fire before any
+# snapshot/resource lookup, so 403 is expected regardless of existence.
+_SCOPED_REJECT_ROUTES = [
+    ("get", f"{API}/snapshots"),
+    ("get", f"{API}/snapshots/status"),
+    ("get", f"{API}/snapshots/1/restore/preview"),
+    ("get", f"{API}/snapshots/1/restore/picture/1/preview"),
+]
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    _SCOPED_REJECT_ROUTES,
+    ids=[p for _, p in _SCOPED_REJECT_ROUTES],
+)
+def test_picture_scoped_all_token_rejected_on_every_read_route(method, path):
+    """``require_unscoped_owner`` must reject a picture-scoped ALL token on
+    every read-shaped snapshot route, before any snapshot lookup."""
+    tmp, server, client = _setup_server_with_owner_session()
+    try:
+        from pixlstash.db_models import Picture
+
+        def _add(session):
+            pic = Picture(file_path="t.jpg", filename="t.jpg")
+            session.add(pic)
+            session.commit()
+            session.refresh(pic)
+            return pic.id
+
+        pic_id = server.vault.db.run_task(_add)
+        scoped_token = _make_picture_scoped_all_token(client, pic_id)
+
+        bare = TestClient(server.api)
+        r = getattr(bare, method)(
+            path, headers={"Authorization": f"Bearer {scoped_token}"}
+        )
+        assert r.status_code == 403, (
+            f"{method.upper()} {path} must reject a picture-scoped ALL token "
+            f"with 403; got {r.status_code}: {r.text}"
+        )
+    finally:
+        server.__exit__(None, None, None)
+        tmp.cleanup()
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    _SCOPED_REJECT_ROUTES,
+    ids=[p for _, p in _SCOPED_REJECT_ROUTES],
+)
+def test_read_token_rejected_on_every_read_route(method, path):
+    """A plain READ-scoped token is likewise rejected on every read-shaped
+    snapshot route."""
+    tmp, server, client = _setup_server_with_owner_session()
+    try:
+        read_token = _make_read_token(client)
+        bare = TestClient(server.api)
+        r = getattr(bare, method)(
+            path, headers={"Authorization": f"Bearer {read_token}"}
+        )
+        assert r.status_code == 403, (
+            f"{method.upper()} {path} must reject a READ token with 403; "
+            f"got {r.status_code}: {r.text}"
+        )
+    finally:
+        server.__exit__(None, None, None)
+        tmp.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Deletion rules: the latest snapshot of each GFS-scheduled kind is locked,
+# older ones of the same kind are deletable (issue: "delete daily snapshots").
+# ---------------------------------------------------------------------------
+
+
+def test_older_daily_deletable_latest_daily_locked():
+    """An older DAILY snapshot can be deleted via the route, but the most
+    recent DAILY (the current automatic restore point) is refused with 409."""
+    from datetime import datetime, timedelta, timezone
+
+    from pixlstash.db_models.snapshot import Snapshot
+
+    tmp, server, client = _setup_server_with_owner_session()
+    try:
+        svc = server.vault.snapshot_service
+        older = svc.create_snapshot("DAILY")
+        newer = svc.create_snapshot("DAILY")
+
+        # Back-to-back creates can collapse to the same microsecond; backdate
+        # `older` so "most recent" is unambiguous.
+        def _backdate(session):
+            row = session.get(Snapshot, older.id)
+            row.created_at = datetime.now(timezone.utc) - timedelta(days=1)
+            session.add(row)
+            session.commit()
+
+        server.vault.db.run_task(_backdate)
+
+        # Older DAILY: deletable.
+        r_old = client.delete(f"{API}/snapshots/{older.id}")
+        assert r_old.status_code == 204, (
+            f"Older DAILY must be deletable; got {r_old.status_code}: {r_old.text}"
+        )
+        assert svc.get_snapshot(older.id) is None
+
+        # Latest DAILY: locked.
+        r_new = client.delete(f"{API}/snapshots/{newer.id}")
+        assert r_new.status_code == 409, (
+            f"Latest DAILY must be locked; got {r_new.status_code}: {r_new.text}"
+        )
+        assert "most recent" in r_new.json()["detail"].lower()
+        assert svc.get_snapshot(newer.id) is not None, (
+            "Refused delete must leave the latest DAILY in place"
+        )
+    finally:
+        server.__exit__(None, None, None)
+        tmp.cleanup()
+
+
+def test_manual_and_opportunistic_snapshots_deletable_via_route():
+    """MANUAL and OPPORTUNISTIC snapshots are never GFS-locked — both delete
+    via the route with 204."""
+    tmp, server, client = _setup_server_with_owner_session()
+    try:
+        svc = server.vault.snapshot_service
+        manual = svc.create_snapshot("MANUAL")
+        opp = svc.create_snapshot("OPPORTUNISTIC")
+
+        for cp in (manual, opp):
+            r = client.delete(f"{API}/snapshots/{cp.id}")
+            assert r.status_code == 204, (
+                f"{cp.kind} must be deletable; got {r.status_code}: {r.text}"
+            )
+            assert svc.get_snapshot(cp.id) is None
     finally:
         server.__exit__(None, None, None)
         tmp.cleanup()
