@@ -793,7 +793,9 @@ class RestoreService:
             snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
             try:
                 with Session(snap_engine) as snap_session:
-                    self._compute_full_preview(snap_session, preview, vault_root)
+                    self._compute_full_preview(
+                        snap_session, preview, vault_root, snapshot_id
+                    )
             except Exception as exc:
                 logger.error(
                     "RestoreService: preview_full failed for snapshot %d: %s",
@@ -2170,104 +2172,125 @@ class RestoreService:
         snap_session: Session,
         preview: RestorePreview,
         vault_root: str,
+        snapshot_id: int,
     ) -> None:
-        """Populate *preview* by diffing all pictures in snap vs live DB.
+        """Populate *preview* with only the resources that actually change.
 
-        Caps the per-resource list at 200 entries.  Summary and warnings are
-        also populated here.
+        Uses the ``metadata_hash`` (which covers columns + tags + face state)
+        to classify every picture across the WHOLE vault as
+        revert / recreate / delete / missing-file / unchanged, then lists only
+        the changed ones (capped at ``MAX_RESOURCES``). Unchanged pictures are
+        counted but never fill the resource table, so the cap is spent on the
+        rows the user cares about. Only id/path/hash columns are scanned — the
+        now-retained embeddings are never pulled into memory for the full set.
 
         Args:
-            snap_session: Read session on the snapshot.
+            snap_session: Read session on the (upgraded) snapshot.
             preview: Preview object to mutate.
             vault_root: Vault root for file-existence checks.
+            snapshot_id: Snapshot being previewed (for the hash sidecar).
         """
         from pixlstash.utils.image_processing.image_utils import ImageUtils
 
         MAX_RESOURCES = 200
-        snap_pictures = snap_session.exec(select(Picture)).all()
-        snap_ids = {p.id for p in snap_pictures}
 
-        live_ids_result = self._vault.db.run_immediate_read_task(
-            lambda session: set(session.exec(select(Picture.id)).all())
+        # Lightweight scan — id, file_path, metadata_hash only.
+        snap_rows = snap_session.exec(
+            select(Picture.id, Picture.file_path, Picture.metadata_hash)
+        ).all()
+        snap_ids = {r[0] for r in snap_rows}
+
+        live_rows = self._vault.db.run_immediate_read_task(
+            lambda s: s.exec(select(Picture.id, Picture.metadata_hash)).all()
         )
+        live_ids = {r[0] for r in live_rows}
+        live_hash = {pid: h for pid, h in live_rows}
 
-        # Bulk-load tag sets from snapshot and live for efficient comparison.
-        _snap_tag_map: dict[int, set] = {}
-        for _pid, _tag in snap_session.exec(select(Tag.picture_id, Tag.tag)).all():
-            _snap_tag_map.setdefault(_pid, set()).add(_tag)
-        _snap_tag_sets: dict[int, frozenset] = {
-            k: frozenset(v) for k, v in _snap_tag_map.items()
-        }
-        _snap_ids_list = list({p.id for p in snap_pictures})
+        # Snapshot hashes: prefer the complete sidecar (legacy snapshots fall
+        # back to the per-row metadata_hash scanned above).
+        sidecar = self._vault.snapshot_service.load_picture_hashes(snapshot_id)
 
-        def _load_live_tag_sets(session) -> dict:
-            _live: dict[int, set] = {}
-            for _pid, _tag in session.exec(
-                select(Tag.picture_id, Tag.tag).where(
-                    Tag.picture_id.in_(_snap_ids_list)
-                )
-            ).all():
-                _live.setdefault(_pid, set()).add(_tag)
-            return {k: frozenset(v) for k, v in _live.items()}
-
-        _live_tag_sets: dict[int, frozenset] = self._vault.db.run_immediate_read_task(
-            _load_live_tag_sets
-        )
+        def _snap_hash(pid: int, scanned_hash) -> "str | None":
+            if sidecar:
+                return sidecar.get(str(pid))
+            return scanned_hash
 
         missing_files = 0
         pictures_to_revert = 0
+        pictures_unchanged = 0
         pictures_to_recreate = 0
         pictures_to_delete = 0
+        shown_reverts: list = []  # (ResourcePreview, picture_id) for tag diffing
 
-        # Pictures in snapshot (to revert or recreate).
-        for snap_pic in snap_pictures:
+        for pid, file_path, scanned_hash in snap_rows:
+            # File presence — a picture whose file vanished is dropped on
+            # restore, so it counts as a change regardless of its hash.
             file_ok = True
-            if snap_pic.file_path:
+            if file_path:
                 try:
-                    resolved = ImageUtils.resolve_picture_path(
-                        vault_root, snap_pic.file_path
-                    )
+                    resolved = ImageUtils.resolve_picture_path(vault_root, file_path)
                     file_ok = os.path.isfile(resolved)
                 except Exception:
                     file_ok = False
-
             if not file_ok:
                 missing_files += 1
-                preview.warnings.append(
-                    f"Picture id={snap_pic.id} file missing on disk; "
-                    "row will be removed after restore."
-                )
+                if len(preview.resources) < MAX_RESOURCES:
+                    preview.resources.append(
+                        ResourcePreview(
+                            type="picture",
+                            id=pid,
+                            exists_in_live=pid in live_ids,
+                            exists_in_snapshot=True,
+                            file_on_disk=False,
+                            changed_fields=[],
+                            dependent_counts={},
+                        )
+                    )
                 continue
 
-            exists_in_live = snap_pic.id in live_ids_result
-            if exists_in_live:
-                pictures_to_revert += 1
-            else:
+            if pid not in live_ids:
                 pictures_to_recreate += 1
-
-            if len(preview.resources) < MAX_RESOURCES:
-                changed = self._diff_picture(snap_pic, exists_in_live)
-                if exists_in_live:
-                    snap_tags = _snap_tag_sets.get(snap_pic.id, frozenset())
-                    live_tags = _live_tag_sets.get(snap_pic.id, frozenset())
-                    if snap_tags != live_tags:
-                        changed.append("tags")
-                preview.resources.append(
-                    ResourcePreview(
-                        type="picture",
-                        id=snap_pic.id,
-                        exists_in_live=exists_in_live,
-                        exists_in_snapshot=True,
-                        file_on_disk=True,
-                        changed_fields=changed,
-                        dependent_counts=self._picture_dependent_counts(
-                            snap_session, snap_pic.id
-                        ),
+                if len(preview.resources) < MAX_RESOURCES:
+                    preview.resources.append(
+                        ResourcePreview(
+                            type="picture",
+                            id=pid,
+                            exists_in_live=False,
+                            exists_in_snapshot=True,
+                            file_on_disk=True,
+                            changed_fields=["(new)"],
+                            dependent_counts=self._picture_dependent_counts(
+                                snap_session, pid
+                            ),
+                        )
                     )
+                continue
+
+            # Present in both — changed iff the metadata hash differs (a NULL
+            # on either side is treated as "can't confirm identical" → changed).
+            s_hash = _snap_hash(pid, scanned_hash)
+            l_hash = live_hash.get(pid)
+            if s_hash is not None and l_hash is not None and s_hash == l_hash:
+                pictures_unchanged += 1
+                continue
+
+            pictures_to_revert += 1
+            if len(preview.resources) < MAX_RESOURCES:
+                snap_pic = snap_session.get(Picture, pid)
+                rp = ResourcePreview(
+                    type="picture",
+                    id=pid,
+                    exists_in_live=True,
+                    exists_in_snapshot=True,
+                    file_on_disk=True,
+                    changed_fields=self._diff_picture(snap_pic, True),
+                    dependent_counts=self._picture_dependent_counts(snap_session, pid),
                 )
+                preview.resources.append(rp)
+                shown_reverts.append((rp, pid))
 
         # Pictures in live but not in snapshot (will be deleted by full restore).
-        for live_id in live_ids_result - snap_ids:
+        for live_id in live_ids - snap_ids:
             pictures_to_delete += 1
             if len(preview.resources) < MAX_RESOURCES:
                 preview.resources.append(
@@ -2282,13 +2305,22 @@ class RestoreService:
                     )
                 )
 
-        total_shown = len(preview.resources)
-        total_affected = len(snap_pictures) + len(live_ids_result - snap_ids)
-        if total_affected > total_shown:
-            preview.warnings.append(
-                f"Showing {total_shown} of {total_affected} affected resources."
-            )
+        # Annotate shown reverts with a "tags" field where the tag sets differ,
+        # and a "(modified)" placeholder when the hash changed but no column /
+        # tag diff is visible (e.g. a face-only edit). Bounded to the shown set.
+        self._annotate_shown_revert_tags(snap_session, shown_reverts)
 
+        total_changed = (
+            pictures_to_revert
+            + pictures_to_recreate
+            + pictures_to_delete
+            + missing_files
+        )
+        shown = len(preview.resources)
+        if total_changed > shown:
+            preview.warnings.append(
+                f"Showing {shown} of {total_changed} changed resources."
+            )
         if missing_files:
             preview.warnings.append(
                 f"{missing_files} picture file(s) missing on disk; "
@@ -2299,8 +2331,49 @@ class RestoreService:
             "pictures_to_revert": pictures_to_revert,
             "pictures_to_recreate": pictures_to_recreate,
             "pictures_to_delete": pictures_to_delete,
+            "pictures_unchanged": pictures_unchanged,
             "missing_files": missing_files,
         }
+
+    def _annotate_shown_revert_tags(self, snap_session: Session, shown_reverts: list):
+        """Add a ``tags`` change marker (and a ``(modified)`` fallback) to the
+        shown revert previews.
+
+        ``_diff_picture`` only compares Picture columns; tag changes (and
+        face-only changes, which still flip the metadata hash) wouldn't show.
+        Resolved here for just the shown set so it stays bounded by the cap.
+
+        Args:
+            snap_session: Read session on the snapshot.
+            shown_reverts: List of ``(ResourcePreview, picture_id)`` tuples.
+        """
+        if not shown_reverts:
+            return
+        shown_ids = [pid for _, pid in shown_reverts]
+
+        snap_tag_sets: dict[int, set] = {}
+        for _pid, _tag in snap_session.exec(
+            select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(shown_ids))
+        ).all():
+            snap_tag_sets.setdefault(_pid, set()).add(_tag)
+
+        def _load_live(session) -> dict:
+            d: dict[int, set] = {}
+            for _pid, _tag in session.exec(
+                select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(shown_ids))
+            ).all():
+                d.setdefault(_pid, set()).add(_tag)
+            return d
+
+        live_tag_sets = self._vault.db.run_immediate_read_task(_load_live)
+
+        for rp, pid in shown_reverts:
+            if snap_tag_sets.get(pid, set()) != live_tag_sets.get(pid, set()):
+                if "tags" not in rp.changed_fields:
+                    rp.changed_fields.append("tags")
+            if not rp.changed_fields:
+                # Hash differs but nothing visible diffed (e.g. a face edit).
+                rp.changed_fields.append("(modified)")
 
     def _compute_resource_preview(
         self,

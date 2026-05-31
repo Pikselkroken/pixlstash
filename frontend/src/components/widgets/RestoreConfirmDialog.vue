@@ -85,6 +85,7 @@ function summaryLabel(key) {
     pictures_to_revert: "Pictures to revert",
     pictures_to_recreate: "Pictures to recreate",
     pictures_to_delete: "Pictures to delete",
+    pictures_unchanged: "Unchanged",
     missing_files: "Missing files",
     picture_sets_to_revert: "Sets to revert",
     projects_to_revert: "Projects to revert",

@@ -1679,3 +1679,77 @@ def test_full_restore_from_legacy_uncompressed_snapshot(server):
     assert _get_picture(server, pic.id).description == "legacy_v1", (
         "Restoring a legacy uncompressed snapshot must work"
     )
+
+
+# ---------------------------------------------------------------------------
+# Full-restore preview lists only the resources that actually change
+# ---------------------------------------------------------------------------
+
+
+def test_preview_full_lists_only_changed_pictures(server):
+    """The preview must surface the pictures that actually changed, not the
+    first N pictures regardless of state. Three pictures, only one mutated:
+    the preview shows exactly that one and counts the rest as unchanged.
+    """
+    for i in range(3):
+        _create_file(server, f"prev_{i}.jpg")
+    p0 = _add_picture(server, filename="prev_0.jpg", description="a")
+    p1 = _add_picture(server, filename="prev_1.jpg", description="b")
+    p2 = _add_picture(server, filename="prev_2.jpg", description="c")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Mutate only p1 after the snapshot.
+    def _mutate(session):
+        session.get(Picture, p1.id).description = "b-changed"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+
+    preview = server.vault.restore_service.preview_full(cp.id)
+
+    assert preview.summary["pictures_to_revert"] == 1, preview.summary
+    assert preview.summary["pictures_unchanged"] == 2, preview.summary
+    assert preview.summary["pictures_to_recreate"] == 0
+    assert preview.summary["pictures_to_delete"] == 0
+
+    shown_ids = {r.id for r in preview.resources}
+    assert shown_ids == {p1.id}, (
+        f"Preview must list only the changed picture; got {shown_ids}"
+    )
+    assert p0.id not in shown_ids and p2.id not in shown_ids
+    assert "description" in preview.resources[0].changed_fields
+
+
+def test_preview_full_classifies_recreate_and_delete(server):
+    """Pictures present only in the snapshot are 'recreate'; pictures present
+    only in live are 'delete'. Unchanged pictures stay out of the list."""
+    _create_file(server, "keep.jpg")
+    _create_file(server, "gone.jpg")
+    _add_picture(server, filename="keep.jpg", description="keep")
+    p_gone = _add_picture(server, filename="gone.jpg", description="gone")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Add p_new BEFORE deleting p_gone so p_new gets a fresh max id — deleting
+    # first would let SQLite reuse p_gone's rowid for p_new and collapse the
+    # two distinct cases into one "id present in both".
+    _create_file(server, "new.jpg")
+    p_new = _add_picture(server, filename="new.jpg", description="new")
+
+    # Snapshot has p_gone but live won't (→ recreate on restore).
+    def _del_gone(session):
+        session.delete(session.get(Picture, p_gone.id))
+        session.commit()
+
+    server.vault.db.run_task(_del_gone)
+
+    preview = server.vault.restore_service.preview_full(cp.id)
+
+    assert preview.summary["pictures_to_recreate"] == 1, preview.summary
+    assert preview.summary["pictures_to_delete"] == 1, preview.summary
+    assert preview.summary["pictures_unchanged"] == 1, preview.summary
+
+    by_id = {r.id: r for r in preview.resources}
+    assert p_gone.id in by_id and not by_id[p_gone.id].exists_in_live
+    assert p_gone.id in by_id and by_id[p_gone.id].exists_in_snapshot
+    assert p_new.id in by_id and by_id[p_new.id].exists_in_live
+    assert p_new.id in by_id and not by_id[p_new.id].exists_in_snapshot
