@@ -19,6 +19,7 @@ from pixlstash.db_models.picture_likeness import (
 )
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.services.snapshot_service import GFS_KEEP_MONTHLY, GFS_KEEP_WEEKLY
 from pixlstash.utils.snapshot_compression import materialize_snapshot
 
 
@@ -281,20 +282,16 @@ def test_gfs_retention_prunes_oldest_daily(server):
 
 
 @pytest.mark.parametrize(
-    "kind, keep_const_name",
+    "kind, keep",
     [
-        ("WEEKLY", "GFS_KEEP_WEEKLY"),
-        ("MONTHLY", "GFS_KEEP_MONTHLY"),
+        ("WEEKLY", GFS_KEEP_WEEKLY),
+        ("MONTHLY", GFS_KEEP_MONTHLY),
     ],
 )
-def test_gfs_retention_prunes_oldest_weekly_and_monthly(server, kind, keep_const_name):
+def test_gfs_retention_prunes_oldest_weekly_and_monthly(server, kind, keep):
     """The promised GFS caps for WEEKLY (4) and MONTHLY (12) prune the oldest
     once the keep limit is exceeded."""
     from datetime import datetime, timedelta, timezone
-
-    import pixlstash.services.snapshot_service as svc
-
-    keep = getattr(svc, keep_const_name)
 
     cps = []
     for i in range(keep + 2):

@@ -313,8 +313,10 @@ def test_scrapheap_purge_logs_deleted_files(server):
     assert os.path.isfile(abs_path)
 
     # Soft-delete into the scrapheap, then permanently purge it.
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
-    assert client.delete("/pictures/scrapheap").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200
+    purge_resp = client.delete("/pictures/scrapheap")
+    assert purge_resp.status_code == 200
 
     # The row and the file on disk are gone...
     assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
@@ -351,7 +353,8 @@ def test_scrapheap_purge_reports_snapshots_with_deleted(server):
 
     # Snapshot now contains this picture, then soft-delete + purge it.
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200
     resp = client.delete("/pictures/scrapheap")
     assert resp.status_code == 200
     body = resp.json()
