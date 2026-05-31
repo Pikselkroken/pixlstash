@@ -83,17 +83,17 @@ class MissingFilePurgeTask(BaseTask):
         now = datetime.now(timezone.utc)
 
         for pic in pictures:
-            # Log the deletion only if not already recorded.
+            # Log the deletion only if not already recorded. The path is stored
+            # as an opaque hash (path_sha), never in cleartext.
             if pic.file_path:
+                path_sha = DeletedFileLog.hash_path(pic.file_path)
                 already_logged = session.exec(
-                    select(DeletedFileLog).where(
-                        DeletedFileLog.file_path == pic.file_path
-                    )
+                    select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
                 ).first()
                 if not already_logged:
                     session.add(
                         DeletedFileLog(
-                            file_path=pic.file_path,
+                            path_sha=path_sha,
                             pixel_sha=pic.pixel_sha,
                             deleted_at=now,
                         )

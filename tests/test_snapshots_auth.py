@@ -247,28 +247,15 @@ def test_read_token_rejected_on_every_read_route(method, path):
 # ---------------------------------------------------------------------------
 
 
-def test_older_daily_deletable_latest_daily_locked():
-    """An older DAILY snapshot can be deleted via the route, but the most
-    recent DAILY (the current automatic restore point) is refused with 409."""
-    from datetime import datetime, timedelta, timezone
-
-    from pixlstash.db_models.snapshot import Snapshot
-
+def test_any_daily_deletable_including_latest():
+    """Any DAILY snapshot can be deleted, including the most recent one — the
+    GFS scheduler simply creates a fresh snapshot for the period on its next
+    pass, so nothing is locked."""
     tmp, server, client = _setup_server_with_owner_session()
     try:
         svc = server.vault.snapshot_service
         older = svc.create_snapshot("DAILY")
         newer = svc.create_snapshot("DAILY")
-
-        # Back-to-back creates can collapse to the same microsecond; backdate
-        # `older` so "most recent" is unambiguous.
-        def _backdate(session):
-            row = session.get(Snapshot, older.id)
-            row.created_at = datetime.now(timezone.utc) - timedelta(days=1)
-            session.add(row)
-            session.commit()
-
-        server.vault.db.run_task(_backdate)
 
         # Older DAILY: deletable.
         r_old = client.delete(f"{API}/snapshots/{older.id}")
@@ -277,15 +264,12 @@ def test_older_daily_deletable_latest_daily_locked():
         )
         assert svc.get_snapshot(older.id) is None
 
-        # Latest DAILY: locked.
+        # Latest DAILY: now also deletable (no longer locked).
         r_new = client.delete(f"{API}/snapshots/{newer.id}")
-        assert r_new.status_code == 409, (
-            f"Latest DAILY must be locked; got {r_new.status_code}: {r_new.text}"
+        assert r_new.status_code == 204, (
+            f"Latest DAILY must be deletable; got {r_new.status_code}: {r_new.text}"
         )
-        assert "most recent" in r_new.json()["detail"].lower()
-        assert svc.get_snapshot(newer.id) is not None, (
-            "Refused delete must leave the latest DAILY in place"
-        )
+        assert svc.get_snapshot(newer.id) is None
     finally:
         server.__exit__(None, None, None)
         tmp.cleanup()

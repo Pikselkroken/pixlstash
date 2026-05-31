@@ -3677,7 +3677,8 @@ defineExpose({
               class="sidebar-project-menu-item"
               :class="{
                 active:
-                  projectViewMode === 'project' && selectedProjectId === p.id,
+                  props.externalProjectViewMode === 'project' &&
+                  props.externalSelectedProjectId === p.id,
               }"
               @click="
                 selectLibraryTab('project');
@@ -5014,7 +5015,8 @@ defineExpose({
                     'sidebar-project-tree-row',
                     {
                       active:
-                        selectedProjectId === p.id &&
+                        props.externalProjectViewMode === 'project' &&
+                        props.externalSelectedProjectId === p.id &&
                         props.selectedCharacter === props.allPicturesId &&
                         selectedSetIdSet.size === 0 &&
                         !props.hasFolderFilter,

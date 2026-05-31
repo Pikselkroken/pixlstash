@@ -34,6 +34,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.db_models import Character, Face  # noqa: F401
 from pixlstash.db_models import PictureLikeness, PictureSet, Picture, Quality, Tag, User  # noqa: F401
 from pixlstash.db_models import Snapshot  # noqa: F401
+from pixlstash.db_models import PictureProjectMember, PictureSetMember
 
 
 # ---------------------------------------------------------------------------
@@ -62,8 +63,9 @@ _HASH_SKIP_COLS: frozenset = frozenset(
 def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optional[str]:
     """Return a SHA-256 hex digest of a picture's user-visible metadata.
 
-    Covers all Picture columns not in ``_HASH_SKIP_COLS`` plus the sorted list
-    of associated tag strings.  Called inside ``after_flush`` so all pending
+    Covers all Picture columns not in ``_HASH_SKIP_COLS`` plus the sorted tag
+    list, face state, and picture-set / project **membership** — everything a
+    full restore would revert. Called inside ``after_flush`` so all pending
     writes are already visible on the connection.
 
     Args:
@@ -114,7 +116,36 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
             ).where(Face.picture_id == picture_id)
         ).all()
     )
-    state = {"cols": col_vals, "tags": tags, "faces": faces}
+    # Picture-set and project membership are user-visible and reverted by a
+    # full restore, but live in their own tables (not Picture columns), so they
+    # must be folded in explicitly — otherwise a picture whose only change is
+    # being moved between sets/projects hashes identically and the restore
+    # preview / identical-state detection would wrongly report "unchanged".
+    set_ids = sorted(
+        session.execute(
+            sa_select(PictureSetMember.set_id).where(
+                PictureSetMember.picture_id == picture_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    project_ids = sorted(
+        session.execute(
+            sa_select(PictureProjectMember.project_id).where(
+                PictureProjectMember.picture_id == picture_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    state = {
+        "cols": col_vals,
+        "tags": tags,
+        "faces": faces,
+        "sets": set_ids,
+        "projects": project_ids,
+    }
     return hashlib.sha256(
         json.dumps(state, sort_keys=True, default=str).encode()
     ).hexdigest()
@@ -133,6 +164,14 @@ def _before_flush_hash_tracker(session, flush_context, instances) -> None:
         elif isinstance(obj, Tag) and obj.picture_id is not None:
             dirty_pids.add(obj.picture_id)
         elif isinstance(obj, Face) and obj.picture_id is not None:
+            dirty_pids.add(obj.picture_id)
+        elif (
+            isinstance(obj, (PictureSetMember, PictureProjectMember))
+            and obj.picture_id is not None
+        ):
+            # Adding/removing a picture from a set or project changes its
+            # restore-visible state, so its hash must be recomputed. Works for
+            # session.deleted too — the row keeps its picture_id while pending.
             dirty_pids.add(obj.picture_id)
 
 

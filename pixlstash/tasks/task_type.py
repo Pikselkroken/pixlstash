@@ -19,7 +19,7 @@ class TaskType(str, Enum):
     REFERENCE_FOLDER_SCAN = "ReferenceFolderScanTask"
     SMART_SCORE = "SmartScoreTask"
     TEXT_SCORE = "TextScoreTask"
-    DAILY_SNAPSHOT = "EnsureDailySnapshotTask"
+    GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
 
     @staticmethod
     def all():

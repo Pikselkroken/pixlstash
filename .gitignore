@@ -24,3 +24,4 @@ demo-data/
 CLAUDE.md
 frontend/e2e/.auth/
 frontend/test-results/
+test-data/images/snapshots/

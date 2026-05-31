@@ -225,6 +225,10 @@
       @empty-scrapheap="confirmEmptyScrapheap"
       @restore-scrapheap="confirmRestoreScrapheap"
     />
+    <SnapshotsWithDeletedDialog
+      v-model="snapshotsWithDeletedOpen"
+      :snapshots="snapshotsWithDeleted"
+    />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
       class="multi-select-toolbar"
@@ -831,6 +835,7 @@ import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import ComfyUiRunner from "../io/ComfyUiRunner.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
+import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   arraysEqualByString,
@@ -3027,13 +3032,17 @@ async function deleteSelected() {
   }
 
   const backendUrl = props.backendUrl;
+  let scrapheapPurgeResp = null;
   try {
     if (isScrapheapSelection) {
-      await apiClient.delete(`${backendUrl}/pictures/scrapheap`, {
-        data: {
-          picture_ids: idsToRemove,
+      scrapheapPurgeResp = await apiClient.delete(
+        `${backendUrl}/pictures/scrapheap`,
+        {
+          data: {
+            picture_ids: idsToRemove,
+          },
         },
-      });
+      );
     } else {
       await Promise.all(
         idsToRemove.map((id) =>
@@ -3056,6 +3065,9 @@ async function deleteSelected() {
       debouncedFetchAllGridImages();
     }
     emit("refresh-sidebar");
+    if (isScrapheapSelection) {
+      showSnapshotsWithDeleted(scrapheapPurgeResp);
+    }
   } catch (err) {
     alert(`Error deleting images: ${err?.message || err}`);
   }
@@ -3379,6 +3391,20 @@ const scrapheapRestoreDisabled = computed(() => {
   );
 });
 
+// After a permanent purge the backend reports which snapshots still hold the
+// deleted pictures' metadata (the archives are not scrubbed). Surface that so
+// the user can delete those snapshots if the deletion was for privacy.
+const snapshotsWithDeleted = ref([]);
+const snapshotsWithDeletedOpen = ref(false);
+
+function showSnapshotsWithDeleted(response) {
+  const snaps = response?.data?.snapshots_with_deleted;
+  if (Array.isArray(snaps) && snaps.length) {
+    snapshotsWithDeleted.value = snaps;
+    snapshotsWithDeletedOpen.value = true;
+  }
+}
+
 async function confirmEmptyScrapheap() {
   if (scrapheapEmptyDisabled.value) return;
   const confirmed = confirm(
@@ -3387,7 +3413,9 @@ async function confirmEmptyScrapheap() {
   if (!confirmed) return;
   scrapheapEmptying.value = true;
   try {
-    await apiClient.delete(`${props.backendUrl}/pictures/scrapheap`);
+    const resp = await apiClient.delete(
+      `${props.backendUrl}/pictures/scrapheap`,
+    );
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
@@ -3397,6 +3425,7 @@ async function confirmEmptyScrapheap() {
     fetchAllGridImages().then(() => {
       updateVisibleThumbnails();
     });
+    showSnapshotsWithDeleted(resp);
   } catch (e) {
     alert("Failed to empty scrapheap.");
   } finally {

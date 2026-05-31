@@ -88,6 +88,7 @@ class RestoreReportResponse(BaseModel):
     resource_type: Optional[str] = None
     resource_id: Optional[int] = None
     missing_files_count: Optional[int] = None
+    permanently_deleted_count: Optional[int] = None
     upserted_count: Optional[int] = None
     errors: Optional[Any] = None
     dry_run: Optional[bool] = None
@@ -271,11 +272,9 @@ def create_router(server) -> APIRouter:
     def delete_snapshot(snapshot_id: int, request: Request):
         """Delete a snapshot and its snapshot files.
 
-        MANUAL and OPPORTUNISTIC snapshots may always be deleted.  For
-        GFS-scheduled kinds (DAILY, WEEKLY, MONTHLY) deletion is refused only
-        for the **most recent** snapshot of that kind — that one is the
-        current automatic restore point and stays locked. Older snapshots of
-        the same kind can be deleted freely.
+        Any snapshot may be deleted, including the most recent DAILY / WEEKLY /
+        MONTHLY one — the GFS scheduler will simply create a fresh snapshot for
+        the current period on its next pass.
 
         Authentication is required.
         """
@@ -283,22 +282,6 @@ def create_router(server) -> APIRouter:
         cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
-        if cp.kind in ("DAILY", "WEEKLY", "MONTHLY"):
-            of_kind = [
-                s
-                for s in server.vault.snapshot_service.list_snapshots()
-                if s.kind == cp.kind
-            ]
-            latest = max(of_kind, key=lambda s: s.created_at, default=None)
-            if latest is not None and latest.id == cp.id:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"Cannot delete the most recent {cp.kind} snapshot — "
-                        "it is the current automatic restore point. Delete "
-                        f"older {cp.kind} snapshots instead."
-                    ),
-                )
         try:
             server.vault.snapshot_service.delete_snapshot(snapshot_id)
         except Exception as exc:
@@ -478,6 +461,7 @@ def create_router(server) -> APIRouter:
             "snapshot_id": report.snapshot_id,
             "resource_type": report.resource_type,
             "missing_files_count": report.missing_files_count,
+            "permanently_deleted_count": report.permanently_deleted_count,
             "upserted_count": report.upserted_count,
             "errors": report.errors,
             "dry_run": dry_run,
@@ -542,6 +526,7 @@ def create_router(server) -> APIRouter:
             "snapshot_id": report.snapshot_id,
             "resource_type": report.resource_type,
             "missing_files_count": report.missing_files_count,
+            "permanently_deleted_count": report.permanently_deleted_count,
             "upserted_count": report.upserted_count,
             "errors": report.errors,
         }
@@ -662,6 +647,7 @@ def create_router(server) -> APIRouter:
             "resource_type": report.resource_type,
             "resource_id": report.resource_id,
             "missing_files_count": report.missing_files_count,
+            "permanently_deleted_count": report.permanently_deleted_count,
             "upserted_count": report.upserted_count,
             "errors": report.errors,
         }

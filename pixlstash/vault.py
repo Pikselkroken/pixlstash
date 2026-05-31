@@ -153,9 +153,9 @@ class Vault:
             image_root=self.image_root,
             path_mapper=path_mapper,
         )
-        from pixlstash.tasks import TaskType, EnsureDailySnapshotFinder
+        from pixlstash.tasks import TaskType, EnsureGfsSnapshotFinder
 
-        self._planner_work_finders[TaskType.DAILY_SNAPSHOT] = EnsureDailySnapshotFinder(
+        self._planner_work_finders[TaskType.GFS_SNAPSHOT] = EnsureGfsSnapshotFinder(
             vault=self
         )
         self._work_planner = WorkPlanner(
@@ -438,19 +438,20 @@ class Vault:
         self._started = False
 
     def set_daily_snapshots_enabled(self, enabled: bool) -> None:
-        """Enable or disable automatic daily snapshots at runtime.
+        """Enable or disable automatic (GFS) snapshots at runtime.
 
-        Takes effect immediately; the next EnsureDailySnapshotFinder cycle
-        will skip snapshot creation when ``enabled`` is False.
+        This is the master switch for the whole DAILY/WEEKLY/MONTHLY schedule.
+        Takes effect immediately; the next EnsureGfsSnapshotFinder cycle will
+        skip snapshot creation when ``enabled`` is False.
 
         Args:
-            enabled: True to allow automatic daily snapshots, False to suppress them.
+            enabled: True to allow automatic snapshots, False to suppress them.
         """
         self._daily_snapshots_enabled = bool(enabled)
 
     @property
     def daily_snapshots_enabled(self) -> bool:
-        """Whether automatic daily snapshots are enabled."""
+        """Whether automatic (GFS) snapshots are enabled."""
         return self._daily_snapshots_enabled
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):

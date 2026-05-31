@@ -19,6 +19,7 @@ from pixlstash.db_models.picture_likeness import (
 )
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.services.snapshot_service import GFS_KEEP_MONTHLY, GFS_KEEP_WEEKLY
 from pixlstash.utils.snapshot_compression import materialize_snapshot
 
 
@@ -277,6 +278,48 @@ def test_gfs_retention_prunes_oldest_daily(server):
     # The two oldest of our original batch must have been pruned.
     surviving_ids = {s.id for s in surviving}
     assert cps[0].id not in surviving_ids
+    assert cps[1].id not in surviving_ids
+
+
+@pytest.mark.parametrize(
+    "kind, keep",
+    [
+        ("WEEKLY", GFS_KEEP_WEEKLY),
+        ("MONTHLY", GFS_KEEP_MONTHLY),
+    ],
+)
+def test_gfs_retention_prunes_oldest_weekly_and_monthly(server, kind, keep):
+    """The promised GFS caps for WEEKLY (4) and MONTHLY (12) prune the oldest
+    once the keep limit is exceeded."""
+    from datetime import datetime, timedelta, timezone
+
+    cps = []
+    for i in range(keep + 2):
+        cp = server.vault.snapshot_service.create_snapshot(kind)
+        cps.append(cp)
+
+        def _backdate(session, cp_id=cp.id, i=i):
+            row = session.get(Snapshot, cp_id)
+            if row is not None:
+                row.created_at = datetime.now(timezone.utc) - timedelta(
+                    days=(keep + 2 - i) * 7
+                )
+                session.add(row)
+                session.commit()
+
+        server.vault.db.run_task(_backdate)
+
+    # Trigger one more prune.
+    server.vault.snapshot_service.create_snapshot(kind)
+
+    surviving = [
+        s for s in server.vault.snapshot_service.list_snapshots() if s.kind == kind
+    ]
+    assert len(surviving) == keep, (
+        f"Expected exactly {keep} {kind} snapshots after prune, got {len(surviving)}"
+    )
+    surviving_ids = {s.id for s in surviving}
+    assert cps[0].id not in surviving_ids, f"Oldest {kind} must be pruned"
     assert cps[1].id not in surviving_ids
 
 

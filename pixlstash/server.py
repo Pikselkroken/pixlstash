@@ -355,6 +355,43 @@ curl "https://your-pixlstash-host/api/v1/projects/$pid/export" \\
 """
 
 
+_SNAPSHOTS_TAG_DESCRIPTION = """\
+Point-in-time snapshots of the **metadata database** — tags, scores, faces, descriptions, and how
+everything is organised. The image files themselves are never copied. Snapshots are taken
+automatically on a grandfather-father-son schedule (daily / weekly / monthly) and can also be
+created by hand, then restored wholesale or for just the resources you choose.
+
+### Common workflow
+
+```bash
+# List restore points (newest first)
+curl "https://your-pixlstash-host/api/v1/snapshots" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Take a manual snapshot
+cp=$(curl -s -X POST "https://your-pixlstash-host/api/v1/snapshots" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"label": "before big cleanup"}' | jq -r .id)
+
+# Preview exactly what a full restore would change (nothing is written)
+curl "https://your-pixlstash-host/api/v1/snapshots/$cp/restore/preview" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Restore everything (a safety snapshot is taken first)
+curl -X POST "https://your-pixlstash-host/api/v1/snapshots/$cp/restore" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# ...or restore just the pictures you select
+curl -X POST "https://your-pixlstash-host/api/v1/snapshots/$cp/restore/batch" \\
+  -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"resources": [{"type": "picture", "id": 8123}]}'
+```
+
+All snapshot endpoints require an **unscoped owner token**. Retention keeps the most recent
+7 daily, 4 weekly, and 12 monthly snapshots automatically.
+"""
+
+
 _AUTH_TAG_DESCRIPTION = """\
 Session login for the web UI. **For API access, prefer a personal token** (see *Authentication*
 at the top) and send it as `Authorization: Bearer …` on every request.
@@ -400,6 +437,10 @@ API_OPENAPI_TAGS = [
     {
         "name": "projects",
         "description": _PROJECTS_TAG_DESCRIPTION,
+    },
+    {
+        "name": "snapshots",
+        "description": _SNAPSHOTS_TAG_DESCRIPTION,
     },
     {
         "name": "auth",
@@ -1883,7 +1924,7 @@ class Server:
         self.api.include_router(
             create_snapshots_router(self),
             prefix=API_V1_PREFIX,
-            include_in_schema=False,
+            tags=["snapshots"],
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.
         self.api.include_router(

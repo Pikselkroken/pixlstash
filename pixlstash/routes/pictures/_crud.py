@@ -1,6 +1,7 @@
 import base64
 import os
 import re
+from datetime import datetime, timezone
 from io import BytesIO
 from email.utils import formatdate
 
@@ -26,6 +27,7 @@ from typing import Optional
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
+    DeletedFileLog,
     Face,
     Picture,
     PictureProjectMember,
@@ -146,6 +148,10 @@ class ScrapheapDeleteResponse(BaseModel):
 
     status: str
     deleted_count: int
+    # Snapshots that still contain metadata for the just-purged pictures, each
+    # ``{id, kind, label, created_at, matched_count}``. The archives are not
+    # scrubbed; the user can delete these snapshots to erase that metadata.
+    snapshots_with_deleted: Optional[list] = None
 
 
 class PictureDeleteResponse(BaseModel):
@@ -1208,7 +1214,10 @@ def register_routes(router, server):
 
         def fetch_deleted(session: Session, ids: list[int] | None):
             query = select(
-                Picture.id, Picture.file_path, Picture.reference_folder_id
+                Picture.id,
+                Picture.file_path,
+                Picture.reference_folder_id,
+                Picture.pixel_sha,
             ).where(
                 Picture.deleted.is_(True),
                 Picture.import_excluded.is_(False),
@@ -1240,10 +1249,16 @@ def register_routes(router, server):
 
         full_delete_ids: list[int] = []
         full_delete_file_paths: list[str] = []
+        full_delete_log_records: list[dict] = []
         sentinel_ids: list[int] = []
 
         for row in rows:
-            pic_id, file_path, ref_folder_id = row[0], row[1], row[2]
+            pic_id, file_path, ref_folder_id, pixel_sha = (
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+            )
             if ref_folder_id is not None and ref_folder_id in no_delete_folder_ids:
                 # Source file is protected — keep the DB row as a scan sentinel.
                 if pic_id is not None:
@@ -1253,6 +1268,12 @@ def register_routes(router, server):
                     full_delete_ids.append(pic_id)
                 if file_path:
                     full_delete_file_paths.append(file_path)
+                    full_delete_log_records.append(
+                        {
+                            "path_sha": DeletedFileLog.hash_path(file_path),
+                            "pixel_sha": pixel_sha,
+                        }
+                    )
 
         if sentinel_ids:
 
@@ -1305,9 +1326,29 @@ def register_routes(router, server):
             file_paths,
         )
 
-        def delete_rows(session: Session, ids: list[int]):
+        def delete_rows(session: Session, ids: list[int], log_records: list[dict]):
             if not ids:
                 return 0
+            # Record each permanently deleted file in deleted_file_log so we
+            # retain a durable record of what can no longer be restored (e.g.
+            # when rolling a vault back to an older snapshot). Logged and
+            # deleted in the same transaction so the two never diverge.
+            now = datetime.now(timezone.utc)
+            for record in log_records:
+                path_sha = record.get("path_sha")
+                if not path_sha:
+                    continue
+                already_logged = session.exec(
+                    select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
+                ).first()
+                if already_logged is None:
+                    session.add(
+                        DeletedFileLog(
+                            path_sha=path_sha,
+                            pixel_sha=record.get("pixel_sha"),
+                            deleted_at=now,
+                        )
+                    )
             session.exec(delete(Picture).where(Picture.id.in_(ids)))
             session.commit()
             return len(ids)
@@ -1315,12 +1356,23 @@ def register_routes(router, server):
         deleted_count = server.vault.db.run_task(
             delete_rows,
             picture_ids,
+            full_delete_log_records,
             priority=DBPriority.IMMEDIATE,
         )
         server.vault.notify(EventType.CHANGED_PICTURES)
+
+        # Tell the caller which snapshots still hold metadata for the pictures
+        # just purged. Snapshot archives are not scrubbed, so the user may want
+        # to delete those snapshots if the deletion was for privacy. Discovery
+        # reads only the JSON manifests (no snapshot DB is opened).
+        snapshots_with_deleted = server.vault.snapshot_service.snapshots_containing(
+            full_delete_ids + sentinel_ids
+        )
+
         return {
             "status": "success",
             "deleted_count": deleted_count + len(sentinel_ids),
+            "snapshots_with_deleted": snapshots_with_deleted,
         }
 
     @router.delete(
