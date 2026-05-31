@@ -98,6 +98,33 @@
         visibleRangeLabel
       }}</span>
     </transition>
+    <!-- ── Breadcrumb: current-view path (bottom-left overlay) ── -->
+    <nav
+      v-if="breadcrumb.length"
+      class="grid-breadcrumb"
+      :class="{
+        'grid-breadcrumb--above-bar': isMultiCharacterView || isSetOverlapView,
+      }"
+      aria-label="Current view"
+    >
+      <template v-for="(crumb, i) in breadcrumb" :key="i">
+        <span v-if="i > 0" class="grid-breadcrumb-sep" aria-hidden="true"
+          >›</span
+        >
+        <button
+          v-if="crumb.to"
+          type="button"
+          class="grid-breadcrumb-crumb is-link"
+          :title="`Go to ${crumb.label}`"
+          @click="navigateBreadcrumb(crumb)"
+        >
+          {{ crumb.label }}
+        </button>
+        <span v-else class="grid-breadcrumb-crumb" :title="crumb.label">{{
+          crumb.label
+        }}</span>
+      </template>
+    </nav>
     <ImageGridContextMenu
       :visible="contextMenuVisible"
       :x="contextMenuX"
@@ -784,6 +811,7 @@ import {
   onUnmounted,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -2441,6 +2469,88 @@ const visibleRangeLabel = computed(() => {
   if (!last || last === first) return first;
   return `${first} – ${last}`;
 });
+
+// ── Breadcrumb (current-view path) ──────────────────────────────────────
+// The route is the single source of truth for the view; it carries only IDs,
+// so names come from useEntityNamesStore (the sidebar publishes them). The
+// trail is built one-directionally (route → labels); clickable ancestor
+// crumbs navigate using the IDs already in the route, never by name (names
+// aren't unique).
+const breadcrumbRoute = useRoute();
+const breadcrumbRouter = useRouter();
+const entityNames = useEntityNamesStore();
+
+const breadcrumb = computed(() => {
+  const { name, params, query } = breadcrumbRoute;
+  // Multi-selection lives in the ?ids= query (count > 1). When several
+  // characters/sets are selected the leaf reads "Multiple People/Sets"
+  // rather than a single name.
+  const multiCount = query.ids
+    ? String(query.ids)
+        .split(",")
+        .filter(Boolean).length
+    : 1;
+  const isMulti = multiCount > 1;
+  const charName = (id) =>
+    isMulti ? "Multiple People" : entityNames.characterNames[id] ?? `Character ${id}`;
+  const setName = (id) =>
+    isMulti ? "Multiple Sets" : entityNames.setNames[id] ?? `Set ${id}`;
+  const projName = (id) => entityNames.projectNames[id] ?? `Project ${id}`;
+  // Root scope crumb names the sidebar bar/tab the view belongs to. These are
+  // scope *labels*, not destinations — plain text, not links. Only an
+  // ancestor that has a real grid route (a project, in project sub-views) is
+  // clickable.
+  const globalRoot = { label: "Global" };
+  const projectsRoot = { label: "Projects" };
+  const projectCrumb = (id) => ({
+    label: projName(id),
+    to: { name: "project", params: { id: String(id) } },
+  });
+  switch (name) {
+    case "all-pictures":
+      return [globalRoot, { label: "All Pictures" }];
+    case "scrapheap":
+      return [globalRoot, { label: "Scrapheap" }];
+    case "character":
+      return [globalRoot, { label: charName(params.id) }];
+    case "set":
+      return [globalRoot, { label: setName(params.id) }];
+    case "project":
+      return [projectsRoot, { label: projName(params.id) }];
+    // For multi-selection, omit the specific project crumb — the selection
+    // can span multiple projects, so a single project name would be wrong.
+    case "project-character":
+      return isMulti
+        ? [projectsRoot, { label: "Multiple People" }]
+        : [projectsRoot, projectCrumb(params.projectId), { label: charName(params.id) }];
+    case "project-set":
+      return isMulti
+        ? [projectsRoot, { label: "Multiple Sets" }]
+        : [projectsRoot, projectCrumb(params.projectId), { label: setName(params.id) }];
+    case "ref-folder":
+      return [
+        { label: "Folders" },
+        { label: entityNames.refFolderLabels[params.id] ?? "Folder" },
+      ];
+    case "import-folder":
+      return [
+        { label: "Folders" },
+        { label: entityNames.importFolderLabels[params.id] ?? "Folder" },
+      ];
+    default:
+      return [];
+  }
+});
+
+function navigateBreadcrumb(crumb) {
+  if (!crumb?.to) return;
+  const target = { ...crumb.to };
+  // Preserve a share token if one is in the URL, matching App.pushAppRoute.
+  if (breadcrumbRoute.query.token) {
+    target.query = { token: breadcrumbRoute.query.token, ...(target.query || {}) };
+  }
+  breadcrumbRouter.push(target).catch(() => {});
+}
 
 watch(
   visibleRangeLabel,
@@ -5985,6 +6095,63 @@ function handleEmptyStateReset() {
   pointer-events: none;
   user-select: none;
   z-index: 50;
+}
+
+/* Breadcrumb: translucent "you are here" path, bottom-left of the grid. */
+.grid-breadcrumb {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 24px);
+  padding: 5px 12px;
+  background: rgba(var(--v-theme-surface), 0.82);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  border-radius: 999px;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.74em;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  user-select: none;
+  z-index: 50;
+  transition: bottom 0.15s;
+}
+/* Lift above the 36px multi-select (union/overlap) bar so the breadcrumb
+   overlaps the visible grid, not that bar. */
+.grid-breadcrumb--above-bar {
+  bottom: 48px;
+}
+.grid-breadcrumb-crumb {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  /* Plain crumbs (scope labels + the current leaf) read as normal text. */
+  color: rgb(var(--v-theme-on-surface));
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Clickable ancestor crumbs look like links, not disabled text. */
+.grid-breadcrumb-crumb.is-link {
+  cursor: pointer;
+  color: rgb(var(--v-theme-primary));
+  transition: text-decoration-color 0.12s;
+}
+.grid-breadcrumb-crumb.is-link:hover {
+  text-decoration: underline;
+}
+.grid-breadcrumb-sep {
+  flex: 0 0 auto;
+  opacity: 0.5;
 }
 .grid-loading-more-pill {
   position: absolute;

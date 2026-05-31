@@ -296,9 +296,21 @@ button:focus:not(:focus-visible) {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
   gap: 4px;
   font-size: 0.7em;
+  transition:
+    opacity 0.15s,
+    bottom 0.15s,
+    right 0.15s;
 }
 .shortcuts-fab:hover {
   opacity: 1;
+}
+/* Lift above the 36px multi-select (union/overlap) bar at the grid bottom. */
+.shortcuts-fab--above-bar {
+  bottom: 44px;
+}
+/* Shift left of the 288px stats sidebar so the FAB stays over the grid. */
+.shortcuts-fab--stats-open {
+  right: 296px;
 }
 
 /* Keyboard shortcuts dialog */

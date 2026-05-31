@@ -49,7 +49,9 @@ frontend/src/
 │   ├── useUserPrefsStore.js
 │   ├── useProjectStore.js
 │   ├── useSidebarStore.js
-│   └── useSearchStore.js
+│   ├── useSearchStore.js
+│   ├── useSnapshotsStore.js
+│   └── useEntityNamesStore.js   # id→name maps for the ImageGrid breadcrumb
 │
 ├── composables/                 # Extracted logic composables (Phase 8.1 — complete)
 │   ├── useVirtualScroll.js      # Virtualised scroll window calculation for ImageGrid
@@ -91,7 +93,7 @@ frontend/src/
 | UI component library | Vuetify 3 |
 | State management | **Pinia** — 10 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
-| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`) render `App.vue` via `<RouterView>`. `App.vue` watches the route and syncs params to Pinia stores; nav handlers call `router.push()` to update the URL. |
+| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`) render `App.vue` via `<RouterView>`. `App.vue` watches the route and syncs params to Pinia stores; nav handlers call `router.push()` to update the URL. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
 | Build tool | Vite 5 |
 | Unit tests | Vitest (jsdom environment) — test files co-located as `*.test.js` in `utils/` |
 | Icons | Material Design Icons (`@mdi/font`) |
@@ -99,6 +101,7 @@ frontend/src/
 ### Key Design Principles
 
 - **Pinia for cross-component state.** All state shared across more than one component lives in a Pinia store in `src/stores/`. `App.vue` owns only layout-shell state (sidebar/stats visibility, pending import counts) that is not consumed anywhere else.
+- **Sidebar tabs are stateless; the route is the single source of truth for the grid view.** Switching a sidebar tab/category (People / Sets / Projects / Folders, and the Global ↔ Project mode) is a *pure sidebar-display* operation: it only changes which list of entries the sidebar renders. It must **not** call `router.push()`, must **not** emit any `select-*` / navigation event, and must **not** write to the filter / selection / sort / grid stores. The grid keeps showing whatever the current route resolves to. Only an explicit **entry click** (a specific character / set / project) navigates, via `router.push()`. This decoupling is what lets a user stay on a global view, switch to the Projects tab purely to reveal its entries as **drop targets**, and drag the current selection onto a project or one of its characters without losing the view they found the pictures in. See [§5 → SideBar.vue](#sidebarvue--150-lines).
 - **Composables for reusable logic.** Complex logic extracted from mega-components lives in `src/composables/` as `useX()` functions. Composables accept dependencies as parameters and are independently unit-testable.
 - **Flat component structure.** All components sit directly in `src/components/` with sub-directories by domain (`views/`, `panels/`, `editors/`, `settings/`, `io/`, `widgets/`). Shared presentational sub-components (e.g. `StarRatingOverlay`, `ProgressOverlay`) live in `widgets/`.
 - **Utilities are pure functions.** Every file in `src/utils/` exports only plain functions and constants; none hold reactive state themselves (except `apiClient.js`, which holds `isAuthenticated`, `sessionContext`, and `isReadOnly`).
@@ -142,7 +145,7 @@ PixlStash uses **Pinia** for cross-component state. State is managed at three ti
 
 ### Tier 1: Pinia stores — cross-component shared state
 
-All state consumed by more than one component lives in a Pinia store. Ten stores are defined in `frontend/src/stores/`:
+All state consumed by more than one component lives in a Pinia store. The stores defined in `frontend/src/stores/` are:
 
 | Store | File | Key State |
 |-------|------|-----------|
@@ -153,9 +156,10 @@ All state consumed by more than one component lives in a Pinia store. Ten stores
 | `useExportStore` | `useExportStore.js` | `exportType`, `exportCaptionMode`, `exportResolution`, `exportTagFormat`, `exportIncludeCharacterName`, `exportUseOriginalFileNames`, etc. |
 | `useWsStore` | `useWsStore.js` | `wsTagUpdate`, `wsPluginProgress`, `pendingExternalImportCount`, `updatesSocket` |
 | `useUserPrefsStore` | `useUserPrefsStore.js` | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights`, `dateFormat`, `themeMode` |
-| `useProjectStore` | `useProjectStore.js` | `projectViewMode`, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
+| `useProjectStore` | `useProjectStore.js` | `projectViewMode` *(sidebar-display only — see below)*, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
 | `useSidebarStore` | `useSidebarStore.js` | `sidebarVisible`, `sidebarDocked`, `statsOpen`, `sidebarForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId` |
 | `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
+| `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
 
 Components import stores directly (`import { useFilterStore } from '../../stores/useFilterStore'`) — no prop drilling required.
 
@@ -204,12 +208,39 @@ Left navigation panel. Responsibilities:
 - Tabs: People, Sets, Projects, Folders.
 - Character list with face thumbnails, drag-drop assignment, inline create/edit.
 - Set list with thumbnail stacks, drag-drop assignment.
-- Project tree with expandable nodes (people + sets per project).
+- Project tree with expandable nodes (people + sets per project); project rows are drop targets — dropping grid pictures assigns them to that project (like character/set rows).
 - Folder browser (import and reference folders).
 - Settings dialog trigger, sort selector.
 - Embeds: `ImageImporter`, `CharacterEditor`, `PictureSetEditor`, `ProjectEditor`, `FolderEditor`, `UserSettingsDialog`.
 - Exposes: `refreshSidebar()`, `openSettingsDialog()`, `startLocalImport()`, `currentProjectId`, `openCurrentSelectionEditor()`
 - Emits: 30+ events including `select-character`, `select-set`, `select-folder`, `update:public-url`, `update:theme-mode`, `update:sort-options`, `update:hidden-tags`, `toggle-dock`, `update:project-view-mode`, etc.
+
+##### Sidebar tabs & drag-to-assign (stateless tabs)
+
+The tab/category switch is **stateless** (see Key Design Principles). Concretely:
+
+- **Tab state is sidebar-local display state only.** `sidebarPrimaryTab`
+  (`'library' | 'folders'`) and `projectViewMode` (`'global' | 'project'`)
+  select *which list the sidebar renders*. Switching them must not
+  `router.push()`, must not emit a `select-*` event, and must not mutate the
+  filter / selection / sort / grid stores. Folder-status polling is the only
+  permitted side effect of a tab switch (it loads the data the tab displays).
+- **Entry clicks are the only navigation.** Clicking a specific character /
+  set / project emits the corresponding `select-*` event → `App.vue` calls
+  `router.push()` → the route (the single source of truth) drives the grid.
+  The grid is otherwise unaffected by tab switches.
+- **Every entry is also a drop target.** Each character and set row (and the
+  project entries) accepts a drop of the current grid selection
+  (`application/json` payload via `dataTransfer`) to assign those pictures —
+  `handleDragOverCharacter` / `dragOverSet` and siblings. Because switching a
+  tab no longer disturbs the grid, the intended flow works end-to-end: find
+  pictures on a global view → switch to the Projects/People/Sets tab → drag the
+  selection onto a project or character to add them, with the global view still
+  intact underneath.
+- **Anti-pattern (do not reintroduce):** a tab/mode `watch` that emits
+  `select-*`, pushes a route, or resets a filter. That recouples the sidebar to
+  the view and breaks the drag-to-assign flow. Keep navigation in entry-click
+  handlers only.
 
 #### `ImageOverlay.vue` (~6 590 lines)
 Full-screen image lightbox. Responsibilities:
