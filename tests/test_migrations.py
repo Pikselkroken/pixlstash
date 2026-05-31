@@ -2,6 +2,7 @@
 and on an upgrade from the pre-snapshots (v1.4.1) schema with real data."""
 
 import contextlib
+import hashlib
 import os
 import sqlite3
 import subprocess
@@ -164,3 +165,68 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
             assert all(h is None for _, h in hashes), (
                 f"metadata_hash must be NULL on pre-existing rows: {hashes}"
             )
+
+
+def test_alembic_0051_migrates_deleted_file_log_to_path_sha():
+    """A deployed DB whose ``deleted_file_log`` still has the old cleartext
+    ``file_path`` column is migrated to the opaque ``path_sha``: existing paths
+    are hashed (so already-logged deletions stay matchable) and the cleartext
+    column is dropped (privacy).
+
+    Fresh DBs build the table from the current model, so only a real deployed
+    DB ever has ``file_path`` — reproduced here by hand-building it and stamping
+    the alembic version to the revision just before 0051.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE deleted_file_log (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    file_path VARCHAR NOT NULL,
+                    pixel_sha VARCHAR,
+                    deleted_at DATETIME NOT NULL
+                );
+                CREATE INDEX ix_deleted_file_log_file_path
+                    ON deleted_file_log (file_path);
+                CREATE TABLE alembic_version (version_num VARCHAR NOT NULL);
+                INSERT INTO alembic_version (version_num)
+                    VALUES ('0050_reset_metadata_hash_membership');
+                INSERT INTO deleted_file_log (file_path, pixel_sha, deleted_at)
+                    VALUES ('abcd-1234.jpg', 'pix1', '2026-01-01 00:00:00');
+                INSERT INTO deleted_file_log (file_path, pixel_sha, deleted_at)
+                    VALUES ('/private/ref/secret.png', NULL, '2026-01-02 00:00:00');
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert result.returncode == 0, (
+            f"upgrade failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cols = {
+                r[1]
+                for r in conn.execute("PRAGMA table_info(deleted_file_log)").fetchall()
+            }
+            assert "path_sha" in cols, "0051 must add path_sha"
+            assert "file_path" not in cols, "0051 must drop the cleartext file_path"
+
+            rows = conn.execute(
+                "SELECT path_sha, pixel_sha FROM deleted_file_log ORDER BY id"
+            ).fetchall()
+            assert rows[0][0] == hashlib.sha256(b"abcd-1234.jpg").hexdigest()
+            assert rows[0][1] == "pix1", "pixel_sha must be preserved"
+            # Sensitive reference-folder path is now a one-way hash, not cleartext.
+            assert rows[1][0] == hashlib.sha256(b"/private/ref/secret.png").hexdigest()
+            assert rows[1][0] != "/private/ref/secret.png"
+        finally:
+            conn.close()

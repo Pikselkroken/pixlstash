@@ -215,6 +215,45 @@ class SnapshotService:
             lambda session: session.get(Snapshot, snapshot_id)
         )
 
+    def snapshots_containing(self, picture_ids) -> list[dict]:
+        """Return snapshots whose manifest still references any of *picture_ids*.
+
+        Used after a permanent purge to tell the user which snapshots continue
+        to hold metadata (tags, description, captions, …) for the pictures they
+        just deleted. The snapshot archives are not scrubbed, so deleting those
+        snapshots is currently the way to erase that retained metadata.
+
+        Discovery reads only the JSON manifests (which list each snapshot's
+        ``picture_ids``) — no snapshot database is opened or decompressed.
+
+        Args:
+            picture_ids: Live picture IDs that were just purged.
+
+        Returns:
+            List of ``{"id", "kind", "label", "created_at", "matched_count"}``
+            dicts, one per snapshot containing at least one of the IDs, ordered
+            newest first.
+        """
+        wanted = {int(p) for p in picture_ids if p is not None}
+        if not wanted:
+            return []
+        result: list[dict] = []
+        for cp in self.list_snapshots():
+            manifest = self.load_manifest(cp.id)
+            manifest_ids = manifest.get("picture_ids") or []
+            matched = wanted.intersection(manifest_ids)
+            if matched:
+                result.append(
+                    {
+                        "id": cp.id,
+                        "kind": cp.kind,
+                        "label": cp.label,
+                        "created_at": cp.created_at.isoformat(),
+                        "matched_count": len(matched),
+                    }
+                )
+        return result
+
     def delete_snapshot(self, snapshot_id: int) -> bool:
         """Delete a snapshot row and its snapshot file from disk.
 

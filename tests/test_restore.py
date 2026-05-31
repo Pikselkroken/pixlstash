@@ -12,6 +12,7 @@ from sqlmodel import delete, select
 
 from pixlstash.db_models import (
     Character,
+    DeletedFileLog,
     Face,
     Picture,
     PictureSet,
@@ -59,6 +60,7 @@ def clean_db(server):
         session.exec(delete(PictureSetMember))
         session.exec(delete(Face))
         session.exec(delete(Tag))
+        session.exec(delete(DeletedFileLog))
         session.exec(delete(Picture))
         session.exec(delete(PictureSet))
         session.exec(delete(Project))
@@ -99,6 +101,39 @@ def _create_file(server, relative_path: str):
     abs_path = os.path.join(server.vault.image_root, relative_path)
     open(abs_path, "wb").close()
     return abs_path
+
+
+def _remove_file(server, relative_path: str):
+    """Delete a placeholder file from the vault image_root."""
+    os.remove(os.path.join(server.vault.image_root, relative_path))
+
+
+def _add_deleted_log(server, file_path: str, pixel_sha: str | None = None):
+    """Record a permanent deletion in deleted_file_log (path stored hashed)."""
+    from datetime import datetime, timezone
+
+    def _do(session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path(file_path),
+                pixel_sha=pixel_sha,
+                deleted_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_do)
+
+
+def _count_deleted_log(server, file_path: str) -> int:
+    path_sha = DeletedFileLog.hash_path(file_path)
+    return server.vault.db.run_immediate_read_task(
+        lambda s: len(
+            s.exec(
+                select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
+            ).all()
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1778,3 +1813,120 @@ def test_preview_full_detects_set_membership_change(server):
     assert preview.summary["pictures_to_revert"] == 1, preview.summary
     assert preview.summary["pictures_unchanged"] == 0, preview.summary
     assert pic.id in {r.id for r in preview.resources}
+
+
+# ---------------------------------------------------------------------------
+# Permanent-deletion ledger (deleted_file_log) cross-check
+# ---------------------------------------------------------------------------
+
+
+def test_full_restore_skips_permanently_deleted_picture(server):
+    """A snapshot picture whose file is in deleted_file_log must not be
+    resurrected — even though its file still exists on disk, so the
+    missing-file pass would NOT drop it. The ledger entry must also survive
+    the DB swap (it was recorded after the snapshot was taken)."""
+    _create_file(server, "purged.jpg")
+    pic = _add_picture(server, filename="purged.jpg", description="doomed")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Simulate a permanent purge AFTER the snapshot: drop the live row and
+    # record the deletion. The file is left on disk to prove the drop comes
+    # from the ledger, not the missing-file check.
+    def _del(session):
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_del)
+    _add_deleted_log(server, "purged.jpg")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert report.missing_files_count == 0, "File is on disk — not missing."
+    assert report.permanently_deleted_count == 1, report.permanently_deleted_count
+    assert _get_picture(server, pic.id) is None, (
+        "Permanently-deleted picture must not be resurrected by restore."
+    )
+    # The ledger entry recorded after the snapshot must survive the swap.
+    assert _count_deleted_log(server, "purged.jpg") == 1, (
+        "deleted_file_log entry must be replayed across the DB swap."
+    )
+
+
+def test_restore_resource_refuses_permanently_deleted_picture(server):
+    """Per-resource restore must skip a picture matched by content hash in
+    deleted_file_log (sha match, with a different recorded path)."""
+    _create_file(server, "gone.jpg")
+    pic = _add_picture(server, filename="gone.jpg", description="original")
+
+    # Give the picture a content hash, then record that hash as deleted under
+    # a different path — exercises the pixel_sha matching branch.
+    def _set_sha(session):
+        p = session.get(Picture, pic.id)
+        p.pixel_sha = "sha-deadbeef"
+        session.commit()
+
+    server.vault.db.run_task(_set_sha)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _del(session):
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_del)
+    _add_deleted_log(server, "some-other-path.jpg", pixel_sha="sha-deadbeef")
+
+    report = server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
+
+    assert report.permanently_deleted_count == 1, report.permanently_deleted_count
+    assert report.upserted_count == 0, "Nothing should be upserted."
+    assert _get_picture(server, pic.id) is None, (
+        "restore_resource must not resurrect a permanently-deleted picture."
+    )
+
+
+def test_full_restore_ratio_check_excludes_permanent_deletions(server):
+    """Permanent deletions must not trip the >50%-missing mount-failure guard.
+
+    12 pictures are snapshotted; 8 are then permanently deleted (files removed
+    AND logged). Their files are missing on disk (8/12 = 67% > 50%), which
+    without the ledger cross-check would refuse the restore as a suspected
+    mount failure. With it, the 8 are excluded from the suspicious ratio and
+    the restore proceeds, dropping all 8."""
+    kept_ids = []
+    deleted_ids = []
+    for i in range(12):
+        name = f"ratio_{i}.jpg"
+        _create_file(server, name)
+        p = _add_picture(server, filename=name)
+        (deleted_ids if i < 8 else kept_ids).append((p.id, name))
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Permanently delete the first 8: remove files + record the deletions.
+    for pid, name in deleted_ids:
+        _remove_file(server, name)
+        _add_deleted_log(server, name)
+
+    # Must NOT raise (the 8 are known deletions, not a mount failure).
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert report.missing_files_count == 8, report.missing_files_count
+    assert report.permanently_deleted_count == 8, report.permanently_deleted_count
+    for pid, _ in deleted_ids:
+        assert _get_picture(server, pid) is None
+    for pid, _ in kept_ids:
+        assert _get_picture(server, pid) is not None
+
+
+def test_preview_full_warns_about_permanently_deleted(server):
+    """The full-restore preview surfaces a permanently-deleted count/warning."""
+    _create_file(server, "prev_del.jpg")
+    pic = _add_picture(server, filename="prev_del.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    _add_deleted_log(server, "prev_del.jpg")
+
+    preview = server.vault.restore_service.preview_full(cp.id)
+    assert preview.summary.get("permanently_deleted") == 1, preview.summary
+    assert any("permanently deleted" in w for w in preview.warnings), preview.warnings
+    assert pic.id  # silence unused-var linters

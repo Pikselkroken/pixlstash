@@ -148,6 +148,10 @@ class ScrapheapDeleteResponse(BaseModel):
 
     status: str
     deleted_count: int
+    # Snapshots that still contain metadata for the just-purged pictures, each
+    # ``{id, kind, label, created_at, matched_count}``. The archives are not
+    # scrubbed; the user can delete these snapshots to erase that metadata.
+    snapshots_with_deleted: Optional[list] = None
 
 
 class PictureDeleteResponse(BaseModel):
@@ -1265,7 +1269,10 @@ def register_routes(router, server):
                 if file_path:
                     full_delete_file_paths.append(file_path)
                     full_delete_log_records.append(
-                        {"file_path": file_path, "pixel_sha": pixel_sha}
+                        {
+                            "path_sha": DeletedFileLog.hash_path(file_path),
+                            "pixel_sha": pixel_sha,
+                        }
                     )
 
         if sentinel_ids:
@@ -1328,16 +1335,16 @@ def register_routes(router, server):
             # deleted in the same transaction so the two never diverge.
             now = datetime.now(timezone.utc)
             for record in log_records:
-                file_path = record.get("file_path")
-                if not file_path:
+                path_sha = record.get("path_sha")
+                if not path_sha:
                     continue
                 already_logged = session.exec(
-                    select(DeletedFileLog).where(DeletedFileLog.file_path == file_path)
+                    select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
                 ).first()
                 if already_logged is None:
                     session.add(
                         DeletedFileLog(
-                            file_path=file_path,
+                            path_sha=path_sha,
                             pixel_sha=record.get("pixel_sha"),
                             deleted_at=now,
                         )
@@ -1353,9 +1360,19 @@ def register_routes(router, server):
             priority=DBPriority.IMMEDIATE,
         )
         server.vault.notify(EventType.CHANGED_PICTURES)
+
+        # Tell the caller which snapshots still hold metadata for the pictures
+        # just purged. Snapshot archives are not scrubbed, so the user may want
+        # to delete those snapshots if the deletion was for privacy. Discovery
+        # reads only the JSON manifests (no snapshot DB is opened).
+        snapshots_with_deleted = server.vault.snapshot_service.snapshots_containing(
+            full_delete_ids + sentinel_ids
+        )
+
         return {
             "status": "success",
             "deleted_count": deleted_count + len(sentinel_ids),
+            "snapshots_with_deleted": snapshots_with_deleted,
         }
 
     @router.delete(

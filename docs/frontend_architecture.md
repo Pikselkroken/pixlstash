@@ -376,6 +376,9 @@ Active-search banner. Props: `query`, `scope`, `resultCount`. Emits: `clear`, `s
 #### `ShareDialog.vue` (286 lines)
 Share link creation. Props: `modelValue` (v-model for open), `pictureId`, `embedWatermark`. Emits: `update:modelValue`, `update:embed-watermark`, `created`. Calls `POST /shares`.
 
+#### `SnapshotsWithDeletedDialog.vue` (~95 lines)
+Post-purge privacy notice. Props: `modelValue` (v-model open), `snapshots` (array of `{id, kind, label, created_at, matched_count}` from the `DELETE /pictures/scrapheap` response's `snapshots_with_deleted`). Emits: `update:modelValue`. Shown by `ImageGrid` after a permanent scrapheap purge when the deleted pictures' metadata still lives in one or more snapshots — the archives are not scrubbed, so it lists those snapshots and points the user to Settings → Snapshots to delete them. Reuses `kindChipColor`/`relativeDate` from `utils/snapshots.js`.
+
 #### `ImageGridContextMenu.vue` (392 lines)
 Right-click context menu for grid cells. Props: `visible`, `x`, `y`, `selectedImageIds`, `selectedMediaSupport`, `selectedCharacter`, `selectedSet`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`. Emits same action events as `Toolbar`. Embeds `AddToEntityControl`.
 

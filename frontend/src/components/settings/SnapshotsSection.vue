@@ -46,27 +46,6 @@ const snapshots = computed(() => store.snapshots);
 const isLoading = computed(() => store.loading);
 const activeJob = computed(() => store.activeJob);
 
-// GFS-scheduled kinds whose most-recent snapshot is the current automatic
-// restore point and must stay locked. Older snapshots of these kinds — and
-// all MANUAL / OPPORTUNISTIC snapshots — can be deleted.
-const GFS_KINDS = ["DAILY", "WEEKLY", "MONTHLY"];
-
-const lockedSnapshotIds = computed(() => {
-  const latestByKind = {};
-  for (const cp of store.snapshots) {
-    if (!GFS_KINDS.includes(cp.kind)) continue;
-    const cur = latestByKind[cp.kind];
-    if (!cur || new Date(cp.created_at) > new Date(cur.created_at)) {
-      latestByKind[cp.kind] = cp;
-    }
-  }
-  return new Set(Object.values(latestByKind).map((cp) => cp.id));
-});
-
-function isLocked(cp) {
-  return lockedSnapshotIds.value.has(cp.id);
-}
-
 function humanBytes(bytes) {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"];
@@ -387,33 +366,18 @@ function handleRestore(cp) {
             Restore…
           </v-btn>
 
-          <v-tooltip
-            :text="
-              isLocked(cp)
-                ? `The most recent ${cp.kind} snapshot is the current automatic restore point and cannot be deleted.`
-                : ''
-            "
-            :disabled="!isLocked(cp)"
+          <v-btn
+            size="x-small"
+            variant="text"
+            density="compact"
+            color="error"
+            :disabled="!!activeJob || deletingId === cp.id"
+            :loading="deletingId === cp.id"
+            title="Delete this snapshot"
+            @click="handleDelete(cp)"
           >
-            <template #activator="{ props: tooltipProps }">
-              <span v-bind="tooltipProps">
-                <v-btn
-                  size="x-small"
-                  variant="text"
-                  density="compact"
-                  color="error"
-                  :disabled="
-                    isLocked(cp) || !!activeJob || deletingId === cp.id
-                  "
-                  :loading="deletingId === cp.id"
-                  title="Delete this snapshot"
-                  @click="handleDelete(cp)"
-                >
-                  <v-icon size="14">mdi-delete-outline</v-icon>
-                </v-btn>
-              </span>
-            </template>
-          </v-tooltip>
+            <v-icon size="14">mdi-delete-outline</v-icon>
+          </v-btn>
         </div>
       </div>
     </template>

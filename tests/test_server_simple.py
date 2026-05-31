@@ -320,16 +320,46 @@ def test_scrapheap_purge_logs_deleted_files(server):
     assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
     assert not os.path.isfile(abs_path)
 
-    # ...and a deleted_file_log row records what can no longer be restored.
+    # ...and a deleted_file_log row records the deletion as opaque hashes —
+    # the raw path is never stored (privacy), only its SHA-256.
+    expected_path_sha = DeletedFileLog.hash_path(file_path)
+
     def _fetch_logs(session: Session):
-        rows = session.exec(
-            select(DeletedFileLog).where(DeletedFileLog.file_path == file_path)
-        ).all()
-        return [(r.file_path, r.pixel_sha) for r in rows]
+        rows = session.exec(select(DeletedFileLog)).all()
+        return [(r.path_sha, r.pixel_sha) for r in rows]
 
     logs = server.vault.db.run_task(_fetch_logs)
     assert len(logs) == 1, f"Expected exactly one log row, got {logs}"
-    assert logs[0] == (file_path, pixel_sha)
+    assert logs[0] == (expected_path_sha, pixel_sha)
+    # The cleartext path must not appear in any column of the log row.
+    assert file_path not in (logs[0][0] or ""), "Raw path leaked into path_sha."
+
+
+def test_scrapheap_purge_reports_snapshots_with_deleted(server):
+    """Purging the scrapheap reports which snapshots still hold the metadata
+    for the deleted pictures, so the user can choose to delete those snapshots."""
+    server.vault.import_default_data()
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+
+    pic_id = server.vault.db.run_task(lambda s: s.exec(select(Picture)).first().id)
+
+    # Snapshot now contains this picture, then soft-delete + purge it.
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    resp = client.delete("/pictures/scrapheap")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    snaps = body.get("snapshots_with_deleted") or []
+    assert any(s["id"] == cp.id and s["matched_count"] >= 1 for s in snaps), (
+        f"Expected snapshot {cp.id} in {snaps}"
+    )
 
 
 def test_pictures_export(server):

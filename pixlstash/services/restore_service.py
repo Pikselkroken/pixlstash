@@ -439,9 +439,9 @@ class RestoreService:
         #     must never be resurrected (even if the file somehow lingers on
         #     disk), and they must not count toward the missing-file ratio
         #     below — an intentional purge is not a mount failure.
-        deleted_paths, deleted_shas = self._load_deleted_file_index()
+        path_shas, pixel_shas = self._load_deleted_file_index()
         deleted_ids = self._find_permanently_deleted_ids(
-            upgraded_snapshot, deleted_paths, deleted_shas
+            upgraded_snapshot, path_shas, pixel_shas
         )
         report.permanently_deleted_count = len(deleted_ids)
         if deleted_ids:
@@ -538,7 +538,7 @@ class RestoreService:
         live_deleted_log = self._vault.db.run_immediate_read_task(
             lambda s: [
                 {
-                    "file_path": r.file_path,
+                    "path_sha": r.path_sha,
                     "pixel_sha": r.pixel_sha,
                     "deleted_at": r.deleted_at,
                 }
@@ -675,18 +675,18 @@ class RestoreService:
 
             # Replay the permanent-deletion ledger. The swapped-in DB only
             # knows about files deleted up to the target snapshot's time;
-            # re-insert any live entry it is missing (deduped by file_path)
+            # re-insert any live entry it is missing (deduped by path_sha)
             # so the record of permanently-deleted, unrestorable content is
             # never lost by rolling back to an older snapshot.
-            existing_deleted_paths = set(
-                session.exec(select(DeletedFileLog.file_path)).all()
+            existing_path_shas = set(
+                session.exec(select(DeletedFileLog.path_sha)).all()
             )
             reinserted_deleted = 0
             for entry in live_deleted_log:
-                if entry["file_path"] in existing_deleted_paths:
+                if entry["path_sha"] in existing_path_shas:
                     continue
                 session.add(DeletedFileLog(**entry))
-                existing_deleted_paths.add(entry["file_path"])
+                existing_path_shas.add(entry["path_sha"])
                 reinserted_deleted += 1
             if reinserted_deleted:
                 session.commit()
@@ -1688,63 +1688,68 @@ class RestoreService:
         return missing, total
 
     def _load_deleted_file_index(self) -> tuple[set[str], set[str]]:
-        """Read the live ``deleted_file_log`` into (file_paths, pixel_shas).
+        """Read the live ``deleted_file_log`` into (path_shas, pixel_shas).
 
         These identify content the user has *permanently* deleted (see
-        ``DeletedFileLog``). Restore consults them so a snapshot taken before
-        the deletion can never resurrect that content, and so the missing-file
-        ratio safety check does not mistake an intentional purge for a
-        transient mount failure.
+        ``DeletedFileLog``). Both are one-way hashes — ``path_sha`` is the
+        SHA-256 of a picture's vault path, ``pixel_sha`` its content hash.
+        Restore consults them so a snapshot taken before the deletion can
+        never resurrect that content, and so the missing-file ratio safety
+        check does not mistake an intentional purge for a transient mount
+        failure.
 
         Returns:
-            ``(deleted_paths, deleted_shas)`` — vault-relative file paths and
-            content hashes recorded as permanently deleted.
+            ``(path_shas, pixel_shas)`` — path and content hashes recorded as
+            permanently deleted.
         """
 
         def _load(session: Session) -> tuple[set[str], set[str]]:
             rows = session.execute(
-                sa_select(DeletedFileLog.file_path, DeletedFileLog.pixel_sha)
+                sa_select(DeletedFileLog.path_sha, DeletedFileLog.pixel_sha)
             ).all()
-            paths = {fp for fp, _ in rows if fp}
-            shas = {sha for _, sha in rows if sha}
-            return paths, shas
+            path_shas = {ps for ps, _ in rows if ps}
+            pixel_shas = {sha for _, sha in rows if sha}
+            return path_shas, pixel_shas
 
         return self._vault.db.run_immediate_read_task(_load)
 
     @staticmethod
     def _match_deleted_picture_ids(
         snap_session: Session,
-        deleted_paths: set[str],
-        deleted_shas: set[str],
+        path_shas: set[str],
+        pixel_shas: set[str],
     ) -> set[int]:
         """Return snapshot Picture IDs whose content is permanently deleted.
 
-        A snapshot row matches if its ``file_path`` or its ``pixel_sha`` is
-        present in the live deleted-file index. Matching on ``pixel_sha`` as
-        well as path catches content that was deleted and later re-added under
-        a different filename.
+        A snapshot row matches if the SHA-256 of its ``file_path`` is in
+        *path_shas*, or its ``pixel_sha`` is in *pixel_shas*. The path is
+        hashed here (the ledger never stores the raw path); matching on
+        ``pixel_sha`` too catches content deleted and later re-added under a
+        different filename.
 
         Args:
             snap_session: Read session on the (upgraded) snapshot DB.
-            deleted_paths: Vault-relative paths recorded as permanently deleted.
-            deleted_shas: Content hashes recorded as permanently deleted.
+            path_shas: Hashed paths recorded as permanently deleted.
+            pixel_shas: Content hashes recorded as permanently deleted.
 
         Returns:
             Set of snapshot Picture IDs that must not be restored.
         """
-        if not deleted_paths and not deleted_shas:
+        if not path_shas and not pixel_shas:
             return set()
         matched: set[int] = set()
         rows = snap_session.execute(
             sa_select(Picture.id, Picture.file_path, Picture.pixel_sha)
         ).all()
         for pid, fp, sha in rows:
-            if (fp and fp in deleted_paths) or (sha and sha in deleted_shas):
+            if (fp and DeletedFileLog.hash_path(fp) in path_shas) or (
+                sha and sha in pixel_shas
+            ):
                 matched.add(pid)
         return matched
 
     def _find_permanently_deleted_ids(
-        self, abs_snapshot: str, deleted_paths: set[str], deleted_shas: set[str]
+        self, abs_snapshot: str, path_shas: set[str], pixel_shas: set[str]
     ) -> set[int]:
         """Scan the snapshot file for Picture rows in the deleted-file index.
 
@@ -1756,20 +1761,20 @@ class RestoreService:
 
         Args:
             abs_snapshot: Absolute path to the (upgraded) snapshot DB.
-            deleted_paths: Vault-relative paths recorded as permanently deleted.
-            deleted_shas: Content hashes recorded as permanently deleted.
+            path_shas: Hashed paths recorded as permanently deleted.
+            pixel_shas: Content hashes recorded as permanently deleted.
 
         Returns:
             Set of snapshot Picture IDs that must not be restored.
         """
-        if not deleted_paths and not deleted_shas:
+        if not path_shas and not pixel_shas:
             return set()
         try:
             engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
             try:
                 with Session(engine) as session:
                     return self._match_deleted_picture_ids(
-                        session, deleted_paths, deleted_shas
+                        session, path_shas, pixel_shas
                     )
             finally:
                 engine.dispose()
@@ -1949,10 +1954,10 @@ class RestoreService:
                 # even if its file still happens to be on disk. Filter here,
                 # before collecting rows, so the deleted pictures' parents are
                 # not pulled in either.
-                deleted_paths, deleted_shas = self._load_deleted_file_index()
-                if deleted_paths or deleted_shas:
+                path_shas, pixel_shas = self._load_deleted_file_index()
+                if path_shas or pixel_shas:
                     blocked = self._match_deleted_picture_ids(
-                        snap_session, deleted_paths, deleted_shas
+                        snap_session, path_shas, pixel_shas
                     )
                     if blocked:
                         kept = [pid for pid in valid_picture_ids if pid not in blocked]
@@ -2533,9 +2538,9 @@ class RestoreService:
         # Permanent-deletion ledger: surface how many snapshot pictures will be
         # withheld because their content was permanently deleted (these also
         # appear under missing_files when their file is already gone from disk).
-        deleted_paths, deleted_shas = self._load_deleted_file_index()
+        path_shas, pixel_shas = self._load_deleted_file_index()
         permanently_deleted = len(
-            self._match_deleted_picture_ids(snap_session, deleted_paths, deleted_shas)
+            self._match_deleted_picture_ids(snap_session, path_shas, pixel_shas)
         )
         if permanently_deleted:
             preview.warnings.append(
@@ -2638,10 +2643,11 @@ class RestoreService:
                     preview.warnings.append(
                         f"Picture id={resource_id} file missing on disk."
                     )
-                deleted_paths, deleted_shas = self._load_deleted_file_index()
-                if (snap_pic.file_path and snap_pic.file_path in deleted_paths) or (
-                    snap_pic.pixel_sha and snap_pic.pixel_sha in deleted_shas
-                ):
+                path_shas, pixel_shas = self._load_deleted_file_index()
+                if (
+                    snap_pic.file_path
+                    and DeletedFileLog.hash_path(snap_pic.file_path) in path_shas
+                ) or (snap_pic.pixel_sha and snap_pic.pixel_sha in pixel_shas):
                     preview.warnings.append(
                         f"Picture id={resource_id} was permanently deleted and "
                         "will not be restored."
