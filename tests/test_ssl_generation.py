@@ -134,3 +134,74 @@ class TestEnsureSslCertificates:
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
         assert key_pub == cert_pub
+
+
+# ---------------------------------------------------------------------------
+# init_server_config: SSL paths live in the config only when SSL is enabled.
+# Regression guard for "startup keeps adding ssl_keyfile/ssl_certfile to my
+# server-config even though require_ssl is off."
+# ---------------------------------------------------------------------------
+
+
+class TestSslConfigPersistence:
+    def test_fresh_config_omits_ssl_paths_when_ssl_off(self, tmp_path):
+        import json
+
+        path = str(tmp_path / "server-config.json")
+        cfg = Server.init_server_config(path)
+
+        assert cfg.get("require_ssl") is False
+        assert "ssl_keyfile" not in cfg
+        assert "ssl_certfile" not in cfg
+        # And nothing SSL-shaped was written to disk.
+        on_disk = json.load(open(path))
+        assert "ssl_keyfile" not in on_disk
+        assert "ssl_certfile" not in on_disk
+
+    def test_existing_ssl_paths_stripped_when_ssl_off(self, tmp_path):
+        """A config polluted with ssl paths from an older build (require_ssl
+        off) has them removed — they would never be read and just reappear."""
+        import json
+
+        path = str(tmp_path / "server-config.json")
+        json.dump(
+            {
+                "require_ssl": False,
+                "ssl_keyfile": "/old/key.pem",
+                "ssl_certfile": "/old/cert.pem",
+            },
+            open(path, "w"),
+        )
+
+        cfg = Server.init_server_config(path)
+        assert "ssl_keyfile" not in cfg
+        assert "ssl_certfile" not in cfg
+
+    def test_ssl_paths_injected_when_ssl_on_and_missing(self, tmp_path):
+        import json
+
+        path = str(tmp_path / "server-config.json")
+        json.dump({"require_ssl": True}, open(path, "w"))
+
+        cfg = Server.init_server_config(path)
+        assert cfg["ssl_keyfile"], "ssl_keyfile must be defaulted when SSL is on"
+        assert cfg["ssl_certfile"], "ssl_certfile must be defaulted when SSL is on"
+        assert os.path.isabs(cfg["ssl_keyfile"])
+        assert os.path.isabs(cfg["ssl_certfile"])
+
+    def test_custom_ssl_paths_preserved_when_ssl_on(self, tmp_path):
+        import json
+
+        path = str(tmp_path / "server-config.json")
+        json.dump(
+            {
+                "require_ssl": True,
+                "ssl_keyfile": "/custom/k.pem",
+                "ssl_certfile": "/custom/c.pem",
+            },
+            open(path, "w"),
+        )
+
+        cfg = Server.init_server_config(path)
+        assert cfg["ssl_keyfile"] == "/custom/k.pem"
+        assert cfg["ssl_certfile"] == "/custom/c.pem"

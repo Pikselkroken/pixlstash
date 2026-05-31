@@ -1349,8 +1349,8 @@ class Server:
                 "log_level": "info",
                 "log_file": default_log_path,
                 "require_ssl": False,
-                "ssl_keyfile": default_ssl_key_path,
-                "ssl_certfile": default_ssl_cert_path,
+                # ssl_keyfile / ssl_certfile are added by the require_ssl
+                # gating block below — only when SSL is actually enabled.
                 "cookie_samesite": "Lax",
                 "cookie_secure": False,
                 "image_root": default_image_root,
@@ -1377,10 +1377,6 @@ class Server:
                     server_config["log_file"] = default_log_path
                 if "require_ssl" not in server_config:
                     server_config["require_ssl"] = False
-                if "ssl_keyfile" not in server_config:
-                    server_config["ssl_keyfile"] = default_ssl_key_path
-                if "ssl_certfile" not in server_config:
-                    server_config["ssl_certfile"] = default_ssl_cert_path
                 if "cookie_samesite" not in server_config:
                     server_config["cookie_samesite"] = "Lax"
                 if "cookie_secure" not in server_config:
@@ -1403,6 +1399,20 @@ class Server:
                     server_config["filesystem_roots"] = []
                 if "daily_snapshots" not in server_config:
                     server_config["daily_snapshots"] = True
+
+        # SSL key/cert paths live in the config *only* when SSL is enabled.
+        # When require_ssl is off they are never read (see _ensure_ssl_certificates
+        # and the uvicorn launch, both guarded by require_ssl), so persisting
+        # them just clutters the user's config — and re-injecting them on every
+        # boot means a user who deletes them sees them reappear. Add the
+        # defaults when SSL is on; strip them when it is off so existing
+        # pollution self-heals on the next write.
+        if server_config.get("require_ssl", False):
+            server_config.setdefault("ssl_keyfile", default_ssl_key_path)
+            server_config.setdefault("ssl_certfile", default_ssl_cert_path)
+        else:
+            server_config.pop("ssl_keyfile", None)
+            server_config.pop("ssl_certfile", None)
 
         # Resolve SSL paths that are relative: interpret them relative to the
         # config file's directory, not the process's CWD, so that the certs

@@ -142,9 +142,7 @@ def test_delete_moves_orphans_to_trash(vault):
 
     # Orphans gone from their original location, present under trash.
     assert not os.path.exists(os.path.join(vault, "2026/05/31/orphan.jpg"))
-    assert os.path.isfile(
-        os.path.join(vault, ".orphan_trash", "2026/05/31/orphan.jpg")
-    )
+    assert os.path.isfile(os.path.join(vault, ".orphan_trash", "2026/05/31/orphan.jpg"))
     assert not os.path.exists(os.path.join(vault, "stray.bin"))
     assert os.path.isfile(os.path.join(vault, ".orphan_trash", "stray.bin"))
 

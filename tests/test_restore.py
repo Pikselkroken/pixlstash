@@ -1279,8 +1279,7 @@ def test_restore_resource_picture_with_missing_project_raises_without_confirm(
     with pytest.raises(MissingDependenciesError) as exc_info:
         server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
     assert proj_id in exc_info.value.missing.get("projects", []), (
-        f"Expected missing projects to include {proj_id}; "
-        f"got {exc_info.value.missing}"
+        f"Expected missing projects to include {proj_id}; got {exc_info.value.missing}"
     )
 
     projects_after = server.vault.db.run_immediate_read_task(
@@ -1378,9 +1377,7 @@ def test_full_restore_allows_high_missing_ratio_with_override(server):
 
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    report = server.vault.restore_service.restore_full(
-        cp.id, allow_without_safety=True
-    )
+    report = server.vault.restore_service.restore_full(cp.id, allow_without_safety=True)
     assert not report.errors, f"Override restore errors: {report.errors}"
     assert report.missing_files_count == 7
 
