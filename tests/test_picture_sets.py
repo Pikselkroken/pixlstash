@@ -266,6 +266,105 @@ def test_reassigning_set_project_reconciles_member_picture_memberships():
         gc.collect()
 
 
+def _first_test_image():
+    import glob
+
+    candidates = glob.glob(
+        os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
+    ) + glob.glob(os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg"))
+    assert candidates, "No test images found in pictures/ directory"
+    path = candidates[0]
+    mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    return path, mime
+
+
+def _import_one_picture(client):
+    path, mime = _first_test_image()
+    with open(path, "rb") as image_file:
+        import_resp = upload_pictures_and_wait(
+            client, [("file", (os.path.basename(path), image_file, mime))]
+        )
+    return import_resp["results"][0]["picture_id"]
+
+
+def _project_picture_ids(client, project_id):
+    resp = client.get("/pictures", params={"project_id": str(project_id)})
+    assert resp.status_code == 200
+    return {row.get("id") for row in resp.json()}
+
+
+def test_moving_set_to_new_project_disassociates_pictures_from_old():
+    """Moving a set out of project A removes its member pictures from A (the
+    project the set was dragged out of) and into the new project B."""
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        project_a = client.post("/projects", json={"name": "Set Move A"}).json()["id"]
+        project_b = client.post("/projects", json={"name": "Set Move B"}).json()["id"]
+
+        pic_id = _import_one_picture(client)
+
+        set_id = client.post(
+            "/picture_sets",
+            json={"name": "Movable Set", "project_id": project_a},
+        ).json()["picture_set"]["id"]
+        assert (
+            client.post(f"/picture_sets/{set_id}/members/{pic_id}").status_code == 200
+        )
+
+        assert pic_id in _project_picture_ids(client, project_a)
+
+        move_resp = client.patch(
+            f"/picture_sets/{set_id}", json={"project_id": project_b}
+        )
+        assert move_resp.status_code == 200
+
+        assert pic_id in _project_picture_ids(client, project_b)
+        assert pic_id not in _project_picture_ids(client, project_a)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_moving_set_keeps_pictures_anchored_by_another_set_in_old_project():
+    """A picture shared with a second set still in project A is retained in A
+    when the first set is moved out — only genuinely orphaned pictures leave."""
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        project_a = client.post("/projects", json={"name": "Shared A"}).json()["id"]
+        project_b = client.post("/projects", json={"name": "Shared B"}).json()["id"]
+
+        pic_id = _import_one_picture(client)
+
+        set_one = client.post(
+            "/picture_sets", json={"name": "Set One", "project_id": project_a}
+        ).json()["picture_set"]["id"]
+        set_two = client.post(
+            "/picture_sets", json={"name": "Set Two", "project_id": project_a}
+        ).json()["picture_set"]["id"]
+        assert (
+            client.post(f"/picture_sets/{set_one}/members/{pic_id}").status_code == 200
+        )
+        assert (
+            client.post(f"/picture_sets/{set_two}/members/{pic_id}").status_code == 200
+        )
+
+        assert pic_id in _project_picture_ids(client, project_a)
+
+        move_resp = client.patch(
+            f"/picture_sets/{set_one}", json={"project_id": project_b}
+        )
+        assert move_resp.status_code == 200
+
+        # Added to B, but kept in A because Set Two still anchors it there.
+        assert pic_id in _project_picture_ids(client, project_b)
+        assert pic_id in _project_picture_ids(client, project_a)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_reference_picture_set_created_with_character():
     temp_dir, client, server = setup_server_with_temp_db()
     try:
@@ -356,15 +455,13 @@ def test_no_duplicate_reference_picture_sets():
 
 
 def test_members_endpoint_expands_stack_siblings():
-    """Members endpoint should include all stack members when expand_stacks=true.
+    """Sets are stack-atomic: adding any member of a stack adds every member.
 
-    When a stack is shown in the grid its representative (leader) image may not
-    be the same picture that was explicitly added to the set.  If pic_b belongs
-    to a stack and was added to the set, the /members?expand_stacks=true response
-    must also include pic_a (the stack leader) so AddToSetControl can correctly
-    mark the set as checked when the stack is selected.
-
-    Without expand_stacks=true only the explicitly stored member (pic_b) is returned.
+    Adding pic_b (a non-leader stack member) makes the whole stack part of the
+    set, so both pic_a and pic_b are real members — returned with *and* without
+    expand_stacks. (Previously only the explicitly added picture was a member and
+    siblings appeared solely via expand_stacks=true; atomic membership removes
+    that partial state.)
     """
     temp_dir, client, server = setup_server_with_temp_db()
     try:
@@ -401,29 +498,22 @@ def test_members_endpoint_expands_stack_siblings():
         add_resp = client.post(f"/picture_sets/{set_id}/members/{pic_b}")
         assert add_resp.status_code == 200
 
-        # Default (no expand_stacks): only the explicitly stored member is returned
+        # Atomic: adding pic_b added the whole stack, so both are real members
+        # even without expand_stacks.
         members_resp = client.get(f"/picture_sets/{set_id}/members")
         assert members_resp.status_code == 200
         member_ids = set(members_resp.json()["picture_ids"])
-        assert pic_b in member_ids, "pic_b (added member) must appear in members"
-        assert pic_a not in member_ids, (
-            "pic_a (stack sibling) must NOT appear without expand_stacks=true"
+        assert pic_a in member_ids and pic_b in member_ids, (
+            f"whole stack expected in set, got {member_ids}"
         )
 
-        # With expand_stacks=true: both pictures returned so the stack leader
-        # is recognised as belonging to the set in the frontend (AddToSetControl)
+        # expand_stacks=true returns the same full stack.
         members_expanded_resp = client.get(
             f"/picture_sets/{set_id}/members?expand_stacks=true"
         )
         assert members_expanded_resp.status_code == 200
         expanded_ids = set(members_expanded_resp.json()["picture_ids"])
-        assert pic_b in expanded_ids, (
-            "pic_b (added member) must appear in expanded members"
-        )
-        assert pic_a in expanded_ids, (
-            "pic_a (stack sibling) must appear in members with expand_stacks=true so "
-            "the stack leader is recognised as belonging to the set in the frontend"
-        )
+        assert pic_a in expanded_ids and pic_b in expanded_ids
     finally:
         server.vault.close()
         temp_dir.cleanup()

@@ -85,6 +85,7 @@ function summaryLabel(key) {
     pictures_to_revert: "Pictures to revert",
     pictures_to_recreate: "Pictures to recreate",
     pictures_to_delete: "Pictures to delete",
+    pictures_unchanged: "Unchanged",
     missing_files: "Missing files",
     picture_sets_to_revert: "Sets to revert",
     projects_to_revert: "Projects to revert",
@@ -164,6 +165,20 @@ async function handleRestore(opts = {}) {
     // Fresh attempt — clear any stale missing-deps prompt.
     missingDependencies.value = null;
   }
+
+  // A full-vault restore is the long-running, progress-tracked path, and the
+  // POST stays open for the whole swap (the backend route is synchronous).
+  // It can never surface a missing-dependencies re-prompt — only per-resource
+  // / batch restores do. So close the dialog the moment the request is
+  // dispatched, otherwise the "Restore in progress…" banner renders behind a
+  // dialog that only closes once the restore has already finished. Any
+  // synchronous failure is routed to the store-level error banner (rendered in
+  // the snapshots settings panel, where every full-vault restore is launched).
+  const closeOnDispatch = isFullVaultRestore.value;
+  if (closeOnDispatch) {
+    dialogOpen.value = false;
+  }
+
   try {
     const report = await store.executeRestore(
       effectiveSnapshotId.value,
@@ -171,11 +186,14 @@ async function handleRestore(opts = {}) {
       { confirmRestoreDependencies },
     );
     emit("confirmed", report);
-    dialogOpen.value = false;
+    if (!closeOnDispatch) {
+      dialogOpen.value = false;
+    }
   } catch (err) {
     const detail = err?.response?.data?.detail;
     // 409 with code=missing_dependencies — switch to the confirm prompt
-    // instead of treating it as a failure.
+    // instead of treating it as a failure. Only reachable on the
+    // per-resource / batch path, where the dialog is still open.
     if (
       err?.response?.status === 409 &&
       detail &&
@@ -185,10 +203,16 @@ async function handleRestore(opts = {}) {
       missingDependencies.value = detail.missing || {};
       return;
     }
-    restoreError.value =
+    const message =
       (typeof detail === "string" ? detail : null) ||
       err?.message ||
       "Restore failed.";
+    if (closeOnDispatch) {
+      // The dialog is already gone — surface the failure on the store banner.
+      store.error = message;
+    } else {
+      restoreError.value = message;
+    }
   } finally {
     restoring.value = false;
   }

@@ -1321,6 +1321,8 @@ export function useStackOrdering(
     showRemoveFromStack,
     // Data helpers (used by useGridFetch and elsewhere)
     collapseStackImages,
+    getLocalStackMembers,
+    ensureStackMembersLoaded,
     mapGridImages,
     setGridIndices,
     hydrateGridImage,

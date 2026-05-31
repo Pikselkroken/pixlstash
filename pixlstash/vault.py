@@ -714,7 +714,13 @@ class Vault:
                     self.db.run_immediate_read_task(SmartScoreTask.count_remaining) or 0
                 )
                 if remaining == 0:
-                    self.notify(EventType.CHANGED_PICTURES, picture_ids)
+                    # Tag the event with the changed field so the SPA only
+                    # reloads the grid when it is actually sorting/filtering by
+                    # smart_score; under any other sort this change is invisible.
+                    self.notify(
+                        EventType.CHANGED_PICTURES,
+                        {"picture_ids": picture_ids, "fields": ["smart_score"]},
+                    )
                 else:
                     logger.debug(
                         "SmartScoreTask updated %s pictures; deferring CHANGED_PICTURES event with %s smart scores remaining.",

@@ -37,6 +37,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.user import User
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
@@ -222,9 +223,13 @@ def register_routes(router, server):
                 if project is None:
                     raise HTTPException(status_code=404, detail="Project not found")
 
+            # Stacks are atomic for project membership: applying a change to any
+            # stacked picture applies it to every member of its stack.
+            target_ids = expand_picture_ids_to_stacks(session, ids)
+
             pics = session.exec(
                 select(Picture)
-                .where(Picture.id.in_(ids))
+                .where(Picture.id.in_(target_ids))
                 .where(Picture.deleted.is_(False))
             ).all()
             updated_ids: list[int] = []

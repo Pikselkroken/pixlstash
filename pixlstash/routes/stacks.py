@@ -8,6 +8,7 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
+from pixlstash.services.stack_membership import reconcile_stack_membership
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
     fetch_smart_score_data,
@@ -447,6 +448,10 @@ def create_router(server) -> APIRouter:
             # or append that may have left gaps or duplicates.
             _compact_stack_positions_in_session(session, stack.id)
 
+            # Stacks are atomic for project/set membership: reconcile the (newly
+            # enlarged) stack to the union of its members' memberships.
+            reconcile_stack_membership(session, stack.id)
+
             stack.updated_at = datetime.utcnow()
             session.add(stack)
             session.commit()
@@ -578,6 +583,10 @@ def create_router(server) -> APIRouter:
             # append above (which may have left gaps, duplicates, or no position-0
             # member if the stack previously had NULL positions).
             _compact_stack_positions_in_session(session, stack_id)
+
+            # Stacks are atomic for project/set membership: reconcile the (newly
+            # enlarged) stack to the union of its members' memberships.
+            reconcile_stack_membership(session, stack_id)
 
             stack.updated_at = datetime.utcnow()
             session.add(stack)

@@ -605,7 +605,8 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || !!groupingLockReason"
+                  :title="groupingLockReason || undefined"
                   :readonly="isReadOnly"
                   @selected="$emit('set-project', $event)"
                 />
@@ -615,7 +616,8 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || !!groupingLockReason"
+                  :title="groupingLockReason || undefined"
                   :readonly="isReadOnly"
                   @added="$emit('add-to-character', $event)"
                   @removed="$emit('remove-from-character', $event)"
@@ -626,7 +628,8 @@
                   placement="right"
                   :backend-url="backendUrl"
                   :picture-ids="selectedImageIds"
-                  :disabled="selectedCount === 0"
+                  :disabled="selectedCount === 0 || !!groupingLockReason"
+                  :title="groupingLockReason || undefined"
                   :readonly="isReadOnly"
                   @added="$emit('added-to-set', $event)"
                 />
@@ -954,6 +957,7 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
+  groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
   captionerPlugins: { type: Array, default: () => [] },
@@ -1128,7 +1132,7 @@ function gbCommitSortSelection(sortValue) {
 }
 
 function gbHandleSortModelUpdate(sortValue) {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+  if (searchStore.searchQuery && searchStore.searchQuery.trim())
     return;
   gbPendingSortSelection.value = sortValue != null ? String(sortValue) : "";
   if (!gbSortRequiresParameter(gbPendingSortSelection.value)) {
@@ -1178,7 +1182,7 @@ const gbSelectedStackThresholdOption = computed(() =>
 );
 
 const gbSortButtonLabel = computed(() => {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+  if (searchStore.searchQuery && searchStore.searchQuery.trim())
     return "Search relevance";
   if (gbSortModel.value === SIMILARITY_SORT_KEY_GB)
     return gbSelectedSimilarityOption.value?.text
@@ -1192,7 +1196,7 @@ const gbSortButtonLabel = computed(() => {
 });
 
 const gbSortTypeName = computed(() => {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+  if (searchStore.searchQuery && searchStore.searchQuery.trim())
     return "Search relevance";
   if (gbSortModel.value === SIMILARITY_SORT_KEY_GB) return "Similarity";
   if (gbSortModel.value === LIKENESS_GROUPS_SORT_KEY_GB) return "Groups";
@@ -1212,7 +1216,7 @@ const gbSortButtonIcon = computed(() =>
 );
 
 const gbSortTypeIcon = computed(() => {
-  if (Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()))
+  if (searchStore.searchQuery && searchStore.searchQuery.trim())
     return "mdi-magnify";
   return gbGetSortIcon(gbSortModel.value);
 });

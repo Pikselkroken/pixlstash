@@ -552,11 +552,20 @@ def test_upgrade_snapshot_schema_runs_alembic_on_old_snapshot(server):
     from sqlalchemy import inspect as sa_inspect
     from sqlmodel import create_engine
 
+    from pixlstash.utils.snapshot_compression import materialize_snapshot
+
     _create_file(server, "schema_upgrade.jpg")
     _add_picture(server, filename="schema_upgrade.jpg")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    abs_snapshot = os.path.join(server.vault.image_root, cp.relative_path)
+    # Materialize to a plain .sqlite (the legacy on-disk form) so we can mutate
+    # it to simulate an old-schema snapshot; _upgrade_snapshot_schema accepts
+    # both compressed and plain inputs.
+    work_dir = tempfile.mkdtemp(prefix="pixlstash_test_oldschema_")
+    abs_snapshot = os.path.join(work_dir, "snapshot.sqlite")
+    materialize_snapshot(
+        os.path.join(server.vault.image_root, cp.relative_path), abs_snapshot
+    )
     assert os.path.isfile(abs_snapshot)
 
     # Strip the metadata_hash column AND back-date alembic_version to before
@@ -594,6 +603,7 @@ def test_upgrade_snapshot_schema_runs_alembic_on_old_snapshot(server):
         )
     finally:
         shutil.rmtree(os.path.dirname(upgraded), ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -677,10 +687,11 @@ def test_restore_batch_skips_project_entries(server):
 
 
 def test_compare_hashes_backfills_null_live_and_returns_identical(server):
-    """Both sides start with NULL metadata_hash (the migration leaves them
-    NULL on existing rows). ``compare_hashes`` must compute and persist both,
-    then report the picture as identical because the underlying metadata
-    matches.
+    """The snapshot-side hash now comes from the manifest's precomputed map
+    (so an interactive compare never decompresses the archive). The live side
+    may still be NULL on pre-migration rows; ``compare_hashes`` must compute
+    and persist the live hash, then report the picture identical because the
+    live and manifest hashes match.
     """
     from sqlalchemy import update as sa_update
 
@@ -688,23 +699,24 @@ def test_compare_hashes_backfills_null_live_and_returns_identical(server):
     pic = _add_picture(server, filename="cmp.jpg", description="same")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    # Force both live and snapshot to NULL so we exercise both backfill paths.
+    # The hash sidecar must carry a precomputed hash for this picture, and the
+    # manifest itself must stay lean (no embedded hash map).
+    sidecar = server.vault.snapshot_service.load_picture_hashes(cp.id)
+    assert str(pic.id) in sidecar, "Snapshot must carry a per-picture hash sidecar"
+    assert "picture_hashes" not in server.vault.snapshot_service.load_manifest(cp.id), (
+        "Manifest must not embed the hash map (kept in a sidecar)"
+    )
+
+    # Force the live hash to NULL so we exercise the live backfill path.
     def _null_live(session):
         session.execute(sa_update(Picture).values(metadata_hash=None))
         session.commit()
 
     server.vault.db.run_task(_null_live)
 
-    import sqlite3
-
-    abs_snapshot = os.path.join(server.vault.image_root, cp.relative_path)
-    with closing(sqlite3.connect(abs_snapshot)) as conn:
-        conn.execute("UPDATE picture SET metadata_hash = NULL")
-        conn.commit()
-
     result = server.vault.restore_service.compare_hashes(cp.id, [pic.id])
     assert result["identical_ids"] == [pic.id], (
-        f"Picture must be reported identical after backfill on both sides; got {result}"
+        f"Picture must be reported identical after live backfill; got {result}"
     )
     assert result["changed_ids"] == []
 
@@ -1148,6 +1160,68 @@ def test_full_restore_preserves_live_likeness_queue_and_frontier(server):
 
 
 # ---------------------------------------------------------------------------
+# Full restore keeps newer snapshots in the index (roll-forward is possible)
+# ---------------------------------------------------------------------------
+
+
+def test_full_restore_preserves_newer_snapshots_in_index(server):
+    """Restoring an older snapshot must NOT hide newer ones.
+
+    The ``Snapshot`` table lives inside the live DB, so the file swap would
+    roll the snapshot index back to whatever snapshots existed when the
+    target was taken — and because ``VACUUM INTO`` copies the live DB *before*
+    a snapshot records its own row, an old snapshot's file doesn't even list
+    itself. Without the post-swap reconciliation the whole list would
+    disappear, stranding the user with no way to roll forward. The fix
+    re-inserts every captured snapshot whose file still exists on disk.
+    """
+    _create_file(server, "rollfwd.jpg")
+    pic = _add_picture(server, filename="rollfwd.jpg", description="state_a")
+
+    # Snapshot A — the older restore point.
+    cp_a = server.vault.snapshot_service.create_snapshot("MANUAL", label="A")
+
+    # Diverge, then take the newer snapshot C.
+    def _mutate(session):
+        session.get(Picture, pic.id).description = "state_c"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+    cp_c = server.vault.snapshot_service.create_snapshot("MANUAL", label="C")
+
+    # Restore the OLDER snapshot A.
+    report = server.vault.restore_service.restore_full(cp_a.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic.id).description == "state_a"
+
+    # The newer snapshot C must still be listed after the restore, keyed by
+    # its file path (ids are re-assigned on re-insert, so compare paths).
+    snapshots = server.vault.snapshot_service.list_snapshots()
+    listed_paths = {s.relative_path for s in snapshots}
+    assert cp_c.relative_path in listed_paths, (
+        "Newer snapshot C must remain in the index after restoring older "
+        f"snapshot A; listed paths: {listed_paths}"
+    )
+    assert cp_a.relative_path in listed_paths, (
+        f"The restored snapshot A must also remain listed; listed paths: {listed_paths}"
+    )
+    # The pre-restore safety snapshot (OPPORTUNISTIC) is preserved too.
+    assert any(s.kind == "OPPORTUNISTIC" for s in snapshots), (
+        f"Safety snapshot must survive the swap; got kinds "
+        f"{[s.kind for s in snapshots]}"
+    )
+
+    # Roll forward: restoring C again must bring back the newer state, proving
+    # the surviving index row is a usable restore point.
+    cp_c_live = next(s for s in snapshots if s.relative_path == cp_c.relative_path)
+    report_fwd = server.vault.restore_service.restore_full(cp_c_live.id)
+    assert not report_fwd.errors, f"Roll-forward errors: {report_fwd.errors}"
+    assert _get_picture(server, pic.id).description == "state_c", (
+        "Restoring the surviving newer snapshot must roll the state forward"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Missing-dependency restore — picture_set and project parents (issue #1)
 # ---------------------------------------------------------------------------
 
@@ -1490,3 +1564,192 @@ def test_missing_deps_refusal_emits_started_then_failed(server):
         EventType.RESTORE_STARTED,
         EventType.RESTORE_FAILED,
     ], f"Expected STARTED→FAILED; got {[e.name for e in events]}"
+
+
+# ---------------------------------------------------------------------------
+# Compression: snapshots are stored compressed and keep blobs across restore
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_is_compressed_on_disk(server):
+    """New snapshots are written as zstd archives (``.sqlite.zst``)."""
+    _create_file(server, "compressed.jpg")
+    _add_picture(server, filename="compressed.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    assert cp.relative_path.endswith(".sqlite.zst"), (
+        f"Snapshot must be compressed; got {cp.relative_path}"
+    )
+    abs_path = os.path.join(server.vault.image_root, cp.relative_path)
+    assert os.path.isfile(abs_path)
+    # zstd magic number (little-endian 0xFD2FB528).
+    with open(abs_path, "rb") as fh:
+        assert fh.read(4) == b"\x28\xb5\x2f\xfd", "File must carry the zstd magic"
+
+
+def test_full_restore_keeps_embeddings_no_regen(server):
+    """The expensive blobs (image embedding + scores) now ride inside the
+    snapshot, so restoring brings them back instead of NULL-resetting them
+    for the WorkPlanner to regenerate.
+    """
+    from sqlalchemy import update as sa_update
+
+    _create_file(server, "embed.jpg")
+    pic = _add_picture(server, filename="embed.jpg", description="v1")
+
+    embedding = b"\x07" * 4096
+
+    def _set_blobs(session):
+        session.execute(
+            sa_update(Picture)
+            .where(Picture.id == pic.id)
+            .values(image_embedding=embedding, smart_score=0.81)
+        )
+        session.commit()
+
+    server.vault.db.run_task(_set_blobs)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Wipe the blobs on the live DB (as if regeneration had cleared them).
+    def _wipe_blobs(session):
+        session.execute(
+            sa_update(Picture)
+            .where(Picture.id == pic.id)
+            .values(image_embedding=None, smart_score=None)
+        )
+        session.commit()
+
+    server.vault.db.run_task(_wipe_blobs)
+    assert _get_picture(server, pic.id).image_embedding is None
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = _get_picture(server, pic.id)
+    assert restored.image_embedding == embedding, (
+        "image_embedding must be restored from the snapshot, not NULL-reset"
+    )
+    assert restored.smart_score == 0.81, (
+        "smart_score must be restored from the snapshot"
+    )
+
+
+def test_full_restore_from_legacy_uncompressed_snapshot(server):
+    """Snapshots created before compression are plain ``.sqlite`` files. The
+    restore read path must still handle them (the materialize copy branch)."""
+    from pixlstash.utils.snapshot_compression import materialize_snapshot
+
+    _create_file(server, "legacy.jpg")
+    pic = _add_picture(server, filename="legacy.jpg", description="legacy_v1")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    vault_root = server.vault.image_root
+    # Decompress the new archive into a sibling plain .sqlite to emulate a
+    # legacy on-disk snapshot, and register a Snapshot row pointing at it.
+    legacy_rel = cp.relative_path[: -len(".zst")]
+    legacy_abs = os.path.join(vault_root, legacy_rel)
+    materialize_snapshot(os.path.join(vault_root, cp.relative_path), legacy_abs)
+
+    def _register(session):
+        row = Snapshot(
+            kind="MANUAL",
+            created_at=cp.created_at,
+            relative_path=legacy_rel,
+            manifest_relative_path=cp.manifest_relative_path,
+            byte_size=os.path.getsize(legacy_abs),
+            picture_count=cp.picture_count,
+            schema_version=cp.schema_version,
+            label="legacy",
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row.id
+
+    legacy_id = server.vault.db.run_task(_register)
+
+    def _mutate(session):
+        session.get(Picture, pic.id).description = "legacy_v2"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+
+    report = server.vault.restore_service.restore_full(legacy_id)
+    assert not report.errors, f"Legacy restore errors: {report.errors}"
+    assert _get_picture(server, pic.id).description == "legacy_v1", (
+        "Restoring a legacy uncompressed snapshot must work"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Full-restore preview lists only the resources that actually change
+# ---------------------------------------------------------------------------
+
+
+def test_preview_full_lists_only_changed_pictures(server):
+    """The preview must surface the pictures that actually changed, not the
+    first N pictures regardless of state. Three pictures, only one mutated:
+    the preview shows exactly that one and counts the rest as unchanged.
+    """
+    for i in range(3):
+        _create_file(server, f"prev_{i}.jpg")
+    p0 = _add_picture(server, filename="prev_0.jpg", description="a")
+    p1 = _add_picture(server, filename="prev_1.jpg", description="b")
+    p2 = _add_picture(server, filename="prev_2.jpg", description="c")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Mutate only p1 after the snapshot.
+    def _mutate(session):
+        session.get(Picture, p1.id).description = "b-changed"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+
+    preview = server.vault.restore_service.preview_full(cp.id)
+
+    assert preview.summary["pictures_to_revert"] == 1, preview.summary
+    assert preview.summary["pictures_unchanged"] == 2, preview.summary
+    assert preview.summary["pictures_to_recreate"] == 0
+    assert preview.summary["pictures_to_delete"] == 0
+
+    shown_ids = {r.id for r in preview.resources}
+    assert shown_ids == {p1.id}, (
+        f"Preview must list only the changed picture; got {shown_ids}"
+    )
+    assert p0.id not in shown_ids and p2.id not in shown_ids
+    assert "description" in preview.resources[0].changed_fields
+
+
+def test_preview_full_classifies_recreate_and_delete(server):
+    """Pictures present only in the snapshot are 'recreate'; pictures present
+    only in live are 'delete'. Unchanged pictures stay out of the list."""
+    _create_file(server, "keep.jpg")
+    _create_file(server, "gone.jpg")
+    _add_picture(server, filename="keep.jpg", description="keep")
+    p_gone = _add_picture(server, filename="gone.jpg", description="gone")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Add p_new BEFORE deleting p_gone so p_new gets a fresh max id — deleting
+    # first would let SQLite reuse p_gone's rowid for p_new and collapse the
+    # two distinct cases into one "id present in both".
+    _create_file(server, "new.jpg")
+    p_new = _add_picture(server, filename="new.jpg", description="new")
+
+    # Snapshot has p_gone but live won't (→ recreate on restore).
+    def _del_gone(session):
+        session.delete(session.get(Picture, p_gone.id))
+        session.commit()
+
+    server.vault.db.run_task(_del_gone)
+
+    preview = server.vault.restore_service.preview_full(cp.id)
+
+    assert preview.summary["pictures_to_recreate"] == 1, preview.summary
+    assert preview.summary["pictures_to_delete"] == 1, preview.summary
+    assert preview.summary["pictures_unchanged"] == 1, preview.summary
+
+    by_id = {r.id: r for r in preview.resources}
+    assert p_gone.id in by_id and not by_id[p_gone.id].exists_in_live
+    assert p_gone.id in by_id and by_id[p_gone.id].exists_in_snapshot
+    assert p_new.id in by_id and by_id[p_new.id].exists_in_live
+    assert p_new.id in by_id and not by_id[p_new.id].exists_in_snapshot

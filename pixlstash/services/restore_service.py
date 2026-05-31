@@ -39,6 +39,7 @@ from pixlstash.db_models.picture_likeness import (
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.snapshot_compression import is_compressed, materialize_snapshot
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
@@ -99,18 +100,6 @@ class MissingDependenciesError(RuntimeError):
             "live DB untouched."
         )
 
-
-# Columns on Picture that are regenerable and should be NULL-reset after any
-# restore so the WorkPlanner reprocesses them automatically.  Kept in sync
-# with ``SnapshotService._strip_regenerable_blobs`` so the snapshot does not
-# carry bytes that the restore would immediately discard.
-_PICTURE_DERIVED_COLUMNS: tuple[str, ...] = (
-    "smart_score",
-    "text_score",
-    "aesthetic_score",
-    "text_embedding",
-    "image_embedding",
-)
 
 # Resource types currently supported by ``restore_resource`` / ``preview_resource``.
 #
@@ -482,6 +471,33 @@ class RestoreService:
             ]
         )
 
+        # 3c. Capture the snapshot index BEFORE the swap. The ``Snapshot`` table
+        #     lives inside the live DB, so the file swap rolls it back to
+        #     whatever snapshots existed when the target snapshot was taken —
+        #     every newer snapshot (and the OPPORTUNISTIC safety snapshot taken
+        #     in step 1) would vanish from the list even though their .sqlite +
+        #     .manifest.json files are untouched on disk. We replay the missing
+        #     rows into the swapped DB during cleanup so restoring an older
+        #     snapshot never hides newer restore points — the user can always
+        #     roll forward again. The ``id`` is deliberately not captured: rows
+        #     are re-inserted with fresh autoincrement ids to avoid colliding
+        #     with the restored DB's own snapshot ids.
+        live_snapshots = self._vault.db.run_immediate_read_task(
+            lambda s: [
+                {
+                    "kind": r.kind,
+                    "created_at": r.created_at,
+                    "relative_path": r.relative_path,
+                    "manifest_relative_path": r.manifest_relative_path,
+                    "byte_size": r.byte_size,
+                    "picture_count": r.picture_count,
+                    "schema_version": r.schema_version,
+                    "label": r.label,
+                }
+                for r in s.exec(select(Snapshot)).all()
+            ]
+        )
+
         # 4. Pause background work, then route the DB swap through the writer
         #    queue so it is serialised with all other DB operations and no
         #    competing connection can hold a lock during the file swap.
@@ -539,14 +555,11 @@ class RestoreService:
                     "RestoreService: deleted %d missing-file picture rows.",
                     result.rowcount,
                 )
-            # NULL-reset derived columns via a single Core UPDATE — avoids
-            # materialising every picture row through the ORM identity map
-            # on large vaults.
-            session.execute(
-                sa_update(Picture).values(
-                    **{col: None for col in _PICTURE_DERIVED_COLUMNS}
-                )
-            )
+            # NOTE: derived columns (embeddings + scores) are NOT NULL-reset
+            # here. Snapshots now carry these blobs, so the swapped-in DB
+            # already holds the real values and the WorkPlanner has nothing to
+            # regenerate. Pictures whose blobs were genuinely NULL at snapshot
+            # time stay NULL and get picked up by the finders as usual.
 
             # Replay the pre-swap likeness pipeline state into the swapped
             # DB, dropping entries for pictures that no longer exist in
@@ -569,6 +582,39 @@ class RestoreService:
             # frontier rows aren't double-inserted (it skips keys already
             # present in the table).
             PictureLikenessFrontier.ensure_all(session)
+
+            # Replay the pre-swap snapshot index. The restored DB only knows
+            # about snapshots that existed when the target snapshot was taken;
+            # re-insert any captured row whose file still exists on disk and
+            # isn't already present (deduped by relative_path). This brings the
+            # newer snapshots — and the safety snapshot from step 1 — back into
+            # the list so they remain valid restore points.
+            existing_snapshot_paths = set(
+                session.exec(select(Snapshot.relative_path)).all()
+            )
+            reinserted_snapshots = 0
+            for snap in live_snapshots:
+                if snap["relative_path"] in existing_snapshot_paths:
+                    continue
+                abs_snap = os.path.join(vault_root, snap["relative_path"])
+                if not os.path.exists(abs_snap):
+                    # File was pruned/deleted since capture — skip rather than
+                    # leave a dangling index row pointing at nothing.
+                    logger.warning(
+                        "RestoreService: snapshot file %s missing on disk; "
+                        "not re-inserting its index row after restore.",
+                        abs_snap,
+                    )
+                    continue
+                session.add(Snapshot(**snap))
+                reinserted_snapshots += 1
+            if reinserted_snapshots:
+                session.commit()
+                logger.info(
+                    "RestoreService: re-inserted %d snapshot index row(s) "
+                    "hidden by the DB swap (newer snapshots + safety snapshot).",
+                    reinserted_snapshots,
+                )
 
         # Steps 4-6 wrapped in try/finally so the planner always restarts —
         # if _do_swap or the cleanup raises, leaving the planner stopped
@@ -747,7 +793,9 @@ class RestoreService:
             snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
             try:
                 with Session(snap_engine) as snap_session:
-                    self._compute_full_preview(snap_session, preview, vault_root)
+                    self._compute_full_preview(
+                        snap_session, preview, vault_root, snapshot_id
+                    )
             except Exception as exc:
                 logger.error(
                     "RestoreService: preview_full failed for snapshot %d: %s",
@@ -1132,71 +1180,97 @@ class RestoreService:
 
         live_hashes: dict[int, str | None] = self._vault.db.run_task(_get_live_hashes)
 
-        # Snapshot-file work (probe → optional backfill → read hashes) is held
-        # under the per-path file lock so a concurrent compare/preview/restore
-        # on the same snapshot can't read a half-rewritten file. The lock is
-        # reentrant, so the nested _backfill_snapshot call re-enters safely.
-        from sqlalchemy import inspect as sa_inspect
+        # Snapshot-side hashes. New snapshots ship a complete {id: hash} map in
+        # an uncompressed sidecar, so an interactive compare never has to touch
+        # — let alone decompress — the archive. The legacy file path only runs
+        # for old uncompressed snapshots that predate the sidecar.
+        sidecar_hashes = self._vault.snapshot_service.load_picture_hashes(snapshot_id)
 
-        with self._snapshot_file_lock(snapshot_path):
-            _probe_engine = None
-            try:
-                _probe_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
-                snap_has_col = "metadata_hash" in {
-                    c["name"] for c in sa_inspect(_probe_engine).get_columns("picture")
-                }
-            except Exception:
-                snap_has_col = False
-            finally:
-                if _probe_engine is not None:
-                    try:
-                        _probe_engine.dispose()
-                    except Exception:
-                        logger.warning(
-                            "RestoreService.compare_hashes: failed to dispose probe engine for snapshot %d",
-                            snapshot_id,
-                        )
+        snap_hashes: dict[int, str | None] = {}
+        if sidecar_hashes:
+            # JSON object keys are strings; look up by str(pid).
+            snap_hashes = {pid: sidecar_hashes.get(str(pid)) for pid in picture_ids}
+        elif is_compressed(snapshot_path):
+            # Compressed but no manifest map — should not happen for snapshots
+            # created by this version. Don't try to open the archive as a DB;
+            # report everything changed so the restore stays available.
+            logger.warning(
+                "RestoreService.compare_hashes: compressed snapshot %d has no "
+                "manifest hash map; treating all pictures as changed.",
+                snapshot_id,
+            )
+            return {"identical_ids": [], "changed_ids": list(picture_ids)}
+        else:
+            # ── Legacy uncompressed snapshot ────────────────────────────────
+            # Probe → optional in-place backfill → read hashes, held under the
+            # per-path file lock so a concurrent compare/preview/restore can't
+            # read a half-rewritten file. The lock is reentrant, so the nested
+            # _backfill_snapshot call re-enters safely.
+            from sqlalchemy import inspect as sa_inspect
 
-            if not snap_has_col:
-                # One-time fix: write migration + hashes into the original snapshot.
-                self._backfill_snapshot(snapshot_path)
-
-            # Fetch snapshot hashes directly from the (possibly just backfilled) file.
-            _snap_engine = None
-            try:
-                _snap_engine = create_engine(f"sqlite:///{snapshot_path}", echo=False)
-                with Session(_snap_engine) as snap_session:
-                    snap_rows = snap_session.execute(
-                        select(Picture.id, Picture.metadata_hash).where(
-                            Picture.id.in_(picture_ids)
-                        )
-                    ).all()
-                    snap_hashes: dict[int, str | None] = {}
-                    for pid, h in snap_rows:
-                        if h is not None:
-                            snap_hashes[pid] = h
-                        else:
-                            # Safety fallback — should not occur after backfill.
-                            snap_hashes[pid] = _compute_picture_metadata_hash(
-                                snap_session, pid
+            with self._snapshot_file_lock(snapshot_path):
+                _probe_engine = None
+                try:
+                    _probe_engine = create_engine(
+                        f"sqlite:///{snapshot_path}", echo=False
+                    )
+                    snap_has_col = "metadata_hash" in {
+                        c["name"]
+                        for c in sa_inspect(_probe_engine).get_columns("picture")
+                    }
+                except Exception:
+                    snap_has_col = False
+                finally:
+                    if _probe_engine is not None:
+                        try:
+                            _probe_engine.dispose()
+                        except Exception:
+                            logger.warning(
+                                "RestoreService.compare_hashes: failed to dispose probe engine for snapshot %d",
+                                snapshot_id,
                             )
-            except Exception as exc:
-                logger.warning(
-                    "RestoreService.compare_hashes: failed to read snapshot %d: %s",
-                    snapshot_id,
-                    exc,
-                )
-                # Treat all as changed on error (conservative / keep enabled)
-                return {"identical_ids": [], "changed_ids": list(picture_ids)}
-            finally:
-                if _snap_engine is not None:
-                    try:
-                        _snap_engine.dispose()
-                    except Exception:
-                        logger.warning(
-                            "RestoreService.compare_hashes: failed to dispose snapshot engine for snapshot %d",
-                            snapshot_id,
-                        )
+
+                if not snap_has_col:
+                    # One-time fix: write migration + hashes into the snapshot.
+                    self._backfill_snapshot(snapshot_path)
+
+                # Read hashes from the (possibly just backfilled) file.
+                _snap_engine = None
+                try:
+                    _snap_engine = create_engine(
+                        f"sqlite:///{snapshot_path}", echo=False
+                    )
+                    with Session(_snap_engine) as snap_session:
+                        snap_rows = snap_session.execute(
+                            select(Picture.id, Picture.metadata_hash).where(
+                                Picture.id.in_(picture_ids)
+                            )
+                        ).all()
+                        for pid, h in snap_rows:
+                            if h is not None:
+                                snap_hashes[pid] = h
+                            else:
+                                # Safety fallback — should not occur after backfill.
+                                snap_hashes[pid] = _compute_picture_metadata_hash(
+                                    snap_session, pid
+                                )
+                except Exception as exc:
+                    logger.warning(
+                        "RestoreService.compare_hashes: failed to read snapshot %d: %s",
+                        snapshot_id,
+                        exc,
+                    )
+                    # Treat all as changed on error (conservative / keep enabled)
+                    return {"identical_ids": [], "changed_ids": list(picture_ids)}
+                finally:
+                    if _snap_engine is not None:
+                        try:
+                            _snap_engine.dispose()
+                        except Exception:
+                            logger.warning(
+                                "RestoreService.compare_hashes: failed to dispose snapshot engine for snapshot %d",
+                                snapshot_id,
+                            )
 
         identical_ids: list[int] = []
         changed_ids: list[int] = []
@@ -1232,6 +1306,10 @@ class RestoreService:
             abs_snapshot = os.path.join(self._vault.image_root, cp.relative_path)
             if not os.path.exists(abs_snapshot):
                 continue
+            if is_compressed(abs_snapshot):
+                # Compressed snapshots carry their hash map in the manifest;
+                # there is no in-file metadata_hash to backfill.
+                continue
             try:
                 self._backfill_snapshot(abs_snapshot, reset_all=reset_all)
             except Exception as exc:
@@ -1257,6 +1335,16 @@ class RestoreService:
             abs_snapshot: Absolute path to the snapshot .sqlite file to update.
             reset_all: When True, clear all existing hashes before recomputing.
         """
+        if is_compressed(abs_snapshot):
+            # In-place backfill is a legacy-only path: compressed snapshots
+            # carry a complete hash map in their manifest, so there is nothing
+            # to write into the (sealed) archive.
+            logger.debug(
+                "RestoreService._backfill_snapshot: skipping compressed snapshot %s",
+                abs_snapshot,
+            )
+            return
+
         from sqlalchemy import inspect as sa_inspect
 
         with self._snapshot_file_lock(abs_snapshot):
@@ -1377,14 +1465,17 @@ class RestoreService:
         return cp
 
     def _upgrade_snapshot_schema(self, abs_snapshot: str) -> Optional[str]:
-        """Copy the snapshot to a temp file and run alembic upgrade head on it.
+        """Materialize the snapshot to a temp file and alembic-upgrade it.
 
-        The initial copy reads the original snapshot file on disk and is held
-        under the per-path file lock (reentrant) so it cannot race with a
-        concurrent in-place backfill.
+        Decompresses the zstd archive (or copies a legacy plain ``.sqlite``)
+        into a scratch ``.sqlite`` and runs ``alembic upgrade head`` on it.
+        The read of the original file is held under the per-path file lock
+        (reentrant) so it cannot race with a concurrent in-place backfill of a
+        legacy snapshot.
 
         Args:
-            abs_snapshot: Absolute path to the read-only snapshot .sqlite file.
+            abs_snapshot: Absolute path to the read-only snapshot archive
+                (``.sqlite.zst`` for new snapshots, ``.sqlite`` for legacy).
 
         Returns:
             Path to the upgraded temp file, or None if the upgrade failed.
@@ -1393,10 +1484,10 @@ class RestoreService:
         tmp_snapshot = os.path.join(tmp_dir, "snapshot.sqlite")
         try:
             with self._snapshot_file_lock(abs_snapshot):
-                shutil.copy2(abs_snapshot, tmp_snapshot)
+                materialize_snapshot(abs_snapshot, tmp_snapshot)
         except Exception as exc:
             logger.error(
-                "RestoreService: failed to copy snapshot to temp dir: %s",
+                "RestoreService: failed to materialize snapshot to temp dir: %s",
                 exc,
                 exc_info=True,
             )
@@ -1994,7 +2085,9 @@ class RestoreService:
         Args:
             session: Live writer session.
             snap_rows: Collected rows from the snapshot.
-            valid_picture_ids: IDs whose derived columns should be NULL-reset.
+            valid_picture_ids: Picture IDs being restored; their picture-scoped
+                dependents (Face/Tag/PSM/PPM) are deleted and re-inserted so
+                the restored pictures mirror the snapshot exactly.
 
         Returns:
             Total number of objects upserted.
@@ -2065,13 +2158,9 @@ class RestoreService:
             )
             count += 1
 
-        # NULL-reset derived columns for restored pictures.
-        for pid in valid_picture_ids:
-            pic = session.get(Picture, pid)
-            if pic:
-                for col in _PICTURE_DERIVED_COLUMNS:
-                    if hasattr(pic, col):
-                        setattr(pic, col, None)
+        # Derived columns (embeddings + scores) are intentionally NOT reset:
+        # the merged snapshot Picture rows already carry them, so the restored
+        # resource comes back fully populated with no regeneration pass.
 
         session.commit()
         return count
@@ -2083,104 +2172,125 @@ class RestoreService:
         snap_session: Session,
         preview: RestorePreview,
         vault_root: str,
+        snapshot_id: int,
     ) -> None:
-        """Populate *preview* by diffing all pictures in snap vs live DB.
+        """Populate *preview* with only the resources that actually change.
 
-        Caps the per-resource list at 200 entries.  Summary and warnings are
-        also populated here.
+        Uses the ``metadata_hash`` (which covers columns + tags + face state)
+        to classify every picture across the WHOLE vault as
+        revert / recreate / delete / missing-file / unchanged, then lists only
+        the changed ones (capped at ``MAX_RESOURCES``). Unchanged pictures are
+        counted but never fill the resource table, so the cap is spent on the
+        rows the user cares about. Only id/path/hash columns are scanned — the
+        now-retained embeddings are never pulled into memory for the full set.
 
         Args:
-            snap_session: Read session on the snapshot.
+            snap_session: Read session on the (upgraded) snapshot.
             preview: Preview object to mutate.
             vault_root: Vault root for file-existence checks.
+            snapshot_id: Snapshot being previewed (for the hash sidecar).
         """
         from pixlstash.utils.image_processing.image_utils import ImageUtils
 
         MAX_RESOURCES = 200
-        snap_pictures = snap_session.exec(select(Picture)).all()
-        snap_ids = {p.id for p in snap_pictures}
 
-        live_ids_result = self._vault.db.run_immediate_read_task(
-            lambda session: set(session.exec(select(Picture.id)).all())
+        # Lightweight scan — id, file_path, metadata_hash only.
+        snap_rows = snap_session.exec(
+            select(Picture.id, Picture.file_path, Picture.metadata_hash)
+        ).all()
+        snap_ids = {r[0] for r in snap_rows}
+
+        live_rows = self._vault.db.run_immediate_read_task(
+            lambda s: s.exec(select(Picture.id, Picture.metadata_hash)).all()
         )
+        live_ids = {r[0] for r in live_rows}
+        live_hash = {pid: h for pid, h in live_rows}
 
-        # Bulk-load tag sets from snapshot and live for efficient comparison.
-        _snap_tag_map: dict[int, set] = {}
-        for _pid, _tag in snap_session.exec(select(Tag.picture_id, Tag.tag)).all():
-            _snap_tag_map.setdefault(_pid, set()).add(_tag)
-        _snap_tag_sets: dict[int, frozenset] = {
-            k: frozenset(v) for k, v in _snap_tag_map.items()
-        }
-        _snap_ids_list = list({p.id for p in snap_pictures})
+        # Snapshot hashes: prefer the complete sidecar (legacy snapshots fall
+        # back to the per-row metadata_hash scanned above).
+        sidecar = self._vault.snapshot_service.load_picture_hashes(snapshot_id)
 
-        def _load_live_tag_sets(session) -> dict:
-            _live: dict[int, set] = {}
-            for _pid, _tag in session.exec(
-                select(Tag.picture_id, Tag.tag).where(
-                    Tag.picture_id.in_(_snap_ids_list)
-                )
-            ).all():
-                _live.setdefault(_pid, set()).add(_tag)
-            return {k: frozenset(v) for k, v in _live.items()}
-
-        _live_tag_sets: dict[int, frozenset] = self._vault.db.run_immediate_read_task(
-            _load_live_tag_sets
-        )
+        def _snap_hash(pid: int, scanned_hash) -> "str | None":
+            if sidecar:
+                return sidecar.get(str(pid))
+            return scanned_hash
 
         missing_files = 0
         pictures_to_revert = 0
+        pictures_unchanged = 0
         pictures_to_recreate = 0
         pictures_to_delete = 0
+        shown_reverts: list = []  # (ResourcePreview, picture_id) for tag diffing
 
-        # Pictures in snapshot (to revert or recreate).
-        for snap_pic in snap_pictures:
+        for pid, file_path, scanned_hash in snap_rows:
+            # File presence — a picture whose file vanished is dropped on
+            # restore, so it counts as a change regardless of its hash.
             file_ok = True
-            if snap_pic.file_path:
+            if file_path:
                 try:
-                    resolved = ImageUtils.resolve_picture_path(
-                        vault_root, snap_pic.file_path
-                    )
+                    resolved = ImageUtils.resolve_picture_path(vault_root, file_path)
                     file_ok = os.path.isfile(resolved)
                 except Exception:
                     file_ok = False
-
             if not file_ok:
                 missing_files += 1
-                preview.warnings.append(
-                    f"Picture id={snap_pic.id} file missing on disk; "
-                    "row will be removed after restore."
-                )
+                if len(preview.resources) < MAX_RESOURCES:
+                    preview.resources.append(
+                        ResourcePreview(
+                            type="picture",
+                            id=pid,
+                            exists_in_live=pid in live_ids,
+                            exists_in_snapshot=True,
+                            file_on_disk=False,
+                            changed_fields=[],
+                            dependent_counts={},
+                        )
+                    )
                 continue
 
-            exists_in_live = snap_pic.id in live_ids_result
-            if exists_in_live:
-                pictures_to_revert += 1
-            else:
+            if pid not in live_ids:
                 pictures_to_recreate += 1
-
-            if len(preview.resources) < MAX_RESOURCES:
-                changed = self._diff_picture(snap_pic, exists_in_live)
-                if exists_in_live:
-                    snap_tags = _snap_tag_sets.get(snap_pic.id, frozenset())
-                    live_tags = _live_tag_sets.get(snap_pic.id, frozenset())
-                    if snap_tags != live_tags:
-                        changed.append("tags")
-                preview.resources.append(
-                    ResourcePreview(
-                        type="picture",
-                        id=snap_pic.id,
-                        exists_in_live=exists_in_live,
-                        exists_in_snapshot=True,
-                        file_on_disk=True,
-                        changed_fields=changed,
-                        dependent_counts=self._picture_dependent_counts(
-                            snap_session, snap_pic.id
-                        ),
+                if len(preview.resources) < MAX_RESOURCES:
+                    preview.resources.append(
+                        ResourcePreview(
+                            type="picture",
+                            id=pid,
+                            exists_in_live=False,
+                            exists_in_snapshot=True,
+                            file_on_disk=True,
+                            changed_fields=["(new)"],
+                            dependent_counts=self._picture_dependent_counts(
+                                snap_session, pid
+                            ),
+                        )
                     )
+                continue
+
+            # Present in both — changed iff the metadata hash differs (a NULL
+            # on either side is treated as "can't confirm identical" → changed).
+            s_hash = _snap_hash(pid, scanned_hash)
+            l_hash = live_hash.get(pid)
+            if s_hash is not None and l_hash is not None and s_hash == l_hash:
+                pictures_unchanged += 1
+                continue
+
+            pictures_to_revert += 1
+            if len(preview.resources) < MAX_RESOURCES:
+                snap_pic = snap_session.get(Picture, pid)
+                rp = ResourcePreview(
+                    type="picture",
+                    id=pid,
+                    exists_in_live=True,
+                    exists_in_snapshot=True,
+                    file_on_disk=True,
+                    changed_fields=self._diff_picture(snap_pic, True),
+                    dependent_counts=self._picture_dependent_counts(snap_session, pid),
                 )
+                preview.resources.append(rp)
+                shown_reverts.append((rp, pid))
 
         # Pictures in live but not in snapshot (will be deleted by full restore).
-        for live_id in live_ids_result - snap_ids:
+        for live_id in live_ids - snap_ids:
             pictures_to_delete += 1
             if len(preview.resources) < MAX_RESOURCES:
                 preview.resources.append(
@@ -2195,13 +2305,22 @@ class RestoreService:
                     )
                 )
 
-        total_shown = len(preview.resources)
-        total_affected = len(snap_pictures) + len(live_ids_result - snap_ids)
-        if total_affected > total_shown:
-            preview.warnings.append(
-                f"Showing {total_shown} of {total_affected} affected resources."
-            )
+        # Annotate shown reverts with a "tags" field where the tag sets differ,
+        # and a "(modified)" placeholder when the hash changed but no column /
+        # tag diff is visible (e.g. a face-only edit). Bounded to the shown set.
+        self._annotate_shown_revert_tags(snap_session, shown_reverts)
 
+        total_changed = (
+            pictures_to_revert
+            + pictures_to_recreate
+            + pictures_to_delete
+            + missing_files
+        )
+        shown = len(preview.resources)
+        if total_changed > shown:
+            preview.warnings.append(
+                f"Showing {shown} of {total_changed} changed resources."
+            )
         if missing_files:
             preview.warnings.append(
                 f"{missing_files} picture file(s) missing on disk; "
@@ -2212,8 +2331,49 @@ class RestoreService:
             "pictures_to_revert": pictures_to_revert,
             "pictures_to_recreate": pictures_to_recreate,
             "pictures_to_delete": pictures_to_delete,
+            "pictures_unchanged": pictures_unchanged,
             "missing_files": missing_files,
         }
+
+    def _annotate_shown_revert_tags(self, snap_session: Session, shown_reverts: list):
+        """Add a ``tags`` change marker (and a ``(modified)`` fallback) to the
+        shown revert previews.
+
+        ``_diff_picture`` only compares Picture columns; tag changes (and
+        face-only changes, which still flip the metadata hash) wouldn't show.
+        Resolved here for just the shown set so it stays bounded by the cap.
+
+        Args:
+            snap_session: Read session on the snapshot.
+            shown_reverts: List of ``(ResourcePreview, picture_id)`` tuples.
+        """
+        if not shown_reverts:
+            return
+        shown_ids = [pid for _, pid in shown_reverts]
+
+        snap_tag_sets: dict[int, set] = {}
+        for _pid, _tag in snap_session.exec(
+            select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(shown_ids))
+        ).all():
+            snap_tag_sets.setdefault(_pid, set()).add(_tag)
+
+        def _load_live(session) -> dict:
+            d: dict[int, set] = {}
+            for _pid, _tag in session.exec(
+                select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(shown_ids))
+            ).all():
+                d.setdefault(_pid, set()).add(_tag)
+            return d
+
+        live_tag_sets = self._vault.db.run_immediate_read_task(_load_live)
+
+        for rp, pid in shown_reverts:
+            if snap_tag_sets.get(pid, set()) != live_tag_sets.get(pid, set()):
+                if "tags" not in rp.changed_fields:
+                    rp.changed_fields.append("tags")
+            if not rp.changed_fields:
+                # Hash differs but nothing visible diffed (e.g. a face edit).
+                rp.changed_fields.append("(modified)")
 
     def _compute_resource_preview(
         self,

@@ -3,8 +3,9 @@
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
-from contextlib import closing
+from contextlib import closing, contextmanager
 
 import pytest
 from sqlalchemy import text
@@ -18,6 +19,25 @@ from pixlstash.db_models.picture_likeness import (
 )
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.utils.snapshot_compression import materialize_snapshot
+
+
+@contextmanager
+def _open_snapshot(server, cp):
+    """Yield a sqlite3 connection to a snapshot, decompressing if compressed.
+
+    Snapshots are stored zstd-compressed on disk, so tests that want to peek
+    at the raw rows must materialize a plain .sqlite first.
+    """
+    abs_path = os.path.join(server.vault.image_root, cp.relative_path)
+    tmp_dir = tempfile.mkdtemp(prefix="pixlstash_test_snap_")
+    tmp_sqlite = os.path.join(tmp_dir, "snap.sqlite")
+    try:
+        materialize_snapshot(abs_path, tmp_sqlite)
+        with closing(sqlite3.connect(tmp_sqlite)) as conn:
+            yield conn
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @pytest.fixture(scope="module")
@@ -166,8 +186,13 @@ def test_delete_snapshot_removes_row_and_files(server):
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
     abs_snapshot = os.path.join(server.vault.image_root, cp.relative_path)
     abs_manifest = os.path.join(server.vault.image_root, cp.manifest_relative_path)
+    abs_hashes = os.path.join(
+        server.vault.image_root,
+        server.vault.snapshot_service._hashes_relative_path(cp.manifest_relative_path),
+    )
     assert os.path.isfile(abs_snapshot)
     assert os.path.isfile(abs_manifest)
+    assert os.path.isfile(abs_hashes), "Hash sidecar should be written"
 
     deleted = server.vault.snapshot_service.delete_snapshot(cp.id)
 
@@ -175,6 +200,7 @@ def test_delete_snapshot_removes_row_and_files(server):
     assert server.vault.snapshot_service.get_snapshot(cp.id) is None
     assert not os.path.isfile(abs_snapshot), "Snapshot file should be removed"
     assert not os.path.isfile(abs_manifest), "Manifest file should be removed"
+    assert not os.path.isfile(abs_hashes), "Hash sidecar should be removed"
 
 
 def test_delete_nonexistent_snapshot_returns_false(server):
@@ -326,17 +352,16 @@ def test_gfs_retention_does_not_prune_manual(server):
 # ---------------------------------------------------------------------------
 
 
-def test_create_snapshot_strips_regenerable_picture_columns(server):
-    """Snapshots must NOT carry regenerable Picture BLOBs/scores — those
-    are NULL-reset by every restore path anyway, so keeping them in the
-    snapshot file is pure disk waste (on a real vault dominated by CLIP
-    embeddings this can mean GBs per snapshot).
+def test_create_snapshot_keeps_regenerable_picture_columns(server):
+    """Snapshots must now CARRY the expensive regenerable Picture blobs
+    (CLIP image/text embeddings) and derived scores. They used to be
+    stripped to save disk, but that forced a full GPU re-embedding pass on
+    every restore; the whole archive is zstd-compressed instead, so keeping
+    them is affordable and a restore comes back fully populated.
 
-    Set the regenerable columns on a live picture, take a snapshot, then
-    open the snapshot file directly and verify those columns are NULL
-    while user-editable fields (description) are preserved.
+    Set the columns on a live picture, take a snapshot, then decompress the
+    archive and verify those columns survived alongside user-editable fields.
     """
-    import sqlite3
     from sqlalchemy import update as sa_update
 
     from pixlstash.db_models import Picture
@@ -363,8 +388,9 @@ def test_create_snapshot_strips_regenerable_picture_columns(server):
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
     snap_path = os.path.join(server.vault.image_root, cp.relative_path)
     assert os.path.isfile(snap_path)
+    assert snap_path.endswith(".sqlite.zst"), "Snapshot must be compressed on disk"
 
-    with closing(sqlite3.connect(snap_path)) as conn:
+    with _open_snapshot(server, cp) as conn:
         row = conn.execute(
             "SELECT description, text_embedding, image_embedding, "
             "smart_score, text_score, aesthetic_score "
@@ -375,13 +401,13 @@ def test_create_snapshot_strips_regenerable_picture_columns(server):
     assert row is not None, "Snapshot must contain the picture row"
     desc, te, ie, ss, ts, aest = row
     assert desc == "user-set", (
-        f"user-editable column must survive the strip; got description={desc!r}"
+        f"user-editable column must survive; got description={desc!r}"
     )
-    assert te is None, "text_embedding must be stripped from the snapshot"
-    assert ie is None, "image_embedding must be stripped from the snapshot"
-    assert ss is None, "smart_score must be stripped from the snapshot"
-    assert ts is None, "text_score must be stripped from the snapshot"
-    assert aest is None, "aesthetic_score must be stripped from the snapshot"
+    assert te == b"\x01" * 4096, "text_embedding must be kept in the snapshot"
+    assert ie == b"\x02" * 4096, "image_embedding must be kept in the snapshot"
+    assert ss == 0.42, "smart_score must be kept in the snapshot"
+    assert ts == 0.31, "text_score must be kept in the snapshot"
+    assert aest == 0.55, "aesthetic_score must be kept in the snapshot"
 
 
 def test_create_snapshot_drops_likeness_pipeline_tables(server):
@@ -391,8 +417,6 @@ def test_create_snapshot_drops_likeness_pipeline_tables(server):
     and O(N²); the progress tables are LIVE pipeline state that the
     restore replays from a fresh capture rather than from the snapshot.
     """
-    import sqlite3
-
     pic_id = _add_picture_with_blobs(server)
 
     # Seed the three tables with live rows so we can prove they
@@ -413,9 +437,8 @@ def test_create_snapshot_drops_likeness_pipeline_tables(server):
     server.vault.db.run_task(_seed)
 
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
-    snap_path = os.path.join(server.vault.image_root, cp.relative_path)
 
-    with closing(sqlite3.connect(snap_path)) as conn:
+    with _open_snapshot(server, cp) as conn:
         likeness_n = conn.execute("SELECT COUNT(*) FROM picturelikeness").fetchone()[0]
         queue_n = conn.execute("SELECT COUNT(*) FROM picturelikenessqueue").fetchone()[
             0

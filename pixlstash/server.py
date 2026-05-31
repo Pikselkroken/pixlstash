@@ -1097,12 +1097,26 @@ class Server:
                 "event": event_type.name,
             }
         else:
-            picture_ids = data if isinstance(data, (list, tuple, set)) else []
+            # ``data`` may be a bare id collection, or a dict carrying both the
+            # ids and the names of the fields that changed. The optional
+            # ``fields`` list lets the SPA skip a grid reload when the changed
+            # fields don't affect its current sort/filters (e.g. a background
+            # ``smart_score`` recompute while sorting by date).
+            fields = None
+            if isinstance(data, dict):
+                picture_ids = data.get("picture_ids") or []
+                fields = data.get("fields")
+            elif isinstance(data, (list, tuple, set)):
+                picture_ids = data
+            else:
+                picture_ids = []
             payload = {
                 "type": "pictures_changed",
                 "event": event_type.name,
                 "picture_ids": list(picture_ids) if picture_ids else [],
             }
+            if fields:
+                payload["fields"] = list(fields)
         stale = []
         for client in clients:
             ws = client.get("ws")

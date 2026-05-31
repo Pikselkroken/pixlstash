@@ -178,7 +178,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 
 | Wire `type` | Trigger | Payload fields | Frontend behaviour |
 |-------------|---------|---------------|--------------------|
-| `pictures_changed` | Picture metadata/score/quality updated | `picture_ids: number[]` | Debounced sidebar refresh + grid version bump; for `LIKENESS_GROUPS` sort, dispatch a tag-update event instead |
+| `pictures_changed` | Picture metadata/score/quality updated | `picture_ids: number[]`, optional `fields: string[]` | Debounced sidebar refresh + grid version bump; for `LIKENESS_GROUPS` sort, dispatch a tag-update event instead. When `fields` is present and **none** of the named fields affect the SPA's current sort/filters (e.g. `["smart_score"]` under a date sort), the SPA skips the refresh entirely. Omit `fields` for changes that may affect any view (user edits, imports) so the SPA always refreshes. |
 | `picture_imported` | New picture entered the vault (ComfyUI, watch folder, API) | `picture_ids: number[]` | If no upload is in progress, increment "pending external imports" pill; refresh grid when in the all-pictures view |
 | `characters_changed` | Character created/updated/deleted or face reassigned | — | Refresh sidebar (character list) |
 | `tags_changed` | Tags or tag predictions changed | `picture_ids: number[]` | Bump `wsTagUpdate` so affected grid cards re-render |
@@ -188,7 +188,8 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 1. Add the enum to `event_types.py`.
 2. Use a snake_case wire `type` and document it here.
 3. Always include enough context (typically `picture_ids`) so the SPA can do targeted updates rather than full reloads.
-4. Update `App.vue#onmessage` to handle it.
+4. For a `pictures_changed` event raised by background work that only touches non-visible/non-sortable columns (embeddings, scores), tag it with `fields` (pass `{"picture_ids": [...], "fields": [...]}` to `notify`) so the SPA can skip the refresh under unaffected sorts. Map the field in `App.vue#pictureChangeFieldAffectsView`.
+5. Update `App.vue#onmessage` to handle it.
 
 **Backend filtering**: the server uses the client's last `set_filters` to decide whether to push an event. Events outside the client's current view are dropped server-side to reduce noise.
 
