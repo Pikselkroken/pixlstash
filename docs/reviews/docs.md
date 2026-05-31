@@ -16,39 +16,13 @@ Suggested labels in parentheses.
 
 ## Tests (highest-value gap)
 
-### 1. Dependency-aware restore is tested for characters only `(tests, restore)`
-`_find_missing_parent_ids` / `_restore_parent_rows` / `_collect_batch_candidate_parents`
-([restore_service.py](../../pixlstash/services/restore_service.py)) handle
-`picture_sets` and `projects`, but `test_restore.py` only exercises the
-`characters` (`Face.character_id`) path. Add a missing-`set_id`
-(`PictureSetMember`) case and a missing-`project_id` (`PictureProjectMember`)
-case, for both `restore_resource` and `restore_batch` (un-confirmed → 409,
-confirmed → parents restored first).
-
-### 2. Missing-file ratio refusal (A3) has zero tests `(tests, restore)`
-Nothing trips the `>50%` / `≥10`-picture mount-failure guard in
-`restore_full` ([restore_service.py:439-452](../../pixlstash/services/restore_service.py)),
-nor proves a small legitimate snapshot still cleans up missing-file rows. Add
-both: (a) ≥10 pictures, >50% missing, no opt-in → refuses; (b) opt-in →
-proceeds; (c) <10 pictures all missing → still cleans up.
-
-### 3. `RESTORE_FAILED` / no-dangling-`RESTORE_STARTED` is unverified `(tests, restore)`
-The lifecycle ordering is correct in source (STARTED emitted only after the
-lock is held and the snapshot file is confirmed; every error path emits a
-terminal FAILED) but no test asserts it. Add: a 404/409/412 emits **no**
-`RESTORE_STARTED`; a mid-restore failure emits a terminal `RESTORE_FAILED`
-across all three restore methods.
+> #1, #2, #3, #5 are **done** (see [Resolved](#resolved-do-not-re-file)).
+> #4, #6, #7, #8 remain open.
 
 ### 4. Restore-with-live-workers is never exercised `(tests, restore)`
 All snapshot/restore tests run `disable_background_workers=True`. The
 production path — swap while the `TaskRunner` is live — has no coverage.
-Pairs with issue #6.
-
-### 5. Snapshot-route scope test covers only one endpoint `(tests, auth)`
-`test_picture_scoped_all_token_rejected_on_snapshot_routes`
-([test_snapshots_auth.py](../../tests/test_snapshots_auth.py)) only checks
-`GET /snapshots`. Parametrize across `list`, `status`,
-`preview_full_restore`, `preview_resource_restore`.
+Pairs with issue #9.
 
 ### 6. `test_openapi_response_schemas.py` doesn't validate per-route shape `(tests, api)`
 It smoke-checks that responses have *a* schema. A `response_model` swap from
@@ -286,6 +260,17 @@ Shipped in 1.5.0; listed so these aren't re-raised:
   Core UPDATE in cleanup; `_swap_database` fsyncs staged file + parent dir.
 - **Real concurrent-restore test** (two threads, one wins / one 409).
 - **Migration-from-real-v1.4.1 test** with data-preservation assertions.
+- **Test #1** dependency restore now covers `picture_set` and `project`
+  parents (refuse-without-confirm + restore-on-confirm), not just characters
+  ([test_restore.py](../../tests/test_restore.py)).
+- **Test #2** missing-file ratio guard covered: ≥10/>50% refuses, opt-in
+  proceeds; small-snapshot all-missing cleanup already covered by
+  `test_full_restore_drops_row_for_missing_file`.
+- **Test #3** restore lifecycle ordering covered: success → STARTED→COMPLETED,
+  404 → no events, dependency-refusal → STARTED→FAILED.
+- **Test #5** snapshot-route scope test parametrized across `list` / `status`
+  / `preview_full` / `preview_resource` for both READ and picture-scoped-ALL
+  tokens ([test_snapshots_auth.py](../../tests/test_snapshots_auth.py)).
 - **Scalar CDN** pinned to `@scalar/api-reference@1.32`.
 - **Version** bumped to `1.5.0.dev0`.
 - **Project-level per-resource restore** is intentionally excluded with a
