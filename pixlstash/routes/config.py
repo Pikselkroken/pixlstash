@@ -16,6 +16,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, User
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import config_service
+from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
     serialize_user_config,
@@ -597,8 +598,6 @@ def create_router(server) -> APIRouter:
         ]
         return {"status": "success", "filesystem_roots": roots}
 
-    import json as _json
-
     @router.get(
         "/server-config/snapshots",
         summary="Get snapshot configuration",
@@ -629,8 +628,7 @@ def create_router(server) -> APIRouter:
         server.vault.set_daily_snapshots_enabled(body.daily_snapshots)
         config_path = getattr(server, "_server_config_path", None)
         if config_path:
-            with open(config_path, "w") as f:
-                _json.dump(server._server_config, f, indent=2)
+            write_json_atomic(config_path, server._server_config)
         return {"status": "success", "daily_snapshots": body.daily_snapshots}
 
     @router.post(

@@ -1,6 +1,5 @@
 import hashlib
 import ipaddress
-import json
 import re
 import secrets
 import threading
@@ -19,6 +18,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority, VaultDatabase
 from pixlstash.db_models import Character, PictureSet, Project, User, UserToken
+from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.service.system_utils import default_max_vram_gb
 
 
@@ -371,12 +371,18 @@ class AuthService:
         self.password_hash = None
         self.username = None
         self.active_session_ids = {}
+        removed_any = False
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
+            removed_any = True
         if "USERNAME" in self._server_config:
             del self._server_config["USERNAME"]
-            with open(self._server_config_path, "w") as f:
-                json.dump(self._server_config, f, indent=2)
+            removed_any = True
+        # Persist whenever either key was removed — previously the write was
+        # nested under the USERNAME branch, so removing only PASSWORD_HASH left
+        # the stale hash on disk.
+        if removed_any:
+            write_json_atomic(self._server_config_path, self._server_config)
         return user
 
     def token_from_value(self, token_value: str) -> Optional[UserToken]:

@@ -63,6 +63,7 @@ from pixlstash.routes.guest_scores import create_router as create_guest_scores_r
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
+from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -890,8 +891,7 @@ class Server:
             server_config_path=self._server_config_path,
             logger=logger,
         ).run()
-        with open(server_config_path, "w") as f:
-            json.dump(self._server_config, f, indent=2)
+        write_json_atomic(server_config_path, self._server_config)
 
         # SSL config
         if self._server_config.get("require_ssl", False):
@@ -1361,8 +1361,7 @@ class Server:
                 "max_attachment_size_mb": 50,
                 "filesystem_roots": [],
             }
-            with open(server_config_path, "w") as f:
-                json.dump(server_config, f, indent=2)
+            write_json_atomic(server_config_path, server_config)
         else:
             with open(server_config_path, "r") as f:
                 server_config = json.load(f)
