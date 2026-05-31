@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.4</title>
+    <title>What's New in PixlStash 1.5</title>
     <meta
       name="description"
-      content="Explore what's new in PixlStash 1.4 including reverse image search, find similar faces, a full search API, semantic search, and the new ComfyUI-PixlStash nodes."
+      content="Explore what's new in PixlStash 1.5: automatic compressed snapshots, one-click and selective restore, a change-aware restore preview, breadcrumb navigation, drag characters and sets between projects, and the new snapshot REST API with examples."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -317,6 +317,158 @@
         opacity: 0.7;
       }
 
+      /* -- API documentation block -- */
+      .api-block {
+        margin-top: 24px;
+        background: var(--panel);
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        border-radius: 18px;
+        box-shadow: 0 10px 24px var(--shadow);
+        overflow: hidden;
+      }
+
+      .api-block-head {
+        padding: 24px 26px 4px;
+      }
+
+      .api-block-head h2 {
+        margin: 0 0 8px;
+        font-size: 1.5rem;
+      }
+
+      .api-block-head p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+        max-width: 72ch;
+      }
+
+      .api-auth {
+        margin: 16px 26px 0;
+        padding: 10px 14px;
+        border-radius: 10px;
+        background: rgba(57, 63, 70, 0.06);
+        border: 1px solid rgba(34, 38, 44, 0.1);
+        font-size: 0.86rem;
+        color: var(--muted);
+      }
+
+      .api-auth code {
+        font-family: "IBM Plex Mono", monospace;
+        color: var(--text);
+      }
+
+      .api-endpoints {
+        padding: 18px 26px 22px;
+        display: grid;
+        gap: 18px;
+      }
+
+      .endpoint {
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        border-radius: 14px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.5);
+      }
+
+      .endpoint-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px 10px;
+        flex-wrap: wrap;
+      }
+
+      .method {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 4px 9px;
+        border-radius: 7px;
+        color: #fff;
+      }
+
+      .method--get {
+        background: #2f8b5f;
+      }
+
+      .method--post {
+        background: #2563eb;
+      }
+
+      .method--delete {
+        background: #c0392b;
+      }
+
+      .endpoint-path {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: var(--text);
+        word-break: break-all;
+      }
+
+      .endpoint-desc {
+        margin: 0;
+        padding: 0 16px;
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      .code-block {
+        margin: 12px 16px 0;
+        background: #0f1419;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid rgba(0, 0, 0, 0.25);
+      }
+
+      .code-block:last-child {
+        margin-bottom: 16px;
+      }
+
+      .code-block-label {
+        display: block;
+        padding: 8px 14px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #7c8794;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .code-block pre {
+        margin: 0;
+        padding: 14px;
+        overflow-x: auto;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.82rem;
+        line-height: 1.6;
+        color: #e6edf3;
+      }
+
+      .code-block .tok-cmd {
+        color: #7ee787;
+        font-weight: 600;
+      }
+
+      .code-block .tok-comment {
+        color: #768390;
+        font-style: italic;
+      }
+
+      .api-more {
+        padding: 0 26px 24px;
+      }
+
+      .api-more a {
+        font-weight: 700;
+        color: var(--accent-2);
+      }
+
       @media (max-width: 980px) {
         .release-hero-inner {
           grid-template-columns: 1fr;
@@ -382,31 +534,39 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- ── PixlStash 1.4 ──────────────────────────────────────────── -->
+      <!-- ── PixlStash 1.5 ──────────────────────────────────────────── -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.4</span>
-            <h1>Search by picture, face, and meaning</h1>
+            <span class="release-kicker">PixlStash 1.5</span>
+            <h1>Snapshots, instant restore, and a full API</h1>
             <p>
-              PixlStash 1.4 adds powerful new ways to find pictures. Reverse
-              image search is now a right-click away in the grid and with a full
-              API, wired straight into your generation workflows with the new
-              <a
-                href="https://github.com/Pikselkroken/ComfyUI-PixlStash/"
-                class="whatsnew-link"
-                target="_blank"
-                rel="noopener"
-                >ComfyUI-PixlStash</a
-              >
-              nodes.
+              PixlStash 1.5 puts a safety net under all your organising work.
+              Automatic, compressed snapshots capture your library's metadata:
+              tags, scores, faces, descriptions, and how everything is
+              organised, so any mistake is one click from undone. Roll all your
+              metadata back, or restore just the pictures you select.
             </p>
+            <p>(Your image files are never touched.)</p>
+            <ul class="release-bullets">
+              <li>
+                Automatic daily / weekly / monthly snapshots, compressed with
+                zstd
+              </li>
+              <li>Full metadata restore with an automatic safety snapshot</li>
+              <li>Selective restore of just the pictures you choose</li>
+              <li>
+                Breadcrumb navigation and drag characters &amp; sets between
+                projects
+              </li>
+              <li>A clean snapshot &amp; restore REST API</li>
+            </ul>
           </div>
           <div class="release-hero-media">
             <img
               class="zoomable-image"
-              src="assets/ReverseImageSearch.jpg"
-              alt="PixlStash 1.4 — context menu with reverse image search and find similar faces"
+              src="assets/ScreenshotSnapshots.jpg"
+              alt="PixlStash 1.5 — snapshots panel with daily, weekly, and monthly restore points"
             />
           </div>
         </div>
@@ -415,30 +575,19 @@
       <section class="section-grid">
         <article class="update-card update-card--feature">
           <div class="update-card-body">
-            <h2>Search from any ComfyUI workflow</h2>
+            <h2>Restore only what you choose</h2>
             <p>
-              The
-              <a
-                href="https://github.com/Pikselkroken/ComfyUI-PixlStash/"
-                target="_blank"
-                class="whatsnew-link"
-                rel="noopener"
-                >ComfyUI-PixlStash</a
-              >
-              nodes expose PixlStash search inside ComfyUI. Drop in a reference
-              image and the <strong>PixlStash Likeness Search</strong> node
-              returns the closest matches from your library. Switch between
-              <code>face_search</code> and <code>picture_likeness</code> modes
-              to match on a person or on an overall picture. Store the pictures
-              straight back into your library with the
-              <strong>Picture Saver</strong> node.
+              A full restore rolls all your metadata back to a point in time,
+              but you don't always want that. Select any pictures and restore
+              just their metadata from a snapshot, leaving everything else
+              exactly as it is.
             </p>
           </div>
           <div class="update-card-media">
             <img
               class="zoomable-image"
-              src="assets/FaceLikenessSearch.jpg"
-              alt="ComfyUI graph using the PixlStash Likeness Search node in face search mode"
+              src="assets/ScreenshotSelectiveRestore.jpg"
+              alt="Selective restore previewing exactly which selected pictures will change"
             />
           </div>
         </article>
@@ -448,17 +597,16 @@
         <article class="update-card">
           <img
             class="zoomable-image"
-            src="assets/SemanticSearch.jpg"
-            alt="ComfyUI graph using the PixlStash Semantic Search node with a text query"
+            src="assets/ScreenshotBreadcrumb.jpg"
+            alt="Breadcrumb navigation showing the path to the current view in PixlStash"
           />
           <div class="update-card-body">
-            <h2>Semantic search by description</h2>
+            <h2>Find your way with breadcrumbs</h2>
             <p>
-              Describe what you're looking for in plain language: "man searching
-              for photos" and the
-              <strong>PixlStash Semantic Search</strong> node returns matching
-              pictures ranked by relevance, with a similarity threshold and
-              result limit you control.
+              A breadcrumb trail above the grid always shows where you are:
+              project, character, or set. This allows you to jump back up the
+              hierarchy with a single click. No more guessing how you reached a
+              view or navigating back from scratch.
             </p>
           </div>
         </article>
@@ -466,17 +614,17 @@
         <article class="update-card">
           <img
             class="zoomable-image"
-            src="assets/MultiLikenessSearch.jpg"
-            alt="ComfyUI graph batching multiple references into a single PixlStash likeness search"
+            src="assets/ScreenshotDragCharacters.jpg"
+            alt="Dragging a character onto a different project in the PixlStash sidebar"
           />
           <div class="update-card-body">
-            <h2>Combine several concepts</h2>
+            <h2>Drag characters &amp; sets between projects</h2>
             <p>
-              Batch multiple characters, sets, and individual pictures into a
-              single likeness search and combine them with
-              <code>mean</code> or <code>min</code>. Surface the pictures
-              closest to all of your inputs at once, not just one. Old man
-              drinking beer by a river? No problem!
+              Reorganise on the fly: grab a character or picture set in the
+              sidebar and drop it onto another project. Their pictures are
+              re-assigned for you — reference-aware, so a picture that still
+              belongs elsewhere stays put. Reshaping large libraries is now a
+              drag away.
             </p>
           </div>
         </article>
@@ -484,14 +632,176 @@
 
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
-          <h2>Even faster grid loading</h2>
+          <h2>Snapshots without the disk bill — or the wait</h2>
           <p>
-            The grid keeps getting quicker. 1.4 builds on the 1.3 loading
-            overhaul with further optimisations, so even very large libraries
-            feel more responsive as you scroll, filter, and search.
+            A snapshot copies only your <strong>metadata database</strong> —
+            never the image files, which would be wildly impractical to
+            duplicate over and over. That database is compressed with
+            <strong>zstd</strong> for roughly a 3× saving, yet still keeps the
+            expensive parts — CLIP embeddings and face data — so a restore comes
+            back fully populated with no re-tagging or re-embedding pass
+            afterwards. Retention follows a true grandfather-father-son policy:
+            the most recent <strong>7 daily</strong>, <strong>4 weekly</strong>,
+            and <strong>12 monthly</strong> snapshots are kept and the oldest
+            are pruned for you.
           </p>
         </div>
       </article>
+
+      <section class="api-block">
+        <div class="api-block-head">
+          <h2>The snapshot &amp; restore API</h2>
+          <p>
+            Everything the snapshots panel does is a plain REST call, so you can
+            script metadata snapshots and restores straight into your own
+            pipelines. Authenticate with an owner token and talk to the
+            endpoints under <code>/api/v1</code>.
+          </p>
+        </div>
+        <div class="api-auth">
+          Every request carries an owner token:
+          <code>Authorization: Bearer &lt;token&gt;</code>
+        </div>
+        <div class="api-endpoints">
+          <div class="endpoint">
+            <div class="endpoint-head">
+              <span class="method method--get">GET</span>
+              <span class="endpoint-path">/snapshots</span>
+            </div>
+            <p class="endpoint-desc">List every restore point, newest first.</p>
+            <div class="code-block">
+              <span class="code-block-label">Request</span>
+              <pre><span class="tok-cmd">curl</span> -H "Authorization: Bearer $TOKEN" \
+     https://your-server/api/v1/snapshots</pre>
+            </div>
+            <div class="code-block">
+              <span class="code-block-label">Response</span>
+              <pre>
+[
+  {
+    "id": 42,
+    "kind": "DAILY",
+    "label": null,
+    "created_at": "2026-05-31T06:42:37Z",
+    "picture_count": 1030,
+    "byte_size": 4523754,
+    "is_compatible": true
+  }
+]</pre
+              >
+            </div>
+          </div>
+
+          <div class="endpoint">
+            <div class="endpoint-head">
+              <span class="method method--post">POST</span>
+              <span class="endpoint-path">/snapshots</span>
+            </div>
+            <p class="endpoint-desc">
+              Take a manual snapshot right now, optionally labelled.
+            </p>
+            <div class="code-block">
+              <span class="code-block-label">Request</span>
+              <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"label": "before big cleanup"}'</pre>
+            </div>
+            <div class="code-block">
+              <span class="code-block-label">Response</span>
+              <pre>
+{ "id": 51, "kind": "MANUAL", "label": "before big cleanup", "picture_count": 1030 }</pre
+              >
+            </div>
+          </div>
+
+          <div class="endpoint">
+            <div class="endpoint-head">
+              <span class="method method--get">GET</span>
+              <span class="endpoint-path">/snapshots/{id}/restore/preview</span>
+            </div>
+            <p class="endpoint-desc">
+              Dry-run a full restore — it counts only what actually changes.
+            </p>
+            <div class="code-block">
+              <span class="code-block-label">Response</span>
+              <pre>
+{
+  "summary": {
+    "pictures_to_revert": 12,
+    "pictures_to_recreate": 3,
+    "pictures_to_delete": 1,
+    "pictures_unchanged": 1014,
+    "missing_files": 0
+  },
+  "warnings": []
+}</pre
+              >
+            </div>
+          </div>
+
+          <div class="endpoint">
+            <div class="endpoint-head">
+              <span class="method method--post">POST</span>
+              <span class="endpoint-path">/snapshots/{id}/restore</span>
+            </div>
+            <p class="endpoint-desc">
+              Restore all metadata to this snapshot — a safety snapshot is taken
+              first.
+            </p>
+            <div class="code-block">
+              <span class="code-block-label">Request</span>
+              <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots/42/restore \
+     -H "Authorization: Bearer $TOKEN"</pre>
+            </div>
+            <div class="code-block">
+              <span class="code-block-label">Response</span>
+              <pre>
+{ "snapshot_id": 42, "resource_type": "full", "missing_files_count": 0, "errors": [] }</pre
+              >
+            </div>
+          </div>
+
+          <div class="endpoint">
+            <div class="endpoint-head">
+              <span class="method method--post">POST</span>
+              <span class="endpoint-path">/snapshots/{id}/restore/batch</span>
+            </div>
+            <p class="endpoint-desc">
+              Selective restore — bring back only the resources you list.
+            </p>
+            <div class="code-block">
+              <span class="code-block-label">Request — curl</span>
+              <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots/42/restore/batch \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"resources": [{"type": "picture", "id": 8123},
+                        {"type": "picture", "id": 8124}]}'</pre>
+            </div>
+            <div class="code-block">
+              <span class="code-block-label">Request — Python</span>
+              <pre><span class="tok-comment"># pip install requests</span>
+import requests
+
+r = requests.post(
+    "https://your-server/api/v1/snapshots/42/restore/batch",
+    headers={"Authorization": f"Bearer {token}"},
+    json={"resources": [{"type": "picture", "id": 8123}]},
+)
+print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count': 1, 'errors': []}</span></pre>
+            </div>
+            <div class="code-block">
+              <span class="code-block-label">Response</span>
+              <pre>
+{ "snapshot_id": 42, "upserted_count": 2, "errors": [] }</pre
+              >
+            </div>
+          </div>
+        </div>
+        <div class="api-more">
+          <a href="api.html">Browse the full interactive API reference →</a>
+        </div>
+      </section>
 
       <section class="release-cta">
         <div>
@@ -510,6 +820,124 @@
           >
         </div>
       </section>
+
+      <!-- ── PixlStash 1.4 (previous release) ────────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release — PixlStash 1.4</span>
+
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.4</span>
+              <h1>Search by picture, face, and meaning</h1>
+              <p>
+                PixlStash 1.4 adds powerful new ways to find pictures. Reverse
+                image search is now a right-click away in the grid and with a
+                full API, wired straight into your generation workflows with the
+                new
+                <a
+                  href="https://github.com/Pikselkroken/ComfyUI-PixlStash/"
+                  class="whatsnew-link"
+                  target="_blank"
+                  rel="noopener"
+                  >ComfyUI-PixlStash</a
+                >
+                nodes.
+              </p>
+            </div>
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ReverseImageSearch.jpg"
+                alt="PixlStash 1.4 — context menu with reverse image search and find similar faces"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>Search from any ComfyUI workflow</h2>
+              <p>
+                The
+                <a
+                  href="https://github.com/Pikselkroken/ComfyUI-PixlStash/"
+                  target="_blank"
+                  class="whatsnew-link"
+                  rel="noopener"
+                  >ComfyUI-PixlStash</a
+                >
+                nodes expose PixlStash search inside ComfyUI. Drop in a
+                reference image and the
+                <strong>PixlStash Likeness Search</strong> node returns the
+                closest matches from your library. Switch between
+                <code>face_search</code> and <code>picture_likeness</code> modes
+                to match on a person or on an overall picture. Store the
+                pictures straight back into your library with the
+                <strong>Picture Saver</strong> node.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/FaceLikenessSearch.jpg"
+                alt="ComfyUI graph using the PixlStash Likeness Search node in face search mode"
+              />
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/SemanticSearch.jpg"
+              alt="ComfyUI graph using the PixlStash Semantic Search node with a text query"
+            />
+            <div class="update-card-body">
+              <h2>Semantic search by description</h2>
+              <p>
+                Describe what you're looking for in plain language: "man
+                searching for photos" and the
+                <strong>PixlStash Semantic Search</strong> node returns matching
+                pictures ranked by relevance, with a similarity threshold and
+                result limit you control.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/MultiLikenessSearch.jpg"
+              alt="ComfyUI graph batching multiple references into a single PixlStash likeness search"
+            />
+            <div class="update-card-body">
+              <h2>Combine several concepts</h2>
+              <p>
+                Batch multiple characters, sets, and individual pictures into a
+                single likeness search and combine them with
+                <code>mean</code> or <code>min</code>. Surface the pictures
+                closest to all of your inputs at once, not just one. Old man
+                drinking beer by a river? No problem!
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Even faster grid loading</h2>
+            <p>
+              The grid keeps getting quicker. 1.4 builds on the 1.3 loading
+              overhaul with further optimisations, so even very large libraries
+              feel more responsive as you scroll, filter, and search.
+            </p>
+          </div>
+        </article>
+      </div>
+      <!-- end prev-release 1.4 -->
 
       <!-- ── PixlStash 1.3 (previous release) ────────────────────────── -->
       <div class="prev-release">
