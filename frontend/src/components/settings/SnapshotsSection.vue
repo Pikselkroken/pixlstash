@@ -79,7 +79,6 @@ function humanBytes(bytes) {
   return `${v.toFixed(u === 0 ? 0 : 1)} ${units[u]}`;
 }
 
-
 // ── Create ─────────────────────────────────────────────────────────────────
 let _createSuccessToken = 0;
 async function handleCreate() {
@@ -203,7 +202,7 @@ function handleRestore(cp) {
     <div class="snapshot-settings-row">
       <v-switch
         :model-value="store.dailySnapshotsEnabled"
-        label="Automatic daily snapshots"
+        label="Automatic snapshots"
         density="compact"
         hide-details
         color="primary"

@@ -834,14 +834,22 @@ The manifest JSON contains: `picture_count`, `picture_ids`, `picture_set_count`,
 
 | Tier | Count kept | How created |
 |---|---|---|
-| `DAILY` | 7 most recent | `EnsureDailySnapshotTask` (one per calendar day) |
+| `DAILY` | 7 most recent | GFS schedule (see below) |
+| `WEEKLY` | 4 most recent | GFS schedule (one per ISO week) |
+| `MONTHLY` | 12 most recent | GFS schedule (one per calendar month) |
 | `OPPORTUNISTIC` | 5 most recent | Safety snapshot before `restore_full` |
 | `MANUAL` | unbounded | User-triggered via `POST /snapshots` (never pruned) |
 
-The codebase reserves `WEEKLY` and `MONTHLY` constants for a future
-DAILY→WEEKLY→MONTHLY promotion scheme, but no promotion logic exists today.
-Effective automatic retention is therefore ~1 week of daily history plus
-whatever the user has explicitly archived as MANUAL.
+`EnsureGfsSnapshotFinder` (`pixlstash/tasks/ensure_gfs_snapshot_finder.py`)
+drives the Grandfather-Father-Son schedule: each 5-minute check schedules **at
+most one** snapshot, of the highest tier currently *due* — `MONTHLY` if the
+calendar month has none, else `WEEKLY` if the ISO week has no weekly-or-higher,
+else `DAILY` if today has no automatic snapshot at all. Because a higher tier
+fills the lower slots (a monthly counts as this week's weekly and today's
+daily), an aligned boundary day yields a single monthly rather than three
+near-identical snapshots. `_apply_gfs_retention` then prunes each tier to its
+keep count independently. The whole schedule is gated by the
+`daily_snapshots` server-config switch (`Vault.daily_snapshots_enabled`).
 
 ### 18.3 `metadata_hash`
 

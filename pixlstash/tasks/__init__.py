@@ -27,8 +27,8 @@ from .reference_folder_scan_task import ReferenceFolderScanTask
 from .reference_folder_scan_finder import ReferenceFolderScanFinder
 from .text_score_task import TextScoreTask
 from .missing_text_score_finder import MissingTextScoreFinder
-from .ensure_daily_snapshot_finder import EnsureDailySnapshotFinder
-from .ensure_daily_snapshot_task import EnsureDailySnapshotTask
+from .ensure_gfs_snapshot_finder import EnsureGfsSnapshotFinder
+from .ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
 
 __all__ = [
     "TaskType",
@@ -59,6 +59,6 @@ __all__ = [
     "ReferenceFolderScanFinder",
     "TextScoreTask",
     "MissingTextScoreFinder",
-    "EnsureDailySnapshotFinder",
-    "EnsureDailySnapshotTask",
+    "EnsureGfsSnapshotFinder",
+    "EnsureGfsSnapshotTask",
 ]
