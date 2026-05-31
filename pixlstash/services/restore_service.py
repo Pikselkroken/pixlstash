@@ -1537,14 +1537,24 @@ class RestoreService:
                 # place. Without this, a power loss between os.replace
                 # and the next implicit fsync can leave the live DB
                 # pointing at a file whose pages aren't yet on disk.
-                with open(staged_db_path, "rb") as staged_fd:
+                # Open read-write ("rb+"): Windows refuses to fsync a
+                # read-only handle ("rb") with EBADF, since CommitFileBuffers
+                # requires write access.
+                with open(staged_db_path, "rb+") as staged_fd:
+                    staged_fd.flush()
                     os.fsync(staged_fd.fileno())
                 os.replace(staged_db_path, live_db_path)
-                live_dir_fd = os.open(os.path.dirname(live_db_path) or ".", os.O_RDONLY)
-                try:
-                    os.fsync(live_dir_fd)
-                finally:
-                    os.close(live_dir_fd)
+                # Directory fsync is a POSIX durability guarantee. Windows
+                # neither lets you open a directory as a file descriptor nor
+                # needs it (NTFS journals its own metadata), so skip it there.
+                if os.name != "nt":
+                    live_dir_fd = os.open(
+                        os.path.dirname(live_db_path) or ".", os.O_RDONLY
+                    )
+                    try:
+                        os.fsync(live_dir_fd)
+                    finally:
+                        os.close(live_dir_fd)
                 # Recreate engine
                 from sqlalchemy import event as sa_event
                 from pixlstash.database import init_database

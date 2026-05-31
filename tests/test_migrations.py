@@ -1,6 +1,7 @@
 """Tests verifying that Alembic migrations run cleanly on a fresh database
 and on an upgrade from the pre-snapshots (v1.4.1) schema with real data."""
 
+import contextlib
 import os
 import sqlite3
 import subprocess
@@ -82,7 +83,10 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
             f"initial upgrade failed:\nstdout: {up_to_head.stdout}\nstderr: {up_to_head.stderr}"
         )
 
-        with sqlite3.connect(db_path) as conn:
+        # contextlib.closing: sqlite3's own context manager commits/rolls
+        # back but does NOT close the connection, leaving the DB file locked
+        # so the TemporaryDirectory cleanup fails on Windows (WinError 32).
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             conn.execute("DROP TABLE IF EXISTS changelog")
             conn.execute("DROP TABLE IF EXISTS snapshot")
             conn.execute("ALTER TABLE picture DROP COLUMN metadata_hash")
@@ -125,7 +129,7 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
         )
 
         # Step 4 — verify data preservation and new schema.
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             rows = list(
                 conn.execute("SELECT id, original_file_name FROM picture ORDER BY id")
             )

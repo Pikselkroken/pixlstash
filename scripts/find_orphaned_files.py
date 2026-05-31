@@ -136,6 +136,13 @@ def _trash_target(image_root: str, orphan: str) -> str:
 
 
 def main() -> None:
+    # Windows consoles (and piped stdout) default to cp1252, which can't
+    # encode the ✓/… glyphs this script prints — emitting one raises
+    # UnicodeEncodeError. Force UTF-8 so output is identical on every platform.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(
         description=(
             "Find files under the vault image root with no matching database "
