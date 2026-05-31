@@ -7,17 +7,23 @@ old snapshots according to the GFS retention constants.
 
 import json
 import os
+import shutil
 import sqlite3
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from sqlmodel import select
 
-from pixlstash.database import DBPriority
+from pixlstash.database import DBPriority, _compute_picture_metadata_hash
 from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.snapshot_compression import (
+    COMPRESSED_SUFFIX,
+    compress_snapshot,
+)
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
@@ -90,10 +96,15 @@ class SnapshotService:
         abs_dir = os.path.join(vault_root, rel_dir)
         os.makedirs(abs_dir, exist_ok=True)
 
-        rel_snapshot = os.path.join(rel_dir, f"{snapshot_uuid}.sqlite")
+        rel_snapshot = os.path.join(rel_dir, f"{snapshot_uuid}{COMPRESSED_SUFFIX}")
         abs_snapshot = os.path.join(vault_root, rel_snapshot)
         rel_manifest = os.path.join(rel_dir, f"{snapshot_uuid}.manifest.json")
         abs_manifest = os.path.join(vault_root, rel_manifest)
+        # The per-picture hash map lives in its own sidecar (not the manifest)
+        # so the snapshot-list endpoint — which parses every manifest for its
+        # small resource counts — never pays to read a multi-MB hash blob.
+        rel_hashes = os.path.join(rel_dir, f"{snapshot_uuid}.hashes.json")
+        abs_hashes = os.path.join(vault_root, rel_hashes)
 
         # --- VACUUM + manifest + Snapshot row (one atomic writer task) --------
         # The VACUUM INTO, the manifest read (resource counts), and the Snapshot
@@ -109,28 +120,34 @@ class SnapshotService:
         )
 
         def _create_and_record(session):
-            self._vacuum_into(abs_snapshot)
+            # VACUUM the live DB into a scratch .sqlite, drop the live
+            # pipeline-state tables, then compress the archive to .sqlite.zst.
+            # The expensive GPU-regenerated blobs (CLIP image/text embeddings,
+            # InsightFace face features) are deliberately KEPT now — zstd makes
+            # carrying them affordable (~3x smaller) so a restore no longer
+            # triggers a full re-embedding / re-detection pass. Only the .zst
+            # is retained; the scratch file is always removed.
+            tmp_dir = tempfile.mkdtemp(prefix="pixlstash_snapshot_")
+            tmp_sqlite = os.path.join(tmp_dir, "snapshot.sqlite")
+            try:
+                self._vacuum_into(tmp_sqlite)
+                self._prepare_snapshot_for_archive(tmp_sqlite)
+                byte_size = compress_snapshot(tmp_sqlite, abs_snapshot)
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
-            # Strip regenerable bytes from the freshly-VACUUMed snapshot
-            # file. These columns are NULL-reset by every restore path
-            # anyway (see ``restore_service._PICTURE_DERIVED_COLUMNS``),
-            # so carrying them in the snapshot just wastes disk — on a
-            # large vault with CLIP embeddings this dominates the file
-            # size. Failure here is non-fatal: the snapshot is still
-            # correct, just larger than ideal.
-            self._strip_regenerable_blobs(abs_snapshot)
-
-            byte_size = (
-                os.path.getsize(abs_snapshot) if os.path.exists(abs_snapshot) else 0
-            )
-
-            manifest = self._build_manifest(session)
+            manifest, picture_hashes = self._build_manifest(session)
             manifest["snapshot_uuid"] = snapshot_uuid
             manifest["kind"] = kind
             manifest["created_at"] = now.isoformat()
 
             with open(abs_manifest, "w", encoding="utf-8") as _fh:
                 json.dump(manifest, _fh, indent=2)
+
+            # Hash-map sidecar (separate so the list endpoint's manifest reads
+            # stay lean). compact JSON — no indent — to keep it small.
+            with open(abs_hashes, "w", encoding="utf-8") as _fh:
+                json.dump(picture_hashes, _fh, separators=(",", ":"))
 
             cp = Snapshot(
                 kind=kind,
@@ -212,9 +229,12 @@ class SnapshotService:
                 return False
             abs_snapshot = os.path.join(vault_root, cp.relative_path)
             abs_manifest = os.path.join(vault_root, cp.manifest_relative_path)
+            abs_hashes = os.path.join(
+                vault_root, self._hashes_relative_path(cp.manifest_relative_path)
+            )
             session.delete(cp)
             session.commit()
-            for path in (abs_snapshot, abs_manifest):
+            for path in (abs_snapshot, abs_manifest, abs_hashes):
                 try:
                     if os.path.exists(path):
                         os.remove(path)
@@ -280,6 +300,54 @@ class SnapshotService:
         except Exception as exc:
             logger.warning(
                 "SnapshotService: could not read manifest for snapshot %d: %s",
+                snapshot_id,
+                exc,
+            )
+            return {}
+
+    @staticmethod
+    def _hashes_relative_path(manifest_relative_path: str) -> str:
+        """Derive the hash-sidecar path from a snapshot's manifest path.
+
+        ``<uuid>.manifest.json`` → ``<uuid>.hashes.json`` in the same dir.
+
+        Args:
+            manifest_relative_path: The snapshot's ``manifest_relative_path``.
+
+        Returns:
+            The relative path of the per-picture hash sidecar.
+        """
+        if manifest_relative_path.endswith(".manifest.json"):
+            return manifest_relative_path[: -len(".manifest.json")] + ".hashes.json"
+        return manifest_relative_path + ".hashes.json"
+
+    def load_picture_hashes(self, snapshot_id: int) -> dict:
+        """Load the per-picture ``{str(id): metadata_hash}`` sidecar.
+
+        Returns an empty dict for legacy snapshots that predate the sidecar
+        (the caller then falls back to reading hashes from the snapshot file).
+
+        Args:
+            snapshot_id: Primary key of the snapshot.
+
+        Returns:
+            Parsed hash map, or empty dict if not found / unreadable.
+        """
+        cp = self.get_snapshot(snapshot_id)
+        if cp is None:
+            return {}
+        abs_hashes = os.path.join(
+            self._vault.image_root,
+            self._hashes_relative_path(cp.manifest_relative_path),
+        )
+        if not os.path.exists(abs_hashes):
+            return {}
+        try:
+            with open(abs_hashes, encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception as exc:
+            logger.warning(
+                "SnapshotService: could not read hash sidecar for snapshot %d: %s",
                 snapshot_id,
                 exc,
             )
@@ -377,17 +445,14 @@ class SnapshotService:
         finally:
             conn.close()
 
-    # Picture columns NULLed when stripping a snapshot. Kept in sync with
-    # ``restore_service._PICTURE_DERIVED_COLUMNS`` — the restore path NULL-
-    # resets these on the live DB regardless of what the snapshot held, so
-    # carrying them around in the snapshot file is pure waste.
-    _STRIP_PICTURE_COLUMNS: tuple[str, ...] = (
-        "text_embedding",
-        "image_embedding",
-        "smart_score",
-        "text_score",
-        "aesthetic_score",
-    )
+    # Picture columns NULLed before archiving a snapshot. Now EMPTY: the
+    # CLIP image/text embeddings and the cheap derived scores used to be
+    # stripped (and NULL-reset on restore) to save disk, but that forced a
+    # full GPU re-embedding pass on every restore. They are now KEPT inside
+    # the snapshot and the whole archive is zstd-compressed instead, so a
+    # restore comes back fully populated. Left as a tuple so the stripping
+    # loop below stays a no-op rather than special-casing the empty case.
+    _STRIP_PICTURE_COLUMNS: tuple[str, ...] = ()
 
     # Tables whose entire contents are dropped from a snapshot. These are
     # all regenerable / pipeline-state tables — keeping the snapshot's
@@ -404,15 +469,23 @@ class SnapshotService:
     )
 
     @classmethod
-    def _strip_regenerable_blobs(cls, abs_snapshot: str) -> None:
-        """NULL the regenerable Picture columns in *abs_snapshot* and re-VACUUM.
+    def _prepare_snapshot_for_archive(cls, abs_snapshot: str) -> None:
+        """Drop live pipeline-state tables from *abs_snapshot* and re-VACUUM.
 
-        Failure is logged and swallowed: a non-stripped snapshot is still
-        correct, just larger.  The file is opened with a dedicated
-        connection so the writer thread's session isn't disturbed.
+        Empties the ``picturelikeness`` / ``picturelikenessqueue`` /
+        ``picturelikenessfrontier`` tables (live similarity progress that the
+        restore path reconstructs from the live DB) and re-VACUUMs to reclaim
+        the freed pages. The expensive per-picture blobs (embeddings, face
+        features, scores) are intentionally retained — see
+        ``_STRIP_PICTURE_COLUMNS``.
+
+        Failure is logged and swallowed: an unprepared snapshot is still
+        correct, just larger.  The file is opened with a dedicated connection
+        so the writer thread's session isn't disturbed.
 
         Args:
-            abs_snapshot: Absolute path to the freshly-VACUUMed snapshot.
+            abs_snapshot: Absolute path to the freshly-VACUUMed scratch
+                snapshot (before compression).
         """
         try:
             conn = sqlite3.connect(abs_snapshot)
@@ -467,18 +540,34 @@ class SnapshotService:
             except Exception:
                 pass
 
-    def _build_manifest(self, session) -> dict:
-        """Build the manifest dict capturing resource counts.
+    def _build_manifest(self, session) -> tuple[dict, dict]:
+        """Build the manifest dict and the per-picture hash map.
 
         Args:
             session: An active read session.
 
         Returns:
-            Dict suitable for JSON serialisation.
+            ``(manifest, picture_hashes)``. The manifest holds resource counts
+            and the id list (written to the ``.manifest.json``); the hash map
+            is ``{str(picture_id): metadata_hash}`` (written to the separate
+            ``.hashes.json`` sidecar so the list endpoint's manifest reads stay
+            lean).
         """
         from sqlalchemy import func, text
 
-        picture_ids: list[int] = list(session.exec(select(Picture.id)).all())
+        # Pull id + metadata_hash together. The hash map lets the interactive
+        # restore preview and hash-compare read hashes from the sidecar and
+        # never decompress the snapshot archive. NULL hashes (legacy rows the
+        # after_flush hook hasn't stamped yet) are computed on the spot so the
+        # map is complete.
+        hash_rows = session.exec(select(Picture.id, Picture.metadata_hash)).all()
+        picture_ids: list[int] = [row[0] for row in hash_rows]
+        picture_hashes: dict[str, str] = {}
+        for pid, h in hash_rows:
+            if h is None:
+                h = _compute_picture_metadata_hash(session, pid)
+            if h is not None:
+                picture_hashes[str(pid)] = h
         picture_set_count = session.exec(select(func.count(PictureSet.id))).one()
         project_count = session.exec(select(func.count(Project.id))).one()
         character_count = session.exec(select(func.count(Character.id))).one()
@@ -496,7 +585,7 @@ class SnapshotService:
             )
             schema_version = ""
 
-        return {
+        manifest = {
             "picture_count": len(picture_ids),
             "picture_ids": picture_ids,
             "picture_set_count": picture_set_count,
@@ -504,6 +593,7 @@ class SnapshotService:
             "character_count": character_count,
             "schema_version": schema_version,
         }
+        return manifest, picture_hashes
 
     def _apply_gfs_retention(self, now: datetime) -> None:
         """Prune snapshots beyond GFS retention limits.
@@ -534,7 +624,11 @@ class SnapshotService:
                 to_delete = rows[keep:]
                 for cp in to_delete:
                     vault_root = self._vault.image_root
-                    for rel_path in (cp.relative_path, cp.manifest_relative_path):
+                    for rel_path in (
+                        cp.relative_path,
+                        cp.manifest_relative_path,
+                        self._hashes_relative_path(cp.manifest_relative_path),
+                    ):
                         abs_path = os.path.join(vault_root, rel_path)
                         try:
                             if os.path.exists(abs_path):
