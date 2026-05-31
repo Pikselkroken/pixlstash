@@ -154,7 +154,8 @@ class TestSslConfigPersistence:
         assert "ssl_keyfile" not in cfg
         assert "ssl_certfile" not in cfg
         # And nothing SSL-shaped was written to disk.
-        on_disk = json.load(open(path))
+        with open(path) as f:
+            on_disk = json.load(f)
         assert "ssl_keyfile" not in on_disk
         assert "ssl_certfile" not in on_disk
 
@@ -164,14 +165,15 @@ class TestSslConfigPersistence:
         import json
 
         path = str(tmp_path / "server-config.json")
-        json.dump(
-            {
-                "require_ssl": False,
-                "ssl_keyfile": "/old/key.pem",
-                "ssl_certfile": "/old/cert.pem",
-            },
-            open(path, "w"),
-        )
+        with open(path, "w") as f:
+            json.dump(
+                {
+                    "require_ssl": False,
+                    "ssl_keyfile": "/old/key.pem",
+                    "ssl_certfile": "/old/cert.pem",
+                },
+                f,
+            )
 
         cfg = Server.init_server_config(path)
         assert "ssl_keyfile" not in cfg
@@ -181,7 +183,8 @@ class TestSslConfigPersistence:
         import json
 
         path = str(tmp_path / "server-config.json")
-        json.dump({"require_ssl": True}, open(path, "w"))
+        with open(path, "w") as f:
+            json.dump({"require_ssl": True}, f)
 
         cfg = Server.init_server_config(path)
         assert cfg["ssl_keyfile"], "ssl_keyfile must be defaulted when SSL is on"
@@ -193,14 +196,15 @@ class TestSslConfigPersistence:
         import json
 
         path = str(tmp_path / "server-config.json")
-        json.dump(
-            {
-                "require_ssl": True,
-                "ssl_keyfile": "/custom/k.pem",
-                "ssl_certfile": "/custom/c.pem",
-            },
-            open(path, "w"),
-        )
+        with open(path, "w") as f:
+            json.dump(
+                {
+                    "require_ssl": True,
+                    "ssl_keyfile": "/custom/k.pem",
+                    "ssl_certfile": "/custom/c.pem",
+                },
+                f,
+            )
 
         cfg = Server.init_server_config(path)
         assert cfg["ssl_keyfile"] == "/custom/k.pem"
