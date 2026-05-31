@@ -1336,9 +1336,17 @@ class RestoreService:
                         )
                 session.commit()
             # Flush WAL to main file for a clean single-file snapshot.
-            with _sqlite3.connect(db_path) as conn:
+            # NB: ``sqlite3.Connection.__exit__`` commits but does NOT close the
+            # connection, so a ``with sqlite3.connect(...)`` here would leak the
+            # file handle and block deletion of the snapshot on Windows. Close
+            # explicitly in a finally.
+            conn = _sqlite3.connect(db_path)
+            try:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 conn.execute("PRAGMA journal_mode=DELETE")
+                conn.commit()
+            finally:
+                conn.close()
             logger.info(
                 "RestoreService: filled %d metadata hashes in %s",
                 len(null_pids),
@@ -1422,9 +1430,16 @@ class RestoreService:
             # main file contains all data without a WAL sidecar.
             import sqlite3
 
-            with sqlite3.connect(tmp_snapshot) as _conn:
-                _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                _conn.execute("PRAGMA journal_mode=DELETE")
+            # ``with sqlite3.connect(...)`` commits but does not close the
+            # connection; close explicitly so the handle is released before the
+            # temp dir is removed (Windows blocks deletion of open files).
+            conn = sqlite3.connect(tmp_snapshot)
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("PRAGMA journal_mode=DELETE")
+                conn.commit()
+            finally:
+                conn.close()
             logger.info(
                 "RestoreService: snapshot schema upgraded to head at %s",
                 tmp_snapshot,
