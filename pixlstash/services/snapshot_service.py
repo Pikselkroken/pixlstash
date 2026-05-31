@@ -99,8 +99,9 @@ class SnapshotService:
         # The VACUUM INTO, the manifest read (resource counts), and the Snapshot
         # INSERT all run in a single writer-thread task so they describe one
         # consistent point-in-time: no other write can interleave between the
-        # snapshot file and the manifest it is paired with.  VACUUM must run first
-        # because SQLite forbids VACUUM inside an open transaction.
+        # snapshot file and the manifest it is paired with.  ``_vacuum_into``
+        # uses its own dedicated connection (see its docstring) but still runs
+        # inside this writer task, so the serialisation guarantee holds.
         logger.info(
             "SnapshotService: creating %s snapshot → %s",
             kind,
@@ -108,7 +109,7 @@ class SnapshotService:
         )
 
         def _create_and_record(session):
-            self._vacuum_into(session, abs_snapshot)
+            self._vacuum_into(abs_snapshot)
 
             # Strip regenerable bytes from the freshly-VACUUMed snapshot
             # file. These columns are NULL-reset by every restore path
@@ -343,12 +344,38 @@ class SnapshotService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _vacuum_into(self, session, abs_snapshot: str) -> None:
-        """Run VACUUM INTO via a raw SQLite connection in the writer session."""
-        conn = session.connection()
-        raw = conn.connection.driver_connection  # underlying sqlite3.Connection
+    def _vacuum_into(self, abs_snapshot: str) -> None:
+        """Write a clean copy of the live DB to *abs_snapshot* via ``VACUUM INTO``.
+
+        Runs on a dedicated short-lived SQLite connection that is closed in a
+        ``finally`` — NOT the writer session's pooled connection.  SQLite keeps
+        an OS file handle on the VACUUM INTO *destination* alive on whichever
+        connection issued the statement until that connection is closed.  The
+        writer session's connection lives in the engine pool for the whole
+        process lifetime, so issuing VACUUM INTO on it left the freshly-written
+        snapshot file open indefinitely; Windows then refuses to delete it
+        (``WinError 32``), which is why ``shutil.rmtree`` of the snapshots dir
+        failed in CI.  POSIX allows unlinking an open file, so this only ever
+        bit Windows.  A dedicated connection releases the handle immediately on
+        ``close()``.
+
+        The caller already runs this inside the single-threaded writer task, so
+        reading the live DB on a second connection cannot race a concurrent
+        write, and WAL mode lets that read observe all committed rows.
+
+        Args:
+            abs_snapshot: Absolute path of the snapshot file to create.
+        """
+        db_path = self._vault.db._db_path
         escaped = abs_snapshot.replace("'", "''")
-        raw.execute(f"VACUUM INTO '{escaped}'")
+        # isolation_level=None keeps the connection in autocommit so VACUUM INTO
+        # is not wrapped in an implicit transaction (SQLite forbids VACUUM inside
+        # an open transaction).
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(f"VACUUM INTO '{escaped}'")
+        finally:
+            conn.close()
 
     # Picture columns NULLed when stripping a snapshot. Kept in sync with
     # ``restore_service._PICTURE_DERIVED_COLUMNS`` — the restore path NULL-
