@@ -9,6 +9,7 @@ codebase migrates.
 import ast
 import re
 import tempfile
+import warnings
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -45,7 +46,9 @@ def test_no_private_vault_access_from_routes():
         source = path.read_text()
         hits = _has_private_vault_access(source)
         for lineno, snippet in hits:
-            violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {snippet}")
+            violations.append(
+                f"{path.relative_to(REPO_ROOT).as_posix()}:{lineno}: {snippet}"
+            )
     assert not violations, (
         "Private vault attribute access detected in route handlers.\n"
         "Add a public method to Vault instead:\n" + "\n".join(violations)
@@ -89,7 +92,9 @@ def test_no_new_direct_db_calls_from_routes():
     """Fail if a route file that is NOT in the allowlist calls vault.db directly."""
     unlisted_violations = []
     for path in sorted(_iter_python_files(ROUTES_DIR)):
-        rel = str(path.relative_to(REPO_ROOT))
+        # as_posix(): the allowlist uses "/" separators, but relative_to()
+        # yields "\" on Windows — str() would never match the allowlist there.
+        rel = path.relative_to(REPO_ROOT).as_posix()
         if not _DB_CALL_PATTERN.search(path.read_text()):
             continue
         if rel not in _DIRECT_DB_CALL_ALLOWLIST:
@@ -121,7 +126,8 @@ def test_services_no_direct_db_calls():
 
     violations = []
     for path in sorted(_iter_python_files(SERVICES_DIR)):
-        rel = str(path.relative_to(REPO_ROOT))
+        # as_posix(): allowlist uses "/" separators (see note above).
+        rel = path.relative_to(REPO_ROOT).as_posix()
         source = path.read_text()
         if not _DB_CALL_PATTERN.search(source):
             continue
@@ -217,9 +223,14 @@ def test_finder_dependencies_resolve_to_registered_finders():
             assert task_type in finders_dict, (
                 f"depends_on() references {task_type!r} but no finder is registered for it"
             )
-    except Exception:
-        # If we can't instantiate finders (e.g. missing DB), skip the runtime check.
-        pass
+    except Exception as exc:
+        # If we can't instantiate finders (e.g. missing DB), skip the runtime
+        # check — but surface why, so a silently broken setup is visible in the
+        # test warning summary rather than passing unnoticed.
+        warnings.warn(
+            f"Skipped runtime finder-resolution check: {exc!r}",
+            stacklevel=2,
+        )
 
 
 # ---------------------------------------------------------------------------

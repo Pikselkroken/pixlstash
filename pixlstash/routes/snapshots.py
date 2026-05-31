@@ -272,9 +272,10 @@ def create_router(server) -> APIRouter:
         """Delete a snapshot and its snapshot files.
 
         MANUAL and OPPORTUNISTIC snapshots may always be deleted.  For
-        GFS-scheduled kinds (DAILY, WEEKLY, MONTHLY) deletion is refused
-        when this is the last remaining snapshot of that kind — the system
-        always keeps at least one of each GFS tier.
+        GFS-scheduled kinds (DAILY, WEEKLY, MONTHLY) deletion is refused only
+        for the **most recent** snapshot of that kind — that one is the
+        current automatic restore point and stays locked. Older snapshots of
+        the same kind can be deleted freely.
 
         Authentication is required.
         """
@@ -283,17 +284,19 @@ def create_router(server) -> APIRouter:
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
         if cp.kind in ("DAILY", "WEEKLY", "MONTHLY"):
-            all_of_kind = [
+            of_kind = [
                 s
                 for s in server.vault.snapshot_service.list_snapshots()
                 if s.kind == cp.kind
             ]
-            if len(all_of_kind) <= 1:
+            latest = max(of_kind, key=lambda s: s.created_at, default=None)
+            if latest is not None and latest.id == cp.id:
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        f"Cannot delete the only remaining {cp.kind} snapshot. "
-                        "The system keeps at least one of each GFS tier."
+                        f"Cannot delete the most recent {cp.kind} snapshot — "
+                        "it is the current automatic restore point. Delete "
+                        f"older {cp.kind} snapshots instead."
                     ),
                 )
         try:

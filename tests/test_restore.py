@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+from contextlib import closing
 
 import pytest
 from sqlalchemy import text
@@ -560,7 +561,7 @@ def test_upgrade_snapshot_schema_runs_alembic_on_old_snapshot(server):
 
     # Strip the metadata_hash column AND back-date alembic_version to before
     # the migration that added it (0049_snapshots → previous head 0048).
-    with sqlite3.connect(abs_snapshot) as conn:
+    with closing(sqlite3.connect(abs_snapshot)) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(picture)").fetchall()}
         assert "metadata_hash" in cols, (
             "Pre-test invariant: current schema has metadata_hash"
@@ -697,7 +698,7 @@ def test_compare_hashes_backfills_null_live_and_returns_identical(server):
     import sqlite3
 
     abs_snapshot = os.path.join(server.vault.image_root, cp.relative_path)
-    with sqlite3.connect(abs_snapshot) as conn:
+    with closing(sqlite3.connect(abs_snapshot)) as conn:
         conn.execute("UPDATE picture SET metadata_hash = NULL")
         conn.commit()
 
@@ -1144,3 +1145,348 @@ def test_full_restore_preserves_live_likeness_queue_and_frontier(server):
     assert post_likeness == [], (
         f"likeness rows must be empty after restore; got {post_likeness}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Missing-dependency restore — picture_set and project parents (issue #1)
+# ---------------------------------------------------------------------------
+
+
+def test_restore_resource_picture_with_missing_picture_set_raises_without_confirm(
+    server,
+):
+    """A snapshot picture is a member of a PictureSet that was later deleted
+    in live. Restoring the picture references the missing set; un-confirmed
+    must raise MissingDependenciesError carrying the set id and write nothing.
+    """
+    from pixlstash.services.restore_service import MissingDependenciesError
+
+    _create_file(server, "in_set.jpg")
+    pic = _add_picture(server, filename="in_set.jpg")
+
+    def _setup(session):
+        ps = PictureSet(name="my_set")
+        session.add(ps)
+        session.commit()
+        session.refresh(ps)
+        session.add(PictureSetMember(set_id=ps.id, picture_id=pic.id))
+        session.commit()
+        return ps.id
+
+    set_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Live: drop the membership then the set (FK-safe order).
+    def _delete_set(session):
+        session.exec(delete(PictureSetMember).where(PictureSetMember.set_id == set_id))
+        session.exec(delete(PictureSet).where(PictureSet.id == set_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_set)
+
+    with pytest.raises(MissingDependenciesError) as exc_info:
+        server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
+    assert set_id in exc_info.value.missing.get("picture_sets", []), (
+        f"Expected missing picture_sets to include {set_id}; "
+        f"got {exc_info.value.missing}"
+    )
+
+    sets_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(select(PictureSet)).all()
+    )
+    assert sets_after == [], (
+        f"Refused restore must not write the set back; got {sets_after}"
+    )
+
+
+def test_restore_resource_picture_confirm_restores_missing_picture_set(server):
+    """With confirm=True, the deleted PictureSet is re-inserted from the
+    snapshot before the membership is upserted — both land in live."""
+    _create_file(server, "in_set2.jpg")
+    pic = _add_picture(server, filename="in_set2.jpg")
+
+    def _setup(session):
+        ps = PictureSet(name="set_to_restore")
+        session.add(ps)
+        session.commit()
+        session.refresh(ps)
+        session.add(PictureSetMember(set_id=ps.id, picture_id=pic.id))
+        session.commit()
+        return ps.id
+
+    set_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_set(session):
+        session.exec(delete(PictureSetMember).where(PictureSetMember.set_id == set_id))
+        session.exec(delete(PictureSet).where(PictureSet.id == set_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_set)
+
+    report = server.vault.restore_service.restore_resource(
+        cp.id, "picture", pic.id, confirm_restore_dependencies=True
+    )
+    assert report.upserted_count > 0
+
+    set_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.get(PictureSet, set_id)
+    )
+    assert set_after is not None and set_after.name == "set_to_restore", (
+        f"Confirmed restore must re-insert the set; got {set_after}"
+    )
+    member_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(
+            select(PictureSetMember).where(PictureSetMember.set_id == set_id)
+        ).first()
+    )
+    assert member_after is not None and member_after.picture_id == pic.id
+
+
+def test_restore_resource_picture_with_missing_project_raises_without_confirm(
+    server,
+):
+    """A snapshot picture belongs to a Project (via PictureProjectMember) that
+    was later deleted in live. Un-confirmed restore must raise with the
+    missing project id and write nothing."""
+    from pixlstash.services.restore_service import MissingDependenciesError
+
+    _create_file(server, "in_proj.jpg")
+    pic = _add_picture(server, filename="in_proj.jpg")
+
+    def _setup(session):
+        proj = Project(name="my_project")
+        session.add(proj)
+        session.commit()
+        session.refresh(proj)
+        session.add(PictureProjectMember(project_id=proj.id, picture_id=pic.id))
+        session.commit()
+        return proj.id
+
+    proj_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_proj(session):
+        session.exec(
+            delete(PictureProjectMember).where(
+                PictureProjectMember.project_id == proj_id
+            )
+        )
+        session.exec(delete(Project).where(Project.id == proj_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_proj)
+
+    with pytest.raises(MissingDependenciesError) as exc_info:
+        server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
+    assert proj_id in exc_info.value.missing.get("projects", []), (
+        f"Expected missing projects to include {proj_id}; got {exc_info.value.missing}"
+    )
+
+    projects_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(select(Project)).all()
+    )
+    assert projects_after == [], (
+        f"Refused restore must not write the project back; got {projects_after}"
+    )
+
+
+def test_restore_resource_picture_confirm_restores_missing_project(server):
+    """With confirm=True, the deleted Project is re-inserted from the snapshot
+    before the project membership is upserted."""
+    _create_file(server, "in_proj2.jpg")
+    pic = _add_picture(server, filename="in_proj2.jpg")
+
+    def _setup(session):
+        proj = Project(name="project_to_restore")
+        session.add(proj)
+        session.commit()
+        session.refresh(proj)
+        session.add(PictureProjectMember(project_id=proj.id, picture_id=pic.id))
+        session.commit()
+        return proj.id
+
+    proj_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_proj(session):
+        session.exec(
+            delete(PictureProjectMember).where(
+                PictureProjectMember.project_id == proj_id
+            )
+        )
+        session.exec(delete(Project).where(Project.id == proj_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_proj)
+
+    report = server.vault.restore_service.restore_resource(
+        cp.id, "picture", pic.id, confirm_restore_dependencies=True
+    )
+    assert report.upserted_count > 0
+
+    proj_after = server.vault.db.run_immediate_read_task(
+        lambda s: s.get(Project, proj_id)
+    )
+    assert proj_after is not None and proj_after.name == "project_to_restore", (
+        f"Confirmed restore must re-insert the project; got {proj_after}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Missing-file ratio guard (A3 / issue #2)
+# ---------------------------------------------------------------------------
+
+
+def test_full_restore_refuses_when_most_files_missing(server):
+    """≥10 pictures and >50% missing on disk looks like a mount failure, not
+    a real deletion. Full restore must refuse rather than wipe metadata for
+    that many pictures."""
+    # 10 pictures; create files for only 3 → 7 missing (70%).
+    for i in range(10):
+        name = f"ratio_{i}.jpg"
+        if i < 3:
+            _create_file(server, name)
+        _add_picture(server, filename=name)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        server.vault.restore_service.restore_full(cp.id)
+    msg = str(exc_info.value).lower()
+    assert "missing" in msg and "mount" in msg, (
+        f"Refusal must explain the mount-failure heuristic; got: {exc_info.value}"
+    )
+
+    # Live DB untouched — all 10 rows still present (no swap happened).
+    count_after = server.vault.db.run_immediate_read_task(
+        lambda s: len(s.exec(select(Picture)).all())
+    )
+    assert count_after == 10, (
+        f"Refused restore must not drop any rows; got {count_after} pictures"
+    )
+
+
+def test_full_restore_allows_high_missing_ratio_with_override(server):
+    """The same >50% scenario proceeds when the caller explicitly opts in via
+    allow_without_safety — the missing-file rows are then dropped."""
+    for i in range(10):
+        name = f"ovr_{i}.jpg"
+        if i < 3:
+            _create_file(server, name)
+        _add_picture(server, filename=name)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    report = server.vault.restore_service.restore_full(cp.id, allow_without_safety=True)
+    assert not report.errors, f"Override restore errors: {report.errors}"
+    assert report.missing_files_count == 7
+
+    # Only the 3 pictures whose files exist survive the cleanup.
+    count_after = server.vault.db.run_immediate_read_task(
+        lambda s: len(s.exec(select(Picture)).all())
+    )
+    assert count_after == 3, (
+        f"Override restore must drop the 7 missing-file rows; got {count_after}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Restore lifecycle events: STARTED/COMPLETED/FAILED ordering (issue #3)
+# ---------------------------------------------------------------------------
+
+
+def _capture_restore_events(server):
+    """Register a listener and return a list that accrues restore EventTypes."""
+    from pixlstash.event_types import EventType
+
+    captured: list = []
+    restore_types = {
+        EventType.RESTORE_STARTED,
+        EventType.RESTORE_COMPLETED,
+        EventType.RESTORE_FAILED,
+    }
+
+    def _listener(event_type, data):
+        if event_type in restore_types:
+            captured.append(event_type)
+
+    server.vault.add_event_listener(_listener)
+    return captured
+
+
+def test_full_restore_emits_started_then_completed(server):
+    """A successful full restore emits exactly STARTED then COMPLETED, in
+    that order, and never FAILED."""
+    from pixlstash.event_types import EventType
+
+    _create_file(server, "evt_ok.jpg")
+    _add_picture(server, filename="evt_ok.jpg", description="v1")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    events = _capture_restore_events(server)
+    server.vault.restore_service.restore_full(cp.id)
+
+    assert events == [
+        EventType.RESTORE_STARTED,
+        EventType.RESTORE_COMPLETED,
+    ], f"Expected STARTED→COMPLETED; got {[e.name for e in events]}"
+
+
+def test_restore_nonexistent_snapshot_emits_no_started(server):
+    """A 404-equivalent (snapshot not found) is detected BEFORE the STARTED
+    event, so the UI is never left with a dangling activeJob."""
+    events = _capture_restore_events(server)
+
+    with pytest.raises(ValueError):
+        server.vault.restore_service.restore_full(999999)
+
+    assert events == [], (
+        f"Missing-snapshot restore must emit no lifecycle events; "
+        f"got {[e.name for e in events]}"
+    )
+
+
+def test_missing_deps_refusal_emits_started_then_failed(server):
+    """A dependency-refusal restore emits STARTED then a terminal FAILED
+    (so the client clears activeJob), never COMPLETED."""
+    from pixlstash.event_types import EventType
+    from pixlstash.services.restore_service import MissingDependenciesError
+
+    _create_file(server, "evt_dep.jpg")
+    pic = _add_picture(server, filename="evt_dep.jpg")
+
+    def _setup(session):
+        c = Character(name="evt_char")
+        session.add(c)
+        session.commit()
+        session.refresh(c)
+        session.add(
+            Face(
+                picture_id=pic.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c.id,
+                bbox_="[0,0,10,10]",
+            )
+        )
+        session.commit()
+        return c.id
+
+    char_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _del(session):
+        session.exec(delete(Character).where(Character.id == char_id))
+        session.commit()
+
+    server.vault.db.run_task(_del)
+
+    events = _capture_restore_events(server)
+    with pytest.raises(MissingDependenciesError):
+        server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
+
+    assert events == [
+        EventType.RESTORE_STARTED,
+        EventType.RESTORE_FAILED,
+    ], f"Expected STARTED→FAILED; got {[e.name for e in events]}"
