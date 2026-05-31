@@ -251,6 +251,14 @@ function handleRestore(cp) {
         snapshots are kept until deleted.
       </span>
     </div>
+    <div class="snapshot-retention-card">
+      <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
+      <span>
+        Snapshots are not a backup solution. They store metadata only and on the
+        same storage as the live vault.<br />For true backups, regularly export
+        your full vault and store it separately.
+      </span>
+    </div>
 
     <!-- ── Error / Loading ───────────────────────────────────────────────── -->
     <div v-if="store.error" class="snapshot-inline-error mt-2">
@@ -459,8 +467,8 @@ function handleRestore(cp) {
   opacity: 0.65;
   background: rgba(var(--v-theme-on-surface), 0.05);
   border-radius: 4px;
-  padding: 6px 10px;
-  margin-bottom: 14px;
+  padding: 6px 8px;
+  margin-bottom: 2px;
   line-height: 1.4;
 }
 
