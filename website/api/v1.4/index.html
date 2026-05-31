@@ -85,6 +85,10 @@
       data-url="openapi.json"
       data-configuration='{"forceDarkModeState": "dark", "hideDarkModeToggle": true, "hideModels": true, "persistAuth": true, "showDeveloperTools": "never", "authentication": {"preferredSecurityScheme": "bearerAuth", "securitySchemes": {"bearerAuth": {"token": "MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE"}}}, "servers": [{"url": "https://demo.pixlstash.dev", "description": "PixlStash demo server"}]}'
     ></script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    <!-- Pinned to a specific version so a future @scalar release cannot
+         change the bundle served to this self-hosted docs page without an
+         intentional bump. Revisit each release; consider vendoring under
+         data/scalar-assets/ for SRI/offline guarantees. -->
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.32"></script>
   </body>
 </html>
