@@ -22,3 +22,5 @@ docs/ideas/
 .api-token
 demo-data/
 CLAUDE.md
+frontend/e2e/.auth/
+frontend/test-results/
