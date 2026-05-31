@@ -13,7 +13,9 @@ from fastapi import (
 from sqlalchemy import (
     text,
 )
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
+from typing import Optional
 
 from pixlstash.db_models import (
     Face,
@@ -51,11 +53,72 @@ from ._helpers import (
 logger = get_logger(__name__)
 
 
+class SortMechanismResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    key: str
+    field: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ImagePluginListResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    plugins: list = []
+    plugin_errors: list = []
+    plugin_dirs: dict = {}
+
+
+class PicturePluginRunResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
+class LikenessGroupResponse(BaseModel):
+    """A picture row belonging to a computed likeness group.
+
+    Picture metadata is large and dynamic; common fields are enumerated and
+    ``extra="allow"`` preserves the rest (including the ``stack_index`` and
+    ``smartScore`` overlays added by the handler)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    score: Optional[int] = None
+    stack_index: Optional[int] = None
+    smartScore: Optional[float] = None
+
+
+class PictureStatsResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    total: Optional[int] = None
+    total_tags: Optional[int] = None
+    tagged: Optional[int] = None
+    untagged: Optional[int] = None
+    avg_tags_per_image: Optional[float] = None
+    top_tags: Optional[list] = None
+    top_cooccurrences: Optional[list] = None
+    confidence_histogram: Optional[list] = None
+    regular_tags: Optional[list] = None
+    score_distribution: Optional[list] = None
+    smart_score_distribution: Optional[list] = None
+    resolution_distribution: Optional[list] = None
+
+
+class OpenLocationResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
 def register_routes(router, server):
     @router.get(
         "/sort_mechanisms",
         summary="List picture sort mechanisms",
         description="Returns all available sorting keys and direction semantics supported by picture listing and search endpoints.",
+        response_model=list[SortMechanismResponse],
     )
     def get_pictures_sort_mechanisms():
         """Return available sorting mechanisms for pictures."""
@@ -65,16 +128,20 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/plugins",
+        include_in_schema=False,
         summary="List image plugins",
         description="Lists available image plugins and their parameter schemas.",
+        response_model=ImagePluginListResponse,
     )
     def list_picture_plugins():
         return plugin_service.list_plugins(server.vault)
 
     @router.post(
         "/pictures/plugins/{name}",
+        include_in_schema=False,
         summary="Run image plugin",
         description="Runs a named image plugin on selected pictures and imports outputs into stacks.",
+        response_model=PicturePluginRunResponse,
     )
     async def run_picture_plugin(name: str, payload: dict = Body(...)):
         raw_picture_ids = payload.get("picture_ids")
@@ -122,7 +189,9 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/comfyui_models",
+        include_in_schema=False,
         summary="List distinct ComfyUI model names",
+        response_model=list[str],
     )
     def get_comfyui_models():
         def fetch(session):
@@ -139,7 +208,9 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/comfyui_loras",
+        include_in_schema=False,
         summary="List distinct ComfyUI LoRA names",
+        response_model=list[str],
     )
     def get_comfyui_loras():
         def fetch(session):
@@ -156,8 +227,10 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/likeness-groups",
+        include_in_schema=False,
         summary="List computed likeness groups",
         description="Builds groups from likeness edges using filtering options such as character, set, format, and threshold.",
+        response_model=list[LikenessGroupResponse],
     )
     def get_likeness_groups(
         request: Request,
@@ -708,8 +781,10 @@ def register_routes(router, server):
 
     @router.post(
         "/pictures/{id}/open-location",
+        include_in_schema=False,
         summary="Open picture location",
         description="Opens the containing folder of a reference picture in the OS file manager.",
+        response_model=OpenLocationResponse,
     )
     def open_picture_location(id: str):
         try:
@@ -744,8 +819,10 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/stats",
+        include_in_schema=False,
         summary="Get picture statistics",
         description="Returns tag statistics for the current view filter, cached for 60 seconds.",
+        response_model=PictureStatsResponse,
     )
     def get_picture_stats(request: Request):
         cache_key = str(sorted(request.query_params.multi_items()))

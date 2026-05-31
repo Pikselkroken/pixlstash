@@ -17,6 +17,7 @@ from typing import List
 import numpy as np
 from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
+from pydantic import BaseModel, ConfigDict
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
@@ -34,6 +35,13 @@ logger = get_logger(__name__)
 _MAX_TOP_N = 500
 _MAX_POOL_M = 2000
 _DEFAULT_TOP_N = 20
+
+
+class ImageLikenessMatchResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    picture_id: int
+    likeness: float
 
 
 def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
@@ -96,7 +104,7 @@ def register_routes(router, server):
             "Results are ordered by descending similarity score. "
             "Only pictures with a pre-computed image embedding are considered."
         ),
-        tags=["pictures"],
+        response_model=list[ImageLikenessMatchResponse],
     )
     async def search_by_image_likeness(
         request: Request,

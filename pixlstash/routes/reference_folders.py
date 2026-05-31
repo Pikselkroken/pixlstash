@@ -57,6 +57,25 @@ class ReferenceFoldersListResponse(BaseModel):
     folders: list[ReferenceFolderResponse]
 
 
+class ReferenceFolderDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    id: int
+
+
+class ServerRestartResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
+class ReferenceFolderOpenResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
 def create_router(server) -> APIRouter:
     """Create the reference-folders API router.
 
@@ -107,7 +126,7 @@ def create_router(server) -> APIRouter:
         summary="List reference folders",
         description="Returns all reference folders and metadata about the current runtime mode.",
         response_model=ReferenceFoldersListResponse,
-        tags=["config"],
+        tags=["folders"],
     )
     def list_reference_folders(request: Request):
         server.auth.require_user_id(request)
@@ -146,7 +165,7 @@ def create_router(server) -> APIRouter:
             "and the folder becomes 'active' (or 'mount_error') right away."
         ),
         response_model=ReferenceFolderResponse,
-        tags=["config"],
+        tags=["folders"],
     )
     def create_reference_folder(
         request: Request,
@@ -246,7 +265,7 @@ def create_router(server) -> APIRouter:
         summary="Update a reference folder",
         description="Updates editable fields for a reference folder.",
         response_model=ReferenceFolderResponse,
-        tags=["config"],
+        tags=["folders"],
     )
     def update_reference_folder(
         folder_id: int,
@@ -284,7 +303,8 @@ def create_router(server) -> APIRouter:
             "Removes a reference folder record. Pictures indexed from this folder "
             "are de-associated but not deleted from the database or disk."
         ),
-        tags=["config"],
+        tags=["folders"],
+        response_model=ReferenceFolderDeleteResponse,
     )
     def delete_reference_folder(folder_id: int, request: Request):
         server.auth.require_user_id(request)
@@ -353,7 +373,8 @@ def create_router(server) -> APIRouter:
             "(systemd, Docker, etc.) is expected to restart it automatically. "
             "Use this after adding reference folders to apply pending mount changes."
         ),
-        tags=["config"],
+        tags=["server"],
+        response_model=ServerRestartResponse,
     )
     def restart_server(request: Request):
         server.auth.require_user_id(request)
@@ -377,7 +398,8 @@ def create_router(server) -> APIRouter:
             "Opens the reference folder (or an optional subdirectory within it) "
             "in the OS file manager."
         ),
-        tags=["config"],
+        tags=["folders"],
+        response_model=ReferenceFolderOpenResponse,
     )
     def open_reference_folder(
         folder_id: int,

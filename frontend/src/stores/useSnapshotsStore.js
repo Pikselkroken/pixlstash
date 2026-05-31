@@ -86,18 +86,18 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     return res.data;
   }
 
-  async function previewResourceRestore(snapshotId, resourceType, resourceId) {
-    const res = await apiClient.get(
-      `/api/v1/snapshots/${snapshotId}/restore/${resourceType}/${resourceId}/preview`
-    );
-    return res.data;
-  }
-
-  async function executeRestore(snapshotId, resources) {
+  async function executeRestore(
+    snapshotId,
+    resources,
+    { confirmRestoreDependencies = false } = {},
+  ) {
     if (resources && resources.length > 0) {
       const res = await apiClient.post(
         `/api/v1/snapshots/${snapshotId}/restore/batch`,
-        { resources }
+        {
+          resources,
+          confirm_restore_dependencies: confirmRestoreDependencies,
+        }
       );
       return res.data;
     }
@@ -149,6 +149,19 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     fetchSnapshots();
   }
 
+  function onRestoreFailed(payload) {
+    // Terminal event for a restore that started emitting STARTED but
+    // hit an error. Clear activeJob so the UI buttons unlock; the
+    // server's error response (404/409/412/500) already surfaced the
+    // detail to the caller that triggered the restore.
+    activeJob.value = null;
+    if (payload?.error) {
+      error.value = `Restore failed: ${payload.error}`;
+    }
+    // A safety snapshot may have landed before the failure; refresh.
+    fetchSnapshots();
+  }
+
   async function fetchSnapshotSettings() {
     try {
       const res = await apiClient.get("/api/v1/server-config/snapshots");
@@ -189,7 +202,6 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     renameSnapshot,
     deleteSnapshot,
     previewRestore,
-    previewResourceRestore,
     executeRestore,
     openRestoreDialog,
     fetchSnapshotSettings,
@@ -199,5 +211,6 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     onSnapshotDeleted,
     onRestoreStarted,
     onRestoreCompleted,
+    onRestoreFailed,
   };
 });

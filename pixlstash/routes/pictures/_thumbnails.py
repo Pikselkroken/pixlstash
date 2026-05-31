@@ -68,6 +68,8 @@ def register_routes(router, server):
         "/pictures/thumbnails/{id}.webp",
         summary="Get picture thumbnail image",
         description="Returns a WebP thumbnail for a picture id, generating and caching it on demand when needed.",
+        response_class=FileResponse,
+        responses={200: {"content": {"image/webp": {}}}},
     )
     async def get_thumbnail(request: Request, id: int):
         started_at = datetime.now()
@@ -281,6 +283,7 @@ def register_routes(router, server):
         "/pictures/thumbnails",
         summary="Get batch thumbnail metadata",
         description="Returns thumbnail URLs and mapped face/hand overlays for a list of picture ids, including penalised-tag hints.",
+        response_model=dict,
     )
     def get_thumbnails(request: Request, payload: dict = Body(...)):
         ids = payload.get("ids", [])

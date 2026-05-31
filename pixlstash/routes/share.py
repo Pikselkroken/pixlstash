@@ -38,6 +38,7 @@ def create_router(server) -> APIRouter:
             "The token value is embedded in the filename portion of the URL."
         ),
         include_in_schema=False,
+        responses={200: {"content": {"image/*": {}}}},
     )
     def serve_shared_picture(token_slug: str):
         # Split off the extension to recover the raw token value.

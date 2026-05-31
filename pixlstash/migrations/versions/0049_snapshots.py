@@ -1,11 +1,9 @@
-"""Snapshots infrastructure: changelog + snapshot tables and picture.metadata_hash.
+"""Snapshots infrastructure: snapshot table and picture.metadata_hash.
 
-Squashes the former snapshots-branch migrations (add_change_log, add_checkpoint,
+Squashes the former snapshots-branch migrations (add_checkpoint,
 add_picture_metadata_hash, reset_metadata_hash) into a single revision that
 chains after 0048_normalize_stack_positions:
 
-  - ``changelog`` table — records every INSERT/UPDATE/DELETE performed by the
-    writer session (powers undo and snapshot restore).
   - ``snapshot`` table — full-database snapshot metadata created by VACUUM INTO.
   - ``picture.metadata_hash`` column — SHA-256 fingerprint of each picture's
     user-visible metadata, used for fast snapshot-identity comparisons.
@@ -40,27 +38,6 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_tables = set(inspector.get_table_names())
-
-    if "changelog" not in existing_tables:
-        op.create_table(
-            "changelog",
-            sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("txn_id", sa.String, nullable=False, index=True),
-            sa.Column("seq_in_txn", sa.Integer, nullable=False),
-            sa.Column("table_name", sa.String, nullable=False, index=True),
-            sa.Column("row_pk_json", sa.String, nullable=False),
-            sa.Column("op", sa.String, nullable=False),
-            sa.Column("before_json", sa.Text, nullable=True),
-            sa.Column("after_json", sa.Text, nullable=True),
-            sa.Column("created_at", sa.DateTime, nullable=False, index=True),
-            sa.Column(
-                "actor_user_id",
-                sa.Integer,
-                sa.ForeignKey("user.id", ondelete="SET NULL"),
-                nullable=True,
-            ),
-            sa.Column("reason", sa.String, nullable=True),
-        )
 
     if "snapshot" not in existing_tables:
         op.create_table(
@@ -100,5 +77,3 @@ def downgrade() -> None:
     existing_tables = set(inspector.get_table_names())
     if "snapshot" in existing_tables:
         op.drop_table("snapshot")
-    if "changelog" in existing_tables:
-        op.drop_table("changelog")

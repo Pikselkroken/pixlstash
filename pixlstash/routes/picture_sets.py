@@ -1,9 +1,11 @@
 import json
 import os
 import sys
+from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 from sqlalchemy import desc, exists, func, nullslast
@@ -36,6 +38,96 @@ from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
 logger = get_logger(__name__)
 
 _UNSET = object()
+
+
+class PictureSetResponse(BaseModel):
+    """Picture set metadata as returned by set listing and lookup endpoints."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    project_id: Optional[int] = None
+    set_icon: Optional[str] = None
+    set_color: Optional[str] = None
+    picture_count: Optional[int] = None
+    top_picture_ids: Optional[list[int]] = None
+    thumbnail_url: Optional[str] = None
+
+
+class PictureSetCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    picture_set: dict
+
+
+class PictureSetPicturesResponse(BaseModel):
+    """Set contents response.
+
+    Covers both shapes returned by ``get_picture_set``: the ``info=true`` path
+    returns picture set metadata (id/name/.../picture_count), while the default
+    path returns ``{"pictures": [...], "set": {...}}``. All fields are optional
+    so neither shape drops data, and ``extra="allow"`` keeps anything else.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    pictures: Optional[list[dict]] = None
+    set: Optional[PictureSetResponse] = None
+    id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    project_id: Optional[int] = None
+    set_icon: Optional[str] = None
+    set_color: Optional[str] = None
+    picture_count: Optional[int] = None
+
+
+class PictureSetUpdateResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
+class PictureSetDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    deleted_id: int
+
+
+class PictureSetMembersResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    picture_ids: list[int]
+
+
+class PictureSetAddPictureResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
+class PictureSetRemovePictureResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+
+
+class PictureSetBulkAddResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    added: int
+
+
+class PictureSetBulkReplaceResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    members: int
 
 
 def create_router(server) -> APIRouter:
@@ -230,6 +322,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets",
         summary="List picture sets",
         description="Returns picture sets with visible member counts, top pictures, and thumbnail URLs.",
+        response_model=list[PictureSetResponse],
     )
     def get_picture_sets(request: Request, project_id: str | None = Query(None)):
         # Restrict listing to the token's resource when a scoped READ token is used
@@ -318,6 +411,7 @@ def create_router(server) -> APIRouter:
         "/projects/{project_name}/picture_sets/{picture_set_name}",
         summary="Get picture set by project name and set name",
         description="Returns picture set metadata for a named set within a named project.",
+        response_model=PictureSetResponse,
     )
     def get_picture_set_by_name(project_name: str, picture_set_name: str):
         def fetch(session):
@@ -437,6 +531,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets",
         summary="Create picture set",
         description="Creates a new picture set with name and optional description.",
+        response_model=PictureSetCreateResponse,
     )
     def create_picture_set(payload: dict = Body(...)):
         name = payload.get("name")
@@ -482,6 +577,7 @@ def create_router(server) -> APIRouter:
             "Also expands stack siblings so all stack members are considered. "
             "Used by the AddToSet menu to load membership in a single request."
         ),
+        response_model=dict,
     )
     def get_batch_membership(
         picture_ids: list[int] = Body(default=[]),
@@ -530,6 +626,8 @@ def create_router(server) -> APIRouter:
         "/picture_sets/{id}/thumbnail",
         summary="Get picture set thumbnail",
         description="Returns or generates a cached composite thumbnail representing top-scoring pictures in a set.",
+        response_class=Response,
+        responses={200: {"content": {"image/png": {}}}},
     )
     def get_picture_set_thumbnail(id: int, request: Request):
         _require_scope_allows_picture_set(request, id)
@@ -758,6 +856,7 @@ def create_router(server) -> APIRouter:
             "picture is returned for each stack. Pass expand_stacks=true to receive "
             "every picture in every stack."
         ),
+        response_model=PictureSetPicturesResponse,
     )
     def get_picture_set(
         request: Request,
@@ -970,6 +1069,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets/{id}",
         summary="Update picture set",
         description="Updates picture set name and/or description.",
+        response_model=PictureSetUpdateResponse,
     )
     def update_picture_set(id: int, payload: dict = Body(...)):
         name = payload.get("name")
@@ -1096,6 +1196,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets/{id}",
         summary="Delete picture set",
         description="Deletes a picture set and all its membership links.",
+        response_model=PictureSetDeleteResponse,
     )
     def delete_picture_set(id: int):
         def delete_set(session, id):
@@ -1122,6 +1223,7 @@ def create_router(server) -> APIRouter:
             "Pass expand_stacks=true to also include all stack siblings of any member, "
             "which is useful for checking whether a stack is part of the set."
         ),
+        response_model=PictureSetMembersResponse,
     )
     def get_picture_set_pictures(
         id: int,
@@ -1188,6 +1290,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets/{id}/members/{picture_id}",
         summary="Add picture to set",
         description="Adds one picture to a set when the set and picture are valid and membership does not already exist.",
+        response_model=PictureSetAddPictureResponse,
     )
     def add_picture_to_set(id: int, picture_id: str):
         reference_character_id = _find_reference_character_id_for_set(id)
@@ -1249,6 +1352,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets/{id}/members/{picture_id}",
         summary="Remove picture from set",
         description="Removes one picture membership from a picture set.",
+        response_model=PictureSetRemovePictureResponse,
     )
     def remove_picture_from_set(id: int, picture_id: str):
         reference_character_id = _find_reference_character_id_for_set(id)
@@ -1302,6 +1406,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets/{id}/members",
         summary="Bulk add pictures to set",
         description="Adds a batch of pictures to a set (non-destructive). Skips pictures already in the set.",
+        response_model=PictureSetBulkAddResponse,
     )
     def bulk_add_pictures_to_set(id: int, payload: dict = Body(...)):
         raw_ids = payload.get("picture_ids", [])
@@ -1369,6 +1474,7 @@ def create_router(server) -> APIRouter:
         "/picture_sets/{id}/members",
         summary="Bulk replace picture set members",
         description="Atomically replaces the entire member list of a set. All existing members are removed and the provided picture ids become the new members.",
+        response_model=PictureSetBulkReplaceResponse,
     )
     def bulk_replace_pictures_in_set(id: int, payload: dict = Body(...)):
         raw_ids = payload.get("picture_ids", [])

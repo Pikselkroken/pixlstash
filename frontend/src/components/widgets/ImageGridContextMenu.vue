@@ -186,6 +186,51 @@
         <div class="ctx-sep" />
       </template>
 
+      <!-- ── Restore from snapshot ─────────────────────────── -->
+      <template
+        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
+      >
+        <div
+          class="ctx-submenu-wrap"
+          @mouseenter="restoreSubmenuOpen = true"
+          @mouseleave="restoreSubmenuOpen = false"
+        >
+          <button
+            class="ctx-item"
+            :disabled="!selectedImageIds.length || isReadOnly"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+            Restore from snapshot
+            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+            <button
+              v-for="cp in recentSnapshots"
+              :key="cp.id"
+              class="ctx-item"
+              :disabled="identicalSnapshotIds.has(cp.id)"
+              :title="
+                identicalSnapshotIds.has(cp.id)
+                  ? 'Selection is identical to this snapshot'
+                  : undefined
+              "
+              @click="handleRestoreFromSnapshot(cp.id)"
+            >
+              <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+              {{ cp.label || cp.kind }}
+              <span class="ctx-default-pill">{{
+                cp.created_at ? formatSnapshotDate(cp.created_at) : ""
+              }}</span>
+            </button>
+            <button class="ctx-item" @click="handleRestoreMore">
+              <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+              More…
+            </button>
+          </div>
+        </div>
+      </template>
+
+
       <!-- ── Find similar faces ─────────────────────────────── -->
       <template
         v-if="
@@ -239,51 +284,6 @@
         </div>
       </template>
 
-      <!-- ── Restore from snapshot ─────────────────────────── -->
-      <template
-        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
-      >
-        <div
-          class="ctx-submenu-wrap"
-          @mouseenter="restoreSubmenuOpen = true"
-          @mouseleave="restoreSubmenuOpen = false"
-        >
-          <button
-            class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly"
-          >
-            <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
-            Restore from snapshot
-            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
-          </button>
-          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
-            <button
-              v-for="cp in recentSnapshots"
-              :key="cp.id"
-              class="ctx-item"
-              :disabled="identicalSnapshotIds.has(cp.id)"
-              :title="
-                identicalSnapshotIds.has(cp.id)
-                  ? 'Selection is identical to this snapshot'
-                  : undefined
-              "
-              @click="handleRestoreFromSnapshot(cp.id)"
-            >
-              <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
-              {{ cp.label || cp.kind }}
-              <span class="ctx-default-pill">{{
-                cp.created_at
-                  ? new Date(cp.created_at + "Z").toLocaleDateString()
-                  : ""
-              }}</span>
-            </button>
-            <button class="ctx-item" @click="handleRestoreMore">
-              <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
-              More…
-            </button>
-          </div>
-        </div>
-      </template>
 
       <!-- ── Reverse image search ────────────────────────────── -->
       <template v-if="contextImage?.id && !isScrapheapView">
@@ -406,7 +406,6 @@ const emit = defineEmits([
   "remove-picture-shares",
   "reverse-image-search",
   "find-similar-faces",
-  "restore-from-snapshot",
 ]);
 
 const menuRef = ref(null);
@@ -419,32 +418,42 @@ const findFacesSubmenuOpen = ref(false);
 const restoreSubmenuOpen = ref(false);
 const identicalSnapshotIds = ref(new Set());
 
+// Run token guards against rapid submenu toggles: when the watcher fires
+// again before its previous batch finishes, the old in-flight requests must
+// not write their (now-stale) results into identicalSnapshotIds and overwrite
+// the new batch's state. Same pattern as SnapshotsSection.vue:88.
+let _hashCompareRunToken = 0;
+
 watch(restoreSubmenuOpen, async (isOpen) => {
   if (!isOpen || !props.selectedImageIds.length) {
     return;
   }
+  const token = ++_hashCompareRunToken;
   identicalSnapshotIds.value = new Set();
   const pictureIds = props.selectedImageIds;
+  const matchedIds = new Set();
   await Promise.all(
     recentSnapshots.value.map(async (cp) => {
       try {
-        const res = await apiClient.post(`/snapshots/${cp.id}/hash-compare`, {
+        const res = await apiClient.post(`/api/v1/snapshots/${cp.id}/hash-compare`, {
           picture_ids: pictureIds,
         });
+        // Bail on stale apply — a newer run has superseded this one.
+        if (token !== _hashCompareRunToken) return;
         const identicalSet = new Set(res.data.identical_ids);
         const allIdentical = pictureIds.every((id) => identicalSet.has(id));
         if (allIdentical) {
-          identicalSnapshotIds.value = new Set([
-            ...identicalSnapshotIds.value,
-            cp.id,
-          ]);
+          matchedIds.add(cp.id);
         }
       } catch (err) {
-        // On error, leave the snapshot enabled (conservative)
+        // On error, leave the snapshot enabled (conservative).
         console.warn(`Hash-compare failed for snapshot ${cp.id}:`, err);
       }
     }),
   );
+  if (token === _hashCompareRunToken) {
+    identicalSnapshotIds.value = matchedIds;
+  }
 });
 
 const snapshotsStore = useSnapshotsStore();
@@ -452,13 +461,23 @@ const recentSnapshots = computed(() =>
   snapshotsStore.snapshots.filter((cp) => cp.is_compatible).slice(0, 5),
 );
 
+// Snapshot created_at may arrive as a bare ISO string (treat as UTC, append
+// "Z") OR already carry a "Z" / offset suffix. Blindly appending "Z" to the
+// latter yields "...+00:00Z" which Date parses as Invalid Date.
+function formatSnapshotDate(iso) {
+  if (!iso) return "";
+  const hasTz = /(Z|[+-]\d{2}:?\d{2})$/.test(iso);
+  const d = new Date(hasTz ? iso : iso + "Z");
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString();
+}
+
 function handleRestoreFromSnapshot(cpId) {
   const resources = props.selectedImageIds.map((id) => ({
     type: "picture",
     id,
   }));
   snapshotsStore.openRestoreDialog(cpId, resources);
-  onAction("restore-from-snapshot", { snapshotId: cpId, resources });
+  emit("close");
 }
 
 function handleRestoreMore() {
@@ -467,7 +486,7 @@ function handleRestoreMore() {
     id,
   }));
   snapshotsStore.openRestoreDialog(null, resources);
-  onAction("restore-from-snapshot", { snapshotId: null, resources });
+  emit("close");
 }
 const faceCharacterNames = ref({}); // face.id -> character name string or null
 

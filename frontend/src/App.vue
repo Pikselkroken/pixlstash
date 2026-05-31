@@ -266,24 +266,19 @@ function connectUpdatesSocket() {
         key: Date.now(),
         payload,
       };
-    } else if (payload?.type === "snapshot_created") {
-      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
+    } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
       snapshotsStore.onSnapshotCreated();
-    } else if (payload?.type === "snapshot_deleted") {
-      wsStore.wsSnapshotEvent = { key: Date.now(), payload };
+    } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
       snapshotsStore.onSnapshotDeleted(payload);
-    } else if (payload?.type === "restore_started") {
-      wsStore.wsRestoreEvent = { key: Date.now(), payload };
+    } else if (payload?.type === "restore_started" && !isReadOnly.value) {
       snapshotsStore.onRestoreStarted(payload);
-    } else if (payload?.type === "restore_completed") {
-      wsStore.wsRestoreEvent = { key: Date.now(), payload };
+    } else if (payload?.type === "restore_completed" && !isReadOnly.value) {
       snapshotsStore.onRestoreCompleted();
       gridStore.wsUpdateKey = Date.now();
       gridStore.refreshGridVersion();
       refreshSidebar();
-    } else if (payload?.type === "undo_applied") {
-      // An undo (triggered via the API or by another client) mutates picture
-      // metadata, so refresh the grid and sidebar counts.
+    } else if (payload?.type === "restore_failed" && !isReadOnly.value) {
+      snapshotsStore.onRestoreFailed(payload);
       gridStore.wsUpdateKey = Date.now();
       gridStore.refreshGridVersion();
       refreshSidebar();
@@ -1661,8 +1656,13 @@ onMounted(async () => {
     })
     .catch(() => {});
   await fetchConfig();
-  snapshotsStore.fetchSnapshots();
+  // Snapshots are owner-only (full unscoped access); READ / share sessions
+  // would 403 on every fetch otherwise.
+  if (!isReadOnly.value) {
+    snapshotsStore.fetchSnapshots();
+  }
   // Navigate to the scoped resource when a share token is active
+  const ctx = sessionContext.value;
   if (ctx && ctx.scope !== "ALL") {
     if (ctx.resource_type === "picture_set") {
       selectionStore.selectedSet = ctx.resource_id;

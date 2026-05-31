@@ -1,12 +1,90 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <title>PixlStash API Reference</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* With the developer-tools toolbar disabled the top header strip is
+         empty, but Scalar still reserves its height — collapse it so the
+         content title sits at the top of the page. */
+      :root,
+      .scalar-app,
+      .dark-mode {
+        --scalar-header-height: 0px !important;
+      }
+      /* Every Scalar ``.section`` carries generous vertical padding to space
+         sections apart; on the first one (the introduction) that top padding
+         becomes ~90px of dead space above the title. Trim it to 12px for the
+         intro only (matching the sidebar's top inset; other sections keep
+         their spacing), and tighten the section's ``gap-12`` flex gap. */
+      .scalar-app section.introduction-section {
+        padding-top: 12px !important;
+        gap: 1rem !important;
+      }
+      .scalar-app section.introduction-section > .section-content {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+      }
+      /* The main column wrapper ships ``padding: 0 60px``, leaving a wide gap
+         between the sidebar and the content. Tighten the horizontal inset. */
+      .scalar-app .section-container {
+        padding-left: 20px !important;
+        padding-right: 20px !important;
+      }
+      .dark-mode {
+        --scalar-font: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif !important;
+        --scalar-font-code: 'IBM Plex Mono', ui-monospace, monospace !important;
+        --scalar-background-1: #2a2f36 !important;
+        --scalar-background-2: #2b3138 !important;
+        --scalar-background-3: #313337 !important;
+        --scalar-background-accent: rgba(142, 166, 4, 0.16) !important;
+        --scalar-color-1: #f2e5da !important;
+        --scalar-color-2: rgba(242, 229, 218, 0.72) !important;
+        --scalar-color-3: rgba(242, 229, 218, 0.5) !important;
+        --scalar-color-accent: #8ea604 !important;
+        --scalar-border-color: #3a4047 !important;
+      }
+      .dark-mode .sidebar {
+        --scalar-sidebar-background-1: #1f2328 !important;
+        --scalar-sidebar-color-1: #f2e5da !important;
+        --scalar-sidebar-color-2: rgba(242, 229, 218, 0.7) !important;
+        --scalar-sidebar-border-color: #3a4047 !important;
+        --scalar-sidebar-item-hover-background: rgba(255, 255, 255, 0.06) !important;
+        --scalar-sidebar-item-hover-color: #f2e5da !important;
+        --scalar-sidebar-item-active-background: rgba(142, 166, 4, 0.16) !important;
+        --scalar-sidebar-color-active: #8ea604 !important;
+        --scalar-sidebar-search-background: #2b3138 !important;
+        --scalar-sidebar-search-border-color: #3a4047 !important;
+        --scalar-sidebar-search--color: rgba(242, 229, 218, 0.6) !important;
+      }
+      /* Float the logo (rendered from the OpenAPI description) so the intro
+         heading and paragraphs flow around it — Scalar's markdown sanitizer
+         strips inline style attributes, so we target the image by src here. */
+      img[src$="scalar-assets/logo.png"] {
+        float: right !important;
+        margin: 0 0 16px 24px !important;
+        max-width: 120px;
+      }
+      /* Make the markdown divider (`---`) end the logo's float so the Quick
+         start block never wraps beside it. */
+      hr {
+        clear: both !important;
+      }
+    </style>
   </head>
   <body>
-    <redoc spec-url="openapi.json"></redoc>
-    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+    <script
+      id="api-reference"
+      data-url="openapi.json"
+      data-configuration='{"forceDarkModeState": "dark", "hideDarkModeToggle": true, "hideModels": true, "persistAuth": true, "showDeveloperTools": "never", "authentication": {"preferredSecurityScheme": "bearerAuth", "securitySchemes": {"bearerAuth": {"token": "MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE"}}}, "servers": [{"url": "https://demo.pixlstash.dev", "description": "PixlStash demo server"}]}'
+    ></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
   </body>
 </html>

@@ -16,6 +16,7 @@
 import { computed, ref, watch } from "vue";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
+import { kindChipColor, relativeDate } from "../../utils/snapshots";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -51,6 +52,18 @@ const restoreError = ref("");
 // Show/hide the per-resource diff table.
 const showDiffTable = ref(false);
 
+// Full-vault restore requires an explicit acknowledgement before the
+// destructive Restore button enables (`resources === null` is the
+// full-vault path). For per-resource restores this is a no-op.
+const fullVaultAcknowledged = ref(false);
+const isFullVaultRestore = computed(() => props.resources == null);
+
+// Missing-dependencies confirmation gate. When the server returns 409
+// {code: missing_dependencies, missing: {...}}, we surface the list and
+// ask the user to confirm (YES) before retrying with
+// ``confirm_restore_dependencies=true``. NO leaves the live DB untouched.
+const missingDependencies = ref(null);
+
 // ── Computed ──────────────────────────────────────────────────────────────
 const dialogOpen = computed({
   get: () => props.open,
@@ -66,32 +79,6 @@ const effectiveSnapshotId = computed(
 );
 
 const snapshots = computed(() => store.snapshots);
-
-function kindChipColor(kind) {
-  const map = {
-    MANUAL: "primary",
-    DAILY: "secondary",
-    WEEKLY: "info",
-    MONTHLY: "success",
-    OPPORTUNISTIC: "warning",
-  };
-  return map[kind] ?? "default";
-}
-
-function relativeDate(isoStr) {
-  if (!isoStr) return "";
-  const normalized =
-    isoStr.includes("T") &&
-    !isoStr.endsWith("Z") &&
-    !/[+-]\d{2}:\d{2}$/.test(isoStr)
-      ? isoStr + "Z"
-      : isoStr;
-  const diff = (Date.now() - new Date(normalized).getTime()) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
 
 function summaryLabel(key) {
   const labels = {
@@ -124,6 +111,8 @@ watch(
       restoring.value = false;
       restoreError.value = "";
       showDiffTable.value = false;
+      fullVaultAcknowledged.value = false;
+      missingDependencies.value = null;
       // If a snapshot is already known, go straight to the preview.
       if (props.snapshotId != null) {
         fetchPreview(props.snapshotId);
@@ -153,6 +142,8 @@ async function fetchPreview(cpId) {
 function selectSnapshot(cp) {
   if (!cp.is_compatible) return;
   selectedSnapshotId.value = cp.id;
+  fullVaultAcknowledged.value = false;
+  missingDependencies.value = null;
   fetchPreview(cp.id);
 }
 
@@ -160,25 +151,67 @@ function backToPicker() {
   selectedSnapshotId.value = null;
   preview.value = null;
   previewError.value = "";
+  fullVaultAcknowledged.value = false;
+  missingDependencies.value = null;
 }
 
 // ── Restore ────────────────────────────────────────────────────────────────
-async function handleRestore() {
+async function handleRestore(opts = {}) {
+  const { confirmRestoreDependencies = false } = opts;
   restoring.value = true;
   restoreError.value = "";
+  if (!confirmRestoreDependencies) {
+    // Fresh attempt — clear any stale missing-deps prompt.
+    missingDependencies.value = null;
+  }
   try {
     const report = await store.executeRestore(
       effectiveSnapshotId.value,
       props.resources,
+      { confirmRestoreDependencies },
     );
     emit("confirmed", report);
     dialogOpen.value = false;
   } catch (err) {
+    const detail = err?.response?.data?.detail;
+    // 409 with code=missing_dependencies — switch to the confirm prompt
+    // instead of treating it as a failure.
+    if (
+      err?.response?.status === 409 &&
+      detail &&
+      typeof detail === "object" &&
+      detail.code === "missing_dependencies"
+    ) {
+      missingDependencies.value = detail.missing || {};
+      return;
+    }
     restoreError.value =
-      err?.response?.data?.detail || err?.message || "Restore failed.";
+      (typeof detail === "string" ? detail : null) ||
+      err?.message ||
+      "Restore failed.";
   } finally {
     restoring.value = false;
   }
+}
+
+function confirmRestoreDependencies() {
+  handleRestore({ confirmRestoreDependencies: true });
+}
+
+function declineRestoreDependencies() {
+  // User refused — leave the live DB untouched. Drop back to the
+  // preview screen so they can either cancel or pick a different
+  // snapshot.
+  missingDependencies.value = null;
+}
+
+function humanKind(kind, count) {
+  const map = {
+    characters: count > 1 ? "characters" : "character",
+    picture_sets: count > 1 ? "picture sets" : "picture set",
+    projects: count > 1 ? "projects" : "project",
+  };
+  return map[kind] ?? kind;
 }
 
 const canRestore = computed(
@@ -186,7 +219,10 @@ const canRestore = computed(
     !previewLoading.value &&
     !restoring.value &&
     preview.value != null &&
-    preview.value?.snapshot?.is_compatible !== false,
+    preview.value?.snapshot?.is_compatible !== false &&
+    // Full-vault restore is irreversible-grade destructive — require an
+    // explicit acknowledgement that this overwrites the entire DB.
+    (!isFullVaultRestore.value || fullVaultAcknowledged.value),
 );
 </script>
 
@@ -402,8 +438,89 @@ const canRestore = computed(
         </template>
       </v-card-text>
 
+      <!-- Full-vault acknowledgement (irreversible destructive action) -->
+      <div
+        v-if="
+          !isPickerStep &&
+          isFullVaultRestore &&
+          preview != null &&
+          !missingDependencies
+        "
+        class="full-vault-ack"
+      >
+        <v-checkbox
+          v-model="fullVaultAcknowledged"
+          density="compact"
+          hide-details
+          color="error"
+          :disabled="restoring"
+        >
+          <template #label>
+            <span class="full-vault-ack-label">
+              I understand this will <strong>overwrite the entire vault</strong>
+              with the selected snapshot. All metadata changes since the
+              snapshot will be lost.
+            </span>
+          </template>
+        </v-checkbox>
+      </div>
+
+      <!-- ── Missing-dependencies prompt ──────────────────────────────────
+           Server returned 409 missing_dependencies — ask the user whether
+           to also restore the listed parents from the snapshot. Replaces
+           the normal action footer until the user picks YES or NO. -->
+      <template v-if="!isPickerStep && missingDependencies">
+        <div class="missing-deps-prompt">
+          <div class="missing-deps-title">
+            <v-icon size="18" color="warning" class="mr-1"
+              >mdi-alert-circle-outline</v-icon
+            >
+            This restore needs to bring back some missing parents
+          </div>
+          <div class="missing-deps-body">
+            The snapshot references resources that have been deleted from
+            your vault since it was taken:
+            <ul class="missing-deps-list">
+              <li
+                v-for="(ids, kind) in missingDependencies"
+                :key="kind"
+              >
+                <strong>{{ ids.length }}</strong>
+                {{ humanKind(kind, ids.length) }}
+                (id{{ ids.length > 1 ? "s" : "" }}: {{ ids.join(", ") }})
+              </li>
+            </ul>
+            Restore them too, or cancel and pick a different snapshot?
+          </div>
+        </div>
+        <v-card-actions class="restore-dialog-actions">
+          <v-spacer />
+          <v-btn
+            variant="text"
+            density="compact"
+            :disabled="restoring"
+            @click="declineRestoreDependencies"
+          >
+            No, cancel
+          </v-btn>
+          <v-btn
+            color="error"
+            density="compact"
+            variant="elevated"
+            :loading="restoring"
+            @click="confirmRestoreDependencies"
+          >
+            <v-icon size="15" class="mr-1">mdi-restore</v-icon>
+            Yes, restore everything
+          </v-btn>
+        </v-card-actions>
+      </template>
+
       <!-- ── Footer ─────────────────────────────────────────────────────── -->
-      <v-card-actions v-if="!isPickerStep" class="restore-dialog-actions">
+      <v-card-actions
+        v-if="!isPickerStep && !missingDependencies"
+        class="restore-dialog-actions"
+      >
         <div v-if="restoreError" class="restore-inline-error mr-auto">
           {{ restoreError }}
         </div>
@@ -648,5 +765,45 @@ const canRestore = computed(
 .restore-inline-error {
   font-size: 0.75rem;
   color: rgb(var(--v-theme-error));
+}
+
+.full-vault-ack {
+  padding: 8px 16px 0;
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.full-vault-ack-label {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.missing-deps-prompt {
+  padding: 12px 16px 4px;
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.missing-deps-title {
+  display: flex;
+  align-items: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgb(var(--v-theme-warning));
+  margin-bottom: 6px;
+}
+
+.missing-deps-body {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.missing-deps-list {
+  margin: 6px 0 8px;
+  padding-left: 20px;
+}
+
+.missing-deps-list li {
+  margin-bottom: 2px;
 }
 </style>

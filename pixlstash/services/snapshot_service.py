@@ -7,6 +7,7 @@ old snapshots according to the GFS retention constants.
 
 import json
 import os
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
@@ -15,7 +16,6 @@ from sqlmodel import select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, Picture, PictureSet, Project
-from pixlstash.db_models.change_log import ChangeLog
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
 
@@ -30,6 +30,10 @@ logger = get_logger(__name__)
 GFS_KEEP_DAILY: int = 7
 GFS_KEEP_WEEKLY: int = 4  # most-recent Sunday of each of the last 4 weeks
 GFS_KEEP_MONTHLY: int = 12  # first-of-month snapshot for the last 12 months
+# OPPORTUNISTIC snapshots accumulate from safety-snapshot-before-restore and
+# from snapshot_if_due() — without a cap they grow without bound. MANUAL
+# snapshots are intentionally not capped: they are user-curated archives.
+GFS_KEEP_OPPORTUNISTIC: int = 5
 
 # Minimum hours between opportunistic snapshots.
 OPPORTUNISTIC_MIN_HOURS: float = 1.0
@@ -60,9 +64,8 @@ class SnapshotService:
         The snapshot is written to
         ``<vault_root>/snapshots/YYYY/MM/DD/<uuid>.sqlite`` via
         ``VACUUM INTO``.  A JSON manifest sidecar is written alongside it
-        with resource counts, id-lists, and the ``max(ChangeLog.id)``
-        covered by this snapshot.  The ``Snapshot`` row is then inserted
-        in the live DB, GFS retention is applied, and a
+        with resource counts and id-lists.  The ``Snapshot`` row is then
+        inserted in the live DB, GFS retention is applied, and a
         ``SNAPSHOT_CREATED`` event is emitted.
 
         Args:
@@ -93,9 +96,9 @@ class SnapshotService:
         abs_manifest = os.path.join(vault_root, rel_manifest)
 
         # --- VACUUM + manifest + Snapshot row (one atomic writer task) --------
-        # The VACUUM INTO, the manifest read (counts + max_changelog_id), and the
-        # Snapshot INSERT all run in a single writer-thread task so they describe
-        # one consistent point-in-time: no other write can interleave between the
+        # The VACUUM INTO, the manifest read (resource counts), and the Snapshot
+        # INSERT all run in a single writer-thread task so they describe one
+        # consistent point-in-time: no other write can interleave between the
         # snapshot file and the manifest it is paired with.  VACUUM must run first
         # because SQLite forbids VACUUM inside an open transaction.
         logger.info(
@@ -106,6 +109,15 @@ class SnapshotService:
 
         def _create_and_record(session):
             self._vacuum_into(session, abs_snapshot)
+
+            # Strip regenerable bytes from the freshly-VACUUMed snapshot
+            # file. These columns are NULL-reset by every restore path
+            # anyway (see ``restore_service._PICTURE_DERIVED_COLUMNS``),
+            # so carrying them in the snapshot just wastes disk — on a
+            # large vault with CLIP embeddings this dominates the file
+            # size. Failure here is non-fatal: the snapshot is still
+            # correct, just larger than ideal.
+            self._strip_regenerable_blobs(abs_snapshot)
 
             byte_size = (
                 os.path.getsize(abs_snapshot) if os.path.exists(abs_snapshot) else 0
@@ -298,15 +310,20 @@ class SnapshotService:
     def snapshot_if_due(self, reason: str = "opportunistic") -> Optional[Snapshot]:
         """Take an opportunistic snapshot if more than OPPORTUNISTIC_MIN_HOURS have passed.
 
+        Only automatic snapshots (DAILY, WEEKLY, MONTHLY, OPPORTUNISTIC) are
+        considered when checking timing — MANUAL snapshots are user-curated
+        archives and should not suppress the opportunistic schedule.
+
         Args:
             reason: Short label for logging.
 
         Returns:
             A new Snapshot if one was created, or None if skipped.
         """
-        snapshots = self.list_snapshots()
-        if snapshots:
-            last = snapshots[0]
+        auto_kinds = {"DAILY", "WEEKLY", "MONTHLY", "OPPORTUNISTIC"}
+        auto_snapshots = [s for s in self.list_snapshots() if s.kind in auto_kinds]
+        if auto_snapshots:
+            last = auto_snapshots[0]
             last_dt = last.created_at
             if last_dt.tzinfo is None:
                 last_dt = last_dt.replace(tzinfo=timezone.utc)
@@ -330,10 +347,101 @@ class SnapshotService:
         """Run VACUUM INTO via a raw SQLite connection in the writer session."""
         conn = session.connection()
         raw = conn.connection.driver_connection  # underlying sqlite3.Connection
-        raw.execute(f"VACUUM INTO '{abs_snapshot}'")
+        escaped = abs_snapshot.replace("'", "''")
+        raw.execute(f"VACUUM INTO '{escaped}'")
+
+    # Picture columns NULLed when stripping a snapshot. Kept in sync with
+    # ``restore_service._PICTURE_DERIVED_COLUMNS`` — the restore path NULL-
+    # resets these on the live DB regardless of what the snapshot held, so
+    # carrying them around in the snapshot file is pure waste.
+    _STRIP_PICTURE_COLUMNS: tuple[str, ...] = (
+        "text_embedding",
+        "image_embedding",
+        "smart_score",
+        "text_score",
+        "aesthetic_score",
+    )
+
+    # Tables whose entire contents are dropped from a snapshot. These are
+    # all regenerable / pipeline-state tables — keeping the snapshot's
+    # rows would either waste disk on values the workers will recompute
+    # (``picturelikeness``) or stomp on the live pipeline's progress
+    # tracking when the restore swaps the file in (``picturelikenessqueue``
+    # / ``picturelikenessfrontier``).  The full-restore path captures the
+    # live queue + frontier before the swap and reinserts a reconciled
+    # set after.
+    _STRIP_TABLES_DELETE_ALL: tuple[str, ...] = (
+        "picturelikeness",
+        "picturelikenessqueue",
+        "picturelikenessfrontier",
+    )
+
+    @classmethod
+    def _strip_regenerable_blobs(cls, abs_snapshot: str) -> None:
+        """NULL the regenerable Picture columns in *abs_snapshot* and re-VACUUM.
+
+        Failure is logged and swallowed: a non-stripped snapshot is still
+        correct, just larger.  The file is opened with a dedicated
+        connection so the writer thread's session isn't disturbed.
+
+        Args:
+            abs_snapshot: Absolute path to the freshly-VACUUMed snapshot.
+        """
+        try:
+            conn = sqlite3.connect(abs_snapshot)
+        except Exception as exc:
+            logger.warning(
+                "SnapshotService: could not open snapshot %s for stripping: %s",
+                abs_snapshot,
+                exc,
+            )
+            return
+        try:
+            # Probe existing columns so we never UPDATE a column the
+            # snapshot's schema doesn't have (older snapshots restored
+            # via the alembic-upgrade path may pre-date some columns).
+            cols_present = {
+                row[1] for row in conn.execute("PRAGMA table_info(picture)").fetchall()
+            }
+            null_cols = [c for c in cls._STRIP_PICTURE_COLUMNS if c in cols_present]
+            if null_cols:
+                set_clause = ", ".join(f"{c} = NULL" for c in null_cols)
+                conn.execute(f"UPDATE picture SET {set_clause}")
+
+            # Drop regenerable / pipeline-state tables. Only those that
+            # actually exist in this snapshot's schema — older snapshots
+            # may pre-date some of them.
+            existing_tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            for table_name in cls._STRIP_TABLES_DELETE_ALL:
+                if table_name in existing_tables:
+                    conn.execute(f"DELETE FROM {table_name}")
+
+            conn.commit()
+            # VACUUM reclaims the pages freed by the UPDATEs and DELETEs
+            # above. SQLite requires VACUUM outside a transaction; the
+            # explicit commit above plus isolation_level reset handle that.
+            conn.isolation_level = None
+            conn.execute("VACUUM")
+        except Exception as exc:
+            logger.warning(
+                "SnapshotService: failed to strip regenerable blobs from %s: %s",
+                abs_snapshot,
+                exc,
+                exc_info=True,
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _build_manifest(self, session) -> dict:
-        """Build the manifest dict capturing resource counts and ChangeLog head.
+        """Build the manifest dict capturing resource counts.
 
         Args:
             session: An active read session.
@@ -361,21 +469,6 @@ class SnapshotService:
             )
             schema_version = ""
 
-        # max ChangeLog id at snapshot time
-        # session.exec() with a scalar aggregate returns the value directly (int
-        # or None), not a Row.  Using [0] on an int raises TypeError that was
-        # previously swallowed, always producing None.
-        try:
-            max_changelog_id = session.exec(
-                select(func.max(ChangeLog.id))
-            ).one_or_none()
-        except Exception as exc:
-            logger.warning(
-                "SnapshotService: failed to read max_changelog_id for manifest: %s",
-                exc,
-            )
-            max_changelog_id = None
-
         return {
             "picture_count": len(picture_ids),
             "picture_ids": picture_ids,
@@ -383,7 +476,6 @@ class SnapshotService:
             "project_count": project_count,
             "character_count": character_count,
             "schema_version": schema_version,
-            "max_changelog_id": max_changelog_id,
         }
 
     def _apply_gfs_retention(self, now: datetime) -> None:
@@ -393,7 +485,8 @@ class SnapshotService:
         - ``GFS_KEEP_DAILY`` most-recent DAILY snapshots.
         - ``GFS_KEEP_WEEKLY`` most-recent WEEKLY snapshots.
         - ``GFS_KEEP_MONTHLY`` most-recent MONTHLY snapshots.
-        - All MANUAL and OPPORTUNISTIC snapshots (user-managed).
+        - ``GFS_KEEP_OPPORTUNISTIC`` most-recent OPPORTUNISTIC snapshots.
+        - All MANUAL snapshots (user-curated; user must delete them manually).
 
         Args:
             now: Current UTC datetime (used only for logging).
@@ -404,6 +497,7 @@ class SnapshotService:
                 ("DAILY", GFS_KEEP_DAILY),
                 ("WEEKLY", GFS_KEEP_WEEKLY),
                 ("MONTHLY", GFS_KEEP_MONTHLY),
+                ("OPPORTUNISTIC", GFS_KEEP_OPPORTUNISTIC),
             ):
                 rows = session.exec(
                     select(Snapshot)
@@ -431,35 +525,5 @@ class SnapshotService:
                         cp.id,
                     )
             session.commit()
-
-            # Truncate old ChangeLog rows beyond the oldest retained snapshot.
-            from pixlstash.db_models.change_log import ChangeLog
-
-            oldest_cp = session.exec(
-                select(Snapshot).order_by(Snapshot.created_at.asc())
-            ).first()
-            if oldest_cp is not None:
-                oldest_manifest_path = os.path.join(
-                    self._vault.image_root, oldest_cp.manifest_relative_path
-                )
-                try:
-                    with open(oldest_manifest_path, encoding="utf-8") as fh:
-                        manifest = json.load(fh)
-                    min_cl_id = manifest.get("max_changelog_id")
-                    if min_cl_id is not None:
-                        from sqlmodel import delete as sm_delete
-
-                        session.exec(
-                            sm_delete(ChangeLog).where(ChangeLog.id < min_cl_id)
-                        )
-                        session.commit()
-                        logger.info(
-                            "SnapshotService: truncated ChangeLog entries with id < %d",
-                            min_cl_id,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "SnapshotService: could not truncate ChangeLog: %s", exc
-                    )
 
         self._vault.db.run_task(_prune, priority=DBPriority.IMMEDIATE)

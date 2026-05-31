@@ -8,3 +8,4 @@ recursive-include pixlstash/migrations *
 recursive-include pixlstash/image_plugins/built-in *.py
 recursive-include pixlstash/data/anchors *.npy
 recursive-include pixlstash/data/comfyui-workflows/built-in *.json
+recursive-include pixlstash/data/scalar-assets *

@@ -1,6 +1,5 @@
 import hashlib
 import ipaddress
-import json
 import re
 import secrets
 import threading
@@ -19,6 +18,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority, VaultDatabase
 from pixlstash.db_models import Character, PictureSet, Project, User, UserToken
+from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.service.system_utils import default_max_vram_gb
 
 
@@ -51,7 +51,6 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
     {
         "/login",
         "/docs",
-        "/redoc",
         "/scalar",
         "/openapi.json",
         "/docs/oauth2-redirect",
@@ -67,9 +66,9 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
 )
 AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/assets/",
+    "/scalar-assets/",
     "/share/",
     "/docs/",
-    "/redoc/",
 )
 AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
 
@@ -372,12 +371,18 @@ class AuthService:
         self.password_hash = None
         self.username = None
         self.active_session_ids = {}
+        removed_any = False
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
+            removed_any = True
         if "USERNAME" in self._server_config:
             del self._server_config["USERNAME"]
-            with open(self._server_config_path, "w") as f:
-                json.dump(self._server_config, f, indent=2)
+            removed_any = True
+        # Persist whenever either key was removed — previously the write was
+        # nested under the USERNAME branch, so removing only PASSWORD_HASH left
+        # the stale hash on disk.
+        if removed_any:
+            write_json_atomic(self._server_config_path, self._server_config)
         return user
 
     def token_from_value(self, token_value: str) -> Optional[UserToken]:
@@ -520,6 +525,27 @@ class AuthService:
         if user_id is not None:
             return user_id
         raise HTTPException(status_code=401, detail=detail)
+
+    def require_unscoped_owner(
+        self,
+        request: Request,
+        detail: str = "Owner-level (full, unscoped) access required",
+    ) -> int:
+        """Require a fully-unscoped owner: cookie session or ALL-scope token
+        with no resource_type restriction.
+
+        Rejects READ-scoped tokens *and* ALL-scope tokens that are restricted
+        to a specific resource. Use this for system-level operations (e.g.
+        snapshots, restore) where any narrowing of access would expose data
+        outside the token's intended scope.
+        """
+        user_id = self.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(status_code=403, detail=detail)
+        matched_token = getattr(request.state, "matched_token", None)
+        if matched_token is not None and matched_token.resource_type is not None:
+            raise HTTPException(status_code=403, detail=detail)
+        return user_id
 
     def get_user_for_request(self, request: Request) -> User:
         user_id = self.require_user_id(request)
@@ -1135,6 +1161,12 @@ class AuthService:
                                     },
                                 )
                         request.state.auth_user_id = user_id
+                        # Stash the matched token so route-level helpers
+                        # (e.g. require_unscoped_owner) can introspect its
+                        # resource_type — token_scope is only populated for
+                        # non-ALL scopes, so an ALL+resource_type token would
+                        # otherwise look indistinguishable from a cookie session.
+                        request.state.matched_token = matched_token
                         if matched_token.scope != "ALL":
                             request.state.token_scope = TokenScope(
                                 scope=matched_token.scope,

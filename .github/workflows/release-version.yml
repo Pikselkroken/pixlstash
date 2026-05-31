@@ -148,12 +148,14 @@ jobs:
             Automated website update triggered by release **${{ steps.tag.outputs.tag }}**.
 
             Changes included:
-            - `website/api/v{major}.{minor}/` — versioned OpenAPI docs generated
-              from the release tag's own backend code.
+            - `website/api/v{major}.{minor}/` — versioned OpenAPI docs (Scalar UI)
+              generated from the release tag's own backend code. The generator
+              also heals any older version pages still on ReDoc and drops the
+              legacy top-level `openapi.json`.
             - `website/latest-version.json` — updated to this release (if it is
               strictly newer than the currently published version; skipped otherwise).
               The `[Security: ...]` tag was taken from the release tag's own `CHANGELOG.md`.
           add-paths: |
             website/latest-version.json
-            website/api/**
+            website/api
           delete-branch: true

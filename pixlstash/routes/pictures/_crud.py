@@ -14,6 +14,7 @@ from fastapi import (
     Response,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import (
     case,
     delete,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     update,
 )
 from sqlmodel import Session, select
+from typing import Optional
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
@@ -58,11 +60,106 @@ from ._helpers import (
 logger = get_logger(__name__)
 
 
+class SetProjectForPicturesResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    project_id: Optional[int] = None
+    mode: str
+    updated_ids: list[int] = []
+    updated_count: int
+    missing_ids: list[int] = []
+
+
+class ApplyScoresResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    only_unscored: bool
+    updated_ids: list[int] = []
+    updated_count: int
+    skipped_ids: list[int] = []
+    skipped_count: int
+    missing_ids: list[int] = []
+    missing_count: int
+    reset_triggered: bool
+
+
+class PictureFullMetadataResponse(BaseModel):
+    """Single picture's full metadata, tags, optional smart score, and any
+    embedded file metadata. The picture model is large/dynamic so common
+    fields are enumerated and ``extra="allow"`` preserves the rest."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    format: Optional[str] = None
+    score: Optional[int] = None
+    tags: Optional[list] = None
+    smartScore: Optional[float] = None
+    metadata: Optional[dict] = None
+
+
+class PictureFaceResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    picture_id: Optional[int] = None
+    frame_index: Optional[int] = None
+    face_index: Optional[int] = None
+    bbox: Optional[list] = None
+    character_id: Optional[int] = None
+
+
+class FaceDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    message: str
+
+
+class PictureCharacterLikenessResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    picture_id: int
+    character_likeness: Optional[float] = None
+    eligible: bool
+
+
+class PicturePatchResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    picture: dict
+
+
+class ScrapheapRestoreResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    restored_count: int
+
+
+class ScrapheapDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    deleted_count: int
+
+
+class PictureDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    message: str
+
+
 def register_routes(router, server):
     @router.patch(
         "/pictures/project",
         summary="Set project for pictures",
         description="Assigns, removes, or clears project association for a batch of pictures.",
+        response_model=SetProjectForPicturesResponse,
     )
     def set_project_for_pictures(payload: dict = Body(...)):
         picture_ids_raw = payload.get("picture_ids")
@@ -229,6 +326,7 @@ def register_routes(router, server):
         "/pictures/apply-scores",
         summary="Batch apply manual scores",
         description="Applies 0-5 manual scores to multiple pictures in one request while optionally enforcing only-unscored updates.",
+        response_model=ApplyScoresResponse,
     )
     def apply_scores_for_pictures(payload: dict = Body(...)):
         scores_payload = payload.get("scores")
@@ -380,6 +478,8 @@ def register_routes(router, server):
         "/pictures/{id}.{ext}",
         summary="Get original picture file",
         description="Streams the original media file for a picture id when the requested extension matches the stored format.",
+        response_class=FileResponse,
+        responses={200: {"content": {"image/*": {}}}},
     )
     def get_picture(request: Request, id: str, ext: str):
         if not isinstance(id, str):
@@ -558,6 +658,7 @@ def register_routes(router, server):
         "/pictures/{id}/metadata",
         summary="Get picture metadata",
         description="Returns metadata, tags, and optional smart score for a single picture, including embedded file metadata when available.",
+        response_model=PictureFullMetadataResponse,
     )
     def get_picture_metadata(
         request: Request,
@@ -619,8 +720,10 @@ def register_routes(router, server):
 
     @router.post(
         "/pictures/{id}/face",
+        include_in_schema=False,
         summary="Create manual face entry",
         description="Adds a face bounding box to a picture and frame index, updating sentinel/ordering behavior for manual annotations.",
+        response_model=PictureFaceResponse,
     )
     def create_picture_face(id: str, payload: dict = Body(...)):
         try:
@@ -680,8 +783,10 @@ def register_routes(router, server):
 
     @router.delete(
         "/pictures/{id}/face/{index}",
+        include_in_schema=False,
         summary="Delete face by index",
         description="Deletes a face at frame 0 by index and reindexes remaining faces for stable ordering.",
+        response_model=FaceDeleteResponse,
     )
     def delete_picture_face(id: str, index: int):
         try:
@@ -742,8 +847,10 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/{id}/character_likeness",
+        include_in_schema=False,
         summary="Get picture character likeness",
         description="Computes max character-likeness score for faces in a picture against a reference character.",
+        response_model=PictureCharacterLikenessResponse,
     )
     def get_picture_character_likeness(
         id: str,
@@ -850,8 +957,19 @@ def register_routes(router, server):
 
     @router.get(
         "/pictures/{id}/{field}",
+        include_in_schema=False,
         summary="Get raw picture field",
         description="Returns a single picture field value; large binary fields are base64 encoded and thumbnail returns image bytes.",
+        responses={
+            200: {
+                "content": {
+                    "application/json": {
+                        "schema": {"type": "object", "additionalProperties": True}
+                    },
+                    "image/png": {},
+                }
+            }
+        },
     )
     def get_picture_field(id: str, field: str):
         pics = server.vault.db.run_task(
@@ -877,6 +995,7 @@ def register_routes(router, server):
         "/pictures/{id}",
         summary="Patch picture fields",
         description="Updates mutable picture fields from query/body parameters, including tag replacement when provided.",
+        response_model=PicturePatchResponse,
     )
     async def patch_picture(id: str, request: Request):
         params = dict(request.query_params)
@@ -1008,6 +1127,7 @@ def register_routes(router, server):
         "/pictures/scrapheap/restore",
         summary="Restore deleted pictures",
         description="Restores deleted pictures from scrapheap, either all deleted pictures or a provided picture id subset.",
+        response_model=ScrapheapRestoreResponse,
     )
     def restore_scrapheap(payload: dict | None = Body(None)):
         picture_ids = None
@@ -1056,6 +1176,7 @@ def register_routes(router, server):
         "/pictures/scrapheap",
         summary="Permanently delete scrapheap pictures",
         description="Permanently removes deleted pictures from database and disk for provided ids or for all scrapheap items when omitted.",
+        response_model=ScrapheapDeleteResponse,
     )
     def delete_scrapheap_selection(
         background_tasks: BackgroundTasks,
@@ -1201,6 +1322,7 @@ def register_routes(router, server):
         "/pictures/{id}",
         summary="Move picture to scrapheap",
         description="Soft-deletes a picture by marking it deleted, making it appear in scrapheap views.",
+        response_model=PictureDeleteResponse,
     )
     def delete_picture(id: str):
         def delete_pic(session, id):

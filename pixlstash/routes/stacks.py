@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request, Query
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import case
 
 from sqlmodel import Session, select
@@ -18,6 +19,35 @@ from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class StackResponse(BaseModel):
+    """Stack metadata plus its ordered picture ids.
+
+    Also covers the unstacked response from ``get_stack_for_picture``
+    (``{"stack_id": None, "picture_ids": []}``) and the stack-deleted response
+    from ``remove_stack_members`` (``{"status", "stack_id": None,
+    "picture_ids"}``), so all fields are optional and ``extra="allow"``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    name: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    picture_ids: Optional[list[int]] = None
+    stack_id: Optional[int] = None
+    status: Optional[str] = None
+
+
+class StackOrderResponse(BaseModel):
+    """Stack id with the resulting ordered picture ids."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int
+    picture_ids: list[int]
 
 
 def create_router(server) -> APIRouter:
@@ -160,6 +190,7 @@ def create_router(server) -> APIRouter:
         "/stacks/{stack_id}",
         summary="Get stack details",
         description="Returns stack metadata and ordered picture ids for a stack.",
+        response_model=StackResponse,
     )
     def get_stack(stack_id: int, request: Request):
         _ensure_secure_when_required(request)
@@ -186,6 +217,7 @@ def create_router(server) -> APIRouter:
         "/stacks/{stack_id}/pictures",
         summary="List pictures in stack",
         description="Returns ordered picture payloads for a stack using grid or metadata field sets.",
+        response_model=list[dict],
     )
     def get_stack_pictures(
         stack_id: int,
@@ -259,6 +291,7 @@ def create_router(server) -> APIRouter:
         "/pictures/{picture_id}/stack",
         summary="Get picture's stack",
         description="Returns the stack containing a picture, or null stack information when unstacked.",
+        response_model=StackResponse,
     )
     def get_stack_for_picture(picture_id: int, request: Request):
         _ensure_secure_when_required(request)
@@ -288,6 +321,7 @@ def create_router(server) -> APIRouter:
         "/stacks",
         summary="Create stack",
         description="Creates a new stack or reuses an existing compatible one and assigns provided pictures to it.",
+        response_model=StackResponse,
     )
     def create_stack(payload: dict = Body(...), request: Request = None):
         _ensure_secure_when_required(request)
@@ -437,6 +471,7 @@ def create_router(server) -> APIRouter:
         "/stacks/{stack_id}/order",
         summary="Reorder stack",
         description="Sets explicit order for all members in a stack using a complete ordered id list.",
+        response_model=StackOrderResponse,
     )
     def reorder_stack(
         stack_id: int, payload: dict = Body(...), request: Request = None
@@ -488,6 +523,7 @@ def create_router(server) -> APIRouter:
         "/stacks/{stack_id}/members",
         summary="Add stack members",
         description="Adds pictures to an existing stack while preventing cross-stack membership conflicts.",
+        response_model=StackResponse,
     )
     def add_stack_members(
         stack_id: int, payload: dict = Body(...), request: Request = None
@@ -559,6 +595,7 @@ def create_router(server) -> APIRouter:
         "/stacks/{stack_id}/members",
         summary="Remove stack members",
         description="Removes pictures from a stack and deletes the stack when one or fewer members remain.",
+        response_model=StackResponse,
     )
     def remove_stack_members(
         stack_id: int, payload: dict = Body(...), request: Request = None
@@ -617,6 +654,7 @@ def create_router(server) -> APIRouter:
             "Moves a single stack member to the given 0-based position, "
             "shifting all other members as needed."
         ),
+        response_model=StackOrderResponse,
     )
     def set_member_position(
         stack_id: int,

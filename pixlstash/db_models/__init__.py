@@ -35,5 +35,4 @@ from .user import User  # noqa: F401
 from .user_token import UserToken  # noqa: F401
 from .guest_session import GuestSession  # noqa: F401
 from .guest_score import GuestScore  # noqa: F401
-from .change_log import ChangeLog  # noqa: F401
 from .snapshot import Snapshot  # noqa: F401

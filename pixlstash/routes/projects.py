@@ -87,6 +87,22 @@ class ProjectUrlAttachmentRequest(BaseModel):
     title: Optional[str] = None
 
 
+class ProjectMembershipResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    project_assignments: dict[int, list[int]] = {}
+    unassigned_picture_ids: list[int] = []
+
+
+class ProjectPictureSetResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    name: str
+    description: Optional[str] = None
+    project_id: Optional[int] = None
+
+
 def create_router(server) -> APIRouter:
     """Create the projects API router.
 
@@ -215,6 +231,7 @@ def create_router(server) -> APIRouter:
             "([picture_ids with no project membership]). "
             "Used by the AddToProject menu to load membership in a single request."
         ),
+        response_model=ProjectMembershipResponse,
     )
     def get_batch_project_membership(
         picture_ids: list[int] = Body(default=[], embed=True),
@@ -285,6 +302,7 @@ def create_router(server) -> APIRouter:
         summary="List picture sets for a project",
         description="Returns all picture sets that belong to the given project. "
         "``id_or_name`` may be a numeric ID or a project name (case-insensitive).",
+        response_model=list[ProjectPictureSetResponse],
     )
     def list_project_picture_sets(request: Request, id_or_name: str):
         server.auth.require_user_id(request)
@@ -577,6 +595,8 @@ def create_router(server) -> APIRouter:
         "/projects/{project_id}/export",
         summary="Export project as ZIP",
         description="Download a ZIP archive of the project: metadata, attachment files, and optionally all pictures belonging to its characters and picture sets.",
+        response_class=StreamingResponse,
+        responses={200: {"content": {"application/zip": {}}}},
     )
     def export_project(
         request: Request,
@@ -940,6 +960,8 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/projects/{project_id}/attachments/{attachment_id}",
         summary="Download a project attachment",
+        response_class=FileResponse,
+        responses={200: {"content": {"application/octet-stream": {}}}},
     )
     def download_attachment(request: Request, project_id: int, attachment_id: int):
         server.auth.require_user_id(request)

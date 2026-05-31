@@ -8,6 +8,8 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, ConfigDict
+from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
 
@@ -15,11 +17,28 @@ from pixlstash.pixl_logging import get_logger
 logger = get_logger(__name__)
 
 
+class ExportStartResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+
+
+class ExportStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    total: int
+    processed: int
+    progress: float
+    download_url: Optional[str] = None
+
+
 def register_routes(router, server):
     @router.get(
         "/pictures/export",
         summary="Start picture export job",
         description="Queues an asynchronous export task and returns a task id for polling status and downloading the generated archive.",
+        response_model=ExportStartResponse,
     )
     def export_pictures_zip(
         request: Request,
@@ -73,6 +92,7 @@ def register_routes(router, server):
         "/pictures/export/status",
         summary="Get export job status",
         description="Returns current progress for an export task id, including completion state and download URL when ready.",
+        response_model=ExportStatusResponse,
     )
     def export_status(task_id: str):
         task = server.export_tasks.get(task_id)
@@ -103,6 +123,8 @@ def register_routes(router, server):
         "/pictures/export/download/{task_id}",
         summary="Download completed export",
         description="Downloads the generated export file for a completed task id.",
+        response_class=FileResponse,
+        responses={200: {"content": {"application/zip": {}}}},
     )
     def download_export(task_id: str):
         task = server.export_tasks.get(task_id)

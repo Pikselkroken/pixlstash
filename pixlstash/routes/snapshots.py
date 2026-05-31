@@ -1,16 +1,103 @@
-"""HTTP routes for snapshot creation, listing, deletion, and restore/undo."""
+"""HTTP routes for snapshot creation, listing, deletion, and restore."""
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
 
-from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.restore_service import (
+    MissingDependenciesError,
+    RestoreInProgressError,
+    SafetySnapshotFailedError,
+)
 
 logger = get_logger(__name__)
 
 # Maximum number of resources returned in preview responses.
 _PREVIEW_RESOURCE_LIMIT = 200
+
+# Maximum picture IDs accepted by POST /snapshots/{id}/hash-compare.
+# The context menu fans out N pictures × ~5 recent snapshots; without a cap a
+# 10k-image selection floods the writer queue with metadata-hash backfills.
+_HASH_COMPARE_PICTURE_LIMIT = 1000
+
+
+# ----------------------------------------------------------------------
+# Response models (declared so Scalar renders real 200 bodies, not null)
+# ----------------------------------------------------------------------
+
+
+class SnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    kind: Optional[str] = None
+    label: Optional[str] = None
+    created_at: Optional[str] = None
+    byte_size: Optional[int] = None
+    picture_count: Optional[int] = None
+    picture_set_count: Optional[int] = None
+    project_count: Optional[int] = None
+    character_count: Optional[int] = None
+    schema_version: Optional[str] = None
+    is_compatible: Optional[bool] = None
+
+
+class SnapshotsStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    active_job: Optional[Any] = None
+
+
+class RestorePreviewSnapshot(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    kind: Optional[str] = None
+    label: Optional[str] = None
+    created_at: Optional[str] = None
+    is_compatible: Optional[bool] = None
+
+
+class RestorePreviewResource(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Optional[str] = None
+    id: Optional[int] = None
+    exists_in_live: Optional[bool] = None
+    exists_in_snapshot: Optional[bool] = None
+    file_on_disk: Optional[bool] = None
+    changed_fields: Optional[Any] = None
+    dependent_counts: Optional[Any] = None
+
+
+class RestorePreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    snapshot: Optional[RestorePreviewSnapshot] = None
+    resources: Optional[List[RestorePreviewResource]] = None
+    summary: Optional[Any] = None
+    warnings: Optional[Any] = None
+
+
+class RestoreReportResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    snapshot_id: Optional[int] = None
+    resource_type: Optional[str] = None
+    resource_id: Optional[int] = None
+    missing_files_count: Optional[int] = None
+    upserted_count: Optional[int] = None
+    errors: Optional[Any] = None
+    dry_run: Optional[bool] = None
+
+
+class HashCompareResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    identical_ids: Optional[List[int]] = None
+    changed_ids: Optional[List[int]] = None
 
 
 def _serialize_snapshot(cp, manifest: dict, live_schema: str) -> dict:
@@ -94,7 +181,7 @@ def create_router(server) -> APIRouter:
     # GET /snapshots
     # ------------------------------------------------------------------
 
-    @router.get("/snapshots")
+    @router.get("/snapshots", response_model=list[SnapshotResponse])
     def list_snapshots(request: Request):
         """Return all snapshots ordered by creation date (newest first).
 
@@ -102,7 +189,10 @@ def create_router(server) -> APIRouter:
         ``is_compatible`` flag (``false`` when the snapshot schema version is
         newer than the live DB — restore would require a downgrade, which is
         unsupported).
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         snapshots = server.vault.snapshot_service.list_snapshots()
         live_schema = server.vault.snapshot_service.get_live_schema_version()
         result = []
@@ -115,20 +205,22 @@ def create_router(server) -> APIRouter:
     # GET /snapshots/status
     # ------------------------------------------------------------------
 
-    @router.get("/snapshots/status")
+    @router.get("/snapshots/status", response_model=SnapshotsStatusResponse)
     def snapshots_status(request: Request):
         """Return the currently-running restore or snapshot job, if any.
 
         ``active_job`` is ``null`` when no job is in progress.
+
+        Requires owner-level (full, unscoped) access.
         """
-        active_job = getattr(server.vault.restore_service, "_active_job", None)
-        return {"active_job": active_job}
+        server.auth.require_unscoped_owner(request)
+        return {"active_job": server.vault.restore_service.get_active_job()}
 
     # ------------------------------------------------------------------
     # POST /snapshots
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots", status_code=201)
+    @router.post("/snapshots", status_code=201, response_model=SnapshotResponse)
     def create_snapshot(
         request: Request,
         label: Optional[str] = Body(default=None, embed=True),
@@ -137,7 +229,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Returns the new snapshot record.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         try:
             cp = server.vault.snapshot_service.create_snapshot(
                 kind="MANUAL", label=label
@@ -153,7 +245,7 @@ def create_router(server) -> APIRouter:
     # PATCH /snapshots/{id}  — rename label
     # ------------------------------------------------------------------
 
-    @router.patch("/snapshots/{snapshot_id}")
+    @router.patch("/snapshots/{snapshot_id}", response_model=SnapshotResponse)
     def rename_snapshot(
         snapshot_id: int,
         request: Request,
@@ -163,7 +255,7 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Works for all snapshot kinds.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         cp = server.vault.snapshot_service.rename_snapshot(snapshot_id, label)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
@@ -177,26 +269,33 @@ def create_router(server) -> APIRouter:
 
     @router.delete("/snapshots/{snapshot_id}", status_code=204)
     def delete_snapshot(snapshot_id: int, request: Request):
-        """Delete a MANUAL snapshot and its snapshot files.
+        """Delete a snapshot and its snapshot files.
 
-        Returns ``403 Forbidden`` for DAILY/WEEKLY/MONTHLY/OPPORTUNISTIC
-        snapshots (those are managed by the GFS schedule).
+        MANUAL and OPPORTUNISTIC snapshots may always be deleted.  For
+        GFS-scheduled kinds (DAILY, WEEKLY, MONTHLY) deletion is refused
+        when this is the last remaining snapshot of that kind — the system
+        always keeps at least one of each GFS tier.
 
         Authentication is required.
         """
-        server.auth.require_user_id(request)
+        server.auth.require_unscoped_owner(request)
         cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
-        if cp.kind != "MANUAL":
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Cannot delete a {cp.kind} snapshot. "
-                    "Only MANUAL snapshots may be deleted by the user; "
-                    "GFS-scheduled snapshots are pruned automatically."
-                ),
-            )
+        if cp.kind in ("DAILY", "WEEKLY", "MONTHLY"):
+            all_of_kind = [
+                s
+                for s in server.vault.snapshot_service.list_snapshots()
+                if s.kind == cp.kind
+            ]
+            if len(all_of_kind) <= 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot delete the only remaining {cp.kind} snapshot. "
+                        "The system keeps at least one of each GFS tier."
+                    ),
+                )
         try:
             server.vault.snapshot_service.delete_snapshot(snapshot_id)
         except Exception as exc:
@@ -212,13 +311,19 @@ def create_router(server) -> APIRouter:
     # GET /snapshots/{id}/restore/preview  (full-restore dry-run preview)
     # ------------------------------------------------------------------
 
-    @router.get("/snapshots/{snapshot_id}/restore/preview")
+    @router.get(
+        "/snapshots/{snapshot_id}/restore/preview",
+        response_model=RestorePreviewResponse,
+    )
     def preview_full_restore(snapshot_id: int, request: Request):
         """Return a dry-run preview of a full restore.
 
         No data is written.  The response includes a summary of what would
         change and per-resource diff entries (capped at 200).
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_full(snapshot_id)
         except ValueError as exc:
@@ -243,7 +348,8 @@ def create_router(server) -> APIRouter:
     # ------------------------------------------------------------------
 
     @router.get(
-        "/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview"
+        "/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview",
+        response_model=RestorePreviewResponse,
     )
     def preview_resource_restore(
         snapshot_id: int,
@@ -251,7 +357,11 @@ def create_router(server) -> APIRouter:
         resource_id: int,
         request: Request,
     ):
-        """Return a dry-run preview of a single-resource restore."""
+        """Return a dry-run preview of a single-resource restore.
+
+        Requires owner-level (full, unscoped) access.
+        """
+        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_resource(
                 snapshot_id, resource_type, resource_id
@@ -279,7 +389,10 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/restore/preview/batch
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore/preview/batch")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore/preview/batch",
+        response_model=RestorePreviewResponse,
+    )
     def preview_batch_restore(
         snapshot_id: int,
         request: Request,
@@ -288,7 +401,10 @@ def create_router(server) -> APIRouter:
         """Return a dry-run preview for a batch of resources.
 
         Body: ``{"resources": [{"type": "picture", "id": 42}, …]}``
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_batch(snapshot_id, resources)
         except ValueError as exc:
@@ -312,24 +428,41 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/restore  (full restore)
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore", response_model=RestoreReportResponse
+    )
     def restore_snapshot(
         snapshot_id: int,
         request: Request,
         dry_run: bool = Body(default=False, embed=True),
+        allow_without_safety: bool = Body(default=False, embed=True),
     ):
         """Replace the live database with the given snapshot snapshot.
 
         Authentication is required.  Returns a summary of the restore.
+
+        Body params:
+            - ``dry_run``: skip the actual swap; return what the restore
+              would do.
+            - ``allow_without_safety``: proceed even if the pre-restore
+              safety snapshot fails. The safety snapshot is the only
+              rollback path; the default (False) refuses the restore with
+              412 rather than silently leave the user with no recovery
+              point.
         """
-        server.auth.require_user_id(request)
-        server.vault.notify(EventType.RESTORE_STARTED, {"snapshot_id": snapshot_id})
+        server.auth.require_unscoped_owner(request)
         try:
             report = server.vault.restore_service.restore_full(
-                snapshot_id, dry_run=dry_run
+                snapshot_id,
+                dry_run=dry_run,
+                allow_without_safety=allow_without_safety,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RestoreInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SafetySnapshotFailedError as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
                 "Full restore of snapshot %d failed: %s",
@@ -351,27 +484,49 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/restore/batch
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore/batch")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore/batch", response_model=RestoreReportResponse
+    )
     def restore_batch(
         snapshot_id: int,
         request: Request,
         resources: List[dict] = Body(embed=True),
+        confirm_restore_dependencies: bool = Body(default=False, embed=True),
     ):
         """Restore a batch of resources from a snapshot in one operation.
 
-        Body: ``{"resources": [{"type": "picture", "id": 42}, …]}``
+        Body: ``{"resources": [{"type": "picture", "id": 42}, …],
+                  "confirm_restore_dependencies": false}``
+
+        If any item references parents (Character / PictureSet / Project)
+        that have since been deleted from live, the response is HTTP 409
+        with body ``{"code": "missing_dependencies", "missing": {...}}``
+        and nothing is written. Retry with
+        ``confirm_restore_dependencies: true`` to also restore the missing
+        parents from the snapshot first.
 
         Authentication is required.  Returns a combined RestoreReport.
         """
-        server.auth.require_user_id(request)
-        server.vault.notify(
-            EventType.RESTORE_STARTED,
-            {"snapshot_id": snapshot_id, "resource_type": "batch"},
-        )
+        server.auth.require_unscoped_owner(request)
         try:
-            report = server.vault.restore_service.restore_batch(snapshot_id, resources)
+            report = server.vault.restore_service.restore_batch(
+                snapshot_id,
+                resources,
+                confirm_restore_dependencies=confirm_restore_dependencies,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RestoreInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except MissingDependenciesError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "missing_dependencies",
+                    "message": str(exc),
+                    "missing": exc.missing,
+                },
+            ) from exc
         except Exception as exc:
             logger.error(
                 "Batch restore from snapshot %d failed: %s",
@@ -392,7 +547,9 @@ def create_router(server) -> APIRouter:
     # POST /snapshots/{id}/hash-compare
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/hash-compare")
+    @router.post(
+        "/snapshots/{snapshot_id}/hash-compare", response_model=HashCompareResponse
+    )
     def hash_compare(
         snapshot_id: int,
         request: Request,
@@ -408,48 +565,85 @@ def create_router(server) -> APIRouter:
 
         Returns:
             ``{"identical_ids": [...], "changed_ids": [...]}``
+
+        Requires owner-level (full, unscoped) access.
         """
+        server.auth.require_unscoped_owner(request)
+        if len(picture_ids) > _HASH_COMPARE_PICTURE_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"picture_ids may contain at most "
+                    f"{_HASH_COMPARE_PICTURE_LIMIT} entries "
+                    f"(got {len(picture_ids)})."
+                ),
+            )
         try:
             result = server.vault.restore_service.compare_hashes(
                 snapshot_id, picture_ids
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error(
+                "hash-compare for snapshot %d failed: %s",
+                snapshot_id,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return result
 
     # ------------------------------------------------------------------
     # POST /snapshots/{id}/restore/{resource_type}/{resource_id}
     # ------------------------------------------------------------------
 
-    @router.post("/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}")
+    @router.post(
+        "/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}",
+        response_model=RestoreReportResponse,
+    )
     def restore_resource(
         snapshot_id: int,
         resource_type: str,
         resource_id: int,
         request: Request,
+        confirm_restore_dependencies: bool = Body(default=False, embed=True),
     ):
         """Restore a single resource from a snapshot snapshot.
 
         ``resource_type`` must be one of ``picture``, ``picture_set``,
         ``project``, or ``character``.
 
+        If the snapshot rows reference parents (Character / PictureSet /
+        Project) that have since been deleted from live, the response
+        is HTTP 409 with body ``{"code": "missing_dependencies",
+        "missing": {...}}`` and nothing is written. Retry with
+        ``confirm_restore_dependencies: true`` to also restore the missing
+        parents from the snapshot first.
+
         Authentication is required.
         """
-        server.auth.require_user_id(request)
-        server.vault.notify(
-            EventType.RESTORE_STARTED,
-            {
-                "snapshot_id": snapshot_id,
-                "resource_type": resource_type,
-                "resource_id": resource_id,
-            },
-        )
+        server.auth.require_unscoped_owner(request)
         try:
             report = server.vault.restore_service.restore_resource(
-                snapshot_id, resource_type, resource_id
+                snapshot_id,
+                resource_type,
+                resource_id,
+                confirm_restore_dependencies=confirm_restore_dependencies,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RestoreInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except MissingDependenciesError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "missing_dependencies",
+                    "message": str(exc),
+                    "missing": exc.missing,
+                },
+            ) from exc
         except Exception as exc:
             logger.error(
                 "Per-resource restore of snapshot %d (%s/%s) failed: %s",
@@ -467,42 +661,6 @@ def create_router(server) -> APIRouter:
             "missing_files_count": report.missing_files_count,
             "upserted_count": report.upserted_count,
             "errors": report.errors,
-        }
-
-    # ------------------------------------------------------------------
-    # POST /undo
-    # ------------------------------------------------------------------
-
-    @router.post("/undo")
-    def undo(
-        request: Request,
-        snapshot_id: Optional[int] = Body(default=None, embed=True),
-    ):
-        """Undo recent metadata changes.
-
-        If ``snapshot_id`` is provided, undo all changes back to that
-        snapshot (hybrid ChangeLog + snapshot strategy).  Otherwise undo
-        only the most recent writer transaction.
-
-        Authentication is required.
-        """
-        server.auth.require_user_id(request)
-        try:
-            if snapshot_id is not None:
-                report = server.vault.undo_service.undo_to_snapshot(snapshot_id)
-            else:
-                report = server.vault.undo_service.undo_last_transaction()
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
-            logger.error("Undo failed: %s", exc, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {
-            "reverted_txn_count": report.reverted_txn_count,
-            "reverted_row_count": report.reverted_row_count,
-            "errors": report.errors,
-            "escalated_to_full_restore": report.escalated_to_full_restore,
-            "escalated_tables": report.escalated_tables,
         }
 
     return router

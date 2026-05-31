@@ -117,8 +117,6 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
-        "pixlstash/services/undo_service.py",  # vault-injection pattern; orchestrates DB reads/writes
-        "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
     }
 
     violations = []
@@ -257,7 +255,7 @@ def test_event_types_fully_classified():
             EventType.SNAPSHOT_DELETED.name,  # snapshot lifecycle event
             EventType.RESTORE_STARTED.name,  # restore lifecycle event
             EventType.RESTORE_COMPLETED.name,  # restore lifecycle event; frontend can react via polling
-            EventType.UNDO_APPLIED.name,  # undo lifecycle event; triggers CHANGED_PICTURES separately
+            EventType.RESTORE_FAILED.name,  # restore lifecycle event; clears activeJob in the UI
         }
     )
 

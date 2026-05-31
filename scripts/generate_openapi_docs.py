@@ -2,10 +2,27 @@ import argparse
 import json
 import os
 import re
+import shutil
 import tempfile
 import tomllib
 
-from pixlstash.server import Server
+import pixlstash
+from pixlstash.server import Server, render_scalar_html
+
+# Images referenced by the API description (logo + token screenshots), bundled
+# with the package and served at /scalar-assets on a live server. The published
+# page uses page-relative URLs, so a copy must sit next to each version's
+# index.html.
+_SCALAR_ASSETS_SRC = os.path.join(
+    os.path.dirname(os.path.abspath(pixlstash.__file__)), "data", "scalar-assets"
+)
+
+# Published docs default Scalar's interactive client at the public demo server
+# and prefill its read-only token, so the online reference can run live read
+# requests out of the box. This token is intentionally public (read-only, demo
+# data); the demo server must list the docs origin in its ``cors_origins``.
+_DEMO_SERVER_URL = "https://demo.pixlstash.dev"
+_DEMO_READONLY_TOKEN = "MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE"
 
 
 def _build_server_config(config_path: str, image_root: str) -> None:
@@ -34,22 +51,45 @@ def _build_server_config(config_path: str, image_root: str) -> None:
 
 
 def _write_scalar_html(target_dir: str) -> None:
-    html = """<!doctype html>
-<html lang="en">
-  <head>
-    <title>PixlStash API Reference</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-  </head>
-  <body>
-    <script id="api-reference" data-url="openapi.json"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-  </body>
-</html>
-"""
-
+    # Relative spec URL: the page sits next to its own openapi.json in the
+    # versioned directory. Point the client at the demo server + read-only token
+    # so the published reference can run live read requests.
+    html = render_scalar_html(
+        "openapi.json",
+        default_server=_DEMO_SERVER_URL,
+        default_token=_DEMO_READONLY_TOKEN,
+    )
     with open(os.path.join(target_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(html)
+    if os.path.isdir(_SCALAR_ASSETS_SRC):
+        shutil.copytree(
+            _SCALAR_ASSETS_SRC,
+            os.path.join(target_dir, "scalar-assets"),
+            dirs_exist_ok=True,
+        )
+
+
+def _heal_legacy_docs(output_dir: str) -> None:
+    """Bring previously published docs in line with the current Scalar setup.
+
+    Docs published before the Scalar migration left two kinds of stale artifact
+    behind, and the release publisher only ever *adds* files, so they would
+    linger forever otherwise:
+
+    * each older ``v{major}.{minor}/index.html`` still renders ReDoc — rewrite
+      it to the Scalar template (the page is version-agnostic, it just loads the
+      sibling ``openapi.json``);
+    * a top-level ``openapi.json`` is no longer emitted (the root only holds the
+      redirect ``index.html``), so drop it if an old run left one behind.
+    """
+    orphan_spec = os.path.join(output_dir, "openapi.json")
+    if os.path.isfile(orphan_spec):
+        os.remove(orphan_spec)
+
+    for name in os.listdir(output_dir):
+        version_dir = os.path.join(output_dir, name)
+        if re.fullmatch(r"v\d+\.\d+", name) and os.path.isdir(version_dir):
+            _write_scalar_html(version_dir)
 
 
 def _write_latest_redirect(output_dir: str) -> None:
@@ -74,8 +114,14 @@ def _write_latest_redirect(output_dir: str) -> None:
   <head>
     <meta charset="utf-8" />
     <title>PixlStash API Reference</title>
-    <meta http-equiv="refresh" content="0; url=./{latest}/" />
     <link rel="canonical" href="./{latest}/" />
+    <script>
+      // Preserve any deep-link hash (e.g. #tag/pictures) through the redirect.
+      location.replace("./{latest}/" + (location.hash || ""));
+    </script>
+    <noscript>
+      <meta http-equiv="refresh" content="0; url=./{latest}/" />
+    </noscript>
   </head>
   <body>
     <p>Redirecting to the latest API reference
@@ -124,6 +170,7 @@ def generate_docs(output_dir: str) -> None:
         json.dump(schema, f, indent=2)
 
     _write_scalar_html(versioned_dir)
+    _heal_legacy_docs(output_dir)
     _write_latest_redirect(output_dir)
     print(f"Generated OpenAPI docs for {api_version} in {versioned_dir}")
 
