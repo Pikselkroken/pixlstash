@@ -1,5 +1,5 @@
 <template>
-  <v-dialog :model-value="open" max-width="600" @click:outside="emit('close')">
+  <v-dialog :model-value="open" max-width="660" @click:outside="emit('close')">
     <div class="editor-shell">
       <v-btn icon size="36px" class="close-icon" @click="emit('close')">
         <v-icon size="24px">mdi-close</v-icon>
@@ -24,7 +24,7 @@
             placeholder="Optional description"
             density="comfortable"
             variant="filled"
-            rows="4"
+            rows="3"
             @keydown.ctrl.enter="save"
             @keydown.meta.enter="save"
           />
@@ -42,48 +42,64 @@
 
           <!-- Appearance row -->
           <div class="appearance-row">
-            <div class="appearance-joint-header">Choose Icon or Thumbnail &amp; Color</div>
+            <div class="appearance-joint-header">
+              Choose Icon or Thumbnail &amp; Color
+            </div>
             <div class="appearance-sections">
               <div class="icon-thumb-box">
                 <!-- Icon grid (ICON_CARDS excluded) -->
                 <div class="icon-grid">
-                <template v-for="cat in SET_ICON_CATEGORIES" :key="cat.label">
-                  <div class="icon-cat-header">{{ cat.label }}</div>
-                  <template v-for="ic in cat.icons.filter(i => i.value !== ICON_CARDS)" :key="ic.value">
-                    <button
-                      class="icon-btn"
-                      :class="{ selected: localSet.set_icon === ic.value }"
-                      :title="ic.label"
-                      @click="localSet.set_icon = ic.value"
+                  <template v-for="cat in SET_ICON_CATEGORIES" :key="cat.label">
+                    <div class="icon-cat-header">{{ cat.label }}</div>
+                    <template
+                      v-for="ic in cat.icons.filter(
+                        (i) => i.value !== ICON_CARDS,
+                      )"
+                      :key="ic.value"
                     >
-                      <v-icon size="22" :color="localSet.set_color || undefined">{{ ic.value }}</v-icon>
-                    </button>
+                      <button
+                        class="icon-btn"
+                        :class="{ selected: localSet.set_icon === ic.value }"
+                        :title="ic.label"
+                        @click="localSet.set_icon = ic.value"
+                      >
+                        <v-icon
+                          size="22"
+                          :color="localSet.set_color || undefined"
+                          >{{ ic.value }}</v-icon
+                        >
+                      </button>
+                    </template>
                   </template>
-                </template>
-              </div>
-              <!-- or divider -->
-              <div class="icon-or-divider">
-                <div class="icon-or-line"></div>
-                <span class="icon-or-text">or</span>
-                <div class="icon-or-line"></div>
-              </div>
-              <!-- Thumbnail aside -->
-              <div class="icon-cards-aside">
-                <div class="icon-cat-header">Thumbnail</div>
-                <button
-                  class="icon-btn--cards-large"
-                  :class="{ selected: localSet.set_icon === ICON_CARDS }"
-                  title="Thumbnail"
-                  @click="localSet.set_icon = ICON_CARDS"
-                >
-                  <img
-                    v-if="props.thumbnailUrl"
-                    :src="props.thumbnailUrl"
-                    class="icon-btn-thumb"
-                    alt="Thumbnail"
-                  />
-                  <v-icon v-else size="32" :color="localSet.set_color || undefined">mdi-layers-triple</v-icon>
-                </button>
+                </div>
+                <!-- or divider -->
+                <div class="icon-or-divider">
+                  <div class="icon-or-line"></div>
+                  <span class="icon-or-text">or</span>
+                  <div class="icon-or-line"></div>
+                </div>
+                <!-- Thumbnail aside -->
+                <div class="icon-cards-aside">
+                  <div class="icon-cat-header">Thumbnail</div>
+                  <button
+                    class="icon-btn--cards-large"
+                    :class="{ selected: localSet.set_icon === ICON_CARDS }"
+                    title="Thumbnail"
+                    @click="localSet.set_icon = ICON_CARDS"
+                  >
+                    <img
+                      v-if="props.thumbnailUrl"
+                      :src="props.thumbnailUrl"
+                      class="icon-btn-thumb"
+                      alt="Thumbnail"
+                    />
+                    <v-icon
+                      v-else
+                      size="32"
+                      :color="localSet.set_color || undefined"
+                      >mdi-layers-triple</v-icon
+                    >
+                  </button>
                 </div>
               </div>
               <!-- Color box -->
@@ -132,7 +148,12 @@ import {
   VTextarea,
 } from "vuetify/components";
 import { apiClient } from "../../utils/apiClient";
-import { SET_ICONS, SET_COLORS, SET_ICON_CATEGORIES, ICON_CARDS } from "../../utils/setAppearance";
+import {
+  SET_ICONS,
+  SET_COLORS,
+  SET_ICON_CATEGORIES,
+  ICON_CARDS,
+} from "../../utils/setAppearance";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -260,6 +281,18 @@ watch(
 
 .editor-card {
   overflow: hidden;
+  /* Cap the dialog at the viewport height and lay it out as a column so the
+     body scrolls internally while the header and footer stay pinned — without
+     this the tall icon grid pushes the Cancel/Save footer off-screen on short
+     windows. */
+  display: flex;
+  flex-direction: column;
+  max-height: 90dvh;
+}
+
+.editor-header,
+.editor-footer {
+  flex-shrink: 0;
 }
 
 .close-icon {
@@ -280,13 +313,18 @@ watch(
 .editor-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 4px;
+  /* The only scrollable region; min-height:0 lets it shrink inside the
+     flex column so overflow-y actually engages. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .editor-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 4px;
   padding: 8px 16px 16px;
 }
 
@@ -294,7 +332,7 @@ watch(
 .appearance-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .appearance-joint-header {
@@ -310,6 +348,9 @@ watch(
   display: flex;
   gap: 8px;
   align-items: stretch;
+  /* Fallback for very narrow windows: let the colour box drop below the icon
+     box rather than overflow and get clipped. */
+  flex-wrap: wrap;
 }
 
 .icon-thumb-box {
@@ -393,7 +434,7 @@ watch(
 
 .icon-btn--cards-large.selected {
   border-color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .icon-grid {
@@ -442,7 +483,7 @@ watch(
 
 .icon-btn.selected {
   border-color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .color-section-header {
@@ -451,7 +492,9 @@ watch(
 
 .color-grid {
   display: grid;
-  grid-template-columns: repeat(6, 36px);
+  /* Fewer columns → narrower (fits the dialog) and taller, so the colours use
+     the vertical space alongside the tall icon grid instead of leaving a gap. */
+  grid-template-columns: repeat(4, 36px);
   gap: 8px;
   align-items: start;
   margin-top: 2px;
@@ -468,7 +511,9 @@ watch(
   box-sizing: border-box;
   aspect-ratio: 1 / 1;
   position: relative;
-  transition: transform 0.12s, border-color 0.12s;
+  transition:
+    transform 0.12s,
+    border-color 0.12s;
 }
 
 .color-swatch:hover {
@@ -521,4 +566,3 @@ watch(
   cursor: not-allowed;
 }
 </style>
-
