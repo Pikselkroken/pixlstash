@@ -752,6 +752,7 @@ Selected milestones:
 | `SNAPSHOT_DELETED`     | ✗ internal  |
 | `RESTORE_STARTED`      | ✗ internal  |
 | `RESTORE_COMPLETED`    | ✗ internal  |
+| `RESTORE_FAILED`       | ✗ internal  |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to all connected clients.
