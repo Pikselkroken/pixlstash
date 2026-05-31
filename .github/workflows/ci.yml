@@ -170,6 +170,11 @@ jobs:
       # smart-score, clip-text-embedding, vram-budget, backend-order,
       # many-to-many-face) are OS-independent — PyTorch/CLIP/InsightFace behave
       # the same on Windows — so they run on Linux only to keep this job fast.
+      # Snapshots / restore / migrations / schema — the highest-value Windows
+      # coverage: the DB file-swap path (os.replace / fsync / VACUUM / WAL) is
+      # the most OS-sensitive code in the release.
+      - name: Test Snapshots, Restore, Migrations & API Schema
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_migrations.py tests/test_snapshots.py tests/test_restore.py tests/test_snapshots_auth.py tests/test_metadata_hash.py tests/test_architecture_guardrails.py tests/test_openapi_response_schemas.py tests/test_find_orphaned_files.py
       - name: Test Server Endpoints and Integration
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_server.py
       - name: Test Authentication
@@ -188,8 +193,3 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_watch_folder_worker.py
       - name: Test Work Planner
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_work_planner.py
-      # Snapshots / restore / migrations / schema — the highest-value Windows
-      # coverage: the DB file-swap path (os.replace / fsync / VACUUM / WAL) is
-      # the most OS-sensitive code in the release.
-      - name: Test Snapshots, Restore, Migrations & API Schema
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_migrations.py tests/test_snapshots.py tests/test_restore.py tests/test_snapshots_auth.py tests/test_metadata_hash.py tests/test_architecture_guardrails.py tests/test_openapi_response_schemas.py tests/test_find_orphaned_files.py
