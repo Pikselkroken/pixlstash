@@ -299,6 +299,8 @@ Key endpoints (see the auto-generated index below for the full set):
 ### `characters.py`
 List, create, update, delete characters; assign / unassign faces; fetch reference picture set; list pictures per character.
 
+**Project-membership reconciliation:** when a character's (or picture set's) `project_id` changes, the handler reconciles its pictures' `PictureProjectMember` rows: each picture is added to the new project and removed from the old one. Removal is *reference-aware* — a picture stays in the old project if another character or picture set still assigned to that project anchors it there (see `picture_referenced_by_project` in [`routes/_helpers.py`](../pixlstash/routes/_helpers.py)). When the entity leaves all projects, each picture's scalar `Picture.project_id` pointer falls back to any remaining membership. The same logic lives in `picture_sets.py::update_picture_set`.
+
 ### `tags.py` / `tag_predictions.py`
 Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPrediction` → `Tag`).
 

@@ -23,6 +23,7 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.event_types import EventType
+from pixlstash.routes._helpers import picture_referenced_by_project
 from pixlstash.pixl_logging import get_logger
 from pixlstash.picture_scoring import (
     find_pictures_by_character_likeness,
@@ -1094,6 +1095,10 @@ def create_router(server) -> APIRouter:
             if not picture_set:
                 return False
 
+            # Capture the project the set is leaving before we mutate it, so we
+            # can disassociate its member pictures from that old project.
+            old_project_id = picture_set.project_id
+
             # Resolve the final (name, project_id) that would result from this
             # update and check uniqueness before touching anything.
             final_name = name if name is not None else picture_set.name
@@ -1170,6 +1175,58 @@ def create_router(server) -> APIRouter:
                             pictures_changed = True
                         if pic.project_id != project_id:
                             pic.project_id = project_id
+                            session.add(pic)
+                            pictures_changed = True
+
+            # When the set leaves a project, drop its member pictures from that
+            # old project unless another character or picture set still assigned
+            # to it anchors them there.
+            if project_id_changed and old_project_id is not None:
+                old_member_ids = [
+                    pic_id
+                    for pic_id in session.exec(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.set_id == id
+                        )
+                    ).all()
+                    if pic_id is not None
+                ]
+                if old_member_ids:
+                    old_pictures = session.exec(
+                        select(Picture).where(Picture.id.in_(old_member_ids))
+                    ).all()
+                    for pic in old_pictures:
+                        if pic.id is None:
+                            continue
+                        if not picture_referenced_by_project(
+                            session,
+                            int(pic.id),
+                            old_project_id,
+                            exclude_set_id=id,
+                        ):
+                            old_membership = session.exec(
+                                select(PictureProjectMember).where(
+                                    PictureProjectMember.picture_id == int(pic.id),
+                                    PictureProjectMember.project_id == old_project_id,
+                                )
+                            ).first()
+                            if old_membership is not None:
+                                session.delete(old_membership)
+                                pictures_changed = True
+                        # If the set left all projects, repoint pictures that
+                        # pointed at the old project to a remaining membership.
+                        if project_id is None and pic.project_id == old_project_id:
+                            session.flush()
+                            fallback_project_id = session.exec(
+                                select(PictureProjectMember.project_id)
+                                .where(PictureProjectMember.picture_id == int(pic.id))
+                                .order_by(PictureProjectMember.project_id.asc())
+                            ).first()
+                            pic.project_id = (
+                                int(fallback_project_id)
+                                if fallback_project_id is not None
+                                else None
+                            )
                             session.add(pic)
                             pictures_changed = True
 

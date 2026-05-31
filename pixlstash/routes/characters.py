@@ -38,6 +38,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes._helpers import picture_referenced_by_project
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_scoring import (
@@ -537,6 +538,9 @@ def create_router(server) -> APIRouter:
                 character = session.get(Character, id)
                 if character is None:
                     raise KeyError("Character not found")
+                # Capture the project the character is leaving before we mutate
+                # it, so we can disassociate its pictures from that old project.
+                old_project_id = character.project_id
                 # Check uniqueness before mutating anything.
                 final_name = name if name is not None else character.name
                 final_project_id = (
@@ -587,6 +591,7 @@ def create_router(server) -> APIRouter:
                         for pic in session.exec(
                             select(Picture).where(Picture.id.in_(picture_ids))
                         ).all():
+                            # Associate the picture with the new project.
                             if project_id is not None:
                                 membership = session.exec(
                                     select(PictureProjectMember).where(
@@ -601,7 +606,45 @@ def create_router(server) -> APIRouter:
                                             project_id=project_id,
                                         )
                                     )
-                            pic.project_id = project_id
+                            # Disassociate the picture from the old project,
+                            # unless another character or picture set still
+                            # assigned to that project anchors it there.
+                            if (
+                                old_project_id is not None
+                                and old_project_id != project_id
+                                and not picture_referenced_by_project(
+                                    session,
+                                    pic.id,
+                                    old_project_id,
+                                    exclude_character_id=id,
+                                )
+                            ):
+                                old_membership = session.exec(
+                                    select(PictureProjectMember).where(
+                                        PictureProjectMember.picture_id == pic.id,
+                                        PictureProjectMember.project_id
+                                        == old_project_id,
+                                    )
+                                ).first()
+                                if old_membership is not None:
+                                    session.delete(old_membership)
+                            # Update the picture's primary project pointer.
+                            if project_id is not None:
+                                pic.project_id = project_id
+                            elif pic.project_id == old_project_id:
+                                # Character left the project entirely; fall back
+                                # to any project the picture still belongs to.
+                                session.flush()
+                                fallback_project_id = session.exec(
+                                    select(PictureProjectMember.project_id)
+                                    .where(PictureProjectMember.picture_id == pic.id)
+                                    .order_by(PictureProjectMember.project_id.asc())
+                                ).first()
+                                pic.project_id = (
+                                    int(fallback_project_id)
+                                    if fallback_project_id is not None
+                                    else None
+                                )
                             session.add(pic)
                         local_project_membership_updated = bool(picture_ids)
 

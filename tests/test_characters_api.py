@@ -7,7 +7,9 @@ import tempfile
 
 from fastapi.testclient import TestClient
 
+from pixlstash.db_models import Face
 from pixlstash.server import Server
+from tests.utils import upload_pictures_and_wait
 
 
 def _setup():
@@ -237,6 +239,130 @@ def test_character_scoped_token_respects_project_id_filter():
         assert resp.status_code == 200
         ids = [c["id"] for c in resp.json()]
         assert char_id not in ids
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _import_one_picture(client):
+    import glob
+
+    candidates = glob.glob(
+        os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
+    ) + glob.glob(os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg"))
+    assert candidates, "No test images found in pictures/ directory"
+    path = candidates[0]
+    mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    with open(path, "rb") as image_file:
+        import_resp = upload_pictures_and_wait(
+            client, [("file", (os.path.basename(path), image_file, mime))]
+        )
+    return import_resp["results"][0]["picture_id"]
+
+
+def _link_face(server, pic_id, char_id, face_index=0):
+    def _add(session):
+        session.add(
+            Face(
+                picture_id=pic_id,
+                frame_index=0,
+                face_index=face_index,
+                character_id=char_id,
+                bbox_="0,0,10,10",
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_add)
+
+
+def _project_picture_ids(client, project_id):
+    resp = client.get("/pictures", params={"project_id": str(project_id)})
+    assert resp.status_code == 200
+    return {row.get("id") for row in resp.json()}
+
+
+def test_moving_character_to_new_project_disassociates_pictures_from_old():
+    """Moving a character out of project A removes the character's pictures from
+    A (the project it was dragged out of) and into the new project B."""
+    temp_dir, client, server = _setup()
+    try:
+        project_a = client.post("/projects", json={"name": "Char Move A"}).json()["id"]
+        project_b = client.post("/projects", json={"name": "Char Move B"}).json()["id"]
+
+        pic_id = _import_one_picture(client)
+        char_id = client.post("/characters", json={"name": "Mover"}).json()[
+            "character"
+        ]["id"]
+        _link_face(server, pic_id, char_id)
+
+        # Assigning the character to A cascades the picture into A.
+        assert (
+            client.patch(
+                f"/characters/{char_id}", json={"project_id": project_a}
+            ).status_code
+            == 200
+        )
+        assert pic_id in _project_picture_ids(client, project_a)
+
+        # Moving the character to B should pull the picture out of A.
+        assert (
+            client.patch(
+                f"/characters/{char_id}", json={"project_id": project_b}
+            ).status_code
+            == 200
+        )
+        assert pic_id in _project_picture_ids(client, project_b)
+        assert pic_id not in _project_picture_ids(client, project_a)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_moving_character_keeps_pictures_shared_with_another_character_in_old_project():
+    """A picture also containing a second character still in project A is kept in
+    A when the first character is moved out — only orphaned pictures leave."""
+    temp_dir, client, server = _setup()
+    try:
+        project_a = client.post("/projects", json={"name": "Shared Char A"}).json()[
+            "id"
+        ]
+        project_b = client.post("/projects", json={"name": "Shared Char B"}).json()[
+            "id"
+        ]
+
+        pic_id = _import_one_picture(client)
+        char_one = client.post("/characters", json={"name": "First"}).json()[
+            "character"
+        ]["id"]
+        char_two = client.post("/characters", json={"name": "Second"}).json()[
+            "character"
+        ]["id"]
+        _link_face(server, pic_id, char_one, face_index=0)
+        _link_face(server, pic_id, char_two, face_index=1)
+
+        for char_id in (char_one, char_two):
+            assert (
+                client.patch(
+                    f"/characters/{char_id}", json={"project_id": project_a}
+                ).status_code
+                == 200
+            )
+        assert pic_id in _project_picture_ids(client, project_a)
+
+        # Move only the first character to B.
+        assert (
+            client.patch(
+                f"/characters/{char_one}", json={"project_id": project_b}
+            ).status_code
+            == 200
+        )
+
+        # Added to B, but retained in A because the second character anchors it.
+        assert pic_id in _project_picture_ids(client, project_b)
+        assert pic_id in _project_picture_ids(client, project_a)
     finally:
         server.vault.close()
         temp_dir.cleanup()

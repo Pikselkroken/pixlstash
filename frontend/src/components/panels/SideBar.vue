@@ -2028,6 +2028,9 @@ function showNotice(
 }
 
 function dragOverSetItem(setId) {
+  // Suppress the image-drop highlight while an entity is being dragged between
+  // projects — that drag is not an image assignment.
+  if (draggingEntityKind.value) return;
   dragOverSet.value = setId;
 }
 
@@ -2468,6 +2471,10 @@ async function handleDeleteSet() {
 
 async function handleDropOnSet(setId, event) {
   dragOverSet.value = null;
+  // An entity (set/character) is being moved between projects — that drop is
+  // handled by the project header / sub-section zones, not by this image-drop
+  // handler. Bail out so we don't try to parse it as image-drag data.
+  if (draggingEntityKind.value) return;
   // If this is an internal grid drag (has application/json payload), skip the
   // file-import path — browsers also populate dataTransfer.files for <img> drags.
   const isInternalDrag =
@@ -2533,6 +2540,9 @@ async function handleDropOnSet(setId, event) {
 }
 
 function handleDragOverCharacter(id) {
+  // Suppress the image-drop highlight while an entity is being dragged between
+  // projects — that drag is not an image assignment.
+  if (draggingEntityKind.value) return;
   dragOverCharacter.value = id;
 }
 
@@ -2544,6 +2554,10 @@ function handleDragLeaveCharacter() {
 const dragOverProjectId = ref(null);
 
 function handleDragOverProject(id) {
+  // Suppress the picture-drop highlight while an entity (character/set) is
+  // being dragged between projects — that drag is handled by the project
+  // header's entity-move zone (onProjectHeaderDrop), not by a picture assign.
+  if (draggingEntityKind.value) return;
   dragOverProjectId.value = id;
 }
 
@@ -2553,6 +2567,10 @@ function handleDragLeaveProject() {
 
 async function onProjectDrop(projectId, event) {
   dragOverProjectId.value = null;
+  // An entity (character/set) is being moved between projects — that drop is
+  // handled by onProjectHeaderDrop, not this picture-assign handler. Bail out
+  // so we don't try to parse it as image-drag data (and log a spurious error).
+  if (draggingEntityKind.value) return;
   if (projectId == null) return;
   // Internal grid drag carries the selected image ids as application/json.
   let imageIds = [];
@@ -2582,6 +2600,9 @@ async function onProjectDrop(projectId, event) {
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
+  // An entity (character/set) is being moved between projects — handled by the
+  // project header / sub-section drop zones, not by this image-drop handler.
+  if (draggingEntityKind.value) return;
   // If this is an internal grid drag (has application/json payload), skip the
   // file-import path — browsers also populate dataTransfer.files for <img> drags.
   const isInternalDrag =
@@ -3134,6 +3155,8 @@ async function toggleCharacterProjectMembership(charId) {
         project_id: newProjectId,
       };
     }
+    // Reassignment changes per-project and per-character image counts.
+    fetchSidebarData();
   } catch (e) {
     console.error("Failed to update character project membership:", e);
   }
@@ -3156,8 +3179,144 @@ async function toggleSetProjectMembership(setId) {
         project_id: newProjectId,
       };
     }
+    // Reassignment changes per-project and per-set image counts.
+    fetchSidebarData();
   } catch (e) {
     console.error("Failed to update set project membership:", e);
+  }
+}
+
+// --- Drag-and-drop: move a character / picture set between projects ---
+// The dragged entity's kind+id are stashed in module refs (this is a
+// same-document drag, and dataTransfer is not readable during dragover in most
+// browsers), so the drop zones can react without reading dataTransfer.
+const draggingEntityKind = ref(null); // 'character' | 'set' | null
+const draggingEntityId = ref(null);
+const moveDragOverProjectId = ref(null); // project header highlight
+const moveDragOverPeopleId = ref(null); // People area highlight
+const moveDragOverSetsId = ref(null); // Sets area highlight
+
+function onEntityDragStart(kind, id, event) {
+  if (isReadOnly.value) return;
+  draggingEntityKind.value = kind;
+  draggingEntityId.value = id;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", `${kind}:${id}`);
+  }
+}
+
+function onEntityDragEnd() {
+  draggingEntityKind.value = null;
+  draggingEntityId.value = null;
+  moveDragOverProjectId.value = null;
+  moveDragOverPeopleId.value = null;
+  moveDragOverSetsId.value = null;
+}
+
+async function moveCharacterToProject(charId, projectId) {
+  const char = characters.value.find((c) => c.id === charId);
+  if (!char || char.project_id === projectId) return;
+  try {
+    await apiClient.patch(`${props.backendUrl}/characters/${charId}`, {
+      project_id: projectId,
+    });
+    const idx = characters.value.findIndex((c) => c.id === charId);
+    if (idx !== -1) {
+      characters.value[idx] = {
+        ...characters.value[idx],
+        project_id: projectId,
+      };
+    }
+    // Reassignment changes per-project and per-character image counts.
+    fetchSidebarData();
+  } catch (e) {
+    console.error(
+      `Failed to move character ${charId} to project ${projectId}:`,
+      e,
+    );
+  }
+}
+
+async function moveSetToProject(setId, projectId) {
+  const set = pictureSets.value.find((s) => s.id === setId);
+  if (!set || set.project_id === projectId) return;
+  try {
+    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, {
+      project_id: projectId,
+    });
+    const idx = pictureSets.value.findIndex((s) => s.id === setId);
+    if (idx !== -1) {
+      pictureSets.value[idx] = {
+        ...pictureSets.value[idx],
+        project_id: projectId,
+      };
+    }
+    // Reassignment changes per-project and per-set image counts.
+    fetchSidebarData();
+  } catch (e) {
+    console.error(`Failed to move set ${setId} to project ${projectId}:`, e);
+  }
+}
+
+// Project header — accepts both characters and sets.
+function onProjectHeaderDragOver(projectId, event) {
+  if (!draggingEntityKind.value) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  moveDragOverProjectId.value = projectId;
+}
+
+function onProjectHeaderDragLeave() {
+  moveDragOverProjectId.value = null;
+}
+
+function onProjectHeaderDrop(projectId) {
+  const kind = draggingEntityKind.value;
+  const id = draggingEntityId.value;
+  moveDragOverProjectId.value = null;
+  if (id == null) return;
+  if (kind === "character") moveCharacterToProject(id, projectId);
+  else if (kind === "set") moveSetToProject(id, projectId);
+}
+
+// People area — accepts only characters.
+function onProjectPeopleDragOver(projectId, event) {
+  if (draggingEntityKind.value !== "character") return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  moveDragOverPeopleId.value = projectId;
+}
+
+function onProjectPeopleDragLeave() {
+  moveDragOverPeopleId.value = null;
+}
+
+function onProjectPeopleDrop(projectId) {
+  const id = draggingEntityId.value;
+  moveDragOverPeopleId.value = null;
+  if (draggingEntityKind.value === "character" && id != null) {
+    moveCharacterToProject(id, projectId);
+  }
+}
+
+// Sets area — accepts only picture sets.
+function onProjectSetsDragOver(projectId, event) {
+  if (draggingEntityKind.value !== "set") return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  moveDragOverSetsId.value = projectId;
+}
+
+function onProjectSetsDragLeave() {
+  moveDragOverSetsId.value = null;
+}
+
+function onProjectSetsDrop(projectId) {
+  const id = draggingEntityId.value;
+  moveDragOverSetsId.value = null;
+  if (draggingEntityKind.value === "set" && id != null) {
+    moveSetToProject(id, projectId);
   }
 }
 
@@ -3184,6 +3343,8 @@ async function handleDropOnProjectPictures(event) {
       mode: "add",
     });
     emit("images-moved", { imageIds: draggedIds });
+    // Reassignment changes per-project image counts.
+    fetchSidebarData();
   } catch (e) {
     console.error("Failed to assign pictures to project:", e);
   }
@@ -3873,7 +4034,10 @@ defineExpose({
 
           <!-- Picture Sets: individual dock buttons when space allows, flyout menu when space is tight -->
           <div
-            v-if="visibleSets.length && sidebarPrimaryTab !== 'folders'"
+            v-if="
+              (visibleSets.length || !isReadOnly) &&
+              sidebarPrimaryTab !== 'folders'
+            "
             class="sidebar-collapsed-divider"
           ></div>
           <template
@@ -3949,6 +4113,26 @@ defineExpose({
               </div>
             </div>
           </template>
+          <div
+            v-else-if="
+              !visibleSets.length &&
+              !isReadOnly &&
+              sidebarPrimaryTab !== 'folders'
+            "
+            class="sidebar-collapsed-row"
+          >
+            <div
+              class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
+              title="Add picture set"
+              @click="createSet()"
+            >
+              <i
+                class="mdi mdi-image-album sidebar-collapsed-item--add-bg-icon"
+                aria-hidden="true"
+              ></i>
+              <v-icon class="sidebar-collapsed-item--add-plus">mdi-plus</v-icon>
+            </div>
+          </div>
           <div
             v-else-if="visibleSets.length && sidebarPrimaryTab !== 'folders'"
             :class="[
@@ -4832,6 +5016,7 @@ defineExpose({
                         selectedSetIdSet.size === 0 &&
                         !props.hasFolderFilter,
                       droppable: dragOverProjectId === p.id,
+                      'project-move-target': moveDragOverProjectId === p.id,
                     },
                   ]"
                   :title="`${p.name} (drop pictures here to add them to this project)`"
@@ -4839,9 +5024,18 @@ defineExpose({
                   @contextmenu.prevent="
                     openSidebarCtxMenu('project', p, $event)
                   "
-                  @dragover.prevent="handleDragOverProject(p.id)"
-                  @dragleave="handleDragLeaveProject"
-                  @drop.prevent="onProjectDrop(p.id, $event)"
+                  @dragover.prevent="
+                    handleDragOverProject(p.id);
+                    onProjectHeaderDragOver(p.id, $event);
+                  "
+                  @dragleave="
+                    handleDragLeaveProject();
+                    onProjectHeaderDragLeave();
+                  "
+                  @drop.prevent="
+                    onProjectHeaderDrop(p.id);
+                    onProjectDrop(p.id, $event);
+                  "
                 >
                   <span class="sidebar-project-tree-name-group">
                     <span class="sidebar-project-tree-label">{{ p.name }}</span>
@@ -4893,7 +5087,15 @@ defineExpose({
                 <!-- Expanded content -->
                 <template v-if="expandedProjectIds.has(p.id)">
                   <!-- People sub-section -->
-                  <div class="sidebar-project-tree-subsection">
+                  <div
+                    :class="[
+                      'sidebar-project-tree-subsection',
+                      { 'project-move-target': moveDragOverPeopleId === p.id },
+                    ]"
+                    @dragover="onProjectPeopleDragOver(p.id, $event)"
+                    @dragleave="onProjectPeopleDragLeave"
+                    @drop.prevent="onProjectPeopleDrop(p.id)"
+                  >
                     <div
                       class="sidebar-project-tree-subheader"
                       @click.stop="toggleProjectTreePeople(p.id)"
@@ -5016,6 +5218,11 @@ defineExpose({
                             droppable: dragOverCharacter === char.id,
                           },
                         ]"
+                        :draggable="!isReadOnly"
+                        @dragstart="
+                          onEntityDragStart('character', char.id, $event)
+                        "
+                        @dragend="onEntityDragEnd"
                         :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                         @click="
                           selectCharacter(
@@ -5092,7 +5299,15 @@ defineExpose({
                   </div>
 
                   <!-- Sets sub-section -->
-                  <div class="sidebar-project-tree-subsection">
+                  <div
+                    :class="[
+                      'sidebar-project-tree-subsection',
+                      { 'project-move-target': moveDragOverSetsId === p.id },
+                    ]"
+                    @dragover="onProjectSetsDragOver(p.id, $event)"
+                    @dragleave="onProjectSetsDragLeave"
+                    @drop.prevent="onProjectSetsDrop(p.id)"
+                  >
                     <div
                       class="sidebar-project-tree-subheader"
                       @click.stop="toggleProjectTreeSets(p.id)"
@@ -5213,6 +5428,9 @@ defineExpose({
                             droppable: dragOverSet === pset.id,
                           },
                         ]"
+                        :draggable="!isReadOnly"
+                        @dragstart="onEntityDragStart('set', pset.id, $event)"
+                        @dragend="onEntityDragEnd"
                         :title="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
                         @click="
                           selectSet(pset.id, pset.name || 'Picture Set', $event)
@@ -6050,6 +6268,15 @@ defineExpose({
     ),
     rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-primary));
+}
+
+/* Drop-target highlight while dragging a character/set onto a project */
+.sidebar-project-tree-row.project-move-target,
+.sidebar-project-tree-subsection.project-move-target {
+  background: rgba(var(--v-theme-primary), 0.22);
+  outline: 2px dashed rgb(var(--v-theme-primary));
+  outline-offset: -2px;
+  border-radius: 4px;
 }
 
 .sidebar-project-tree-expand-indicator {
