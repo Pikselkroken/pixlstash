@@ -24,6 +24,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.pixl_logging import get_logger
 from pixlstash.picture_scoring import (
     find_pictures_by_character_likeness,
@@ -1354,38 +1355,50 @@ def create_router(server) -> APIRouter:
 
         def add_member(session, id, picture_id, reference_character_id=None):
             picture_set = session.get(PictureSet, id)
-            picture = session.get(Picture, picture_id)
-            if not picture_set or not picture or picture.deleted:
+            if not picture_set:
                 return False
-            exists = session.exec(
-                select(PictureSetMember).where(
-                    PictureSetMember.set_id == id,
-                    PictureSetMember.picture_id == picture_id,
+            # Sets are atomic for stacks: adding any stacked picture adds every
+            # member of its stack.
+            target_ids = expand_picture_ids_to_stacks(session, [int(picture_id)])
+            pictures = session.exec(
+                select(Picture).where(
+                    Picture.id.in_(target_ids),
+                    Picture.deleted.is_(False),
                 )
-            ).first()
-            if exists:
+            ).all()
+            if not pictures:
                 return False
-            member = PictureSetMember(set_id=id, picture_id=picture_id)
-            session.add(member)
-            if picture_set.project_id is not None:
-                membership = session.exec(
-                    select(PictureProjectMember).where(
-                        PictureProjectMember.picture_id == picture.id,
-                        PictureProjectMember.project_id == picture_set.project_id,
+            added_any = False
+            for picture in pictures:
+                exists = session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.set_id == id,
+                        PictureSetMember.picture_id == picture.id,
                     )
                 ).first()
-                if membership is None:
-                    session.add(
-                        PictureProjectMember(
-                            picture_id=picture.id,
-                            project_id=picture_set.project_id,
+                if exists is None:
+                    session.add(PictureSetMember(set_id=id, picture_id=picture.id))
+                    added_any = True
+                if picture_set.project_id is not None:
+                    membership = session.exec(
+                        select(PictureProjectMember).where(
+                            PictureProjectMember.picture_id == picture.id,
+                            PictureProjectMember.project_id == picture_set.project_id,
                         )
-                    )
-                picture.project_id = picture_set.project_id
-                session.add(picture)
+                    ).first()
+                    if membership is None:
+                        session.add(
+                            PictureProjectMember(
+                                picture_id=picture.id,
+                                project_id=picture_set.project_id,
+                            )
+                        )
+                    if picture.project_id != picture_set.project_id:
+                        picture.project_id = picture_set.project_id
+                    session.add(picture)
             session.add(picture_set)
             session.commit()
-            return True
+            return added_any
 
         success = server.vault.db.run_task(
             add_member,
@@ -1415,35 +1428,23 @@ def create_router(server) -> APIRouter:
         reference_character_id = _find_reference_character_id_for_set(id)
 
         def remove_member(session, id, picture_id, reference_character_id=None):
-            member = session.exec(
+            # Sets are atomic for stacks: removing any stacked picture removes
+            # every member of its stack from the set. This also covers the case
+            # where the requested id is a collapsed-stack leader shown because a
+            # different member of its stack is the one actually in the set.
+            target_ids = expand_picture_ids_to_stacks(session, [int(picture_id)])
+            members = session.exec(
                 select(PictureSetMember).where(
                     PictureSetMember.set_id == id,
-                    PictureSetMember.picture_id == picture_id,
+                    PictureSetMember.picture_id.in_(target_ids),
                 )
-            ).first()
-            if member:
-                session.delete(member)
-                session.commit()
-                return True
-            # The picture may be a stack leader that was shown because another
-            # member of the same stack is in the set.  Find that member and
-            # remove it instead.
-            pic = session.get(Picture, picture_id)
-            if pic and pic.stack_id is not None:
-                stack_members = session.exec(
-                    select(PictureSetMember).where(
-                        PictureSetMember.set_id == id,
-                        PictureSetMember.picture_id.in_(
-                            select(Picture.id).where(Picture.stack_id == pic.stack_id)
-                        ),
-                    )
-                ).all()
-                if stack_members:
-                    for m in stack_members:
-                        session.delete(m)
-                    session.commit()
-                    return True
-            return False
+            ).all()
+            if not members:
+                return False
+            for m in members:
+                session.delete(m)
+            session.commit()
+            return True
 
         success = server.vault.db.run_task(
             remove_member,
@@ -1482,6 +1483,8 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, set_id)
             if not picture_set:
                 return None
+            # Sets are atomic for stacks: pull in every member of any stack.
+            picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
             existing = set(
                 session.exec(
                     select(PictureSetMember.picture_id).where(
@@ -1548,6 +1551,8 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, set_id)
             if not picture_set:
                 return None
+            # Sets are atomic for stacks: keep every member of any stack together.
+            picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
             # Remove all existing members
             existing_members = session.exec(
                 select(PictureSetMember).where(PictureSetMember.set_id == set_id)

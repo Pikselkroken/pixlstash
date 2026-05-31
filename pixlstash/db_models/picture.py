@@ -133,6 +133,10 @@ class LikenessParameter(IntEnum):
 
 LIKENESS_PARAMETER_SENTINEL = -1.0
 
+# Sentinel marking "no project_id filter supplied" in Picture.find, so a real
+# project_id of None (the unassigned scope) can be told apart from absence.
+_NO_PROJECT_SCOPE = object()
+
 
 def _default_likeness_parameters() -> np.ndarray:
     return np.full(
@@ -1001,7 +1005,49 @@ class Picture(SQLModel, table=True):
         # former _get_stack_leader_ids() round-trip + IN(ids) approach, which
         # was unacceptably slow on large libraries.
         if stack_leaders_only:
-            query = query.where(or_(cls.stack_id.is_(None), cls.stack_position == 0))
+            project_scope = search.get("project_id", _NO_PROJECT_SCOPE)
+            if project_scope is _NO_PROJECT_SCOPE or isinstance(
+                project_scope, (list, tuple)
+            ):
+                # Unscoped (or multi-project) grid: fast path — leader is the
+                # global stack_position == 0, backed by the partial leader index.
+                query = query.where(
+                    or_(cls.stack_id.is_(None), cls.stack_position == 0)
+                )
+            else:
+                # Project-scoped grid: represent each stack by its lowest-positioned
+                # member that is itself in this project scope, so a stack is not
+                # dropped just because its global position-0 leader belongs to a
+                # different project (e.g. a legacy stack whose membership predates
+                # the stack-atomic invariant). Mirrors find_unassigned().
+                sibling = aliased(cls)
+                sibling_project = select(PictureProjectMember.picture_id).where(
+                    PictureProjectMember.picture_id == sibling.id
+                )
+                if project_scope is None:
+                    sibling_in_scope = ~exists(sibling_project)
+                else:
+                    sibling_in_scope = exists(
+                        sibling_project.where(
+                            PictureProjectMember.project_id == project_scope
+                        )
+                    )
+                cur_pos = func.coalesce(cls.stack_position, 999999)
+                sib_pos = func.coalesce(sibling.stack_position, 999999)
+                has_higher_ranked_sibling = exists(
+                    select(sibling.id).where(
+                        sibling.stack_id == cls.stack_id,
+                        sibling.deleted.is_(False),
+                        sibling_in_scope,
+                        or_(
+                            sib_pos < cur_pos,
+                            (sib_pos == cur_pos) & (sibling.id < cls.id),
+                        ),
+                    )
+                )
+                query = query.where(
+                    or_(cls.stack_id.is_(None), ~has_higher_ranked_sibling)
+                )
         if comfyui_self_parts:
             self_where = " OR ".join(comfyui_self_parts)
             if stack_leaders_only:

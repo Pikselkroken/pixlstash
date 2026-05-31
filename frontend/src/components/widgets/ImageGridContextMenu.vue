@@ -23,7 +23,8 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || !!groupingLockReason"
+          :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
           @selected="onAction('set-project', $event)"
         />
@@ -32,7 +33,8 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || !!groupingLockReason"
+          :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
           @added="onAction('add-to-character', $event)"
           @removed="onAction('remove-from-character', $event)"
@@ -42,7 +44,8 @@
           placement="right"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length"
+          :disabled="!selectedImageIds.length || !!groupingLockReason"
+          :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
           @added="onAction('added-to-set', $event)"
         />
@@ -377,6 +380,7 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
+  groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
   captionerPlugins: { type: Array, default: () => [] },

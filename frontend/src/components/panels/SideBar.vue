@@ -2642,7 +2642,10 @@ async function onCharacterDrop(characterId, event) {
     if (data.imageIds && Array.isArray(data.imageIds)) {
       imageIds = data.imageIds;
     }
-    emit("images-assigned-to-character", { characterId, imageIds });
+    // The actual "images-assigned-to-character" event is emitted after the
+    // assignment is committed (below); emitting it here as well would refresh
+    // the grid against not-yet-committed data and also fire wrongly for
+    // face-only drags.
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || String(e);
     console.error("Error parsing drag data:", detail);

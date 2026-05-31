@@ -177,6 +177,28 @@ function buildUpdatesSocketUrl() {
   return `${wsBase}/ws/updates`;
 }
 
+// A `pictures_changed` event may carry a `fields` list naming the columns that
+// changed. When every changed field is invisible to the current sort + active
+// filters (e.g. a background `smart_score` recompute while sorting by date),
+// the grid/sidebar don't need to react at all. An event with no `fields`
+// (user edits, imports, plugin output, …) is treated as "unknown" and always
+// refreshes, preserving the previous behaviour.
+function pictureChangeFieldAffectsView(field) {
+  if (field === "smart_score") {
+    return (
+      sortStore.selectedSort === "SMART_SCORE" ||
+      filterStore.smartScoreBucketFilter != null
+    );
+  }
+  // Unknown field → assume it can affect the view, so refresh to be safe.
+  return true;
+}
+
+function pictureChangeAffectsView(fields) {
+  if (!Array.isArray(fields) || fields.length === 0) return true;
+  return fields.some(pictureChangeFieldAffectsView);
+}
+
 function shouldRefreshForPictureChange() {
   if (selectionStore.selectedSetIds.length) return false;
   const selectedChar = selectionStore.selectedCharacter;
@@ -228,6 +250,16 @@ function connectUpdatesSocket() {
       payload?.type === "pictures_changed" ||
       payload?.type === "picture_imported";
     if (isPictureChange) {
+      // Skip entirely when the changed fields can't affect the current view —
+      // this is what stops background smart_score recomputes from reloading the
+      // grid (and refreshing the sidebar) under a date sort, in any pile
+      // including the scrapheap.
+      if (
+        payload?.type === "pictures_changed" &&
+        !pictureChangeAffectsView(payload.fields)
+      ) {
+        return;
+      }
       if (!wsStore.isUploadInProgress) {
         refreshSidebarPicturesDebounced(true);
       }
@@ -1424,17 +1456,31 @@ function resolveThemeName(mode) {
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
-  if (
-    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID ||
-    selectionStore.selectedSet
-  ) {
+  const current = selectionStore.selectedCharacter;
+  // Unassigned view: assigned pictures leave the unassigned bucket — drop their
+  // tiles from the grid immediately.
+  if (current === UNASSIGNED_PICTURES_ID && !selectionStore.selectedSet) {
+    if (
+      gridContainer.value &&
+      typeof gridContainer.value.removeImagesById === "function"
+    ) {
+      gridContainer.value.removeImagesById(imageIds);
+    }
     return;
   }
-  if (
-    gridContainer.value &&
-    typeof gridContainer.value.removeImagesById === "function"
-  ) {
-    gridContainer.value.removeImagesById(imageIds);
+  // Viewing a specific character: reassigning pictures (and their whole stack)
+  // to a DIFFERENT character moves them out of this view. Refetch so they
+  // disappear right away instead of lingering until the view changes — a plain
+  // removeImagesById can't catch every stack member (a collapsed drag only
+  // carries the leader id).
+  const isSpecificCharacterView =
+    current != null &&
+    !selectionStore.selectedSet &&
+    String(current) !== String(ALL_PICTURES_ID) &&
+    String(current) !== String(UNASSIGNED_PICTURES_ID) &&
+    String(current) !== String(SCRAPHEAP_PICTURES_ID);
+  if (isSpecificCharacterView && String(current) !== String(characterId)) {
+    gridStore.refreshGridVersion();
   }
 }
 

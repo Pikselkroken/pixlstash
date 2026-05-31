@@ -230,6 +230,8 @@
             :picture-ids="[image.id]"
             :include-deleted-members="true"
             :force-dark="true"
+            :disabled="!!stackGroupingLockReason"
+            :title="stackGroupingLockReason || undefined"
             :class="{ hidden: chromeHidden }"
             @added="(payload) => emit('added-to-set', payload)"
           />
@@ -241,6 +243,8 @@
             :include-deleted-members="true"
             :expand-stacks="false"
             :force-dark="true"
+            :disabled="!!stackGroupingLockReason"
+            :title="stackGroupingLockReason || undefined"
             :class="{ hidden: chromeHidden }"
             @selected="(payload) => emit('set-project', payload)"
           />
@@ -744,6 +748,16 @@ const {
 } = toRefs(props);
 
 const image = ref(null);
+// Grouping (project/set) membership is stack-atomic: a single stack member shown
+// in the overlay cannot have its membership changed individually — the user must
+// unstack first. Whole-stack edits happen from the collapsed grid tile.
+const stackGroupingLockReason = computed(() => {
+  if (!image.value) return null;
+  const count = Number(image.value.stackCount ?? image.value.stack_count ?? 0);
+  return count > 1
+    ? "Unstack first to change the project or set of an individual stack picture."
+    : null;
+});
 const addToSetControlRef = ref(null);
 const tagsPanelRef = ref(null);
 const isAddingTag = computed(() => tagsPanelRef.value?.addingTag ?? false);
@@ -1999,6 +2013,8 @@ const FILMSTRIP_GAP = 0;
 const FILMSTRIP_RAIL_PADDING = 8;
 const ZOOM_WHEEL_THRESHOLD = 40;
 const ZOOM_WHEEL_SENSITIVITY = 0.25;
+// Approximate pixels per line for wheel events reported in DOM_DELTA_LINE units.
+const WHEEL_LINE_HEIGHT_PX = 16;
 const windowHeight = ref(0);
 const overlayMainRef = ref(null);
 const filmstripRef = ref(null);

@@ -39,6 +39,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_scoring import (
@@ -588,6 +589,9 @@ def create_router(server) -> APIRouter:
                                 if face.picture_id is not None
                             }
                         )
+                        # Project membership is stack-atomic: a character on one
+                        # member of a stack moves the whole stack's membership.
+                        picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
                         for pic in session.exec(
                             select(Picture).where(Picture.id.in_(picture_ids))
                         ).all():
@@ -1203,6 +1207,12 @@ def create_router(server) -> APIRouter:
             faces_to_assign = []
             existing_faces = []
             if picture_ids:
+                # Stacks move as a unit: assigning any stacked picture to a
+                # character assigns every member of its stack, so a collapsed
+                # stack dragged onto a character moves all of its pictures
+                # (reassigning each member's face also moves it off the old
+                # character, keeping character counts consistent).
+                picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
                 reference_faces = select_reference_faces_for_character(
                     session, character_id
                 )

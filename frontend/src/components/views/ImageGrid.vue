@@ -67,6 +67,7 @@
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :all-grid-images="allGridImages"
+      :grouping-lock-reason="partialStackGroupingReason"
       :visible="showSelectionBar"
       @clear-selection="clearSelection"
       @added-to-set="handleOverlayAddedToSet"
@@ -142,6 +143,7 @@
       :comfyui-configured="props.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
+      :grouping-lock-reason="partialStackGroupingReason"
       :available-plugins="availablePlugins"
       :tagger-plugins="taggerPlugins"
       :captioner-plugins="captionerPlugins"
@@ -3060,6 +3062,10 @@ async function deleteSelected() {
 }
 
 async function handleSetProjectForSelected(payload) {
+  if (partialStackGroupingReason.value) {
+    window.alert(partialStackGroupingReason.value);
+    return;
+  }
   const explicitPictureIds = Array.isArray(payload?.pictureIds)
     ? payload.pictureIds
     : [];
@@ -3230,6 +3236,50 @@ const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
 });
+// Grouping (project/set/character) membership is stack-atomic: it can only be
+// changed for a WHOLE stack at once — a collapsed stack tile (which represents
+// the whole stack) or every member of an expanded stack selected. Changing a
+// strict subset of a stack's members is refused; the user must unstack first.
+const PARTIAL_STACK_GROUPING_MESSAGE =
+  "Unstack first to change the project, set or character of individual stack pictures.";
+
+const partialStackGroupingReason = computed(() => {
+  const ids = (selectedImageIds.value || [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return null;
+  const idSet = new Set(ids);
+  const images = allGridImages.value || [];
+  const byId = new Map(
+    images.filter((img) => img && img.id != null).map((img) => [String(img.id), img]),
+  );
+
+  // Which stacks does the selection touch? (Members share stack_id even when
+  // expanded — only the collapsed leader tile carries a >1 stack_count, so we
+  // must group by stack_id, not by per-tile count.)
+  const stackIds = new Set();
+  for (const id of ids) {
+    const img = byId.get(String(id));
+    if (!img) continue;
+    const stackId = getPictureStackId(img);
+    if (stackId) stackIds.add(stackId);
+  }
+
+  for (const stackId of stackIds) {
+    // A collapsed stack tile represents the whole stack → allowed.
+    if (!expandedStackIds.value.has(stackId)) continue;
+    // An expanded stack is whole-stack only when every rendered member is
+    // selected.
+    const memberIds = images
+      .filter((img) => img && img.id != null && getPictureStackId(img) === stackId)
+      .map((img) => Number(img.id));
+    const allSelected =
+      memberIds.length > 0 && memberIds.every((mid) => idSet.has(mid));
+    if (!allSelected) return PARTIAL_STACK_GROUPING_MESSAGE;
+  }
+  return null;
+});
+
 const selectedExpandedCount = computed(() => {
   const selectedSet = new Set(
     selectedImageIds.value
@@ -3979,6 +4029,8 @@ const {
   getLikenessGroupId,
   createStacksFromSelectedGroups,
   collapseStackImages,
+  getLocalStackMembers,
+  ensureStackMembersLoaded,
 } = useStackOrdering(
   {
     allGridImages,

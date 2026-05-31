@@ -244,7 +244,11 @@ def test_smart_score_task_notifies_picture_change_when_queue_drained():
     Vault._on_task_completed(vault, task, None)
 
     assert worker_notifications
-    assert emitted_events == [(EventType.CHANGED_PICTURES, [201])]
+    # The event is tagged with the changed field so the SPA can skip a grid
+    # reload when it isn't sorting/filtering by smart_score.
+    assert emitted_events == [
+        (EventType.CHANGED_PICTURES, {"picture_ids": [201], "fields": ["smart_score"]})
+    ]
 
 
 def test_get_watch_folders():

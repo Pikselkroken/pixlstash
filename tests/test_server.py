@@ -579,12 +579,14 @@ def test_unassigned_excludes_stack_when_any_member_is_in_set():
     log_resources("END test_unassigned_excludes_stack_when_any_member_is_in_set")
 
 
-def test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope():
-    """Project-scoped UNASSIGNED grid should not drop stacks only because global leader is out of scope."""
+def test_stacking_unions_project_membership_across_members():
+    """Stack membership is atomic: stacking pictures from different projects
+    unions their project memberships so every member belongs to every project
+    the stack touches. The (unassigned) stack then appears in each project's
+    UNASSIGNED grid, collapsed to a single leader, regardless of which member
+    is the leader."""
 
-    log_resources(
-        "START test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope"
-    )
+    log_resources("START test_stacking_unions_project_membership_across_members")
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(server_config_path=server_config_path) as server:
@@ -658,20 +660,25 @@ def test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope():
             stack_id = stack_resp.json().get("id")
             assert stack_id is not None
 
-            # Force pic_b to be stack leader while querying project A scope.
+            # Force pic_b to be the stack leader.
             reorder_resp = client.patch(
                 f"/stacks/{stack_id}/order",
                 json={"picture_ids": [pic_b, pic_a]},
             )
             assert reorder_resp.status_code == 200
 
-            summary_resp = client.get(
-                "/characters/UNASSIGNED/summary",
-                params={"project_id": str(project_a_id)},
-            )
-            assert summary_resp.status_code == 200
-            assert summary_resp.json().get("image_count") == 1
+            # Union: stacking pic_a (project A) with pic_b (project B) makes both
+            # pictures belong to BOTH projects.
+            def project_ids(project_id):
+                resp = client.get("/pictures", params={"project_id": str(project_id)})
+                assert resp.status_code == 200
+                return {item.get("id") for item in resp.json()}
 
+            assert {pic_a, pic_b} <= project_ids(project_a_id)
+            assert {pic_a, pic_b} <= project_ids(project_b_id)
+
+            # The unassigned (no character/set) stack appears in project A's
+            # UNASSIGNED grid, collapsed to a single leader.
             grid_resp = client.get(
                 "/pictures",
                 params={
@@ -682,12 +689,10 @@ def test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope():
             )
             assert grid_resp.status_code == 200
             grid_ids = {item.get("id") for item in grid_resp.json()}
-            assert pic_a in grid_ids
+            assert len(grid_ids & {pic_a, pic_b}) == 1
 
     gc.collect()
-    log_resources(
-        "END test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope"
-    )
+    log_resources("END test_stacking_unions_project_membership_across_members")
 
 
 def test_unassigned_project_scope_uses_project_character_and_set_membership_only():
