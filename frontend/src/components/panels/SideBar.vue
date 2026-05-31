@@ -30,6 +30,11 @@ import {
   SET_ICON_CATEGORIES,
   ICON_CARDS,
 } from "../../utils/setAppearance.js";
+import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+
+// Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
+// authoritative name source (it fetches these lists); see useEntityNamesStore.
+const entityNames = useEntityNamesStore();
 
 const appVersion = __APP_VERSION__;
 
@@ -142,6 +147,7 @@ const emit = defineEmits([
   "open-import-dialog",
   "update:project-view-mode",
   "update:selected-project-id",
+  "view-project",
   "update:check-for-updates",
   "update:show-keyboard-hint",
   "select-folder",
@@ -187,14 +193,12 @@ function toggleProjectTreeSets(id) {
 }
 
 function selectProjectNode(p) {
-  selectProject(p.id);
-  // Also navigate to all pictures for this project
-  emit("select-character", {
-    id: props.allPicturesId,
-    label: "All Pictures",
-    ids: [],
-  });
-  emit("select-set", null);
+  // Explicit entry click → navigate. Unlike a tab switch, clicking a specific
+  // project IS a navigation: emit `view-project` so App pushes /project/:id.
+  // `applyRouteToStores` then sets projectViewMode/selectedProjectId from the
+  // route (the single source of truth), which scopes the grid to the project.
+  selectProject(p.id); // update sidebar-local highlight/scope
+  emit("view-project", p.id);
 }
 
 // --- Sorting State ---
@@ -557,6 +561,7 @@ async function fetchReferenceFolders() {
   try {
     const res = await apiClient.get("/reference-folders");
     referenceFolders.value = res.data?.folders ?? [];
+    entityNames.mergeRefFolderLabels(referenceFolders.value);
     inDocker.value = Boolean(res.data?.in_docker);
     referenceFoldersImageRoot.value = res.data?.image_root ?? null;
     // In non-Docker mode we eagerly browse roots so we know which have
@@ -580,6 +585,7 @@ async function fetchImportFolders() {
   try {
     const res = await apiClient.get("/import-folders");
     importFolders.value = res.data?.folders ?? [];
+    entityNames.mergeImportFolderLabels(importFolders.value);
     if (sidebarPrimaryTab.value === "folders") {
       _startFolderStatusPoll();
     }
@@ -778,27 +784,26 @@ function _stopFolderStatusPoll() {
 onBeforeUnmount(() => _stopFolderStatusPoll());
 
 function selectFoldersTab() {
+  // Stateless tab switch: only change which list the sidebar shows. Do NOT
+  // emit select-* / navigate / clear the grid's selection — switching a tab
+  // must leave the current view intact so the user can drag pictures from it
+  // onto entries in this tab.
   sidebarPrimaryTab.value = "folders";
-  // Reset project mode so the grid isn't filtered by a project while on the
-  // folders tab. Setting projectViewMode triggers its own watcher which emits
-  // update:project-view-mode to App.vue.
   projectViewMode.value = "global";
-  // Clear character / set selection so the folders view starts unfiltered.
-  emit("select-character", { id: props.allPicturesId, label: "All Pictures" });
-  emit("select-set", null);
 }
 
 function selectLibraryTab(mode) {
+  // Stateless tab switch (see selectFoldersTab): sidebar-display only, no
+  // navigation and no grid-filter mutation.
   sidebarPrimaryTab.value = "library";
   if (mode === "project") {
     switchToProjectView();
   } else {
     projectViewMode.value = "global";
   }
-  // Clear the folder filter so the library view is not restricted to a folder.
+  // Clear only the sidebar's own folder highlight (display state); the grid
+  // view is unchanged and still driven by the route.
   selectedFolderReferenceId.value = null;
-  emit("select-folder", null);
-  emit("update:folder-scanning", false);
 }
 function updateLabelOverflow(key, el = null) {
   const element = el || labelRefs.get(key);
@@ -2171,6 +2176,7 @@ async function fetchCharacters() {
       console.warn("Unexpected /characters response; expected an array:", chars);
     }
     characters.value = nextCharacters;
+    entityNames.mergeCharacterNames(nextCharacters);
     for (const char of nextCharacters) {
       fetchCharacterThumbnail(char.id);
     }
@@ -2263,6 +2269,7 @@ async function fetchProjects() {
   try {
     const res = await apiClient.get(`${props.backendUrl}/projects`);
     projects.value = Array.isArray(res.data) ? res.data : [];
+    entityNames.mergeProjectNames(projects.value);
   } catch (e) {
     console.error("Error fetching projects:", e);
     projects.value = [];
@@ -2278,6 +2285,7 @@ async function fetchPictureSets() {
 
     const sets = await res.data; // Axios responses use `data` for the payload
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
+    entityNames.mergeSetNames(pictureSets.value);
     await updateSetThumbnails(pictureSets.value);
   } catch (e) {
     console.error("Error fetching picture sets:", e);
@@ -2530,6 +2538,46 @@ function handleDragOverCharacter(id) {
 
 function handleDragLeaveCharacter() {
   dragOverCharacter.value = null;
+}
+
+// --- Project drop target (assign dragged pictures to a specific project) ---
+const dragOverProjectId = ref(null);
+
+function handleDragOverProject(id) {
+  dragOverProjectId.value = id;
+}
+
+function handleDragLeaveProject() {
+  dragOverProjectId.value = null;
+}
+
+async function onProjectDrop(projectId, event) {
+  dragOverProjectId.value = null;
+  if (projectId == null) return;
+  // Internal grid drag carries the selected image ids as application/json.
+  let imageIds = [];
+  try {
+    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    if (Array.isArray(data.imageIds)) imageIds = data.imageIds;
+  } catch (e) {
+    console.error("Could not parse drag data for project drop:", e);
+    return;
+  }
+  if (!imageIds.length) return;
+  try {
+    // Picture↔Project is many-to-many (PictureProjectMember); membership is
+    // created via the batch /pictures/project endpoint with mode "add".
+    // (Patching a picture's direct project_id column does NOT create the
+    // membership the project view queries — that returns 200 but shows nothing.)
+    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
+      picture_ids: imageIds,
+      project_id: projectId,
+      mode: "add",
+    });
+    emit("images-moved", { imageIds });
+  } catch (e) {
+    console.error("Failed to assign pictures to project:", e);
+  }
 }
 
 async function onCharacterDrop(characterId, event) {
@@ -2969,26 +3017,44 @@ watch(
 // restore.  Reset to false via nextTick() after the flush cycle completes.
 let _initializing = false;
 
-watch(projectViewMode, (v) => {
+watch(projectViewMode, () => {
   if (_initializing) return;
-  emit("update:project-view-mode", v);
-  // Re-fetch sets with the correct scope (all sets in global, scoped sets in
-  // project view). Without this, a set removed from a project while in
-  // project view could be absent from the global list because the 800 ms
-  // debounced sidebar refresh fired the set-fetch while still in project mode
-  // (so only project-scoped sets were returned), and the subsequent mode
-  // switch only called fetchSidebarData() which doesn't reload pictureSets.
+  // Stateless tabs: switching the Global ↔ Project mode is a sidebar-display
+  // operation only. It changes which list of entries the sidebar renders but
+  // must NOT touch the grid — the grid view follows the route (the single
+  // source of truth), driven only by explicit entry clicks. We therefore do
+  // NOT emit update:project-view-mode here. Re-fetching the sets is purely to
+  // populate the sidebar's own scoped list (all sets in global, project-scoped
+  // sets in project view).
   void fetchPictureSets();
   void fetchSidebarData();
 });
 watch(selectedProjectId, (v) => {
   if (_initializing) return;
-  emit("update:selected-project-id", v);
+  // Display-only (see watch(projectViewMode) above): no emit to App.
+  // Navigation to a project happens via the explicit `view-project`
+  // entry-click event, not by changing the sidebar's scope here.
   if (v !== null) lastUsedProjectId.value = v;
-  // Re-fetch sets for the newly selected project.
+  // Re-fetch sets for the newly selected project (sidebar list scope).
   void fetchPictureSets();
   void fetchSidebarData();
 });
+
+// Keep the sidebar's current-project in sync with the route (the single source
+// of truth). Navigating to a project via the breadcrumb / deep-link / browser
+// back-forward updates externalSelectedProjectId; without mirroring it here the
+// sidebar's project highlight + scope would stay on the last project that was
+// selected *in the sidebar*. The init block already seeds this once on mount;
+// this handles every subsequent route change. (Switching the Projects tab does
+// NOT change the prop, so the stateless browse-scope is preserved.)
+watch(
+  () => props.externalSelectedProjectId,
+  (v) => {
+    if (_initializing) return;
+    const next = v ?? null;
+    if (next !== selectedProjectId.value) selectedProjectId.value = next;
+  },
+);
 
 // Sync the sidebar's folder highlight with the active route.
 // When App.vue navigates to /ref-folder/:id or /import-folder/:id it passes
@@ -3111,13 +3177,12 @@ async function handleDropOnProjectPictures(event) {
   }
   if (draggedIds.length === 0) return;
   try {
-    await Promise.all(
-      draggedIds.map((picId) =>
-        apiClient.patch(`${props.backendUrl}/pictures/${picId}`, {
-          project_id: selectedProjectId.value,
-        }),
-      ),
-    );
+    // Many-to-many membership via the batch endpoint (see onProjectDrop).
+    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
+      picture_ids: draggedIds,
+      project_id: selectedProjectId.value,
+      mode: "add",
+    });
     emit("images-moved", { imageIds: draggedIds });
   } catch (e) {
     console.error("Failed to assign pictures to project:", e);
@@ -3452,7 +3517,7 @@ defineExpose({
               }"
               @click="
                 selectLibraryTab('project');
-                selectProject(p.id);
+                selectProjectNode(p);
                 projectMenuSection = null;
               "
             >
@@ -3632,8 +3697,8 @@ defineExpose({
                       !props.hasFolderFilter,
                   },
                 ]"
-                :title="char.name || 'Character'"
-                @click="selectCharacter(char.id, char.name || 'Character')"
+                :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
+                @click="selectCharacter(char.id, char.name || 'Character', $event)"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('character', char, $event)
                 "
@@ -3764,7 +3829,7 @@ defineExpose({
                     },
                   ]"
                   @click="
-                    selectCharacter(char.id, char.name || 'Character');
+                    selectCharacter(char.id, char.name || 'Character', $event);
                     collapsedCharMenuOpen = false;
                   "
                   @contextmenu.prevent="
@@ -4766,12 +4831,17 @@ defineExpose({
                         props.selectedCharacter === props.allPicturesId &&
                         selectedSetIdSet.size === 0 &&
                         !props.hasFolderFilter,
+                      droppable: dragOverProjectId === p.id,
                     },
                   ]"
+                  :title="`${p.name} (drop pictures here to add them to this project)`"
                   @click="selectProjectNode(p)"
                   @contextmenu.prevent="
                     openSidebarCtxMenu('project', p, $event)
                   "
+                  @dragover.prevent="handleDragOverProject(p.id)"
+                  @dragleave="handleDragLeaveProject"
+                  @drop.prevent="onProjectDrop(p.id, $event)"
                 >
                   <span class="sidebar-project-tree-name-group">
                     <span class="sidebar-project-tree-label">{{ p.name }}</span>
@@ -5962,6 +6032,14 @@ defineExpose({
   color: rgb(var(--v-theme-on-primary));
   border-left: 3px solid rgb(var(--v-theme-primary));
   border-radius: 0;
+}
+
+/* Drop-target highlight (drag pictures onto a project to assign them) —
+   mirrors .sidebar-list-item.droppable used by character/set rows. */
+.sidebar-project-tree-row.droppable {
+  filter: brightness(1.2);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
 }
 
 .sidebar-project-tree-row.active:hover {

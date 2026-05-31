@@ -57,6 +57,16 @@ const snapshotsStore = useSnapshotsStore();
 const route = useRoute();
 const router = useRouter();
 
+// The multi-select (union/overlap) bar is shown at the grid's bottom edge
+// whenever more than one character or set is selected (mirrors ImageGrid's
+// isMultiCharacterView / isSetOverlapView). Used to lift the F1 shortcuts FAB
+// above that bar so it overlaps the visible grid, not the bar.
+const multiSelectBarShown = computed(
+  () =>
+    (selectionStore.selectedCharacterIds?.length ?? 0) > 1 ||
+    (selectionStore.selectedSetIds?.length ?? 0) > 1,
+);
+
 // --- Theme ---
 const theme = useTheme();
 
@@ -698,9 +708,21 @@ function pushRouteForCurrentSelection() {
   if (proj.projectViewMode === "project" && proj.selectedProjectId != null) {
     const projId = String(proj.selectedProjectId);
     if (sel.selectedSetIds.length > 0) {
+      const query = {};
+      if (sel.selectedSetIds.length > 1) {
+        query.ids = sel.selectedSetIds.join(",");
+        query.mode = sel.setMultiMode || "intersection";
+        if (
+          sel.setMultiMode === "difference" &&
+          sel.setDifferenceBaseId != null
+        ) {
+          query.base = String(sel.setDifferenceBaseId);
+        }
+      }
       pushAppRoute({
         name: "project-set",
         params: { projectId: projId, id: String(sel.selectedSetIds[0]) },
+        query,
       });
       return;
     }
@@ -709,9 +731,15 @@ function pushRouteForCurrentSelection() {
       sel.selectedCharacter !== ALL_PICTURES_ID &&
       sel.selectedCharacter !== SCRAPHEAP_PICTURES_ID
     ) {
+      const query = {};
+      if (sel.selectedCharacterIds.length > 1) {
+        query.ids = sel.selectedCharacterIds.join(",");
+        query.mode = sel.characterMultiMode || "union";
+      }
       pushAppRoute({
         name: "project-character",
         params: { projectId: projId, id: String(sel.selectedCharacter) },
+        query,
       });
       return;
     }
@@ -804,12 +832,19 @@ function applyRouteToStores() {
     const charId = Number.isFinite(charIdNum) ? charIdNum : String(charIdRaw);
     const idsRaw = query.ids;
     const modeRaw = query.mode;
+    // No ?ids= query → fall back to the single route character (when it is a
+    // real character, id > 0), mirroring the set branch. Falling back to []
+    // here would clear selectedCharacterIds after a single select, so the
+    // next Ctrl/Cmd-click would see an empty multi-set and never accumulate
+    // (this is why multi-select worked for sets but not characters).
     const ids = idsRaw
       ? String(idsRaw)
           .split(",")
           .map(Number)
           .filter((id) => Number.isFinite(id) && id > 0)
-      : [];
+      : Number.isFinite(charIdNum) && charIdNum > 0
+        ? [charIdNum]
+        : [];
     selectionStore.selectedFolderFilter = null;
     selectionStore.selectedSet = null;
     if (selectionStore.selectedSetIds.length > 0)
@@ -894,6 +929,21 @@ function applyRouteToStores() {
     const charIdRaw = params.id || ALL_PICTURES_ID;
     const charIdNum = Number(charIdRaw);
     const charId = Number.isFinite(charIdNum) ? charIdNum : String(charIdRaw);
+    // Parse the multi-selection from the query (mirrors the global character
+    // branch); fall back to the single route character so a single select in
+    // project mode does not clear selectedCharacterIds — which previously made
+    // the next Ctrl/Cmd-click restart from empty (multi-select never worked in
+    // the project tab).
+    const idsRaw = query.ids;
+    const modeRaw = query.mode;
+    const ids = idsRaw
+      ? String(idsRaw)
+          .split(",")
+          .map(Number)
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : Number.isFinite(charIdNum) && charIdNum > 0
+        ? [charIdNum]
+        : [];
     projectStore.projectViewMode = "project";
     projectStore.selectedProjectId =
       Number.isFinite(projectId) && projectId > 0 ? projectId : null;
@@ -903,11 +953,25 @@ function applyRouteToStores() {
       selectionStore.selectedSetIds = [];
     if (String(selectionStore.selectedCharacter) !== String(charId))
       selectionStore.selectedCharacter = charId;
-    if (selectionStore.selectedCharacterIds.length > 0)
-      selectionStore.selectedCharacterIds = [];
+    if (!_sameNumIds(selectionStore.selectedCharacterIds, ids))
+      selectionStore.selectedCharacterIds = ids;
+    if (ids.length > 1 && modeRaw) {
+      selectionStore.characterMultiMode = String(modeRaw);
+    }
   } else if (name === "project-set") {
     const projectId = Number(params.projectId);
     const setId = Number(params.id);
+    const idsRaw = query.ids;
+    const modeRaw = query.mode;
+    const baseRaw = query.base;
+    const ids = idsRaw
+      ? String(idsRaw)
+          .split(",")
+          .map(Number)
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : Number.isFinite(setId) && setId > 0
+        ? [setId]
+        : [];
     projectStore.projectViewMode = "project";
     projectStore.selectedProjectId =
       Number.isFinite(projectId) && projectId > 0 ? projectId : null;
@@ -915,11 +979,20 @@ function applyRouteToStores() {
     selectionStore.selectedCharacter = null;
     if (selectionStore.selectedCharacterIds.length > 0)
       selectionStore.selectedCharacterIds = [];
-    const nextSet = Number.isFinite(setId) && setId > 0 ? setId : null;
+    const nextSet = ids[0] ?? null;
     if (selectionStore.selectedSet !== nextSet)
       selectionStore.selectedSet = nextSet;
-    if (!_sameNumIds(selectionStore.selectedSetIds, nextSet ? [nextSet] : []))
-      selectionStore.selectedSetIds = nextSet ? [nextSet] : [];
+    if (!_sameNumIds(selectionStore.selectedSetIds, ids))
+      selectionStore.selectedSetIds = ids;
+    if (ids.length > 1 && modeRaw) {
+      selectionStore.setMultiMode = String(modeRaw);
+    }
+    if (ids.length > 1 && baseRaw) {
+      const baseId = Number(baseRaw);
+      if (Number.isFinite(baseId) && baseId > 0) {
+        selectionStore.setDifferenceBaseId = baseId;
+      }
+    }
     selectionStore.lastSelectedCharacterLabel = "All Pictures";
   } else if (name === "ref-folder" || name === "import-folder") {
     // Folder routes — clear all other selection state. The sidebar will emit
@@ -947,23 +1020,26 @@ async function handleUpdateSearchQuery(value) {
   searchStore.addToSearchHistory(nextQuery);
 }
 
+// Stateless sidebar tabs: switching the Global ↔ Project mode (or the
+// project picker) must not navigate or change the grid — the route is the
+// single source of truth. These handlers therefore only mirror the value
+// into the store (used for sidebar scoping); they never push a route.
+// Grid navigation happens via explicit entry clicks (handleViewProject,
+// handleSelectCharacter, handleSelectSet, handleSelectFolder).
 function handleUpdateProjectViewMode(mode) {
   projectStore.projectViewMode = mode;
-  if (mode === "global") {
-    pushAppRoute({ name: "all-pictures" });
-  } else if (mode === "project" && projectStore.selectedProjectId != null) {
-    pushAppRoute({
-      name: "project",
-      params: { id: String(projectStore.selectedProjectId) },
-    });
-  }
 }
 
 function handleUpdateSelectedProjectId(id) {
   projectStore.selectedProjectId = id;
-  if (projectStore.projectViewMode === "project" && id != null) {
-    pushAppRoute({ name: "project", params: { id: String(id) } });
-  }
+}
+
+// Explicit "view this project" entry click → navigate. applyRouteToStores
+// (watching the route) sets projectViewMode/selectedProjectId from the URL,
+// which scopes the grid to the project.
+function handleViewProject(id) {
+  if (id == null) return;
+  pushAppRoute({ name: "project", params: { id: String(id) } });
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
@@ -1782,6 +1858,7 @@ defineExpose({
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
             @update:project-view-mode="handleUpdateProjectViewMode"
             @update:selected-project-id="handleUpdateSelectedProjectId"
+            @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
@@ -2106,6 +2183,10 @@ defineExpose({
     <button
       v-show="userPrefsStore.showKeyboardHint"
       class="shortcuts-fab"
+      :class="{
+        'shortcuts-fab--above-bar': multiSelectBarShown,
+        'shortcuts-fab--stats-open': sidebarStore.statsOpen,
+      }"
       type="button"
       title="Keyboard shortcuts (F1)"
       @click="shortcutsDialogOpen = true"
