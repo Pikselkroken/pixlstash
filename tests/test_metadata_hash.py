@@ -16,9 +16,17 @@ import tempfile
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import delete
+from sqlmodel import delete, select
 
-from pixlstash.db_models import Character, Face, Picture
+from pixlstash.db_models import (
+    Character,
+    Face,
+    Picture,
+    PictureProjectMember,
+    PictureSet,
+    PictureSetMember,
+    Project,
+)
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
@@ -41,6 +49,10 @@ def clean_db(server):
         session.exec(delete(Snapshot))
         session.exec(delete(Tag))
         session.exec(delete(Face))
+        session.exec(delete(PictureSetMember))
+        session.exec(delete(PictureProjectMember))
+        session.exec(delete(PictureSet))
+        session.exec(delete(Project))
         session.exec(delete(Character))
         session.exec(delete(Picture))
         session.exec(text("PRAGMA foreign_keys = ON"))
@@ -112,6 +124,69 @@ def test_tag_addition_changes_hash(server):
     assert after != initial, (
         f"Tag add must change metadata_hash; got identical "
         f"before={initial!r} after={after!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Set / project membership: SHOULD change the hash — a full restore reverts
+# membership, so the preview / identical-state detection must see it.
+# ---------------------------------------------------------------------------
+
+
+def test_set_membership_change_changes_hash(server):
+    pic = _add_picture(server)
+    initial = _hash_of(server, pic.id)
+    assert initial is not None
+
+    def _add_to_set(session):
+        s = PictureSet(name="myset")
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+        session.add(PictureSetMember(set_id=s.id, picture_id=pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_add_to_set)
+    after = _hash_of(server, pic.id)
+    assert after != initial, (
+        f"Adding a picture to a set must change its metadata_hash; "
+        f"got identical before={initial!r} after={after!r}"
+    )
+
+    # Removing it again must return to the original hash (deterministic). Use
+    # an ORM delete — like the real routes — so the after-flush hook fires
+    # (a Core bulk delete bypasses the unit-of-work and would not recompute).
+    def _remove(session):
+        m = session.exec(
+            select(PictureSetMember).where(PictureSetMember.picture_id == pic.id)
+        ).first()
+        session.delete(m)
+        session.commit()
+
+    server.vault.db.run_task(_remove)
+    assert _hash_of(server, pic.id) == initial, (
+        "Removing the set membership must restore the original hash"
+    )
+
+
+def test_project_membership_change_changes_hash(server):
+    pic = _add_picture(server)
+    initial = _hash_of(server, pic.id)
+    assert initial is not None
+
+    def _add_to_project(session):
+        proj = Project(name="myproject")
+        session.add(proj)
+        session.commit()
+        session.refresh(proj)
+        session.add(PictureProjectMember(project_id=proj.id, picture_id=pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_add_to_project)
+    after = _hash_of(server, pic.id)
+    assert after != initial, (
+        f"Adding a picture to a project must change its metadata_hash; "
+        f"got identical before={initial!r} after={after!r}"
     )
 
 

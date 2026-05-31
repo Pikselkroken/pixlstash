@@ -16,6 +16,7 @@ has to be held in memory.
 """
 
 import os
+import shutil
 
 import zstandard
 
@@ -37,6 +38,34 @@ _COMPRESSION_LEVEL = 3
 
 # Chunk size for streaming copy_stream (1 MiB).
 _CHUNK_SIZE = 1 << 20
+
+
+# Scratch subdirectory (under the vault's snapshots dir) for the full,
+# uncompressed DB written during snapshot creation and decompressed during
+# restore/preview.
+_SCRATCH_DIRNAME = ".tmp"
+
+
+def snapshot_scratch_dir(vault_root: str) -> str:
+    """Return (creating if needed) the on-vault scratch dir for snapshot work.
+
+    The scratch ``.sqlite`` is the **full** vault DB — now that embeddings are
+    retained it can be hundreds of MB to several GB. Keeping it on the vault
+    filesystem rather than the system ``/tmp`` avoids ENOSPC / RAM blow-ups when
+    ``/tmp`` is a small tmpfs or root partition, which is exactly the failure
+    mode on the large, embedding-heavy vaults this feature targets. The
+    snapshots dir is already excluded from the orphan-file scanner, so the
+    scratch dir under it is ignored too.
+
+    Args:
+        vault_root: The vault image root.
+
+    Returns:
+        Absolute path to ``<vault_root>/snapshots/.tmp``.
+    """
+    path = os.path.join(vault_root, "snapshots", _SCRATCH_DIRNAME)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def is_compressed(path: str) -> bool:
@@ -123,6 +152,4 @@ def materialize_snapshot(src_path: str, dst_sqlite_path: str) -> None:
     if is_compressed(src_path):
         decompress_snapshot(src_path, dst_sqlite_path)
     else:
-        import shutil
-
         shutil.copy2(src_path, dst_sqlite_path)

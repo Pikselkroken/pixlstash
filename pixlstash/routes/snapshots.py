@@ -88,6 +88,7 @@ class RestoreReportResponse(BaseModel):
     resource_type: Optional[str] = None
     resource_id: Optional[int] = None
     missing_files_count: Optional[int] = None
+    permanently_deleted_count: Optional[int] = None
     upserted_count: Optional[int] = None
     errors: Optional[Any] = None
     dry_run: Optional[bool] = None
@@ -478,6 +479,7 @@ def create_router(server) -> APIRouter:
             "snapshot_id": report.snapshot_id,
             "resource_type": report.resource_type,
             "missing_files_count": report.missing_files_count,
+            "permanently_deleted_count": report.permanently_deleted_count,
             "upserted_count": report.upserted_count,
             "errors": report.errors,
             "dry_run": dry_run,
@@ -542,6 +544,7 @@ def create_router(server) -> APIRouter:
             "snapshot_id": report.snapshot_id,
             "resource_type": report.resource_type,
             "missing_files_count": report.missing_files_count,
+            "permanently_deleted_count": report.permanently_deleted_count,
             "upserted_count": report.upserted_count,
             "errors": report.errors,
         }
@@ -662,6 +665,7 @@ def create_router(server) -> APIRouter:
             "resource_type": report.resource_type,
             "resource_id": report.resource_id,
             "missing_files_count": report.missing_files_count,
+            "permanently_deleted_count": report.permanently_deleted_count,
             "upserted_count": report.upserted_count,
             "errors": report.errors,
         }

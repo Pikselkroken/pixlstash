@@ -23,6 +23,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.snapshot_compression import (
     COMPRESSED_SUFFIX,
     compress_snapshot,
+    snapshot_scratch_dir,
 )
 
 if TYPE_CHECKING:
@@ -127,7 +128,9 @@ class SnapshotService:
             # carrying them affordable (~3x smaller) so a restore no longer
             # triggers a full re-embedding / re-detection pass. Only the .zst
             # is retained; the scratch file is always removed.
-            tmp_dir = tempfile.mkdtemp(prefix="pixlstash_snapshot_")
+            tmp_dir = tempfile.mkdtemp(
+                prefix="pixlstash_snapshot_", dir=snapshot_scratch_dir(vault_root)
+            )
             tmp_sqlite = os.path.join(tmp_dir, "snapshot.sqlite")
             try:
                 self._vacuum_into(tmp_sqlite)

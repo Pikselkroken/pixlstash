@@ -1753,3 +1753,28 @@ def test_preview_full_classifies_recreate_and_delete(server):
     assert p_gone.id in by_id and by_id[p_gone.id].exists_in_snapshot
     assert p_new.id in by_id and by_id[p_new.id].exists_in_live
     assert p_new.id in by_id and not by_id[p_new.id].exists_in_snapshot
+
+
+def test_preview_full_detects_set_membership_change(server):
+    """A picture whose only post-snapshot change is set membership must still
+    surface as changed — membership is folded into metadata_hash, so the
+    preview no longer reports it as unchanged."""
+    _create_file(server, "memb.jpg")
+    pic = _add_picture(server, filename="memb.jpg", description="same")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot, move the picture into a new set (no column/tag change).
+    def _add_to_set(session):
+        s = PictureSet(name="after-set")
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+        session.add(PictureSetMember(set_id=s.id, picture_id=pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_add_to_set)
+
+    preview = server.vault.restore_service.preview_full(cp.id)
+    assert preview.summary["pictures_to_revert"] == 1, preview.summary
+    assert preview.summary["pictures_unchanged"] == 0, preview.summary
+    assert pic.id in {r.id for r in preview.resources}

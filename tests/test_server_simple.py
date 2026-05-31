@@ -26,7 +26,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete
+from sqlmodel import Session, delete, select
 from sqlalchemy import text
 
 from pixlstash.db_models import (
@@ -285,6 +285,51 @@ def test_pictures_thumbnails(server):
     resp = client.post("/pictures/thumbnails", json={"ids": []})
     assert resp.status_code == 200
     assert isinstance(resp.json(), dict)
+
+
+def test_scrapheap_purge_logs_deleted_files(server):
+    """Purging the scrapheap records each removed file in deleted_file_log.
+
+    The log is how we know which files can no longer be restored (e.g. when
+    rolling a vault back to an older snapshot), so a permanent purge must
+    write one row per deleted file, with its content hash.
+    """
+    server.vault.import_default_data()
+    client = TestClient(server.api)
+
+    resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
+    assert resp.status_code == 200
+
+    def _first_picture(session: Session):
+        pic = session.exec(select(Picture)).first()
+        assert pic is not None, "No pictures imported"
+        return (pic.id, pic.file_path, pic.pixel_sha)
+
+    pic_id, file_path, pixel_sha = server.vault.db.run_task(_first_picture)
+    assert file_path, "Imported picture has no file_path"
+    abs_path = ImageUtils.resolve_picture_path(server.vault.image_root, file_path)
+    assert os.path.isfile(abs_path)
+
+    # Soft-delete into the scrapheap, then permanently purge it.
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    assert client.delete("/pictures/scrapheap").status_code == 200
+
+    # The row and the file on disk are gone...
+    assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
+    assert not os.path.isfile(abs_path)
+
+    # ...and a deleted_file_log row records what can no longer be restored.
+    def _fetch_logs(session: Session):
+        rows = session.exec(
+            select(DeletedFileLog).where(DeletedFileLog.file_path == file_path)
+        ).all()
+        return [(r.file_path, r.pixel_sha) for r in rows]
+
+    logs = server.vault.db.run_task(_fetch_logs)
+    assert len(logs) == 1, f"Expected exactly one log row, got {logs}"
+    assert logs[0] == (file_path, pixel_sha)
 
 
 def test_pictures_export(server):

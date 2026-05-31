@@ -23,6 +23,7 @@ from sqlalchemy import (
 
 from pixlstash.db_models import (
     Character,
+    DeletedFileLog,
     Face,
     Picture,
     PictureSet,
@@ -39,7 +40,11 @@ from pixlstash.db_models.picture_likeness import (
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.snapshot_compression import is_compressed, materialize_snapshot
+from pixlstash.utils.snapshot_compression import (
+    is_compressed,
+    materialize_snapshot,
+    snapshot_scratch_dir,
+)
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
@@ -135,6 +140,9 @@ class RestoreReport:
             restore).
         missing_files_count: Number of Picture rows skipped because their
             files were absent on disk.
+        permanently_deleted_count: Number of Picture rows skipped because
+            their file/content was recorded in ``deleted_file_log`` (a
+            permanent deletion that restore must never resurrect).
         upserted_count: Number of rows upserted (per-resource restores only).
         errors: Non-fatal error messages accumulated during the restore.
     """
@@ -143,6 +151,7 @@ class RestoreReport:
     resource_type: str
     resource_id: Optional[int] = None
     missing_files_count: int = 0
+    permanently_deleted_count: int = 0
     upserted_count: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -424,22 +433,44 @@ class RestoreService:
                 len(missing_ids),
             )
 
+        # 3a. Cross-check the snapshot against the permanent-deletion ledger.
+        #     Pictures whose file path or content hash is recorded in
+        #     deleted_file_log were intentionally, permanently deleted: they
+        #     must never be resurrected (even if the file somehow lingers on
+        #     disk), and they must not count toward the missing-file ratio
+        #     below — an intentional purge is not a mount failure.
+        deleted_paths, deleted_shas = self._load_deleted_file_index()
+        deleted_ids = self._find_permanently_deleted_ids(
+            upgraded_snapshot, deleted_paths, deleted_shas
+        )
+        report.permanently_deleted_count = len(deleted_ids)
+        if deleted_ids:
+            logger.info(
+                "RestoreService: %d snapshot picture(s) match the "
+                "permanent-deletion ledger; they will not be restored.",
+                len(deleted_ids),
+            )
+
         # Safety check: if a suspiciously large fraction of files are
         # flagged as missing, this is almost certainly a partial-mount
         # failure rather than legitimate deletions. Refuse to wipe
         # metadata for that many pictures unless the caller has
         # explicitly opted in to "I know my data looks wrong, proceed".
+        # Known permanent deletions are excluded — they are expected to be
+        # gone, so they never read as a mount failure.
         # Skipped when the snapshot is too small for the ratio to mean
         # anything (a one-picture snapshot whose file the user deleted
         # is legitimately 100% missing).
+        suspicious_missing = set(missing_ids) - deleted_ids
         if (
             total_pictures >= _MIN_PICTURES_FOR_MISSING_RATIO_CHECK
-            and len(missing_ids) / total_pictures > _MAX_MISSING_RATIO_FOR_CLEANUP
+            and len(suspicious_missing) / total_pictures
+            > _MAX_MISSING_RATIO_FOR_CLEANUP
             and not allow_without_safety
         ):
-            ratio_pct = 100.0 * len(missing_ids) / total_pictures
+            ratio_pct = 100.0 * len(suspicious_missing) / total_pictures
             raise RuntimeError(
-                f"{len(missing_ids)} of {total_pictures} pictures "
+                f"{len(suspicious_missing)} of {total_pictures} pictures "
                 f"({ratio_pct:.0f}%) are missing on disk — refusing to "
                 "overwrite the live DB and drop metadata for that many "
                 "pictures, this looks like a network mount issue. If you "
@@ -498,6 +529,28 @@ class RestoreService:
             ]
         )
 
+        # 3d. Capture the permanent-deletion ledger BEFORE the swap. Like the
+        #     Snapshot index, deleted_file_log lives inside the live DB, so the
+        #     file swap rolls it back to its snapshot-era contents — losing the
+        #     record of every file deleted since. We replay the live rows into
+        #     the swapped DB during cleanup so "what has been permanently
+        #     deleted (and is therefore unrestorable)" survives the restore.
+        live_deleted_log = self._vault.db.run_immediate_read_task(
+            lambda s: [
+                {
+                    "file_path": r.file_path,
+                    "pixel_sha": r.pixel_sha,
+                    "deleted_at": r.deleted_at,
+                }
+                for r in s.exec(select(DeletedFileLog)).all()
+            ]
+        )
+
+        # Rows to drop after the swap: files missing on disk PLUS any picture
+        # matched against the permanent-deletion ledger (the latter may still
+        # be on disk, so it would otherwise survive the swap).
+        drop_ids = sorted(set(missing_ids) | deleted_ids)
+
         # 4. Pause background work, then route the DB swap through the writer
         #    queue so it is serialised with all other DB operations and no
         #    competing connection can hold a lock during the file swap.
@@ -530,13 +583,14 @@ class RestoreService:
             self._swap_database(live_db_path, upgraded_snapshot)
 
         def _post_restore_cleanup(session):
-            if missing_ids:
+            if drop_ids:
                 # Drop dependents explicitly in FK-safe order, then the
                 # pictures. SQLite FK CASCADE would normally take care of
                 # this, but doing it explicitly keeps the cleanup robust to
                 # relationship-config drift and prevents one failing ORM
                 # cascade from rolling back the entire post-restore task and
-                # silently leaving the missing-file rows behind.
+                # silently leaving the dropped rows behind. ``drop_ids``
+                # covers both missing-on-disk files and permanent deletions.
                 for child_model in (
                     Tag,
                     Face,
@@ -545,15 +599,18 @@ class RestoreService:
                 ):
                     session.execute(
                         sa_delete(child_model).where(
-                            child_model.picture_id.in_(missing_ids)
+                            child_model.picture_id.in_(drop_ids)
                         )
                     )
                 result = session.execute(
-                    sa_delete(Picture).where(Picture.id.in_(missing_ids))
+                    sa_delete(Picture).where(Picture.id.in_(drop_ids))
                 )
                 logger.info(
-                    "RestoreService: deleted %d missing-file picture rows.",
+                    "RestoreService: dropped %d picture row(s) after restore "
+                    "(%d missing-file, %d permanently deleted).",
                     result.rowcount,
+                    len(missing_ids),
+                    len(deleted_ids),
                 )
             # NOTE: derived columns (embeddings + scores) are NOT NULL-reset
             # here. Snapshots now carry these blobs, so the swapped-in DB
@@ -614,6 +671,29 @@ class RestoreService:
                     "RestoreService: re-inserted %d snapshot index row(s) "
                     "hidden by the DB swap (newer snapshots + safety snapshot).",
                     reinserted_snapshots,
+                )
+
+            # Replay the permanent-deletion ledger. The swapped-in DB only
+            # knows about files deleted up to the target snapshot's time;
+            # re-insert any live entry it is missing (deduped by file_path)
+            # so the record of permanently-deleted, unrestorable content is
+            # never lost by rolling back to an older snapshot.
+            existing_deleted_paths = set(
+                session.exec(select(DeletedFileLog.file_path)).all()
+            )
+            reinserted_deleted = 0
+            for entry in live_deleted_log:
+                if entry["file_path"] in existing_deleted_paths:
+                    continue
+                session.add(DeletedFileLog(**entry))
+                existing_deleted_paths.add(entry["file_path"])
+                reinserted_deleted += 1
+            if reinserted_deleted:
+                session.commit()
+                logger.info(
+                    "RestoreService: replayed %d permanent-deletion ledger "
+                    "row(s) hidden by the DB swap.",
+                    reinserted_deleted,
                 )
 
         # Steps 4-6 wrapped in try/finally so the planner always restarts —
@@ -729,13 +809,11 @@ class RestoreService:
                         confirm_restore_dependencies=confirm_restore_dependencies,
                     )
                 finally:
-                    try:
-                        os.remove(upgraded_snapshot)
-                    except Exception:
-                        logger.warning(
-                            "RestoreService: failed to remove temp upgraded snapshot: %s",
-                            upgraded_snapshot,
-                        )
+                    # Remove the whole mkdtemp dir, not just the file, so the
+                    # empty scratch directory isn't leaked.
+                    shutil.rmtree(
+                        os.path.dirname(upgraded_snapshot), ignore_errors=True
+                    )
 
                 self._emit_lifecycle(
                     EventType.RESTORE_COMPLETED,
@@ -1480,7 +1558,10 @@ class RestoreService:
         Returns:
             Path to the upgraded temp file, or None if the upgrade failed.
         """
-        tmp_dir = tempfile.mkdtemp(prefix="pixlstash_restore_")
+        tmp_dir = tempfile.mkdtemp(
+            prefix="pixlstash_restore_",
+            dir=snapshot_scratch_dir(self._vault.image_root),
+        )
         tmp_snapshot = os.path.join(tmp_dir, "snapshot.sqlite")
         try:
             with self._snapshot_file_lock(abs_snapshot):
@@ -1605,6 +1686,101 @@ class RestoreService:
                 exc_info=True,
             )
         return missing, total
+
+    def _load_deleted_file_index(self) -> tuple[set[str], set[str]]:
+        """Read the live ``deleted_file_log`` into (file_paths, pixel_shas).
+
+        These identify content the user has *permanently* deleted (see
+        ``DeletedFileLog``). Restore consults them so a snapshot taken before
+        the deletion can never resurrect that content, and so the missing-file
+        ratio safety check does not mistake an intentional purge for a
+        transient mount failure.
+
+        Returns:
+            ``(deleted_paths, deleted_shas)`` — vault-relative file paths and
+            content hashes recorded as permanently deleted.
+        """
+
+        def _load(session: Session) -> tuple[set[str], set[str]]:
+            rows = session.execute(
+                sa_select(DeletedFileLog.file_path, DeletedFileLog.pixel_sha)
+            ).all()
+            paths = {fp for fp, _ in rows if fp}
+            shas = {sha for _, sha in rows if sha}
+            return paths, shas
+
+        return self._vault.db.run_immediate_read_task(_load)
+
+    @staticmethod
+    def _match_deleted_picture_ids(
+        snap_session: Session,
+        deleted_paths: set[str],
+        deleted_shas: set[str],
+    ) -> set[int]:
+        """Return snapshot Picture IDs whose content is permanently deleted.
+
+        A snapshot row matches if its ``file_path`` or its ``pixel_sha`` is
+        present in the live deleted-file index. Matching on ``pixel_sha`` as
+        well as path catches content that was deleted and later re-added under
+        a different filename.
+
+        Args:
+            snap_session: Read session on the (upgraded) snapshot DB.
+            deleted_paths: Vault-relative paths recorded as permanently deleted.
+            deleted_shas: Content hashes recorded as permanently deleted.
+
+        Returns:
+            Set of snapshot Picture IDs that must not be restored.
+        """
+        if not deleted_paths and not deleted_shas:
+            return set()
+        matched: set[int] = set()
+        rows = snap_session.execute(
+            sa_select(Picture.id, Picture.file_path, Picture.pixel_sha)
+        ).all()
+        for pid, fp, sha in rows:
+            if (fp and fp in deleted_paths) or (sha and sha in deleted_shas):
+                matched.add(pid)
+        return matched
+
+    def _find_permanently_deleted_ids(
+        self, abs_snapshot: str, deleted_paths: set[str], deleted_shas: set[str]
+    ) -> set[int]:
+        """Scan the snapshot file for Picture rows in the deleted-file index.
+
+        Path-based wrapper around ``_match_deleted_picture_ids`` used by the
+        full restore (which works from the snapshot file rather than an open
+        session). Fails open: any read error returns an empty set so a restore
+        is never blocked by an unreadable ledger scan — the missing-file pass
+        still drops files that are absent on disk.
+
+        Args:
+            abs_snapshot: Absolute path to the (upgraded) snapshot DB.
+            deleted_paths: Vault-relative paths recorded as permanently deleted.
+            deleted_shas: Content hashes recorded as permanently deleted.
+
+        Returns:
+            Set of snapshot Picture IDs that must not be restored.
+        """
+        if not deleted_paths and not deleted_shas:
+            return set()
+        try:
+            engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            try:
+                with Session(engine) as session:
+                    return self._match_deleted_picture_ids(
+                        session, deleted_paths, deleted_shas
+                    )
+            finally:
+                engine.dispose()
+        except Exception as exc:
+            logger.error(
+                "RestoreService: failed to scan snapshot for permanently-deleted "
+                "pictures: %s",
+                exc,
+                exc_info=True,
+            )
+            return set()
 
     def _swap_database(self, live_db_path: str, new_db_path: str) -> None:
         """Replace the live SQLite file with *new_db_path*.
@@ -1767,6 +1943,33 @@ class RestoreService:
                             report.missing_files_count += 1
                             continue
                     valid_picture_ids.append(pid)
+
+                # Honor the permanent-deletion ledger: never resurrect a
+                # picture whose file or content hash was permanently deleted,
+                # even if its file still happens to be on disk. Filter here,
+                # before collecting rows, so the deleted pictures' parents are
+                # not pulled in either.
+                deleted_paths, deleted_shas = self._load_deleted_file_index()
+                if deleted_paths or deleted_shas:
+                    blocked = self._match_deleted_picture_ids(
+                        snap_session, deleted_paths, deleted_shas
+                    )
+                    if blocked:
+                        kept = [pid for pid in valid_picture_ids if pid not in blocked]
+                        skipped = len(valid_picture_ids) - len(kept)
+                        if skipped:
+                            report.permanently_deleted_count += skipped
+                            report.errors.append(
+                                f"Skipped {skipped} permanently-deleted "
+                                "picture(s); they cannot be restored."
+                            )
+                            logger.info(
+                                "RestoreService: skipping %d permanently-deleted "
+                                "picture(s) during %s restore.",
+                                skipped,
+                                resource_type,
+                            )
+                        valid_picture_ids = kept
 
                 # Collect all rows to upsert.
                 snap_rows = self._collect_rows_for_upsert(
@@ -2327,12 +2530,26 @@ class RestoreService:
                 "those rows will be removed after restore."
             )
 
+        # Permanent-deletion ledger: surface how many snapshot pictures will be
+        # withheld because their content was permanently deleted (these also
+        # appear under missing_files when their file is already gone from disk).
+        deleted_paths, deleted_shas = self._load_deleted_file_index()
+        permanently_deleted = len(
+            self._match_deleted_picture_ids(snap_session, deleted_paths, deleted_shas)
+        )
+        if permanently_deleted:
+            preview.warnings.append(
+                f"{permanently_deleted} picture(s) in this snapshot were "
+                "permanently deleted and will not be restored."
+            )
+
         preview.summary = {
             "pictures_to_revert": pictures_to_revert,
             "pictures_to_recreate": pictures_to_recreate,
             "pictures_to_delete": pictures_to_delete,
             "pictures_unchanged": pictures_unchanged,
             "missing_files": missing_files,
+            "permanently_deleted": permanently_deleted,
         }
 
     def _annotate_shown_revert_tags(self, snap_session: Session, shown_reverts: list):
@@ -2420,6 +2637,14 @@ class RestoreService:
                 if not file_ok:
                     preview.warnings.append(
                         f"Picture id={resource_id} file missing on disk."
+                    )
+                deleted_paths, deleted_shas = self._load_deleted_file_index()
+                if (snap_pic.file_path and snap_pic.file_path in deleted_paths) or (
+                    snap_pic.pixel_sha and snap_pic.pixel_sha in deleted_shas
+                ):
+                    preview.warnings.append(
+                        f"Picture id={resource_id} was permanently deleted and "
+                        "will not be restored."
                     )
                 exists_in_live = self._vault.db.run_immediate_read_task(
                     lambda session: session.get(Picture, resource_id) is not None
