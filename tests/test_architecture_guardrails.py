@@ -9,6 +9,7 @@ codebase migrates.
 import ast
 import re
 import tempfile
+import warnings
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -222,9 +223,14 @@ def test_finder_dependencies_resolve_to_registered_finders():
             assert task_type in finders_dict, (
                 f"depends_on() references {task_type!r} but no finder is registered for it"
             )
-    except Exception:
-        # If we can't instantiate finders (e.g. missing DB), skip the runtime check.
-        pass
+    except Exception as exc:
+        # If we can't instantiate finders (e.g. missing DB), skip the runtime
+        # check — but surface why, so a silently broken setup is visible in the
+        # test warning summary rather than passing unnoticed.
+        warnings.warn(
+            f"Skipped runtime finder-resolution check: {exc!r}",
+            stacklevel=2,
+        )
 
 
 # ---------------------------------------------------------------------------

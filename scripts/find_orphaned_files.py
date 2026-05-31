@@ -187,8 +187,14 @@ def main() -> None:
     for path in orphans:
         try:
             total_bytes += os.path.getsize(path)
-        except OSError:
-            pass
+        except OSError as exc:
+            # File vanished or is unreadable between scan and sizing; it's
+            # still reported as an orphan, only its bytes are omitted from
+            # the total. Warn so the discrepancy isn't silent.
+            print(
+                f"  ! could not size {path}, excluded from total: {exc}",
+                file=sys.stderr,
+            )
         by_kind.setdefault(_classify(path), []).append(path)
 
     print(
