@@ -482,6 +482,33 @@ class RestoreService:
             ]
         )
 
+        # 3c. Capture the snapshot index BEFORE the swap. The ``Snapshot`` table
+        #     lives inside the live DB, so the file swap rolls it back to
+        #     whatever snapshots existed when the target snapshot was taken —
+        #     every newer snapshot (and the OPPORTUNISTIC safety snapshot taken
+        #     in step 1) would vanish from the list even though their .sqlite +
+        #     .manifest.json files are untouched on disk. We replay the missing
+        #     rows into the swapped DB during cleanup so restoring an older
+        #     snapshot never hides newer restore points — the user can always
+        #     roll forward again. The ``id`` is deliberately not captured: rows
+        #     are re-inserted with fresh autoincrement ids to avoid colliding
+        #     with the restored DB's own snapshot ids.
+        live_snapshots = self._vault.db.run_immediate_read_task(
+            lambda s: [
+                {
+                    "kind": r.kind,
+                    "created_at": r.created_at,
+                    "relative_path": r.relative_path,
+                    "manifest_relative_path": r.manifest_relative_path,
+                    "byte_size": r.byte_size,
+                    "picture_count": r.picture_count,
+                    "schema_version": r.schema_version,
+                    "label": r.label,
+                }
+                for r in s.exec(select(Snapshot)).all()
+            ]
+        )
+
         # 4. Pause background work, then route the DB swap through the writer
         #    queue so it is serialised with all other DB operations and no
         #    competing connection can hold a lock during the file swap.
@@ -569,6 +596,39 @@ class RestoreService:
             # frontier rows aren't double-inserted (it skips keys already
             # present in the table).
             PictureLikenessFrontier.ensure_all(session)
+
+            # Replay the pre-swap snapshot index. The restored DB only knows
+            # about snapshots that existed when the target snapshot was taken;
+            # re-insert any captured row whose file still exists on disk and
+            # isn't already present (deduped by relative_path). This brings the
+            # newer snapshots — and the safety snapshot from step 1 — back into
+            # the list so they remain valid restore points.
+            existing_snapshot_paths = set(
+                session.exec(select(Snapshot.relative_path)).all()
+            )
+            reinserted_snapshots = 0
+            for snap in live_snapshots:
+                if snap["relative_path"] in existing_snapshot_paths:
+                    continue
+                abs_snap = os.path.join(vault_root, snap["relative_path"])
+                if not os.path.exists(abs_snap):
+                    # File was pruned/deleted since capture — skip rather than
+                    # leave a dangling index row pointing at nothing.
+                    logger.warning(
+                        "RestoreService: snapshot file %s missing on disk; "
+                        "not re-inserting its index row after restore.",
+                        abs_snap,
+                    )
+                    continue
+                session.add(Snapshot(**snap))
+                reinserted_snapshots += 1
+            if reinserted_snapshots:
+                session.commit()
+                logger.info(
+                    "RestoreService: re-inserted %d snapshot index row(s) "
+                    "hidden by the DB swap (newer snapshots + safety snapshot).",
+                    reinserted_snapshots,
+                )
 
         # Steps 4-6 wrapped in try/finally so the planner always restarts —
         # if _do_swap or the cleanup raises, leaving the planner stopped

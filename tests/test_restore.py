@@ -1148,6 +1148,68 @@ def test_full_restore_preserves_live_likeness_queue_and_frontier(server):
 
 
 # ---------------------------------------------------------------------------
+# Full restore keeps newer snapshots in the index (roll-forward is possible)
+# ---------------------------------------------------------------------------
+
+
+def test_full_restore_preserves_newer_snapshots_in_index(server):
+    """Restoring an older snapshot must NOT hide newer ones.
+
+    The ``Snapshot`` table lives inside the live DB, so the file swap would
+    roll the snapshot index back to whatever snapshots existed when the
+    target was taken — and because ``VACUUM INTO`` copies the live DB *before*
+    a snapshot records its own row, an old snapshot's file doesn't even list
+    itself. Without the post-swap reconciliation the whole list would
+    disappear, stranding the user with no way to roll forward. The fix
+    re-inserts every captured snapshot whose file still exists on disk.
+    """
+    _create_file(server, "rollfwd.jpg")
+    pic = _add_picture(server, filename="rollfwd.jpg", description="state_a")
+
+    # Snapshot A — the older restore point.
+    cp_a = server.vault.snapshot_service.create_snapshot("MANUAL", label="A")
+
+    # Diverge, then take the newer snapshot C.
+    def _mutate(session):
+        session.get(Picture, pic.id).description = "state_c"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+    cp_c = server.vault.snapshot_service.create_snapshot("MANUAL", label="C")
+
+    # Restore the OLDER snapshot A.
+    report = server.vault.restore_service.restore_full(cp_a.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic.id).description == "state_a"
+
+    # The newer snapshot C must still be listed after the restore, keyed by
+    # its file path (ids are re-assigned on re-insert, so compare paths).
+    snapshots = server.vault.snapshot_service.list_snapshots()
+    listed_paths = {s.relative_path for s in snapshots}
+    assert cp_c.relative_path in listed_paths, (
+        "Newer snapshot C must remain in the index after restoring older "
+        f"snapshot A; listed paths: {listed_paths}"
+    )
+    assert cp_a.relative_path in listed_paths, (
+        f"The restored snapshot A must also remain listed; listed paths: {listed_paths}"
+    )
+    # The pre-restore safety snapshot (OPPORTUNISTIC) is preserved too.
+    assert any(s.kind == "OPPORTUNISTIC" for s in snapshots), (
+        f"Safety snapshot must survive the swap; got kinds "
+        f"{[s.kind for s in snapshots]}"
+    )
+
+    # Roll forward: restoring C again must bring back the newer state, proving
+    # the surviving index row is a usable restore point.
+    cp_c_live = next(s for s in snapshots if s.relative_path == cp_c.relative_path)
+    report_fwd = server.vault.restore_service.restore_full(cp_c_live.id)
+    assert not report_fwd.errors, f"Roll-forward errors: {report_fwd.errors}"
+    assert _get_picture(server, pic.id).description == "state_c", (
+        "Restoring the surviving newer snapshot must roll the state forward"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Missing-dependency restore — picture_set and project parents (issue #1)
 # ---------------------------------------------------------------------------
 
