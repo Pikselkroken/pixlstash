@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+from contextlib import closing
 
 import pytest
 from sqlalchemy import text
@@ -560,7 +561,7 @@ def test_upgrade_snapshot_schema_runs_alembic_on_old_snapshot(server):
 
     # Strip the metadata_hash column AND back-date alembic_version to before
     # the migration that added it (0049_snapshots → previous head 0048).
-    with sqlite3.connect(abs_snapshot) as conn:
+    with closing(sqlite3.connect(abs_snapshot)) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(picture)").fetchall()}
         assert "metadata_hash" in cols, (
             "Pre-test invariant: current schema has metadata_hash"
@@ -697,7 +698,7 @@ def test_compare_hashes_backfills_null_live_and_returns_identical(server):
     import sqlite3
 
     abs_snapshot = os.path.join(server.vault.image_root, cp.relative_path)
-    with sqlite3.connect(abs_snapshot) as conn:
+    with closing(sqlite3.connect(abs_snapshot)) as conn:
         conn.execute("UPDATE picture SET metadata_hash = NULL")
         conn.commit()
 

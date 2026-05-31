@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+from contextlib import closing
 
 import pytest
 from sqlalchemy import text
@@ -363,7 +364,7 @@ def test_create_snapshot_strips_regenerable_picture_columns(server):
     snap_path = os.path.join(server.vault.image_root, cp.relative_path)
     assert os.path.isfile(snap_path)
 
-    with sqlite3.connect(snap_path) as conn:
+    with closing(sqlite3.connect(snap_path)) as conn:
         row = conn.execute(
             "SELECT description, text_embedding, image_embedding, "
             "smart_score, text_score, aesthetic_score "
@@ -414,7 +415,7 @@ def test_create_snapshot_drops_likeness_pipeline_tables(server):
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
     snap_path = os.path.join(server.vault.image_root, cp.relative_path)
 
-    with sqlite3.connect(snap_path) as conn:
+    with closing(sqlite3.connect(snap_path)) as conn:
         likeness_n = conn.execute("SELECT COUNT(*) FROM picturelikeness").fetchone()[0]
         queue_n = conn.execute("SELECT COUNT(*) FROM picturelikenessqueue").fetchone()[
             0
