@@ -86,7 +86,8 @@ RUN pip install --no-cache-dir \
     python-dotenv \
     click \
     accelerate \
-    bitsandbytes
+    bitsandbytes \
+    zstandard
 
 # Download spaCy English model
 RUN python -m spacy download en_core_web_sm

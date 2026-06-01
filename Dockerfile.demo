@@ -93,7 +93,8 @@ RUN pip install --no-cache-dir \
     python-dotenv \
     click \
     accelerate \
-    bitsandbytes
+    bitsandbytes \
+    zstandard
 
 RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*
 
