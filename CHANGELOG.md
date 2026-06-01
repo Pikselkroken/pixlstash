@@ -1,3 +1,8 @@
+# [1.5.0]
+- Snapshot and restore
+- Breadcrumb navigation
+- Drag characters and sets between projects
+
 # [1.5.0rc2] [Security:High]
 - Fix unauthorised and unscoped access to web sockets
 
