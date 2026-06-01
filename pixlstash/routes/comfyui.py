@@ -1058,16 +1058,26 @@ def create_router(server) -> APIRouter:
 
     @router.websocket("/ws/comfyui")
     async def comfyui_progress_proxy(websocket: WebSocket):
+        # The HTTP auth middleware does not cover WebSockets. Require an
+        # authenticated OWNER before accepting — running ComfyUI is an owner
+        # operation. Without this, an unauthenticated (or merely resource-
+        # scoped) client would get a WebSocket proxy to the internal ComfyUI
+        # service via the DEFAULT_COMFYUI_URL fallback. Also reject cross-site
+        # handshakes (CSWSH).
+        if not server.auth.is_websocket_origin_allowed(
+            websocket, server.allow_origins, server.allow_origin_regex
+        ):
+            await websocket.close(code=1008)
+            return
+        ws_auth = server.auth.authenticate_websocket(websocket)
+        if ws_auth is None or not ws_auth.is_owner:
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
-        session_id = websocket.cookies.get("session_id")
-        user = None
-        if session_id:
-            user_id = server.auth.active_session_ids.get(session_id)
-            if user_id is not None:
-                user = server.vault.db.run_task(
-                    lambda session: session.get(User, user_id),
-                    priority=DBPriority.IMMEDIATE,
-                )
+        user = server.vault.db.run_task(
+            lambda session: session.get(User, ws_auth.user_id),
+            priority=DBPriority.IMMEDIATE,
+        )
 
         comfyui_url = getattr(user, "comfyui_url", None) if user else None
         comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")

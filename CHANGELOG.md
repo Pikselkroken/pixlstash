@@ -1,3 +1,6 @@
+# [1.4.2] [Security:High]
+- Fix unauthenticated web socket exposure
+
 # [1.4.1]
 - Bump axios package in frontend due to a vulnerability [Security:Low]
 

@@ -13,6 +13,7 @@ import { useRoute, useRouter } from "vue-router";
 import {
   apiClient,
   API_BASE_URL,
+  appendShareToken,
   isReadOnly,
   sessionContext,
 } from "./utils/apiClient";
@@ -161,7 +162,11 @@ const activeCategoryLabel = computed(() => {
 function buildUpdatesSocketUrl() {
   if (!BACKEND_URL) return "";
   const wsBase = BACKEND_URL.replace(/^http/i, "ws");
-  return `${wsBase}/ws/updates`;
+  // The backend authenticates the WebSocket handshake (the HTTP auth
+  // middleware does not cover WebSockets). A full session authenticates via
+  // the same-origin session cookie; a share/read-only session has no cookie,
+  // so append its READ token as ?token= the same way HTTP requests do.
+  return appendShareToken(`${wsBase}/ws/updates`);
 }
 
 function shouldRefreshForPictureChange() {
