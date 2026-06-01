@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -164,6 +165,22 @@ class TokenScope:
     expires_at: Optional[datetime]
     include_attachments: bool = False
     watermark: bool = False
+
+
+@dataclass(frozen=True)
+class WebSocketAuth:
+    """Result of authenticating a WebSocket handshake.
+
+    Attributes:
+        user_id: The authenticated owner user id.
+        is_owner: True for a cookie session or an ALL-scope token with no
+            resource restriction; False for a resource-scoped / READ token,
+            which authenticates the connection but is not entitled to the
+            owner-level global event stream.
+    """
+
+    user_id: int
+    is_owner: bool
 
 
 class AuthService:
@@ -546,6 +563,94 @@ class AuthService:
         if matched_token is not None and matched_token.resource_type is not None:
             raise HTTPException(status_code=403, detail=detail)
         return user_id
+
+    # ------------------------------------------------------------------
+    # WebSocket authentication
+    #
+    # The HTTP auth middleware only runs for the ``http`` ASGI scope, so
+    # WebSocket routes are NOT covered by it and must authenticate themselves
+    # *before* calling ``websocket.accept()``. These helpers mirror the HTTP
+    # rules and additionally guard against cross-site WebSocket hijacking
+    # (CSWSH), which the auth check alone cannot stop because the browser
+    # auto-attaches the victim's session cookie to a cross-site handshake.
+    # ------------------------------------------------------------------
+
+    def authenticate_websocket(self, websocket) -> "Optional[WebSocketAuth]":
+        """Authenticate a WebSocket handshake. Call BEFORE ``accept()``.
+
+        Mirrors the HTTP authentication paths: a cookie session is a full
+        owner; a ``?token=`` query param is honoured only for READ scope
+        (ALL-scope tokens must never appear in URLs); a ``Bearer`` header is
+        honoured for any scope.
+
+        Args:
+            websocket: The incoming Starlette/FastAPI ``WebSocket``.
+
+        Returns:
+            A ``WebSocketAuth(user_id, is_owner)`` — ``is_owner`` is True for a
+            cookie session or an ALL-scope token with no resource restriction —
+            or ``None`` if the connection is unauthenticated.
+        """
+        # Cookie session — full owner (the browser SPA sends this on the
+        # handshake, same-origin).
+        session_id = websocket.cookies.get("session_id")
+        if session_id:
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is not None:
+                return WebSocketAuth(user_id=user_id, is_owner=True)
+
+        matched: Optional[UserToken] = None
+        # Bearer token (non-browser clients can set this header).
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            matched = self._token_from_value(auth_header[len("Bearer ") :])
+        # ?token= query param — READ scope only, mirroring _token_from_query_param.
+        if matched is None:
+            token_value = websocket.query_params.get("token")
+            if token_value:
+                candidate = self._token_from_value(token_value)
+                if candidate is not None and candidate.scope == "READ":
+                    matched = candidate
+
+        if matched is not None:
+            user = self.get_user()
+            if user is not None:
+                is_owner = matched.scope == "ALL" and matched.resource_type is None
+                return WebSocketAuth(user_id=user.id, is_owner=is_owner)
+        return None
+
+    def is_websocket_origin_allowed(
+        self, websocket, allow_origins, allow_origin_regex
+    ) -> bool:
+        """Reject cross-site WebSocket handshakes (CSWSH).
+
+        Browsers always send an ``Origin`` on a WS handshake, so a present
+        Origin that is neither same-origin nor in the configured CORS allow
+        list is a cross-site attempt and is refused. A missing Origin
+        (non-browser client) is allowed through to the auth check, which still
+        gates access.
+
+        Args:
+            websocket: The incoming ``WebSocket``.
+            allow_origins: List of explicitly-allowed origins (CORS policy).
+            allow_origin_regex: Optional regex of allowed origins.
+
+        Returns:
+            True if the handshake's Origin is acceptable.
+        """
+        origin = websocket.headers.get("origin")
+        if not origin:
+            return True
+        # Same-origin: the Origin's host:port equals the Host the handshake
+        # targeted (covers the normal SPA case regardless of CORS config).
+        host = websocket.headers.get("host")
+        if host and urlparse(origin).netloc == host:
+            return True
+        if origin in (allow_origins or []):
+            return True
+        if allow_origin_regex and re.match(allow_origin_regex, origin):
+            return True
+        return False
 
     def get_user_for_request(self, request: Request) -> User:
         user_id = self.require_user_id(request)

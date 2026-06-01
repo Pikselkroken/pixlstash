@@ -1161,10 +1161,17 @@ class Server:
         stale = []
         for client in clients:
             ws = client.get("ws")
-            filters = client.get("filters") or {}
             if not ws:
                 stale.append(client)
                 continue
+            # The global vault-activity stream is owner-level. A resource-scoped
+            # / READ token authenticates the connection but is not entitled to
+            # it, so it receives no events (we never deliver vault-wide activity
+            # outside a token's grant). Per-resource scoped delivery, if ever
+            # wanted, would be an additive change here.
+            if not client.get("owner"):
+                continue
+            filters = client.get("filters") or {}
             if not self._should_send_ws_update(event_type, filters):
                 continue
             try:
@@ -1815,12 +1822,30 @@ class Server:
 
         @self.api.websocket(f"{API_V1_PREFIX}/ws/updates")
         async def websocket_updates(websocket: WebSocket):
+            # The HTTP auth middleware does not run for WebSocket connections,
+            # so authenticate here BEFORE accepting. Without this, any reachable
+            # client — including a cross-site page via CSWSH, since the browser
+            # auto-attaches the session cookie to the handshake — could
+            # subscribe to live vault activity.
+            if not self.auth.is_websocket_origin_allowed(
+                websocket, self.allow_origins, self.allow_origin_regex
+            ):
+                await websocket.close(code=1008)
+                return
+            ws_auth = self.auth.authenticate_websocket(websocket)
+            if ws_auth is None:
+                await websocket.close(code=1008)
+                return
             await websocket.accept()
             # Always refresh _ws_loop so it tracks the currently-running event loop.
             # In production (uvicorn) this is always the same loop; in tests each
             # WebSocket session may run on a different loop than HTTP requests.
             self._ws_loop = asyncio.get_running_loop()
-            client = {"ws": websocket, "filters": {}}
+            # Only owner-level connections receive the global vault-activity
+            # stream. A resource-scoped / READ token may connect (authenticated)
+            # but is never sent events outside its grant — see
+            # ``_broadcast_ws_event``.
+            client = {"ws": websocket, "filters": {}, "owner": ws_auth.is_owner}
             with self._ws_clients_lock:
                 self._ws_clients.append(client)
             try:

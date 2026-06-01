@@ -1,3 +1,12 @@
+# [1.5.0rc2] [Security:High]
+- Fix unauthorised and unscoped access to web sockets
+
+# [1.5.0rc1]
+- Introduce snapshots and restore functionality
+- Breadcrump navigation
+- Drag characters and sets between projects
+- Stacking bug fixes
+
 # [1.4.1]
 - Bump axios package in frontend due to a vulnerability [Security:Low]
 
