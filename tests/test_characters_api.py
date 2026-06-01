@@ -367,3 +367,28 @@ def test_moving_character_keeps_pictures_shared_with_another_character_in_old_pr
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_batch_character_membership_returns_assignments():
+    """POST /characters/membership must return a 200 with the picture's character
+    assignment. Regression: the handler built character_assignments with integer
+    keys while CharacterMembershipResponse declares dict[str, list[int]]; pydantic
+    v2 rejected the int keys, the response 500'd, and the AddToCharacter menu
+    received no membership data (every character shown unchecked)."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _import_one_picture(client)
+        char_id = client.post("/characters", json={"name": "Member"}).json()[
+            "character"
+        ]["id"]
+        _link_face(server, pic_id, char_id)
+
+        resp = client.post("/characters/membership", json={"picture_ids": [pic_id]})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["character_assignments"] == {str(char_id): [pic_id]}
+        assert data["pictures_with_faces"] == [pic_id]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()

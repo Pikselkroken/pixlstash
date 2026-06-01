@@ -212,7 +212,7 @@ class CharacterMembershipResponse(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    character_assignments: dict[str, list[int]] = {}
+    character_assignments: dict[int, list[int]] = {}
     pictures_with_faces: list[int] = []
 
 
