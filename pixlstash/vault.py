@@ -634,6 +634,8 @@ class Vault:
         Returns:
             Optional[np.ndarray]: Generated text embedding or None if failed.
         """
+        if self._engine is None:
+            return None
         embedding = self._engine.text_embedding_workflow.encode_query(query)
         return embedding[0] if embedding is not None and len(embedding) > 0 else None
 
@@ -641,6 +643,8 @@ class Vault:
         """
         Generate a CLIP text embedding for the provided query text.
         """
+        if self._engine is None:
+            return None
         return self._engine.text_embedding_workflow.encode_clip_query(query)
 
     def set_description(self, description: str):
