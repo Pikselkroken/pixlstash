@@ -385,12 +385,27 @@ watch(maxVramGbValue, () => {
   <v-divider class="settings-section-divider" />
   <div class="settings-section">
     <div class="settings-section-title">Updates</div>
-    <v-checkbox
-      v-model="checkForUpdatesModel"
-      density="compact"
-      hide-details
-      label="Check for updates automatically (anonymous count only)"
-    />
+    <v-checkbox v-model="checkForUpdatesModel" density="compact" hide-details>
+      <template #label>
+        Check for updates automatically
+        <v-tooltip
+          text="Checks once a day and shows a sidebar notice when a new version is out, including security fixes you'll want soon. The check sends only your app version and install type (e.g. pip or docker), anonymously. Turn it off here any time."
+          location="top"
+          max-width="320"
+        >
+          <template #activator="{ props: tooltipProps }">
+            <v-icon
+              v-bind="tooltipProps"
+              size="14"
+              class="ml-1"
+              tabindex="0"
+              aria-label="About automatic update checks"
+              >mdi-information-outline</v-icon
+            >
+          </template>
+        </v-tooltip>
+      </template>
+    </v-checkbox>
   </div>
   <v-divider class="settings-section-divider" />
   <div class="settings-section">

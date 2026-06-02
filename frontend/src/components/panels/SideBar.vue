@@ -88,7 +88,13 @@ const securityUpdateTitle = computed(() => {
   return `v${latestVersion.value} includes a ${latestSecurityLevel.value}-severity security fix. Update as soon as possible.`;
 });
 
-const LATEST_VERSION_URL = "https://pixlstash.dev/latest-version.json";
+// Telemetry endpoint. The install type lives in the PATH (not the query
+// string) because Cloudflare zone analytics can only filter on path — see
+// issue #402. The response body is identical across all buckets.
+const LATEST_VERSION_BASE_URL = "https://pixlstash.dev/latest-version";
+// Install-type buckets allowed in the telemetry path; anything else (or
+// empty) collapses to "other". Detection must never block the check.
+const TELEMETRY_INSTALL_BUCKETS = new Set(["docker", "pip", "other"]);
 const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
 
 const props = defineProps({
@@ -2754,7 +2760,10 @@ function checkForUpdatesNow() {
   // security patch so it re-checks (and re-shows) on every page load.
   if (Date.now() - last < VERSION_CHECK_INTERVAL_MS && !isHighSecurity) return;
 
-  const url = `${LATEST_VERSION_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
+  const bucket = TELEMETRY_INSTALL_BUCKETS.has(props.installType)
+    ? props.installType
+    : "other";
+  const url = `${LATEST_VERSION_BASE_URL}/${bucket}.json?v=${encodeURIComponent(appVersion)}`;
   fetch(url)
     .then((r) => r.json())
     .then((data) => {
@@ -2769,7 +2778,9 @@ function checkForUpdatesNow() {
         updateDismissed.value = dismissed === remote;
       }
     })
-    .catch(() => {});
+    .catch((e) => {
+      console.warn("Version update check failed:", e);
+    });
 }
 
 let versionCheckInterval = null;
