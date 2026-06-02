@@ -553,7 +553,16 @@
             </div>
           </v-menu>
         </div>
-        <!-- Selection ▾ dropdown — mirrors the right-click context menu exactly -->
+        <!--
+          Selection ▾ dropdown — mirrors the right-click context menu for every
+          selection-scoped action, so keyboard ("S") and toolbar users reach the
+          same actions as a right-click on the same selection. The context menu
+          additionally offers three single-image actions (Share image, Find
+          similar faces, Remove all shares) that are deliberately context-only:
+          they act on a specific right-clicked image and its per-image face /
+          share state, which the selection-scoped dropdown has no single target
+          for. Multi-select parity is asserted by e2e/specs/menu-parity.spec.js.
+        -->
         <div
           class="selection-ctx-bar"
           :class="{ 'selection-ctx-bar--active': selectedCount > 0 }"
@@ -816,6 +825,76 @@
                 <div class="ctx-sep" />
               </template>
 
+              <!-- ── Restore from snapshot ─────────────────────────── -->
+              <template
+                v-if="!isReadOnly && selectedCount >= 1 && !isScrapheapView"
+              >
+                <div
+                  ref="restoreSubmenuWrapRef"
+                  class="ctx-submenu-wrap"
+                  @mouseenter="restoreSubmenuOpen = true"
+                  @mouseleave="restoreSubmenuOpen = false"
+                >
+                  <button
+                    class="ctx-item"
+                    :disabled="selectedCount === 0 || isReadOnly"
+                  >
+                    <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+                    Restore from snapshot
+                    <v-icon class="ctx-arrow" size="14"
+                      >mdi-chevron-right</v-icon
+                    >
+                  </button>
+                  <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+                    <button
+                      v-for="cp in recentSnapshots"
+                      :key="cp.id"
+                      class="ctx-item"
+                      :disabled="identicalSnapshotIds.has(cp.id)"
+                      :title="
+                        identicalSnapshotIds.has(cp.id)
+                          ? 'Selection is identical to this snapshot'
+                          : undefined
+                      "
+                      @click="handleRestoreFromSnapshot(cp.id)"
+                    >
+                      <v-icon class="ctx-icon" size="14"
+                        >mdi-camera-outline</v-icon
+                      >
+                      {{ cp.label || cp.kind }}
+                      <span class="ctx-default-pill">{{
+                        cp.created_at ? formatSnapshotDate(cp.created_at) : ""
+                      }}</span>
+                    </button>
+                    <button class="ctx-item" @click="handleRestoreMore">
+                      <v-icon class="ctx-icon" size="14"
+                        >mdi-dots-horizontal</v-icon
+                      >
+                      More…
+                    </button>
+                  </div>
+                </div>
+              </template>
+
+              <!-- ── Reverse image search ──────────────────────────── -->
+              <template v-if="!isScrapheapView">
+                <button
+                  class="ctx-item"
+                  :disabled="selectedCount === 0"
+                  title="Find visually similar images"
+                  @click="
+                    $emit('reverse-image-search');
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15"
+                    >mdi-image-search-outline</v-icon
+                  >
+                  Reverse image search
+                </button>
+                <div class="ctx-sep" />
+              </template>
+
               <!-- ── Remove / Delete (danger) ──────────────────────── -->
               <button
                 v-if="showRemoveButton"
@@ -929,6 +1008,7 @@ import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
+import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import GbFilterPanel from "./GbFilterPanel.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
@@ -985,6 +1065,7 @@ const emit = defineEmits([
   "tags-applied",
   "auto-tag",
   "generate-description",
+  "reverse-image-search",
   "expand-all-stacks",
   "collapse-all-stacks",
   "confirm-export-zip",
@@ -1014,6 +1095,7 @@ const gridStore = useGridStore();
 const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
+const snapshotsStore = useSnapshotsStore();
 
 const tbComfyuiMenuOpen = ref(false);
 const autoTagSubmenuOpen = ref(false);
@@ -1391,6 +1473,9 @@ const ateCharacterRef = ref(null);
 const ateSetRef = ref(null);
 const autoTagSubmenuWrapRef = ref(null);
 const descriptionSubmenuWrapRef = ref(null);
+const restoreSubmenuWrapRef = ref(null);
+const restoreSubmenuOpen = ref(false);
+const identicalSnapshotIds = ref(new Set());
 
 function isEditableElement(el) {
   if (!(el instanceof HTMLElement)) return false;
@@ -1488,6 +1573,8 @@ async function onSelectionMenuKeydown(event) {
       if (autoTagSubmenuWrapRef.value === wrap) autoTagSubmenuOpen.value = true;
       else if (descriptionSubmenuWrapRef.value === wrap)
         descriptionSubmenuOpen.value = true;
+      else if (restoreSubmenuWrapRef.value === wrap)
+        restoreSubmenuOpen.value = true;
       await nextTick();
       wrap.querySelector(".ctx-submenu button:not(:disabled)")?.focus();
     }
@@ -1517,6 +1604,8 @@ async function onSelectionMenuKeydown(event) {
         autoTagSubmenuOpen.value = false;
       else if (descriptionSubmenuWrapRef.value === wrap)
         descriptionSubmenuOpen.value = false;
+      else if (restoreSubmenuWrapRef.value === wrap)
+        restoreSubmenuOpen.value = false;
       await nextTick();
       wrap?.querySelector(":scope > button.ctx-item")?.focus();
     }
@@ -1556,6 +1645,84 @@ watch(selectionMenuOpen, async (open) => {
   const rect = selectionMenuPanelRef.value.getBoundingClientRect();
   selectionPanelFlipped.value = rect.right + 185 > window.innerWidth - 8;
 });
+
+// ── Restore from snapshot (mirrors ImageGridContextMenu.vue) ─────────────────
+// The five most-recent compatible snapshots offered as quick-restore targets
+// for the current selection. Lives here so the Selection ▾ dropdown — and its
+// keyboard "S" entry point — exposes the same selection-scoped action as the
+// right-click context menu. Like the context menu, it drives the app-wide
+// RestoreConfirmDialog via the snapshots store (no parent wiring needed).
+const recentSnapshots = computed(() =>
+  snapshotsStore.snapshots.filter((cp) => cp.is_compatible).slice(0, 5),
+);
+
+// Run token guards against rapid submenu toggles: when the watcher fires again
+// before its previous batch finishes, the old in-flight requests must not write
+// their (now-stale) results into identicalSnapshotIds. Same pattern as
+// ImageGridContextMenu.vue and SnapshotsSection.vue.
+let _hashCompareRunToken = 0;
+
+watch(restoreSubmenuOpen, async (isOpen) => {
+  if (!isOpen || !props.selectedImageIds.length) {
+    return;
+  }
+  const token = ++_hashCompareRunToken;
+  identicalSnapshotIds.value = new Set();
+  const pictureIds = props.selectedImageIds;
+  const matchedIds = new Set();
+  await Promise.all(
+    recentSnapshots.value.map(async (cp) => {
+      try {
+        const res = await apiClient.post(
+          `/api/v1/snapshots/${cp.id}/hash-compare`,
+          { picture_ids: pictureIds },
+        );
+        // Bail on stale apply — a newer run has superseded this one.
+        if (token !== _hashCompareRunToken) return;
+        const identicalSet = new Set(res.data.identical_ids);
+        const allIdentical = pictureIds.every((id) => identicalSet.has(id));
+        if (allIdentical) {
+          matchedIds.add(cp.id);
+        }
+      } catch (err) {
+        // On error, leave the snapshot enabled (conservative).
+        console.warn(`Hash-compare failed for snapshot ${cp.id}:`, err);
+      }
+    }),
+  );
+  if (token === _hashCompareRunToken) {
+    identicalSnapshotIds.value = matchedIds;
+  }
+});
+
+// Snapshot created_at may arrive as a bare ISO string (treat as UTC, append
+// "Z") OR already carry a "Z" / offset suffix. Blindly appending "Z" to the
+// latter yields "...+00:00Z" which Date parses as Invalid Date.
+function formatSnapshotDate(iso) {
+  if (!iso) return "";
+  const hasTz = /(Z|[+-]\d{2}:?\d{2})$/.test(iso);
+  const d = new Date(hasTz ? iso : iso + "Z");
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString();
+}
+
+function handleRestoreFromSnapshot(cpId) {
+  const resources = props.selectedImageIds.map((id) => ({
+    type: "picture",
+    id,
+  }));
+  snapshotsStore.openRestoreDialog(cpId, resources);
+  selectionMenuOpen.value = false;
+}
+
+function handleRestoreMore() {
+  const resources = props.selectedImageIds.map((id) => ({
+    type: "picture",
+    id,
+  }));
+  snapshotsStore.openRestoreDialog(null, resources);
+  selectionMenuOpen.value = false;
+}
+
 const pluginParameters = ref({});
 const comfyuiMenuOpen = ref(false);
 const comfyuiWorkflows = ref([]);

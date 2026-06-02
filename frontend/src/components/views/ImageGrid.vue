@@ -86,6 +86,7 @@
       @tags-applied="debouncedFetchAllGridImages({ force: true })"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
+      @reverse-image-search="handleReverseImageSearch"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-settings="emit('open-settings')"
