@@ -383,9 +383,9 @@
               :class="{ 'bar-btn--active': tbComfyuiMenuOpen }"
               type="button"
               :disabled="isReadOnly"
-              title="Generate with ComfyUI (T2I)"
+              title="Generate new image with ComfyUI from a text prompt"
             >
-              <v-icon size="20">mdi-robot</v-icon>
+              <v-icon size="20">mdi-image-plus</v-icon>
             </button>
           </template>
           <TbComfyPanel
@@ -492,7 +492,9 @@
               ></div>
             </template>
             <div class="plugin-menu-panel">
-              <div class="plugin-menu-header">ComfyUI I2I</div>
+              <div class="plugin-menu-header">
+                Edit selected images with ComfyUI
+              </div>
               <div class="plugin-menu-body">
                 <div v-if="comfyuiWorkflowLoading" class="plugin-menu-note">
                   Loading workflows...
@@ -819,8 +821,8 @@
                     selectionMenuOpen = false;
                   "
                 >
-                  <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
-                  ComfyUI
+                  <v-icon class="ctx-icon" size="15">mdi-auto-fix</v-icon>
+                  Edit with ComfyUI
                 </button>
                 <div class="ctx-sep" />
               </template>
@@ -1214,8 +1216,7 @@ function gbCommitSortSelection(sortValue) {
 }
 
 function gbHandleSortModelUpdate(sortValue) {
-  if (searchStore.searchQuery && searchStore.searchQuery.trim())
-    return;
+  if (searchStore.searchQuery && searchStore.searchQuery.trim()) return;
   gbPendingSortSelection.value = sortValue != null ? String(sortValue) : "";
   if (!gbSortRequiresParameter(gbPendingSortSelection.value)) {
     gbCommitSortSelection(gbPendingSortSelection.value);

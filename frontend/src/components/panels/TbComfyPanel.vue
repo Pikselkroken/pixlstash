@@ -1,6 +1,8 @@
 <template>
   <div class="tb-comfyui-panel popup-panel">
-    <div class="tb-comfyui-header">Generate with ComfyUI (T2I)</div>
+    <div class="tb-comfyui-header">
+      Generate with ComfyUI from a text prompt
+    </div>
     <div class="tb-comfyui-body">
       <div v-if="tbComfyuiWorkflowLoading" class="tb-comfyui-note">
         Loading workflows...

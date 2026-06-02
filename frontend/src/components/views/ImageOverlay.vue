@@ -120,8 +120,8 @@
             <button
               class="overlay-icon-btn overlay-comfy-activator"
               type="button"
-              title="Run ComfyUI I2I"
-              aria-label="Run ComfyUI I2I"
+              title="Edit with ComfyUI"
+              aria-label="Edit with ComfyUI"
               :class="{
                 hidden: chromeHidden,
                 'overlay-icon-btn--active': comfyuiMenuOpen,
@@ -140,7 +140,7 @@
               transition="scale-transition"
             >
               <div class="overlay-comfy-panel">
-                <div class="overlay-comfy-header">ComfyUI I2I</div>
+                <div class="overlay-comfy-header">Edit with ComfyUI</div>
                 <div v-if="comfyuiWorkflowLoading" class="overlay-comfy-status">
                   Loading workflows...
                 </div>
