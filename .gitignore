@@ -6,6 +6,8 @@ build/
 .env
 .venv
 vault.db*
+# Exception: the committed Playwright e2e fixture (every other vault.db stays ignored)
+!test-data/images/vault.db
 wd14_tagger_model
 cpu
 .vscode/
@@ -25,3 +27,4 @@ CLAUDE.md
 frontend/e2e/.auth/
 frontend/test-results/
 test-data/images/snapshots/
+test-results

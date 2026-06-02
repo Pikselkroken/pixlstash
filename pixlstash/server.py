@@ -1860,7 +1860,12 @@ class Server:
         ###############################
         # Rate limiting              ##
         ###############################
-        self.api.add_middleware(RateLimitMiddleware)
+        self.api.add_middleware(
+            RateLimitMiddleware,
+            enabled=not bool(self._server_config.get("disable_rate_limit", False)),
+            limit=int(self._server_config.get("rate_limit_max_requests", 120)),
+            window=int(self._server_config.get("rate_limit_window_seconds", 60)),
+        )
 
         ###############################
         # Static file endpoints      ##
