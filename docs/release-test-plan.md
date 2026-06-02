@@ -224,6 +224,13 @@ Covers the lazy ML library loading change introduced in 1.2.
 - [ ] Locate a stack indicator badge on a thumbnail → click it — the stack expands to show all member pictures
 - [ ] Click the stack badge again — the stack collapses back to the leader thumbnail
 
+### 3.5 Selection ▾ / Context Menu Parity
+Automated by `frontend/e2e/specs/menu-parity.spec.js` (see `docs/regular-tests.md`).
+- [ ] Select 2+ pictures (Ctrl-click) → open the **Selection ▾** dropdown (or press **S**) and note the action items
+- [ ] Right-click one of the **selected** pictures and note the context-menu action items
+- [ ] Both menus list the **same** selection-scoped actions
+  - ⚠️ **Known bug — currently FAILS:** the context menu shows **Restore from snapshot** and **Reverse image search** (and, for a single selection, **Share image** / **Find similar faces**) which the Selection ▾ menu lacks. Tracked in [#403](https://github.com/Pikselkroken/pixlstash/issues/403). Mark ❌ until reconciled.
+
 ---
 
 ## 4. Picture Detail (ImageOverlay)
