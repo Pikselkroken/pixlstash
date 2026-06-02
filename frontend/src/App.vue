@@ -1940,14 +1940,19 @@ defineExpose({
         <v-dialog v-model="updateCheckDialogOpen" max-width="420" persistent>
           <v-card class="update-check-dialog">
             <v-card-title class="update-check-title"
-              >Check for updates automatically?</v-card-title
+              >Get notified about new versions?</v-card-title
             >
             <v-card-text class="update-check-body">
-              When enabled, PixlStash checks for a newer version once per day.
+              PixlStash can check once a day and show a notice in the sidebar
+              when a newer version is out, including security fixes you'll want
+              to install promptly. It only ever sends your current version and
+              install type (e.g. pip or docker), anonymously. You can turn this
+              off any time in Settings → Behaviour.
               <br />
               <span class="update-check-note"
-                >The request sends your installed version and install type (e.g.
-                pip or docker) anonymously. No IP addresses are stored.</span
+                >This check is served by our CDN (Cloudflare). We only ever see
+                aggregate counts and never anything that identifies you
+                personally.</span
               >
             </v-card-text>
             <v-card-actions class="update-check-actions">
@@ -1959,7 +1964,7 @@ defineExpose({
                     handleUpdateCheckForUpdates(false);
                   }
                 "
-                >No</v-btn
+                >Not now</v-btn
               >
               <v-btn
                 color="primary"
@@ -1970,7 +1975,7 @@ defineExpose({
                     handleUpdateCheckForUpdates(true);
                   }
                 "
-                >Yes</v-btn
+                >Notify me</v-btn
               >
             </v-card-actions>
           </v-card>

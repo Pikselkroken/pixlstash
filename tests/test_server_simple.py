@@ -456,3 +456,53 @@ def test_read_version(server):
     assert data["message"] == "PixlStash REST API"
     assert data["version"] == expected_version
     assert "install_type" in data
+    # The install_type contract is exactly these three values; the frontend
+    # guards anything else to "other", but the backend must never emit a value
+    # outside the set in the first place.
+    assert data["install_type"] in {"docker", "pip", "other"}
+
+
+def test_read_version_install_type_docker(server, monkeypatch):
+    """The env flag makes /version report the reliable ``docker`` signal."""
+    monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    client = TestClient(server.api)
+    response = client.get("/version")
+    assert response.status_code == 200
+    assert response.json()["install_type"] == "docker"
+
+
+def test_read_version_install_type_pip_default(server, monkeypatch):
+    """With no docker signals and no override, the default is ``pip``."""
+    monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    # Server.running_in_docker() also checks /.dockerenv; neutralise it so the
+    # test is deterministic regardless of where it runs.
+    monkeypatch.setattr(os.path, "exists", lambda path: False)
+    client = TestClient(server.api)
+    response = client.get("/version")
+    assert response.status_code == 200
+    assert response.json()["install_type"] == "pip"
+
+
+def test_read_version_install_type_override(server, monkeypatch):
+    """A valid PIXLSTASH_INSTALL_TYPE override wins over docker detection."""
+    # Even with the docker flag set, an explicit override takes precedence so an
+    # installer (e.g. the Windows build) can declare "other".
+    monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "other")
+    client = TestClient(server.api)
+    response = client.get("/version")
+    assert response.status_code == 200
+    assert response.json()["install_type"] == "other"
+
+
+def test_read_version_install_type_invalid_override_ignored(server, monkeypatch):
+    """An invalid override is ignored and detection falls back to docker."""
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "garbage")
+    monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
+    client = TestClient(server.api)
+    response = client.get("/version")
+    assert response.status_code == 200
+    # "garbage" is dropped; docker detection then supplies the reliable value.
+    assert response.json()["install_type"] == "docker"

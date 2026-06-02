@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pillow_heif import register_heif_opener
 
 from sqlmodel import select
@@ -101,14 +101,48 @@ def _get_lan_ip() -> str | None:
 
 
 class VersionResponse(BaseModel):
-    """Body of ``GET /version``."""
+    """Body of ``GET /version``.
+
+    Public, unauthenticated endpoint used by the SPA for version display and by
+    the daily active-install telemetry ping. ``extra="allow"`` keeps the
+    response forward-compatible: new diagnostic fields can be added without
+    breaking older clients that ignore unknown keys.
+    """
 
     model_config = ConfigDict(extra="allow")
 
-    message: str
-    version: str
-    install_type: str
-    docker_variant: str
+    message: str = Field(
+        description="Human-readable identifier for the API. Constant string.",
+        examples=["PixlStash REST API"],
+    )
+    version: str = Field(
+        description=(
+            "Running PixlStash version, read from the installed package "
+            "metadata (the `version` in `pyproject.toml`)."
+        ),
+        examples=["1.5.0"],
+    )
+    install_type: str = Field(
+        description=(
+            "How this server was installed, for active-install telemetry. "
+            "Always exactly one of: `docker` (the reliable signal — set via "
+            "the `PIXLSTASH_IN_DOCKER=1` env flag or the presence of "
+            "`/.dockerenv`), `pip` (the default for a plain Python/pip "
+            "install), or `other` (the uncertain fallback — e.g. an installer "
+            "such as the Windows Inno Setup build that declares "
+            "`PIXLSTASH_INSTALL_TYPE=other`). Clients should treat any "
+            "unrecognised value as `other`."
+        ),
+        examples=["docker", "pip", "other"],
+    )
+    docker_variant: str = Field(
+        description=(
+            "Which Docker image variant is running, reported from the "
+            "`PIXLSTASH_DOCKER_VARIANT` env var. Only meaningful when "
+            "`install_type` is `docker`; defaults to `gpu` otherwise."
+        ),
+        examples=["gpu", "cpu"],
+    )
 
 
 class SessionStatusResponse(BaseModel):
@@ -902,8 +936,89 @@ class Server:
 
     @staticmethod
     def running_in_docker() -> bool:
-        """Return True when the server is running inside a Docker container."""
-        return os.environ.get("PIXLSTASH_IN_DOCKER", "") == "1"
+        """Return True when the server is running inside a Docker container.
+
+        Docker is the **reliable** half of the install-type telemetry, so this
+        check uses two independent positive signals and treats either as proof
+        of a containerised run:
+
+        1. ``PIXLSTASH_IN_DOCKER == "1"`` — set explicitly by our own images
+           (primary signal).
+        2. The presence of ``/.dockerenv`` — a marker file the Docker runtime
+           creates in every container root, present even if the env flag was
+           lost (e.g. an overridden entrypoint or a stripped environment).
+
+        Both checks are cheap (a dict lookup and a single ``stat``). The
+        filesystem fallback only fires when the env flag is absent, and that
+        case is logged so a "docker without the flag" deployment is visible in
+        the logs rather than silently misclassified.
+        """
+        if os.environ.get("PIXLSTASH_IN_DOCKER", "") == "1":
+            return True
+
+        # Secondary signal: the Docker runtime drops this marker file into the
+        # container root. We only reach here when the env flag is missing, so a
+        # positive result means an unexpected-but-still-docker deployment.
+        try:
+            if os.path.exists("/.dockerenv"):
+                logger.info(
+                    "Detected Docker via /.dockerenv marker file while "
+                    "PIXLSTASH_IN_DOCKER was unset (value=%r); treating install "
+                    "as docker.",
+                    os.environ.get("PIXLSTASH_IN_DOCKER"),
+                )
+                return True
+        except OSError as exc:
+            # A failed stat must not crash version reporting; fall through to
+            # the non-docker default but record why the fallback signal was
+            # inconclusive.
+            logger.warning(
+                "Could not stat /.dockerenv while detecting Docker "
+                "(error=%s); assuming not running in Docker.",
+                exc,
+            )
+        return False
+
+    # install_type telemetry: exactly these three values may ever be reported.
+    # "docker" is the reliable signal, "pip" the default, "other" the explicit
+    # opt-out used by installers (e.g. the Windows Inno Setup wheel build) that
+    # otherwise look like a plain pip install.
+    INSTALL_TYPES = ("docker", "pip", "other")
+
+    @staticmethod
+    def detect_install_type() -> str:
+        """Return the install type for telemetry: one of ``INSTALL_TYPES``.
+
+        Resolution order:
+
+        1. ``PIXLSTASH_INSTALL_TYPE`` override — if set to one of the allowed
+           values it wins outright, letting an installer declare its channel
+           (e.g. ``other`` for the Windows build) without a code change. An
+           empty or invalid value is ignored (and logged) so a typo can never
+           leak a junk value into telemetry.
+        2. Docker detection (:meth:`running_in_docker`) — the reliable signal.
+        3. Default to ``pip``.
+
+        The return value is guaranteed to be a member of ``INSTALL_TYPES``.
+        """
+        override = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower()
+        if override:
+            if override in Server.INSTALL_TYPES:
+                logger.info(
+                    "Using PIXLSTASH_INSTALL_TYPE override for install_type=%r.",
+                    override,
+                )
+                return override
+            logger.warning(
+                "Ignoring invalid PIXLSTASH_INSTALL_TYPE=%r (allowed: %s); "
+                "falling back to automatic detection.",
+                override,
+                ", ".join(Server.INSTALL_TYPES),
+            )
+
+        if Server.running_in_docker():
+            return "docker"
+        return "pip"
 
     def __init__(
         self,
@@ -1786,10 +1901,23 @@ class Server:
         @self.api.get("/version", tags=["server"], response_model=VersionResponse)
         async def read_version():
             version = self._get_version()
-            install_type = "docker" if Server.running_in_docker() else "pip"
+            install_type = Server.detect_install_type()
+            # Defensive guard: detect_install_type() already constrains its
+            # output, but the returned value feeds cross-cutting telemetry, so
+            # never let anything outside the contract escape. Anything
+            # unexpected collapses to the uncertain "other" bucket.
+            if install_type not in Server.INSTALL_TYPES:
+                logger.warning(
+                    "detect_install_type() produced unexpected value %r; "
+                    "reporting install_type='other'.",
+                    install_type,
+                )
+                install_type = "other"
             docker_variant = os.environ.get("PIXLSTASH_DOCKER_VARIANT", "gpu")
             logger.info(
-                "[/version] PIXLSTASH_DOCKER_VARIANT=%r -> docker_variant=%r",
+                "[/version] install_type=%r PIXLSTASH_DOCKER_VARIANT=%r -> "
+                "docker_variant=%r",
+                install_type,
                 os.environ.get("PIXLSTASH_DOCKER_VARIANT"),
                 docker_variant,
             )
