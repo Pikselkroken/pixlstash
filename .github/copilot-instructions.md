@@ -28,6 +28,47 @@ Task classification rules:
 When making changes to architecture or integration patterns, always update the relevant documentation to reflect the new approach. This ensures that all future work follows the updated architecture and maintains consistency across the codebase.
 
 
+## Skill Delegation
+
+This repo ships role-specific **skills** — personas with their own expertise (and, for the developer roles, their own subagents). Route work to the skill that owns the domain instead of doing everything in one generalist pass. This extends the frontend/backend/full‑stack classification above; check the available-skills list at the start of each session, because the set can grow.
+
+### Who owns what
+
+| Task | Skill |
+|---|---|
+| Backend code: Python, FastAPI, SQLModel/SQLAlchemy, Alembic, async/concurrency, data models, observability | `senior-backend-developer` |
+| Routine backend work that copies an existing pattern (mirror a CRUD endpoint, add a field + migration, straightforward tests, obvious bugfix, type hints/docstrings) | `junior-backend-developer` |
+| Frontend code: Vue 3, JS, HTML, CSS, state/data flow, routing, browser/CORS/CSP issues, rendering | `senior-frontend-developer` |
+| Routine frontend work that mirrors an existing component (presentational component, props/emits, simple layout fix, basic route/computed, a11y attributes, copy) | `junior-frontend-developer` |
+| ML: training/fine-tuning, model eval, embeddings, captioning, quality scoring, architecture/dataset choices | `machine-learning-expert` |
+| ComfyUI graphs, nodes, model selection, generation/upscale/inpaint pipelines | `comfyui-workflow-wizard` |
+| CI/CD, GitHub Actions, pipeline speed/flakiness, release automation, the `pixlstash-metrics` collector | `ci-expert` |
+| Security review of a diff/PR/codebase, secret hunting, dependency audit, API/deploy/demo hardening, threat modeling | `chief-security-officer` |
+| Product strategy, roadmap, build‑vs‑cut, metrics interpretation, monetization, investor/fundraising narrative | `chief-executive-officer` |
+| Marketing & growth: Reddit/YouTube/Discord/forums, pixlstash.dev content, adoption tactics | `chief-marketing-officer` |
+| Deep, multi-source, fact-checked research | `deep-research` |
+
+Senior vs. junior: the senior decides and delegates; the junior only takes work that already has a clear pattern to copy and **escalates anything non‑trivial** instead of guessing.
+
+### Handing a task to a skill
+
+- **Single domain, advisory, or you'll do it inline:** invoke the skill in this conversation (the `Skill` tool, or a `/skill-name` slash command). It loads that persona's expertise into your context for the rest of the task.
+- **Self-contained chunk, or a search/implementation-heavy job you don't want filling your context:** spawn a subagent (the `Agent` tool) and have it invoke the skill, then report back. Keeps the main context clean.
+- Always pair the skill with its architecture doc: frontend → `docs/frontend_architecture.md`, backend → `docs/backend_architecture.md`, full‑stack → both + `docs/integration_architecture.md`.
+
+### Splitting one task across several skills (in parallel)
+
+Decompose by domain first, then fan out. **Independent** sub-tasks should run concurrently — issue all the subagent calls in a **single message** so they execute at once; **dependent** ones run in sequence.
+
+- **Full‑stack feature** → split at the API boundary: `senior-backend-developer` (endpoint/model/migration) and `senior-frontend-developer` (UI/state) in parallel, then reconcile the contract against `docs/integration_architecture.md`. Each senior hands its routine sub-parts to the matching junior.
+- **Honour the built-in escalation chains:**
+  - Seniors spawn juniors for mechanical sub-work (`senior-backend-developer` → `junior-backend-developer`; `senior-frontend-developer` → `junior-frontend-developer`).
+  - `ci-expert` must clear any workflow/CI change with `chief-security-officer` before it is pushed.
+  - `chief-executive-officer` drives the execution skills — it tasks `ci-expert` (metrics/pipelines) and `chief-marketing-officer` (growth).
+- **Gate, don't parallelize, the safety steps.** Anything touching auth, secrets, external exposure, dependencies, deploys, or CI must pass `chief-security-officer` review (or `/security-review`) **before merge/push** — that is a barrier *after* the implementation work, not a concurrent lane.
+- When you fan out, give each skill a tightly-scoped brief and reconcile their outputs yourself. Don't let parallel agents edit the same files; split by file/area or sequence the overlap.
+
+
 ## Imports
 - Mostly use imports at the top of the file. Local imports within functions are only acceptable if they are necessary to avoid circular dependencies, to reduce startup time for rarely used modules or if the import is *clearly* optional.
 - Do not use local imports for libraries that are commonly used in the code base, like torch, numpy, PIL, cv2, etc. These should be imported at the top of the file for clarity and consistency.
