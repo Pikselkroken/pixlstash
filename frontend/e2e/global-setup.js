@@ -74,6 +74,13 @@ export default async function globalSetup(config) {
 
   mkdirSync(AUTH_DIR, { recursive: true })
   await ctx.storageState({ path: STATE_PATH })
-  writeFileSync(TOKEN_PATH, JSON.stringify({ token, username: USERNAME }, null, 2))
+  // Persist the per-run credentials so specs can mint an *isolated* session
+  // when needed (e.g. the logout test, which must not pop the shared session
+  // out of the backend's in-memory active_session_ids map). All values live
+  // only in the gitignored .auth/ dir for the duration of the run.
+  writeFileSync(
+    TOKEN_PATH,
+    JSON.stringify({ token, username: USERNAME, password: PASSWORD }, null, 2),
+  )
   await ctx.dispose()
 }

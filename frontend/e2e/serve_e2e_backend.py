@@ -90,6 +90,10 @@ def main() -> int:
             "require_ssl": False,
             "cookie_secure": False,
             "disable_password_auth": False,
+            # The suite reloads the SPA many times in quick succession; the
+            # global rate limiter (120 public requests / 60s) would otherwise
+            # 429 later navigations. Safe to disable on this hermetic backend.
+            "disable_rate_limit": True,
             "disable_background_workers": True,
             "generate_thumbnails_on_startup": False,
             "default_device": "cpu",
