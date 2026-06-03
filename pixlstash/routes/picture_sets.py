@@ -26,6 +26,7 @@ from pixlstash.event_types import EventType
 from pixlstash.routes._helpers import picture_referenced_by_project
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 from pixlstash.picture_scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
@@ -582,11 +583,20 @@ def create_router(server) -> APIRouter:
         response_model=dict,
     )
     def get_batch_membership(
+        request: Request,
         picture_ids: list[int] = Body(default=[]),
         include_deleted: bool = Body(False),
     ):
         if not picture_ids:
             return {}
+
+        # Scope guard (BOLA): restrict a READ-scoped share token to picture ids
+        # within its granted resource.  None == owner / unscoped == no filter.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                return {}
 
         def fetch_membership(session, ids: list[int], include_deleted: bool):
             # Expand stacks: include all stack siblings of requested pictures.
