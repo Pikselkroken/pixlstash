@@ -915,6 +915,115 @@ class TestResourceScopedReadTokenIsolation:
             finally:
                 server.__exit__(None, None, None)
 
+    def test_unassigned_listing_cannot_leak_out_of_scope_pictures(self):
+        """character_id=UNASSIGNED must honour token scope. Regression for the
+        bypass where an empty intersected id list fell through to no filter and
+        the set/character scope was never applied to the UNASSIGNED branch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                client = TestClient(server.api)
+                hdr = {"Authorization": f"Bearer {token_a}"}
+                for path in (
+                    "/pictures?character_id=UNASSIGNED",
+                    f"/pictures?character_id=UNASSIGNED&id={pic_b}",
+                ):
+                    r = client.get(f"{API}{path}", headers=hdr)
+                    assert r.status_code == 200, r.text
+                    ids = {p["id"] for p in r.json()}
+                    assert pic_b not in ids, (
+                        f"UNASSIGNED listing leaked out-of-scope picture via {path}: {ids}"
+                    )
+                r = client.get(
+                    f"{API}/pictures/count?character_id=UNASSIGNED", headers=hdr
+                )
+                assert r.status_code == 200, r.text
+                assert r.json().get("count") <= 1, (
+                    f"UNASSIGNED count leaked out-of-scope pictures: {r.json()}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_scoped_token_cannot_read_other_picture_fields(self):
+        """GET /pictures/{id}/{field} must enforce scope. Regression: it sat
+        unguarded between get_picture and get_picture_metadata."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                client = TestClient(server.api)
+                hdr = {"Authorization": f"Bearer {token_a}"}
+                for field in ("file_path", "width", "thumbnail"):
+                    r = client.get(f"{API}/pictures/{pic_b}/{field}", headers=hdr)
+                    assert r.status_code in {403, 404}, (
+                        f"Set-A token read pic_b field '{field}', "
+                        f"got {r.status_code}: {r.text}"
+                    )
+                # In-scope field still readable (no over-block).
+                r = client.get(f"{API}/pictures/{pic_a}/width", headers=hdr)
+                assert r.status_code == 200, (
+                    f"Set-A token wrongly blocked from its own picture field: {r.text}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_scoped_token_cannot_read_stack_outside_scope(self):
+        """Stack read endpoints must not leak out-of-scope pictures. Regression
+        for unscoped /stacks/{id}/pictures and /pictures/{id}/stack.
+
+        Uses a single-picture token (allow-set is exactly {pic_a}) so that
+        stacking pic_a with pic_b cannot widen scope via set-membership
+        propagation the way a set-scoped token would.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                # Single-picture share token for pic_a only.
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={
+                        "description": "single picture token",
+                        "scope": "READ",
+                        "resource_type": "picture",
+                        "resource_id": pic_a,
+                    },
+                )
+                assert r.status_code == 200, r.text
+                pic_token = r.json()["token"]
+
+                # Owner stacks pic_a and pic_b together.
+                r = owner_client.post(
+                    f"{API}/stacks", json={"picture_ids": [pic_a, pic_b]}
+                )
+                assert r.status_code in {200, 201}, r.text
+                r = owner_client.get(f"{API}/pictures/{pic_a}/stack")
+                assert r.status_code == 200, r.text
+                stack_id = r.json().get("id")
+                assert stack_id is not None, f"no stack id in {r.json()}"
+
+                client = TestClient(server.api)
+                hdr = {"Authorization": f"Bearer {pic_token}"}
+                r = client.get(
+                    f"{API}/stacks/{stack_id}/pictures?fields=metadata", headers=hdr
+                )
+                assert r.status_code in {200, 404}, r.text
+                if r.status_code == 200:
+                    ids = {row.get("id") for row in r.json()}
+                    assert ids <= {pic_a}, (
+                        f"Stack pictures leaked out-of-scope picture(s): {ids}"
+                    )
+                r = client.get(f"{API}/pictures/{pic_b}/stack", headers=hdr)
+                assert r.status_code in {403, 404}, (
+                    f"pic_a token learned pic_b's stack, got {r.status_code}: {r.text}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
 
 # ---------------------------------------------------------------------------
 # 4. Expired token is rejected

@@ -982,7 +982,7 @@ def register_routes(router, server):
             }
         },
     )
-    def get_picture_field(id: str, field: str):
+    def get_picture_field(request: Request, id: str, field: str):
         pics = server.vault.db.run_task(
             lambda session: Picture.find(
                 session,
@@ -995,6 +995,9 @@ def register_routes(router, server):
             logger.error(f"Picture not found for id={id}")
             raise HTTPException(status_code=404, detail="Picture not found")
         pic = pics[0]
+        # Scope guard (BOLA): a resource-scoped token may only read its own
+        # picture's fields/thumbnail, like get_picture and get_picture_metadata.
+        enforce_picture_scope(server, request, pic.id)
 
         if field == "thumbnail":
             return Response(content=pic.thumbnail, media_type="image/png")
