@@ -50,6 +50,7 @@ from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.filter_helpers import (
     combine_likeness_scores,
     fetch_scope_allowed_character_ids,
+    fetch_scope_allowed_picture_ids,
     VALID_COMBINE_MODES,
 )
 from pixlstash.utils.service.path_utils import resolve_path_within
@@ -749,10 +750,19 @@ def create_router(server) -> APIRouter:
         response_model=CharacterMembershipResponse,
     )
     def get_batch_character_membership(
+        request: Request,
         picture_ids: list[int] = Body(default=[], embed=True),
     ):
         if not picture_ids:
             return {"character_assignments": {}, "pictures_with_faces": []}
+
+        # Scope guard (BOLA): restrict a READ-scoped share token to picture ids
+        # within its granted resource.  None == owner / unscoped == no filter.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                return {"character_assignments": {}, "pictures_with_faces": []}
 
         def fetch(session, ids: list[int]):
             rows = session.exec(

@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, delete, select
 
@@ -20,6 +20,7 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
 
@@ -347,11 +348,20 @@ def create_router(server) -> APIRouter:
         description="Returns tags for each requested picture id. At most 200 ids accepted per call.",
         response_model=list[BulkPictureTagsResponse],
     )
-    def bulk_fetch_tags(payload: BulkFetchTagsRequest):
+    def bulk_fetch_tags(request: Request, payload: BulkFetchTagsRequest):
         try:
             ids = payload.picture_ids[:200]
             if not ids:
                 return []
+
+            # Scope guard (BOLA): a READ-scoped share token may only read tags
+            # for pictures within its granted resource.  None == owner /
+            # unscoped == no filter.
+            scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+            if scope_allowed is not None:
+                ids = [pic_id for pic_id in ids if pic_id in scope_allowed]
+                if not ids:
+                    return []
 
             def fetch(session: Session, ids: list):
                 rows = session.exec(

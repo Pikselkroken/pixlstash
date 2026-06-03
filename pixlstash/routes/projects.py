@@ -30,6 +30,7 @@ from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
 
@@ -234,10 +235,19 @@ def create_router(server) -> APIRouter:
         response_model=ProjectMembershipResponse,
     )
     def get_batch_project_membership(
+        request: Request,
         picture_ids: list[int] = Body(default=[], embed=True),
     ):
         if not picture_ids:
             return {"project_assignments": {}, "unassigned_picture_ids": []}
+
+        # Scope guard (BOLA): restrict a READ-scoped share token to picture ids
+        # within its granted resource.  None == owner / unscoped == no filter.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                return {"project_assignments": {}, "unassigned_picture_ids": []}
 
         def fetch(session, ids: list[int]):
             rows = session.exec(
