@@ -184,7 +184,7 @@
           @click="delegate('open-comfyui-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
-          ComfyUI
+          Edit with ComfyUI
         </button>
         <div class="ctx-sep" />
       </template>
@@ -232,7 +232,6 @@
           </div>
         </div>
       </template>
-
 
       <!-- ── Find similar faces ─────────────────────────────── -->
       <template
@@ -286,7 +285,6 @@
           </div>
         </div>
       </template>
-
 
       <!-- ── Reverse image search ────────────────────────────── -->
       <template v-if="contextImage?.id && !isScrapheapView">
@@ -439,9 +437,12 @@ watch(restoreSubmenuOpen, async (isOpen) => {
   await Promise.all(
     recentSnapshots.value.map(async (cp) => {
       try {
-        const res = await apiClient.post(`/api/v1/snapshots/${cp.id}/hash-compare`, {
-          picture_ids: pictureIds,
-        });
+        const res = await apiClient.post(
+          `/api/v1/snapshots/${cp.id}/hash-compare`,
+          {
+            picture_ids: pictureIds,
+          },
+        );
         // Bail on stale apply — a newer run has superseded this one.
         if (token !== _hashCompareRunToken) return;
         const identicalSet = new Set(res.data.identical_ids);
