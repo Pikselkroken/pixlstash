@@ -2182,7 +2182,10 @@ async function fetchCharacters() {
     const chars = await res.data;
     const nextCharacters = Array.isArray(chars) ? chars : [];
     if (!Array.isArray(chars)) {
-      console.warn("Unexpected /characters response; expected an array:", chars);
+      console.warn(
+        "Unexpected /characters response; expected an array:",
+        chars,
+      );
     }
     characters.value = nextCharacters;
     entityNames.mergeCharacterNames(nextCharacters);
@@ -2763,7 +2766,7 @@ function checkForUpdatesNow() {
   const bucket = TELEMETRY_INSTALL_BUCKETS.has(props.installType)
     ? props.installType
     : "other";
-  const url = `${LATEST_VERSION_BASE_URL}/${bucket}.json?v=${encodeURIComponent(appVersion)}`;
+  const url = `${LATEST_VERSION_BASE_URL}/${encodeURIComponent(appVersion)}/${bucket}.json`;
   fetch(url)
     .then((r) => r.json())
     .then((data) => {
@@ -2773,7 +2776,7 @@ function checkForUpdatesNow() {
       if (remote && isRemoteNewer(appVersion, remote)) {
         const dismissed = localStorage.getItem(VERSION_CHECK_DISMISSED_KEY);
         latestVersion.value = remote;
-        latestVersionUrl.value = `${UPDATE_PAGE_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
+        latestVersionUrl.value = `${UPDATE_PAGE_URL}/?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
         latestSecurityLevel.value = data?.security ?? null;
         updateDismissed.value = dismissed === remote;
       }
@@ -3874,7 +3877,9 @@ defineExpose({
                   },
                 ]"
                 :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
-                @click="selectCharacter(char.id, char.name || 'Character', $event)"
+                @click="
+                  selectCharacter(char.id, char.name || 'Character', $event)
+                "
                 @contextmenu.prevent="
                   openSidebarCtxMenu('character', char, $event)
                 "
