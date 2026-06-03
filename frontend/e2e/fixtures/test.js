@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { GridPage } from '../pages/GridPage.js'
 import { ImageOverlay } from '../pages/ImageOverlay.js'
 import { SettingsDialog } from '../pages/SettingsDialog.js'
+import { SideBar } from '../pages/SideBar.js'
+import { ShareDialog } from '../pages/ShareDialog.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TOKEN_PATH = resolve(__dirname, '../.auth/token.json')
@@ -66,6 +68,12 @@ export const test = base.extend({
   },
   settings: async ({ page }, use) => {
     await use(new SettingsDialog(page))
+  },
+  sidebar: async ({ page }, use) => {
+    await use(new SideBar(page))
+  },
+  shareDialog: async ({ page }, use) => {
+    await use(new ShareDialog(page))
   },
 })
 

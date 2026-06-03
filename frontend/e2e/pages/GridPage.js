@@ -34,6 +34,20 @@ export class GridPage {
     this.searchOverlay = page.locator('.search-overlay')
     this.searchInput = page.locator('.search-overlay input').first()
     this.searchHistoryChips = page.locator('.search-history-chip')
+    // Right-click context menu (§3.5) — ImageGridContextMenu.vue.
+    this.contextMenu = page.locator('.image-ctx-menu')
+    // Statistics sidebar — toggled from the toolbar. Its title flips with state
+    // ("Show"/"Hide stats sidebar"), so target the (single) chart-bar button by
+    // icon, which is stable across both states.
+    this.statsToggle = page.locator('.bar-btn:has(.mdi-chart-bar)').first()
+    this.statsSidebar = page.locator('.stats-sidebar')
+    this.statsContent = page.locator('.stats-sidebar-content')
+    this.statsTabs = page.locator('.stats-tab-btn')
+    // Boolean set-operation toolbar (appears when >1 set/character selected).
+    this.multiSelectToolbar = page.locator('.multi-select-toolbar')
+    this.multiSelectMode = page.locator('.multi-select-toolbar__mode')
+    this.multiSelectLabel = page.locator('.multi-select-toolbar__label')
+    this.multiSelectClear = page.locator('.multi-select-toolbar__clear')
   }
 
   async goto() {
@@ -76,5 +90,17 @@ export class GridPage {
 
   sortOption(label) {
     return this.page.locator('.gb-sort-grid-btn', { hasText: label }).first()
+  }
+
+  /** Right-click a card (first by default) to open the context menu. */
+  async openContextMenu(cardLocator) {
+    const target = cardLocator ?? this.cards.first()
+    await target.click({ button: 'right' })
+    await expect(this.contextMenu).toBeVisible()
+  }
+
+  /** A context-menu action item by its visible label. */
+  contextMenuItem(label) {
+    return this.contextMenu.locator('.ctx-item', { hasText: label }).first()
   }
 }
