@@ -17,6 +17,7 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -208,6 +209,14 @@ def create_router(server) -> APIRouter:
         if not stack:
             raise HTTPException(status_code=404, detail="Stack not found")
 
+        # Scope guard (BOLA): a resource-scoped token only sees stack members
+        # within its grant; if none are in scope, the stack is not visible to it.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            pictures = [pic for pic in pictures if pic.id in scope_allowed]
+            if not pictures:
+                raise HTTPException(status_code=404, detail="Stack not found")
+
         pictures = _ensure_stack_positions(request, stack_id, pictures)
 
         payload = safe_model_dict(stack)
@@ -279,6 +288,13 @@ def create_router(server) -> APIRouter:
         )
         if select_fields is None:
             raise HTTPException(status_code=404, detail="Stack not found")
+        # Scope guard (BOLA): restrict to stack members within the token's grant;
+        # a scoped token with no in-scope members must not see the stack.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            pictures = [pic for pic in pictures if pic.id in scope_allowed]
+            if not pictures:
+                raise HTTPException(status_code=404, detail="Stack not found")
         # Only apply stack-position ordering when no explicit sort is active;
         # this also persists positions for stacks that haven't been ordered yet.
         if sort_mech is None:
@@ -311,6 +327,14 @@ def create_router(server) -> APIRouter:
         )
         if not stack_id or not stack:
             return {"stack_id": None, "picture_ids": []}
+
+        # Scope guard (BOLA): a token not granted the queried picture must not
+        # learn its stack; stack siblings outside the grant are filtered out.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            if picture_id not in scope_allowed:
+                raise HTTPException(status_code=404, detail="Stack not found")
+            pictures = [pic for pic in pictures if pic.id in scope_allowed]
 
         pictures = _ensure_stack_positions(request, stack_id, pictures)
 

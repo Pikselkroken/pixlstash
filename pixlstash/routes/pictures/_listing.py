@@ -32,6 +32,7 @@ from pixlstash.picture_scoring import (
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
+    fetch_scope_allowed_picture_ids,
     fetch_set_candidate_ids,
     normalize_set_mode,
     project_membership_exists_clause,
@@ -889,6 +890,25 @@ def select_pictures_for_listing(
             pics = _enrich_stack_counts(server, pics)
         return pics
     if character_id == "UNASSIGNED":
+        # Token scope enforcement (BOLA): this branch bypasses the set/character/
+        # picture scope filters applied to the main query path, so constrain it
+        # explicitly.  fetch_scope_allowed_picture_ids returns None for an
+        # owner/unscoped token and the allowed id set otherwise; fail closed when
+        # nothing is in scope rather than falling through to an unfiltered query.
+        scope_allowed_ids = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed_ids is not None:
+            requested = query_params.get("id")
+            if requested:
+                allowed = [
+                    str(i)
+                    for i in requested
+                    if str(i).isdigit() and int(i) in scope_allowed_ids
+                ]
+            else:
+                allowed = [str(i) for i in scope_allowed_ids]
+            if not allowed:
+                return _empty_result()
+            query_params["id"] = allowed
         unassigned_project_id = None
         unassigned_project_only = False
         if project_id_raw == "UNASSIGNED":
