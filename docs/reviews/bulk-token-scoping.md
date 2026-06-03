@@ -66,11 +66,25 @@ leak the patch just closed.
 
 ---
 
-## STRONGLY RECOMMENDED before tagging (same one-line pattern, cheap; a reviewer will ask why these were skipped)
+## ACCEPTED RISK for v1.5.1 (CTO decision; CSO did not object)
+
+These two read endpoints remain unscoped after the patch. The CTO chose not to
+expand the emergency 1.5.1 scope to cover them; the CSO concurred because neither
+exposes vault content, credentials, or RCE, and both are reachable only by a
+holder of an already-issued resource-scoped READ token. Both are the same one-line
+`request` + `enforce_picture_scope` fix and remain open as tracked follow-ups.
+
+**Owner:** CTO. **Revisit trigger (not a fixed version):** close both *before*
+scoped share links become a promoted or widely-used feature — in particular before
+any are issued against the public demo — since that is when "a scoped token in a
+third party's hands" stops being hypothetical. Take the fix opportunistically in
+any normal release before then.
 
 ### R1 — `GET /comfyui/pictures/{picture_id}/workflow` unscoped (MEDIUM)
 `pixlstash/routes/comfyui.py:1628`. Leaks the embedded ComfyUI workflow (prompts,
-seeds, model/LoRA names) for any picture. Fix: `request` + `enforce_picture_scope`.
+seeds, model/LoRA names) for any picture id to a scoped token. Returns workflow
+metadata only (no image bytes, file path, or credentials). Fix: `request` +
+`enforce_picture_scope`.
 
 ### R2 — `GET /pictures/{id}/character_likeness` unscoped (LOW)
 `pixlstash/routes/pictures/_crud.py:866`. Leaks existence + a likeness score of an
