@@ -11,6 +11,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # HF_TOKEN lifts HuggingFace's anonymous-download rate limit, which was
+    # throttling cold model fetches past the import tests' 10s timeout. Use a
+    # READ-ONLY, public-scope fine-grained token: that minimal scope is the
+    # compensating control for exposing it job-wide (the npm/wheel steps also
+    # see it). Set job-wide rather than per-step so a newly added pytest step
+    # can't silently reintroduce the flake. Absent on fork PRs by design —
+    # GitHub withholds secrets from forked-PR runs, which fall back to
+    # unauthenticated downloads. Do NOT switch those to pull_request_target.
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - name: Remove unused tools
         uses: jlumbroso/free-disk-space@main
@@ -214,6 +224,9 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    # See the `build` job for the rationale and the read-only token requirement.
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
