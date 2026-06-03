@@ -1,12 +1,13 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_prediction_service
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
+from pixlstash.routes.pictures._helpers import enforce_picture_scope
 
 logger = get_logger(__name__)
 
@@ -107,6 +108,7 @@ def create_router(server) -> APIRouter:
         response_model=list[TagPredictionItemResponse] | TagPredictionsResponse,
     )
     def get_tag_predictions(
+        request: Request,
         id: int,
         status: str | None = None,
         include_meta: bool = False,
@@ -115,6 +117,10 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        # Scope guard (BOLA): a resource-scoped READ share token may only read
+        # tag predictions for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
 
         predictions = tag_prediction_service.get_predictions(
             server.vault, pic_id, status

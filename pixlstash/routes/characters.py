@@ -348,6 +348,23 @@ def create_router(server) -> APIRouter:
                 )
             )
 
+        # Scope guard (BOLA): a resource-scoped token may only summarise its own
+        # character; the aggregate ALL/UNASSIGNED/SCRAPHEAP views are owner-only.
+        scope = getattr(request.state, "token_scope", None)
+        if id in ("ALL", "UNASSIGNED", "SCRAPHEAP"):
+            if scope is not None and scope.resource_type is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised for aggregate summaries",
+                )
+        else:
+            try:
+                _require_scope_allows_character(request, int(id))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid character id"
+                ) from exc
+
         if id == "ALL":
 
             def count_all(session: Session) -> int:
@@ -806,7 +823,9 @@ def create_router(server) -> APIRouter:
         description="Returns a character record by name within a named project.",
         response_model=CharacterResponse,
     )
-    def get_character_by_project_and_name(project_name: str, character_name: str):
+    def get_character_by_project_and_name(
+        request: Request, project_name: str, character_name: str
+    ):
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
@@ -823,7 +842,11 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Character not found")
             return safe_model_dict(character)
 
-        return server.vault.db.run_immediate_read_task(fetch)
+        result = server.vault.db.run_immediate_read_task(fetch)
+        # Scope guard (BOLA): a resource-scoped token may only read its own
+        # character — the id-based twin (get_character_by_id) already does this.
+        _require_scope_allows_character(request, int(result["id"]))
+        return result
 
     @router.get(
         "/characters/{id}/{field}",

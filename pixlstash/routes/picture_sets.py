@@ -416,7 +416,9 @@ def create_router(server) -> APIRouter:
         description="Returns picture set metadata for a named set within a named project.",
         response_model=PictureSetResponse,
     )
-    def get_picture_set_by_name(project_name: str, picture_set_name: str):
+    def get_picture_set_by_name(
+        request: Request, project_name: str, picture_set_name: str
+    ):
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
@@ -433,7 +435,11 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Picture set not found")
             return safe_model_dict(picture_set)
 
-        return server.vault.db.run_immediate_read_task(fetch)
+        result = server.vault.db.run_immediate_read_task(fetch)
+        # Scope guard (BOLA): a resource-scoped token may only read its own set —
+        # the id-based twin (get_picture_set) already does this.
+        _require_scope_allows_picture_set(request, int(result["id"]))
+        return result
 
     # Palette and icon list kept in sync with the frontend constants.
     _SET_COLORS = [

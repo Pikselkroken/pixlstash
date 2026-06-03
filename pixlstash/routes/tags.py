@@ -21,6 +21,7 @@ from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.routes.pictures._helpers import enforce_picture_scope
 
 logger = get_logger(__name__)
 
@@ -150,12 +151,15 @@ def create_router(server) -> APIRouter:
         description="Returns all tags currently attached to a picture.",
         response_model=ListPictureTagsResponse,
     )
-    def list_picture_tags(id: str):
+    def list_picture_tags(request: Request, id: str):
         try:
             try:
                 pic_id = int(id)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid picture id")
+            # Scope guard (BOLA): a resource-scoped READ share token may only
+            # read tags for pictures within its granted resource.
+            enforce_picture_scope(server, request, pic_id)
             pic_list = server.vault.db.run_task(
                 lambda session: Picture.find(
                     session,
