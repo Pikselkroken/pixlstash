@@ -122,6 +122,17 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 
 If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_BRANCH.md
 
+## Security & authorization review process
+
+Mandatory for any change touching authentication, authorization, or access-scope (tokens, sharing, per-object/per-resource access). These exist because a BOLA audit once shipped a "fix" that closed four endpoints and left three siblings of the same severity open (whole-library leaks via `/pictures/{id}/{field}`, `/stacks/{id}/pictures`, and a `character_id=UNASSIGNED` bypass). The misses were completeness and verification failures, not knowledge gaps.
+
+- **Coverage matrix, not a findings list.** Enumerate *every* endpoint that returns or mutates resource data and record, per endpoint, where its access check is. Empty cells are the bug list. Completeness must be arithmetic, not judgement, before an authz audit is called done.
+- **Mind the decomposition seams.** When a review is fanned out across file clusters, a risk class that spans files (e.g. read-BOLA in a CRUD module assigned to the "uploads" reviewer) falls between mandates. Assign by risk class as well as by file, and explicitly cover the read endpoints in every module.
+- **Trace the whole input space of a touched endpoint.** A fix verified only on the default path is not verified. Exercise alternate branches and parameters of the same handler (e.g. `character_id=UNASSIGNED`, `?fields=grid`, stream vs list).
+- **Independent adversarial sign-off before "done".** The author of a security fix must not be the one who certifies it complete. Spawn a separate reviewer/board tasked to *refute* and to hunt sibling and leftover holes; run it before merge, not after, and reproduce each finding.
+- **Tests assert both directions and fail-closed.** Cover the negative (out-of-scope blocked) and the positive (in-scope still works; over-blocking is its own regression), across sibling vectors, ideally written by someone other than the fix author.
+- **Prefer deny-by-default, centralised authz.** Per-handler opt-in checks guarantee this bug class recurs. Flag every new ad-hoc per-endpoint check and move toward a single chokepoint that fails closed for unrecognised routes/scopes.
+
 ## Conventions & Patterns
 
 - **Throughput & batching:** Always think about throughput and concurrency. Evaluate whether a piece of work is best handled as a batch following ML best practices — for images this usually means sorting and grouping by size so each batch is composed of equally-sized tensors (e.g. image and face-crop quality calculation).
