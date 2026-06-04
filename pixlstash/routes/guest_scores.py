@@ -22,6 +22,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.guest_session import GuestSession
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
 
@@ -199,6 +200,16 @@ def create_router(server) -> APIRouter:
                     detail=f"Score must be an integer 0-5, got {val!r} for picture {pic_id}",
                 )
             validated_scores[pic_id] = val
+
+        # Scope guard (BOLA): a READ-scoped share token may only score pictures
+        # within its granted resource.  None == owner / unscoped == no filter.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            validated_scores = {
+                pid: score
+                for pid, score in validated_scores.items()
+                if pid in scope_allowed
+            }
 
         # Resolve config limits
         max_stored = int(server._server_config.get("guest_max_stored_sessions", 1000))

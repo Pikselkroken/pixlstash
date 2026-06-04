@@ -32,6 +32,7 @@ from pixlstash.picture_scoring import (
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
+    fetch_scope_allowed_picture_ids,
     fetch_set_candidate_ids,
     normalize_set_mode,
     project_membership_exists_clause,
@@ -278,6 +279,7 @@ def select_pictures_for_listing(
     project_id: int | None = None,
     scope_set_id: int | None = None,
     scope_character_id: int | None = None,
+    scope_picture_id: int | None = None,
     stream_state: dict | None = None,
     count_only: bool = False,
 ):
@@ -466,6 +468,18 @@ def select_pictures_for_listing(
         character_id = scope_character_id
         character_id_list = [scope_character_id]
         character_mode = "union"
+
+    # Token scope enforcement: a single-picture share token may only ever
+    # resolve that one picture id.  Intersect with any caller-supplied ids so
+    # a `picture`-scoped token cannot widen the result to the whole vault.
+    if scope_picture_id is not None:
+        existing_ids = query_params.get("id")
+        if existing_ids:
+            query_params["id"] = [
+                i for i in existing_ids if str(i) == str(scope_picture_id)
+            ]
+        else:
+            query_params["id"] = [str(scope_picture_id)]
 
     # Shared-only filter: restrict to pictures that have an active READ token for the current user.
     if shared_only:
@@ -876,6 +890,25 @@ def select_pictures_for_listing(
             pics = _enrich_stack_counts(server, pics)
         return pics
     if character_id == "UNASSIGNED":
+        # Token scope enforcement (BOLA): this branch bypasses the set/character/
+        # picture scope filters applied to the main query path, so constrain it
+        # explicitly.  fetch_scope_allowed_picture_ids returns None for an
+        # owner/unscoped token and the allowed id set otherwise; fail closed when
+        # nothing is in scope rather than falling through to an unfiltered query.
+        scope_allowed_ids = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed_ids is not None:
+            requested = query_params.get("id")
+            if requested:
+                allowed = [
+                    str(i)
+                    for i in requested
+                    if str(i).isdigit() and int(i) in scope_allowed_ids
+                ]
+            else:
+                allowed = [str(i) for i in scope_allowed_ids]
+            if not allowed:
+                return _empty_result()
+            query_params["id"] = allowed
         unassigned_project_id = None
         unassigned_project_only = False
         if project_id_raw == "UNASSIGNED":
@@ -1331,6 +1364,11 @@ def register_routes(router, server):
             if token_scope is not None and token_scope.resource_type == "character"
             else None
         )
+        scope_picture_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "picture"
+            else None
+        )
         return select_pictures_for_listing(
             server=server,
             request=request,
@@ -1344,6 +1382,7 @@ def register_routes(router, server):
             project_id=project_id,
             scope_set_id=scope_set_id,
             scope_character_id=scope_character_id,
+            scope_picture_id=scope_picture_id,
         )
 
     @router.get(
@@ -1428,6 +1467,11 @@ def register_routes(router, server):
             if token_scope is not None and token_scope.resource_type == "character"
             else None
         )
+        scope_picture_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "picture"
+            else None
+        )
         # Mirror the /pictures endpoint: fields=grid implies stack_leaders_only.
         effective_stack_leaders_only = stack_leaders_only or (fields == "grid")
         stream_state: dict = {}
@@ -1444,6 +1488,7 @@ def register_routes(router, server):
             project_id=project_id,
             scope_set_id=scope_set_id,
             scope_character_id=scope_character_id,
+            scope_picture_id=scope_picture_id,
             stream_state=stream_state,
         )
         sql_count = int(stream_state.get("sql_count", 0))
@@ -1511,6 +1556,11 @@ def register_routes(router, server):
             if token_scope is not None and token_scope.resource_type == "character"
             else None
         )
+        scope_picture_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "picture"
+            else None
+        )
         # Use count_only=True to run a fast SELECT COUNT(*) rather than fetching all rows.
         # The count may be a small over-estimate for deployments with hidden-tag post-filtering,
         sort_mech = (
@@ -1531,5 +1581,6 @@ def register_routes(router, server):
             project_id=project_id,
             scope_set_id=scope_set_id,
             scope_character_id=scope_character_id,
+            scope_picture_id=scope_picture_id,
         )
         return {"count": count}

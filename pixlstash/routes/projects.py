@@ -30,6 +30,7 @@ from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
 
@@ -234,10 +235,19 @@ def create_router(server) -> APIRouter:
         response_model=ProjectMembershipResponse,
     )
     def get_batch_project_membership(
+        request: Request,
         picture_ids: list[int] = Body(default=[], embed=True),
     ):
         if not picture_ids:
             return {"project_assignments": {}, "unassigned_picture_ids": []}
+
+        # Scope guard (BOLA): restrict a READ-scoped share token to picture ids
+        # within its granted resource.  None == owner / unscoped == no filter.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                return {"project_assignments": {}, "unassigned_picture_ids": []}
 
         def fetch(session, ids: list[int]):
             rows = session.exec(
@@ -520,6 +530,22 @@ def create_router(server) -> APIRouter:
     )
     def get_project_summary(request: Request, project_id: str):
         server.auth.require_user_id(request)
+        # Scope guard (BOLA): a resource-scoped token may only summarise its own
+        # project; the aggregate UNASSIGNED view is owner-only.
+        scope = getattr(request.state, "token_scope", None)
+        if project_id == "UNASSIGNED":
+            if scope is not None and scope.resource_type is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised for aggregate summaries",
+                )
+        else:
+            try:
+                _require_scope_allows_project(request, int(project_id))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid project_id"
+                ) from exc
 
         hidden_tags = []
         if request.query_params.get("apply_tag_filter", "").lower() == "true":
@@ -605,18 +631,18 @@ def create_router(server) -> APIRouter:
         include_attachments: bool = Query(default=True),
     ):
         server.auth.require_user_id(request)
+        # Scope guard (BOLA): reject any token scoped to a different resource —
+        # not just a project-id mismatch.  Previously a character- or
+        # picture_set-scoped token fell through this check and could export an
+        # arbitrary project.
+        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
-        if token_scope is not None and token_scope.scope == "READ":
-            if (
-                token_scope.resource_type == "project"
-                and token_scope.resource_id != project_id
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token does not grant access to this project.",
-                )
-            if not token_scope.include_attachments:
-                include_attachments = False
+        if (
+            token_scope is not None
+            and token_scope.scope == "READ"
+            and not token_scope.include_attachments
+        ):
+            include_attachments = False
 
         def _safe(name: str) -> str:
             """Slugify a name for use as a directory component."""
@@ -839,6 +865,10 @@ def create_router(server) -> APIRouter:
     )
     def list_attachments(request: Request, project_id: int):
         server.auth.require_user_id(request)
+        # Scope guard (BOLA): a resource-scoped token may only touch its own
+        # project — checking the include_attachments flag alone let a project-A
+        # token list project-B's attachments.
+        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None
@@ -965,6 +995,9 @@ def create_router(server) -> APIRouter:
     )
     def download_attachment(request: Request, project_id: int, attachment_id: int):
         server.auth.require_user_id(request)
+        # Scope guard (BOLA): a resource-scoped token may only download from its
+        # own project's attachments.
+        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None
