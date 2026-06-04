@@ -1860,11 +1860,19 @@ class Server:
         ###############################
         # Rate limiting              ##
         ###############################
+        # Pass the configured limit/window through, but fall back to ``None``
+        # (NOT inline numbers) when a key is unset so the middleware uses its
+        # module-level ``_LIMIT`` / ``_WINDOW`` defaults. Those constants are the
+        # single source of truth for the defaults and the documented test hook —
+        # patching ``rate_limiter._LIMIT`` / ``_WINDOW`` only takes effect when
+        # the instance value is ``None``.
+        rate_limit_cfg = self._server_config.get("rate_limit_max_requests")
+        rate_window_cfg = self._server_config.get("rate_limit_window_seconds")
         self.api.add_middleware(
             RateLimitMiddleware,
             enabled=not bool(self._server_config.get("disable_rate_limit", False)),
-            limit=int(self._server_config.get("rate_limit_max_requests", 120)),
-            window=int(self._server_config.get("rate_limit_window_seconds", 60)),
+            limit=int(rate_limit_cfg) if rate_limit_cfg is not None else None,
+            window=int(rate_window_cfg) if rate_window_cfg is not None else None,
         )
 
         ###############################

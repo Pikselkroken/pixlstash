@@ -45,7 +45,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._enabled = enabled
         # None → fall back to the module defaults at dispatch time, so tests
         # that patch ``_LIMIT`` / ``_WINDOW`` keep working. server.py passes
-        # explicit values sourced from server-config.
+        # explicit values only when set in server-config; otherwise it passes
+        # None so these module defaults (and the test hook) apply.
         self._limit = limit
         self._window_seconds = window
         self._events: deque[float] = deque()
