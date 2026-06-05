@@ -31,6 +31,7 @@ from pixlstash.picture_scoring import (
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 from ._helpers import enforce_picture_scope
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 
 logger = get_logger(__name__)
@@ -289,6 +290,21 @@ def register_routes(router, server):
         ids = payload.get("ids", [])
         if not isinstance(ids, list):
             raise HTTPException(status_code=400, detail="'ids' must be a list")
+
+        # Scope guard (BOLA): a READ-scoped share token may only resolve
+        # thumbnails for pictures within its granted resource.  None == owner /
+        # unscoped == no filter.  Filtering the raw id list here flows through to
+        # every downstream query (penalised tags, Picture.find).
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            filtered_ids = []
+            for raw_id in ids:
+                try:
+                    if int(raw_id) in scope_allowed:
+                        filtered_ids.append(raw_id)
+                except (TypeError, ValueError):
+                    continue
+            ids = filtered_ids
 
         logger.debug(
             "Thumbnail batch request: client=%s count=%s ids_preview=%s",

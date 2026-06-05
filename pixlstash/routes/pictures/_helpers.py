@@ -360,6 +360,13 @@ def enforce_picture_scope(server, request: Request, picture_id: int):
                 status_code=403,
                 detail="Token is not authorised to access this picture",
             )
+    elif scope.resource_type == "picture":
+        # Single-picture share token: only that exact picture is permitted.
+        if picture_id != scope.resource_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised to access this picture",
+            )
     elif scope.resource_type is not None:
         raise HTTPException(
             status_code=403,

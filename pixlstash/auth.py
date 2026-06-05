@@ -78,6 +78,9 @@ AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
 READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
     {
         "/api/v1/pictures/thumbnails",
+        # Bulk tag lookup — POST only because it carries an id list; the handler
+        # is a pure SELECT and scope-filters its ids (see tags.bulk_fetch_tags).
+        "/api/v1/pictures/tags/bulk_fetch",
         "/api/v1/pictures/guest-scores",
         "/api/v1/pictures/guest-scores/session",
         # Membership lookup endpoints use POST for body size but are semantically read-only.

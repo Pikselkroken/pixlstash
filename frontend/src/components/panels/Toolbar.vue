@@ -897,6 +897,76 @@
                 <div class="ctx-sep" />
               </template>
 
+              <!-- ── Restore from snapshot ─────────────────────────── -->
+              <template
+                v-if="!isReadOnly && selectedCount >= 1 && !isScrapheapView"
+              >
+                <div
+                  ref="restoreSubmenuWrapRef"
+                  class="ctx-submenu-wrap"
+                  @mouseenter="restoreSubmenuOpen = true"
+                  @mouseleave="restoreSubmenuOpen = false"
+                >
+                  <button
+                    class="ctx-item"
+                    :disabled="selectedCount === 0 || isReadOnly"
+                  >
+                    <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+                    Restore from snapshot
+                    <v-icon class="ctx-arrow" size="14"
+                      >mdi-chevron-right</v-icon
+                    >
+                  </button>
+                  <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+                    <button
+                      v-for="cp in recentSnapshots"
+                      :key="cp.id"
+                      class="ctx-item"
+                      :disabled="identicalSnapshotIds.has(cp.id)"
+                      :title="
+                        identicalSnapshotIds.has(cp.id)
+                          ? 'Selection is identical to this snapshot'
+                          : undefined
+                      "
+                      @click="handleRestoreFromSnapshot(cp.id)"
+                    >
+                      <v-icon class="ctx-icon" size="14"
+                        >mdi-camera-outline</v-icon
+                      >
+                      {{ cp.label || cp.kind }}
+                      <span class="ctx-default-pill">{{
+                        cp.created_at ? formatSnapshotDate(cp.created_at) : ""
+                      }}</span>
+                    </button>
+                    <button class="ctx-item" @click="handleRestoreMore">
+                      <v-icon class="ctx-icon" size="14"
+                        >mdi-dots-horizontal</v-icon
+                      >
+                      More…
+                    </button>
+                  </div>
+                </div>
+              </template>
+
+              <!-- ── Reverse image search ──────────────────────────── -->
+              <template v-if="!isScrapheapView">
+                <button
+                  class="ctx-item"
+                  :disabled="selectedCount === 0"
+                  title="Find visually similar images"
+                  @click="
+                    $emit('reverse-image-search');
+                    selectionMenuOpen = false;
+                  "
+                >
+                  <v-icon class="ctx-icon" size="15"
+                    >mdi-image-search-outline</v-icon
+                  >
+                  Reverse image search
+                </button>
+                <div class="ctx-sep" />
+              </template>
+
               <!-- ── Remove / Delete (danger) ──────────────────────── -->
               <button
                 v-if="showRemoveButton"

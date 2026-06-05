@@ -26,6 +26,7 @@ from pixlstash.event_types import EventType
 from pixlstash.routes._helpers import picture_referenced_by_project
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 from pixlstash.picture_scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
@@ -415,7 +416,9 @@ def create_router(server) -> APIRouter:
         description="Returns picture set metadata for a named set within a named project.",
         response_model=PictureSetResponse,
     )
-    def get_picture_set_by_name(project_name: str, picture_set_name: str):
+    def get_picture_set_by_name(
+        request: Request, project_name: str, picture_set_name: str
+    ):
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
@@ -432,7 +435,11 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Picture set not found")
             return safe_model_dict(picture_set)
 
-        return server.vault.db.run_immediate_read_task(fetch)
+        result = server.vault.db.run_immediate_read_task(fetch)
+        # Scope guard (BOLA): a resource-scoped token may only read its own set —
+        # the id-based twin (get_picture_set) already does this.
+        _require_scope_allows_picture_set(request, int(result["id"]))
+        return result
 
     # Palette and icon list kept in sync with the frontend constants.
     _SET_COLORS = [
@@ -582,11 +589,20 @@ def create_router(server) -> APIRouter:
         response_model=dict,
     )
     def get_batch_membership(
+        request: Request,
         picture_ids: list[int] = Body(default=[]),
         include_deleted: bool = Body(False),
     ):
         if not picture_ids:
             return {}
+
+        # Scope guard (BOLA): restrict a READ-scoped share token to picture ids
+        # within its granted resource.  None == owner / unscoped == no filter.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                return {}
 
         def fetch_membership(session, ids: list[int], include_deleted: bool):
             # Expand stacks: include all stack siblings of requested pictures.

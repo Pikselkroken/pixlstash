@@ -50,6 +50,7 @@ from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.filter_helpers import (
     combine_likeness_scores,
     fetch_scope_allowed_character_ids,
+    fetch_scope_allowed_picture_ids,
     VALID_COMBINE_MODES,
 )
 from pixlstash.utils.service.path_utils import resolve_path_within
@@ -346,6 +347,23 @@ def create_router(server) -> APIRouter:
                     func.lower(Tag.tag).in_(hidden_tag_set),
                 )
             )
+
+        # Scope guard (BOLA): a resource-scoped token may only summarise its own
+        # character; the aggregate ALL/UNASSIGNED/SCRAPHEAP views are owner-only.
+        scope = getattr(request.state, "token_scope", None)
+        if id in ("ALL", "UNASSIGNED", "SCRAPHEAP"):
+            if scope is not None and scope.resource_type is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised for aggregate summaries",
+                )
+        else:
+            try:
+                _require_scope_allows_character(request, int(id))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid character id"
+                ) from exc
 
         if id == "ALL":
 
@@ -749,10 +767,19 @@ def create_router(server) -> APIRouter:
         response_model=CharacterMembershipResponse,
     )
     def get_batch_character_membership(
+        request: Request,
         picture_ids: list[int] = Body(default=[], embed=True),
     ):
         if not picture_ids:
             return {"character_assignments": {}, "pictures_with_faces": []}
+
+        # Scope guard (BOLA): restrict a READ-scoped share token to picture ids
+        # within its granted resource.  None == owner / unscoped == no filter.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                return {"character_assignments": {}, "pictures_with_faces": []}
 
         def fetch(session, ids: list[int]):
             rows = session.exec(
@@ -796,7 +823,9 @@ def create_router(server) -> APIRouter:
         description="Returns a character record by name within a named project.",
         response_model=CharacterResponse,
     )
-    def get_character_by_project_and_name(project_name: str, character_name: str):
+    def get_character_by_project_and_name(
+        request: Request, project_name: str, character_name: str
+    ):
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
@@ -813,7 +842,11 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Character not found")
             return safe_model_dict(character)
 
-        return server.vault.db.run_immediate_read_task(fetch)
+        result = server.vault.db.run_immediate_read_task(fetch)
+        # Scope guard (BOLA): a resource-scoped token may only read its own
+        # character — the id-based twin (get_character_by_id) already does this.
+        _require_scope_allows_character(request, int(result["id"]))
+        return result
 
     @router.get(
         "/characters/{id}/{field}",
