@@ -11,6 +11,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # HF_TOKEN lifts HuggingFace's anonymous-download rate limit, which was
+    # throttling cold model fetches past the import tests' 10s timeout. Use a
+    # READ-ONLY, public-scope fine-grained token: that minimal scope is the
+    # compensating control for exposing it job-wide (the npm/wheel steps also
+    # see it). Set job-wide rather than per-step so a newly added pytest step
+    # can't silently reintroduce the flake. Absent on fork PRs by design —
+    # GitHub withholds secrets from forked-PR runs, which fall back to
+    # unauthenticated downloads. Do NOT switch those to pull_request_target.
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - name: Remove unused tools
         uses: jlumbroso/free-disk-space@main
@@ -42,8 +52,23 @@ jobs:
       - name: Cache HuggingFace models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/picture_tagger.py') }}
+          # Two distinct on-disk locations, both required:
+          #  * ~/.cache/huggingface — the HF hub cache used by CLIP/SBert/
+          #    Florence via from_pretrained_local_first.
+          #  * ~/.local/share/pixlstash/downloaded_models — platformdirs
+          #    user_data_dir, where the WD14 and PixlStash taggers land because
+          #    they call hf_hub_download(local_dir=...), which bypasses the hub
+          #    cache entirely. The old key cached only the hub dir and was thus
+          #    a no-op for the taggers that actually 429'd.
+          # A warm cache makes needs_download() (a pure file-existence check)
+          # return False, so download() — and its HEAD revalidation, the call
+          # that returns 429 — is never issued. Key off the tagger plugins so a
+          # model/revision bump busts the cache; restore-keys keeps it warm
+          # across unrelated commits.
+          path: |
+            ~/.cache/huggingface
+            ~/.local/share/pixlstash/downloaded_models
+          key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py') }}
           restore-keys: hf-models-${{ runner.os }}-
 
       - name: Verify wheel includes Alembic assets
@@ -214,6 +239,9 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    # See the `build` job for the rationale and the read-only token requirement.
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
@@ -237,8 +265,16 @@ jobs:
       - name: Cache HuggingFace models
         uses: actions/cache@v4
         with:
-          path: ~\.cache\huggingface
-          key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/picture_tagger.py') }}
+          # See the Linux `build` job for the rationale. The taggers download
+          # via hf_hub_download(local_dir=...) into platformdirs' Windows
+          # user_data_dir — %LOCALAPPDATA%\pixlstash\pixlstash\downloaded_models
+          # (the doubled "pixlstash" is platformdirs' appauthor=appname default)
+          # — NOT ~\.cache\huggingface. Caching both is what makes a warm runner
+          # skip the HEAD revalidation that returns the 429.
+          path: |
+            ~\.cache\huggingface
+            ~\AppData\Local\pixlstash\pixlstash\downloaded_models
+          key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py') }}
           restore-keys: hf-models-${{ runner.os }}-
 
       # Windows only validates OS-sensitive behaviour (file/path/process
