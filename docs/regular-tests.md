@@ -74,15 +74,60 @@ shrinks as automated coverage grows.
 |------|--------|--------|
 | expands and collapses stacks from the View menu | Expand-all / collapse-all stack controls in the View menu | ✅ |
 
+## Tags — `tags.spec.js` (plan §5)
+| Test | Covers | Status |
+|------|--------|--------|
+| adds and removes a tag in the overlay | Add a tag via the inline input; remove it via its ✕ button (chip appears/disappears with no reload) | ✅ |
+
+## Star rating — `rating.spec.js` (plan §6)
+| Test | Covers | Status |
+|------|--------|--------|
+| sets a rating that persists across a reload | Click the Nth star in the overlay; the score round-trips to the backend and survives a reload | ✅ |
+
+## Picture Sets / Projects / Characters — `entities.spec.js` (plan §7/§8/§9)
+| Test | Covers | Status |
+|------|--------|--------|
+| filters the grid to a picture set (§7) | Sidebar set row → `/set/:id`, row goes active, grid renders | ✅ |
+| filters the grid to a character (§9) | Sidebar character row → `/character/:id`, row goes active, grid renders | ✅ |
+| opens a project from the Projects tab (§8) | Projects tab → project row → `/project/:id` | ✅ |
+
+## Context menu — `context-menu.spec.js` (plan §3.5)
+| Test | Covers | Status |
+|------|--------|--------|
+| opens on right-click and lists picture actions | Right-click a card opens `.image-ctx-menu` exposing Tag / Reverse image search / Share image; Escape dismisses it | ✅ |
+
+## Statistics sidebar — `stats.spec.js`
+| Test | Covers | Status |
+|------|--------|--------|
+| toggles the stats sidebar open and closed | Toolbar chart-bar toggle shows/hides `.stats-sidebar-content` with its Tags/Pictures/Tasks tabs | ✅ |
+
+## Boolean set operations — `set-operations.spec.js`
+| Test | Covers | Status |
+|------|--------|--------|
+| combines multiple sets via the multi-select toolbar | Ctrl-click a second set reveals the combine toolbar with Union / Overlap / Difference / Unique (XOR); clearing dismisses it | ✅ |
+
+## Sharing — `sharing.spec.js`
+| Test | Covers | Status |
+|------|--------|--------|
+| creates a read-only share link for a picture | Context menu → Share image → Create Link mints a read-only URL shown for copying | ✅ |
+
+## Snapshots — `snapshots.spec.js`
+| Test | Covers | Status |
+|------|--------|--------|
+| lists restore points with a restore action (list-only) | Settings → Snapshots lists ≥1 restore point, each offering a Restore action (rollback itself is **not** clicked — it would rewrite the shared DB) | ✅ |
+
 ---
 
 ## Coverage gaps / testing debt (risk-based)
 
 Tracked so they aren't forgotten — weighted by blast radius:
 
-- **Snapshots & rollback (v1.5) — HIGHEST RISK, not yet automated.** The
-  round-trip (snapshot → mutate → rollback) and *selective metadata restore*
-  have no E2E coverage. Data-loss territory; should be the next spec.
+- **Snapshots rollback & selective restore (v1.5) — HIGH RISK, partially
+  automated.** `snapshots.spec.js` now asserts the restore-point list renders
+  with a Restore action, but the destructive round-trip (snapshot → mutate →
+  rollback) and *selective metadata restore* are still uncovered — clicking
+  Restore would rewrite the shared fixture DB, so it needs an isolated backend.
+  Data-loss territory; should be the next spec.
 - **Bulk operations at scale** — select-all/range and apply-to-many beyond a
   handful of pictures are only smoke-covered.
 - **Import of malformed / huge / unsupported files** — graceful handling
