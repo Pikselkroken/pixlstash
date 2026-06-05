@@ -274,10 +274,10 @@ const projectEditorProject = ref(null);
 // --- Move-to-project menus ---
 const characterMoveMenuOpen = ref(false);
 const characterMoveMenuBtnRef = ref(null);
-const characterMenuPos = ref({ top: 0, left: 0 });
+const characterMenuPos = ref({ top: "0px", left: "0px" });
 const setMoveMenuOpen = ref(false);
 const setMoveMenuBtnRef = ref(null);
-const setMenuPos = ref({ top: 0, left: 0 });
+const setMenuPos = ref({ top: "0px", left: "0px" });
 
 // --- Sidebar Context Menu ---
 const sidebarCtxVisible = ref(false);
@@ -329,11 +329,34 @@ const revokeSharesPending = ref(null); // { resourceType, resourceId, label }
 const shareDialogOpen = ref(false);
 const shareDialogPending = ref(null); // { resourceType, resourceId, label }
 
+// Worst-case height of a move/create flyout. Keep in sync with the
+// .sidebar-move-menu max-height CSS rule below.
+const MOVE_MENU_MAX_H = 420;
+
+// Position a move/create flyout relative to its trigger button, returning a
+// ready-to-bind style object. Opens downward (anchored at the trigger's
+// bottom) when there is room; otherwise flips upward and anchors the menu's
+// bottom just above the trigger so it stays attached, matching the flip
+// behaviour of sidebarCtxMenuStyle. An over-tall menu still scrolls inside
+// its max-height in either direction.
+function _moveMenuPos(rect) {
+  const margin = 8;
+  const left = rect.left + "px";
+  // Flip up only when opening downward would push the menu past the viewport
+  // bottom and there is more room above the trigger than below it.
+  const spaceBelow = window.innerHeight - rect.bottom;
+  const spaceAbove = rect.top;
+  if (spaceBelow < MOVE_MENU_MAX_H + margin && spaceAbove > spaceBelow) {
+    // Anchor the menu's bottom just above the trigger's top edge.
+    return { bottom: window.innerHeight - rect.top + 4 + "px", left };
+  }
+  return { top: rect.bottom + 4 + "px", left };
+}
+
 function openCharacterMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
   if (el) {
-    const rect = el.getBoundingClientRect();
-    characterMenuPos.value = { top: rect.bottom + 4, left: rect.left };
+    characterMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
   characterMoveMenuOpen.value = !characterMoveMenuOpen.value;
 }
@@ -341,8 +364,7 @@ function openCharacterMoveMenu(event) {
 function openSetMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
   if (el) {
-    const rect = el.getBoundingClientRect();
-    setMenuPos.value = { top: rect.bottom + 4, left: rect.left };
+    setMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
   setMoveMenuOpen.value = !setMoveMenuOpen.value;
 }
@@ -5161,10 +5183,7 @@ defineExpose({
                                 selectedProjectId === p.id
                               "
                               class="sidebar-move-menu"
-                              :style="{
-                                top: characterMenuPos.top + 'px',
-                                left: characterMenuPos.left + 'px',
-                              }"
+                              :style="characterMenuPos"
                             >
                               <div
                                 class="sidebar-move-menu-item sidebar-move-menu-item--create"
@@ -5372,10 +5391,7 @@ defineExpose({
                                 setMoveMenuOpen && selectedProjectId === p.id
                               "
                               class="sidebar-move-menu"
-                              :style="{
-                                top: setMenuPos.top + 'px',
-                                left: setMenuPos.left + 'px',
-                              }"
+                              :style="setMenuPos"
                             >
                               <div
                                 class="sidebar-move-menu-item sidebar-move-menu-item--create"
@@ -7543,7 +7559,7 @@ defineExpose({
   border-radius: 6px;
   min-width: 180px;
   max-width: 300px;
-  max-height: 420px;
+  max-height: 420px; /* keep in sync with MOVE_MENU_MAX_H in the script */
   overflow-y: auto;
   padding: 4px 0;
   box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.3);
