@@ -493,7 +493,22 @@ class InferenceEngine:
             silent=True,
         )
         if wd14_service.needs_download():
-            wd14_service.download()
+            # Best-effort, mirroring the PixlStash tagger above: a transient
+            # model-download failure (e.g. a HuggingFace 429) must disable WD14
+            # tagging, not propagate out of engine creation and fail the
+            # caller. Tagging is async/best-effort, so a network blip here must
+            # never fail a user's import.
+            try:
+                wd14_service.download()
+            except Exception as exc:
+                logger.warning(
+                    "WD14 tagger download failed (%s), disabling.", exc
+                )
+        if wd14_service.needs_download():
+            logger.warning(
+                "WD14 tagger model not found in %s, disabling.", model_dir
+            )
+            wd14_enabled = False
 
         vram_budget = VramBudget(device)
         vram_budget.set_budget_gb(max_vram_gb)
