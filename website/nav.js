@@ -3,6 +3,7 @@
     { href: "index.html", label: "Home" },
     { href: "introduction.html", label: "Getting started" },
     { href: "features.html", label: "Features" },
+    { href: "comfyui.html", label: "ComfyUI" },
     {
       href: "whatsnew.html",
       label: "What's New in 1.5",

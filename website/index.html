@@ -224,6 +224,77 @@
         object-position: top;
       }
 
+      .comfy-teaser {
+        display: block;
+        text-decoration: none;
+        color: inherit;
+        margin: 6px auto 16px;
+        background: var(--panel-strong);
+        border: 1px solid rgba(14, 127, 168, 0.25);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        transition: box-shadow 0.18s ease;
+      }
+
+      .comfy-teaser:hover {
+        box-shadow: 0 4px 14px rgba(14, 127, 168, 0.18);
+      }
+
+      .comfy-teaser-wrap {
+        display: grid;
+        grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr);
+        gap: 0;
+        align-items: stretch;
+      }
+
+      .comfy-teaser-copy {
+        padding: 14px 18px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 6px;
+        background: linear-gradient(
+          125deg,
+          rgba(14, 127, 168, 0.12),
+          rgba(10, 95, 126, 0.06)
+        );
+      }
+
+      .comfy-teaser-label {
+        font-size: 0.74rem;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #0e7fa8;
+        font-weight: 700;
+      }
+
+      .comfy-teaser-copy h2 {
+        margin: 0;
+        font-size: clamp(1rem, 1.8vw, 1.3rem);
+        line-height: 1.2;
+      }
+
+      .comfy-teaser-copy p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.4;
+        font-size: 0.88rem;
+      }
+
+      .comfy-teaser-link {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: #0e7fa8;
+      }
+
+      .comfy-teaser-media img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: top;
+      }
+
       .cta-banner p {
         margin: 0;
         color: var(--muted);
@@ -275,6 +346,10 @@
         }
 
         .demo-teaser-wrap {
+          grid-template-columns: 1fr;
+        }
+
+        .comfy-teaser-wrap {
           grid-template-columns: 1fr;
         }
 
@@ -433,6 +508,27 @@
             <img
               src="assets/ScreenshotSnapshots.jpg"
               alt="PixlStash 1.5: snapshots and metadata restore"
+            />
+          </div>
+        </div>
+      </a>
+
+      <a class="comfy-teaser" href="comfyui.html">
+        <div class="comfy-teaser-wrap">
+          <div class="comfy-teaser-copy">
+            <span class="comfy-teaser-label">ComfyUI</span>
+            <h2>Drive PixlStash from ComfyUI</h2>
+            <p>
+              Custom nodes to load, search, gate by likeness, and save vault
+              images straight from your ComfyUI workflows — with ready-made
+              example graphs to get started.
+            </p>
+            <span class="comfy-teaser-link">Explore the nodes →</span>
+          </div>
+          <div class="comfy-teaser-media">
+            <img
+              src="assets/ScreenshotComfyUi.jpg"
+              alt="PixlStash ComfyUI integration"
             />
           </div>
         </div>

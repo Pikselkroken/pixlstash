@@ -1,0 +1,980 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ComfyUI nodes — PixlStash</title>
+    <meta
+      name="description"
+      content="ComfyUI-PixlStash connects your ComfyUI workflows to a PixlStash vaul. Load, search, gate, and save images by project, set, or character. Explore the nodes, example workflows, and how to install them."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+      html {
+        scroll-behavior: smooth;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+
+      #install-manager {
+        scroll-margin-top: 24px;
+      }
+
+      .section {
+        margin-top: 64px;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+
+      .section-title {
+        font-size: 2rem;
+        margin: 0;
+      }
+
+      .section-subtitle {
+        color: var(--muted);
+        max-width: 560px;
+        line-height: 1.6;
+      }
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+      }
+
+      .feature-card {
+        background: var(--panel);
+        border-radius: var(--radius-md);
+        padding: 18px;
+        border: 1px solid rgba(34, 38, 44, 0.1);
+      }
+
+      .feature-card h3 {
+        margin: 0 0 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .feature-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+        font-size: 0.95rem;
+      }
+
+      .feature-card code,
+      .shot p code,
+      .config-table code,
+      .method-info code,
+      .section-subtitle code {
+        font-family: var(--mono);
+        font-size: 0.85em;
+        background: var(--panel-strong);
+        border-radius: 4px;
+        padding: 1px 5px;
+        color: var(--accent-2);
+      }
+
+      .node-tag {
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding: 2px 7px;
+        border-radius: 999px;
+        font-weight: 600;
+      }
+
+      .node-tag--write {
+        background: rgba(196, 148, 47, 0.16);
+        color: #7a5a18;
+        border: 1px solid rgba(196, 148, 47, 0.32);
+      }
+
+      .node-tag--read {
+        background: rgba(47, 139, 95, 0.12);
+        color: #1e5c3a;
+        border: 1px solid rgba(47, 139, 95, 0.28);
+      }
+
+      .node-req {
+        display: block;
+        margin-top: 10px;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+
+      .shot-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 18px;
+      }
+
+      .shot {
+        border-radius: var(--radius-lg);
+        padding: 18px;
+        border: 1px solid rgba(34, 38, 44, 0.12);
+        background: linear-gradient(
+          135deg,
+          rgba(255, 255, 255, 0.92),
+          rgba(235, 239, 244, 0.7)
+        );
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .shot img {
+        width: 100%;
+        height: auto;
+        border-radius: 14px;
+        display: block;
+        margin-bottom: 14px;
+        border: 1px solid rgba(34, 38, 44, 0.18);
+        box-shadow: 0 18px 40px rgba(17, 20, 26, 0.2);
+        background: #1c1f24;
+      }
+
+      .shot-image-btn {
+        display: block;
+        width: 100%;
+        border: none;
+        padding: 0;
+        background: transparent;
+        cursor: zoom-in;
+        text-align: left;
+      }
+
+      .shot h4 {
+        margin: 0 0 8px;
+        font-size: 1.1rem;
+      }
+
+      .shot p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.92rem;
+        line-height: 1.55;
+      }
+
+      .shot-image-pair {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .shot-image-pair .shot-image-btn {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .shot-image-pair .shot-image-btn img {
+        margin-bottom: 0;
+        height: 150px;
+        object-fit: cover;
+        object-position: center;
+      }
+
+      .shot-link {
+        margin-top: 14px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--accent-2);
+      }
+
+      .shot-link:hover {
+        color: var(--accent);
+      }
+
+      /* Video demo cards reuse .features/.feature/.video-card from pixlstash.css */
+      .video-card video {
+        cursor: zoom-in;
+      }
+
+      /* Configuration table */
+      .config-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        border: 1px solid rgba(34, 38, 44, 0.1);
+        font-size: 0.92rem;
+      }
+
+      .config-table th,
+      .config-table td {
+        text-align: left;
+        padding: 12px 16px;
+        border-bottom: 1px solid rgba(34, 38, 44, 0.08);
+        line-height: 1.5;
+      }
+
+      .config-table th {
+        background: var(--panel-strong);
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .config-table td:first-child {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        white-space: nowrap;
+        color: var(--accent-2);
+      }
+
+      .config-table td {
+        color: var(--muted);
+      }
+
+      .config-table tr:last-child td {
+        border-bottom: none;
+      }
+
+      /* Install layout */
+      .install-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 28px;
+        align-items: start;
+      }
+
+      .install-card {
+        background: var(--panel);
+        border-radius: var(--radius-lg);
+        padding: 22px;
+        border: 1px solid rgba(34, 38, 44, 0.11);
+        box-shadow: 0 16px 48px var(--shadow);
+      }
+
+      .install-card h3 {
+        margin: 0 0 14px;
+        font-size: 1.15rem;
+      }
+
+      .install-card img {
+        width: 100%;
+        height: auto;
+        border-radius: 12px;
+        display: block;
+        margin-bottom: 14px;
+        border: 1px solid rgba(34, 38, 44, 0.18);
+        box-shadow: 0 12px 28px rgba(17, 20, 26, 0.18);
+        cursor: zoom-in;
+        background: #1c1f24;
+      }
+
+      /* Lightbox (handles both screenshots and videos) */
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(18, 20, 24, 0.72);
+        z-index: 2000;
+        padding: 28px;
+      }
+
+      .lightbox.open {
+        display: flex;
+      }
+
+      .lightbox-image,
+      .lightbox-video {
+        max-width: min(1280px, 94vw);
+        max-height: 84vh;
+        width: auto;
+        height: auto;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
+      }
+
+      .lightbox-close {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+        border: none;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.9);
+        color: #1b1f24;
+        cursor: pointer;
+      }
+
+      .lightbox-close:hover {
+        background: rgba(255, 255, 255, 1);
+      }
+
+      @media (max-width: 700px) {
+        .section-title {
+          font-size: 1.5rem;
+        }
+
+        .install-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
+
+      <div class="page-hero">
+        <h1>PixlStash for ComfyUI</h1>
+        <p>
+          A pack of custom ComfyUI nodes that wire your workflows straight into
+          a PixlStash vault. Load images by project, set, or character; search
+          by face, picture, or meaning; gate generations by likeness; and save
+          the results back with full metadata with no manual exporting in
+          between.
+        </p>
+        <div class="cta-row">
+          <a class="download-btn" href="#install-manager"
+            >Install with ComfyUI Manager</a
+          >
+          <a
+            class="demo-btn"
+            href="https://github.com/Pikselkroken/ComfyUI-PixlStash"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Get the nodes on GitHub</a
+          >
+          <a
+            class="demo-btn"
+            href="https://github.com/Pikselkroken/ComfyUI-PixlStash/tree/main/examples"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Browse example workflows</a
+          >
+        </div>
+      </div>
+
+      <!-- ── See it in action (the two ComfyUI demo videos) ── -->
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">See it in action</h2>
+          <p class="section-subtitle">
+            Two short clips driving PixlStash from ComfyUI. Pull matching faces
+            out of your vault, and extend a vault image beyond its borders.
+          </p>
+        </div>
+        <div class="features">
+          <!-- ComfyUI Face Search -->
+          <div class="feature">
+            <div class="feature-text">
+              <span class="feature-number">ComfyUI</span>
+              <h2>Search faces from ComfyUI</h2>
+              <p>
+                Use the PixlStash ComfyUI nodes to search your library for
+                pictures matching a face, then pull them straight into your
+                workflow to edit them with no manual exporting in between.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/08-ComfyUI-FaceSearch.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+
+          <!-- ComfyUI Outpaint -->
+          <div class="feature feature--reverse">
+            <div class="feature-text">
+              <span class="feature-number">ComfyUI</span>
+              <h2>Outpaint PixlStash images</h2>
+              <p>
+                A ready-made ComfyUI node and workflow lets you load an image,
+                outpaint it, extending it beyond its original borders and saving
+                the result back to PixlStash.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/09-ComfyUI-OutPaint.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── The nodes ── -->
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">The nodes</h2>
+          <p class="section-subtitle">
+            Connection credentials (URL and API token) are configured once in
+            <strong>ComfyUI Settings &gt; PixlStash</strong> and read by the
+            nodes at runtime. They never appear as node widgets or in saved
+            workflow JSON.
+          </p>
+        </div>
+
+        <div class="feature-grid">
+          <div class="feature-card">
+            <h3>Project Loader</h3>
+            <p>
+              Selects a project from your vault and outputs a
+              <code>PIXLSTASH_PROJECT</code> wire that scopes the operations of
+              every node downstream.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Set Loader</h3>
+            <p>
+              Selects a set within a project, outputting
+              <code>PIXLSTASH_PROJECT</code> and <code>PIXLSTASH_SET</code>
+              wires. Reference-character sets are excluded from the dropdown.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Character Loader</h3>
+            <p>
+              Selects a character from your vault, outputting
+              <code>PIXLSTASH_PROJECT</code> and
+              <code>PIXLSTASH_CHARACTER</code> wires.
+              <span class="node-req">Requires PixlStash v1.2.1+.</span>
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Picture Loader</h3>
+            <p>
+              Loads images as <code>IMAGE</code> and <code>MASK</code> tensors.
+              <strong>Picker mode</strong> opens a thumbnail browser to choose
+              exactly the images you want; <strong>browse mode</strong> fetches
+              automatically from any connected project, set, or character
+              filter. Context wires pass straight through to a downstream saver.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>
+              Picture Saver
+              <span class="node-tag node-tag--write">write scope</span>
+            </h3>
+            <p>
+              Uploads images and optionally assigns them to a project, set,
+              and/or character. Supports embedded workflow metadata in PNG
+              output and returns the IDs of successfully imported pictures.
+            </p>
+          </div>
+        </div>
+
+        <div class="shot-grid" style="margin-top: 18px">
+          <div class="shot">
+            <h4>
+              Likeness Search
+              <span class="node-tag node-tag--read">read scope</span>
+            </h4>
+            <div class="shot-image-pair">
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/FaceLikenessSearch.jpg"
+                  data-full="assets/FaceLikenessSearch.jpg"
+                  alt="PixlStash Likeness Search node matching a reference face against the vault"
+                  loading="lazy"
+                />
+              </button>
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/MultiLikenessSearch.jpg"
+                  data-full="assets/MultiLikenessSearch.jpg"
+                  alt="PixlStash Likeness Search combining multiple reference images into one query"
+                  loading="lazy"
+                />
+              </button>
+            </div>
+            <p>
+              Search by likeness to a face, or combine several reference images
+              into a single embedding query (e.g. "an old man and a young man
+              drinking beer"). Filter by project, character, and set by wiring
+              those inputs.
+              <span class="node-req">Requires PixlStash v1.4+.</span>
+            </p>
+          </div>
+
+          <div class="shot">
+            <h4>
+              Semantic Search
+              <span class="node-tag node-tag--read">read scope</span>
+            </h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/SemanticSearch.jpg"
+                data-full="assets/SemanticSearch.jpg"
+                alt="PixlStash Semantic Search node pulling images from a vault by a text query"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Pull images out of the vault by meaning. Type a text string and
+              the node uses PixlStash's semantic search to return the closest
+              matches. Filter by project, character, and set.
+              <span class="node-req">Requires PixlStash v1.4+.</span>
+            </p>
+          </div>
+
+          <div class="shot">
+            <h4>
+              Face Likeness Gate
+              <span class="node-tag node-tag--write">write scope</span>
+            </h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyFaceLikenessGate.jpg"
+                data-full="assets/ComfyFaceLikenessGate.jpg"
+                alt="PixlStash Face Likeness Gate splitting a batch into accepted and rejected by character match"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Keep only the generations that actually match a reference
+              character. Wire in a Character Loader plus a batch of images, set
+              a likeness threshold, and the gate splits the batch into
+              <code>accepted</code> and <code>rejected</code> streams (with
+              counts) — so you never waste compute polishing an off-model
+              render.
+              <span class="node-req"
+                >Requires PixlStash v1.4+ and a running face-extraction
+                worker.</span
+              >
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Example workflows ── -->
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Example workflows</h2>
+          <p class="section-subtitle">
+            Ready-to-load workflow JSON files ship in the
+            <a
+              href="https://github.com/Pikselkroken/ComfyUI-PixlStash/tree/main/examples"
+              target="_blank"
+              rel="noopener noreferrer"
+              style="color: var(--accent-2); text-decoration: underline"
+              >examples directory</a
+            >. They use only PixlStash nodes plus core ComfyUI nodes, so they
+            load on any install. Click a screenshot to enlarge it.
+          </p>
+        </div>
+        <div class="shot-grid">
+          <div class="shot">
+            <h4>Load &amp; save round-trip</h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyWorkflow.png"
+                data-full="assets/ComfyWorkflow.png"
+                alt="A PixlStash load-and-save round-trip workflow in ComfyUI"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              The starting point: load images from a project, set, or character
+              and save the results straight back into your vault.
+            </p>
+            <a
+              class="shot-link"
+              href="https://github.com/Pikselkroken/ComfyUI-PixlStash/blob/main/examples/PixlStash-LoadAndSave.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open workflow JSON →</a
+            >
+          </div>
+
+          <div class="shot">
+            <h4>Search → image edit → save</h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotSearchEdit.jpg"
+                data-full="assets/ScreenshotSearchEdit.jpg"
+                alt="Face likeness search feeding a ComfyUI image-edit pipeline, end to end"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              End to end: find source images by face or meaning, run them
+              through an edit pipeline, and save the edited results back to
+              PixlStash.
+            </p>
+            <a
+              class="shot-link"
+              href="https://github.com/Pikselkroken/ComfyUI-PixlStash/blob/main/examples/PixlStash-SearchImageEdit.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open workflow JSON →</a
+            >
+          </div>
+
+          <div class="shot">
+            <h4>Image edit by prompt</h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyImageEdit.jpg"
+                data-full="assets/ComfyImageEdit.jpg"
+                alt="Editing a loaded vault image with a text instruction in ComfyUI"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Load a picture from the vault and edit it with a plain-language
+              instruction ("replace her top with a blue wooly jumper"), then
+              save it tagged to the same character.
+            </p>
+            <a
+              class="shot-link"
+              href="https://github.com/Pikselkroken/ComfyUI-PixlStash/blob/main/examples/PixlStash-ImageEdit.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open workflow JSON →</a
+            >
+          </div>
+
+          <div class="shot">
+            <h4>Outpaint</h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyOutpaint.jpg"
+                data-full="assets/ComfyOutpaint.jpg"
+                alt="Outpainting a loaded vault image beyond its original frame in ComfyUI"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Extend a loaded vault image beyond its original frame, then save
+              the wider result back with its metadata intact.
+            </p>
+            <a
+              class="shot-link"
+              href="https://github.com/Pikselkroken/ComfyUI-PixlStash/blob/main/examples/PixlStash-Outpaint.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open workflow JSON →</a
+            >
+          </div>
+
+          <div class="shot">
+            <h4>Upscale</h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyUpscale.jpg"
+                data-full="assets/ComfyUpscale.jpg"
+                alt="Upscaling a vault image and saving it back in ComfyUI"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Upscale a vault image and write the higher-resolution result
+              straight back to PixlStash with metadata preserved.
+            </p>
+            <a
+              class="shot-link"
+              href="https://github.com/Pikselkroken/ComfyUI-PixlStash/blob/main/examples/PixlStash-Upscale.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open workflow JSON →</a
+            >
+          </div>
+
+          <div class="shot">
+            <h4>Face likeness gate → upscale</h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyFaceLikenessGateUpscale.jpg"
+                data-full="assets/ComfyFaceLikenessGateUpscale.jpg"
+                alt="Generate with a character LoRA, gate by face likeness, then upscale and save the matches"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Run it end to end: generate with a character LoRA, gate by face
+              likeness, then upscale the accepted frames and save accepted and
+              rejected streams to separate sets.
+            </p>
+            <a
+              class="shot-link"
+              href="https://github.com/Pikselkroken/ComfyUI-PixlStash/blob/main/examples/PixlStash-FaceLikenessGate-Upscale.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open workflow JSON →</a
+            >
+          </div>
+
+          <div class="shot">
+            <h4>Results land back in your vault</h4>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyResult.jpg"
+                data-full="assets/ComfyResult.jpg"
+                alt="Generated and edited images saved back into a PixlStash set"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Because the Picture Saver writes straight to PixlStash, everything
+              you generate or edit shows up organised by project, set, and
+              character — ready to search, tag, and curate.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Install ── -->
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Install the nodes</h2>
+          <p class="section-subtitle">
+            Add the PixlStash nodes to your ComfyUI install, then point them at
+            your vault.
+          </p>
+        </div>
+
+        <div class="install-grid">
+          <div class="install-card" id="install-manager">
+            <h3>Via ComfyUI Manager (recommended)</h3>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ComfyInstallation.jpg"
+                data-full="assets/ComfyInstallation.jpg"
+                alt="Installing ComfyUI-PixlStash from the ComfyUI Manager custom-nodes browser"
+                loading="lazy"
+              />
+            </button>
+            <div class="method-steps">
+              <div class="step">
+                <span class="step-label">1 · Open the Manager</span>
+                <p class="step-note">
+                  Click <strong>Manager</strong> in the ComfyUI menu, then open
+                  the <strong>Custom Nodes Manager</strong>. Don't have it yet?
+                  Install
+                  <a
+                    href="https://github.com/Comfy-Org/ComfyUI-Manager"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >ComfyUI Manager</a
+                  >
+                  first.
+                </p>
+              </div>
+              <div class="step">
+                <span class="step-label">2 · Find &amp; install</span>
+                <p class="step-note">
+                  Search for <code>ComfyUI-PixlStash</code> and click
+                  <strong>Install</strong> on the matching result.
+                </p>
+              </div>
+              <div class="step">
+                <span class="step-label">3 · Restart &amp; configure</span>
+                <p class="step-note">
+                  Restart ComfyUI when the install finishes, then set your
+                  PixlStash URL and API token under
+                  <strong>Settings &gt; PixlStash</strong>.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="install-card">
+            <h3>Manual install</h3>
+            <div class="method-steps">
+              <div class="step">
+                <span class="step-label">Clone into custom_nodes</span>
+                <div class="cmd-block">
+                  <code></code>
+                  <button
+                    class="copy-btn"
+                    data-copy="cd custom_nodes
+git clone https://github.com/Pikselkroken/ComfyUI-PixlStash.git"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <p class="step-note">
+                Restart ComfyUI after cloning, then configure your PixlStash URL
+                and API token under <strong>Settings &gt; PixlStash</strong>.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" style="margin-top: 36px">
+          <div class="section-header">
+            <h2 class="section-title" style="font-size: 1.4rem">
+              Configuration
+            </h2>
+          </div>
+          <table class="config-table">
+            <thead>
+              <tr>
+                <th>Setting</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>URL</td>
+                <td>Base URL of your PixlStash instance.</td>
+              </tr>
+              <tr>
+                <td>API Token</td>
+                <td>
+                  A token with the required read or write scope. The search and
+                  loader nodes need read scope; the Picture Saver and Face
+                  Likeness Gate need write scope.
+                </td>
+              </tr>
+              <tr>
+                <td>Verify SSL</td>
+                <td>Whether to validate the server certificate.</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="method-info" style="margin-top: 16px">
+            Credentials live only in ComfyUI's settings — they're never written
+            into a saved workflow, so you can share a <code>.json</code> safely.
+            Need a token? Create a scoped one in PixlStash under user settings —
+            see the <a href="introduction.html">getting-started tour</a> and the
+            <a href="api.html">API reference</a>.
+          </p>
+        </div>
+      </section>
+
+      <div class="page-footer">
+        <p>
+          <a href="features.html">Back to all features</a>
+          &nbsp;·&nbsp;
+          <a
+            href="https://github.com/Pikselkroken/ComfyUI-PixlStash"
+            target="_blank"
+            rel="noopener noreferrer"
+            >ComfyUI-PixlStash on GitHub</a
+          >
+          &nbsp;·&nbsp;
+          <a href="index.html">Back to PixlStash home</a>
+        </p>
+      </div>
+    </div>
+
+    <div class="lightbox" id="lightbox" aria-hidden="true">
+      <button class="lightbox-close" type="button">Close</button>
+      <img class="lightbox-image" alt="" hidden />
+      <video class="lightbox-video" controls playsinline hidden></video>
+    </div>
+    <script>
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImage = lightbox.querySelector(".lightbox-image");
+      const lightboxVideo = lightbox.querySelector(".lightbox-video");
+      const lightboxClose = lightbox.querySelector(".lightbox-close");
+
+      function showLightbox() {
+        lightbox.classList.add("open");
+        lightbox.setAttribute("aria-hidden", "false");
+      }
+
+      function openImageLightbox(img) {
+        lightboxVideo.pause();
+        lightboxVideo.hidden = true;
+        lightboxVideo.removeAttribute("src");
+        lightboxImage.hidden = false;
+        lightboxImage.src = img.dataset.full || img.src;
+        lightboxImage.alt = img.alt || "Screenshot";
+        showLightbox();
+      }
+
+      function openVideoLightbox(video) {
+        lightboxImage.hidden = true;
+        lightboxImage.removeAttribute("src");
+        lightboxVideo.hidden = false;
+        lightboxVideo.src = video.currentSrc || video.src;
+        lightboxVideo.currentTime = 0;
+        lightboxVideo.play();
+        showLightbox();
+      }
+
+      function closeLightbox() {
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        lightboxVideo.pause();
+        lightboxVideo.removeAttribute("src");
+        lightboxImage.removeAttribute("src");
+      }
+
+      document.querySelectorAll(".shot-image-btn img").forEach((img) => {
+        img.addEventListener("click", () => openImageLightbox(img));
+      });
+
+      document.querySelectorAll(".video-card video").forEach((video) => {
+        video.addEventListener("click", () => openVideoLightbox(video));
+      });
+
+      lightboxClose.addEventListener("click", closeLightbox);
+
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) closeLightbox();
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && lightbox.classList.contains("open")) {
+          closeLightbox();
+        }
+      });
+
+      // Copy buttons (multi-line commands rendered from data-copy)
+      document.querySelectorAll(".cmd-block").forEach((block) => {
+        const code = block.querySelector("code");
+        const btn = block.querySelector(".copy-btn[data-copy]");
+        if (code && btn) code.textContent = btn.dataset.copy;
+      });
+
+      document.querySelectorAll(".copy-btn[data-copy]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          navigator.clipboard.writeText(btn.dataset.copy).then(() => {
+            const original = btn.textContent;
+            btn.textContent = "Copied!";
+            btn.classList.add("copied");
+            setTimeout(() => {
+              btn.textContent = original;
+              btn.classList.remove("copied");
+            }, 2000);
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
