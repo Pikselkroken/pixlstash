@@ -43,6 +43,8 @@ from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
+    find_pictures_by_character_likeness_sql,
+    pack_reference_blobs,
     select_reference_faces_for_character,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -61,6 +63,12 @@ from ._helpers import (
 
 
 logger = get_logger(__name__)
+
+# Upper bound on picture_ids per batch character-likeness request. Bounds the
+# work of a single request (one SQL scoring pass plus a handful of grouped
+# eligibility queries over the id set). Requests over this cap are rejected
+# rather than silently truncated.
+BATCH_CHARACTER_LIKENESS_MAX_IDS = 1000
 
 
 class SetProjectForPicturesResponse(BaseModel):
@@ -134,6 +142,142 @@ class PictureCharacterLikenessResponse(BaseModel):
             "`character_likeness` is the final score; the client must stop "
             "polling even if the value is 0.0 or null. False means face "
             "extraction is still pending and the client may poll again."
+        ),
+    )
+
+
+class BatchCharacterLikenessRequest(BaseModel):
+    """Request body for the batch character-likeness endpoint.
+
+    Lets a client score many pictures against a single reference character in
+    one request instead of one request per picture per poll cycle.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "reference_character_id": 12,
+                "picture_ids": [101, 102, 103],
+                "character_id": "ALL",
+            }
+        },
+    )
+
+    reference_character_id: int = Field(
+        ...,
+        description=(
+            "Id of the character whose reference faces define the likeness "
+            "target. Each picture's faces are scored against this character's "
+            "reference faces; the picture's score is the maximum across its "
+            "faces."
+        ),
+    )
+    picture_ids: list[int] = Field(
+        ...,
+        description=(
+            "Picture ids to score. Must contain at least one id and at most "
+            "1000. Every requested id is echoed back in `results`, including "
+            "ids that are missing, deleted, or ineligible (deny-by-default), "
+            "so a client can match results to its request positionally or by "
+            "id."
+        ),
+    )
+    character_id: Optional[str] = Field(
+        None,
+        description=(
+            "Optional candidate-face filter, mirroring the single-id endpoint. "
+            "Omit (or null) / 'ALL' to score every face on each picture; "
+            "'UNASSIGNED' to score only faces not assigned to any character "
+            "(and only for pictures that have no assigned face and are in no "
+            "picture set); or a character id (as a string) to score only "
+            "faces assigned to that character."
+        ),
+    )
+
+
+class BatchCharacterLikenessResult(BaseModel):
+    """Per-picture result, identical in meaning to the single-id endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    picture_id: int = Field(
+        ...,
+        description="The picture id this result corresponds to.",
+    )
+    character_likeness: Optional[float] = Field(
+        None,
+        description=(
+            "Maximum likeness score across the picture's scored faces, in "
+            "[0, 1]. Null when the picture is ineligible (missing, deleted, "
+            "out of scope, or excluded by the `character_id` filter)."
+        ),
+    )
+    eligible: bool = Field(
+        ...,
+        description=(
+            "True when the picture is a valid candidate for this reference "
+            "character under the requested `character_id` filter. False for "
+            "missing/deleted/out-of-scope pictures and for the ineligible "
+            "cases the single-id endpoint also reports as ineligible."
+        ),
+    )
+    ready: bool = Field(
+        ...,
+        description=(
+            "True when face extraction has completed for this picture and "
+            "`character_likeness` is final (stop polling, even if the value is "
+            "0.0 or null). False means face extraction is still pending and "
+            "the client may poll this id again."
+        ),
+    )
+
+
+class BatchCharacterLikenessResponse(BaseModel):
+    """Batch character-likeness response.
+
+    `results` contains exactly one entry per requested picture id, in the same
+    order they were requested.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "reference_character_id": 12,
+                "results": [
+                    {
+                        "picture_id": 101,
+                        "character_likeness": 0.87,
+                        "eligible": True,
+                        "ready": True,
+                    },
+                    {
+                        "picture_id": 102,
+                        "character_likeness": 0.0,
+                        "eligible": True,
+                        "ready": False,
+                    },
+                    {
+                        "picture_id": 103,
+                        "character_likeness": None,
+                        "eligible": False,
+                        "ready": True,
+                    },
+                ],
+            }
+        },
+    )
+
+    reference_character_id: int = Field(
+        ...,
+        description="The reference character id the batch was scored against.",
+    )
+    results: list[BatchCharacterLikenessResult] = Field(
+        ...,
+        description=(
+            "One result per requested picture id, in request order. Every "
+            "requested id appears exactly once."
         ),
     )
 
@@ -1013,6 +1157,282 @@ def register_routes(router, server):
             "character_likeness": score,
             "eligible": True,
             "ready": True,
+        }
+
+    @router.post(
+        "/pictures/character_likeness/batch",
+        summary="Batch picture character likeness",
+        description=(
+            "Scores many pictures against one reference character in a single "
+            "request, so a client polling N pictures makes one request per "
+            "poll cycle instead of N. Each result's `character_likeness`, "
+            "`eligible`, and `ready` mean exactly what the single-id "
+            "`/pictures/{id}/character_likeness` endpoint returns for that id, "
+            "including the same eligibility and deny-by-default rules: every "
+            "requested id appears once in `results`, and a missing, deleted, "
+            "out-of-scope, or otherwise-refused id yields "
+            "`{character_likeness: null, eligible: false, ready: true}` "
+            "without revealing whether the id exists."
+        ),
+        response_model=BatchCharacterLikenessResponse,
+    )
+    def get_pictures_character_likeness_batch(
+        payload: BatchCharacterLikenessRequest = Body(...),
+    ):
+        reference_character_id = payload.reference_character_id
+        character_id = payload.character_id
+
+        # Validation: non-empty and bounded. Preserve request order while
+        # de-duplicating, then map answers back onto the original list so the
+        # response is positionally aligned with what the client sent.
+        if not payload.picture_ids:
+            raise HTTPException(
+                status_code=422,
+                detail="picture_ids must contain at least one id",
+            )
+        if len(payload.picture_ids) > BATCH_CHARACTER_LIKENESS_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "picture_ids exceeds the maximum of "
+                    f"{BATCH_CHARACTER_LIKENESS_MAX_IDS} ids per request"
+                ),
+            )
+
+        # `character_id` accepts the keywords ALL/UNASSIGNED (and null) or a
+        # numeric character id as a string, matching the single-id endpoint.
+        # Reject any other string with a 422 instead of letting int() 500 deep
+        # in a query (the single-id endpoint's unguarded int() would 500 here).
+        if character_id is not None and character_id not in ("ALL", "UNASSIGNED", ""):
+            try:
+                int(character_id)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "character_id must be 'ALL', 'UNASSIGNED', or a numeric "
+                        "character id"
+                    ),
+                ) from None
+
+        requested_ids = list(payload.picture_ids)
+        unique_ids = list(dict.fromkeys(requested_ids))
+
+        def deny_result(picture_id: int) -> dict:
+            # Deny-by-default: indistinguishable from an out-of-scope/ineligible
+            # picture, so the response never leaks whether the id exists.
+            return {
+                "picture_id": picture_id,
+                "character_likeness": None,
+                "eligible": False,
+                "ready": True,
+            }
+
+        # One grouped pass collects every per-id signal the single-id endpoint
+        # derives, so the batch matches it id-for-id without a per-id loop:
+        #   live_ids        - exists and not soft-deleted (else 404 -> deny)
+        #   ids_with_faces  - has >=1 Face row (the authoritative `ready` signal)
+        #   assigned_ids    - has a Face assigned to some character
+        #   in_set_ids      - is a member of a picture set
+        #   matched_ids     - has >=1 Face matching the character_id filter
+        def gather_signals(session: Session, ids: list[int]):
+            live_ids = {
+                row
+                for row in session.exec(
+                    select(Picture.id)
+                    .where(Picture.id.in_(ids))
+                    .where(Picture.deleted.is_(False))
+                ).all()
+                if row is not None
+            }
+            ids_with_faces = {
+                row
+                for row in session.exec(
+                    select(Face.picture_id)
+                    .where(Face.picture_id.in_(ids))
+                    .group_by(Face.picture_id)
+                ).all()
+                if row is not None
+            }
+            assigned_ids = {
+                row
+                for row in session.exec(
+                    select(Face.picture_id)
+                    .where(
+                        Face.picture_id.in_(ids),
+                        Face.character_id.is_not(None),
+                    )
+                    .group_by(Face.picture_id)
+                ).all()
+                if row is not None
+            }
+            in_set_ids = {
+                row
+                for row in session.exec(
+                    select(PictureSetMember.picture_id)
+                    .where(PictureSetMember.picture_id.in_(ids))
+                    .group_by(PictureSetMember.picture_id)
+                ).all()
+                if row is not None
+            }
+
+            # Faces matching the same character filter the single-id endpoint
+            # applies in fetch_face_ids. `matched_ids` mirrors a non-empty
+            # fetch_face_ids; `scorable_match_ids` additionally requires a
+            # matching face with usable features, mirroring single-id's test
+            # that compute_character_likeness_for_faces produced a non-empty
+            # map (a sentinel/featureless-only picture matches but cannot be
+            # scored, so single-id reports it ineligible).
+            def _match_query():
+                q = select(Face.picture_id).where(Face.picture_id.in_(ids))
+                if character_id == "UNASSIGNED":
+                    q = q.where(Face.character_id.is_(None))
+                elif character_id and character_id not in ("ALL", ""):
+                    q = q.where(Face.character_id == int(character_id))
+                return q
+
+            matched_ids = {
+                row
+                for row in session.exec(
+                    _match_query().group_by(Face.picture_id)
+                ).all()
+                if row is not None
+            }
+            scorable_match_ids = {
+                row
+                for row in session.exec(
+                    _match_query()
+                    .where(Face.features.is_not(None))
+                    .group_by(Face.picture_id)
+                ).all()
+                if row is not None
+            }
+            return (
+                live_ids,
+                ids_with_faces,
+                assigned_ids,
+                in_set_ids,
+                matched_ids,
+                scorable_match_ids,
+            )
+
+        (
+            live_ids,
+            ids_with_faces,
+            assigned_ids,
+            in_set_ids,
+            matched_ids,
+            scorable_match_ids,
+        ) = server.vault.db.run_task(gather_signals, unique_ids)
+
+        # Determine whether the reference character has any usable reference
+        # faces at all. When it does not, the single-id endpoint reports an
+        # eligible picture's faces as ready with a real 0.0 score, and reports
+        # `eligible: false` only once a score "would have" been computed (its
+        # likeness_map is empty). We mirror that below.
+        reference_faces = server.vault.db.run_task(
+            select_reference_faces_for_character,
+            int(reference_character_id),
+            10,
+            priority=DBPriority.IMMEDIATE,
+        )
+        has_reference = bool(reference_faces) and (
+            pack_reference_blobs(reference_faces) is not None
+        )
+
+        # Single SQL scoring pass over the live candidate ids that have a
+        # matching face with usable features. Reuses the registered
+        # character_face_likeness scalar (identical algorithm to the single-id
+        # path's compute_character_likeness_for_faces), so scores are
+        # bit-for-bit equal.
+        scorable_ids = [
+            pid
+            for pid in unique_ids
+            if pid in live_ids and pid in scorable_match_ids
+        ]
+        likeness_by_id: dict[int, float] = {}
+        if scorable_ids and has_reference:
+            scored = find_pictures_by_character_likeness_sql(
+                server,
+                character_id,
+                int(reference_character_id),
+                offset=0,
+                limit=len(scorable_ids),
+                descending=True,
+                candidate_ids=scorable_ids,
+            )
+            for entry in scored:
+                entry_id = entry.get("id")
+                if entry_id is None:
+                    continue
+                likeness_by_id[int(entry_id)] = max(
+                    0.0, float(entry.get("character_likeness", 0.0) or 0.0)
+                )
+
+        def classify(pid: int) -> dict:
+            # Mirrors get_picture_character_likeness exactly, per id.
+            if pid not in live_ids:
+                # Not found or soft-deleted -> single-id raises 404. Deny.
+                return deny_result(pid)
+
+            ready = pid in ids_with_faces
+
+            if character_id == "UNASSIGNED" and (
+                pid in assigned_ids or pid in in_set_ids
+            ):
+                # Eligibility-ineligible: a final answer.
+                return {
+                    "picture_id": pid,
+                    "character_likeness": None,
+                    "eligible": False,
+                    "ready": True,
+                }
+
+            if pid not in matched_ids:
+                if character_id and character_id not in ("ALL", "UNASSIGNED"):
+                    # The requested character has no faces here. Final, ineligible.
+                    return {
+                        "picture_id": pid,
+                        "character_likeness": None,
+                        "eligible": False,
+                        "ready": True,
+                    }
+                # Eligible but no faces matched: ambiguous case. `ready` follows
+                # the authoritative has-any-Face-row signal.
+                return {
+                    "picture_id": pid,
+                    "character_likeness": 0.0,
+                    "eligible": True,
+                    "ready": ready,
+                }
+
+            if not has_reference or pid not in scorable_match_ids:
+                # Single-id's likeness_map is empty here: either the reference
+                # character has no usable reference faces, or none of this
+                # picture's matching faces have features to score (e.g. a
+                # detection sentinel). Either way a real 0.0, and final because
+                # the picture already has at least one extracted Face row.
+                return {
+                    "picture_id": pid,
+                    "character_likeness": 0.0,
+                    "eligible": False,
+                    "ready": True,
+                }
+
+            # Matched, scorable faces and a computable score: always final.
+            return {
+                "picture_id": pid,
+                "character_likeness": likeness_by_id.get(pid, 0.0),
+                "eligible": True,
+                "ready": True,
+            }
+
+        per_id = {pid: classify(pid) for pid in unique_ids}
+        results = [per_id[pid] for pid in requested_ids]
+
+        return {
+            "reference_character_id": int(reference_character_id),
+            "results": results,
         }
 
     @router.get(
