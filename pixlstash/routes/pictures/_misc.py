@@ -11,6 +11,7 @@ from fastapi import (
     Request,
 )
 from sqlalchemy import (
+    bindparam,
     text,
 )
 from pydantic import BaseModel, ConfigDict
@@ -193,15 +194,31 @@ def register_routes(router, server):
         summary="List distinct ComfyUI model names",
         response_model=list[str],
     )
-    def get_comfyui_models():
+    def get_comfyui_models(request: Request):
+        # Scope guard (BOLA): a READ-scoped share token may only see the model
+        # vocabulary drawn from pictures within its granted resource. None ==
+        # owner / unscoped == no filter (full list). An empty set means the
+        # scope matched nothing, so return nothing rather than the full list.
+        allowed = fetch_scope_allowed_picture_ids(server, request)
+        if allowed is not None and not allowed:
+            return []
+        allowed_ids = list(allowed) if allowed is not None else None
+
         def fetch(session):
-            rows = session.execute(
-                text(
-                    "SELECT DISTINCT j.value FROM picture p, json_each(p.comfyui_models) j "
-                    "WHERE p.comfyui_models IS NOT NULL AND p.comfyui_models != '[]' "
-                    "AND p.deleted = 0 ORDER BY j.value"
+            sql = (
+                "SELECT DISTINCT j.value FROM picture p, json_each(p.comfyui_models) j "
+                "WHERE p.comfyui_models IS NOT NULL AND p.comfyui_models != '[]' "
+                "AND p.deleted = 0"
+            )
+            if allowed_ids is not None:
+                sql += " AND p.id IN :allowed_ids"
+            sql += " ORDER BY j.value"
+            stmt = text(sql)
+            if allowed_ids is not None:
+                stmt = stmt.bindparams(
+                    bindparam("allowed_ids", value=allowed_ids, expanding=True)
                 )
-            ).all()
+            rows = session.execute(stmt).all()
             return [r[0] for r in rows if r and r[0]]
 
         return server.vault.db.run_immediate_read_task(fetch)
@@ -212,15 +229,31 @@ def register_routes(router, server):
         summary="List distinct ComfyUI LoRA names",
         response_model=list[str],
     )
-    def get_comfyui_loras():
+    def get_comfyui_loras(request: Request):
+        # Scope guard (BOLA): a READ-scoped share token may only see the LoRA
+        # vocabulary drawn from pictures within its granted resource. None ==
+        # owner / unscoped == no filter (full list). An empty set means the
+        # scope matched nothing, so return nothing rather than the full list.
+        allowed = fetch_scope_allowed_picture_ids(server, request)
+        if allowed is not None and not allowed:
+            return []
+        allowed_ids = list(allowed) if allowed is not None else None
+
         def fetch(session):
-            rows = session.execute(
-                text(
-                    "SELECT DISTINCT j.value FROM picture p, json_each(p.comfyui_loras) j "
-                    "WHERE p.comfyui_loras IS NOT NULL AND p.comfyui_loras != '[]' "
-                    "AND p.deleted = 0 ORDER BY j.value"
+            sql = (
+                "SELECT DISTINCT j.value FROM picture p, json_each(p.comfyui_loras) j "
+                "WHERE p.comfyui_loras IS NOT NULL AND p.comfyui_loras != '[]' "
+                "AND p.deleted = 0"
+            )
+            if allowed_ids is not None:
+                sql += " AND p.id IN :allowed_ids"
+            sql += " ORDER BY j.value"
+            stmt = text(sql)
+            if allowed_ids is not None:
+                stmt = stmt.bindparams(
+                    bindparam("allowed_ids", value=allowed_ids, expanding=True)
                 )
-            ).all()
+            rows = session.execute(stmt).all()
             return [r[0] for r in rows if r and r[0]]
 
         return server.vault.db.run_immediate_read_task(fetch)
