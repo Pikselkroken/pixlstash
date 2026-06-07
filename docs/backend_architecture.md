@@ -804,6 +804,29 @@ Prefix:   /assets/, /share/, /docs/
 
 In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
 
+### 16.1 Endpoint scope enforcement (HARD REQUIREMENT)
+
+**Every endpoint that returns or mutates per-object / per-resource data MUST enforce the scoping system before it returns any resource-derived data.** This is a hard, deny-by-default requirement, not a guideline. It is here because `GET /pictures/{id}/character_likeness` shipped with no object-level check while every sibling read handler had one (the R2 finding in `docs/reviews/v1.5.1-security-signoff.md`), the latest recurrence of a BOLA class this codebase has now seen three times.
+
+**The chokepoint.** `enforce_picture_scope(server, request, picture_id)` in [`pixlstash/routes/pictures/_helpers.py`](../pixlstash/routes/pictures/_helpers.py) is the single fail-closed gate for picture-scoped routes. It reads `request.state.token_scope`:
+
+- `token_scope is None` (unscoped / owner token) → returns immediately, full access.
+- scoped to `picture_set` / `character` / `project` / `picture` → checks membership of `picture_id` and raises **403** if the picture is out of scope.
+- any other (unrecognised) `resource_type` → raises **403**. It denies routes/scopes it doesn't recognise instead of letting them through.
+
+Do not reimplement this logic per handler; call the chokepoint.
+
+**The only two acceptable states for a new data endpoint.** Exactly one of these must hold, as a recorded decision:
+
+1. **It calls the chokepoint.** For a picture-scoped route, that means `request: Request` in the signature plus `enforce_picture_scope(server, request, pic_id)` called *immediately after parsing the id, before any DB read, branch, or return*, so it covers **all** return paths uniformly. Never thread the check into individual `return` statements — a handler with several early returns (e.g. the `character_id=UNASSIGNED` branch) is unscoped on every path the check doesn't sit in front of.
+2. **It is explicitly and deliberately scope-exempt** — added to `READ_BLOCKED_GET_PATHS` / a `READ_SAFE_POST_PATHS` entry in [`auth.py`](../pixlstash/auth.py), or documented as genuinely public — **with a written justification and a named reviewer sign-off.**
+
+An endpoint in **neither** state is a bug, not a judgement call. There is no "I forgot" state; unscoped-by-omission is exactly what produced R2.
+
+**Copy-this pattern.** `get_picture`, `get_picture_metadata`, and `get_picture_field` in [`pixlstash/routes/pictures/_crud.py`](../pixlstash/routes/pictures/_crud.py) are the reference implementations: take `request: Request`, parse the id, call `enforce_picture_scope(server, request, id)`, then proceed. A new handler that doesn't match that shape is wrong.
+
+**Review gate.** This extends the coverage-matrix discipline in `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*); it does not replace it. Arithmetic completeness, independent adversarial sign-off, and tests in both directions (out-of-scope blocked **and** in-scope still works) still apply. Any PR that adds or alters an endpoint must record the scope decision for that route in its review: which state (1 or 2) it is in, and where the check or exemption lives. The coverage matrix must have **no empty cell** for the new route, or the PR does not merge.
+
 ---
 
 ## 17. Data Flow Pipeline
