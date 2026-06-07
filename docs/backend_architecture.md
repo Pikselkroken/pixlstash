@@ -804,6 +804,59 @@ Prefix:   /assets/, /share/, /docs/
 
 In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
 
+### 16.1 Endpoint scope enforcement (HARD REQUIREMENT)
+
+**Every endpoint that returns or mutates per-object / per-resource data MUST enforce the scoping system before it returns any resource-derived data.** This is a hard, deny-by-default requirement, not a guideline. It is here because `GET /pictures/{id}/character_likeness` shipped with no object-level check while every sibling read handler had one (the R2 finding in `docs/reviews/v1.5.1-security-signoff.md`), the latest recurrence of a BOLA class this codebase has now seen three times.
+
+**The chokepoint.** `enforce_picture_scope(server, request, picture_id)` in [`pixlstash/routes/pictures/_helpers.py`](../pixlstash/routes/pictures/_helpers.py) is the single fail-closed gate for picture-scoped routes. It reads `request.state.token_scope`:
+
+- `token_scope is None` (unscoped / owner token) → returns immediately, full access.
+- scoped to `picture_set` / `character` / `project` / `picture` → checks membership of `picture_id` and raises **403** if the picture is out of scope.
+- any other (unrecognised) `resource_type` → raises **403**. It denies routes/scopes it doesn't recognise instead of letting them through.
+
+Do not reimplement this logic per handler; call the chokepoint.
+
+**The only two acceptable states for a new data endpoint.** Exactly one of these must hold, as a recorded decision:
+
+1. **It calls the chokepoint.** For a picture-scoped route, that means `request: Request` in the signature plus `enforce_picture_scope(server, request, pic_id)` called *immediately after parsing the id, before any DB read, branch, or return*, so it covers **all** return paths uniformly. Never thread the check into individual `return` statements — a handler with several early returns (e.g. the `character_id=UNASSIGNED` branch) is unscoped on every path the check doesn't sit in front of.
+2. **It is explicitly and deliberately scope-exempt** — added to `READ_BLOCKED_GET_PATHS` / a `READ_SAFE_POST_PATHS` entry in [`auth.py`](../pixlstash/auth.py), or documented as genuinely public — **with a written justification and a named reviewer sign-off.**
+
+An endpoint in **neither** state is a bug, not a judgement call. There is no "I forgot" state; unscoped-by-omission is exactly what produced R2.
+
+**Copy-this pattern.** `get_picture`, `get_picture_metadata`, and `get_picture_field` in [`pixlstash/routes/pictures/_crud.py`](../pixlstash/routes/pictures/_crud.py) are the reference implementations: take `request: Request`, parse the id, call `enforce_picture_scope(server, request, id)`, then proceed. A new handler that doesn't match that shape is wrong.
+
+**Review gate.** This extends the coverage-matrix discipline in `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*); it does not replace it. Arithmetic completeness, independent adversarial sign-off, and tests in both directions (out-of-scope blocked **and** in-scope still works) still apply. Any PR that adds or alters an endpoint must record the scope decision for that route in its review: which state (1 or 2) it is in, and where the check or exemption lives. The coverage matrix must have **no empty cell** for the new route, or the PR does not merge.
+
+### 16.2 Aspirational: centralised authorization chokepoint (NOT YET IMPLEMENTED — target state)
+
+> **This subsection describes a target architecture that does not exist in the code today.** It is the agreed long-term direction, not a description of current behaviour. As of this writing the system works exactly as §16.1 describes: authorization is **per-handler opt-in**, and the only thing preventing an unscoped endpoint is a human (or this doc) remembering to add the check. Do not read §16.2 as "how PixlStash authorizes requests." Read it as "where we are taking it." Until it ships, §16.1 is law.
+
+**Why the current model is structurally unsafe.** The auth middleware in [`auth.py`](../pixlstash/auth.py) *authenticates* (resolves the principal, populates `request.state.token_scope` / `request.state.matched_token`) and blocks methods/paths (`READ_BLOCKED_GET_PATHS`, the non-GET block for READ tokens, the `READ_SAFE_POST_PATHS` allowlist), then calls the route. It does **not** object-authorize. Object-level access (does *this* token reach *this* picture) is enforced only if the individual handler calls `enforce_picture_scope` / `fetch_scope_allowed_picture_ids`. So a new handler that returns per-object data and forgets the call is **unscoped by default** — it leaks. That is the BOLA-by-omission class, and it has recurred at least three times in v1.5.1 alone (`/pictures/{id}/{field}`, `/stacks/{id}/pictures`, the `character_id=UNASSIGNED` branch) plus R1 `/comfyui/pictures/{id}/workflow` and R2 `/pictures/{id}/character_likeness`. Per-handler opt-in guarantees the class recurs; only structure stops it.
+
+**Target architecture: deny-by-default, enforced centrally.** Move object authorization out of the handlers and into one chokepoint that every data route passes through, so omission denies instead of leaks:
+
+1. **Central enforcement point.** A single mechanism (an authorization middleware after authentication, or a mandatory FastAPI dependency wired into every data router) resolves the resource id from the route — path params (`picture_id`, `id`), and for batch/list routes the relevant body/query ids — and runs the membership check before the handler body executes. **An unrecognised route combined with a scoped token is denied, not allowed through.** The default answer for "is this principal allowed this object?" is *no* unless a declaration says otherwise.
+2. **Every route declares its requirement in one place — no empty cells.** Each route states, in a single registry/table, its resource type and scope requirement, or is explicitly marked `public` or `owner-only`. This turns the §16.1 / review "coverage matrix has no empty cell" rule from a manual judgement into a machine fact: a **startup assertion or a CI test enumerates all mounted routes and fails the build if any data route is undeclared.** A reviewer forgetting a cell can no longer ship; the boot/CI step is the backstop.
+3. **The existing helpers become the implementation the chokepoint calls.** `enforce_picture_scope` (in [`routes/pictures/_helpers.py`](../pixlstash/routes/pictures/_helpers.py)) and `fetch_scope_allowed_picture_ids` (in [`utils/service/filter_helpers.py`](../pixlstash/utils/service/filter_helpers.py)) stay as the membership logic — set / character / project / single-picture resolution and the fail-closed 403 on an unrecognised `resource_type`. What changes is *who calls them*: the chokepoint guarantees they run, rather than each handler remembering to invoke them. This also resolves the **guard-duplication** debt — the `getattr(request.state, "token_scope", None)` + resource-type ladder is currently inlined across ~five files; consolidating it into the chokepoint's single call site removes the copies.
+4. **Fold in the `ALL`+`resource_type` token footgun.** Today an `ALL`-scope token carrying a `resource_type` produces `token_scope = None` (the middleware only builds a `TokenScope` when `scope != "ALL"`, see `auth.py` around the `request.state.token_scope = TokenScope(...)` assignment), so `enforce_picture_scope` treats it as a full-owner request and **every BOLA guard is bypassed.** It is not reachable by the current share-token UI (which only mints `scope=READ` for resource-scoped tokens), but it is a latent hole. Fix it as part of this work: reject `ALL`+`resource_type` at `create_token`, and/or have the central check also consult `request.state.matched_token` (as `require_unscoped_owner` already does) so the scope is derived from the real token, not from the partially-populated `token_scope`.
+
+**Migration path (incremental, not a big-bang rewrite).**
+
+1. Build the route-declaration registry and the startup/CI assertion **first, in report-only mode** — enumerate every data route, list the undeclared ones, and treat that list as the backlog. This is the coverage matrix, generated rather than hand-maintained.
+2. Back-fill declarations for existing routes to match their current §16.1 state (state 1 = scoped via the chokepoint helpers; state 2 = explicitly exempt with the recorded justification). Reconcile against the live audit findings in `docs/reviews/bulk-token-scoping.md` and `docs/reviews/v1.5.1-security-signoff.md` so nothing already known is mis-declared.
+3. Introduce the central chokepoint behind the declarations and have it call the existing helpers; keep the per-handler calls until the chokepoint is proven equivalent (tests in both directions, per §16.1), then remove the now-redundant inline calls.
+4. Close the `ALL`+`resource_type` footgun and delete the duplicated ladder.
+5. Flip the startup/CI assertion from report-only to **fail-closed**: an undeclared data route fails the build.
+
+**Done-criteria (how we know it is real, not just documented).**
+
+- A newly added handler that returns per-object data and declares nothing is **rejected by default at runtime** (denied, not leaked), and **does not pass CI** (the route-declaration assertion fails the build), with **no authorization code required inside the handler** for it to be safe.
+- Removing a handler's inline scope call does not open a hole, because the chokepoint enforces it regardless.
+- An `ALL`+`resource_type` token can no longer bypass object scope.
+- The `token_scope` ladder exists in exactly one place.
+
+Until all of the above is true, this is target state. **§16.1 remains the binding rule and the hard requirement still applies to every new endpoint.** New authorization work should move toward this central model rather than adding more per-handler opt-in checks; any new per-handler check is debt against this direction and should be flagged as such in review.
+
 ---
 
 ## 17. Data Flow Pipeline

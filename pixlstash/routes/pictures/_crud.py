@@ -15,7 +15,7 @@ from fastapi import (
     Response,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     case,
     delete,
@@ -127,6 +127,15 @@ class PictureCharacterLikenessResponse(BaseModel):
     picture_id: int
     character_likeness: Optional[float] = None
     eligible: bool
+    ready: bool = Field(
+        ...,
+        description=(
+            "True when face extraction has completed for this picture and "
+            "`character_likeness` is the final score; the client must stop "
+            "polling even if the value is 0.0 or null. False means face "
+            "extraction is still pending and the client may poll again."
+        ),
+    )
 
 
 class PicturePatchResponse(BaseModel):
@@ -864,6 +873,7 @@ def register_routes(router, server):
         response_model=PictureCharacterLikenessResponse,
     )
     def get_picture_character_likeness(
+        request: Request,
         id: str,
         reference_character_id: int = Query(...),
         character_id: str = Query(None),
@@ -872,6 +882,13 @@ def register_routes(router, server):
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        # Object-level access check before any DB work, so every return branch
+        # below is uniformly gated. Owner/unscoped sessions have token_scope is
+        # None and pass straight through; a scoped token outside this picture's
+        # grant gets a 403 here (mirrors get_picture / get_picture_metadata /
+        # get_picture_field).
+        enforce_picture_scope(server, request, pic_id)
 
         def fetch_picture_characters(session):
             pic = session.exec(
@@ -900,7 +917,9 @@ def register_routes(router, server):
 
         def is_in_picture_set(session):
             member = session.exec(
-                select(PictureSetMember.id).where(PictureSetMember.picture_id == pic_id)
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.picture_id == pic_id
+                )
             ).first()
             return member is not None
 
@@ -908,10 +927,12 @@ def register_routes(router, server):
             server.vault.db.run_task(has_assigned_faces)
             or server.vault.db.run_task(is_in_picture_set)
         ):
+            # Eligibility-ineligible: a final answer, nothing more to compute.
             return {
                 "picture_id": pic_id,
                 "character_likeness": None,
                 "eligible": False,
+                "ready": True,
             }
 
         def fetch_face_ids(session):
@@ -925,15 +946,36 @@ def register_routes(router, server):
         face_ids = server.vault.db.run_task(fetch_face_ids)
         if not face_ids:
             if character_id and character_id not in ("ALL", "UNASSIGNED"):
+                # Ineligible: the requested character has no faces here. Final.
                 return {
                     "picture_id": pic_id,
                     "character_likeness": None,
                     "eligible": False,
+                    "ready": True,
                 }
+
+            # Eligible but no faces matched: the genuinely ambiguous case.
+            # Authoritative "extraction done" signal: the picture has at least
+            # one Face row. MissingFaceExtractionFinder selects pictures with
+            # ``~Picture.faces.any()``, and FaceExtractionTask always inserts a
+            # row when it runs (a real face, or a sentinel face_index=-1,
+            # bbox=None when none are detected). So zero Face rows means
+            # extraction has not run yet (poll again); any Face row means it has
+            # (score is final, stop polling).
+            def has_any_face(session):
+                return (
+                    session.exec(
+                        select(Face.id).where(Face.picture_id == pic_id)
+                    ).first()
+                    is not None
+                )
+
+            extraction_done = server.vault.db.run_task(has_any_face)
             return {
                 "picture_id": pic_id,
                 "character_likeness": 0.0,
                 "eligible": True,
+                "ready": extraction_done,
             }
 
         def fetch_faces(session, ids):
@@ -951,19 +993,26 @@ def register_routes(router, server):
             candidate_faces,
         )
         if not likeness_map:
+            # No reference faces for the reference character: a real 0.0. The
+            # picture's own faces are already extracted (face_ids is non-empty),
+            # so this is final.
             return {
                 "picture_id": pic_id,
                 "character_likeness": 0.0,
                 "eligible": False,
+                "ready": True,
             }
         score = 0.0
         for face_id in face_ids:
             score = max(score, float(likeness_map.get(face_id, 0.0)))
 
+        # The picture has at least one extracted face and a score was computed.
+        # Always final, even when the score is low (the reported bug).
         return {
             "picture_id": pic_id,
             "character_likeness": score,
             "eligible": True,
+            "ready": True,
         }
 
     @router.get(
