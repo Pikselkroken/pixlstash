@@ -145,6 +145,10 @@ This is not advisory. Every new or modified endpoint that **returns or mutates p
 - **Copy the guarded siblings, verbatim.** `get_picture`, `get_picture_metadata`, and `get_picture_field` in `pixlstash/routes/pictures/_crud.py` are the reference pattern: `request: Request` parameter, parse the id, call `enforce_picture_scope(server, request, id)`, then proceed. If your new handler doesn't look like those, it's wrong.
 - **This is an extension of the coverage-matrix discipline above, not a replacement.** Arithmetic completeness, independent adversarial sign-off, and tests in both directions still apply. The scope decision for any added or altered endpoint must appear in the PR review as a filled cell in the coverage matrix: which state (a or b) it is in, and where the check / exemption lives. An empty cell blocks the merge.
 
+### Long-term direction: centralised deny-by-default chokepoint (the hard requirement above is a stopgap)
+
+The per-handler hard requirement above is a stopgap, not the destination. It still relies on a human remembering the check — exactly how this BOLA class keeps recurring. The agreed long-term fix is to move object authorization into a **single, centralised, deny-by-default chokepoint**: one enforcement point (an authorization middleware after authentication, or a mandatory router dependency) that resolves the resource id from the route and denies any data route it cannot match to a declared scope — so an endpoint is safe by *omission* instead of by remembering. Every route declares its resource type / scope requirement (or `public` / `owner-only`) in one place, and a **startup/CI assertion fails the build on any undeclared data route**, turning the "no empty cell in the coverage matrix" rule into a machine fact rather than a manual judgement. The existing helpers (`enforce_picture_scope`, `fetch_scope_allowed_picture_ids`) become what the chokepoint calls, not what each handler opts into; the same work closes the `ALL`+`resource_type` token footgun and removes the duplicated `token_scope` ladder. See `docs/backend_architecture.md` §16.2 for the full design and migration path. **Until it ships, the hard requirement above is law — but steer NEW authorization work toward the central model. Adding another per-handler opt-in check is debt against this direction and should be flagged in review.**
+
 ## Conventions & Patterns
 
 - **Throughput & batching:** Always think about throughput and concurrency. Evaluate whether a piece of work is best handled as a batch following ML best practices — for images this usually means sorting and grouping by size so each batch is composed of equally-sized tensors (e.g. image and face-crop quality calculation).
@@ -156,6 +160,10 @@ This is not advisory. Every new or modified endpoint that **returns or mutates p
 
 - **External:** Uses OpenCV, NumPy, PIL, FastAPI, rapidfuzz, and Vue 3.
 - **Cross-component:** Backend serves REST API; frontend consumes API and displays images/metrics.
+
+## Commit messages
+
+Write short concise commit messages without a torrent of detail.
 
 ---
 
