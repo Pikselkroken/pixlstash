@@ -25,6 +25,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import pixlstash.routes.pictures._crud as crud_module
 import pixlstash.utils.rate_limiter as rl_module
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
@@ -966,6 +967,79 @@ class TestResourceScopedReadTokenIsolation:
                 r = client.get(f"{API}/pictures/{pic_a}/width", headers=hdr)
                 assert r.status_code == 200, (
                     f"Set-A token wrongly blocked from its own picture field: {r.text}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_scoped_token_cannot_read_other_picture_character_likeness(self):
+        """GET /pictures/{id}/character_likeness must enforce scope. Regression
+        (R2): it sat unguarded alongside get_picture / get_picture_metadata /
+        get_picture_field and leaked picture existence, likeness scores, and the
+        face-extraction ``ready`` flag to any scoped token.
+
+        ML helpers are stubbed so the in-scope (positive) path is deterministic
+        and GPU-free; the out-of-scope (negative) path is rejected by
+        ``enforce_picture_scope`` before any ML/DB work runs.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                # A reference character is required by the endpoint's query.
+                r = owner_client.post(f"{API}/characters", json={"name": "Ref"})
+                assert r.status_code == 200, r.text
+                ref_char_id = r.json()["character"]["id"]
+
+                client = TestClient(server.api)
+                hdr = {"Authorization": f"Bearer {token_a}"}
+                params = {"reference_character_id": str(ref_char_id)}
+
+                # Negative: set-A token must not read set-B picture likeness.
+                r = client.get(
+                    f"{API}/pictures/{pic_b}/character_likeness",
+                    params=params,
+                    headers=hdr,
+                )
+                assert r.status_code in {403, 404}, (
+                    f"Set-A token read pic_b character_likeness, "
+                    f"got {r.status_code}: {r.text}"
+                )
+
+                # Positive: in-scope picture still readable (no over-block).
+                # Stub the ML helpers so any face-bearing path is deterministic
+                # and never touches the GPU.
+                def _fake_select_reference_faces(session, character_id, max_refs=10):
+                    return []
+
+                def _fake_compute_likeness(reference_faces, candidate_faces):
+                    return {}
+
+                with (
+                    patch.object(
+                        crud_module,
+                        "select_reference_faces_for_character",
+                        _fake_select_reference_faces,
+                    ),
+                    patch.object(
+                        crud_module,
+                        "compute_character_likeness_for_faces",
+                        _fake_compute_likeness,
+                    ),
+                ):
+                    r = client.get(
+                        f"{API}/pictures/{pic_a}/character_likeness",
+                        params=params,
+                        headers=hdr,
+                    )
+                assert r.status_code == 200, (
+                    f"Set-A token wrongly blocked from its own picture's "
+                    f"character_likeness: {r.text}"
+                )
+                body = r.json()
+                assert body["picture_id"] == pic_a
+                assert "ready" in body, (
+                    f"character_likeness response missing 'ready' flag: {body}"
                 )
             finally:
                 server.__exit__(None, None, None)

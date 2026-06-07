@@ -873,6 +873,7 @@ def register_routes(router, server):
         response_model=PictureCharacterLikenessResponse,
     )
     def get_picture_character_likeness(
+        request: Request,
         id: str,
         reference_character_id: int = Query(...),
         character_id: str = Query(None),
@@ -881,6 +882,13 @@ def register_routes(router, server):
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        # Object-level access check before any DB work, so every return branch
+        # below is uniformly gated. Owner/unscoped sessions have token_scope is
+        # None and pass straight through; a scoped token outside this picture's
+        # grant gets a 403 here (mirrors get_picture / get_picture_metadata /
+        # get_picture_field).
+        enforce_picture_scope(server, request, pic_id)
 
         def fetch_picture_characters(session):
             pic = session.exec(
