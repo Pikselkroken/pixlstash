@@ -11,7 +11,6 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     or_,
-    text,
 )
 from sqlmodel import Session, select
 
@@ -38,6 +37,7 @@ from pixlstash.utils.service.filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
+from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 from ._helpers import (
     _enrich_stack_counts,
@@ -655,168 +655,26 @@ def select_pictures_for_listing(
                     project_id_value,
                 )
 
-        if formats:
-            query = query.where(Picture.format.in_(formats))
-
-        if min_score_value is not None:
-            query = query.where(Picture.score >= min_score_value)
-        if max_score_value is not None:
-            query = query.where(Picture.score <= max_score_value)
-
-        if smart_score_bucket_value == "unscored":
-            query = query.where(Picture.smart_score.is_(None))
-        elif smart_score_bucket_value == "1-2":
-            query = query.where(
-                Picture.smart_score.is_not(None), Picture.smart_score < 2.0
-            )
-        elif smart_score_bucket_value == "2-3":
-            query = query.where(Picture.smart_score >= 2.0, Picture.smart_score < 3.0)
-        elif smart_score_bucket_value == "3-4":
-            query = query.where(Picture.smart_score >= 3.0, Picture.smart_score < 4.0)
-        elif smart_score_bucket_value == "4-5":
-            query = query.where(Picture.smart_score >= 4.0)
-
-        if resolution_bucket_value == "unknown":
-            query = query.where(or_(Picture.width.is_(None), Picture.height.is_(None)))
-        elif resolution_bucket_value == "lt1mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height < 1_000_000,
-            )
-        elif resolution_bucket_value == "1-4mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 1_000_000,
-                Picture.width * Picture.height < 4_000_000,
-            )
-        elif resolution_bucket_value == "4-8mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 4_000_000,
-                Picture.width * Picture.height < 8_000_000,
-            )
-        elif resolution_bucket_value == "8-16mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 8_000_000,
-                Picture.width * Picture.height < 16_000_000,
-            )
-        elif resolution_bucket_value == "16plus":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 16_000_000,
-            )
-
-        if tags_filter_value:
-            for i, tag in enumerate(tags_filter_value):
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_tag_filter_{i})"
-                    ).bindparams(**{f"ss_tag_filter_{i}": tag})
-                )
-
-        if tags_rejected_filter_value:
-            for i, tag in enumerate(tags_rejected_filter_value):
-                query = query.where(
-                    text(
-                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_rejected_tag_{i})"
-                    ).bindparams(**{f"ss_rejected_tag_{i}": tag})
-                )
-
-        if hidden_tags_filter_value:
-            placeholders = ", ".join(
-                f":ss_ht_{i}" for i in range(len(hidden_tags_filter_value))
-            )
-            query = query.where(
-                text(
-                    f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id"
-                    f" AND LOWER(tag.tag) IN ({placeholders}))"
-                ).bindparams(
-                    **{f"ss_ht_{i}": t for i, t in enumerate(hidden_tags_filter_value)}
-                )
-            )
-
-        if tags_confidence_above_filter_value:
-            for i, entry in enumerate(tags_confidence_above_filter_value):
-                tag, threshold = entry.rsplit(":", 1)
-                if float(threshold) <= 0.0:
-                    query = query.where(
-                        text(
-                            f"("
-                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                            f" AND tag_prediction.tag = :ss_ca_tag_{i} AND tag_prediction.confidence >= :ss_ca_thresh_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
-                            f") OR ("
-                            f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ss_ca_tag_{i})"
-                            f")"
-                        ).bindparams(
-                            **{
-                                f"ss_ca_tag_{i}": tag,
-                                f"ss_ca_thresh_{i}": float(threshold),
-                            }
-                        )
-                    )
-                else:
-                    query = query.where(
-                        text(
-                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                            f" AND tag_prediction.tag = :ss_ca_tag_{i} AND tag_prediction.confidence >= :ss_ca_thresh_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
-                        ).bindparams(
-                            **{
-                                f"ss_ca_tag_{i}": tag,
-                                f"ss_ca_thresh_{i}": float(threshold),
-                            }
-                        )
-                    )
-
-        if tags_confidence_below_filter_value:
-            for i, entry in enumerate(tags_confidence_below_filter_value):
-                tag, threshold = entry.rsplit(":", 1)
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :ss_cb_tag_{i} AND tag_prediction.confidence < :ss_cb_thresh_{i})"
-                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_cb_tag_{i})"
-                    ).bindparams(
-                        **{f"ss_cb_tag_{i}": tag, f"ss_cb_thresh_{i}": float(threshold)}
-                    )
-                )
-
-        if comfyui_models_filter_value:
-            for i, m in enumerate(comfyui_models_filter_value):
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :ss_comfyui_model_{i})"
-                    ).bindparams(**{f"ss_comfyui_model_{i}": m})
-                )
-
-        if comfyui_loras_filter_value:
-            for i, m in enumerate(comfyui_loras_filter_value):
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :ss_comfyui_lora_{i})"
-                    ).bindparams(**{f"ss_comfyui_lora_{i}": m})
-                )
-
-        if face_filter_value == "with_face":
-            query = query.where(
-                text(
-                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
-        elif face_filter_value == "without_face":
-            query = query.where(
-                text(
-                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
+        # Intrinsic-attribute predicates via the shared compiler.  Deleted / project
+        # / character scoping is handled above (woven into the candidate branches),
+        # so the filter applies no lifecycle clauses here.
+        query = PredicateFilter(
+            format=formats,
+            min_score=min_score_value,
+            max_score=max_score_value,
+            smart_score_bucket=smart_score_bucket_value,
+            resolution_bucket=resolution_bucket_value,
+            tags_filter=tags_filter_value,
+            tags_rejected_filter=tags_rejected_filter_value,
+            hidden_tags_filter=hidden_tags_filter_value,
+            tags_confidence_above_filter=tags_confidence_above_filter_value,
+            tags_confidence_below_filter=tags_confidence_below_filter_value,
+            comfyui_models_filter=comfyui_models_filter_value,
+            comfyui_loras_filter=comfyui_loras_filter_value,
+            face_filter=face_filter_value,
+            apply_deleted_filter=False,
+            exclude_import_excluded=False,
+        ).apply(query)
 
         return list(session.exec(query).all())
 

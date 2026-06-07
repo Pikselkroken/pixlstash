@@ -45,6 +45,7 @@ from pixlstash.utils.service.filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
+from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 from ._helpers import (
     _fetch_hidden_picture_ids,
@@ -621,88 +622,22 @@ def register_routes(router, server):
                 comfyui_loras_filter_value,
             ):
                 query = select(Picture.id).where(Picture.id.in_(candidate_ids_list))
-                if deleted_only:
-                    query = query.where(Picture.deleted.is_(True))
-                else:
-                    query = query.where(Picture.deleted.is_(False))
-                if min_score_value is not None:
-                    query = query.where(Picture.score >= min_score_value)
-                if max_score_value is not None:
-                    query = query.where(Picture.score <= max_score_value)
-                if comfyui_models_filter_value:
-                    for i, m in enumerate(comfyui_models_filter_value):
-                        query = query.where(
-                            text(
-                                f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :comfyui_model_{i})"
-                            ).bindparams(**{f"comfyui_model_{i}": m})
-                        )
-                if comfyui_loras_filter_value:
-                    for i, m in enumerate(comfyui_loras_filter_value):
-                        query = query.where(
-                            text(
-                                f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :comfyui_lora_{i})"
-                            ).bindparams(**{f"comfyui_lora_{i}": m})
-                        )
-                if tags_filter_value:
-                    for i, t in enumerate(tags_filter_value):
-                        query = query.where(
-                            text(
-                                f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
-                            ).bindparams(**{f"tag_filter_{i}": t})
-                        )
-                if tags_rejected_filter_value:
-                    for i, t in enumerate(tags_rejected_filter_value):
-                        query = query.where(
-                            text(
-                                f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
-                            ).bindparams(**{f"rejected_tag_filter_{i}": t})
-                        )
-                if tags_confidence_above_filter_value:
-                    for i, entry in enumerate(tags_confidence_above_filter_value):
-                        t, thresh = entry.rsplit(":", 1)
-                        if float(thresh) <= 0.0:
-                            query = query.where(
-                                text(
-                                    f"("
-                                    f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                                    f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                                    f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                                    f") OR ("
-                                    f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                                    f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ca_tag_{i})"
-                                    f")"
-                                ).bindparams(
-                                    **{
-                                        f"ca_tag_{i}": t,
-                                        f"ca_thresh_{i}": float(thresh),
-                                    }
-                                )
-                            )
-                        else:
-                            query = query.where(
-                                text(
-                                    f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                                    f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                                    f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                                ).bindparams(
-                                    **{
-                                        f"ca_tag_{i}": t,
-                                        f"ca_thresh_{i}": float(thresh),
-                                    }
-                                )
-                            )
-                if tags_confidence_below_filter_value:
-                    for i, entry in enumerate(tags_confidence_below_filter_value):
-                        t, thresh = entry.rsplit(":", 1)
-                        query = query.where(
-                            text(
-                                f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                                f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
-                                f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
-                            ).bindparams(
-                                **{f"cb_tag_{i}": t, f"cb_thresh_{i}": float(thresh)}
-                            )
-                        )
+                # This post-filter narrows an already-id-bounded set; only the
+                # deleted lifecycle clause plus score/comfyui/tag predicates apply
+                # (no format/buckets/face — those were handled when the candidate
+                # set was built).  All compiled by the shared PredicateFilter.
+                query = PredicateFilter(
+                    min_score=min_score_value,
+                    max_score=max_score_value,
+                    comfyui_models_filter=comfyui_models_filter_value,
+                    comfyui_loras_filter=comfyui_loras_filter_value,
+                    tags_filter=tags_filter_value,
+                    tags_rejected_filter=tags_rejected_filter_value,
+                    tags_confidence_above_filter=tags_confidence_above_filter_value,
+                    tags_confidence_below_filter=tags_confidence_below_filter_value,
+                    only_deleted=deleted_only,
+                    exclude_import_excluded=False,
+                ).apply(query)
                 return set(session.exec(query).all())
 
             matching_ids = server.vault.db.run_immediate_read_task(
@@ -895,19 +830,23 @@ def register_routes(router, server):
         set_ids_raw = request.query_params.getlist("set_ids")
         set_mode_raw = request.query_params.get("set_mode", "union")
         project_id_raw = request.query_params.get("project_id")
-        tags_filter = request.query_params.getlist("tag")
-        rejected_tags = request.query_params.getlist("rejected_tag")
-        format_filter = request.query_params.getlist("format")
+        # Intrinsic-attribute query params via the shared parser.  Membership / scope
+        # params keep their bespoke handling, and min/max score keep their dedicated
+        # HTTPException-on-invalid coercion below.
+        _predicate_filter = PredicateFilter.from_query_params(request)
+        tags_filter = _predicate_filter.tags_filter or []
+        rejected_tags = _predicate_filter.tags_rejected_filter or []
+        format_filter = _predicate_filter.format or []
         min_score_raw = request.query_params.get("min_score")
         max_score_raw = request.query_params.get("max_score")
-        smart_score_bucket = request.query_params.get("smart_score_bucket") or None
-        resolution_bucket = request.query_params.get("resolution_bucket") or None
-        file_path_prefix = request.query_params.get("file_path_prefix") or None
-        import_source_folder = request.query_params.get("import_source_folder") or None
-        face_filter = request.query_params.get("face_filter") or None
+        smart_score_bucket = _predicate_filter.smart_score_bucket
+        resolution_bucket = _predicate_filter.resolution_bucket
+        file_path_prefix = _predicate_filter.file_path_prefix
+        import_source_folder = _predicate_filter.import_source_folder
+        face_filter = _predicate_filter.face_filter
         confidence_tag = request.query_params.get("confidence_tag") or None
-        confidence_above = request.query_params.getlist("tag_confidence_above") or []
-        confidence_below = request.query_params.getlist("tag_confidence_below") or []
+        confidence_above = _predicate_filter.tags_confidence_above_filter or []
+        confidence_below = _predicate_filter.tags_confidence_below_filter or []
         include = set(request.query_params.getlist("include"))
 
         only_deleted = character_id_raw == "SCRAPHEAP"

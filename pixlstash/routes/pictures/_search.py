@@ -24,6 +24,7 @@ from pixlstash.utils.service.filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
+from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 from ._helpers import (
     _fetch_hidden_picture_ids,
@@ -93,12 +94,15 @@ def register_routes(router, server):
                 if isinstance(desc_val, str)
                 else bool(desc_val)
             )
-            format = request.query_params.getlist("format")
+            # Intrinsic list params are parsed by the shared parser; the membership
+            # and pagination params keep their bespoke ``query_params`` pop handling.
+            _predicate_filter = PredicateFilter.from_query_params(request)
+            format = _predicate_filter.format or []
             min_score_raw = query_params.pop("min_score", None)
-            comfyui_models = request.query_params.getlist("comfyui_model")
-            comfyui_loras = request.query_params.getlist("comfyui_lora")
-            tags_filter = request.query_params.getlist("tag")
-            tags_rejected_filter = request.query_params.getlist("rejected_tag")
+            comfyui_models = _predicate_filter.comfyui_models_filter or []
+            comfyui_loras = _predicate_filter.comfyui_loras_filter or []
+            tags_filter = _predicate_filter.tags_filter or []
+            tags_rejected_filter = _predicate_filter.tags_rejected_filter or []
         min_score = int(min_score_raw) if min_score_raw is not None else None
         if not query:
             raise HTTPException(
