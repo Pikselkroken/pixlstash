@@ -344,9 +344,7 @@ def create_router(server) -> APIRouter:
                 if allowed_ids is not None:
                     query = query.where(Tag.picture_id.in_(allowed_ids))
                 rows = session.exec(
-                    query.group_by(Tag.tag).order_by(
-                        func.count(Tag.id).desc(), Tag.tag
-                    )
+                    query.group_by(Tag.tag).order_by(func.count(Tag.id).desc(), Tag.tag)
                 ).all()
                 return [{"tag": tag, "count": count} for tag, count in rows if tag]
 

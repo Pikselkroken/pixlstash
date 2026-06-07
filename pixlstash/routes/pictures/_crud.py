@@ -917,7 +917,9 @@ def register_routes(router, server):
 
         def is_in_picture_set(session):
             member = session.exec(
-                select(PictureSetMember.id).where(PictureSetMember.picture_id == pic_id)
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.picture_id == pic_id
+                )
             ).first()
             return member is not None
 
