@@ -27,6 +27,7 @@ from PIL import Image
 
 import pixlstash.routes.pictures._crud as crud_module
 import pixlstash.utils.rate_limiter as rl_module
+from pixlstash.db_models import Picture
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -1095,6 +1096,187 @@ class TestResourceScopedReadTokenIsolation:
                 assert r.status_code in {403, 404}, (
                     f"pic_a token learned pic_b's stack, got {r.status_code}: {r.text}"
                 )
+            finally:
+                server.__exit__(None, None, None)
+
+    def _seed_comfyui_vocab(self, server, pic_a, pic_b):
+        """Write distinct ComfyUI model/LoRA JSON onto each picture.
+
+        These columns are pipeline-populated JSON arrays with no owner-facing
+        API, so the test seeds them directly via the DB task runner (mirrors the
+        direct-write pattern in test_characters_api.py / test_many_to_many).
+        """
+
+        def _set(session):
+            pic_a_row = session.get(Picture, pic_a)
+            pic_b_row = session.get(Picture, pic_b)
+            pic_a_row.comfyui_models = '["model-a-only"]'
+            pic_a_row.comfyui_loras = '["lora-a-only"]'
+            pic_b_row.comfyui_models = '["model-b-only"]'
+            pic_b_row.comfyui_loras = '["lora-b-only"]'
+            session.add(pic_a_row)
+            session.add(pic_b_row)
+            session.commit()
+
+        server.vault.db.run_task(_set)
+
+    def test_comfyui_models_cannot_leak_out_of_scope_vocab(self):
+        """GET /pictures/comfyui_models must only return model names drawn from
+        pictures inside the token's grant; owner/unscoped sees the union."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                self._seed_comfyui_vocab(server, pic_a, pic_b)
+
+                # Negative: Set-A token must not see Set-B-only models.
+                r = TestClient(server.api).get(
+                    f"{API}/pictures/comfyui_models",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                scoped = set(r.json())
+                assert "model-b-only" not in scoped, (
+                    f"Set-A token leaked out-of-scope model vocab: {scoped}"
+                )
+                assert scoped <= {"model-a-only"}, (
+                    f"Set-A token returned unexpected models: {scoped}"
+                )
+
+                # Positive: owner/unscoped sees the union (no over-block).
+                r = owner_client.get(f"{API}/pictures/comfyui_models")
+                assert r.status_code == 200, r.text
+                owner_models = set(r.json())
+                assert {"model-a-only", "model-b-only"} <= owner_models, (
+                    f"Owner did not see full model vocab: {owner_models}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_comfyui_loras_cannot_leak_out_of_scope_vocab(self):
+        """GET /pictures/comfyui_loras must only return LoRA names drawn from
+        pictures inside the token's grant; owner/unscoped sees the union."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                self._seed_comfyui_vocab(server, pic_a, pic_b)
+
+                # Negative: Set-A token must not see Set-B-only LoRAs.
+                r = TestClient(server.api).get(
+                    f"{API}/pictures/comfyui_loras",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                scoped = set(r.json())
+                assert "lora-b-only" not in scoped, (
+                    f"Set-A token leaked out-of-scope LoRA vocab: {scoped}"
+                )
+                assert scoped <= {"lora-a-only"}, (
+                    f"Set-A token returned unexpected LoRAs: {scoped}"
+                )
+
+                # Positive: owner/unscoped sees the union (no over-block).
+                r = owner_client.get(f"{API}/pictures/comfyui_loras")
+                assert r.status_code == 200, r.text
+                owner_loras = set(r.json())
+                assert {"lora-a-only", "lora-b-only"} <= owner_loras, (
+                    f"Owner did not see full LoRA vocab: {owner_loras}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_list_all_tags_cannot_leak_out_of_scope_vocab(self):
+        """GET /tags must only return tag values (and counts) drawn from
+        pictures inside the token's grant; owner/unscoped sees the union."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                # Seed distinct tags per picture via the owner API.
+                r = owner_client.post(
+                    f"{API}/pictures/{pic_a}/tags", json={"tag": "tag-a-only"}
+                )
+                assert r.status_code == 200, r.text
+                r = owner_client.post(
+                    f"{API}/pictures/{pic_b}/tags", json={"tag": "tag-b-only"}
+                )
+                assert r.status_code == 200, r.text
+
+                # Negative: Set-A token must not see the Set-B-only tag, and the
+                # counts it does see must reflect only the in-scope picture.
+                r = TestClient(server.api).get(
+                    f"{API}/tags",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                scoped = {row["tag"]: row["count"] for row in r.json()}
+                assert "tag-b-only" not in scoped, (
+                    f"Set-A token leaked out-of-scope tag vocab: {scoped}"
+                )
+                assert scoped.get("tag-a-only") == 1, (
+                    f"Set-A token tag count wrong (must reflect only Set A): {scoped}"
+                )
+
+                # Positive: owner/unscoped sees the union (no over-block).
+                r = owner_client.get(f"{API}/tags")
+                assert r.status_code == 200, r.text
+                owner_tags = {row["tag"] for row in r.json()}
+                assert {"tag-a-only", "tag-b-only"} <= owner_tags, (
+                    f"Owner did not see full tag vocab: {owner_tags}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_scoped_token_cannot_read_other_picture_comfyui_workflow(self):
+        """GET /comfyui/pictures/{id}/workflow must enforce scope (R1).
+
+        Negative: a Set-A token is rejected on a Set-B picture by
+        enforce_picture_scope before any DB read or metadata extraction.
+        Positive: the in-scope picture is still served. The workflow extractor
+        is stubbed so the in-scope call returns a deterministic 200 (the plain
+        test PNG carries no embedded workflow), proving the scope gate let the
+        request through rather than over-blocking.
+        """
+        import pixlstash.routes.comfyui as comfyui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                client = TestClient(server.api)
+                hdr = {"Authorization": f"Bearer {token_a}"}
+
+                def _fake_extract(_metadata):
+                    return {"workflow": {"nodes": []}, "models": [], "loras": []}
+
+                # Negative: Set-A token must not reach Set-B picture's workflow.
+                # Stubbed extractor would happily return data, so a pass here
+                # proves the scope gate (not a missing-workflow 404) blocked it.
+                with patch.object(
+                    comfyui_module, "extract_comfy_workflow_info", _fake_extract
+                ):
+                    r = client.get(
+                        f"{API}/comfyui/pictures/{pic_b}/workflow", headers=hdr
+                    )
+                    assert r.status_code in {403, 404}, (
+                        f"Set-A token read pic_b ComfyUI workflow, "
+                        f"got {r.status_code}: {r.text}"
+                    )
+
+                    # Positive: the in-scope picture is still served (no
+                    # over-block) and returns the extracted workflow.
+                    r = client.get(
+                        f"{API}/comfyui/pictures/{pic_a}/workflow", headers=hdr
+                    )
+                    assert r.status_code == 200, (
+                        f"Set-A token wrongly scope-blocked from its own "
+                        f"picture's workflow: {r.status_code} {r.text}"
+                    )
             finally:
                 server.__exit__(None, None, None)
 

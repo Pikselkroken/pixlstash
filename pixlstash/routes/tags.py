@@ -320,21 +320,33 @@ def create_router(server) -> APIRouter:
         description="Returns all unique tag values with their usage count, sorted by count descending then alphabetically.",
         response_model=list[TagCountResponse],
     )
-    def list_all_tags():
+    def list_all_tags(request: Request):
         try:
             from sqlalchemy import func
 
+            # Scope guard (BOLA): a READ-scoped share token may only see the tag
+            # vocabulary (and counts) drawn from pictures within its granted
+            # resource. None == owner / unscoped == no filter (full list). An
+            # empty set means the scope matched nothing, so return nothing
+            # rather than the full list. Mirrors bulk_fetch_tags below.
+            scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+            if scope_allowed is not None and not scope_allowed:
+                return []
+            allowed_ids = list(scope_allowed) if scope_allowed is not None else None
+
             def fetch(session: Session):
+                query = select(Tag.tag, func.count(Tag.id).label("count")).where(
+                    Tag.tag.is_not(None),
+                    ~Tag.tag.like(
+                        TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                    ),
+                )
+                if allowed_ids is not None:
+                    query = query.where(Tag.picture_id.in_(allowed_ids))
                 rows = session.exec(
-                    select(Tag.tag, func.count(Tag.id).label("count"))
-                    .where(
-                        Tag.tag.is_not(None),
-                        ~Tag.tag.like(
-                            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
-                        ),
+                    query.group_by(Tag.tag).order_by(
+                        func.count(Tag.id).desc(), Tag.tag
                     )
-                    .group_by(Tag.tag)
-                    .order_by(func.count(Tag.id).desc(), Tag.tag)
                 ).all()
                 return [{"tag": tag, "count": count} for tag, count in rows if tag]
 
