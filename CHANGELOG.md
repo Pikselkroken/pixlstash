@@ -1,3 +1,6 @@
+# [1.5.2] [Security:Moderate]
+- Fix some more scoping issues + add ready flag to character-likeness query to let client improve performance
+
 # [1.5.1] [Security:High]
 - Fix a scope-enforcement gap where a read-only or resource-scoped token could read pictures and metadata outside the resource it was granted. Update recommended for anyone who has issued share links or API tokens.
 
