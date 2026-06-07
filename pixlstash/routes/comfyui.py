@@ -35,6 +35,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.routes.pictures._helpers import enforce_picture_scope
 from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.stacking import (
     build_stack_filename_prefix,
@@ -1625,9 +1626,20 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUIPictureWorkflowResponse,
     )
-    def get_picture_comfyui_workflow(picture_id: str):
+    def get_picture_comfyui_workflow(request: Request, picture_id: str):
+        try:
+            pic_id = int(picture_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        # Object-level access check before any DB work, so every return branch
+        # below is uniformly gated. Owner/unscoped sessions have token_scope is
+        # None and pass straight through; a scoped token outside this picture's
+        # grant gets a 403 here (mirrors get_picture / get_picture_field).
+        enforce_picture_scope(server, request, pic_id)
+
         pics = server.vault.db.run_immediate_read_task(
-            Picture.find, id=picture_id, select_fields=["id", "file_path"]
+            Picture.find, id=pic_id, select_fields=["id", "file_path"]
         )
         if not pics:
             raise HTTPException(status_code=404, detail="Picture not found")
