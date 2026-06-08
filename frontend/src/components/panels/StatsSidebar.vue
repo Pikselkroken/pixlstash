@@ -1838,7 +1838,11 @@ function handleResolutionBarClick(label) {
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  /* No left divider in the docked layout: the panel shares the toolbar's
+     background, so toolbar + stats header read as one continuous top strip and
+     the grid's images provide the separation below. The mobile drawer re-adds an
+     edge (see the max-width: 1339px block). */
+  border-left: 1px solid transparent;
   background: rgba(var(--v-theme-background), 0.95);
   transition:
     width 0.15s,
@@ -1851,12 +1855,13 @@ function handleResolutionBarClick(label) {
   .stats-sidebar {
     position: fixed;
     right: 0;
-    top: 48px;
+    top: calc(var(--titlebar-h, 0px) + 48px);
     bottom: 0;
     height: auto;
     z-index: 150;
     transform: translateX(0);
     transition: transform 0.3s ease;
+    border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   }
 
   .stats-sidebar.collapsed {
@@ -1934,7 +1939,6 @@ function handleResolutionBarClick(label) {
 .stats-sidebar-header {
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   margin-bottom: 4px;
   height: 48px;
   flex-shrink: 0;
@@ -1954,7 +1958,6 @@ function handleResolutionBarClick(label) {
   justify-content: space-between;
   flex: 1;
   padding: 0 4px 0 10px;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
 }
 
 @media (max-width: 1339px) {

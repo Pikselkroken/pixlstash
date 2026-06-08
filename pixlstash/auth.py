@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+import os
 import re
 import secrets
 import threading
@@ -339,6 +340,48 @@ class AuthService:
         self.password_hash = user.password_hash if user else None
         self.username = user.username if user else None
         return user
+
+    # Env var the Electron desktop shell uses to hand the server a
+    # pre-authenticated owner session token (see seed_desktop_session).
+    DESKTOP_SESSION_ENV = "PIXLSTASH_DESKTOP_SESSION"
+
+    def seed_desktop_session(self) -> Optional[str]:
+        """Register a pre-authenticated owner session for the local desktop app.
+
+        When PixlStash runs inside the Electron desktop shell, the shell
+        generates a high-entropy token once per launch, passes it to the server
+        via the ``PIXLSTASH_DESKTOP_SESSION`` env var, and injects the same value
+        as the ``session_id`` cookie in its own ``BrowserWindow``.  Seeding the
+        token into :attr:`active_session_ids` here means the local window opens
+        straight into the library with no login/registration prompt.
+
+        This affects only the loopback owner: remote browsers and API clients
+        present a *different* cookie/token and continue to authenticate via the
+        normal password login (:meth:`login`) or share tokens.  Returns the
+        seeded token, or ``None`` when no (valid) token was supplied.
+        """
+        token = os.environ.get(self.DESKTOP_SESSION_ENV, "").strip()
+        if not token:
+            return None
+        # Guard against a weak/guessable token leaking owner access.  The shell
+        # always supplies a 32+ char random token; reject anything shorter.
+        if len(token) < 16:
+            self._logger.warning(
+                "Ignoring %s: token too short (expected >=16 chars).",
+                self.DESKTOP_SESSION_ENV,
+            )
+            return None
+        user = self.ensure_user()
+        if not user or user.id is None:
+            self._logger.error(
+                "Could not seed desktop session: failed to ensure an owner user."
+            )
+            return None
+        self.active_session_ids[token] = user.id
+        self._logger.info(
+            "Seeded a pre-authenticated desktop session for the local owner."
+        )
+        return token
 
     def set_password_hash(self, hashed_password: str):
         def update_user(session: Session):

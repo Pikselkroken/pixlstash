@@ -632,10 +632,10 @@ def test_read_version(server):
     assert data["message"] == "PixlStash REST API"
     assert data["version"] == expected_version
     assert "install_type" in data
-    # The install_type contract is exactly these three values; the frontend
+    # The install_type contract is exactly this set of values; the frontend
     # guards anything else to "other", but the backend must never emit a value
     # outside the set in the first place.
-    assert data["install_type"] in {"docker", "pip", "other"}
+    assert data["install_type"] in {"docker", "pip", "electron", "other"}
 
 
 def test_read_version_install_type_docker(server, monkeypatch):
@@ -671,6 +671,16 @@ def test_read_version_install_type_override(server, monkeypatch):
     response = client.get("/version")
     assert response.status_code == 200
     assert response.json()["install_type"] == "other"
+
+
+def test_read_version_install_type_electron(server, monkeypatch):
+    """The Electron desktop app declares its channel via the override env var."""
+    monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    client = TestClient(server.api)
+    response = client.get("/version")
+    assert response.status_code == 200
+    assert response.json()["install_type"] == "electron"
 
 
 def test_read_version_install_type_invalid_override_ignored(server, monkeypatch):

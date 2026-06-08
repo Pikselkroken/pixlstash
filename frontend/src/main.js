@@ -13,6 +13,13 @@ import router from './router/index.js'
 
 import Root from './Root.vue'
 
+// Tag the document when running inside the Electron desktop shell so CSS can
+// apply native-app chrome (thin scrollbars, no text-selection on chrome)
+// without changing the experience for plain browser visitors.
+if (typeof window !== 'undefined' && window.pixlstashDesktop) {
+  document.documentElement.classList.add('is-desktop')
+}
+
 // Custom theme properties
 const pixlStashLight = {
   dark: false,
@@ -60,21 +67,21 @@ const pixlStashLight = {
 const pixlStashDark = {
   dark: true,
   colors: {
-    'sidebar': '#494f56',
-    'sidebar-text': '#f2f5fa',
-    'toolbar': '#2a2f36',
+    'sidebar': '#23282f',
+    'sidebar-text': '#f2e5da',
+    'toolbar': '#23282f',
     'toolbar-text': '#f2e5da',
     'sidebar-hover': '#f28f3b',
     'on-sidebar-hover': '#f2e5da',
-    'input-background': '#343a40',
+    'input-background': '#2b3138',
     'input-text': '#f2e5da',
-    'cancel-button': '#4f545b',
+    'cancel-button': '#3a4047',
     'cancel-button-text': '#f2e5da',
-    'dark-surface': '#1f2328',
+    'dark-surface': '#181b20',
     'on-dark-surface': '#f2e5da',
-    surface: '#2b3138',
+    surface: '#23282f',
     onSurface: '#f2e5da',
-    background: '#2a2f36',
+    background: '#1b1f24',
     onBackground: '#f2e5da',
     accent: '#f28f3b',
     onAccent: '#1b1b1b',
@@ -84,8 +91,8 @@ const pixlStashDark = {
     onSecondary: '#ffffff',
     tertiary: '#77A0A9',
     onTertiary: '#0f1418',
-    border: '#8c838b',
-    divider: '#3a4047',
+    border: '#363d45',
+    divider: '#2c323a',
     overlay: '#00000066',
     focus: '#7c4dff',
     hover: '#ffffff14',

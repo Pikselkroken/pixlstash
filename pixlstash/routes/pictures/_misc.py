@@ -636,7 +636,6 @@ def register_routes(router, server):
                     tags_confidence_above_filter=tags_confidence_above_filter_value,
                     tags_confidence_below_filter=tags_confidence_below_filter_value,
                     only_deleted=deleted_only,
-                    exclude_import_excluded=False,
                 ).apply(query)
                 return set(session.exec(query).all())
 

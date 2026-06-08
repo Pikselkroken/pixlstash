@@ -20,10 +20,15 @@ body {
   width: 100vw;
   height: 100vh;
   z-index: 0;
-  background: rgba(var(--v-theme-error), 0.08);
+  background: rgb(var(--v-theme-background));
   margin: 0;
   padding: 0;
   overflow: hidden;
+  /* Column so a custom title bar (desktop) stacks above the file manager,
+     which then fills the remaining height. In a browser there is no title bar,
+     so the file manager simply fills the whole viewport. */
+  display: flex;
+  flex-direction: column;
 }
 
 /* Removed duplicate body rule */
@@ -32,7 +37,7 @@ body {
   display: flex;
   flex-direction: row;
   width: 100vw;
-  height: 100vh;
+  flex: 1;
   min-height: 0;
   inset: 0;
   min-width: 0;
@@ -47,7 +52,7 @@ body {
   flex-direction: column;
   background-color: rgb(var(--v-theme-background)) !important;
   min-width: 0;
-  height: 100vh;
+  height: 100%;
   box-sizing: border-box;
   padding: 0;
   margin: 0;
@@ -158,7 +163,7 @@ body {
   .sidebar-shell {
     position: fixed;
     left: 0;
-    top: 48px;
+    top: calc(var(--titlebar-h, 0px) + 48px);
     bottom: 0;
     z-index: 150;
     transform: translateX(-100%);
@@ -172,7 +177,7 @@ body {
 
 @media (max-width: 999px) and (hover: none) and (pointer: coarse) {
   .sidebar-shell {
-    top: 56px;
+    top: calc(var(--titlebar-h, 0px) + 56px);
   }
 }
 

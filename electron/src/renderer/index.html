@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'"
+    />
+    <title>PixlStash</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="winbar" class="winbar"></div>
+    <div class="app">
+      <div class="logo">Pixl<span>Stash</span></div>
+
+      <!-- Busy states: detect / starting / loading -->
+      <div id="busy">
+        <div class="spinner"></div>
+      </div>
+      <div id="status" class="status">Starting…</div>
+
+      <!-- Error -->
+      <div id="error" class="error hidden"></div>
+    </div>
+    <script src="winbar.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

@@ -9,7 +9,7 @@ license-files = [
   "frontend/LICENSE",
 ]
 authors = [
-    { name = "Gaute Lindkvist" }
+    { name = "Gaute Lindkvist", email="lindkvis@gmail.com" }
 ]
 keywords = [
     "image library",

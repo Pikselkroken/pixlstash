@@ -1,0 +1,128 @@
+name: Build Electron Desktop App
+
+# Builds the cross-platform desktop app for a release:
+#   1. build the pixlstash wheel once (shared, also published to PyPI),
+#   2. per OS: build the bundled CPU/Metal Python runtime, embed it via
+#      electron-builder extraResources, and build the installers.
+# GPU acceleration (CUDA/ROCm) is NOT bundled or hosted — the desktop app adds it
+# on demand by pip-installing the heavy wheels straight from PyPI / PyTorch.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-wheel:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        run: cd frontend && npm ci && npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Resolve version
+        id: version
+        run: |
+          version=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          pre=$(python -c "from packaging.version import Version;print('true' if Version('$version').is_prerelease else 'false')")
+          echo "is_prerelease=$pre" >> "$GITHUB_OUTPUT"
+      - name: Validate tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          [ "${{ github.ref_name }}" = "v${{ steps.version.outputs.version }}" ] || { echo "tag/version mismatch"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+
+  build-electron:
+    needs: build-wheel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, os: linux, arch: x64, accel: cpu }
+          - { runner: windows-latest, os: win, arch: x64, accel: cpu }
+          - { runner: macos-14, os: mac, arch: arm64, accel: metal }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: dist
+      - name: Cache runtime build inputs (CPython tarball + pip wheels)
+        uses: actions/cache@v4
+        with:
+          path: .build-cache
+          # Keyed per platform; the build script's hash busts it when pins
+          # (CPython / torch index / deps) change. restore-keys reuses the most
+          # recent cache for this platform even after a bust.
+          key: build-runtime-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.accel }}-${{ hashFiles('scripts/build_desktop_runtime.py') }}
+          restore-keys: |
+            build-runtime-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.accel }}-
+      - name: Build bundled runtime (${{ matrix.os }}/${{ matrix.arch }}/${{ matrix.accel }})
+        shell: bash
+        run: |
+          WHEEL=$(ls dist/pixlstash-*.whl | head -n1)
+          python scripts/build_desktop_runtime.py \
+            --wheel "$WHEEL" \
+            --os ${{ matrix.os }} --arch ${{ matrix.arch }} --accel ${{ matrix.accel }} \
+            --output-dir electron/resources
+      - name: Build Electron installers
+        working-directory: electron
+        # Unsigned by default; supply CSC_LINK/CSC_KEY_PASSWORD (win/mac) and
+        # APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID secrets to sign+notarise.
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: |
+          npm ci
+          npm run dist -- --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ matrix.runner }}
+          path: |
+            electron/release/*.exe
+            electron/release/*.dmg
+            electron/release/*.zip
+            electron/release/*.AppImage
+            electron/release/*.deb
+      - name: Attach installers to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          files: |
+            electron/release/*.exe
+            electron/release/*.dmg
+            electron/release/*.zip
+            electron/release/*.AppImage
+            electron/release/*.deb
+          prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}

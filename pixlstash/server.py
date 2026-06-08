@@ -128,12 +128,13 @@ class VersionResponse(BaseModel):
             "Always exactly one of: `docker` (the reliable signal — set via "
             "the `PIXLSTASH_IN_DOCKER=1` env flag or the presence of "
             "`/.dockerenv`), `pip` (the default for a plain Python/pip "
-            "install), or `other` (the uncertain fallback — e.g. an installer "
-            "such as the Windows Inno Setup build that declares "
-            "`PIXLSTASH_INSTALL_TYPE=other`). Clients should treat any "
-            "unrecognised value as `other`."
+            "install), `electron` (the cross-platform desktop app, which "
+            "declares `PIXLSTASH_INSTALL_TYPE=electron`), or `other` (the "
+            "uncertain fallback — e.g. the Windows Inno Setup build that "
+            "declares `PIXLSTASH_INSTALL_TYPE=other`). Clients should treat "
+            "any unrecognised value as `other`."
         ),
-        examples=["docker", "pip", "other"],
+        examples=["docker", "pip", "electron", "other"],
     )
     docker_variant: str = Field(
         description=(
@@ -988,7 +989,7 @@ class Server:
     # "docker" is the reliable signal, "pip" the default, "other" the explicit
     # opt-out used by installers (e.g. the Windows Inno Setup wheel build) that
     # otherwise look like a plain pip install.
-    INSTALL_TYPES = ("docker", "pip", "other")
+    INSTALL_TYPES = ("docker", "pip", "electron", "other")
 
     @staticmethod
     def detect_install_type() -> str:
@@ -1054,6 +1055,37 @@ class Server:
         ).run()
         write_json_atomic(server_config_path, self._server_config)
 
+        # Internal loopback transport (Electron desktop shell).
+        #
+        # The desktop app launches this backend purely as a private, in-process
+        # service: a free *ephemeral* port on 127.0.0.1, spoken to over plain
+        # HTTP (see electron/src/backend/ServerProcess.ts — it hardcodes
+        # http://127.0.0.1:<port>, health-checks it over node:http, and only
+        # whitelists http loopback). That internal transport is intrinsic to the
+        # loopback and must NOT be derived from server-config: a config whose
+        # require_ssl is enabled for *external* exposure (a public listener we
+        # may add later) must not turn this internal connection into HTTPS, or
+        # the shell can never reach it. Host/port are already forced this way via
+        # PIXLSTASH_HOST/PIXLSTASH_PORT at launch; do the same for the scheme.
+        #
+        # Applied AFTER the config was persisted above and only to the in-memory
+        # copy this process runs with — the on-disk server-config keeps the
+        # user's real require_ssl/SSL settings for any external listener. Tied to
+        # the desktop launch context (PIXLSTASH_INSTALL_TYPE=electron, set by the
+        # shell), never to a generic SSL toggle.
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
+            if self._server_config.get("require_ssl", False):
+                logger.info(
+                    "Electron desktop loopback: forcing plain HTTP on the ephemeral "
+                    "loopback port. server-config require_ssl/SSL certs are left "
+                    "untouched and apply only to external exposure, not this "
+                    "internal connection."
+                )
+            # Secure cookies are dropped by the browser over HTTP, so keep
+            # cookie_secure consistent with the actual (HTTP) scheme.
+            self._server_config["require_ssl"] = False
+            self._server_config["cookie_secure"] = False
+
         # SSL config
         if self._server_config.get("require_ssl", False):
             self._ensure_ssl_certificates()
@@ -1099,6 +1131,10 @@ class Server:
             logger,
         )
         self._user = self.auth.ensure_user()
+        # Desktop (Electron) shell: register the pre-authenticated loopback
+        # owner session so the local window opens straight into the library.
+        # No-op for every other install type (env var unset).
+        self.auth.seed_desktop_session()
         if self._user and self._user.description is not None:
             self.vault.set_description(self._user.description)
         self.vault.set_keep_models_in_memory(
@@ -1454,6 +1490,19 @@ class Server:
         version = self._get_version()
         host = self._server_config.get("host", "127.0.0.1")
         port = self._server_config.get("port", 9537)
+        # Env overrides (honoured by the Docker entrypoint and the Electron
+        # desktop shell, which binds the backend to a free loopback port).
+        # An unset/blank value leaves the config-derived value untouched.
+        host = os.environ.get("PIXLSTASH_HOST", "").strip() or host
+        _port_override = os.environ.get("PIXLSTASH_PORT", "").strip()
+        if _port_override:
+            try:
+                port = int(_port_override)
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid PIXLSTASH_PORT=%r (not an integer).",
+                    _port_override,
+                )
         scheme = "https" if self._server_config.get("require_ssl", False) else "http"
         server_url = f"{scheme}://{host}:{port}"
         _w = 54
@@ -1587,6 +1636,20 @@ class Server:
                     server_config["filesystem_roots"] = []
                 if "daily_snapshots" not in server_config:
                     server_config["daily_snapshots"] = True
+
+        # Inference-device override. The Electron desktop launches the backend
+        # with its own --server-config and selects the device by which runtime is
+        # active: the bundled env ships CPU-only torch, GPU wheels are added on
+        # demand as overlays. It passes the active runtime's device via
+        # PIXLSTASH_DEFAULT_DEVICE so the backend uses what the runtime actually
+        # provides, regardless of the config's default_device (which can't know
+        # whether torch is the CPU build or a GPU overlay). General-purpose: a
+        # Docker deploy can use it too. Blank/unset leaves the config untouched.
+        _device_override = (
+            os.environ.get("PIXLSTASH_DEFAULT_DEVICE", "").strip().lower()
+        )
+        if _device_override:
+            server_config["default_device"] = _device_override
 
         # SSL key/cert paths live in the config *only* when SSL is enabled.
         # When require_ssl is off they are never read (see _ensure_ssl_certificates

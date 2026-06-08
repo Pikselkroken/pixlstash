@@ -31,71 +31,16 @@ import {
   ICON_CARDS,
 } from "../../utils/setAppearance.js";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useVersionCheck } from "../../composables/useVersionCheck";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
 const entityNames = useEntityNamesStore();
 
-const appVersion = __APP_VERSION__;
-
-const latestVersion = ref(null);
-const latestVersionUrl = ref(null);
-const latestSecurityLevel = ref(null);
-
-// PEP 440-aware version comparison: treats rc/a/b/dev as pre-releases.
-function parseVersion(v) {
-  const m = String(v).match(
-    /^(\d+)\.(\d+)\.(\d+)(?:(\.?(?:a|b|rc|dev))(\d+))?/i,
-  );
-  if (!m) return null;
-  const preTag = m[4]?.toLowerCase().replace(/^\./, "");
-  const preWeight = { dev: -4, a: -3, b: -2, rc: -1 }[preTag] ?? 0;
-  return [
-    Number(m[1]),
-    Number(m[2]),
-    Number(m[3]),
-    preWeight,
-    Number(m[5] || 0),
-  ];
-}
-function isRemoteNewer(current, remote) {
-  const a = parseVersion(current);
-  const b = parseVersion(remote);
-  if (!a || !b) return false; // conservatively: don't advertise if we can't parse
-  for (let i = 0; i < a.length; i++) {
-    if (b[i] > a[i]) return true;
-    if (b[i] < a[i]) return false;
-  }
-  return false;
-}
-
-const updateAvailable = computed(
-  () => latestVersion.value && isRemoteNewer(appVersion, latestVersion.value),
-);
-
-const securityUpdateClass = computed(() => {
-  if (!latestSecurityLevel.value) return "sidebar-update-available";
-  const high = ["critical", "high"].includes(
-    latestSecurityLevel.value.toLowerCase(),
-  );
-  return high
-    ? "sidebar-update-available sidebar-update-security sidebar-update-security--high"
-    : "sidebar-update-available sidebar-update-security";
-});
-
-const securityUpdateTitle = computed(() => {
-  if (!latestSecurityLevel.value) return undefined;
-  return `v${latestVersion.value} includes a ${latestSecurityLevel.value}-severity security fix. Update as soon as possible.`;
-});
-
-// Telemetry endpoint. The install type lives in the PATH (not the query
-// string) because Cloudflare zone analytics can only filter on path — see
-// issue #402. The response body is identical across all buckets.
-const LATEST_VERSION_BASE_URL = "https://pixlstash.dev/latest-version";
-// Install-type buckets allowed in the telemetry path; anything else (or
-// empty) collapses to "other". Detection must never block the check.
-const TELEMETRY_INSTALL_BUCKETS = new Set(["docker", "pip", "other"]);
-const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
+// The desktop shell hosts the brand (logo + "new version" alert) in the title
+// bar, so the sidebar copies below are gated on !isDesktop.
+const isDesktop =
+  typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
   docked: { type: Boolean, default: false },
@@ -143,7 +88,6 @@ const emit = defineEmits([
   "update:sidebar-thumbnail-size",
   "update:date-format",
   "update:theme-mode",
-  "toggle-dock",
   "update:sort-options",
   "update:hidden-tags",
   "update:apply-tag-filter",
@@ -159,6 +103,30 @@ const emit = defineEmits([
   "select-folder",
   "update:folder-scanning",
 ]);
+
+// "New version available" alert. Disabled on the desktop shell, where the title
+// bar owns the check, so it never runs twice.
+const {
+  latestVersion,
+  latestVersionUrl,
+  latestSecurityLevel,
+  updateAvailable,
+  updateDismissed,
+  isHighSecurity,
+  securityUpdateTitle,
+  dismissUpdateAlert,
+} = useVersionCheck(
+  () => props.installType,
+  () => props.checkForUpdates,
+  !isDesktop,
+);
+
+const securityUpdateClass = computed(() => {
+  if (!latestSecurityLevel.value) return "sidebar-update-available";
+  return isHighSecurity.value
+    ? "sidebar-update-available sidebar-update-security sidebar-update-security--high"
+    : "sidebar-update-available sidebar-update-security";
+});
 
 const imageImporterRef = ref(null);
 const sidebarRootRef = ref(null);
@@ -2758,88 +2726,6 @@ async function characterSaved() {
   closeCharacterEditor();
 }
 
-const VERSION_CHECK_STORAGE_KEY = "pixlstash:lastVersionCheck";
-const VERSION_CHECK_SECURITY_KEY = "pixlstash:lastSecurityLevel";
-const VERSION_CHECK_DISMISSED_KEY = "pixlstash:dismissedUpdateVersion";
-const VERSION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-
-const updateDismissed = ref(
-  localStorage.getItem(VERSION_CHECK_DISMISSED_KEY) === latestVersion.value,
-);
-
-function dismissUpdateAlert() {
-  localStorage.setItem(VERSION_CHECK_DISMISSED_KEY, latestVersion.value);
-  updateDismissed.value = true;
-}
-
-function checkForUpdatesNow() {
-  const last = parseInt(
-    localStorage.getItem(VERSION_CHECK_STORAGE_KEY) ?? "0",
-    10,
-  );
-  const lastSecurity = localStorage.getItem(VERSION_CHECK_SECURITY_KEY) ?? "";
-  const isHighSecurity = ["critical", "high"].includes(
-    lastSecurity.toLowerCase(),
-  );
-  // Bypass the 24h throttle when the last known release was a High/Critical
-  // security patch so it re-checks (and re-shows) on every page load.
-  if (Date.now() - last < VERSION_CHECK_INTERVAL_MS && !isHighSecurity) return;
-
-  const bucket = TELEMETRY_INSTALL_BUCKETS.has(props.installType)
-    ? props.installType
-    : "other";
-  const url = `${LATEST_VERSION_BASE_URL}/${encodeURIComponent(appVersion)}/${bucket}.json`;
-  fetch(url)
-    .then((r) => r.json())
-    .then((data) => {
-      localStorage.setItem(VERSION_CHECK_STORAGE_KEY, String(Date.now()));
-      localStorage.setItem(VERSION_CHECK_SECURITY_KEY, data?.security ?? "");
-      const remote = data?.version;
-      if (remote && isRemoteNewer(appVersion, remote)) {
-        const dismissed = localStorage.getItem(VERSION_CHECK_DISMISSED_KEY);
-        latestVersion.value = remote;
-        latestVersionUrl.value = `${UPDATE_PAGE_URL}/?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
-        latestSecurityLevel.value = data?.security ?? null;
-        updateDismissed.value = dismissed === remote;
-      }
-    })
-    .catch((e) => {
-      console.warn("Version update check failed:", e);
-    });
-}
-
-let versionCheckInterval = null;
-
-function startVersionCheckInterval() {
-  if (versionCheckInterval) return;
-  versionCheckInterval = setInterval(() => {
-    if (props.checkForUpdates === true) {
-      checkForUpdatesNow();
-    }
-  }, VERSION_CHECK_INTERVAL_MS);
-}
-
-function stopVersionCheckInterval() {
-  if (versionCheckInterval) {
-    clearInterval(versionCheckInterval);
-    versionCheckInterval = null;
-  }
-}
-
-watch(
-  () => props.checkForUpdates,
-  (val) => {
-    if (val === true) {
-      if (!latestVersion.value) {
-        checkForUpdatesNow();
-      }
-      startVersionCheckInterval();
-    } else {
-      stopVersionCheckInterval();
-    }
-  },
-);
-
 onMounted(() => {
   // When the session is scoped to a project via a share token, initialise
   // SideBar's internal project view state before any data is fetched.
@@ -2882,13 +2768,6 @@ onMounted(() => {
   });
   if (dockedScrollRef.value) {
     _dockedScrollObserver.observe(dockedScrollRef.value);
-  }
-
-  // Fetch latest version directly from pixlstash.dev when the user has opted in.
-  // Also handled by a watcher above for when the prop resolves after mount.
-  if (props.checkForUpdates === true) {
-    checkForUpdatesNow();
-    startVersionCheckInterval();
   }
 
   const handleNoticeReflow = () => {
@@ -2980,7 +2859,6 @@ document.addEventListener("keydown", onSidebarCtxKeydown, true);
 let sidebarNoticeCleanup = null;
 let _dockedScrollObserver = null;
 onBeforeUnmount(() => {
-  stopVersionCheckInterval();
   document.removeEventListener("mousedown", onSidebarCtxOutside);
   document.removeEventListener("keydown", onSidebarCtxKeydown, true);
   if (sidebarNoticeCleanup) {
@@ -3535,7 +3413,9 @@ defineExpose({
     :class="{ 'sidebar-docked': props.docked }"
     :style="sidebarThumbStyle"
   >
-    <div class="sidebar-brand">
+    <!-- On the desktop shell the brand (logo + name + update alert) lives in
+         the title bar, so this row collapses to just the dock toggle. -->
+    <div v-if="!isDesktop" class="sidebar-brand">
       <div class="sidebar-brand-left">
         <a
           href="https://pikselkroken.github.io/pixlstash/"
@@ -3575,15 +3455,6 @@ defineExpose({
           </div>
         </div>
       </div>
-      <button
-        class="sidebar-brand-toggle"
-        :title="props.docked ? 'Switch to full sidebar' : 'Switch to dock'"
-        @click.stop="emit('toggle-dock')"
-      >
-        <v-icon>{{
-          props.docked ? "mdi-chevron-right" : "mdi-chevron-left"
-        }}</v-icon>
-      </button>
     </div>
     <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
     <div
@@ -6113,7 +5984,7 @@ defineExpose({
   flex: 1;
   border-radius: 0;
   border: none;
-  border-bottom: 2px solid rgba(var(--v-theme-sidebar-text), 0.15);
+  border-bottom: 2px solid transparent;
   font-size: 0.74rem;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -6894,23 +6765,6 @@ defineExpose({
   position: static;
 }
 
-.sidebar.sidebar-docked .sidebar-brand-toggle {
-  position: static;
-  transform: none;
-  width: calc(var(--sidebar-thumb-size) * 0.65) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.65) !important;
-  min-width: calc(var(--sidebar-thumb-size) * 0.65) !important;
-  min-height: calc(var(--sidebar-thumb-size) * 0.65) !important;
-  padding: 0 !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sidebar.sidebar-docked .sidebar-brand-toggle:hover {
-  background-color: rgba(var(--v-theme-accent), 0.4);
-}
-
 .sidebar.sidebar-docked .sidebar-brand-left {
   padding: 0;
   justify-content: center;
@@ -6958,10 +6812,6 @@ defineExpose({
   filter: drop-shadow(0 0 8px rgba(var(--v-theme-accent), 0.9))
     drop-shadow(0 0 16px rgba(var(--v-theme-accent), 0.5));
   transform: scale(1.08);
-}
-
-.sidebar-brand-toggle:hover {
-  background-color: rgb(var(--v-theme-accent));
 }
 
 .sidebar-brand-title {
@@ -7056,25 +6906,6 @@ defineExpose({
 .sidebar-brand-task-btn:hover {
   opacity: 1;
   background-color: rgba(var(--v-theme-accent), 0.25);
-}
-
-.sidebar-brand-toggle {
-  min-width: 36px;
-  min-height: 36px;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border-radius: 8px;
-  background: transparent;
-  border: none;
-  box-shadow: none;
-}
-
-.sidebar-brand-toggle:focus,
-.sidebar-brand-toggle:focus-visible,
-.sidebar-brand-toggle:active {
-  outline: none;
-  box-shadow: none;
 }
 
 .sidebar-collapsed-list {

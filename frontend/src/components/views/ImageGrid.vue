@@ -100,9 +100,10 @@
         visibleRangeLabel
       }}</span>
     </transition>
-    <!-- ── Breadcrumb: current-view path (bottom-left overlay) ── -->
+    <!-- ── Breadcrumb: current-view path (bottom-left overlay) ──
+         Hidden on the desktop shell, where it lives in the title bar. -->
     <nav
-      v-if="breadcrumb.length"
+      v-if="breadcrumb.length && !isDesktop"
       class="grid-breadcrumb"
       :class="{
         'grid-breadcrumb--above-bar': isMultiCharacterView || isSetOverlapView,
@@ -229,6 +230,8 @@
     <SnapshotsWithDeletedDialog
       v-model="snapshotsWithDeletedOpen"
       :snapshots="snapshotsWithDeleted"
+      :dont-show-again="userPrefsStore.hidePurgeSnapshotWarning"
+      @update:dont-show-again="userPrefsStore.setHidePurgeSnapshotWarning($event)"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -818,7 +821,8 @@ import {
   onUnmounted,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -2478,87 +2482,15 @@ const visibleRangeLabel = computed(() => {
   return `${first} – ${last}`;
 });
 
+const userPrefsStore = useUserPrefsStore();
+
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
-// The route is the single source of truth for the view; it carries only IDs,
-// so names come from useEntityNamesStore (the sidebar publishes them). The
-// trail is built one-directionally (route → labels); clickable ancestor
-// crumbs navigate using the IDs already in the route, never by name (names
-// aren't unique).
-const breadcrumbRoute = useRoute();
-const breadcrumbRouter = useRouter();
-const entityNames = useEntityNamesStore();
-
-const breadcrumb = computed(() => {
-  const { name, params, query } = breadcrumbRoute;
-  // Multi-selection lives in the ?ids= query (count > 1). When several
-  // characters/sets are selected the leaf reads "Multiple People/Sets"
-  // rather than a single name.
-  const multiCount = query.ids
-    ? String(query.ids)
-        .split(",")
-        .filter(Boolean).length
-    : 1;
-  const isMulti = multiCount > 1;
-  const charName = (id) =>
-    isMulti ? "Multiple People" : entityNames.characterNames[id] ?? `Character ${id}`;
-  const setName = (id) =>
-    isMulti ? "Multiple Sets" : entityNames.setNames[id] ?? `Set ${id}`;
-  const projName = (id) => entityNames.projectNames[id] ?? `Project ${id}`;
-  // Root scope crumb names the sidebar bar/tab the view belongs to. These are
-  // scope *labels*, not destinations — plain text, not links. Only an
-  // ancestor that has a real grid route (a project, in project sub-views) is
-  // clickable.
-  const globalRoot = { label: "Global" };
-  const projectsRoot = { label: "Projects" };
-  const projectCrumb = (id) => ({
-    label: projName(id),
-    to: { name: "project", params: { id: String(id) } },
-  });
-  switch (name) {
-    case "all-pictures":
-      return [globalRoot, { label: "All Pictures" }];
-    case "scrapheap":
-      return [globalRoot, { label: "Scrapheap" }];
-    case "character":
-      return [globalRoot, { label: charName(params.id) }];
-    case "set":
-      return [globalRoot, { label: setName(params.id) }];
-    case "project":
-      return [projectsRoot, { label: projName(params.id) }];
-    // For multi-selection, omit the specific project crumb — the selection
-    // can span multiple projects, so a single project name would be wrong.
-    case "project-character":
-      return isMulti
-        ? [projectsRoot, { label: "Multiple People" }]
-        : [projectsRoot, projectCrumb(params.projectId), { label: charName(params.id) }];
-    case "project-set":
-      return isMulti
-        ? [projectsRoot, { label: "Multiple Sets" }]
-        : [projectsRoot, projectCrumb(params.projectId), { label: setName(params.id) }];
-    case "ref-folder":
-      return [
-        { label: "Folders" },
-        { label: entityNames.refFolderLabels[params.id] ?? "Folder" },
-      ];
-    case "import-folder":
-      return [
-        { label: "Folders" },
-        { label: entityNames.importFolderLabels[params.id] ?? "Folder" },
-      ];
-    default:
-      return [];
-  }
-});
-
-function navigateBreadcrumb(crumb) {
-  if (!crumb?.to) return;
-  const target = { ...crumb.to };
-  // Preserve a share token if one is in the URL, matching App.pushAppRoute.
-  if (breadcrumbRoute.query.token) {
-    target.query = { token: breadcrumbRoute.query.token, ...(target.query || {}) };
-  }
-  breadcrumbRouter.push(target).catch(() => {});
-}
+// The trail logic lives in useBreadcrumb, shared with the desktop title bar.
+// In the desktop shell the breadcrumb renders in the title bar instead, so the
+// in-grid overlay below is gated on !isDesktop.
+const isDesktop =
+  typeof window !== "undefined" && !!window.pixlstashDesktop;
+const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 watch(
   visibleRangeLabel,
@@ -3399,6 +3331,7 @@ const snapshotsWithDeleted = ref([]);
 const snapshotsWithDeletedOpen = ref(false);
 
 function showSnapshotsWithDeleted(response) {
+  if (userPrefsStore.hidePurgeSnapshotWarning) return;
   const snaps = response?.data?.snapshots_with_deleted;
   if (Array.isArray(snaps) && snaps.length) {
     snapshotsWithDeleted.value = snaps;
@@ -6304,7 +6237,7 @@ function handleEmptyStateReset() {
   overflow-x: hidden;
   width: 100%;
   padding-right: 0px;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgb(var(--v-theme-on-accent));
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.3) transparent;
 }
 .empty-state {
   position: absolute;
@@ -6854,22 +6787,25 @@ function handleEmptyStateReset() {
 
 <style>
 /* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
-/* Thumb uses transparent border + background-clip trick: expands on hover, colour stays the same */
+/* Neutral translucent thumb that reads on both light and dark grids; transparent
+   border + background-clip makes it a thin pill that thickens slightly on hover. */
 .grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgb(var(--v-theme-accent)) !important;
+  background: rgba(var(--v-theme-on-surface), 0.22) !important;
   background-clip: padding-box !important;
   border: 3px solid transparent !important;
   border-radius: 8px !important;
-  transition: border-width 0.15s ease !important;
+  transition:
+    background 0.15s ease,
+    border-width 0.15s ease !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--v-theme-accent)) !important;
+  background: rgba(var(--v-theme-on-surface), 0.4) !important;
   background-clip: padding-box !important;
-  border: 1px solid transparent !important;
+  border: 2px solid transparent !important;
   border-radius: 8px !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: rgba(var(--v-theme-shadow), 0.15) !important;
+  background: transparent !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-corner {
   background: transparent !important;

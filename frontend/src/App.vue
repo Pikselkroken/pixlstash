@@ -30,6 +30,7 @@ import { useSearchStore } from "./stores/useSearchStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 
 import SideBar from "./components/panels/SideBar.vue";
+import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
@@ -483,10 +484,6 @@ function updateSidebarBreakpoints() {
 function updateIsMobile() {
   updateSidebarBreakpoints();
   updateMaxColumns();
-}
-
-function toggleDock() {
-  sidebarStore.persistSidebarDocked(!sidebarStore.sidebarDocked);
 }
 
 function clampColumnsToBounds() {
@@ -1861,6 +1858,10 @@ defineExpose({
 <template>
   <v-app>
     <div class="app-viewport">
+      <TitleBar
+        :install-type="installType"
+        :check-for-updates="userPrefsStore.checkForUpdates"
+      />
       <div class="file-manager">
         <div
           class="sidebar-shell"
@@ -1917,7 +1918,6 @@ defineExpose({
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMovedToSet"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
-            @toggle-dock="toggleDock"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @open-import-dialog="openImportDialog"

@@ -673,7 +673,6 @@ def select_pictures_for_listing(
             comfyui_loras_filter=comfyui_loras_filter_value,
             face_filter=face_filter_value,
             apply_deleted_filter=False,
-            exclude_import_excluded=False,
         ).apply(query)
 
         return list(session.exec(query).all())

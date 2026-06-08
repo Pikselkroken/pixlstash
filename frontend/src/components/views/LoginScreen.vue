@@ -4,12 +4,14 @@
       <v-icon size="20" class="token-error-icon">mdi-link-off</v-icon>
       {{ tokenError }}
     </div>
+    <div class="login-brand">
+      <img src="/Logo.png" alt="" class="login-logo" />
+      <span class="login-wordmark"
+        >Pixl<span class="login-wordmark-accent">Stash</span></span
+      >
+    </div>
     <h1 class="headline">
-      {{
-        needsRegistration
-          ? "Register Password for PixlStash"
-          : "Log In to PixlStash"
-      }}
+      {{ needsRegistration ? "Register Password" : "Log In" }}
     </h1>
     <p class="subtitle">
       {{
@@ -107,6 +109,30 @@ async function handleLogin() {
   height: 100vh;
   background: rgb(var(--v-theme-dark-surface));
   color-scheme: dark;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 1.75rem;
+}
+
+.login-logo {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+}
+
+.login-wordmark {
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.login-wordmark-accent {
+  color: rgb(var(--v-theme-accent));
 }
 
 .token-error-banner {

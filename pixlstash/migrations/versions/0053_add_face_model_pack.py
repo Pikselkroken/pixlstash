@@ -10,8 +10,8 @@ only pack PixlStash supported until now), so existing rows are backfilled to
 FACE_MODEL_REFRESH finder will refresh embeddings in place only when the
 configured pack differs from a face's recorded ``model_pack``.
 
-Revision ID: 0052_add_face_model_pack
-Revises: 0051_deleted_file_log_path_sha
+Revision ID: 0053_add_face_model_pack
+Revises: 0052_drop_import_excluded_sentinel
 Create Date: 2026-06-09 00:00:00.000000
 
 """
@@ -22,8 +22,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0052_add_face_model_pack"
-down_revision: Union[str, None] = "0051_deleted_file_log_path_sha"
+revision: str = "0053_add_face_model_pack"
+down_revision: Union[str, None] = "0052_drop_import_excluded_sentinel"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

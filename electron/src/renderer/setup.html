@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'"
+    />
+    <title>Welcome to PixlStash</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="winbar" class="winbar"></div>
+    <div class="app setup">
+      <div class="setup-header">
+        <img class="brand-logo" src="Logo.png" alt="" />
+        <h1 class="setup-title">Welcome to PixlStash</h1>
+        <p class="setup-intro">
+          Let's set up your library. You can change these later in Settings.
+        </p>
+      </div>
+
+      <div id="imported" class="imported hidden">
+        <span id="importedText"></span>
+      </div>
+
+      <div class="panel">
+        <div class="hw">Library folder</div>
+        <div class="field">
+          <input id="folder" type="text" aria-label="Library folder" readonly />
+          <button id="pick" class="secondary" type="button">Choose…</button>
+        </div>
+        <div class="sub">Your pictures and the PixlStash database are stored here.</div>
+      </div>
+
+      <div id="computePanel" class="panel hidden">
+        <div class="hw">Compute</div>
+        <div id="computeOptions"></div>
+      </div>
+
+      <div id="error" class="error hidden"></div>
+
+      <div id="progress" class="progress hidden">
+        <div class="bar"><div id="barFill"></div></div>
+        <div id="progressCaption" class="caption"></div>
+      </div>
+
+      <button id="start" type="button">Get started</button>
+    </div>
+    <script src="winbar.js"></script>
+    <script src="setup.js"></script>
+  </body>
+</html>

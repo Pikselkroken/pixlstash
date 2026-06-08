@@ -1,0 +1,417 @@
+:root {
+  /* PixlStash dark theme — mirrors the Vuetify pixlStashDark palette in
+     frontend/src/main.js: cream text on slate, olive-green primary, orange
+     (logo) accent. Keep these in sync with the web app's theme. */
+  --bg: #1f2328;
+  --panel: #2b3138;
+  --fg: #f2e5da;
+  --muted: rgba(242, 229, 218, 0.55);
+  --accent: #f28f3b;
+  --accent-2: #7c9004;
+  --on-accent: #1b1b1b;
+  --border: #3a4047;
+  --logo-accent: #f28f3b;
+  --ok: #4caf50;
+  --err: #f44336;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Top padding clears the fixed title bar (frameless window). */
+  padding: 46px 32px 32px;
+  gap: 18px;
+}
+
+/* Frameless-window title bar for the splash + setup pages (injected by
+   winbar.js). Matches the app's toolbar colour so it reads as one strip. */
+.winbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  background: #23282f;
+  border-bottom: 1px solid rgba(242, 229, 218, 0.06);
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.winbar.winbar--mac {
+  padding-left: 78px; /* room for native traffic lights */
+}
+.winbar .wb-brand {
+  margin-right: auto;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--fg);
+  opacity: 0.8;
+}
+.winbar .wb-controls {
+  display: flex;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
+}
+.winbar .wb-btn {
+  width: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--fg);
+  opacity: 0.8;
+  cursor: default;
+  padding: 0;
+}
+.winbar .wb-btn:hover {
+  background: rgba(242, 229, 218, 0.1);
+  opacity: 1;
+}
+.winbar .wb-close:hover {
+  background: #e81123;
+  color: #fff;
+  opacity: 1;
+}
+
+.logo {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.logo span {
+  color: var(--accent);
+}
+
+.status {
+  color: var(--muted);
+  font-size: 15px;
+  min-height: 20px;
+  text-align: center;
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hidden {
+  display: none !important;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  width: 100%;
+  max-width: 560px;
+}
+
+.hw {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+/* Muted helper/caption text (used outside .backend / .choice too). */
+.sub {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.backend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  margin-bottom: 10px;
+}
+
+.backend.recommended {
+  border-color: var(--accent);
+}
+
+.backend .meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.backend .label {
+  font-weight: 600;
+}
+
+.backend .sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.badge {
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 8px;
+}
+
+button {
+  background: var(--accent-2);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent);
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.progress {
+  width: 100%;
+  max-width: 560px;
+}
+
+.bar {
+  height: 10px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bar > div {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.15s ease;
+}
+
+/* Unknown progress (pip gives no byte-level % over a pipe): a sliding chunk
+   instead of a static full bar that would read as "done". */
+.bar > div.indeterminate {
+  width: 40%;
+  transition: none;
+  animation: bar-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes bar-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.progress .caption {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--muted);
+  margin-top: 8px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  /* Always reserve two lines (and clamp to two) so the button below never
+     jumps as the message length changes. */
+  min-height: 2.6em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* First-run setup wizard */
+.app.setup {
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 16px;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 40px 32px;
+  overflow-y: auto;
+}
+
+.setup-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.brand-logo {
+  width: 72px;
+  height: 72px;
+}
+
+.setup-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.setup-intro {
+  margin: 0;
+  max-width: 420px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.imported {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  background: rgba(142, 166, 4, 0.06);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 13px;
+  overflow-wrap: anywhere;
+}
+
+.field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.field input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.field input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.field button {
+  white-space: nowrap;
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.choice:last-child {
+  margin-bottom: 0;
+}
+
+.choice:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.choice.selected {
+  border-color: var(--accent);
+  background: rgba(142, 166, 4, 0.08);
+}
+
+.choice input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.choice .label {
+  font-weight: 600;
+}
+
+.choice .sub {
+  margin-top: 3px;
+}
+
+#start {
+  align-self: center;
+  min-width: 200px;
+  margin-top: 4px;
+  padding: 11px 22px;
+}
+
+.error {
+  color: var(--err);
+  /* Backend startup failures carry a multi-line tail of the server's own
+     output; preserve its line breaks and let long paths wrap instead of
+     collapsing the whole thing onto one centered run-on line. */
+  white-space: pre-wrap;
+  text-align: left;
+  overflow-wrap: anywhere;
+  max-width: 560px;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.4;
+}

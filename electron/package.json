@@ -1,0 +1,98 @@
+{
+  "name": "pixlstash-desktop",
+  "productName": "PixlStash",
+  "desktopName": "pixlstash.desktop",
+  "version": "1.6.0-dev.1",
+  "description": "PixlStash desktop app — a native window around the local PixlStash server, with downloadable, hardware-matched compute backends.",
+  "author": {
+    "name": "Gaute Lindkvist",
+    "email": "lindkvis@gmail.com"
+  },
+  "homepage": "https://pixlstash.dev",
+  "license": "GPL-3.0-only",
+  "main": "dist/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "sync-version": "node scripts/sync-version.mjs",
+    "copy-assets": "node scripts/copy-assets.mjs",
+    "check-electron": "node scripts/check-electron-binary.mjs",
+    "build": "npm run sync-version && tsc && npm run copy-assets",
+    "start": "npm run check-electron && npm run build && electron .",
+    "setup-dev-icon": "node scripts/dev-desktop-integration.mjs",
+    "dev": "npm run check-electron && npm run build && npm run setup-dev-icon && cross-env PIXLSTASH_DESKTOP_DEV=1 electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9",
+    "fzstd": "^0.1.1",
+    "tar": "^7.5.16"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "cross-env": "^7.0.3",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "dev.pixlstash.desktop",
+    "productName": "PixlStash",
+    "copyright": "Copyright © PixlStash",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/python",
+        "to": "python"
+      },
+      {
+        "from": "resources/runtime.json",
+        "to": "runtime.json"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.photography",
+      "icon": "assets/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Graphics",
+      "icon": "assets/icon.png",
+      "synopsis": "Self-hosted picture library with AI tagging and semantic search",
+      "syncDesktopName": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "pikselkroken",
+      "repo": "pixlstash"
+    }
+  }
+}

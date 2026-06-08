@@ -1062,7 +1062,6 @@ class Picture(SQLModel, table=True):
             tags_confidence_below_filter=tags_confidence_below_filter,
             face_filter=face_filter,
             apply_deleted_filter=False,
-            exclude_import_excluded=False,
         ).apply(query)
 
         if stack_leaders_only:

@@ -5,9 +5,11 @@ function loadStatsOpen() {
   try {
     const stored = window.localStorage?.getItem("pixlstash:statsSidebarOpen");
     if (stored !== null) return stored !== "false";
-    return !window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+    // Default hidden so the grid is uncluttered on first run; the user opens the
+    // stats panel from the toolbar toggle and the choice is then persisted.
+    return false;
   } catch {
-    return true;
+    return false;
   }
 }
 

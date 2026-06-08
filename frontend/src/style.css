@@ -35,3 +35,79 @@ body {
   letter-spacing: 0.06em;
   color: rgba(var(--v-theme-on-surface), 0.5);
 }
+
+/* ===========================================================================
+   Desktop-app chrome — applied only inside the Electron shell (main.js adds
+   `.is-desktop` to <html> when window.pixlstashDesktop exists). A plain browser
+   visitor keeps normal web behaviour. Cheap, high-impact "feels like an app,
+   not a website" signals (à la VS Code / LM Studio).
+   =========================================================================== */
+
+/* Thin, subtle overlay scrollbars instead of the OS's fat browser ones. */
+.is-desktop {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(242, 229, 218, 0.22) transparent;
+}
+.is-desktop ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.is-desktop ::-webkit-scrollbar-track,
+.is-desktop ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.is-desktop ::-webkit-scrollbar-thumb {
+  background: rgba(242, 229, 218, 0.18);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+.is-desktop ::-webkit-scrollbar-thumb:hover {
+  background: rgba(242, 229, 218, 0.32);
+  background-clip: padding-box;
+}
+
+/* An app, not a document: default cursor + no text selection on chrome.
+   Re-enable both wherever the user genuinely reads or edits text. Add the
+   `selectable` class to any element whose text should stay copyable. */
+.is-desktop,
+.is-desktop body {
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.is-desktop input,
+.is-desktop textarea,
+.is-desktop [contenteditable="true"],
+.is-desktop .selectable {
+  cursor: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* No mobile-style tap-highlight flash on click. */
+.is-desktop * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Desktop shell: the title bar + toolbar are drawn in the app background colour,
+   so remap the sidebar's palette to that same background and make it read as one
+   continuous piece of chrome instead of a separate, lighter panel. The vars are
+   set on `.sidebar` itself (deeper than Vuetify's runtime `.v-theme--*` element)
+   so they actually win; `on-background` pairs with `background`, keeping text and
+   divider contrast correct in both themes. The brand row is hidden on desktop
+   (branding lives in the title bar), so a little top padding keeps the first row
+   off the window edge. */
+html.is-desktop .sidebar {
+  --v-theme-sidebar: var(--v-theme-background);
+  --v-theme-sidebar-text: var(--v-theme-on-background);
+  padding-top: 4px;
+}
+
+/* Title-bar height in the desktop shell. The floating sidebar / stats drawers are
+   `position: fixed`, so their `top` must clear the title bar too; they use
+   top: calc(var(--titlebar-h) + toolbar-height). In a plain browser there is no
+   title bar, so the fallback 0px keeps the original behaviour. */
+html.is-desktop {
+  --titlebar-h: 34px;
+}
