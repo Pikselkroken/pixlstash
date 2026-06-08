@@ -198,12 +198,6 @@ class Picture(SQLModel, table=True):
     text_score: Optional[float] = Field(default=None, index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
-    # When True, the source file could not be deleted (allow_delete_file=False on
-    # the reference folder) but the user has permanently removed the picture from
-    # the scrapheap.  The record is kept in the DB so the reference-folder scan
-    # does not re-import the file on the next pass.  These pictures are invisible
-    # to all normal queries via find().
-    import_excluded: bool = Field(default=False, index=True)
     stack_id: Optional[int] = Field(
         default=None, foreign_key="picturestack.id", index=True
     )
@@ -533,6 +527,14 @@ class Picture(SQLModel, table=True):
             .limit(limit)
         )
 
+        if only_deleted:
+            stmt = stmt.where(cls.deleted.is_(True))
+        elif not include_deleted:
+            stmt = stmt.where(cls.deleted.is_(False))
+
+        if not include_unimported:
+            stmt = stmt.where(cls.imported_at.is_not(None))
+
         # Apply select_fields logic (like in find)
         if select_fields:
             select_fields = list(set(select_fields) | {"id"})
@@ -709,6 +711,14 @@ class Picture(SQLModel, table=True):
             ]
             for rel_attr in rel_attrs:
                 query = query.options(selectinload(rel_attr))
+
+        if only_deleted:
+            query = query.where(cls.deleted.is_(True))
+        elif not include_deleted:
+            query = query.where(cls.deleted.is_(False))
+
+        if not include_unimported:
+            query = query.where(cls.imported_at.is_not(None))
 
         for attr, value in search.items():
             if attr == "project_id":

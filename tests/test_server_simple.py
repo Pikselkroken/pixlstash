@@ -365,6 +365,182 @@ def test_scrapheap_purge_reports_snapshots_with_deleted(server):
     )
 
 
+def _make_reference_folder_picture(server, folder_dir, file_name, *, allow_delete):
+    """Create a reference folder, a real image file in it, and an indexed Picture.
+
+    Returns (folder_id, picture_id, abs_file_path).
+    """
+    os.makedirs(folder_dir, exist_ok=True)
+    abs_file_path = os.path.join(folder_dir, file_name)
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(abs_file_path, format="PNG")
+    pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_file_path)
+
+    def _insert(session: Session):
+        folder = ReferenceFolder(
+            folder=folder_dir,
+            label="refs",
+            allow_delete_file=allow_delete,
+            status="active",
+        )
+        session.add(folder)
+        session.commit()
+        session.refresh(folder)
+        pic = Picture(
+            file_path=abs_file_path,
+            reference_folder_id=folder.id,
+            pixel_sha=pixel_sha,
+            format="PNG",
+            width=8,
+            height=8,
+            original_file_name=file_name,
+        )
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        return folder.id, pic.id
+
+    folder_id, pic_id = server.vault.db.run_task(_insert)
+    return folder_id, pic_id, abs_file_path
+
+
+def _run_reference_folder_scan(server, folder_id, folder_dir):
+    from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
+
+    task = ReferenceFolderScanTask(
+        database=server.vault.db,
+        folder_id=folder_id,
+        folder_path=folder_dir,
+        resolved_path=folder_dir,
+    )
+    return task._run_task()
+
+
+def test_scrapheap_purge_protected_folder_keeps_file_and_blocks_reimport(
+    server, tmp_path
+):
+    """allow_delete_file=False protects only the on-disk file, never the DB row.
+
+    Emptying the scrapheap must: delete the Picture row, write a DeletedFileLog
+    entry, leave the source file on disk, and a subsequent reference-folder scan
+    must NOT re-import the still-present file (the ledger blocks it).
+    """
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+
+    folder_dir = str(tmp_path / "protected_refs")
+    folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
+        server, folder_dir, "keep_me.png", allow_delete=False
+    )
+    expected_path_sha = DeletedFileLog.hash_path(abs_file_path)
+
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    purge_resp = client.delete("/pictures/scrapheap")
+    assert purge_resp.status_code == 200
+    assert purge_resp.json()["deleted_count"] == 1
+
+    # Row gone, ledger written, file still on disk (protected).
+    assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
+    assert os.path.isfile(abs_file_path), "Protected source file must stay on disk"
+
+    def _fetch_logs(session: Session):
+        return [
+            (r.path_sha, r.pixel_sha)
+            for r in session.exec(select(DeletedFileLog)).all()
+        ]
+
+    logs = server.vault.db.run_task(_fetch_logs)
+    assert any(path_sha == expected_path_sha for path_sha, _ in logs), (
+        f"Expected ledger entry for protected file, got {logs}"
+    )
+
+    # A scan of the folder must NOT re-import the still-present file.
+    result = _run_reference_folder_scan(server, folder_id, folder_dir)
+    assert result["new_count"] == 0, (
+        f"Protected, purged file was re-imported by scan: {result}"
+    )
+    reimported = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(Picture).where(Picture.reference_folder_id == folder_id)
+        ).all()
+    )
+    assert reimported == [], f"Scan re-created picture rows: {reimported}"
+
+
+def test_scrapheap_purge_unprotected_folder_removes_file_and_logs(server, tmp_path):
+    """allow_delete_file=True removes the on-disk file as well as the row.
+
+    Emptying the scrapheap must delete the Picture row, write a DeletedFileLog
+    entry, and remove the source file from disk.
+    """
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+
+    folder_dir = str(tmp_path / "unprotected_refs")
+    _folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
+        server, folder_dir, "remove_me.png", allow_delete=True
+    )
+    expected_path_sha = DeletedFileLog.hash_path(abs_file_path)
+
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    purge_resp = client.delete("/pictures/scrapheap")
+    assert purge_resp.status_code == 200
+    assert purge_resp.json()["deleted_count"] == 1
+
+    # Row gone, ledger written, file removed from disk.
+    assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
+    assert not os.path.isfile(abs_file_path), "Unprotected source file must be removed"
+
+    logs = server.vault.db.run_task(
+        lambda s: [r.path_sha for r in s.exec(select(DeletedFileLog)).all()]
+    )
+    assert expected_path_sha in logs, f"Expected ledger entry, got {logs}"
+
+
+def test_scrapheap_count_matches_grid(server):
+    """The scrapheap badge count must equal the scrapheap grid length.
+
+    Regression for the '72 deleted, empty grid' bug: count_scrapheap and
+    Picture.find(only_deleted=True) must apply the same filters and agree.
+    """
+    server.vault.import_default_data()
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+
+    pic_ids = server.vault.db.run_task(
+        lambda s: [p.id for p in s.exec(select(Picture)).all()]
+    )
+    assert pic_ids, "No pictures imported"
+    for pic_id in pic_ids:
+        assert client.delete(f"/pictures/{pic_id}").status_code == 200
+
+    count = client.get("/characters/SCRAPHEAP/summary").json()
+    badge_count = count.get("image_count")
+
+    def _grid(session: Session):
+        return Picture.find(session, only_deleted=True, select_fields=["id"])
+
+    grid = server.vault.db.run_task(_grid)
+    assert badge_count == len(grid), (
+        f"Scrapheap count {badge_count} != grid length {len(grid)}"
+    )
+    assert len(grid) == len(pic_ids)
+
+
 def test_pictures_export(server):
     """Test /pictures/export endpoint returns 200 and zip content."""
     server.vault.import_default_data(add_tagger_test_images=True)
