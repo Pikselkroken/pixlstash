@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import os
 import re
@@ -5,14 +6,19 @@ from datetime import datetime, timezone
 from io import BytesIO
 from email.utils import formatdate
 
+import cv2
+import numpy as np
 from PIL import Image
 from fastapi import (
     BackgroundTasks,
     Body,
+    File,
+    Form,
     HTTPException,
     Query,
     Request,
     Response,
+    UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -52,6 +58,7 @@ from pixlstash.utils.service.caption_utils import (
     serialize_tag_objects,
     sync_picture_sidecar,
 )
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_character_ids
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.watermark import apply_watermark, get_watermark_bytes
 
@@ -69,6 +76,39 @@ logger = get_logger(__name__)
 # eligibility queries over the id set). Requests over this cap are rejected
 # rather than silently truncated.
 BATCH_CHARACTER_LIKENESS_MAX_IDS = 1000
+
+
+class _DetectedFace:
+    """Adapter exposing an in-memory face detection as the ``(.id, .features)``
+    shape ``compute_character_likeness_for_faces`` consumes.
+
+    ``FaceResult.embedding`` (the normalised ArcFace vector from the recognition
+    model) is the same value face extraction stores in ``Face.features`` as
+    ``embedding.astype("float32").tobytes()``, so scoring an uploaded image this
+    way is bit-for-bit identical to scoring a stored picture — without writing
+    any ``Picture``/``Face`` rows.
+    """
+
+    __slots__ = ("id", "features")
+
+    def __init__(self, face_id: int, embedding):
+        self.id = face_id
+        self.features = np.asarray(embedding, dtype=np.float32).tobytes()
+
+
+class ScoreCharacterLikenessResultEntry(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    index: int
+    character_likeness: Optional[float] = None
+    eligible: bool
+
+
+class ScoreCharacterLikenessResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    reference_character_id: int
+    results: list[ScoreCharacterLikenessResultEntry]
 
 
 class SetProjectForPicturesResponse(BaseModel):
@@ -1293,9 +1333,7 @@ def register_routes(router, server):
 
             matched_ids = {
                 row
-                for row in session.exec(
-                    _match_query().group_by(Face.picture_id)
-                ).all()
+                for row in session.exec(_match_query().group_by(Face.picture_id)).all()
                 if row is not None
             }
             scorable_match_ids = {
@@ -1346,9 +1384,7 @@ def register_routes(router, server):
         # path's compute_character_likeness_for_faces), so scores are
         # bit-for-bit equal.
         scorable_ids = [
-            pid
-            for pid in unique_ids
-            if pid in live_ids and pid in scorable_match_ids
+            pid for pid in unique_ids if pid in live_ids and pid in scorable_match_ids
         ]
         likeness_by_id: dict[int, float] = {}
         if scorable_ids and has_reference:
@@ -1429,6 +1465,158 @@ def register_routes(router, server):
 
         per_id = {pid: classify(pid) for pid in unique_ids}
         results = [per_id[pid] for pid in requested_ids]
+
+        return {
+            "reference_character_id": int(reference_character_id),
+            "results": results,
+        }
+
+    @router.post(
+        "/pictures/score_character_likeness",
+        summary="Score uploaded images by character likeness",
+        description=(
+            "Scores one or more uploaded images by how closely a detected face "
+            "matches a reference character, without importing or persisting "
+            "anything. Faces are detected in-memory on the GPU face queue and "
+            "compared against the reference character's reference faces with the "
+            "same softmax-weighted cosine similarity as the stored-picture "
+            "`character_likeness` endpoints, so the scores are directly "
+            "comparable.\n\n"
+            "Returns one result per uploaded file, in upload order, as "
+            "`{index, character_likeness, eligible}`:\n"
+            "- `index`: 0-based position of the file in the request.\n"
+            "- `character_likeness`: the maximum likeness [0-1] over the faces "
+            "detected in that image, or `null` when the frame is not "
+            "scorable.\n"
+            "- `eligible`: `false` when the image has no detectable face, or "
+            "the reference character has no usable reference faces to score "
+            "against (the score is then `null`); otherwise `true`.\n\n"
+            "Intended for quality gates (e.g. the ComfyUI Face Likeness Gate) "
+            "that score generated frames against a character without polluting "
+            "the vault — no tagging, captioning, embedding, or vault-wide "
+            "likeness work is triggered."
+        ),
+        response_model=ScoreCharacterLikenessResponse,
+    )
+    async def score_character_likeness(
+        request: Request,
+        files: list[UploadFile] = File(
+            ...,
+            description="Images to score against the reference character.",
+        ),
+        reference_character_id: int = Form(
+            ...,
+            description="Character to score each uploaded image's face(s) against.",
+        ),
+    ):
+        # ── Authentication & scope ────────────────────────────────────────
+        server.auth.require_user_id(request)
+        scope_allowed = fetch_scope_allowed_character_ids(server, request)
+        if (
+            scope_allowed is not None
+            and int(reference_character_id) not in scope_allowed
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Token does not have access to the reference character.",
+            )
+
+        if not files:
+            raise HTTPException(
+                status_code=400, detail="At least one file must be uploaded."
+            )
+
+        # ── Decode uploads to BGR numpy arrays ────────────────────────────
+        bgr_images: list[np.ndarray] = []
+        for idx, file in enumerate(files):
+            raw_bytes = await file.read()
+            if not raw_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: uploaded file is empty.",
+                )
+            try:
+                pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {idx + 1}: could not decode uploaded image.",
+                ) from exc
+            bgr_images.append(cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR))
+
+        # ── Reference faces for the character ─────────────────────────────
+        reference_faces = server.vault.db.run_task(
+            select_reference_faces_for_character,
+            int(reference_character_id),
+            10,
+            priority=DBPriority.IMMEDIATE,
+        )
+
+        # ── Detect faces in-memory on the GPU queue (nothing persisted) ───
+        from pixlstash.tasks.face_detection_task import FaceDetectionTask
+
+        engine = getattr(server.vault, "_engine", None)
+        if engine is None:
+            raise HTTPException(
+                status_code=503, detail="Inference engine not available."
+            )
+        task_runner = getattr(server.vault, "_task_runner", None)
+        if task_runner is None:
+            raise HTTPException(status_code=503, detail="Task runner not available.")
+
+        detection_task = FaceDetectionTask(engine, bgr_images)
+        loop = asyncio.get_event_loop()
+        # Detection is batched on the GPU; allow a little more headroom per image
+        # so a large batch under load does not time out prematurely.
+        timeout_s = max(60.0, 2.0 * len(bgr_images))
+        try:
+            all_face_results = await loop.run_in_executor(
+                None, task_runner.submit_and_wait, detection_task, timeout_s
+            )
+        except TimeoutError as exc:
+            logger.error("score_character_likeness: face detection timed out: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Face detection timed out; the server may be under heavy load.",
+            ) from exc
+        except RuntimeError as exc:
+            logger.error("score_character_likeness: face detection failed: %s", exc)
+            raise HTTPException(
+                status_code=503, detail="Face detection failed."
+            ) from exc
+
+        # ── Score each image: max likeness over its detected faces ────────
+        # No reference faces → nothing is scorable (mirrors the stored-picture
+        # endpoints' empty-likeness_map case: eligible=false, score=null).
+        has_reference = bool(reference_faces)
+        results: list[dict] = []
+        for idx, face_results in enumerate(all_face_results):
+            if not has_reference:
+                results.append(
+                    {"index": idx, "character_likeness": None, "eligible": False}
+                )
+                continue
+
+            candidate_faces = [
+                _DetectedFace(face_i, fr.embedding)
+                for face_i, fr in enumerate(face_results)
+                if fr.embedding is not None
+            ]
+            if not candidate_faces:
+                # No detectable face — nothing to score, so the frame is
+                # ineligible and a gate rejects it regardless of threshold.
+                results.append(
+                    {"index": idx, "character_likeness": None, "eligible": False}
+                )
+                continue
+
+            likeness_map = compute_character_likeness_for_faces(
+                reference_faces, candidate_faces
+            )
+            score = max(likeness_map.values(), default=0.0)
+            results.append(
+                {"index": idx, "character_likeness": float(score), "eligible": True}
+            )
 
         return {
             "reference_character_id": int(reference_character_id),

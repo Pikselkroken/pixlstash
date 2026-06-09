@@ -501,13 +501,9 @@ class InferenceEngine:
             try:
                 wd14_service.download()
             except Exception as exc:
-                logger.warning(
-                    "WD14 tagger download failed (%s), disabling.", exc
-                )
+                logger.warning("WD14 tagger download failed (%s), disabling.", exc)
         if wd14_service.needs_download():
-            logger.warning(
-                "WD14 tagger model not found in %s, disabling.", model_dir
-            )
+            logger.warning("WD14 tagger model not found in %s, disabling.", model_dir)
             wd14_enabled = False
 
         vram_budget = VramBudget(device)
