@@ -63,6 +63,70 @@ def test_likeness_search_basic():
             assert picture_ids[0] in ids
 
 
+def test_score_character_likeness_basic():
+    """The stateless gate-scoring endpoint returns one result per uploaded file
+    without importing anything, and reports frames as ineligible when there is
+    nothing to score against."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            # A reference character with no reference faces yet.
+            resp = client.post(f"{API_PREFIX}/characters", json={"name": "Gate Ref"})
+            assert resp.status_code == 200, resp.text
+            character_id = resp.json()["character"]["id"]
+
+            files = [
+                ("files", ("a.png", random_images[0], "image/png")),
+                ("files", ("b.png", random_images[1], "image/png")),
+            ]
+            resp = client.post(
+                f"{API_PREFIX}/pictures/score_character_likeness",
+                files=files,
+                data={"reference_character_id": character_id},
+            )
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert data["reference_character_id"] == character_id
+
+            results = data["results"]
+            assert len(results) == 2
+            assert [r["index"] for r in results] == [0, 1]
+            # Nothing imported: the uploaded frames never become vault pictures.
+            for r in results:
+                assert {"index", "character_likeness", "eligible"} <= set(r)
+                # The character has no reference faces (and the random-noise
+                # frames have no detectable face), so nothing is scorable.
+                assert r["eligible"] is False
+                assert r["character_likeness"] is None
+
+            # Scoring must not have imported the frames as pictures.
+            def _picture_count(session):
+                result = session.exec(select(func.count()).select_from(Picture)).one()
+                return result[0] if isinstance(result, tuple) else (result or 0)
+
+            assert server.vault.db.run_task(_picture_count) == 0
+
+
+def test_score_character_likeness_requires_auth():
+    """The scoring endpoint rejects unauthenticated requests."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                f"{API_PREFIX}/pictures/score_character_likeness",
+                files=[("files", ("a.png", random_images[0], "image/png"))],
+                data={"reference_character_id": 1},
+            )
+            assert resp.status_code == 401, resp.text
+
+
 def test_face_search_basic():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
