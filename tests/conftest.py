@@ -75,6 +75,13 @@ def pytest_addoption(parser):
         help="VRAM budget in GB applied to all Server instances (e.g. 4.0). "
         "Overrides the persisted user config value.",
     )
+    parser.addoption(
+        "--insightface-model-pack",
+        type=str,
+        default=None,
+        help="InsightFace model pack applied to all Server instances "
+        "(e.g. 'buffalo_l' or 'auraface'). Overrides the persisted config value.",
+    )
 
 
 def pytest_configure(config):
@@ -89,6 +96,7 @@ def pytest_configure(config):
     Server.DEFAULT_FORCE_CPU = True if force_cpu else None
     Server.DEFAULT_FAST_CAPTIONS = config.getoption("--fast-captions")
     Server.DEFAULT_MAX_VRAM_GB = config.getoption("--max-vram-gb")
+    Server.DEFAULT_INSIGHTFACE_MODEL_PACK = config.getoption("--insightface-model-pack")
 
 
 def pytest_sessionfinish(session, exitstatus):
