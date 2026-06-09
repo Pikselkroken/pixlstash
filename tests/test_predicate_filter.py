@@ -311,9 +311,7 @@ def test_face_filter(session):
     _assert_matches_agrees(session, with_flt, {with_face.id})
 
     without_flt = PredicateFilter(face_filter="without_face")
-    _assert_matches_agrees(
-        session, without_flt, {without_face.id, sentinel_only.id}
-    )
+    _assert_matches_agrees(session, without_flt, {without_face.id, sentinel_only.id})
 
 
 # --------------------------------------------------------------------------- #

@@ -161,6 +161,10 @@ The per-handler hard requirement above is a stopgap, not the destination. It sti
 - **External:** Uses OpenCV, NumPy, PIL, FastAPI, rapidfuzz, and Vue 3.
 - **Cross-component:** Backend serves REST API; frontend consumes API and displays images/metrics.
 
+## Always Run Ruff on Python code before considering the job complete
+
+Do ruff format and ruff check.
+
 ## Commit messages
 
 Write short concise commit messages without a torrent of detail.

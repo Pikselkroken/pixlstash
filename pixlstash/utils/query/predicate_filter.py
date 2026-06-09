@@ -347,7 +347,9 @@ class PredicateFilter(BaseModel):
         return session.exec(stmt).first() is not None
 
     @classmethod
-    def from_query_params(cls, request, *, children_only: bool = True) -> "PredicateFilter":
+    def from_query_params(
+        cls, request, *, children_only: bool = True
+    ) -> "PredicateFilter":
         """Build a filter from the intrinsic-attribute query params on ``request``.
 
         Covers the vocabulary shared by the picture-listing routes.  Membership
