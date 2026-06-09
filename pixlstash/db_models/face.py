@@ -38,6 +38,12 @@ class Face(SQLModel, table=True):
     )
     bbox_: Optional[str] = Field(sa_column=Column("bbox", String, default=None))
     features: Optional[bytes] = None
+    # Name of the InsightFace model pack that produced this face's embedding
+    # (e.g. "buffalo_l" or "auraface"). Nullable for rows created before the
+    # column existed; backfilled to "buffalo_l" by the Alembic migration.
+    model_pack: Optional[str] = Field(
+        sa_column=Column("model_pack", String, default=None)
+    )
 
     # Relationships
     picture: Optional["Picture"] = Relationship(

@@ -926,6 +926,10 @@ class Server:
         DEFAULT_CLEANUP_MISSING_PICTURES: Class-level startup cleanup toggle.
             When ``True``, startup removes picture rows that point to missing
             source files before thumbnail generation. ``False`` means disabled.
+        DEFAULT_INSIGHTFACE_MODEL_PACK: Class-level InsightFace model-pack
+            override. When set (e.g. by a test), it replaces the
+            ``insightface_model_pack`` value from the persisted config for all
+            Server instances. ``None`` means use the config value.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -933,6 +937,7 @@ class Server:
     DEFAULT_FAST_CAPTIONS: bool = False
     DEFAULT_PORT: int | None = None
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
+    DEFAULT_INSIGHTFACE_MODEL_PACK: str | None = None
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -1077,6 +1082,9 @@ class Server:
             force_cpu=bool(_force_cpu),
             fast_captions=Server.DEFAULT_FAST_CAPTIONS,
             daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
+            insightface_model_pack=self._server_config.get(
+                "insightface_model_pack", "buffalo_l"
+            ),
         )
 
         self._ws_clients = []
@@ -1532,6 +1540,7 @@ class Server:
                 "cookie_secure": False,
                 "image_root": default_image_root,
                 "default_device": "auto",
+                "insightface_model_pack": "buffalo_l",
                 "min_free_disk_gb": 1.0,
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
@@ -1562,6 +1571,8 @@ class Server:
                     server_config["image_root"] = default_image_root
                 if "default_device" not in server_config:
                     server_config["default_device"] = "auto"
+                if "insightface_model_pack" not in server_config:
+                    server_config["insightface_model_pack"] = "buffalo_l"
                 if "min_free_disk_gb" not in server_config:
                     server_config["min_free_disk_gb"] = 1.0
                 if "min_free_vram_mb" not in server_config:
@@ -1605,6 +1616,13 @@ class Server:
         # the production server is already occupying the configured port.
         if Server.DEFAULT_PORT is not None:
             server_config["port"] = Server.DEFAULT_PORT
+
+        # Apply any test-level InsightFace model-pack override so tests can force
+        # a pack without writing JSON (mirrors DEFAULT_FORCE_CPU / DEFAULT_PORT).
+        if Server.DEFAULT_INSIGHTFACE_MODEL_PACK is not None:
+            server_config["insightface_model_pack"] = (
+                Server.DEFAULT_INSIGHTFACE_MODEL_PACK
+            )
 
         return server_config
 

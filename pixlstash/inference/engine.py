@@ -50,6 +50,8 @@ class InferenceEngine:
         image_root: Filesystem root for picture storage (used by workflows).
         keep_models_in_memory: When ``False`` models are unloaded during idle
             periods.
+        insightface_model_pack: Name of the InsightFace model pack used by the
+            face pipeline (e.g. ``"buffalo_l"`` or ``"auraface"``).
         wd14_enabled: Whether the WD14 tagger is active.
         pixlstash_tagger_enabled: Whether the PixlStash tagger is active.
         pixlstash_tagger_threshold_offset: Score threshold adjustment for the
@@ -71,6 +73,7 @@ class InferenceEngine:
         force_cpu: bool = False,
         image_root: str | None = None,
         keep_models_in_memory: bool = True,
+        insightface_model_pack: str = "buffalo_l",
         wd14_enabled: bool = True,
         pixlstash_tagger_enabled: bool = True,
         pixlstash_tagger_threshold_offset: float = 0.0,
@@ -87,6 +90,7 @@ class InferenceEngine:
         self.force_cpu = force_cpu
         self.image_root = image_root
         self._keep_models_in_memory = keep_models_in_memory
+        self.insightface_model_pack = insightface_model_pack
         # tagger_settings is the authoritative config; the per-tagger flags are
         # kept for backward compat but derived from settings when settings are set.
         if tagger_settings is not None:
@@ -411,6 +415,7 @@ class InferenceEngine:
         wd14_threshold: float | None = None,
         pixlstash_tagger_threshold_offset: float = 0.0,
         keep_models_in_memory: bool = True,
+        insightface_model_pack: str = "buffalo_l",
         tagger_settings: dict | None = None,
     ) -> "InferenceEngine":
         """Construct a fully-wired :class:`InferenceEngine`.
@@ -430,6 +435,8 @@ class InferenceEngine:
             pixlstash_tagger_threshold_offset: Score threshold adjustment for
                 the PixlStash tagger.
             keep_models_in_memory: Whether to keep models loaded between runs.
+            insightface_model_pack: Name of the InsightFace model pack used by
+                the face pipeline (e.g. ``"buffalo_l"`` or ``"auraface"``).
 
         Returns:
             A fully constructed :class:`InferenceEngine` ready for use.
@@ -524,6 +531,7 @@ class InferenceEngine:
             force_cpu=force_cpu or (device == "cpu"),
             image_root=image_root,
             keep_models_in_memory=keep_models_in_memory,
+            insightface_model_pack=insightface_model_pack,
             wd14_enabled=wd14_enabled,
             pixlstash_tagger_enabled=pixlstash_tagger_enabled,
             pixlstash_tagger_threshold_offset=pixlstash_tagger_threshold_offset,
