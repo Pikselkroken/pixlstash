@@ -5,6 +5,7 @@ class TaskType(str, Enum):
     """Identifies each background worker / task-runner lane."""
 
     FACE_EXTRACTION = "FaceExtractionTask"
+    FACE_MODEL_REFRESH = "FaceModelRefreshTask"
     TAGGER = "TagTask"
     QUALITY = "QualityTask"
     LIKENESS = "LikenessTask"

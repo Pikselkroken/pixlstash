@@ -2,9 +2,11 @@ from .task_type import TaskType
 from .base_task_finder import BaseTaskFinder, TaskFinderRegistry
 from .description_task import DescriptionTask
 from .face_extraction_task import FaceExtractionTask
+from .face_model_refresh_task import FaceModelRefreshTask
 from .quality_task import QualityTask
 from .image_embedding_task import ImageEmbeddingTask
 from .missing_face_extraction_finder import MissingFaceExtractionFinder
+from .missing_face_model_refresh_finder import MissingFaceModelRefreshFinder
 from .missing_image_embedding_finder import MissingImageEmbeddingFinder
 from .missing_likeness_finder import MissingLikenessFinder
 from .missing_likeness_parameters_finder import MissingLikenessParametersFinder
@@ -36,9 +38,11 @@ __all__ = [
     "TaskFinderRegistry",
     "DescriptionTask",
     "FaceExtractionTask",
+    "FaceModelRefreshTask",
     "ImageEmbeddingTask",
     "QualityTask",
     "MissingFaceExtractionFinder",
+    "MissingFaceModelRefreshFinder",
     "MissingImageEmbeddingFinder",
     "MissingLikenessFinder",
     "MissingLikenessParametersFinder",

@@ -22,6 +22,10 @@ from pixlstash.inference.engine import InferenceEngine
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.insightface_batched import BatchedFaceRunner
+from pixlstash.utils.insightface_model_utils import (
+    DEFAULT_MODEL_PACK,
+    ensure_model_pack_available,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
@@ -304,14 +308,31 @@ class FaceExtractionTask(BaseTask):
 
         Returns:
             An initialised :class:`insightface.app.FaceAnalysis` instance.
+
+        Raises:
+            ValueError: If the engine's ``insightface_model_pack`` is not a known
+                pack (fail-closed; see
+                :func:`~pixlstash.utils.insightface_model_utils.validate_model_pack`).
+            RuntimeError: If a required model-pack download fails.
         """
+        # Validate the configured pack and provision it on disk (no-op for
+        # auto-downloaded packs like buffalo_l) before constructing FaceAnalysis.
+        # Fails closed for unknown names instead of letting FaceAnalysis try to
+        # fetch an arbitrary zoo entry.
+        model_pack = getattr(engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
+        ensure_model_pack_available(model_pack)
+
         if cpu_spillover:
             with cls._cpu_insightface_lock:
                 if cls._global_cpu_insightface_app is None:
                     logger.debug(
-                        "FaceExtractionTask: initialising CPU spillover InsightFace app (ctx_id=-1)."
+                        "FaceExtractionTask: initialising CPU spillover InsightFace "
+                        "app (ctx_id=-1, pack=%s).",
+                        model_pack,
                     )
-                    app = FaceAnalysis(providers=["CPUExecutionProvider"])
+                    app = FaceAnalysis(
+                        name=model_pack, providers=["CPUExecutionProvider"]
+                    )
                     app.prepare(ctx_id=-1, det_thresh=0.25, det_size=(256, 256))
                     cls._global_cpu_insightface_app = app
                 else:
@@ -331,11 +352,12 @@ class FaceExtractionTask(BaseTask):
             else ["CPUExecutionProvider"]
         )
         logger.debug(
-            "Initialising InsightFace with providers=%s (ctx_id=%d)",
+            "Initialising InsightFace with providers=%s (ctx_id=%d, pack=%s)",
             providers,
             0 if use_cuda else -1,
+            model_pack,
         )
-        app = FaceAnalysis(providers=providers)
+        app = FaceAnalysis(name=model_pack, providers=providers)
         app.prepare(
             ctx_id=0 if use_cuda else -1,
             det_thresh=0.25,
@@ -483,6 +505,11 @@ class FaceExtractionTask(BaseTask):
         self._init_insightface_app()
         init_s = time.time() - _init_start
 
+        # Tag every face written in this batch with the pack that produced it so
+        # the FACE_MODEL_REFRESH finder can detect stale embeddings on a pack
+        # change. Read once per batch — the engine pack is immutable per run.
+        model_pack = getattr(self._engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
+
         updates = []
         setup_s = 0.0
         batch_infer_s = 0.0
@@ -622,6 +649,7 @@ class FaceExtractionTask(BaseTask):
                                 character_id=None,
                                 frame_index=0,
                                 features=features_bytes,
+                                model_pack=model_pack,
                             )
                         )
                     if face_objects:
@@ -688,6 +716,7 @@ class FaceExtractionTask(BaseTask):
                                         character_id=None,
                                         frame_index=0,
                                         features=features_bytes,
+                                        model_pack=model_pack,
                                     )
                                 )
                         step = max(1, frame_count // 3)
@@ -735,6 +764,7 @@ class FaceExtractionTask(BaseTask):
                                         character_id=None,
                                         frame_index=frame_index,
                                         features=features_bytes,
+                                        model_pack=model_pack,
                                     )
                                 )
                         cap.release()
@@ -772,6 +802,7 @@ class FaceExtractionTask(BaseTask):
                             face_index=-1,
                             character_id=None,
                             bbox=None,
+                            model_pack=model_pack,
                         )
                     )
                 else:

@@ -77,6 +77,7 @@ class Vault:
         force_cpu: bool = False,
         fast_captions: bool = False,
         daily_snapshots_enabled: bool = True,
+        insightface_model_pack: str = "buffalo_l",
     ):
         """
         Initialize a Vault instance.
@@ -109,6 +110,7 @@ class Vault:
         self._engine: InferenceEngine | None = None
         self._force_cpu = force_cpu
         self._fast_captions = fast_captions
+        self._insightface_model_pack = insightface_model_pack
         self._last_aggressive_unload_at = 0.0
         self._keep_models_in_memory = True
         self._max_vram_gb = None
@@ -193,6 +195,7 @@ class Vault:
                 pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
                 or 0.0,
                 keep_models_in_memory=self._keep_models_in_memory,
+                insightface_model_pack=self._insightface_model_pack,
                 tagger_settings=self._tagger_settings,
             )
             self._bind_engine_services()
@@ -911,6 +914,7 @@ class Vault:
                 pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
                 or 0.0,
                 keep_models_in_memory=self._keep_models_in_memory,
+                insightface_model_pack=self._insightface_model_pack,
                 tagger_settings=self._tagger_settings,
             )
             self._bind_engine_services()
