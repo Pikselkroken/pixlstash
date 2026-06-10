@@ -101,7 +101,12 @@ body {
 html.is-desktop .sidebar {
   --v-theme-sidebar: var(--v-theme-background);
   --v-theme-sidebar-text: var(--v-theme-on-background);
-  padding-top: 4px;
+}
+
+/* Give the sidebar's "Library" header band the same height as the toolbar and the
+   stats header so the three columns line up at the top in the desktop shell. */
+html.is-desktop .sidebar-view-header {
+  height: 48px;
 }
 
 /* Title-bar height in the desktop shell. The floating sidebar / stats drawers are

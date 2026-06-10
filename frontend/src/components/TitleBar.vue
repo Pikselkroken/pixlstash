@@ -70,7 +70,6 @@ const close = () => desktop?.windowClose?.();
       <span class="titlebar-name"
         >Pixl<span class="titlebar-name-accent">Stash</span></span
       >
-      <span class="titlebar-version">v{{ appVersion }}</span>
       <nav
         v-if="breadcrumb.length"
         class="titlebar-breadcrumb"
@@ -95,6 +94,7 @@ const close = () => desktop?.windowClose?.();
       </nav>
     </div>
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
+    <span class="titlebar-version">v{{ appVersion }}</span>
     <div
       v-if="updateAvailable && !updateDismissed"
       class="titlebar-update"
@@ -196,13 +196,20 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-name-accent {
-  color: rgb(var(--v-theme-accent));
+  /* Subdued: blend the accent with the main title-bar text colour so "Stash"
+     reads as a tint rather than full orange. */
+  color: color-mix(
+    in srgb,
+    rgb(var(--v-theme-accent)) 55%,
+    rgb(var(--v-theme-on-background))
+  );
 }
 
 .titlebar-version {
   opacity: 0.55;
   font-size: 11px;
   flex-shrink: 0;
+  padding: 0 12px;
 }
 
 /* Breadcrumb: current-view path, inline after the version. */

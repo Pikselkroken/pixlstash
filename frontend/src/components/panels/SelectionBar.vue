@@ -643,20 +643,23 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   position: absolute;
   bottom: 18px;
   left: 50%;
+  /* width: max-content so the pill hugs its icons. NOTE: do NOT add
+     container-type here — inline-size containment makes the width ignore the
+     contents, collapsing the pill to ~0 and leaving the icons floating with no
+     visible background. */
+  width: max-content;
   transform: translateX(-50%);
   z-index: 200;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   max-width: calc(100% - 24px);
   padding: 6px 10px;
-  border-radius: 14px;
-  background: rgba(var(--v-theme-background), 0.97);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
-  border: 1px solid rgba(var(--v-theme-on-background), 0.1);
-  backdrop-filter: blur(8px);
-  container-type: inline-size;
-  container-name: selbar;
+  border-radius: 999px;
+  background: rgba(var(--v-theme-surface), 0.86);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  backdrop-filter: blur(12px);
 }
 
 .selbar-pop-enter-active,

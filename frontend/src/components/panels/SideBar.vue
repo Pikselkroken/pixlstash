@@ -3679,8 +3679,17 @@ defineExpose({
       </Teleport>
     </div>
     <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
-    <div v-else-if="!scopedResourceType" class="sidebar-view-tabs-row">
-      <div class="sidebar-view-tabs">
+    <div v-else-if="!scopedResourceType" class="sidebar-view-header">
+      <div v-if="isDesktop" class="sidebar-view-title-row">
+        <span class="sidebar-view-title-text">
+          <v-icon size="13" class="sidebar-view-title-icon"
+            >mdi-bookshelf</v-icon
+          >
+          Library
+        </span>
+      </div>
+      <div class="sidebar-view-tabs-row">
+        <div class="sidebar-view-tabs">
         <button
           class="sidebar-view-tab"
           :class="{
@@ -3712,6 +3721,7 @@ defineExpose({
           <v-icon size="14">mdi-folder-network-outline</v-icon>
           Folders
         </button>
+        </div>
       </div>
     </div>
     <div class="sidebar-scroll" ref="dockedScrollRef">
@@ -5935,6 +5945,34 @@ defineExpose({
   font-size: 0.9rem;
   font-style: italic;
   color: rgba(var(--v-theme-sidebar-text), 0.5);
+}
+
+.sidebar-view-header {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.sidebar-view-title-row {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  padding: 0 4px 0 10px;
+}
+
+.sidebar-view-title-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-sidebar-text), 0.5);
+}
+
+.sidebar-view-title-icon {
+  color: rgba(var(--v-theme-sidebar-text), 0.4);
 }
 
 .sidebar-view-tabs-row {
