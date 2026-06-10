@@ -109,6 +109,14 @@ html.is-desktop .sidebar-view-header {
   height: 48px;
 }
 
+/* Keep the custom title bar visible (and its drag region + window controls
+   usable) when the full-screen image lightbox is open: start the overlay below
+   the title bar instead of covering it. In a browser there is no title bar, so
+   --titlebar-h is unset and the overlay stays full-screen. */
+html.is-desktop .image-overlay {
+  top: var(--titlebar-h);
+}
+
 /* Title-bar height in the desktop shell. The floating sidebar / stats drawers are
    `position: fixed`, so their `top` must clear the title bar too; they use
    top: calc(var(--titlebar-h) + toolbar-height). In a plain browser there is no
