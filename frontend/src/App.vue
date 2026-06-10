@@ -519,7 +519,7 @@ function updateMaxColumns() {
 
 function closeSidebarIfMobile() {
   if (sidebarStore.sidebarForcedHidden) {
-    sidebarStore.sidebarVisible = false;
+    sidebarStore.hideAutoSidebar();
   }
 }
 
@@ -1863,13 +1863,32 @@ defineExpose({
         :check-for-updates="userPrefsStore.checkForUpdates"
       />
       <div class="file-manager">
+        <!-- Auto-hide (unpinned): a thin strip at the left edge reveals the
+             sidebar overlay on hover (or tap, on touch). -->
+        <div
+          v-if="sidebarStore.sidebarOverlay && !sidebarStore.sidebarVisible"
+          class="sidebar-hover-trigger"
+          title="Show sidebar"
+          @mouseenter="sidebarStore.revealSidebar()"
+          @click="sidebarStore.revealSidebar()"
+        >
+          <span class="sidebar-hover-trigger-tab">
+            <v-icon size="18">mdi-chevron-right</v-icon>
+          </span>
+        </div>
         <div
           class="sidebar-shell"
-          :class="{ open: sidebarStore.sidebarVisible }"
+          :class="{
+            open: sidebarStore.sidebarVisible,
+            'sidebar-overlay': sidebarStore.sidebarOverlay,
+          }"
+          @mouseleave="
+            sidebarStore.sidebarOverlay && sidebarStore.hideAutoSidebar()
+          "
         >
           <SideBar
             ref="sidebarRef"
-            :docked="sidebarStore.sidebarDocked"
+            :docked="sidebarStore.effectiveDocked"
             :selectedCharacter="selectionStore.selectedCharacter"
             :selectedCharacterIds="selectionStore.selectedCharacterIds"
             :allPicturesId="ALL_PICTURES_ID"
@@ -1928,11 +1947,9 @@ defineExpose({
         </div>
         <Transition name="backdrop-fade">
           <div
-            v-if="
-              sidebarStore.sidebarVisible && sidebarStore.sidebarForcedHidden
-            "
+            v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarOverlay"
             class="sidebar-backdrop"
-            @click="sidebarStore.sidebarVisible = false"
+            @click="sidebarStore.hideAutoSidebar()"
           ></div>
         </Transition>
 

@@ -154,9 +154,71 @@ body {
 }
 
 @media (min-width: 1000px) {
-  .sidebar-shell:not(.open) {
+  /* Hide the in-flow sidebar when closed — but not the auto-hide overlay, which
+     stays in the DOM (off-screen) so it can slide in. */
+  .sidebar-shell:not(.open):not(.sidebar-overlay) {
     display: none;
   }
+}
+
+/* Auto-hide / drawer: the unpinned sidebar floats over the grid and slides in.
+   Driven by the .sidebar-overlay class, so it works at any width. */
+.sidebar-shell.sidebar-overlay {
+  position: fixed;
+  left: 0;
+  /* Same top as the in-flow (pinned) sidebar so toggling pin/auto doesn't shift
+     it. The dock/full header band keeps the content below the toolbar. */
+  top: var(--titlebar-h, 0px);
+  bottom: 0;
+  z-index: 150;
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+}
+.sidebar-shell.sidebar-overlay.open {
+  transform: translateX(0);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+}
+/* Visible "there's a sidebar here" band shown while the sidebar is auto-hidden;
+   hovering (or tapping) it reveals the sidebar. A centered handle with an expand
+   arrow makes it obvious it's interactive. */
+.sidebar-hover-trigger {
+  position: fixed;
+  left: 0;
+  top: calc(var(--titlebar-h, 0px) + 48px);
+  bottom: 0;
+  width: 8px;
+  z-index: 140;
+  display: flex;
+  align-items: center;
+  overflow: visible;
+  background: rgba(var(--v-theme-on-background), 0.2);
+  border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
+  cursor: pointer;
+  transition:
+    width 0.15s ease,
+    background 0.15s ease;
+}
+.sidebar-hover-trigger:hover {
+  width: 11px;
+  background: rgba(var(--v-theme-accent), 0.45);
+}
+.sidebar-hover-trigger-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 52px;
+  border-radius: 0 9px 9px 0;
+  background: rgba(var(--v-theme-on-background), 0.28);
+  color: rgba(var(--v-theme-on-background), 0.8);
+  box-shadow: 1px 0 8px rgba(0, 0, 0, 0.3);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.sidebar-hover-trigger:hover .sidebar-hover-trigger-tab {
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
 }
 
 @media (max-width: 999px) {

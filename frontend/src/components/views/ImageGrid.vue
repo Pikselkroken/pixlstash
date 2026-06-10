@@ -6251,7 +6251,7 @@ function handleEmptyStateReset() {
   overflow-x: hidden;
   width: 100%;
   padding-right: 0px;
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.3) transparent;
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.12) transparent;
 }
 .empty-state {
   position: absolute;
@@ -6804,7 +6804,7 @@ function handleEmptyStateReset() {
 /* Neutral translucent thumb that reads on both light and dark grids; transparent
    border + background-clip makes it a thin pill that thickens slightly on hover. */
 .grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.22) !important;
+  background: rgba(var(--v-theme-on-surface), 0.1) !important;
   background-clip: padding-box !important;
   border: 3px solid transparent !important;
   border-radius: 8px !important;
@@ -6813,7 +6813,7 @@ function handleEmptyStateReset() {
     border-width 0.15s ease !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.4) !important;
+  background: rgba(var(--v-theme-on-surface), 0.22) !important;
   background-clip: padding-box !important;
   border: 2px solid transparent !important;
   border-radius: 8px !important;

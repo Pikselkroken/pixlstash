@@ -31,11 +31,13 @@ import {
   ICON_CARDS,
 } from "../../utils/setAppearance.js";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
 const entityNames = useEntityNamesStore();
+const sidebarStore = useSidebarStore();
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
 // bar, so the sidebar copies below are gated on !isDesktop.
@@ -3456,6 +3458,23 @@ defineExpose({
         </div>
       </div>
     </div>
+    <div v-if="props.docked" class="sidebar-dock-header">
+      <button
+        class="sidebar-pin-toggle sidebar-pin-toggle--dock"
+        :class="{ pinned: sidebarStore.sidebarPinned }"
+        type="button"
+        :title="
+          sidebarStore.sidebarPinned
+            ? 'Unpin sidebar (auto-hide)'
+            : 'Pin sidebar open'
+        "
+        @click="sidebarStore.toggleSidebarPinned()"
+      >
+        <v-icon size="18">{{
+          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
+        }}</v-icon>
+      </button>
+    </div>
     <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
     <div
       v-if="props.docked"
@@ -3678,7 +3697,6 @@ defineExpose({
         </div>
       </Teleport>
     </div>
-    <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
     <div v-else-if="!scopedResourceType" class="sidebar-view-header">
       <div v-if="isDesktop" class="sidebar-view-title-row">
         <span class="sidebar-view-title-text">
@@ -3687,6 +3705,21 @@ defineExpose({
           >
           Library
         </span>
+        <button
+          class="sidebar-pin-toggle"
+          :class="{ pinned: sidebarStore.sidebarPinned }"
+          type="button"
+          :title="
+            sidebarStore.sidebarPinned
+              ? 'Unpin sidebar (auto-hide)'
+              : 'Pin sidebar open'
+          "
+          @click="sidebarStore.toggleSidebarPinned()"
+        >
+          <v-icon size="15">{{
+            sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
+          }}</v-icon>
+        </button>
       </div>
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
@@ -5956,8 +5989,59 @@ defineExpose({
 .sidebar-view-title-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex: 1;
   padding: 0 4px 0 10px;
+}
+
+.sidebar-pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  cursor: pointer;
+  transition:
+    color 0.12s,
+    background 0.12s;
+}
+.sidebar-pin-toggle:hover {
+  background: rgba(var(--v-theme-sidebar-text), 0.1);
+  color: rgba(var(--v-theme-sidebar-text), 0.9);
+}
+.sidebar-pin-toggle.pinned {
+  color: rgb(var(--v-theme-accent));
+}
+
+/* Dock header: a toolbar-height band so the dock's icons line up below the
+   toolbar, holding the pin toggle as a proper (non-faded) toggle button. */
+.sidebar-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  flex-shrink: 0;
+}
+.sidebar-pin-toggle--dock {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--v-theme-sidebar-text), 0.22);
+  background: rgba(var(--v-theme-sidebar-text), 0.06);
+  color: rgba(var(--v-theme-sidebar-text), 0.8);
+}
+.sidebar-pin-toggle--dock:hover {
+  background: rgba(var(--v-theme-sidebar-text), 0.13);
+  color: rgba(var(--v-theme-sidebar-text), 0.95);
+}
+.sidebar-pin-toggle--dock.pinned {
+  border-color: rgba(var(--v-theme-accent), 0.7);
+  background: rgba(var(--v-theme-accent), 0.18);
+  color: rgb(var(--v-theme-accent));
 }
 
 .sidebar-view-title-text {
@@ -6787,6 +6871,7 @@ defineExpose({
   overflow: hidden;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   box-sizing: border-box;
+  border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
 }
 
 .sidebar.sidebar-docked {
@@ -7268,7 +7353,7 @@ defineExpose({
   overflow-x: hidden;
   overflow-y: auto;
   padding: 0px 0 0;
-  scrollbar-color: rgba(var(--v-theme-primary), 0.55) transparent;
+  scrollbar-color: rgba(var(--v-theme-on-background), 0.08) transparent;
   scrollbar-width: thin;
   display: flex;
   flex-direction: column;
@@ -7281,12 +7366,12 @@ defineExpose({
 }
 
 .sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-primary), 0.55);
+  background: rgba(var(--v-theme-on-background), 0.08);
   border-radius: 6px;
 }
 
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-on-background), 0.18);
 }
 
 .sidebar-scroll::-webkit-scrollbar-track {
@@ -8516,11 +8601,11 @@ button.sidebar-ctx-item:disabled:hover {
   width: 6px !important;
 }
 .sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-primary), 0.55) !important;
+  background: rgba(var(--v-theme-on-background), 0.08) !important;
   border-radius: 6px !important;
 }
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--v-theme-primary)) !important;
+  background: rgba(var(--v-theme-on-background), 0.18) !important;
 }
 .sidebar-scroll::-webkit-scrollbar-track {
   background: transparent !important;

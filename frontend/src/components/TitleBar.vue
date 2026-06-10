@@ -143,6 +143,8 @@ const close = () => desktop?.windowClose?.();
   align-items: center;
   height: 34px;
   flex-shrink: 0;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(var(--v-theme-on-background), 0.12);
   /* Match the toolbar below (Toolbar.vue uses --v-theme-background), not the
      sidebar, so the title bar and toolbar read as one continuous strip. Note
      --v-theme-toolbar equals --v-theme-sidebar, hence the dedicated var here. */

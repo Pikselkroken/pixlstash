@@ -1,6 +1,9 @@
 <script setup>
 import { computed, ref } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+
+const sidebarStore = useSidebarStore();
 
 const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 32 },
@@ -116,6 +119,44 @@ async function clearGuestSession() {
         thumb-color="primary"
         class="settings-slider"
       />
+    </div>
+  </div>
+  <v-divider class="settings-section-divider" />
+  <div class="settings-section">
+    <div
+      class="settings-section-title"
+      title="Show the sidebar at full width or as a narrow icon dock."
+    >
+      Sidebar Width
+    </div>
+    <div class="sidebar-width-toggle">
+      <button
+        class="sidebar-width-opt"
+        :class="{ active: !sidebarStore.sidebarDocked }"
+        type="button"
+        @click="sidebarStore.setSidebarDocked(false)"
+      >
+        <span class="swi swi--full">
+          <span class="swi-rail"></span>
+          <span class="swi-content"></span>
+        </span>
+        <span class="sidebar-width-label">Full</span>
+      </button>
+      <button
+        class="sidebar-width-opt"
+        :class="{ active: sidebarStore.sidebarDocked }"
+        type="button"
+        @click="sidebarStore.setSidebarDocked(true)"
+      >
+        <span class="swi swi--dock">
+          <span class="swi-rail"></span>
+          <span class="swi-content"></span>
+        </span>
+        <span class="sidebar-width-label">Dock</span>
+      </button>
+    </div>
+    <div class="settings-section-desc">
+      Pin or unpin the sidebar from its header.
     </div>
   </div>
   <v-divider class="settings-section-divider" />
@@ -240,5 +281,70 @@ async function clearGuestSession() {
 
 .settings-add-tag-input {
   flex: 1 1 auto;
+}
+
+.sidebar-width-toggle {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.sidebar-width-opt {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  color: rgb(var(--v-theme-on-surface));
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background 0.12s,
+    color 0.12s;
+}
+.sidebar-width-opt:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+.sidebar-width-opt.active {
+  border-color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-accent), 0.1);
+  color: rgb(var(--v-theme-accent));
+}
+/* Mini layout illustration: a window frame with a filled left rail (wide for
+   full, narrow for dock) over a dotted content area. currentColor → accent when
+   the option is active. */
+.swi {
+  display: flex;
+  width: 78px;
+  height: 50px;
+  border-radius: 6px;
+  border: 1.5px solid currentColor;
+  overflow: hidden;
+  opacity: 0.85;
+}
+.swi-rail {
+  background: currentColor;
+  flex-shrink: 0;
+}
+.swi--full .swi-rail {
+  width: 26px;
+}
+.swi--dock .swi-rail {
+  width: 11px;
+}
+.swi-content {
+  flex: 1;
+  background: radial-gradient(currentColor 1px, transparent 1.5px) 0 0 / 10px
+    10px;
+  opacity: 0.35;
+}
+.sidebar-width-label {
+  font-weight: 600;
 }
 </style>

@@ -2,61 +2,6 @@
   <div class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
-        <!-- ── Sidebar layout menu: full / docked / hidden ──────── -->
-        <v-menu
-          v-model="sidebarMenuOpen"
-          location="bottom start"
-          origin="top start"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="bar-btn bar-btn--icon"
-              :class="{ 'bar-btn--active': sidebarStore.sidebarVisible }"
-              type="button"
-              title="Sidebar layout"
-            >
-              <v-icon size="20">mdi-dock-left</v-icon>
-            </button>
-          </template>
-          <div class="sidebar-mode-menu popup-panel">
-            <button
-              class="sidebar-mode-item"
-              :class="{
-                active:
-                  sidebarStore.sidebarVisible && !sidebarStore.sidebarDocked,
-              }"
-              type="button"
-              @click="setSidebarMode('full')"
-            >
-              <v-icon size="18">mdi-page-layout-sidebar-left</v-icon>
-              <span>Show sidebar</span>
-            </button>
-            <button
-              class="sidebar-mode-item"
-              :class="{
-                active:
-                  sidebarStore.sidebarVisible && sidebarStore.sidebarDocked,
-              }"
-              type="button"
-              @click="setSidebarMode('docked')"
-            >
-              <v-icon size="18">mdi-dock-left</v-icon>
-              <span>Show docked sidebar</span>
-            </button>
-            <button
-              class="sidebar-mode-item"
-              :class="{ active: !sidebarStore.sidebarVisible }"
-              type="button"
-              @click="setSidebarMode('hidden')"
-            >
-              <v-icon size="18">mdi-arrow-collapse-left</v-icon>
-              <span>Hide sidebar</span>
-            </button>
-          </div>
-        </v-menu>
-        <div class="bar-separator"></div>
         <!-- ── Sort split-button ──────────────────────────────────── -->
         <v-menu
           v-model="gbSortMenuOpen"
@@ -537,18 +482,6 @@ const tbComfyuiMenuOpen = ref(false);
 const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
 const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";
 const gbSortMenuOpen = ref(false);
-const sidebarMenuOpen = ref(false);
-
-// Sidebar layout dropdown: a single control for the three sidebar states, so the
-// sidebar and docked sidebar no longer need their own in-panel dock toggles.
-function setSidebarMode(mode) {
-  if (mode === "hidden") {
-    sidebarStore.sidebarVisible = false;
-    return;
-  }
-  sidebarStore.sidebarVisible = true;
-  sidebarStore.persistSidebarDocked(mode === "docked");
-}
 const gbPendingSortSelection = ref(null);
 
 const gbSortModel = computed({
@@ -866,37 +799,6 @@ const gbCollapseAllStacksDisabled = computed(
   flex-shrink: 0;
 }
 
-/* ── Sidebar layout dropdown ──────────────────────────────────────────────── */
-.sidebar-mode-menu {
-  min-width: 200px;
-  padding: 4px;
-  gap: 2px;
-}
-.sidebar-mode-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: rgb(var(--v-theme-on-background));
-  font-family: inherit;
-  font-size: 0.85rem;
-  text-align: left;
-  cursor: pointer;
-}
-.sidebar-mode-item:hover {
-  background: rgba(var(--v-theme-on-background), 0.1);
-}
-.sidebar-mode-item.active {
-  color: rgb(var(--v-theme-accent));
-}
-.sidebar-mode-item.active .v-icon {
-  color: rgb(var(--v-theme-accent));
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
    Grid Bar – Sort / Filter / View buttons and panels
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -905,9 +807,8 @@ const gbCollapseAllStacksDisabled = computed(
 .bar-split-button {
   display: flex;
   align-items: center;
-  border-radius: 5px;
-  border: 1px solid rgba(var(--v-theme-on-background), 0.07);
-  background: rgba(var(--v-theme-on-background), 0.02);
+  background: transparent;
+  border: none;
 }
 
 .bar-btn {
@@ -915,7 +816,6 @@ const gbCollapseAllStacksDisabled = computed(
   align-items: center;
   gap: 4px;
   padding: 0 9px;
-  border-radius: 5px;
   cursor: pointer;
   font-size: 0.88em;
   font-family: inherit;
@@ -947,7 +847,6 @@ const gbCollapseAllStacksDisabled = computed(
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
   flex-shrink: 0;
 }
 
@@ -969,11 +868,11 @@ const gbCollapseAllStacksDisabled = computed(
 .bar-split-toggle {
   border-radius: 5px 0 0 5px;
   padding-right: 5px;
+  border: none;
 }
 
 .bar-split-menu {
   border-radius: 0 5px 5px 0;
-  border-left: 1px solid rgba(var(--v-theme-on-background), 0.07);
   padding-left: 6px;
   padding-right: 6px;
 }

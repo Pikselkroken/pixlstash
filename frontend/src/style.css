@@ -106,7 +106,7 @@ html.is-desktop .sidebar {
 /* Give the sidebar's "Library" header band the same height as the toolbar and the
    stats header so the three columns line up at the top in the desktop shell. */
 html.is-desktop .sidebar-view-header {
-  height: 48px;
+  min-height: 48px;
 }
 
 /* Keep the custom title bar visible (and its drag region + window controls
