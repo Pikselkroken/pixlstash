@@ -45,10 +45,8 @@
   />
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
-      ref="selectionBarRef"
       :selectedCount="selectedImageIds.length"
       :selectedExpandedCount="selectedExpandedCount"
-      :selectedFaceCount="selectedFaceIds.length"
       :selectedCharacter="String(props.selectedCharacter)"
       :selectedSet="String(props.selectedSet)"
       :selectedGroupName="selectedGroupName"
@@ -58,41 +56,13 @@
       :scrapheapPicturesId="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
       :selected-image-ids="selectedImageIds"
-      :selected-media-support="selectedMediaSupport"
-      :comfyui-client-id="comfyuiClientId"
       :comfyui-configured="props.comfyuiConfigured"
-      :available-plugins="availablePlugins"
-      :tagger-plugins="taggerPlugins"
-      :captioner-plugins="captionerPlugins"
-      :show-remove-from-stack="showRemoveFromStack"
-      :selected-multiple-stack-ids="selectedMultipleStackIds"
-      :all-grid-images="allGridImages"
-      :grouping-lock-reason="partialStackGroupingReason"
-      :visible="showSelectionBar"
-      @clear-selection="clearSelection"
-      @added-to-set="handleOverlayAddedToSet"
-      @remove-from-group="removeFromGroup"
-      @delete-selected="deleteSelected"
-      @set-project="handleSetProjectForSelected"
-      @add-to-character="handleAddToCharacter"
-      @remove-from-character="handleRemoveFromCharacter"
-      @create-stack="createStackFromSelection"
-      @remove-from-stack="removeSelectedFromStack"
-      @dissolve-stacks="dissolveSelectedStacks"
-      @create-stacks-from-groups="createStacksFromSelectedGroups"
-      @run-plugin="handlePluginRunRequest"
-      @comfyui-run="handleComfyuiRun"
       @comfyui-run-grid="runComfyuiOnGridImages"
-      @tags-applied="debouncedFetchAllGridImages({ force: true })"
-      @auto-tag="handleAutoTag"
-      @generate-description="handleGenerateDescription"
-      @reverse-image-search="handleReverseImageSearch"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @confirm-export-zip="emit('confirm-export-zip')"
-      @selection-menu-open="toolbarSelectionMenuOpen = $event"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -807,6 +777,49 @@
         </v-btn>
       </template>
     </v-snackbar>
+
+    <SelectionBar
+      ref="selectionBarRef"
+      :selected-count="selectedImageIds.length"
+      :selected-expanded-count="selectedExpandedCount"
+      :selected-face-count="selectedFaceIds.length"
+      :selected-group-name="selectedGroupName"
+      :selected-sort="props.selectedSort"
+      :visible="showSelectionBar"
+      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :backend-url="props.backendUrl"
+      :selected-image-ids="selectedImageIds"
+      :selected-media-support="selectedMediaSupport"
+      :comfyui-client-id="comfyuiClientId"
+      :comfyui-configured="props.comfyuiConfigured"
+      :show-remove-from-stack="showRemoveFromStack"
+      :selected-multiple-stack-ids="selectedMultipleStackIds"
+      :grouping-lock-reason="partialStackGroupingReason"
+      :available-plugins="availablePlugins"
+      :tagger-plugins="taggerPlugins"
+      :captioner-plugins="captionerPlugins"
+      :all-grid-images="allGridImages"
+      :selected-character="String(props.selectedCharacter)"
+      :selected-set="String(props.selectedSet)"
+      @clear-selection="clearSelection"
+      @added-to-set="handleOverlayAddedToSet"
+      @remove-from-group="removeFromGroup"
+      @delete-selected="deleteSelected"
+      @set-project="handleSetProjectForSelected"
+      @add-to-character="handleAddToCharacter"
+      @remove-from-character="handleRemoveFromCharacter"
+      @create-stack="createStackFromSelection"
+      @remove-from-stack="removeSelectedFromStack"
+      @dissolve-stacks="dissolveSelectedStacks"
+      @create-stacks-from-groups="createStacksFromSelectedGroups"
+      @run-plugin="handlePluginRunRequest"
+      @comfyui-run="handleComfyuiRun"
+      @tags-applied="debouncedFetchAllGridImages({ force: true })"
+      @auto-tag="handleAutoTag"
+      @generate-description="handleGenerateDescription"
+      @reverse-image-search="handleReverseImageSearch"
+      @selection-menu-open="toolbarSelectionMenuOpen = $event"
+    />
   </div>
 </template>
 
@@ -834,6 +847,7 @@ import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
+import SelectionBar from "../panels/SelectionBar.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
