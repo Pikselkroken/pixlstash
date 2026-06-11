@@ -61,7 +61,11 @@ jobs:
         include:
           - { runner: ubuntu-latest, os: linux, arch: x64, accel: cpu }
           - { runner: windows-latest, os: win, arch: x64, accel: cpu }
-          - { runner: macos-14, os: mac, arch: arm64, accel: metal }
+          # macOS builds disabled: the unsigned/un-notarised .dmg trips Gatekeeper
+          # ("PixlStash is damaged"), which is worse than not shipping it. Re-enable
+          # once Developer ID signing + notarisation is set up (see the signing env
+          # in the build step), restoring:
+          # - { runner: macos-14, os: mac, arch: arm64, accel: metal }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -110,8 +114,6 @@ jobs:
           name: electron-${{ matrix.runner }}
           path: |
             electron/release/*.exe
-            electron/release/*.dmg
-            electron/release/*.zip
             electron/release/*.AppImage
             electron/release/*.deb
       - name: Attach installers to release
@@ -121,8 +123,6 @@ jobs:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
           files: |
             electron/release/*.exe
-            electron/release/*.dmg
-            electron/release/*.zip
             electron/release/*.AppImage
             electron/release/*.deb
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
