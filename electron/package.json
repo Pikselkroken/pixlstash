@@ -17,9 +17,9 @@
     "copy-assets": "node scripts/copy-assets.mjs",
     "check-electron": "node scripts/check-electron-binary.mjs",
     "build": "npm run sync-version && tsc && npm run copy-assets",
-    "start": "npm run check-electron && npm run build && electron .",
+    "start": "npm run check-electron && npm run build && node scripts/dev-run.mjs",
     "setup-dev-icon": "node scripts/dev-desktop-integration.mjs",
-    "dev": "npm run check-electron && npm run build && npm run setup-dev-icon && cross-env PIXLSTASH_DESKTOP_DEV=1 electron .",
+    "dev": "npm run check-electron && npm run build && npm run setup-dev-icon && cross-env PIXLSTASH_DESKTOP_DEV=1 node scripts/dev-run.mjs",
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir",
     "lint": "tsc --noEmit"

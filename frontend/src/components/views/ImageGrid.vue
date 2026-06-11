@@ -6251,7 +6251,12 @@ function handleEmptyStateReset() {
   overflow-x: hidden;
   width: 100%;
   padding-right: 0px;
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.12) transparent;
+  /* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue */
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
+  scrollbar-width: thin;
+}
+.grid-scroll-wrapper:hover {
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
 }
 .empty-state {
   position: absolute;
@@ -6298,7 +6303,9 @@ function handleEmptyStateReset() {
   width: 100%;
   box-sizing: border-box;
   flex: 1 1 0%;
-  padding: 0 4px 2px 0 !important;
+  /* No right padding: the scrollbar's own symmetric gutter provides the gap to
+     the thumb, so thumbnails sit an equal distance on both sides of it. */
+  padding: 0 0 2px 0 !important;
   align-content: start;
   justify-content: start;
 }
@@ -6307,7 +6314,7 @@ function handleEmptyStateReset() {
   gap: 0px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar {
-  width: 10px;
+  width: 8px;
 }
 .image-card-cursor .thumbnail-img {
   outline: 2px solid rgba(var(--v-theme-primary), 0.9);
@@ -6801,22 +6808,22 @@ function handleEmptyStateReset() {
 
 <style>
 /* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
-/* Neutral translucent thumb that reads on both light and dark grids; transparent
-   border + background-clip makes it a thin pill that thickens slightly on hover. */
+/* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue:
+   nearly invisible at rest, fades in on hover/use. The transparent border +
+   background-clip insets the thumb equally from both track edges so it floats
+   as a centred pill with symmetric gutters (no flush-against-the-panel edge). */
 .grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.1) !important;
-  background-clip: padding-box !important;
-  border: 3px solid transparent !important;
-  border-radius: 8px !important;
-  transition:
-    background 0.15s ease,
-    border-width 0.15s ease !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.22) !important;
+  background: rgba(var(--v-theme-on-surface), 0.05) !important;
   background-clip: padding-box !important;
   border: 2px solid transparent !important;
   border-radius: 8px !important;
+  transition: background 0.15s ease !important;
+}
+.grid-scroll-wrapper:hover::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-on-surface), 0.18) !important;
+}
+.grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--v-theme-on-surface), 0.3) !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-track {
   background: transparent !important;

@@ -192,8 +192,11 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-name {
-  font-weight: 600;
-  letter-spacing: 0.4px;
+  /* Pixelated brand font, used only for the "PixlStash" name (matches the
+     sidebar header logo). Loaded via @font-face in App.css. */
+  font-family: "PressStart2P", monospace;
+  font-size: 11px;
+  letter-spacing: 0.5px;
   flex-shrink: 0;
 }
 

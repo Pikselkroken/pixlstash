@@ -7353,7 +7353,8 @@ defineExpose({
   overflow-x: hidden;
   overflow-y: auto;
   padding: 0px 0 0;
-  scrollbar-color: rgba(var(--v-theme-on-background), 0.08) transparent;
+  /* Shared subtle scrollbar treatment — keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
   scrollbar-width: thin;
   display: flex;
   flex-direction: column;
@@ -7361,17 +7362,28 @@ defineExpose({
   background: transparent;
 }
 
+.sidebar-scroll:hover {
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
+}
+
 .sidebar-scroll::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 
 .sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-background), 0.08);
-  border-radius: 6px;
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+.sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-on-surface), 0.18);
 }
 
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-background), 0.18);
+  background: rgba(var(--v-theme-on-surface), 0.3);
 }
 
 .sidebar-scroll::-webkit-scrollbar-track {
@@ -8597,15 +8609,22 @@ button.sidebar-ctx-item:disabled:hover {
 
 <style>
 /* Non-scoped: webkit scrollbar pseudo-elements are suppressed by scoped data-v selectors */
+/* Shared subtle scrollbar treatment — keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
 .sidebar-scroll::-webkit-scrollbar {
-  width: 6px !important;
+  width: 8px !important;
 }
 .sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-background), 0.08) !important;
-  border-radius: 6px !important;
+  background: rgba(var(--v-theme-on-surface), 0.05) !important;
+  background-clip: padding-box !important;
+  border: 2px solid transparent !important;
+  border-radius: 8px !important;
+  transition: background 0.15s ease !important;
+}
+.sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-on-surface), 0.18) !important;
 }
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-background), 0.18) !important;
+  background: rgba(var(--v-theme-on-surface), 0.3) !important;
 }
 .sidebar-scroll::-webkit-scrollbar-track {
   background: transparent !important;

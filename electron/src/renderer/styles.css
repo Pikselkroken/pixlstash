@@ -98,14 +98,30 @@ body {
   opacity: 1;
 }
 
+/* Pixelated brand font, used only for the "PixlStash" name (matches the
+   in-app sidebar/title-bar logo). Same-origin file, allowed by the page CSP. */
+@font-face {
+  font-family: "PressStart2P";
+  src: url("PressStart2P-Regular.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+}
+
 .logo {
-  font-size: 26px;
-  font-weight: 700;
+  font-family: "PressStart2P", monospace;
+  font-size: 20px;
   letter-spacing: 0.5px;
 }
 
 .logo span {
   color: var(--accent);
+}
+
+/* The "PixlStash" word inside the setup page's "Welcome to PixlStash" title. */
+.brand-name {
+  font-family: "PressStart2P", monospace;
+  font-size: 0.8em;
+  letter-spacing: 0.5px;
 }
 
 .status {

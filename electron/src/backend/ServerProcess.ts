@@ -103,22 +103,34 @@ function startupFailureMessage(
   );
 }
 
-function killTree(child: ChildProcess): void {
+function killTree(child: ChildProcess, detached: boolean): void {
   if (child.pid === undefined) return;
   if (process.platform === 'win32') {
     execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
-  } else {
+    return;
+  }
+  const pid = child.pid;
+  const signal = (sig: NodeJS.Signals): void => {
     try {
-      // Negative pid kills the whole detached process group (uvicorn + workers).
-      process.kill(-child.pid, 'SIGTERM');
+      // When we spawned the backend detached it leads its own process group, so
+      // a negative pid takes down the whole tree (uvicorn + any workers). When
+      // it shares our group (the dev supervisor case) we must target the single
+      // pid — a negative pid would refer to a non-existent group and ESRCH.
+      process.kill(detached ? -pid : pid, sig);
     } catch {
       try {
-        child.kill('SIGTERM');
+        child.kill(sig);
       } catch {
         /* already gone */
       }
     }
-  }
+  };
+  // Ask politely first so uvicorn can close the DB and sockets cleanly...
+  signal('SIGTERM');
+  // ...but a backend still importing torch can't service a Python-level SIGTERM
+  // (its handler is deferred behind the long native call), so escalate to an
+  // unmaskable SIGKILL shortly after. No-op once the process is already gone.
+  setTimeout(() => signal('SIGKILL'), 1500).unref();
 }
 
 /**
@@ -132,6 +144,8 @@ export class ServerProcess {
   private logStream: WriteStream | null = null;
   private running: RunningServer | null = null;
   private exited = false;
+  /** Whether the backend was spawned in its own process group (see `start`). */
+  private detached = false;
 
   constructor(private readonly onExit?: (code: number | null) => void) {}
 
@@ -180,9 +194,18 @@ export class ServerProcess {
     const args = ['-m', 'pixlstash.app'];
     if (!isDevBackend()) args.push('--server-config', serverConfigPath());
 
+    // Normally we detach the backend into its own process group so we can take
+    // down the whole tree with one signal. But under the dev supervisor
+    // (scripts/dev-run.mjs) we deliberately DON'T: staying in the supervisor's
+    // Electron process group lets it sweep the backend together with Electron's
+    // own helpers on Ctrl-C. A terminal SIGINT never reaches a detached backend,
+    // which is exactly how the dev server used to get orphaned.
+    this.detached =
+      process.platform !== 'win32' && process.env.PIXLSTASH_DESKTOP_SUPERVISED !== '1';
+
     this.child = spawn(python, args, {
       env,
-      detached: process.platform !== 'win32',
+      detached: this.detached,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.exited = false;
@@ -234,7 +257,7 @@ export class ServerProcess {
 
   stop(): void {
     if (this.child && !this.exited) {
-      killTree(this.child);
+      killTree(this.child, this.detached);
     }
     this.child = null;
     this.running = null;
