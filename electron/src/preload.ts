@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   getServerSettings: () => ipcRenderer.invoke('server:getSettings'),
   setServerSettings: (settings: unknown) =>
     ipcRenderer.invoke('server:setSettings', settings),
+  checkServerPort: (port: number) => ipcRenderer.invoke('server:checkPort', port),
   // Fired when the tray's Settings entry asks the renderer to open Settings.
   onOpenSettings: (cb: () => void) => {
     const listener = () => cb();

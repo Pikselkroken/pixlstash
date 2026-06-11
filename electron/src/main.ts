@@ -11,6 +11,7 @@ import {
 } from 'electron';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -420,6 +421,40 @@ function readServerSettings(): ServerSettings & { urls: string[] } {
   return { enabled, port, ssl, urls };
 }
 
+/** Result of probing whether the external listener could bind a given port. */
+interface PortCheck {
+  available: boolean;
+  /** OS error code when unavailable (EADDRINUSE, EACCES, EINVAL, …). */
+  code?: string;
+}
+
+/**
+ * Probe whether `port` can be bound for the external listener. Tries a throwaway
+ * bind on 0.0.0.0 (the host the external server uses) and immediately closes it.
+ * `available: false` with `code` is returned when the OS refuses the bind — the
+ * port is taken (EADDRINUSE) or privileged (EACCES). Used by Settings to warn
+ * before the user enables the server on a port that won't come up. Note: if our
+ * own external listener is already running on `port`, this reports EADDRINUSE —
+ * the caller is responsible for ignoring that self-conflict.
+ */
+function checkPortAvailable(port: number): Promise<PortCheck> {
+  return new Promise((resolvePort) => {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      resolvePort({ available: false, code: 'EINVAL' });
+      return;
+    }
+    const tester = createServer();
+    tester.once('error', (err: NodeJS.ErrnoException) => {
+      tester.close();
+      resolvePort({ available: false, code: err.code || 'EUNKNOWN' });
+    });
+    tester.once('listening', () => {
+      tester.close(() => resolvePort({ available: true }));
+    });
+    tester.listen(port, '0.0.0.0');
+  });
+}
+
 /**
  * Persist the external-listener settings into the desktop's own server-config
  * and relaunch the backend so the change takes effect. The loopback the window
@@ -696,6 +731,7 @@ function registerIpc(): void {
   ipcMain.handle('server:setSettings', async (_e, settings: ServerSettings) => {
     await writeServerSettings(settings);
   });
+  ipcMain.handle('server:checkPort', (_e, port: number) => checkPortAvailable(port));
 
   // Custom title-bar window controls (the window is frameless).
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());

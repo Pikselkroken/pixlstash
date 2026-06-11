@@ -34,6 +34,71 @@ const serverDirty = computed(() => {
   );
 });
 
+// Whether the chosen external port can actually be bound. We probe it in the
+// main process (a throwaway bind on 0.0.0.0) so the user is warned before
+// enabling the server on a port that's already taken or privileged. `null` =
+// not checked yet.
+const portCheck = ref(null); // { available, code } | null
+let portCheckTimer = null;
+let portCheckSeq = 0;
+
+// The running external listener owns its own port, so probing that exact port
+// reports it "in use" by us — not a real conflict. Ignore that self-case.
+const portIsOwnRunning = computed(
+  () =>
+    !!server.value?.enabled &&
+    Number(server.value.port) === Number(serverDraft.value.port),
+);
+
+const portConflict = computed(
+  () =>
+    serverDraft.value.enabled &&
+    !!portCheck.value &&
+    !portCheck.value.available &&
+    !portIsOwnRunning.value,
+);
+
+const portWarning = computed(() => {
+  if (!portConflict.value) return "";
+  const port = serverDraft.value.port;
+  switch (portCheck.value.code) {
+    case "EADDRINUSE":
+      return `Port ${port} is already in use by another app. Pick a different port.`;
+    case "EACCES":
+      return `Port ${port} is reserved by the system. Pick a port above 1023.`;
+    case "EINVAL":
+      return `${port} is not a valid port number (use 1–65535).`;
+    default:
+      return `Port ${port} can't be used for the server.`;
+  }
+});
+
+async function checkPort() {
+  if (!desktop?.checkServerPort) return;
+  const port = Number(serverDraft.value.port);
+  if (!serverDraft.value.enabled || !Number.isInteger(port)) {
+    portCheck.value = null;
+    return;
+  }
+  const seq = ++portCheckSeq;
+  try {
+    const result = await desktop.checkServerPort(port);
+    if (seq === portCheckSeq) portCheck.value = result;
+  } catch (e) {
+    if (seq === portCheckSeq) portCheck.value = null;
+    error.value = e?.message || String(e);
+  }
+}
+
+// Debounce while the user is typing a port; re-check when the toggle flips.
+watch(
+  () => [serverDraft.value.port, serverDraft.value.enabled],
+  () => {
+    if (portCheckTimer) clearTimeout(portCheckTimer);
+    portCheckTimer = setTimeout(checkPort, 300);
+  },
+);
+
 // Desktop-shell preference: keep running in the tray when the window is closed.
 const hideToTrayOnClose = ref(true);
 
@@ -129,6 +194,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (stopProgress) stopProgress();
+  if (portCheckTimer) clearTimeout(portCheckTimer);
 });
 
 watch(
@@ -179,14 +245,35 @@ watch(
           <div class="compute-label">Port</div>
           <div class="compute-sub">The port other devices connect to.</div>
         </div>
-        <input
-          v-model.number="serverDraft.port"
-          type="number"
-          min="1"
-          max="65535"
-          class="server-port-input"
-          :disabled="!serverDraft.enabled || busy"
-        />
+        <div class="server-port-field">
+          <v-tooltip
+            v-if="portConflict"
+            :text="portWarning"
+            location="top"
+            max-width="280"
+          >
+            <template #activator="{ props: tooltipProps }">
+              <v-icon
+                v-bind="tooltipProps"
+                color="error"
+                size="18"
+                tabindex="0"
+                class="server-port-warning"
+                :aria-label="portWarning"
+                >mdi-alert-circle</v-icon
+              >
+            </template>
+          </v-tooltip>
+          <input
+            v-model.number="serverDraft.port"
+            type="number"
+            min="1"
+            max="65535"
+            class="server-port-input"
+            :class="{ 'server-port-input--error': portConflict }"
+            :disabled="!serverDraft.enabled || busy"
+          />
+        </div>
       </div>
 
       <div
@@ -429,6 +516,21 @@ watch(
 
 .server-row--disabled {
   opacity: 0.5;
+}
+
+.server-port-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.server-port-warning {
+  cursor: help;
+}
+
+.server-port-input--error {
+  border-color: rgb(var(--v-theme-error));
 }
 
 .server-port-input {
