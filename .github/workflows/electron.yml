@@ -12,8 +12,12 @@ on:
       - "v*"
   workflow_dispatch:
 
+# Least privilege: the workflow defaults to read-only. Only build-electron, which
+# attaches installers to the GitHub release, is granted contents: write (and even
+# that uses the RELEASE_BOT_TOKEN for the release itself). build-wheel only checks
+# out and uploads a workflow artifact, so it stays read-only.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-wheel:
@@ -55,6 +59,9 @@ jobs:
 
   build-electron:
     needs: build-wheel
+    # Needs write to attach installers to the GitHub release (softprops below).
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:

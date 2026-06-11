@@ -433,16 +433,11 @@ import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 const props = defineProps({
   selectedCount: Number,
-  selectedExpandedCount: { type: Number, default: 0 },
   selectedCharacter: String,
-  selectedSet: String,
-  selectedGroupName: String,
   selectedSort: { type: String, default: "" },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
-  scrapheapPicturesId: { type: String, required: true },
   backendUrl: { type: String, required: true },
-  selectedImageIds: { type: Array, default: () => [] },
   comfyuiConfigured: { type: Boolean, default: false },
 });
 

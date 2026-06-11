@@ -67,7 +67,7 @@ body {
 /* Thin, subtle overlay scrollbars instead of the OS's fat browser ones. */
 .is-desktop {
   scrollbar-width: thin;
-  scrollbar-color: rgba(242, 229, 218, 0.22) transparent;
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.22) transparent;
 }
 .is-desktop ::-webkit-scrollbar {
   width: 10px;
@@ -78,13 +78,13 @@ body {
   background: transparent;
 }
 .is-desktop ::-webkit-scrollbar-thumb {
-  background: rgba(242, 229, 218, 0.18);
+  background: rgba(var(--v-theme-on-surface), 0.18);
   border: 2px solid transparent;
   border-radius: 8px;
   background-clip: padding-box;
 }
 .is-desktop ::-webkit-scrollbar-thumb:hover {
-  background: rgba(242, 229, 218, 0.32);
+  background: rgba(var(--v-theme-on-surface), 0.32);
   background-clip: padding-box;
 }
 

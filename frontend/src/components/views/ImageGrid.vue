@@ -46,16 +46,11 @@
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
       :selectedCount="selectedImageIds.length"
-      :selectedExpandedCount="selectedExpandedCount"
       :selectedCharacter="String(props.selectedCharacter)"
-      :selectedSet="String(props.selectedSet)"
-      :selectedGroupName="selectedGroupName"
       :selectedSort="props.selectedSort"
       :allPicturesId="String(props.allPicturesId)"
       :unassignedPicturesId="String(props.unassignedPicturesId)"
-      :scrapheapPicturesId="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
-      :selected-image-ids="selectedImageIds"
       :comfyui-configured="props.comfyuiConfigured"
       @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
@@ -6098,6 +6093,12 @@ function handleEmptyStateReset() {
 
 .grid-content-area {
   --selbar-height: 48px;
+  /* Container context for the floating SelectionBar's `@container selbar`
+     query. The bar itself is `width: max-content` and cannot host the
+     container (inline-size containment collapses the pill — see the note in
+     SelectionBar.vue), so the query tracks the available grid-content width
+     here, on the bar's `position: relative` containing block. */
+  container: selbar / inline-size;
 }
 
 @media (hover: none) and (pointer: coarse) {

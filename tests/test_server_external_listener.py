@@ -42,9 +42,19 @@ def test_init_server_config_backfills_external_flag(tmp_path):
     assert config["external_server_enabled"] is False
 
 
-def _fake_server(config):
-    """A minimal stand-in exposing just what _build_electron_configs touches."""
-    return SimpleNamespace(api=object(), _server_config=config)
+def _fake_server(config, password_set=True):
+    """A minimal stand-in exposing just what _build_electron_configs touches.
+
+    By default the stand-in reports an owner password is set, so the external
+    listener may bind. Pass ``password_set=False`` to simulate the auto-logged-in
+    desktop owner who never set a password (the external listener must then
+    refuse to bind — see test_external_listener_refused_without_owner_password).
+    """
+    password_hash = "bcrypt-hash" if password_set else None
+    auth = SimpleNamespace(
+        get_user=lambda: SimpleNamespace(password_hash=password_hash)
+    )
+    return SimpleNamespace(api=object(), _server_config=config, auth=auth)
 
 
 def test_loopback_only_when_external_disabled():
@@ -100,6 +110,38 @@ def test_external_https_listener_uses_ssl_paths(tmp_path):
     # The loopback never gets SSL even when require_ssl is on.
     assert not configs[0].is_ssl
     assert ("Remote", "https://0.0.0.0:8443") in banner
+
+
+def test_external_listener_refused_without_owner_password():
+    """Remote access must NOT bind 0.0.0.0 while the owner has no password set.
+
+    The auto-logged-in desktop owner can have password_hash=None; exposing the
+    external listener in that state lets any LAN device claim the empty owner
+    account (BLOCKER 1). _build_electron_configs must fail closed and serve the
+    loopback window only.
+    """
+    server = _fake_server(
+        {"external_server_enabled": True, "port": 9537}, password_set=False
+    )
+    configs, banner = Server._build_electron_configs(server, "127.0.0.1", 50104)
+
+    # Only the loopback listener — the external one was refused.
+    assert len(configs) == 1
+    assert configs[0].host == "127.0.0.1"
+    assert banner == [("Window", "http://127.0.0.1:50104")]
+    # No "Remote" row leaked into the banner.
+    assert all(label != "Remote" for label, _ in banner)
+
+
+def test_external_listener_refused_when_no_auth_service():
+    """Fail closed: with no auth service to verify the password, refuse to bind."""
+    server = SimpleNamespace(
+        api=object(),
+        _server_config={"external_server_enabled": True, "port": 9537},
+    )
+    configs, banner = Server._build_electron_configs(server, "127.0.0.1", 50105)
+    assert len(configs) == 1
+    assert configs[0].host == "127.0.0.1"
 
 
 def _run_startup_port_check(server_config, server_config_path, logger):

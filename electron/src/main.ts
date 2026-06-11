@@ -12,7 +12,8 @@ import {
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetector';
 import { BackendManager, OVERLAY_ACCELS } from './backend/BackendManager';
@@ -39,6 +40,13 @@ const execFileP = promisify(execFile);
  * Loaded as a NativeImage and applied via both the constructor option AND an
  * explicit setIcon() — the constructor `icon` alone is unreliable on Linux. */
 const APP_ICON_PATH = join(__dirname, 'renderer', 'icon.png');
+
+/** The packaged renderer directory — the ONLY `file://` location we ever load
+ * (splash index.html, first-run setup.html, their bundled assets). Used by the
+ * navigation guard to pin allowed local navigation to our own files instead of
+ * trusting any `file://` URL. Resolved (symlinks/`..` collapsed) and suffixed
+ * with the path separator so a sibling dir sharing the prefix can't slip through. */
+const RENDERER_DIR = resolve(__dirname, 'renderer') + sep;
 
 function loadAppIcon(): Electron.NativeImage {
   const img = nativeImage.createFromPath(APP_ICON_PATH);
@@ -79,6 +87,87 @@ let runtime: RuntimeInfo | null = null;
 
 function sendPhase(payload: Record<string, unknown>): void {
   mainWindow?.webContents.send('app:phase', payload);
+}
+
+/**
+ * Decide whether the window may navigate (top-level) to `target`. The privileged
+ * `pixlstashDesktop` preload bridge stays injected across same-window navigation,
+ * so any off-origin page that loaded here could call high-impact IPC
+ * (setServerSettings, commitSetup, installAccelerator, …). We therefore allow
+ * ONLY the content we load ourselves and block everything else (deny-by-default):
+ *
+ *  - `file://` — ONLY files inside our own packaged renderer directory
+ *    (renderer/index.html splash, renderer/setup.html, their assets). A blanket
+ *    `file:` allow would let a navigated page load any local HTML under the
+ *    privileged preload, so we resolve the target path and require it to live
+ *    under RENDERER_DIR.
+ *  - the live loopback backend origin — http://127.0.0.1:<ephemeral port>. The
+ *    port is chosen fresh per backend launch, so the allowed origin is derived
+ *    from the URL we actually loaded (`currentUrl`), never hardcoded. Before the
+ *    backend is up `currentUrl` is null; we then permit only the loopback host
+ *    (127.0.0.1 / localhost over http) so an in-flight load isn't broken, while
+ *    still excluding every non-loopback origin.
+ */
+function isAllowedNavigation(target: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch (e) {
+    console.warn(`[nav] blocking navigation to unparseable URL ${target}:`, e);
+    return false;
+  }
+  // Local bundled pages (splash / setup wizard): allow ONLY our own renderer
+  // files, never an arbitrary file:// path (which would still carry the preload).
+  if (url.protocol === 'file:') {
+    try {
+      const path = resolve(fileURLToPath(url));
+      return path === RENDERER_DIR.slice(0, -1) || path.startsWith(RENDERER_DIR);
+    } catch (e) {
+      console.warn(`[nav] blocking unresolvable file:// URL ${target}:`, e);
+      return false;
+    }
+  }
+  // The running backend, pinned to the exact loopback origin we loaded.
+  if (currentUrl) {
+    try {
+      if (url.origin === new URL(currentUrl).origin) return true;
+    } catch (e) {
+      console.warn(`[nav] could not parse current backend URL ${currentUrl}:`, e);
+    }
+  }
+  // Fallback before the backend URL is known: only the loopback host over http.
+  if (url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Hand a URL to the OS browser/handler, but ONLY for schemes we trust. Passing
+ * attacker-influenced URLs to `shell.openExternal` is a known local code-exec /
+ * privilege-escalation vector: `file:`, `smb:`, and custom-handler schemes
+ * (`vscode:`, `ms-msdt:`, …) can launch local programs or mount remote shares.
+ * Outbound links from app content should only ever be plain web/email links, so
+ * we allow `https:` and `mailto:` and block (and log) everything else —
+ * deny-by-default. Plain `http:` is intentionally excluded for outbound opens:
+ * the only legitimate http target here is the loopback backend, which is handled
+ * in-app (setWindowOpenHandler 'allow' / isAllowedNavigation), never opened
+ * externally. Used by BOTH setWindowOpenHandler and the navigation guard so the
+ * scheme policy lives in one place.
+ */
+function openExternalSafely(url: string): void {
+  let protocol: string;
+  try {
+    ({ protocol } = new URL(url));
+  } catch (e) {
+    console.warn(`[external] refusing to open unparseable URL ${url}:`, e);
+    return;
+  }
+  if (protocol === 'https:' || protocol === 'mailto:') {
+    void shell.openExternal(url);
+    return;
+  }
+  console.warn(`[external] blocked openExternal for disallowed scheme '${protocol}': ${url}`);
 }
 
 /** The accelerator the bundled (installer-shipped) runtime provides. */
@@ -131,9 +220,25 @@ function createMainWindow(): void {
     if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
       return { action: 'allow' };
     }
-    shell.openExternal(url);
+    openExternalSafely(url);
     return { action: 'deny' };
   });
+  // Lock down TOP-LEVEL navigation so the privileged preload bridge can never
+  // end up under an untrusted origin. setWindowOpenHandler above only covers
+  // window.open / new windows; in-window navigation (link clicks, meta-refresh,
+  // window.location, HTTP redirects) is governed here. Anything that isn't our
+  // own local content or the live loopback backend is cancelled and, if it's a
+  // real external link, handed to the OS browser instead.
+  const guardNavigation = (event: Electron.Event, url: string): void => {
+    if (isAllowedNavigation(url)) return;
+    event.preventDefault();
+    console.warn(`[nav] blocked in-window navigation to off-origin URL: ${url}`);
+    // Hand a real external link to the OS browser, but only through the scheme
+    // allowlist (https/mailto) — never a raw file:/smb:/custom-handler URL.
+    openExternalSafely(url);
+  };
+  mainWindow.webContents.on('will-navigate', guardNavigation);
+  mainWindow.webContents.on('will-redirect', guardNavigation);
 }
 
 /** Bring the main window to the front, recreating it if it was destroyed. */

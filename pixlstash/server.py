@@ -97,7 +97,11 @@ def _get_lan_ip() -> str | None:
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except OSError as exc:
+        # No default route / unreachable interface: we cannot determine the LAN
+        # IP. Log it so a misconfigured host that can't add the LAN IP to the
+        # cert SAN leaves a diagnostic instead of failing silently.
+        logger.warning("Could not determine LAN IP: %s", exc)
         return None
 
 
@@ -1544,6 +1548,38 @@ class Server:
         lines.append(f"  ╚{_b}╝")
         print("\n" + "\n".join(lines) + "\n")
 
+    def _external_listener_password_ready(self) -> bool:
+        """Return True only if the owner account has a password set.
+
+        The external (remote access) listener binds ``0.0.0.0`` and is reachable
+        from the LAN. The desktop owner is auto-logged-in via the seeded loopback
+        session and never goes through registration, so ``password_hash`` can be
+        ``None``. Binding the external listener in that state lets any LAN device
+        claim the empty owner account, so we refuse to expose it until a password
+        exists. Fails closed: any error determining the state is treated as "not
+        ready" and logged.
+        """
+        auth = getattr(self, "auth", None)
+        if auth is None:
+            # No auth service wired (e.g. a unit-test stand-in). Fail closed.
+            logger.error(
+                "Refusing external listener: no auth service available to verify "
+                "an owner password is set."
+            )
+            return False
+        try:
+            user = auth.get_user()
+        except Exception as exc:
+            logger.error(
+                "Refusing external listener: failed to load the owner user to "
+                "verify a password is set: %s",
+                exc,
+            )
+            return False
+        if user is None or not user.password_hash:
+            return False
+        return True
+
     def _build_electron_configs(self, loop_host, loop_port):
         """Build the uvicorn configs (and banner rows) for the desktop listeners.
 
@@ -1569,6 +1605,14 @@ class Server:
         banner = [("Window", f"http://{loop_host}:{loop_port}")]
 
         if self._server_config.get("external_server_enabled", False):
+            if not Server._external_listener_password_ready(self):
+                logger.error(
+                    "Refusing to bind the external (remote access) listener: the "
+                    "owner account has no password set. Set an owner password "
+                    "before enabling remote access so a LAN device cannot claim "
+                    "the account. Serving the loopback window only."
+                )
+                return configs, banner
             ext_host = "0.0.0.0"
             ext_port = int(self._server_config.get("port", 9537))
             ext_kwargs = dict(
@@ -1609,6 +1653,15 @@ class Server:
             # handlers would only stop the server that registered last.
             server.install_signal_handlers = False
 
+        # ``banner`` rows are produced in the same order as ``configs`` by
+        # ``_build_electron_configs`` (loopback first, optional external second),
+        # so the label for each server is its banner row. Fall back to the bound
+        # socket if the banner is somehow shorter than the server list.
+        labels = [f"{label} ({url})" for label, url in banner[: len(servers)]]
+        while len(labels) < len(servers):
+            cfg = servers[len(labels)].config
+            labels.append(f"listener ({cfg.host}:{cfg.port})")
+
         async def _serve():
             running_loop = asyncio.get_running_loop()
 
@@ -1624,7 +1677,26 @@ class Server:
                     # the desktop shell force-kills the process tree there.
                     pass
 
-            await asyncio.gather(*(server.serve() for server in servers))
+            async def _serve_one(server, label):
+                # Wrap each listener so a bind failure (e.g. the external
+                # 0.0.0.0 socket already in use, or the loopback ephemeral port
+                # stolen between the bind-check and the bind) is logged with
+                # *which* socket failed before it propagates. A bare
+                # ``asyncio.gather`` surfaces the first exception with no
+                # indication of which listener raised it.
+                try:
+                    await server.serve()
+                except Exception as exc:
+                    logger.error("Desktop %s failed: %s", label, exc, exc_info=True)
+                    # Stop the sibling listener so we don't leave a half-running
+                    # backend, then re-raise so the process exits non-zero.
+                    for other in servers:
+                        other.should_exit = True
+                    raise
+
+            await asyncio.gather(
+                *(_serve_one(server, label) for server, label in zip(servers, labels))
+            )
 
         try:
             asyncio.run(_serve())

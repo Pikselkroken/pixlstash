@@ -4,6 +4,9 @@
       <v-icon size="20" class="token-error-icon">mdi-link-off</v-icon>
       {{ tokenError }}
     </div>
+    <h1 class="sr-only">
+      {{ needsRegistration ? "Register for PixlStash" : "Log in to PixlStash" }}
+    </h1>
     <div class="login-brand">
       <img src="/Logo.png" alt="" class="login-logo" />
       <WordmarkLogo class="login-wordmark" />
@@ -147,10 +150,18 @@ async function handleLogin() {
   color: rgb(var(--v-theme-error));
 }
 
-.headline {
-  margin: 0 0 0.25rem;
-  color: rgb(var(--v-theme-on-dark-surface));
-  text-align: center;
+/* Visually hidden but exposed to assistive tech, so the login page keeps an
+   <h1> document-outline landmark behind the logo + wordmark brand block. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .subtitle {

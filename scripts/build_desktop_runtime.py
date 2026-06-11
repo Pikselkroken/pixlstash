@@ -23,12 +23,14 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -82,19 +84,91 @@ def download(url: str, dest: Path) -> None:
         shutil.copyfileobj(resp, out)
 
 
+def _sha256_of(path: Path) -> str:
+    """Return the hex SHA256 digest of a file, read in chunks."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fetch_expected_sha256(triple: str) -> str:
+    """Fetch the published SHA256 for the pinned python-build-standalone asset.
+
+    Every install_only asset ships a sibling ``<asset>.sha256`` sidecar in the
+    same release whose body is the raw hex digest (optionally
+    ``<digest>  <filename>``). We fetch and parse it so the tarball can be
+    verified against the upstream-published value before we trust it. Raises
+    ``SystemExit`` with context on any HTTP error or unparseable body so a build
+    fails loudly rather than shipping an unverified interpreter.
+    """
+    url = pbs_asset_url(triple) + ".sha256"
+    log(f"fetching checksum {url}")
+    try:
+        with urllib.request.urlopen(url) as resp:  # noqa: S310
+            body = resp.read().decode("utf-8", "strict").strip()
+    except urllib.error.URLError as exc:
+        raise SystemExit(
+            f"could not fetch the published SHA256 sidecar for the CPython "
+            f"asset ({url}): {exc}. Verify PBS_RELEASE={PBS_RELEASE} and "
+            f"PYTHON_VERSION={PYTHON_VERSION} point at a real published asset."
+        ) from exc
+    # The sidecar is either a bare hex digest or "<digest>  <filename>".
+    digest = body.split()[0] if body else ""
+    if len(digest) != 64 or not all(c in "0123456789abcdef" for c in digest.lower()):
+        raise SystemExit(
+            f"published SHA256 sidecar at {url} did not contain a 64-char hex "
+            f"digest (got {body!r}). Refusing to proceed without a usable checksum."
+        )
+    return digest.lower()
+
+
 def fetch_standalone_python(triple: str, dest_dir: Path, cache_dir: Path) -> Path:
     """Extract standalone CPython into ``dest_dir/python``, caching the tarball.
 
     The python-build-standalone archive is pinned by version+release in its
     filename, so a cached copy is always valid for the same pins; we reuse it
-    across builds instead of re-downloading ~30 MB every time.
+    across builds instead of re-downloading ~30 MB every time. The download is
+    verified against the upstream-published ``.sha256`` sidecar **before** it is
+    trusted (and a previously cached copy is re-verified), so a truncated body,
+    a 302-to-HTML, or a poisoned mirror cannot be cached and then fail
+    confusingly at ``tarfile.open`` (or, worse, ship a tampered interpreter).
     """
     archive = cache_dir / pbs_asset_name(triple)
+    expected = fetch_expected_sha256(triple)
+
     if archive.is_file() and archive.stat().st_size > 0:
-        log(f"using cached CPython {archive}")
-    else:
+        actual = _sha256_of(archive)
+        if actual == expected:
+            log(f"using cached CPython {archive} (sha256 verified)")
+        else:
+            # A cached file that no longer matches is corrupt or was poisoned
+            # before verification existed; never trust it. Drop and re-fetch.
+            log(
+                f"cached CPython {archive} sha256 mismatch "
+                f"(expected {expected}, got {actual}); re-downloading"
+            )
+            archive.unlink()
+
+    if not archive.is_file():
         cache_dir.mkdir(parents=True, exist_ok=True)
-        download(pbs_asset_url(triple), archive)
+        # Download to a temp path and only promote to the cache name once the
+        # checksum verifies, so a bad download is never cached as "valid".
+        tmp = archive.with_suffix(archive.suffix + ".part")
+        download(pbs_asset_url(triple), tmp)
+        actual = _sha256_of(tmp)
+        if actual != expected:
+            tmp.unlink(missing_ok=True)
+            raise SystemExit(
+                f"downloaded CPython tarball failed SHA256 verification: "
+                f"expected {expected}, got {actual} (url={pbs_asset_url(triple)}). "
+                f"The body may be truncated, an HTML error/redirect page, or "
+                f"tampered with. Refusing to extract or cache it."
+            )
+        tmp.replace(archive)
+        log(f"downloaded and verified CPython {archive}")
+
     log("extracting standalone CPython")
     with tarfile.open(archive) as tf:
         tf.extractall(dest_dir)  # noqa: S202 — trusted upstream artifact

@@ -646,7 +646,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   /* width: max-content so the pill hugs its icons. NOTE: do NOT add
      container-type here — inline-size containment makes the width ignore the
      contents, collapsing the pill to ~0 and leaving the icons floating with no
-     visible background. */
+     visible background. The `selbar` container for the @container query below
+     is declared on `.grid-content-area` (ImageGrid.vue), the bar's positioned
+     ancestor. */
   width: max-content;
   transform: translateX(-50%);
   z-index: 200;
