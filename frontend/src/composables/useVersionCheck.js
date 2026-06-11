@@ -34,7 +34,7 @@ function isRemoteNewer(current, remote) {
 const LATEST_VERSION_BASE_URL = "https://pixlstash.dev/latest-version";
 // Install-type buckets allowed in the telemetry path; anything else (or
 // empty) collapses to "other". Detection must never block the check.
-const TELEMETRY_INSTALL_BUCKETS = new Set(["docker", "pip", "other"]);
+const TELEMETRY_INSTALL_BUCKETS = new Set(["docker", "pip", "electron", "other"]);
 const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
 
 const VERSION_CHECK_STORAGE_KEY = "pixlstash:lastVersionCheck";

@@ -7,6 +7,7 @@ import {
   shell,
   session,
   dialog,
+  Tray,
 } from 'electron';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -62,7 +63,15 @@ app.setPath('userData', join(app.getPath('appData'), 'pixlstash-desktop'));
 const manager = new BackendManager();
 let serverProcess: ServerProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+// The URL currently loaded in the window, so we can jump straight back to the
+// running backend when reopening from the tray (no full re-boot needed).
+let currentUrl: string | null = null;
 let quitting = false;
+// Desktop-shell preference: when true, closing the window hides it to the tray
+// (keeping the backend / remote server alive) instead of quitting. Loaded from
+// disk at startup and toggled from Settings → Backend.
+let hideToTrayOnClose = true;
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -105,6 +114,15 @@ function createMainWindow(): void {
     mainWindow.setIcon(APP_ICON);
   }
   mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'));
+  // With a tray available, closing the window hides it instead of quitting so
+  // the backend (and any remote server) keeps running. A real quit goes through
+  // `quitting` (tray Quit / app before-quit), which lets the close proceed.
+  mainWindow.on('close', (e) => {
+    if (!quitting && tray && hideToTrayOnClose) {
+      e.preventDefault();
+      mainWindow?.hide();
+    }
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -116,6 +134,93 @@ function createMainWindow(): void {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+}
+
+/** Bring the main window to the front, recreating it if it was destroyed. */
+function showWindow(): void {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  // The window was closed while the app stayed alive in the tray; recreate it
+  // and jump straight back to the running backend if we have its URL, otherwise
+  // run the normal boot flow. (createMainWindow reassigns the module-level
+  // mainWindow, which TS can't see through the null-narrowing above.)
+  createMainWindow();
+  const win = mainWindow as BrowserWindow | null;
+  if (currentUrl) {
+    void win?.loadURL(currentUrl);
+  } else {
+    win?.webContents.once('did-finish-load', () => void boot());
+  }
+}
+
+/**
+ * Create the system-tray icon so the app can keep running — and keep serving the
+ * optional remote server — after the window is closed. Returns false when the
+ * platform has no usable tray (macOS uses the dock; a GNOME session without
+ * AppIndicator support can't show one), in which case the caller keeps the
+ * default quit-on-close behavior so the app is never left unreachable.
+ */
+function createTray(): boolean {
+  if (process.platform === 'darwin') return false; // macOS keeps the dock icon
+  try {
+    tray = new Tray(APP_ICON.isEmpty() ? nativeImage.createEmpty() : APP_ICON);
+  } catch (e) {
+    console.warn('[tray] could not create a tray icon; keeping quit-on-close:', e);
+    tray = null;
+    return false;
+  }
+  tray.setToolTip('PixlStash');
+  // On Linux the context menu is the primary interaction (left-click may not
+  // emit 'click'), so it must always be set; on Windows click also reopens.
+  tray.setContextMenu(buildTrayMenu());
+  tray.on('click', () => showWindow());
+  return true;
+}
+
+/** Build the tray context menu, reflecting the current remote-server state. */
+function buildTrayMenu(): Menu {
+  const serverEnabled = readServerSettings().enabled;
+  return Menu.buildFromTemplate([
+    { label: 'Show window', click: () => showWindow() },
+    { label: 'Settings…', click: () => openSettings() },
+    { type: 'separator' },
+    {
+      label: 'Enable server',
+      type: 'checkbox',
+      checked: serverEnabled,
+      // Flipping this restarts the backend so the external listener is bound (or
+      // dropped); the window reloads onto the new loopback URL, same as Apply.
+      click: () => void toggleServerEnabled(!serverEnabled),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit PixlStash',
+      click: () => {
+        quitting = true;
+        app.quit();
+      },
+    },
+  ]);
+}
+
+/** Refresh the tray menu so its checkbox states match the current config. */
+function refreshTrayMenu(): void {
+  if (tray) tray.setContextMenu(buildTrayMenu());
+}
+
+/** Toggle the external (remote) server on/off, preserving the port and SSL. */
+async function toggleServerEnabled(enabled: boolean): Promise<void> {
+  const current = readServerSettings();
+  try {
+    await writeServerSettings({ enabled, port: current.port, ssl: current.ssl });
+  } catch (e) {
+    console.warn('[tray] failed to toggle the remote server:', e);
+    refreshTrayMenu();
+  }
 }
 
 /** Reveal the active library (image_root) in the OS file manager. */
@@ -131,6 +236,43 @@ function openLibraryFolder(): void {
     return;
   }
   void shell.openPath(imageRoot);
+}
+
+/** The desktop shell's own preferences file (separate from the backend config). */
+function desktopPrefsPath(): string {
+  return join(app.getPath('userData'), 'desktop-prefs.json');
+}
+
+/** Load shell preferences from disk into memory (defaults kept when absent). */
+function loadDesktopPrefs(): void {
+  const prefs = existsSync(desktopPrefsPath()) ? readJsonFile(desktopPrefsPath()) : null;
+  if (prefs && typeof prefs.hideToTrayOnClose === 'boolean') {
+    hideToTrayOnClose = prefs.hideToTrayOnClose;
+  }
+}
+
+/** Persist the current shell preferences to disk. */
+function saveDesktopPrefs(): void {
+  try {
+    mkdirSync(dirname(desktopPrefsPath()), { recursive: true });
+    writeFileSync(desktopPrefsPath(), JSON.stringify({ hideToTrayOnClose }, null, 2));
+  } catch (e) {
+    console.warn('[desktop-prefs] could not persist preferences:', e);
+  }
+}
+
+/** Bring the window forward and ask the renderer to open the Settings dialog. */
+function openSettings(): void {
+  showWindow();
+  const wc = mainWindow?.webContents;
+  if (!wc) return;
+  // If the window was just recreated it is still loading; wait for the renderer
+  // (which registers the listener) before sending, otherwise fire immediately.
+  if (wc.isLoading()) {
+    wc.once('did-finish-load', () => wc.send('app:open-settings'));
+  } else {
+    wc.send('app:open-settings');
+  }
 }
 
 /** Reveal the current backend log (handy when attaching it to a bug report). */
@@ -192,6 +334,8 @@ async function writeServerSettings(settings: ServerSettings): Promise<void> {
   if (settings.enabled) cfg.host = '0.0.0.0';
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+  // Keep the tray's "Enable server" checkbox in sync with the new config.
+  refreshTrayMenu();
   await startAndLoad(await activeOverlayAccel());
 }
 
@@ -257,6 +401,7 @@ async function startAndLoad(accel: Accel | null): Promise<void> {
   });
 
   sendPhase({ phase: 'ready', url: running.url });
+  currentUrl = running.url;
   await mainWindow?.loadURL(running.url);
 }
 
@@ -430,6 +575,16 @@ function registerIpc(): void {
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());
 
+  // Desktop-shell preferences (e.g. hide-to-tray-on-close).
+  ipcMain.handle('desktop:getPrefs', () => ({ hideToTrayOnClose }));
+  ipcMain.handle('desktop:setPrefs', (_e, prefs: { hideToTrayOnClose?: boolean }) => {
+    if (typeof prefs?.hideToTrayOnClose === 'boolean') {
+      hideToTrayOnClose = prefs.hideToTrayOnClose;
+      saveDesktopPrefs();
+    }
+    return { hideToTrayOnClose };
+  });
+
   // External server (remote access) settings. The loopback the window uses is
   // never affected by these — only the optional second listener.
   ipcMain.handle('server:getSettings', () => readServerSettings());
@@ -475,16 +630,17 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
+    // Relaunching while we're already running just reopens the window (it may be
+    // hidden in the tray).
+    showWindow();
   });
 
   app.whenReady().then(() => {
+    loadDesktopPrefs();
     buildMenu();
     registerIpc();
     createMainWindow();
+    createTray();
     // Kick off boot once the splash has loaded so phase events aren't missed.
     mainWindow?.webContents.once('did-finish-load', () => {
       void boot();
@@ -498,9 +654,15 @@ if (!gotLock) {
   app.on('before-quit', () => {
     quitting = true;
     serverProcess?.stop();
+    tray?.destroy();
+    tray = null;
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    // With hide-to-tray active the window only hides (never destroyed), so this
+    // normally won't fire. It does fire when the tray is unavailable OR the user
+    // turned hide-to-tray off — in both cases closing the window should quit
+    // (macOS keeps its usual dock behavior).
+    if (process.platform !== 'darwin' && !(tray && hideToTrayOnClose)) app.quit();
   });
 }

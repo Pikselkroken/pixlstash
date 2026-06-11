@@ -34,6 +34,9 @@ const serverDirty = computed(() => {
   );
 });
 
+// Desktop-shell preference: keep running in the tray when the window is closed.
+const hideToTrayOnClose = ref(true);
+
 const activeLabel = computed(() => {
   if (!state.value) return "";
   const active = state.value.items.find((i) => i.active);
@@ -44,6 +47,26 @@ async function refresh() {
   if (!desktop) return;
   try {
     state.value = await desktop.listAccelerators();
+  } catch (e) {
+    error.value = e?.message || String(e);
+  }
+}
+
+async function refreshDesktopPrefs() {
+  if (!desktop?.getDesktopPrefs) return;
+  try {
+    const prefs = await desktop.getDesktopPrefs();
+    hideToTrayOnClose.value = !!prefs.hideToTrayOnClose;
+  } catch (e) {
+    error.value = e?.message || String(e);
+  }
+}
+
+async function setHideToTray(value) {
+  if (!desktop?.setDesktopPrefs) return;
+  hideToTrayOnClose.value = value;
+  try {
+    await desktop.setDesktopPrefs({ hideToTrayOnClose: value });
   } catch (e) {
     error.value = e?.message || String(e);
   }
@@ -101,6 +124,7 @@ onMounted(() => {
   }
   refresh();
   refreshServer();
+  refreshDesktopPrefs();
 });
 
 onUnmounted(() => {
@@ -113,6 +137,7 @@ watch(
     if (isOpen) {
       refresh();
       refreshServer();
+      refreshDesktopPrefs();
     }
   },
 );
@@ -296,6 +321,22 @@ watch(
   <v-divider class="settings-section-divider" />
   <div class="settings-section">
     <div class="settings-section-title">Desktop</div>
+    <div class="compute-row">
+      <div class="compute-meta">
+        <div class="compute-label">Hide to tray on close</div>
+        <div class="compute-sub">
+          Keep PixlStash (and any remote server) running in the background when
+          you close the window. Reopen it from the tray icon.
+        </div>
+      </div>
+      <v-switch
+        :model-value="hideToTrayOnClose"
+        color="primary"
+        density="compact"
+        hide-details
+        @update:model-value="setHideToTray($event)"
+      />
+    </div>
     <div class="compute-links">
       <v-btn
         variant="text"

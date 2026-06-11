@@ -17,10 +17,19 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   // Desktop conveniences re-homed from the (removed) native menu.
   openLibraryFolder: () => ipcRenderer.invoke('desktop:openLibraryFolder'),
   showLogs: () => ipcRenderer.invoke('desktop:showLogs'),
+  // Desktop-shell preferences (hide-to-tray-on-close, ...).
+  getDesktopPrefs: () => ipcRenderer.invoke('desktop:getPrefs'),
+  setDesktopPrefs: (prefs: unknown) => ipcRenderer.invoke('desktop:setPrefs', prefs),
   // External server (remote access) settings.
   getServerSettings: () => ipcRenderer.invoke('server:getSettings'),
   setServerSettings: (settings: unknown) =>
     ipcRenderer.invoke('server:setSettings', settings),
+  // Fired when the tray's Settings entry asks the renderer to open Settings.
+  onOpenSettings: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('app:open-settings', listener);
+    return () => ipcRenderer.removeListener('app:open-settings', listener);
+  },
   // Custom title-bar window controls (frameless window).
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),

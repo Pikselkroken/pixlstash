@@ -128,6 +128,8 @@ let columnsMenuCloseTimeout = null;
 let sidebarRefreshDebounceTimeout = null;
 let sidebarRefreshPicturesDebounceTimeout = null;
 let sidebarRefreshPicturesFlash = false;
+// Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
+let stopOpenSettings = null;
 
 // --- Computed ---
 // Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
@@ -1847,6 +1849,12 @@ onMounted(async () => {
   window.addEventListener("dragover", handleWindowDragOver, true);
   window.addEventListener("drop", handleWindowDrop, true);
   window.addEventListener("paste", handleWindowPaste, true);
+  // Desktop tray → "Settings" opens the Settings dialog directly.
+  if (window.pixlstashDesktop?.onOpenSettings) {
+    stopOpenSettings = window.pixlstashDesktop.onOpenSettings(() =>
+      openSettingsDialog(),
+    );
+  }
   refreshSidebar();
   updateMaxColumns();
   connectUpdatesSocket();
@@ -1864,6 +1872,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disconnectUpdatesSocket();
+  if (stopOpenSettings) stopOpenSettings();
   window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);
   window.removeEventListener("dragover", handleWindowDragOver, true);
