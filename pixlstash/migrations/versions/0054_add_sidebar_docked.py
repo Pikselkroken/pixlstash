@@ -22,6 +22,10 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    # Guard a missing user table (a partial/synthetic DB, e.g. the migration
+    # tests that hand-build a minimal schema) before inspecting its columns.
+    if "user" not in inspector.get_table_names():
+        return
 
     existing_columns = {col["name"] for col in inspector.get_columns("user")}
     if "sidebar_docked" not in existing_columns:
