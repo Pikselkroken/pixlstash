@@ -196,6 +196,12 @@ class AuthService:
         self._server_config_path = server_config_path
         self._logger = logger
         self.active_session_ids: dict[str, int] = {}
+        # The pre-authenticated Electron desktop owner session, if seeded (see
+        # seed_desktop_session). It grants full owner access and is therefore
+        # pinned to local connections only: the desktop window reaches the
+        # backend over loopback, so this session must never authenticate a
+        # request arriving on the optional external listener.
+        self._desktop_session_token: Optional[str] = None
         self.user: Optional[User] = None
         self.password_hash: Optional[str] = None
         self.username: Optional[str] = None
@@ -270,12 +276,22 @@ class AuthService:
             return sum(1 for ts in self._guest_sessions.values() if ts >= active_cutoff)
 
     def ensure_secure_when_required(self, request: Request):
-        if self._server_config.get("require_ssl", False):
-            if request.url.scheme != "https":
-                raise HTTPException(
-                    status_code=403,
-                    detail="HTTPS is required for this operation.",
-                )
+        if not self._server_config.get("require_ssl", False):
+            return
+        if request.url.scheme == "https":
+            return
+        # require_ssl governs the *external* surface only. The Electron desktop
+        # window always reaches the backend over a plain-HTTP loopback connection
+        # by design (require_ssl drives the separate external listener, not this
+        # one), and a standalone HTTPS-only server never serves plaintext at all.
+        # So a local/loopback client must not be forced onto HTTPS — only a
+        # genuinely remote plaintext request is rejected.
+        if is_local_ip(self._get_real_client_ip(request)):
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="HTTPS is required for this operation.",
+        )
 
     def _get_real_client_ip(self, request: Request) -> str:
         trusted = self._server_config.get("trusted_proxies", [])
@@ -378,6 +394,7 @@ class AuthService:
             )
             return None
         self.active_session_ids[token] = user.id
+        self._desktop_session_token = token
         self._logger.info(
             "Seeded a pre-authenticated desktop session for the local owner."
         )
@@ -1281,6 +1298,23 @@ class AuthService:
 
             session_id = request.cookies.get("session_id")
             user_id = self.active_session_ids.get(session_id) if session_id else None
+
+            # The seeded Electron desktop owner session is loopback-only: the
+            # window talks to the backend over 127.0.0.1, so this high-privilege
+            # session must never grant access on the optional external listener
+            # (even though the cookie is scoped to the loopback origin and so is
+            # not normally sent there — this is the fail-closed backstop). Drop
+            # it for non-local clients and let normal token auth take over.
+            if (
+                user_id is not None
+                and session_id == self._desktop_session_token
+                and not is_local_ip(self._get_real_client_ip(request))
+            ):
+                self._logger.warning(
+                    "Rejected desktop owner session from non-local IP %s.",
+                    self._get_real_client_ip(request),
+                )
+                user_id = None
 
             if user_id is not None:
                 # Cookie session — full owner access, no scope restriction

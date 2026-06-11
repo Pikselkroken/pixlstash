@@ -1838,12 +1838,12 @@ function handleResolutionBarClick(label) {
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  /* No left divider in the docked layout: the panel shares the toolbar's
-     background, so toolbar + stats header read as one continuous top strip and
-     the grid's images provide the separation below. The mobile drawer re-adds an
-     edge (see the max-width: 1339px block). */
+  /* No left divider in the docked layout: the panel uses the sidebar's chrome
+     colour so the left sidebar and right stats panel frame the grid symmetrically;
+     the grid's images provide the separation. The mobile drawer re-adds an edge
+     (see the max-width: 1339px block). */
   border-left: 1px solid transparent;
-  background: rgba(var(--v-theme-background), 0.95);
+  background: rgb(var(--v-theme-sidebar));
   transition:
     width 0.15s,
     min-width 0.15s,

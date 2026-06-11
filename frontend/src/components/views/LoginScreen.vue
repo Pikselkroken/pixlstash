@@ -6,13 +6,8 @@
     </div>
     <div class="login-brand">
       <img src="/Logo.png" alt="" class="login-logo" />
-      <span class="login-wordmark"
-        >Pixl<span class="login-wordmark-accent">Stash</span></span
-      >
+      <WordmarkLogo class="login-wordmark" />
     </div>
-    <h1 class="headline">
-      {{ needsRegistration ? "Register Password" : "Log In" }}
-    </h1>
     <p class="subtitle">
       {{
         needsRegistration
@@ -69,6 +64,7 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../../utils/apiClient";
+import WordmarkLogo from "../WordmarkLogo.vue";
 
 const props = defineProps({
   tokenError: { type: String, default: null },
@@ -125,14 +121,10 @@ async function handleLogin() {
 }
 
 .login-wordmark {
+  /* Tiny5 brand wordmark (WordmarkLogo.vue). */
   font-size: 2.1rem;
-  font-weight: 700;
-  letter-spacing: 0.5px;
   color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.login-wordmark-accent {
-  color: rgb(var(--v-theme-accent));
+  --wordmark-accent: rgb(var(--v-theme-accent));
 }
 
 .token-error-banner {

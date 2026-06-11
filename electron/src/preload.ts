@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   // Desktop conveniences re-homed from the (removed) native menu.
   openLibraryFolder: () => ipcRenderer.invoke('desktop:openLibraryFolder'),
   showLogs: () => ipcRenderer.invoke('desktop:showLogs'),
+  // External server (remote access) settings.
+  getServerSettings: () => ipcRenderer.invoke('server:getSettings'),
+  setServerSettings: (settings: unknown) =>
+    ipcRenderer.invoke('server:setSettings', settings),
   // Custom title-bar window controls (frameless window).
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),

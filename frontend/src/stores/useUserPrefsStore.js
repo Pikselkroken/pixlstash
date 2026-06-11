@@ -32,6 +32,8 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
   const penalisedTagWeights = ref({});
   const checkForUpdates = ref(null); // null = undecided, true/false = user choice
   const sidebarThumbnailSize = ref(isReadOnly.value ? 32 : 48);
+  // Expanded (non-docked) sidebar width in px. Drag-resizable, clamped 120–300.
+  const sidebarWidth = ref(240);
   const publicUrl = ref(null);
   const embedWatermark = ref(false);
   // Per-device dismissal of the "deleted pictures still in snapshots" warning
@@ -52,6 +54,7 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
     penalisedTagWeights,
     checkForUpdates,
     sidebarThumbnailSize,
+    sidebarWidth,
     publicUrl,
     embedWatermark,
     hidePurgeSnapshotWarning,

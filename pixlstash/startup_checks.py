@@ -199,6 +199,16 @@ class StartupChecks:
         host = str(self._server_config.get("host", "localhost"))
         port = int(self._server_config.get("port", 8000))
 
+        # Under the Electron desktop shell the configured host:port describes the
+        # optional *external* listener, not the connection the window uses (that
+        # is an always-free ephemeral loopback port — see Server.run). So only
+        # check the configured port when remote access is actually enabled, and
+        # check it on the interface it will really bind (0.0.0.0).
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
+            if not self._server_config.get("external_server_enabled", False):
+                return
+            host = "0.0.0.0"
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

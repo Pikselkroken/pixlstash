@@ -1169,6 +1169,12 @@ function handleUpdateSidebarThumbnailSize(value) {
   userPrefsStore.sidebarThumbnailSize = nextValue;
 }
 
+function handleUpdateSidebarWidth(value) {
+  const nextValue = Number(value);
+  if (!Number.isFinite(nextValue)) return;
+  userPrefsStore.sidebarWidth = nextValue;
+}
+
 function handleColumnsEnd() {
   if (columnsMenuCloseTimeout) {
     clearTimeout(columnsMenuCloseTimeout);
@@ -1213,6 +1219,9 @@ async function fetchConfig() {
     if (typeof res.data.compact_mode === "boolean") {
       gridStore.compactMode = res.data.compact_mode;
     }
+    if (typeof res.data.sidebar_docked === "boolean") {
+      sidebarStore.setSidebarDocked(res.data.sidebar_docked);
+    }
     if (typeof res.data.date_format === "string" && res.data.date_format) {
       userPrefsStore.dateFormat = res.data.date_format;
     }
@@ -1228,6 +1237,9 @@ async function fetchConfig() {
     if (typeof res.data.sidebar_thumbnail_size === "number") {
       userPrefsStore.sidebarThumbnailSize = res.data.sidebar_thumbnail_size;
     }
+    if (typeof res.data.sidebar_width === "number") {
+      userPrefsStore.sidebarWidth = res.data.sidebar_width;
+    }
     if (res.data.stack_strictness != null) {
       sortStore.stackThreshold = String(res.data.stack_strictness);
     }
@@ -1235,6 +1247,7 @@ async function fetchConfig() {
     config.descending = sortStore.selectedDescending;
     config.columns = gridStore.columns;
     config.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
+    config.sidebar_width = userPrefsStore.sidebarWidth;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
@@ -1257,6 +1270,10 @@ async function fetchConfig() {
       typeof res.data.compact_mode === "boolean"
         ? res.data.compact_mode
         : gridStore.compactMode;
+    config.sidebar_docked =
+      typeof res.data.sidebar_docked === "boolean"
+        ? res.data.sidebar_docked
+        : sidebarStore.sidebarDocked;
     config.date_format = userPrefsStore.dateFormat;
     config.theme_mode = userPrefsStore.themeMode;
     config.stack_strictness =
@@ -1311,6 +1328,7 @@ async function fetchConfig() {
       show_problem_icon: gridStore.showProblemIcon,
       expand_all_stacks: gridStore.showStacks,
       compact_mode: gridStore.compactMode,
+      sidebar_docked: sidebarStore.sidebarDocked,
       date_format: userPrefsStore.dateFormat,
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
@@ -1351,6 +1369,9 @@ async function patchConfigUIOptions() {
   if (userPrefsStore.sidebarThumbnailSize) {
     patch.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
   }
+  if (userPrefsStore.sidebarWidth) {
+    patch.sidebar_width = userPrefsStore.sidebarWidth;
+  }
   if (typeof userPrefsStore.showKeyboardHint === "boolean")
     patch.show_keyboard_hint = userPrefsStore.showKeyboardHint;
   if (typeof gridStore.showFaceBboxes === "boolean") {
@@ -1364,6 +1385,9 @@ async function patchConfigUIOptions() {
   }
   if (typeof gridStore.compactMode === "boolean") {
     patch.compact_mode = gridStore.compactMode;
+  }
+  if (typeof sidebarStore.sidebarDocked === "boolean") {
+    patch.sidebar_docked = sidebarStore.sidebarDocked;
   }
   if (
     typeof userPrefsStore.dateFormat === "string" &&
@@ -1717,7 +1741,23 @@ watch(
 );
 
 watch(
+  () => sidebarStore.sidebarDocked,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
   () => userPrefsStore.sidebarThumbnailSize,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
+  () => userPrefsStore.sidebarWidth,
   () => {
     if (!configLoaded.value) return;
     patchConfigUIOptions();
@@ -1904,6 +1944,7 @@ defineExpose({
             :embedWatermark="userPrefsStore.embedWatermark"
             :selectedSimilarityCharacter="sortStore.selectedSimilarityCharacter"
             :sidebarThumbnailSize="userPrefsStore.sidebarThumbnailSize"
+            :sidebarWidth="userPrefsStore.sidebarWidth"
             :dateFormat="userPrefsStore.dateFormat"
             :themeMode="userPrefsStore.themeMode"
             :hasFolderFilter="selectionStore.selectedFolderFilter != null"
@@ -1927,6 +1968,7 @@ defineExpose({
             @update:date-format="handleUpdateDateFormat"
             @update:theme-mode="handleUpdateThemeMode"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
+            @update:sidebar-width="handleUpdateSidebarWidth"
             @update:project-view-mode="handleUpdateProjectViewMode"
             @update:selected-project-id="handleUpdateSelectedProjectId"
             @view-project="handleViewProject"

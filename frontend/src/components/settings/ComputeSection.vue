@@ -18,6 +18,22 @@ const error = ref("");
 const progress = ref(null); // { message, fraction } while installing
 let stopProgress = null;
 
+// External-server (remote access) settings. `server` mirrors the saved state
+// from the backend config; `serverDraft` is what the form edits until Apply.
+const server = ref(null); // { enabled, port, ssl, urls }
+const serverDraft = ref({ enabled: false, port: 9537, ssl: false });
+
+const serverDirty = computed(() => {
+  if (!server.value) return false;
+  const d = serverDraft.value;
+  const s = server.value;
+  return (
+    d.enabled !== s.enabled ||
+    Number(d.port) !== Number(s.port) ||
+    d.ssl !== s.ssl
+  );
+});
+
 const activeLabel = computed(() => {
   if (!state.value) return "";
   const active = state.value.items.find((i) => i.active);
@@ -28,6 +44,17 @@ async function refresh() {
   if (!desktop) return;
   try {
     state.value = await desktop.listAccelerators();
+  } catch (e) {
+    error.value = e?.message || String(e);
+  }
+}
+
+async function refreshServer() {
+  if (!desktop?.getServerSettings) return;
+  try {
+    const s = await desktop.getServerSettings();
+    server.value = s;
+    serverDraft.value = { enabled: s.enabled, port: s.port, ssl: s.ssl };
   } catch (e) {
     error.value = e?.message || String(e);
   }
@@ -47,6 +74,11 @@ async function guarded(fn) {
     await refresh();
   }
 }
+
+// Persisting the settings restarts the backend, which reloads this page — so a
+// successful Apply ends with the app reloading onto the new loopback URL.
+const applyServer = () =>
+  guarded(() => desktop.setServerSettings({ ...serverDraft.value }));
 
 const install = (accel) => guarded(() => desktop.installAccelerator(accel));
 const use = (accel) => guarded(() => desktop.useAccelerator(accel));
@@ -68,6 +100,7 @@ onMounted(() => {
     });
   }
   refresh();
+  refreshServer();
 });
 
 onUnmounted(() => {
@@ -77,12 +110,104 @@ onUnmounted(() => {
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen) refresh();
+    if (isOpen) {
+      refresh();
+      refreshServer();
+    }
   },
 );
 </script>
 
 <template>
+  <v-divider class="settings-section-divider" />
+  <div class="settings-section">
+    <div class="settings-section-title">Remote access</div>
+    <div class="settings-section-desc">
+      Let other devices on your network open this library in a browser. The app
+      window always uses a private local connection — this only controls the
+      separate connection from the outside. Changing it restarts the local
+      server.
+    </div>
+
+    <template v-if="server">
+      <div class="compute-row">
+        <div class="compute-meta">
+          <div class="compute-label">Enable server</div>
+          <div class="compute-sub">
+            Serve the library to other devices on your network.
+          </div>
+        </div>
+        <v-switch
+          v-model="serverDraft.enabled"
+          color="primary"
+          density="compact"
+          hide-details
+          :disabled="busy"
+        />
+      </div>
+
+      <div
+        class="compute-row"
+        :class="{ 'server-row--disabled': !serverDraft.enabled }"
+      >
+        <div class="compute-meta">
+          <div class="compute-label">Port</div>
+          <div class="compute-sub">The port other devices connect to.</div>
+        </div>
+        <input
+          v-model.number="serverDraft.port"
+          type="number"
+          min="1"
+          max="65535"
+          class="server-port-input"
+          :disabled="!serverDraft.enabled || busy"
+        />
+      </div>
+
+      <div
+        class="compute-row"
+        :class="{ 'server-row--disabled': !serverDraft.enabled }"
+      >
+        <div class="compute-meta">
+          <div class="compute-label">Use HTTPS (SSL)</div>
+          <div class="compute-sub">
+            Encrypts the outside connection with a self-signed certificate —
+            browsers will warn on first connect.
+          </div>
+        </div>
+        <v-switch
+          v-model="serverDraft.ssl"
+          color="primary"
+          density="compact"
+          hide-details
+          :disabled="!serverDraft.enabled || busy"
+        />
+      </div>
+
+      <div v-if="server.enabled" class="compute-sub server-urls">
+        <template v-if="server.urls.length">
+          Reachable at:
+          <span v-for="url in server.urls" :key="url" class="server-url">
+            {{ url }}
+          </span>
+        </template>
+        <template v-else>
+          Reachable on this machine's network address, port {{ server.port }}.
+        </template>
+      </div>
+
+      <v-btn
+        size="small"
+        class="settings-action-btn server-apply-btn"
+        :disabled="busy || !serverDirty"
+        @click="applyServer"
+      >
+        Apply &amp; restart
+      </v-btn>
+    </template>
+    <div v-else class="settings-token-empty">Loading…</div>
+  </div>
+
   <v-divider class="settings-section-divider" />
   <div class="settings-section">
     <div class="settings-section-title">Compute acceleration</div>
@@ -259,6 +384,50 @@ watch(
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.server-row--disabled {
+  opacity: 0.5;
+}
+
+.server-port-input {
+  width: 96px;
+  flex-shrink: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 8px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
+  border-radius: 4px;
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: inherit;
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.server-port-input::-webkit-inner-spin-button,
+.server-port-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.server-port-input:disabled {
+  cursor: default;
+}
+
+.server-urls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.server-url {
+  font-family: monospace;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.server-apply-btn {
+  align-self: flex-start;
 }
 
 .settings-token-empty {

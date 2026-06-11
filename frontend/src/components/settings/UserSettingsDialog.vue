@@ -96,7 +96,7 @@ watch(
           <v-tab v-if="!isReadOnly" value="smart-score">Smart Score</v-tab>
           <v-tab v-if="!isReadOnly" value="workflows">Workflows</v-tab>
           <v-tab v-if="!isReadOnly" value="snapshots">Snapshots</v-tab>
-          <v-tab v-if="isDesktop && !isReadOnly" value="compute">Compute</v-tab>
+          <v-tab v-if="isDesktop && !isReadOnly" value="compute">Backend</v-tab>
           <v-tab v-if="!isReadOnly" value="account">Account Settings</v-tab>
         </v-tabs>
         <v-card-text class="settings-dialog-body">

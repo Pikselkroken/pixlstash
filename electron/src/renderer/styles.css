@@ -101,15 +101,15 @@ body {
 /* Pixelated brand font, used only for the "PixlStash" name (matches the
    in-app sidebar/title-bar logo). Same-origin file, allowed by the page CSP. */
 @font-face {
-  font-family: "PressStart2P";
-  src: url("PressStart2P-Regular.ttf") format("truetype");
+  font-family: "Tiny5";
+  src: url("Tiny5-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
 }
 
 .logo {
-  font-family: "PressStart2P", monospace;
-  font-size: 20px;
+  font-family: "Tiny5", monospace;
+  font-size: 22px;
   letter-spacing: 0.5px;
 }
 
@@ -119,8 +119,8 @@ body {
 
 /* The "PixlStash" word inside the setup page's "Welcome to PixlStash" title. */
 .brand-name {
-  font-family: "PressStart2P", monospace;
-  font-size: 0.8em;
+  font-family: "Tiny5", monospace;
+  font-size: 0.9em;
   letter-spacing: 0.5px;
 }
 
@@ -206,12 +206,15 @@ body {
 }
 
 .badge {
-  font-size: 11px;
+  font-size: 16px;
   color: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 999px;
   padding: 1px 8px;
   margin-left: 8px;
+  -webkit-font-smoothing: none; /* kills antialiasing on Mac */
+  font-smooth: never;
+  text-rendering: optimizeSpeed;
 }
 
 button {

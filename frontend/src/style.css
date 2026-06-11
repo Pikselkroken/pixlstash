@@ -27,6 +27,27 @@ body {
   text-align: left;
 }
 
+/* Interactive wash tokens for sidebar hover/selection. The raw alphas were tuned
+   for the dark theme, where a bright accent/primary over a dark surface reads
+   well at 8–18%. Over the light theme's near-white canvas those same alphas wash
+   out, so light gets stronger values (and dark-on-light selection text). Dark
+   keeps its original values. Defined on the Vuetify theme classes so they cascade
+   into the scoped component styles. */
+.v-theme--pixlStashDark {
+  --hover-wash: rgba(var(--v-theme-accent), 0.08);
+  --active-wash: rgba(var(--v-theme-primary), 0.18);
+  --active-bar: rgb(var(--v-theme-primary));
+  --active-text: rgb(var(--v-theme-on-primary));
+}
+.v-theme--pixlStashLight {
+  /* Selection reads warm (accent) on the light theme instead of the olive `primary`
+     green, which clashes with the warm palette. Dark keeps the green convention. */
+  --hover-wash: rgba(var(--v-theme-accent), 0.14);
+  --active-wash: rgba(var(--v-theme-accent), 0.20);
+  --active-bar: rgb(var(--v-theme-accent));
+  --active-text: rgb(var(--v-theme-on-surface));
+}
+
 /* Reusable uppercase section label — matches font-size 11px, weight 600, spacing 0.06em */
 .section-label {
   font-size: 11px;
@@ -90,18 +111,14 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Desktop shell: the title bar + toolbar are drawn in the app background colour,
-   so remap the sidebar's palette to that same background and make it read as one
-   continuous piece of chrome instead of a separate, lighter panel. The vars are
-   set on `.sidebar` itself (deeper than Vuetify's runtime `.v-theme--*` element)
-   so they actually win; `on-background` pairs with `background`, keeping text and
-   divider contrast correct in both themes. The brand row is hidden on desktop
-   (branding lives in the title bar), so a little top padding keeps the first row
-   off the window edge. */
-html.is-desktop .sidebar {
-  --v-theme-sidebar: var(--v-theme-background);
-  --v-theme-sidebar-text: var(--v-theme-on-background);
-}
+/* The sidebar, toolbar and title bar each paint from their OWN theme token
+   (`sidebar`, `toolbar`, `toolbar` respectively) and the grid canvas from
+   `background`. Want them to read as one continuous chrome strip? Set those tokens
+   to the same value in main.js. Want the chrome to recede behind a brighter
+   canvas? Give them different values. The colour relationship lives in the theme
+   tokens, not hard-coded here, so it's yours to tune per theme.
+   (Earlier this remapped the sidebar onto `background` unconditionally, which made
+   those token edits no-ops in the desktop shell.) */
 
 /* Give the sidebar's "Library" header band the same height as the toolbar and the
    stats header so the three columns line up at the top in the desktop shell. */

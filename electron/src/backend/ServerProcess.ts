@@ -20,7 +20,7 @@ export interface RunningServer {
  * repo's .venv by default, or PIXLSTASH_DEV_BACKEND if set. This is the loop
  * used to iterate on the shell without building the bundled runtime.
  */
-function devInterpreter(): string {
+export function devInterpreter(): string {
   if (process.env.PIXLSTASH_DEV_BACKEND) return process.env.PIXLSTASH_DEV_BACKEND;
   // electron/dist/backend → repo root is three levels up.
   const repoRoot = join(__dirname, '..', '..', '..');
@@ -144,6 +144,9 @@ export class ServerProcess {
   private logStream: WriteStream | null = null;
   private running: RunningServer | null = null;
   private exited = false;
+  /** Set by stop() so the exit handler treats the death as intentional (e.g. a
+   * settings-driven restart or app quit) and does NOT surface an error. */
+  private stopping = false;
   /** Whether the backend was spawned in its own process group (see `start`). */
   private detached = false;
 
@@ -189,10 +192,12 @@ export class ServerProcess {
       ...(device ? { PIXLSTASH_DEFAULT_DEVICE: device } : {}),
     };
 
-    // Production runs the app's own config (separate from any pip/Docker install
-    // on this machine). Dev uses the developer's default config/library as-is.
-    const args = ['-m', 'pixlstash.app'];
-    if (!isDevBackend()) args.push('--server-config', serverConfigPath());
+    // The desktop app always runs its OWN config (under the pixlstash-desktop
+    // app-data dir), in both dev and packaged runs — never the standalone
+    // server's config. A standalone pip/Docker server (launched without
+    // --server-config) keeps using the plain `pixlstash` config, so the two
+    // installs stay fully separate and never read or clobber each other.
+    const args = ['-m', 'pixlstash.app', '--server-config', serverConfigPath()];
 
     // Normally we detach the backend into its own process group so we can take
     // down the whole tree with one signal. But under the dev supervisor
@@ -229,6 +234,10 @@ export class ServerProcess {
     this.child.on('exit', (code, signal) => {
       this.exited = true;
       this.running = null;
+      if (this.stopping) {
+        // We asked it to stop (settings restart / quit) — death is expected.
+        return;
+      }
       if (ready) {
         // Crashed after a healthy start — let the owner surface it (dialog).
         this.onExit?.(code);
@@ -256,6 +265,7 @@ export class ServerProcess {
   }
 
   stop(): void {
+    this.stopping = true;
     if (this.child && !this.exited) {
       killTree(this.child, this.detached);
     }

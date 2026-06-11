@@ -16,6 +16,7 @@ import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import ShareDialog from "../io/ShareDialog.vue";
+import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
   apiClient,
@@ -61,6 +62,7 @@ const props = defineProps({
   publicUrl: { type: String, default: null },
   embedWatermark: { type: Boolean, default: false },
   sidebarThumbnailSize: { type: Number, default: 48 },
+  sidebarWidth: { type: Number, default: 240 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
   hasFolderFilter: { type: Boolean, default: false },
@@ -88,6 +90,7 @@ const emit = defineEmits([
   "update:similarity-character",
   "update:similarity-options",
   "update:sidebar-thumbnail-size",
+  "update:sidebar-width",
   "update:date-format",
   "update:theme-mode",
   "update:sort-options",
@@ -1358,9 +1361,85 @@ const sidebarThumbnailSizeLarge = computed(
   () => sidebarThumbnailSizeModel.value + 8,
 );
 
-const sidebarThumbStyle = computed(() => ({
-  "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
-}));
+// Expanded-sidebar width (drag-resizable). Clamp ≈50%–125% of the 240px default.
+const SIDEBAR_WIDTH_MIN = 120;
+const SIDEBAR_WIDTH_MAX = 300;
+const clampSidebarWidth = (v) =>
+  Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(v)));
+
+// Persisted width; the setter emits up to the store/backend.
+const sidebarWidthModel = computed({
+  get: () => props.sidebarWidth ?? 240,
+  set: (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    emit("update:sidebar-width", clampSidebarWidth(parsed));
+  },
+});
+
+// Live width while dragging (null when not dragging). Kept local so a drag does
+// not emit/persist on every frame — we commit once on pointer-up.
+const sidebarDragWidth = ref(null);
+
+const sidebarThumbStyle = computed(() => {
+  const style = {
+    "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
+  };
+  // Apply the resized width only when expanded; docked width is driven by the
+  // thumbnail size in CSS, so leave it to the stylesheet there.
+  if (!props.docked) {
+    const w = sidebarDragWidth.value ?? sidebarWidthModel.value;
+    style.width = `${w}px`;
+  }
+  return style;
+});
+
+// --- Sidebar resize drag (expanded mode only) ---
+let _resizeStartX = 0;
+let _resizeStartWidth = 0;
+
+function onSidebarResizeMove(e) {
+  sidebarDragWidth.value = clampSidebarWidth(
+    _resizeStartWidth + (e.clientX - _resizeStartX),
+  );
+}
+
+function onSidebarResizeEnd() {
+  window.removeEventListener("pointermove", onSidebarResizeMove);
+  window.removeEventListener("pointerup", onSidebarResizeEnd);
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  // Commit the final width once (emits → store → persist).
+  if (sidebarDragWidth.value != null) {
+    sidebarWidthModel.value = sidebarDragWidth.value;
+    sidebarDragWidth.value = null;
+  }
+}
+
+function onSidebarResizeStart(e) {
+  if (props.docked) return;
+  e.preventDefault();
+  const rect = sidebarRootRef.value?.getBoundingClientRect();
+  _resizeStartWidth = rect ? rect.width : sidebarWidthModel.value;
+  _resizeStartX = e.clientX;
+  sidebarDragWidth.value = clampSidebarWidth(_resizeStartWidth);
+  window.addEventListener("pointermove", onSidebarResizeMove);
+  window.addEventListener("pointerup", onSidebarResizeEnd);
+  document.body.style.cursor = "ew-resize";
+  document.body.style.userSelect = "none";
+}
+
+function onSidebarResizeKey(e) {
+  if (props.docked) return;
+  const step = e.shiftKey ? 24 : 8;
+  if (e.key === "ArrowLeft") {
+    sidebarWidthModel.value = sidebarWidthModel.value - step;
+    e.preventDefault();
+  } else if (e.key === "ArrowRight") {
+    sidebarWidthModel.value = sidebarWidthModel.value + step;
+    e.preventDefault();
+  }
+}
 
 const isSearchActive = computed(() => {
   const query = typeof props.searchQuery === "string" ? props.searchQuery : "";
@@ -2863,6 +2942,8 @@ let _dockedScrollObserver = null;
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onSidebarCtxOutside);
   document.removeEventListener("keydown", onSidebarCtxKeydown, true);
+  // Drop any in-flight sidebar-resize drag listeners.
+  onSidebarResizeEnd();
   if (sidebarNoticeCleanup) {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;
@@ -3415,6 +3496,18 @@ defineExpose({
     :class="{ 'sidebar-docked': props.docked }"
     :style="sidebarThumbStyle"
   >
+    <!-- Drag the right edge to resize the expanded sidebar (hidden when docked). -->
+    <div
+      v-if="!props.docked"
+      class="sidebar-resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      tabindex="0"
+      title="Drag to resize sidebar"
+      @pointerdown="onSidebarResizeStart"
+      @keydown="onSidebarResizeKey"
+    ></div>
     <!-- On the desktop shell the brand (logo + name + update alert) lives in
          the title bar, so this row collapses to just the dock toggle. -->
     <div v-if="!isDesktop" class="sidebar-brand">
@@ -3432,7 +3525,7 @@ defineExpose({
           />
         </a>
         <div v-if="!props.docked" class="sidebar-brand-text">
-          <span class="sidebar-brand-title">PixlStash</span>
+          <WordmarkLogo class="sidebar-brand-title" />
           <div
             v-if="updateAvailable && !updateDismissed"
             class="sidebar-update-wrapper"
@@ -3457,6 +3550,21 @@ defineExpose({
           </div>
         </div>
       </div>
+      <button
+        class="sidebar-pin-toggle sidebar-brand-pin"
+        :class="{ pinned: sidebarStore.sidebarPinned }"
+        type="button"
+        :title="
+          sidebarStore.sidebarPinned
+            ? 'Unpin sidebar (auto-hide)'
+            : 'Pin sidebar open'
+        "
+        @click="sidebarStore.toggleSidebarPinned()"
+      >
+        <v-icon size="15">{{
+          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
+        }}</v-icon>
+      </button>
     </div>
     <div v-if="props.docked" class="sidebar-dock-header">
       <button
@@ -6023,16 +6131,28 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 48px;
+  /* At least toolbar height (so the icons below line up under the toolbar), but
+     grow to fit the pin when thumbnails are sized larger than that. */
+  height: max(48px, var(--sidebar-thumb-size));
   flex-shrink: 0;
 }
 .sidebar-pin-toggle--dock {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  /* Match the docked thumbnail / nav-icon footprint so the rail reads as one
+     uniform column of equally-sized items. */
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
+  border-radius: var(--sidebar-item-radius);
   border: 1px solid rgba(var(--v-theme-sidebar-text), 0.22);
   background: rgba(var(--v-theme-sidebar-text), 0.06);
   color: rgba(var(--v-theme-sidebar-text), 0.8);
+}
+/* Scale the pin glyph with the box (overrides the inline size="18" on <v-icon>),
+   matching the nav-icon glyphs in the rail below. Slightly less than the nav
+   icons' fill since the pin's border already frames it. */
+.sidebar-pin-toggle--dock .v-icon {
+  font-size: calc(var(--sidebar-thumb-size) * 0.82) !important;
+  width: calc(var(--sidebar-thumb-size) * 0.82) !important;
+  height: calc(var(--sidebar-thumb-size) * 0.82) !important;
 }
 .sidebar-pin-toggle--dock:hover {
   background: rgba(var(--v-theme-sidebar-text), 0.13);
@@ -6093,6 +6213,7 @@ defineExpose({
 
 .sidebar-view-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0;
   flex: 1;
 }
@@ -6102,8 +6223,12 @@ defineExpose({
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 5px 8px 4px;
-  flex: 1;
+  /* Trimmed vertical padding so the header (title row + this tab row) stays at the
+     48px toolbar height when the tabs sit on one line; min-height pads any slack. */
+  padding: 3px 8px 2px;
+  /* Grow to fill the row, but don't shrink below the icon+label — so when the
+     sidebar is narrowed the tabs wrap onto new lines instead of clipping. */
+  flex: 1 0 auto;
   border-radius: 0;
   border: none;
   border-bottom: 2px solid transparent;
@@ -6267,18 +6392,15 @@ defineExpose({
 
 .sidebar-project-tree-row:hover {
   background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
     rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgba(var(--v-theme-sidebar-text), 0.92);
 }
 
 .sidebar-project-tree-row.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-  border-left: 3px solid rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  color: var(--active-text);
+  border-left: 3px solid var(--active-bar);
   border-radius: 0;
 }
 
@@ -6292,12 +6414,9 @@ defineExpose({
 
 .sidebar-project-tree-row.active:hover {
   background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
-    rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
+    var(--active-wash);
+  color: var(--active-text);
 }
 
 /* Drop-target highlight while dragging a character/set onto a project */
@@ -6852,6 +6971,7 @@ defineExpose({
 /* Sidebar right edge for counts */
 .sidebar {
   width: 240px;
+  position: relative;
   --sidebar-right-edge: 8px;
   --sidebar-header-action-right-edge: 0px;
   --sidebar-thumb-size: 24px;
@@ -6872,6 +6992,26 @@ defineExpose({
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   box-sizing: border-box;
   border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
+}
+
+/* Drag-to-resize grip on the sidebar's right edge (expanded mode only). Sits over
+   the border, invisible until hovered/focused/dragged. */
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 6;
+  cursor: ew-resize;
+  background: transparent;
+  touch-action: none;
+  transition: background 0.15s ease;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle:focus-visible {
+  background: rgba(var(--v-theme-accent), 0.4);
+  outline: none;
 }
 
 .sidebar.sidebar-docked {
@@ -6908,6 +7048,17 @@ defineExpose({
   background: transparent;
 }
 
+/* Pin/auto-hide toggle in the browser sidebar's top-right (uses the empty space
+   beside the wordmark; mirrors the desktop title-bar pin). */
+.sidebar-brand-pin {
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin: 2px 4px 0 0;
+}
+.sidebar-brand-pin.pinned {
+  color: rgb(var(--v-theme-accent));
+}
+
 .sidebar-brand-left {
   display: flex;
   align-items: center;
@@ -6938,13 +7089,11 @@ defineExpose({
 }
 
 .sidebar-brand-title {
-  font-family: "PressStart2P", monospace;
-  font-size: 0.95em;
-  color: color-mix(
-    in srgb,
-    rgb(var(--v-theme-sidebar-text)) 90%,
-    rgb(var(--v-theme-accent))
-  );
+  /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. "Pixl" uses the
+     sidebar text colour, "Stash" the accent — matching the desktop title bar. */
+  font-size: 24px;
+  color: rgb(var(--v-theme-sidebar-text));
+  --wordmark-accent: rgb(var(--v-theme-accent));
 }
 
 .sidebar-brand-text {
@@ -6955,13 +7104,13 @@ defineExpose({
 }
 
 .sidebar-update-wrapper {
-  position: absolute;
-  top: 100%;
-  left: 0;
+  /* Flows below the wordmark (was absolute top:100%, which slid behind the tabs
+     row and looked "gone"). */
   display: flex;
   align-items: center;
   gap: 3px;
   white-space: nowrap;
+  margin-top: 3px;
 }
 
 .sidebar-update-available {
@@ -7453,30 +7602,27 @@ defineExpose({
 }
 
 .sidebar-list-item.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-  border-left: 3px solid rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  color: var(--active-text);
+  border-left: 3px solid var(--active-bar);
   position: relative;
   border-radius: 0;
 }
 
 .sidebar-list-item.active .sidebar-list-count {
-  color: rgba(var(--v-theme-on-primary), 0.65);
+  color: color-mix(in srgb, var(--active-text) 65%, transparent);
 }
 
 .sidebar-list-item:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: var(--hover-wash);
   color: rgba(var(--v-theme-sidebar-text), 0.92);
 }
 
 .sidebar-list-item.active:hover {
   background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
-    rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
+    var(--active-wash);
+  color: var(--active-text);
 }
 
 .sidebar-list-item.droppable {
@@ -7620,9 +7766,12 @@ defineExpose({
 }
 
 .sidebar-collapsed-item .v-icon {
-  font-size: calc(var(--sidebar-thumb-size) * 0.65) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.65) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.65) !important;
+  /* Fill most of the box so the line-art icons read the same size as the
+     edge-to-edge thumbnails (MDI glyphs carry ~8% internal margin, so this
+     stops just short of the edge rather than touching it). */
+  font-size: calc(var(--sidebar-thumb-size) * 0.92) !important;
+  width: calc(var(--sidebar-thumb-size) * 0.92) !important;
+  height: calc(var(--sidebar-thumb-size) * 0.92) !important;
 }
 
 .sidebar-list-label {

@@ -395,7 +395,7 @@
           },
         ]"
         :style="{
-          gridTemplateColumns: `repeat(${props.columns}, minmax(0, ${MAX_THUMBNAIL_SIZE}px))`,
+          gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
           position: 'relative',
           ...badgeCssVars,
         }"
@@ -998,7 +998,9 @@ const props = defineProps({
 // ============================================================
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 const MIN_THUMBNAIL_SIZE = 128;
-const MAX_THUMBNAIL_SIZE = 384;
+// Per-column thumbnail width is now driven by `1fr` tracks that fill the grid;
+// the 384px upper bound is enforced via the column-count clamp in App.vue
+// (updateMaxColumns), so no fixed max is applied to the track itself here.
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 
 const normalizedSelectedSetIds = computed(() => {

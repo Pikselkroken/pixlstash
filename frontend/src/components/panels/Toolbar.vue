@@ -768,7 +768,10 @@ const gbCollapseAllStacksDisabled = computed(
   top: 0;
   width: 100%;
   z-index: 100;
-  background: rgba(var(--v-theme-background), 0.95);
+  /* Paint from the `toolbar` token (not `background`) so the toolbar strip can be
+     tuned independently of the grid canvas. Set `toolbar` == `background` in the
+     theme to keep them identical. */
+  background: rgba(var(--v-theme-toolbar), 0.95);
   padding: 0 10px;
   margin: 0;
   height: 48px;

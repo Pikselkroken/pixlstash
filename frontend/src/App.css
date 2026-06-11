@@ -191,16 +191,14 @@ body {
   display: flex;
   align-items: center;
   overflow: visible;
-  background: rgba(var(--v-theme-on-background), 0.2);
-  border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
+  /* No full-length strip — the centred tab is the only indicator. This stays an
+     invisible hit area so hovering the edge still reveals the sidebar. */
+  background: transparent;
   cursor: pointer;
-  transition:
-    width 0.15s ease,
-    background 0.15s ease;
+  transition: width 0.15s ease;
 }
 .sidebar-hover-trigger:hover {
   width: 11px;
-  background: rgba(var(--v-theme-accent), 0.45);
 }
 .sidebar-hover-trigger-tab {
   display: flex;
@@ -209,8 +207,9 @@ body {
   width: 20px;
   height: 52px;
   border-radius: 0 9px 9px 0;
-  background: rgba(var(--v-theme-on-background), 0.28);
-  color: rgba(var(--v-theme-on-background), 0.8);
+  /* Solid, clearly-visible handle (was a faint 0.28 wash) with a light arrow. */
+  background: rgba(var(--v-theme-on-background), 0.72);
+  color: rgb(var(--v-theme-background));
   box-shadow: 1px 0 8px rgba(0, 0, 0, 0.3);
   transition:
     background 0.15s ease,
@@ -243,9 +242,10 @@ body {
   }
 }
 
+/* Tiny5 — the brand wordmark pixel font (logo). */
 @font-face {
-  font-family: "PressStart2P";
-  src: url("/src/assets/fonts/PressStart2P-Regular.ttf") format("truetype");
+  font-family: "Tiny5";
+  src: url("/src/assets/fonts/Tiny5-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
 }

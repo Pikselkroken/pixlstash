@@ -10,6 +10,7 @@ import {
 } from 'electron';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetector';
@@ -137,6 +138,61 @@ function showServerLogs(): void {
   const log = serverLogPath();
   if (existsSync(log)) shell.showItemInFolder(log);
   else void shell.openPath(dirname(log));
+}
+
+/** Port offered for the external listener when the config has none yet. */
+const DEFAULT_EXTERNAL_PORT = 9537;
+
+interface ServerSettings {
+  enabled: boolean;
+  port: number;
+  ssl: boolean;
+}
+
+/** This machine's non-loopback IPv4 addresses, for showing reachable URLs. */
+function lanAddresses(): string[] {
+  const out: string[] = [];
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const addr of addrs ?? []) {
+      if (addr.family === 'IPv4' && !addr.internal) out.push(addr.address);
+    }
+  }
+  return out;
+}
+
+/** Read the backend's external-listener settings (defaults when absent). */
+function readServerSettings(): ServerSettings & { urls: string[] } {
+  const configPath = serverConfigPath();
+  const cfg = existsSync(configPath) ? readJsonFile(configPath) : null;
+  const enabled = Boolean(cfg?.external_server_enabled);
+  const port =
+    typeof cfg?.port === 'number' && cfg.port > 0 ? (cfg.port as number) : DEFAULT_EXTERNAL_PORT;
+  const ssl = Boolean(cfg?.require_ssl);
+  const scheme = ssl ? 'https' : 'http';
+  const urls = enabled ? lanAddresses().map((ip) => `${scheme}://${ip}:${port}`) : [];
+  return { enabled, port, ssl, urls };
+}
+
+/**
+ * Persist the external-listener settings into the desktop's own server-config
+ * and relaunch the backend so the change takes effect. The loopback the window
+ * uses is unaffected — run() always serves it on a fresh ephemeral HTTP port —
+ * so the window simply reloads onto the new loopback URL, exactly like switching
+ * the compute runtime.
+ */
+async function writeServerSettings(settings: ServerSettings): Promise<void> {
+  const configPath = serverConfigPath();
+  const cfg = (existsSync(configPath) ? readJsonFile(configPath) : null) ?? {};
+  cfg.external_server_enabled = settings.enabled;
+  if (Number.isInteger(settings.port) && settings.port > 0 && settings.port <= 65535) {
+    cfg.port = settings.port;
+  }
+  cfg.require_ssl = settings.ssl;
+  // Bind all interfaces when remote access is on so other devices can reach it.
+  if (settings.enabled) cfg.host = '0.0.0.0';
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+  await startAndLoad(await activeOverlayAccel());
 }
 
 function buildMenu(): void {
@@ -373,6 +429,13 @@ function registerIpc(): void {
 
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());
+
+  // External server (remote access) settings. The loopback the window uses is
+  // never affected by these — only the optional second listener.
+  ipcMain.handle('server:getSettings', () => readServerSettings());
+  ipcMain.handle('server:setSettings', async (_e, settings: ServerSettings) => {
+    await writeServerSettings(settings);
+  });
 
   // Custom title-bar window controls (the window is frameless).
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());

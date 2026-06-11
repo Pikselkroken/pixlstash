@@ -216,3 +216,68 @@ def test_desktop_session_does_not_authenticate_other_clients(server, monkeypatch
     assert client.get(f"{API_PREFIX}/protected").status_code == 401
     client.cookies.set("session_id", "some-other-unseeded-value")
     assert client.get(f"{API_PREFIX}/protected").status_code == 401
+
+
+def test_desktop_session_rejected_from_non_local_ip(server, monkeypatch):
+    """The loopback owner session must not grant access on the external listener.
+
+    The desktop app can expose an optional external listener; the seeded owner
+    session is high-privilege and pinned to local connections, so a request
+    presenting it from a non-local IP is fail-closed (falls through to the normal
+    auth wall) even though the cookie is normally scoped to the loopback origin.
+    """
+    monkeypatch.setenv(server.auth.DESKTOP_SESSION_ENV, DESKTOP_TOKEN)
+    server.auth.seed_desktop_session()
+
+    # Simulate the request arriving from a public (non-local) client IP.
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
+
+    client = TestClient(server.api)
+    client.cookies.set("session_id", DESKTOP_TOKEN)
+    assert client.get(f"{API_PREFIX}/protected").status_code == 401
+
+    # Sanity: a local client with the same cookie is still authenticated.
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "127.0.0.1")
+    assert client.get(f"{API_PREFIX}/protected").status_code == 200
+
+
+def test_secure_endpoint_works_on_loopback_with_require_ssl(server, monkeypatch):
+    """require_ssl drives the external listener — it must NOT 403 the HTTP loopback.
+
+    The desktop window always reaches the backend over plain-HTTP loopback while
+    require_ssl may be enabled for the external listener. Secure-required
+    endpoints (settings, taggers, share lookups, ...) must keep working for the
+    local window; only genuinely remote plaintext requests are rejected.
+    """
+    monkeypatch.setenv(server.auth.DESKTOP_SESSION_ENV, DESKTOP_TOKEN)
+    server.auth.seed_desktop_session()
+    # Enable require_ssl as the external-listener setting would.
+    monkeypatch.setitem(server.auth._server_config, "require_ssl", True)
+
+    client = TestClient(server.api)
+    client.cookies.set("session_id", DESKTOP_TOKEN)
+    # TestClient requests look like local HTTP, so a secure-required endpoint
+    # must still succeed (this is the settings-save / shared-ids regression).
+    response = client.get(
+        f"{API_PREFIX}/users/me/shared-resource-ids?resource_type=character"
+    )
+    assert response.status_code == 200
+
+
+def test_secure_required_rejects_remote_plaintext(server, monkeypatch):
+    """With require_ssl on, a remote (non-local) plaintext request is still 403."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    monkeypatch.setitem(server.auth._server_config, "require_ssl", True)
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
+
+    remote_http = SimpleNamespace(url=SimpleNamespace(scheme="http"))
+    with pytest.raises(HTTPException) as exc:
+        server.auth.ensure_secure_when_required(remote_http)
+    assert exc.value.status_code == 403
+
+    # https from the same remote client is allowed (it's over TLS).
+    remote_https = SimpleNamespace(url=SimpleNamespace(scheme="https"))
+    server.auth.ensure_secure_when_required(remote_https)  # no raise

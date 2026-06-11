@@ -28,6 +28,7 @@ def _make_user(**kwargs):
         show_resolution=False,
         show_problem_icon=False,
         compact_mode=False,
+        sidebar_docked=False,
         date_format="relative",
         theme_mode="dark",
         check_for_updates=True,

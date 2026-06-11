@@ -12,6 +12,7 @@
 import { computed } from "vue";
 import { useBreadcrumb } from "../composables/useBreadcrumb";
 import { useVersionCheck } from "../composables/useVersionCheck";
+import WordmarkLogo from "./WordmarkLogo.vue";
 
 const props = defineProps({
   installType: { type: String, default: "pip" },
@@ -20,7 +21,9 @@ const props = defineProps({
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 const isMac = /mac/i.test(
-  (typeof navigator !== "undefined" && (navigator.platform || navigator.userAgent)) || "",
+  (typeof navigator !== "undefined" &&
+    (navigator.platform || navigator.userAgent)) ||
+    "",
 );
 
 const appVersion = __APP_VERSION__;
@@ -67,9 +70,7 @@ const close = () => desktop?.windowClose?.();
       >
         <img src="/Logo.png" alt="PixlStash logo" class="titlebar-logo" />
       </a>
-      <span class="titlebar-name"
-        >Pixl<span class="titlebar-name-accent">Stash</span></span
-      >
+      <WordmarkLogo class="titlebar-name" />
       <nav
         v-if="breadcrumb.length"
         class="titlebar-breadcrumb"
@@ -95,10 +96,7 @@ const close = () => desktop?.windowClose?.();
     </div>
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
     <span class="titlebar-version">v{{ appVersion }}</span>
-    <div
-      v-if="updateAvailable && !updateDismissed"
-      class="titlebar-update"
-    >
+    <div v-if="updateAvailable && !updateDismissed" class="titlebar-update">
       <a
         :href="latestVersionUrl"
         target="_blank"
@@ -106,9 +104,12 @@ const close = () => desktop?.windowClose?.();
         :class="securityUpdateClass"
         :title="securityUpdateTitle"
         >&#x2191; v{{ latestVersion
-        }}{{
-          latestSecurityLevel ? " security ⚠️" : " available"
-        }}</a
+        }}{{ latestSecurityLevel ? " security" : " available"
+        }}<span
+          v-if="latestSecurityLevel"
+          class="titlebar-update-warn"
+          aria-hidden="true"
+        >⚠️</span></a
       ><button
         class="titlebar-update-dismiss"
         :title="`Dismiss v${latestVersion} update alert`"
@@ -118,19 +119,45 @@ const close = () => desktop?.windowClose?.();
       </button>
     </div>
     <div v-if="!isMac" class="titlebar-controls">
-      <button class="tb-btn" type="button" aria-label="Minimize" @click="minimize">
+      <button
+        class="tb-btn"
+        type="button"
+        aria-label="Minimize"
+        @click="minimize"
+      >
         <svg width="10" height="10" viewBox="0 0 10 10">
           <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
         </svg>
       </button>
-      <button class="tb-btn" type="button" aria-label="Maximize" @click="toggleMaximize">
+      <button
+        class="tb-btn"
+        type="button"
+        aria-label="Maximize"
+        @click="toggleMaximize"
+      >
         <svg width="10" height="10" viewBox="0 0 10 10">
-          <rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" />
+          <rect
+            x="0.5"
+            y="0.5"
+            width="9"
+            height="9"
+            fill="none"
+            stroke="currentColor"
+          />
         </svg>
       </button>
-      <button class="tb-btn tb-close" type="button" aria-label="Close" @click="close">
+      <button
+        class="tb-btn tb-close"
+        type="button"
+        aria-label="Close"
+        @click="close"
+      >
         <svg width="10" height="10" viewBox="0 0 10 10">
-          <path d="M1,1 L9,9 M9,1 L1,9" stroke="currentColor" stroke-width="1.1" />
+          <path
+            d="M1,1 L9,9 M9,1 L1,9"
+            stroke="currentColor"
+            stroke-width="1.1"
+          />
         </svg>
       </button>
     </div>
@@ -145,10 +172,10 @@ const close = () => desktop?.windowClose?.();
   flex-shrink: 0;
   box-sizing: border-box;
   border-bottom: 1px solid rgba(var(--v-theme-on-background), 0.12);
-  /* Match the toolbar below (Toolbar.vue uses --v-theme-background), not the
-     sidebar, so the title bar and toolbar read as one continuous strip. Note
-     --v-theme-toolbar equals --v-theme-sidebar, hence the dedicated var here. */
-  background: rgb(var(--v-theme-background));
+  /* Paint from the `toolbar` token so the title bar and the toolbar strip below it
+     read as one continuous piece. Both now track `toolbar`, which the theme can set
+     equal to or distinct from `background` (the grid canvas) and `sidebar`. */
+  background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-on-background));
   -webkit-app-region: drag;
   user-select: none;
@@ -178,8 +205,11 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-logo {
-  width: 20px;
-  height: 20px;
+  /* Sized to sit close to the wordmark/breadcrumb letter height rather than
+     towering over them. The icon is the largest element by a hair, as the brand
+     anchor, but reads as part of the same group. */
+  width: 16px;
+  height: 16px;
   object-fit: contain;
   transition:
     filter 0.2s ease,
@@ -192,18 +222,12 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-name {
-  /* Pixelated brand font, used only for the "PixlStash" name (matches the
-     sidebar header logo). Loaded via @font-face in App.css. */
-  font-family: "PressStart2P", monospace;
-  font-size: 11px;
-  letter-spacing: 0.5px;
+  /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. */
+  font-size: 16px;
   flex-shrink: 0;
-}
-
-.titlebar-name-accent {
-  /* Subdued: blend the accent with the main title-bar text colour so "Stash"
-     reads as a tint rather than full orange. */
-  color: color-mix(
+  /* "Pixl" tracks the title-bar text colour; "Stash" is the subdued accent blend. */
+  color: rgb(var(--v-theme-on-background));
+  --wordmark-accent: color-mix(
     in srgb,
     rgb(var(--v-theme-accent)) 55%,
     rgb(var(--v-theme-on-background))
@@ -211,6 +235,9 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-version {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
   opacity: 0.55;
   font-size: 11px;
   flex-shrink: 0;
@@ -225,7 +252,17 @@ const close = () => desktop?.windowClose?.();
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font-weight: 600;
+  /* Sized so the sans cap-height lands close to the pixel wordmark's glyph
+     height (the two fonts render very differently at the same px), and weight
+     500 keeps it from out-shouting the brand. */
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 500;
+  /* Match the wordmark's downward nudge (relative positioning, not transform, so
+     the text isn't layerized and resampled) so the whole group sits on the icon's
+     optical centre rather than above it. */
+  position: relative;
+  top: 1px;
 }
 
 .titlebar-bc-sep {
@@ -274,11 +311,22 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-update-link {
+  display: inline-flex;
+  align-items: center;
   font-size: 11px;
   line-height: 1;
   color: rgba(var(--v-theme-accent), 0.95);
   text-decoration: none;
   white-space: nowrap;
+}
+
+/* Isolate the ⚠️ emoji in its own centered box so its tall glyph metrics don't
+   baseline-shift the update text (and knock it off-centre vs the version). */
+.titlebar-update-warn {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  line-height: 1;
 }
 
 .titlebar-update-link:hover {
