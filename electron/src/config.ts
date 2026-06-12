@@ -22,7 +22,7 @@ export interface RuntimeInfo {
 export const ACCEL_LABELS: Record<Accel, string> = {
   cpu: 'CPU',
   cu128: 'NVIDIA GPU (CUDA 12.8)',
-  rocm: 'AMD GPU (ROCm)',
+  rocm: 'AMD GPU (ROCm, experimental)',
   metal: 'Apple Silicon (Metal)',
 };
 
@@ -33,7 +33,11 @@ export const ACCEL_LABELS: Record<Accel, string> = {
 export const TORCH_INDEX: Record<Accel, string | null> = {
   cpu: 'https://download.pytorch.org/whl/cpu',
   cu128: 'https://download.pytorch.org/whl/cu128',
-  rocm: 'https://download.pytorch.org/whl/rocm6.2',
+  // ROCm is experimental and Linux-only. rocm7.1 is the index that publishes the
+  // same torch version line as the bundled CPU build; older rocmX.Y indexes lag
+  // several torch releases behind. Keep this in step with the bundled torch when
+  // it moves (the install-time fallback in BackendManager handles minor drift).
+  rocm: 'https://download.pytorch.org/whl/rocm7.1',
   metal: null,
 };
 
