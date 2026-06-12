@@ -285,6 +285,18 @@ class StartupChecks:
         is_auto_mode = device_value == "auto"
         is_explicit_gpu = device_value == "cuda"
 
+        # PyTorch's ROCm build drives the AMD GPU through the CUDA API (torch.cuda.*
+        # works, HIP masquerades as CUDA), so the checks below run unchanged; only
+        # torch.version.hip distinguishes it. ROCm is experimental and unverified,
+        # and we ship the CPU ONNX Runtime alongside it, so the ONNX models run on
+        # CPU by design while torch uses the GPU.
+        is_rocm = (
+            torch is not None
+            and getattr(getattr(torch, "version", None), "hip", None) is not None
+        )
+        accel_name = "ROCm" if is_rocm else "CUDA"
+        accel_note = " (experimental, unverified)" if is_rocm else ""
+
         if device_value == "cpu":
             outcome.notes.append(
                 "default_device is set to cpu in config; using CPU inference."
@@ -302,13 +314,21 @@ class StartupChecks:
             )
             return
 
-        if not torch.cuda.is_available():
+        try:
+            gpu_available = torch.cuda.is_available()
+        except Exception as exc:
+            # A broken ROCm/CUDA install (unsupported gfx arch, missing driver) can
+            # raise here rather than returning False; treat any error as "no GPU"
+            # and fall back to CPU cleanly instead of crashing startup.
+            gpu_available = False
+            outcome.notes.append(f"GPU availability probe failed ({exc}).")
+        if not gpu_available:
             self._handle_gpu_check_failure(
                 outcome,
                 is_auto_mode,
                 is_explicit_gpu,
-                "CUDA is unavailable; forcing CPU inference.",
-                "CUDA is unavailable while default_device is set to cuda.",
+                f"{accel_name} is unavailable; forcing CPU inference.",
+                f"{accel_name} is unavailable while default_device is set to cuda.",
             )
             return
 
@@ -317,7 +337,17 @@ class StartupChecks:
             providers = ort.get_available_providers() if ort is not None else []
         except Exception:
             providers = []
-        if "CUDAExecutionProvider" not in providers:
+        if is_rocm:
+            # The ROCm/MIGraphX ONNX Runtime build isn't on PyPI, so we bundle the
+            # CPU ORT on ROCm; the InsightFace face-extraction and optional WD14
+            # ONNX models run on CPU by design while PyTorch (HIP) uses the GPU for
+            # embeddings, captioning and the other torch workloads. This is expected
+            # on ROCm, so it's a note rather than a warning.
+            outcome.notes.append(
+                "AMD GPU (ROCm) is experimental and unverified. PyTorch will use the "
+                "GPU; the ONNX face-extraction and WD14 tagger models run on CPU."
+            )
+        elif "CUDAExecutionProvider" not in providers:
             provider_list = ", ".join(providers) if providers else "none"
             onnx_package = self._detect_onnxruntime_package()
             gpu_arch_note = self._detect_gpu_arch_note()
@@ -387,7 +417,8 @@ class StartupChecks:
             return
 
         outcome.notes.append(
-            f"GPU check passed ({free_mb:.0f} MB free VRAM); using CUDA inference."
+            f"GPU check passed ({free_mb:.0f} MB free VRAM); "
+            f"using {accel_name}{accel_note} inference."
         )
 
     def _force_cpu_with_warning(
