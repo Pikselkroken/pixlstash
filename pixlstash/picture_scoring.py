@@ -553,7 +553,6 @@ def find_pictures_by_character_likeness_sql(
             select(Face.picture_id, max_likeness)
             .join(Picture, Face.picture_id == Picture.id)
             .where(deleted_filter)
-            .where(Picture.import_excluded.is_(False))
             .group_by(Face.picture_id)
             .order_by(order_expr)
             .limit(limit)
@@ -650,7 +649,6 @@ def count_pictures_by_character_likeness(
             select(func.count(func.distinct(Face.picture_id)))
             .join(Picture, Face.picture_id == Picture.id)
             .where(deleted_filter)
-            .where(Picture.import_excluded.is_(False))
         )
         if stack_leaders_only:
             query = query.where(

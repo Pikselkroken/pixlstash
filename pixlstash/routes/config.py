@@ -77,6 +77,7 @@ def create_router(server) -> APIRouter:
         descending: Optional[bool] = None
         columns: Optional[int] = None
         sidebar_thumbnail_size: Optional[int] = None
+        sidebar_width: Optional[int] = None
         show_stars: Optional[bool] = None
         show_face_bboxes: Optional[bool] = None
         show_hand_bboxes: Optional[bool] = None
@@ -84,6 +85,7 @@ def create_router(server) -> APIRouter:
         show_resolution: Optional[bool] = None
         show_problem_icon: Optional[bool] = None
         compact_mode: Optional[bool] = None
+        sidebar_docked: Optional[bool] = None
         expand_all_stacks: Optional[bool] = None
         date_format: Optional[str] = None
         theme_mode: Optional[str] = None

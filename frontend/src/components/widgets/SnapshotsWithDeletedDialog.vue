@@ -5,9 +5,10 @@ import { formatUserDate } from "../../utils/utils";
 defineProps({
   modelValue: { type: Boolean, default: false },
   snapshots: { type: Array, default: () => [] },
+  dontShowAgain: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
 </script>
 
 <template>
@@ -65,6 +66,14 @@ const emit = defineEmits(["update:modelValue"]);
       </v-card-text>
 
       <v-card-actions class="snap-del-actions">
+        <v-checkbox
+          :model-value="dontShowAgain"
+          label="Don't show this again"
+          density="compact"
+          hide-details
+          class="snap-del-dont-show"
+          @update:model-value="emit('update:dontShowAgain', $event)"
+        />
         <v-spacer />
         <v-btn variant="text" @click="emit('update:modelValue', false)">
           Close
@@ -102,5 +111,9 @@ const emit = defineEmits(["update:modelValue"]);
 }
 .snap-del-item-title {
   font-size: 0.9rem;
+}
+.snap-del-dont-show :deep(.v-label) {
+  font-size: 0.85rem;
+  opacity: 0.85;
 }
 </style>

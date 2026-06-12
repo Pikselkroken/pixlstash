@@ -36,6 +36,13 @@ PixlStash runs on your machine and serves the UI at a local (or Internet-facing)
   </a>
 </p>
 
+PixlStash is available as a **native desktop app for Windows, macOS, and Linux**
+(no Python or browser tab required), as a Windows installer, a Docker image, or a
+pip package. The desktop app ships a ready-to-run CPU runtime (Metal on Apple
+Silicon), so it works offline out of the box, and auto-detects your hardware to
+offer optional GPU acceleration (NVIDIA CUDA / AMD ROCm), which it installs on
+demand straight from PyPI / PyTorch.
+
 Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
 
 
@@ -46,6 +53,11 @@ On first run, PixlStash creates a user config directory and stores:
 - Server config
 - Database
 - Imported media files
+
+The **desktop app** uses this same platform user data directory, so a desktop
+install shares its library with a pip or Docker install on the same machine. If
+you add GPU acceleration, the desktop app stores the downloaded GPU wheels under
+the app's own user-data directory.
 
 > **Model downloads:** On first startup, PixlStash automatically downloads the AI models required for tagging, captioning, and quality scoring. This includes several hundred MB of model weights. Downloads are stored in the platform user data directory:
 >

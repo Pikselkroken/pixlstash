@@ -204,7 +204,6 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
         tags_confidence_below_filter=params.confidence_below or None,
         face_filter=params.face_filter,
         apply_deleted_filter=False,
-        exclude_import_excluded=False,
     ).apply(pic_q)
 
     return pic_q.subquery()

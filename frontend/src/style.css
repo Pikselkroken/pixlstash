@@ -27,6 +27,27 @@ body {
   text-align: left;
 }
 
+/* Interactive wash tokens for sidebar hover/selection. The raw alphas were tuned
+   for the dark theme, where a bright accent/primary over a dark surface reads
+   well at 8–18%. Over the light theme's near-white canvas those same alphas wash
+   out, so light gets stronger values (and dark-on-light selection text). Dark
+   keeps its original values. Defined on the Vuetify theme classes so they cascade
+   into the scoped component styles. */
+.v-theme--pixlStashDark {
+  --hover-wash: rgba(var(--v-theme-accent), 0.08);
+  --active-wash: rgba(var(--v-theme-primary), 0.18);
+  --active-bar: rgb(var(--v-theme-primary));
+  --active-text: rgb(var(--v-theme-on-primary));
+}
+.v-theme--pixlStashLight {
+  /* Selection reads warm (accent) on the light theme instead of the olive `primary`
+     green, which clashes with the warm palette. Dark keeps the green convention. */
+  --hover-wash: rgba(var(--v-theme-accent), 0.14);
+  --active-wash: rgba(var(--v-theme-accent), 0.20);
+  --active-bar: rgb(var(--v-theme-accent));
+  --active-text: rgb(var(--v-theme-on-surface));
+}
+
 /* Reusable uppercase section label — matches font-size 11px, weight 600, spacing 0.06em */
 .section-label {
   font-size: 11px;
@@ -34,4 +55,89 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+/* ===========================================================================
+   Desktop-app chrome — applied only inside the Electron shell (main.js adds
+   `.is-desktop` to <html> when window.pixlstashDesktop exists). A plain browser
+   visitor keeps normal web behaviour. Cheap, high-impact "feels like an app,
+   not a website" signals (à la VS Code / LM Studio).
+   =========================================================================== */
+
+/* Thin, subtle overlay scrollbars instead of the OS's fat browser ones. */
+.is-desktop {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.22) transparent;
+}
+.is-desktop ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.is-desktop ::-webkit-scrollbar-track,
+.is-desktop ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.is-desktop ::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-on-surface), 0.18);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+.is-desktop ::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--v-theme-on-surface), 0.32);
+  background-clip: padding-box;
+}
+
+/* An app, not a document: default cursor + no text selection on chrome.
+   Re-enable both wherever the user genuinely reads or edits text. Add the
+   `selectable` class to any element whose text should stay copyable. */
+.is-desktop,
+.is-desktop body {
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.is-desktop input,
+.is-desktop textarea,
+.is-desktop [contenteditable="true"],
+.is-desktop .selectable {
+  cursor: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* No mobile-style tap-highlight flash on click. */
+.is-desktop * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The sidebar, toolbar and title bar each paint from their OWN theme token
+   (`sidebar`, `toolbar`, `toolbar` respectively) and the grid canvas from
+   `background`. Want them to read as one continuous chrome strip? Set those tokens
+   to the same value in main.js. Want the chrome to recede behind a brighter
+   canvas? Give them different values. The colour relationship lives in the theme
+   tokens, not hard-coded here, so it's yours to tune per theme.
+   (Earlier this remapped the sidebar onto `background` unconditionally, which made
+   those token edits no-ops in the desktop shell.) */
+
+/* Give the sidebar's "Library" header band the same height as the toolbar and the
+   stats header so the three columns line up at the top in the desktop shell. */
+html.is-desktop .sidebar-view-header {
+  min-height: 48px;
+}
+
+/* Keep the custom title bar visible (and its drag region + window controls
+   usable) when the full-screen image lightbox is open: start the overlay below
+   the title bar instead of covering it. In a browser there is no title bar, so
+   --titlebar-h is unset and the overlay stays full-screen. */
+html.is-desktop .image-overlay {
+  top: var(--titlebar-h);
+}
+
+/* Title-bar height in the desktop shell. The floating sidebar / stats drawers are
+   `position: fixed`, so their `top` must clear the title bar too; they use
+   top: calc(var(--titlebar-h) + toolbar-height). In a plain browser there is no
+   title bar, so the fallback 0px keeps the original behaviour. */
+html.is-desktop {
+  --titlebar-h: 34px;
 }

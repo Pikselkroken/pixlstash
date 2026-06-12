@@ -30,6 +30,7 @@ import { useSearchStore } from "./stores/useSearchStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 
 import SideBar from "./components/panels/SideBar.vue";
+import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
@@ -127,6 +128,8 @@ let columnsMenuCloseTimeout = null;
 let sidebarRefreshDebounceTimeout = null;
 let sidebarRefreshPicturesDebounceTimeout = null;
 let sidebarRefreshPicturesFlash = false;
+// Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
+let stopOpenSettings = null;
 
 // --- Computed ---
 // Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
@@ -485,10 +488,6 @@ function updateIsMobile() {
   updateMaxColumns();
 }
 
-function toggleDock() {
-  sidebarStore.persistSidebarDocked(!sidebarStore.sidebarDocked);
-}
-
 function clampColumnsToBounds() {
   if (gridStore.columns > gridStore.maxColumns) {
     gridStore.columns = gridStore.maxColumns;
@@ -522,7 +521,7 @@ function updateMaxColumns() {
 
 function closeSidebarIfMobile() {
   if (sidebarStore.sidebarForcedHidden) {
-    sidebarStore.sidebarVisible = false;
+    sidebarStore.hideAutoSidebar();
   }
 }
 
@@ -1172,6 +1171,12 @@ function handleUpdateSidebarThumbnailSize(value) {
   userPrefsStore.sidebarThumbnailSize = nextValue;
 }
 
+function handleUpdateSidebarWidth(value) {
+  const nextValue = Number(value);
+  if (!Number.isFinite(nextValue)) return;
+  userPrefsStore.sidebarWidth = nextValue;
+}
+
 function handleColumnsEnd() {
   if (columnsMenuCloseTimeout) {
     clearTimeout(columnsMenuCloseTimeout);
@@ -1216,6 +1221,9 @@ async function fetchConfig() {
     if (typeof res.data.compact_mode === "boolean") {
       gridStore.compactMode = res.data.compact_mode;
     }
+    if (typeof res.data.sidebar_docked === "boolean") {
+      sidebarStore.setSidebarDocked(res.data.sidebar_docked);
+    }
     if (typeof res.data.date_format === "string" && res.data.date_format) {
       userPrefsStore.dateFormat = res.data.date_format;
     }
@@ -1231,6 +1239,9 @@ async function fetchConfig() {
     if (typeof res.data.sidebar_thumbnail_size === "number") {
       userPrefsStore.sidebarThumbnailSize = res.data.sidebar_thumbnail_size;
     }
+    if (typeof res.data.sidebar_width === "number") {
+      userPrefsStore.sidebarWidth = res.data.sidebar_width;
+    }
     if (res.data.stack_strictness != null) {
       sortStore.stackThreshold = String(res.data.stack_strictness);
     }
@@ -1238,6 +1249,7 @@ async function fetchConfig() {
     config.descending = sortStore.selectedDescending;
     config.columns = gridStore.columns;
     config.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
+    config.sidebar_width = userPrefsStore.sidebarWidth;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
@@ -1260,6 +1272,10 @@ async function fetchConfig() {
       typeof res.data.compact_mode === "boolean"
         ? res.data.compact_mode
         : gridStore.compactMode;
+    config.sidebar_docked =
+      typeof res.data.sidebar_docked === "boolean"
+        ? res.data.sidebar_docked
+        : sidebarStore.sidebarDocked;
     config.date_format = userPrefsStore.dateFormat;
     config.theme_mode = userPrefsStore.themeMode;
     config.stack_strictness =
@@ -1314,6 +1330,7 @@ async function fetchConfig() {
       show_problem_icon: gridStore.showProblemIcon,
       expand_all_stacks: gridStore.showStacks,
       compact_mode: gridStore.compactMode,
+      sidebar_docked: sidebarStore.sidebarDocked,
       date_format: userPrefsStore.dateFormat,
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
@@ -1354,6 +1371,9 @@ async function patchConfigUIOptions() {
   if (userPrefsStore.sidebarThumbnailSize) {
     patch.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
   }
+  if (userPrefsStore.sidebarWidth) {
+    patch.sidebar_width = userPrefsStore.sidebarWidth;
+  }
   if (typeof userPrefsStore.showKeyboardHint === "boolean")
     patch.show_keyboard_hint = userPrefsStore.showKeyboardHint;
   if (typeof gridStore.showFaceBboxes === "boolean") {
@@ -1367,6 +1387,9 @@ async function patchConfigUIOptions() {
   }
   if (typeof gridStore.compactMode === "boolean") {
     patch.compact_mode = gridStore.compactMode;
+  }
+  if (typeof sidebarStore.sidebarDocked === "boolean") {
+    patch.sidebar_docked = sidebarStore.sidebarDocked;
   }
   if (
     typeof userPrefsStore.dateFormat === "string" &&
@@ -1720,7 +1743,23 @@ watch(
 );
 
 watch(
+  () => sidebarStore.sidebarDocked,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
   () => userPrefsStore.sidebarThumbnailSize,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
+  () => userPrefsStore.sidebarWidth,
   () => {
     if (!configLoaded.value) return;
     patchConfigUIOptions();
@@ -1810,6 +1849,12 @@ onMounted(async () => {
   window.addEventListener("dragover", handleWindowDragOver, true);
   window.addEventListener("drop", handleWindowDrop, true);
   window.addEventListener("paste", handleWindowPaste, true);
+  // Desktop tray → "Settings" opens the Settings dialog directly.
+  if (window.pixlstashDesktop?.onOpenSettings) {
+    stopOpenSettings = window.pixlstashDesktop.onOpenSettings(() =>
+      openSettingsDialog(),
+    );
+  }
   refreshSidebar();
   updateMaxColumns();
   connectUpdatesSocket();
@@ -1827,6 +1872,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disconnectUpdatesSocket();
+  if (stopOpenSettings) stopOpenSettings();
   window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);
   window.removeEventListener("dragover", handleWindowDragOver, true);
@@ -1861,14 +1907,37 @@ defineExpose({
 <template>
   <v-app>
     <div class="app-viewport">
+      <TitleBar
+        :install-type="installType"
+        :check-for-updates="userPrefsStore.checkForUpdates"
+      />
       <div class="file-manager">
+        <!-- Auto-hide (unpinned): a thin strip at the left edge reveals the
+             sidebar overlay on hover (or tap, on touch). -->
+        <div
+          v-if="sidebarStore.sidebarOverlay && !sidebarStore.sidebarVisible"
+          class="sidebar-hover-trigger"
+          title="Show sidebar"
+          @mouseenter="sidebarStore.revealSidebar()"
+          @click="sidebarStore.revealSidebar()"
+        >
+          <span class="sidebar-hover-trigger-tab">
+            <v-icon size="18">mdi-chevron-right</v-icon>
+          </span>
+        </div>
         <div
           class="sidebar-shell"
-          :class="{ open: sidebarStore.sidebarVisible }"
+          :class="{
+            open: sidebarStore.sidebarVisible,
+            'sidebar-overlay': sidebarStore.sidebarOverlay,
+          }"
+          @mouseleave="
+            sidebarStore.sidebarOverlay && sidebarStore.hideAutoSidebar()
+          "
         >
           <SideBar
             ref="sidebarRef"
-            :docked="sidebarStore.sidebarDocked"
+            :docked="sidebarStore.effectiveDocked"
             :selectedCharacter="selectionStore.selectedCharacter"
             :selectedCharacterIds="selectionStore.selectedCharacterIds"
             :allPicturesId="ALL_PICTURES_ID"
@@ -1884,6 +1953,7 @@ defineExpose({
             :embedWatermark="userPrefsStore.embedWatermark"
             :selectedSimilarityCharacter="sortStore.selectedSimilarityCharacter"
             :sidebarThumbnailSize="userPrefsStore.sidebarThumbnailSize"
+            :sidebarWidth="userPrefsStore.sidebarWidth"
             :dateFormat="userPrefsStore.dateFormat"
             :themeMode="userPrefsStore.themeMode"
             :hasFolderFilter="selectionStore.selectedFolderFilter != null"
@@ -1907,6 +1977,7 @@ defineExpose({
             @update:date-format="handleUpdateDateFormat"
             @update:theme-mode="handleUpdateThemeMode"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
+            @update:sidebar-width="handleUpdateSidebarWidth"
             @update:project-view-mode="handleUpdateProjectViewMode"
             @update:selected-project-id="handleUpdateSelectedProjectId"
             @view-project="handleViewProject"
@@ -1917,7 +1988,6 @@ defineExpose({
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMovedToSet"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
-            @toggle-dock="toggleDock"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @open-import-dialog="openImportDialog"
@@ -1928,11 +1998,9 @@ defineExpose({
         </div>
         <Transition name="backdrop-fade">
           <div
-            v-if="
-              sidebarStore.sidebarVisible && sidebarStore.sidebarForcedHidden
-            "
+            v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarOverlay"
             class="sidebar-backdrop"
-            @click="sidebarStore.sidebarVisible = false"
+            @click="sidebarStore.hideAutoSidebar()"
           ></div>
         </Transition>
 

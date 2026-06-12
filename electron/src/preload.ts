@@ -1,0 +1,49 @@
+import { contextBridge, ipcRenderer } from 'electron';
+
+/**
+ * Minimal, locked-down bridge for the splash / backend-manager UI. The main
+ * PixlStash web app (loaded from the local server) does not use any of this.
+ */
+contextBridge.exposeInMainWorld('pixlstashDesktop', {
+  bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
+  // First-run setup wizard.
+  probeSetup: () => ipcRenderer.invoke('setup:probe'),
+  pickLibraryFolder: (current: string) => ipcRenderer.invoke('setup:pickFolder', current),
+  commitSetup: (choices: unknown) => ipcRenderer.invoke('setup:commit', choices),
+  listAccelerators: () => ipcRenderer.invoke('accel:list'),
+  installAccelerator: (accel: string) => ipcRenderer.invoke('accel:install', accel),
+  useAccelerator: (accel: string | null) => ipcRenderer.invoke('accel:use', accel),
+  removeAccelerator: (accel: string) => ipcRenderer.invoke('accel:remove', accel),
+  // Desktop conveniences re-homed from the (removed) native menu.
+  openLibraryFolder: () => ipcRenderer.invoke('desktop:openLibraryFolder'),
+  showLogs: () => ipcRenderer.invoke('desktop:showLogs'),
+  // Desktop-shell preferences (hide-to-tray-on-close, ...).
+  getDesktopPrefs: () => ipcRenderer.invoke('desktop:getPrefs'),
+  setDesktopPrefs: (prefs: unknown) => ipcRenderer.invoke('desktop:setPrefs', prefs),
+  // External server (remote access) settings.
+  getServerSettings: () => ipcRenderer.invoke('server:getSettings'),
+  setServerSettings: (settings: unknown) =>
+    ipcRenderer.invoke('server:setSettings', settings),
+  checkServerPort: (port: number) => ipcRenderer.invoke('server:checkPort', port),
+  // Fired when the tray's Settings entry asks the renderer to open Settings.
+  onOpenSettings: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('app:open-settings', listener);
+    return () => ipcRenderer.removeListener('app:open-settings', listener);
+  },
+  // Custom title-bar window controls (frameless window).
+  windowMinimize: () => ipcRenderer.invoke('window:minimize'),
+  windowToggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+  windowClose: () => ipcRenderer.invoke('window:close'),
+  // Main → renderer streaming events.
+  onPhase: (cb: (payload: unknown) => void) => {
+    const listener = (_e: unknown, payload: unknown) => cb(payload);
+    ipcRenderer.on('app:phase', listener);
+    return () => ipcRenderer.removeListener('app:phase', listener);
+  },
+  onProgress: (cb: (payload: unknown) => void) => {
+    const listener = (_e: unknown, payload: unknown) => cb(payload);
+    ipcRenderer.on('install:progress', listener);
+    return () => ipcRenderer.removeListener('install:progress', listener);
+  },
+});

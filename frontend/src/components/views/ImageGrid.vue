@@ -45,54 +45,19 @@
   />
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
-      ref="selectionBarRef"
       :selectedCount="selectedImageIds.length"
-      :selectedExpandedCount="selectedExpandedCount"
-      :selectedFaceCount="selectedFaceIds.length"
       :selectedCharacter="String(props.selectedCharacter)"
-      :selectedSet="String(props.selectedSet)"
-      :selectedGroupName="selectedGroupName"
       :selectedSort="props.selectedSort"
       :allPicturesId="String(props.allPicturesId)"
       :unassignedPicturesId="String(props.unassignedPicturesId)"
-      :scrapheapPicturesId="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
-      :selected-image-ids="selectedImageIds"
-      :selected-media-support="selectedMediaSupport"
-      :comfyui-client-id="comfyuiClientId"
       :comfyui-configured="props.comfyuiConfigured"
-      :available-plugins="availablePlugins"
-      :tagger-plugins="taggerPlugins"
-      :captioner-plugins="captionerPlugins"
-      :show-remove-from-stack="showRemoveFromStack"
-      :selected-multiple-stack-ids="selectedMultipleStackIds"
-      :all-grid-images="allGridImages"
-      :grouping-lock-reason="partialStackGroupingReason"
-      :visible="showSelectionBar"
-      @clear-selection="clearSelection"
-      @added-to-set="handleOverlayAddedToSet"
-      @remove-from-group="removeFromGroup"
-      @delete-selected="deleteSelected"
-      @set-project="handleSetProjectForSelected"
-      @add-to-character="handleAddToCharacter"
-      @remove-from-character="handleRemoveFromCharacter"
-      @create-stack="createStackFromSelection"
-      @remove-from-stack="removeSelectedFromStack"
-      @dissolve-stacks="dissolveSelectedStacks"
-      @create-stacks-from-groups="createStacksFromSelectedGroups"
-      @run-plugin="handlePluginRunRequest"
-      @comfyui-run="handleComfyuiRun"
       @comfyui-run-grid="runComfyuiOnGridImages"
-      @tags-applied="debouncedFetchAllGridImages({ force: true })"
-      @auto-tag="handleAutoTag"
-      @generate-description="handleGenerateDescription"
-      @reverse-image-search="handleReverseImageSearch"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @confirm-export-zip="emit('confirm-export-zip')"
-      @selection-menu-open="toolbarSelectionMenuOpen = $event"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -100,9 +65,10 @@
         visibleRangeLabel
       }}</span>
     </transition>
-    <!-- ── Breadcrumb: current-view path (bottom-left overlay) ── -->
+    <!-- ── Breadcrumb: current-view path (bottom-left overlay) ──
+         Hidden on the desktop shell, where it lives in the title bar. -->
     <nav
-      v-if="breadcrumb.length"
+      v-if="breadcrumb.length && !isDesktop"
       class="grid-breadcrumb"
       :class="{
         'grid-breadcrumb--above-bar': isMultiCharacterView || isSetOverlapView,
@@ -229,6 +195,8 @@
     <SnapshotsWithDeletedDialog
       v-model="snapshotsWithDeletedOpen"
       :snapshots="snapshotsWithDeleted"
+      :dont-show-again="userPrefsStore.hidePurgeSnapshotWarning"
+      @update:dont-show-again="userPrefsStore.setHidePurgeSnapshotWarning($event)"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -422,7 +390,7 @@
           },
         ]"
         :style="{
-          gridTemplateColumns: `repeat(${props.columns}, minmax(0, ${MAX_THUMBNAIL_SIZE}px))`,
+          gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
           position: 'relative',
           ...badgeCssVars,
         }"
@@ -804,6 +772,49 @@
         </v-btn>
       </template>
     </v-snackbar>
+
+    <SelectionBar
+      ref="selectionBarRef"
+      :selected-count="selectedImageIds.length"
+      :selected-expanded-count="selectedExpandedCount"
+      :selected-face-count="selectedFaceIds.length"
+      :selected-group-name="selectedGroupName"
+      :selected-sort="props.selectedSort"
+      :visible="showSelectionBar"
+      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :backend-url="props.backendUrl"
+      :selected-image-ids="selectedImageIds"
+      :selected-media-support="selectedMediaSupport"
+      :comfyui-client-id="comfyuiClientId"
+      :comfyui-configured="props.comfyuiConfigured"
+      :show-remove-from-stack="showRemoveFromStack"
+      :selected-multiple-stack-ids="selectedMultipleStackIds"
+      :grouping-lock-reason="partialStackGroupingReason"
+      :available-plugins="availablePlugins"
+      :tagger-plugins="taggerPlugins"
+      :captioner-plugins="captionerPlugins"
+      :all-grid-images="allGridImages"
+      :selected-character="String(props.selectedCharacter)"
+      :selected-set="String(props.selectedSet)"
+      @clear-selection="clearSelection"
+      @added-to-set="handleOverlayAddedToSet"
+      @remove-from-group="removeFromGroup"
+      @delete-selected="deleteSelected"
+      @set-project="handleSetProjectForSelected"
+      @add-to-character="handleAddToCharacter"
+      @remove-from-character="handleRemoveFromCharacter"
+      @create-stack="createStackFromSelection"
+      @remove-from-stack="removeSelectedFromStack"
+      @dissolve-stacks="dissolveSelectedStacks"
+      @create-stacks-from-groups="createStacksFromSelectedGroups"
+      @run-plugin="handlePluginRunRequest"
+      @comfyui-run="handleComfyuiRun"
+      @tags-applied="debouncedFetchAllGridImages({ force: true })"
+      @auto-tag="handleAutoTag"
+      @generate-description="handleGenerateDescription"
+      @reverse-image-search="handleReverseImageSearch"
+      @selection-menu-open="toolbarSelectionMenuOpen = $event"
+    />
   </div>
 </template>
 
@@ -818,7 +829,8 @@ import {
   onUnmounted,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -830,6 +842,7 @@ import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
+import SelectionBar from "../panels/SelectionBar.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
@@ -980,7 +993,9 @@ const props = defineProps({
 // ============================================================
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 const MIN_THUMBNAIL_SIZE = 128;
-const MAX_THUMBNAIL_SIZE = 384;
+// Per-column thumbnail width is now driven by `1fr` tracks that fill the grid;
+// the 384px upper bound is enforced via the column-count clamp in App.vue
+// (updateMaxColumns), so no fixed max is applied to the track itself here.
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 
 const normalizedSelectedSetIds = computed(() => {
@@ -2478,87 +2493,15 @@ const visibleRangeLabel = computed(() => {
   return `${first} – ${last}`;
 });
 
+const userPrefsStore = useUserPrefsStore();
+
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
-// The route is the single source of truth for the view; it carries only IDs,
-// so names come from useEntityNamesStore (the sidebar publishes them). The
-// trail is built one-directionally (route → labels); clickable ancestor
-// crumbs navigate using the IDs already in the route, never by name (names
-// aren't unique).
-const breadcrumbRoute = useRoute();
-const breadcrumbRouter = useRouter();
-const entityNames = useEntityNamesStore();
-
-const breadcrumb = computed(() => {
-  const { name, params, query } = breadcrumbRoute;
-  // Multi-selection lives in the ?ids= query (count > 1). When several
-  // characters/sets are selected the leaf reads "Multiple People/Sets"
-  // rather than a single name.
-  const multiCount = query.ids
-    ? String(query.ids)
-        .split(",")
-        .filter(Boolean).length
-    : 1;
-  const isMulti = multiCount > 1;
-  const charName = (id) =>
-    isMulti ? "Multiple People" : entityNames.characterNames[id] ?? `Character ${id}`;
-  const setName = (id) =>
-    isMulti ? "Multiple Sets" : entityNames.setNames[id] ?? `Set ${id}`;
-  const projName = (id) => entityNames.projectNames[id] ?? `Project ${id}`;
-  // Root scope crumb names the sidebar bar/tab the view belongs to. These are
-  // scope *labels*, not destinations — plain text, not links. Only an
-  // ancestor that has a real grid route (a project, in project sub-views) is
-  // clickable.
-  const globalRoot = { label: "Global" };
-  const projectsRoot = { label: "Projects" };
-  const projectCrumb = (id) => ({
-    label: projName(id),
-    to: { name: "project", params: { id: String(id) } },
-  });
-  switch (name) {
-    case "all-pictures":
-      return [globalRoot, { label: "All Pictures" }];
-    case "scrapheap":
-      return [globalRoot, { label: "Scrapheap" }];
-    case "character":
-      return [globalRoot, { label: charName(params.id) }];
-    case "set":
-      return [globalRoot, { label: setName(params.id) }];
-    case "project":
-      return [projectsRoot, { label: projName(params.id) }];
-    // For multi-selection, omit the specific project crumb — the selection
-    // can span multiple projects, so a single project name would be wrong.
-    case "project-character":
-      return isMulti
-        ? [projectsRoot, { label: "Multiple People" }]
-        : [projectsRoot, projectCrumb(params.projectId), { label: charName(params.id) }];
-    case "project-set":
-      return isMulti
-        ? [projectsRoot, { label: "Multiple Sets" }]
-        : [projectsRoot, projectCrumb(params.projectId), { label: setName(params.id) }];
-    case "ref-folder":
-      return [
-        { label: "Folders" },
-        { label: entityNames.refFolderLabels[params.id] ?? "Folder" },
-      ];
-    case "import-folder":
-      return [
-        { label: "Folders" },
-        { label: entityNames.importFolderLabels[params.id] ?? "Folder" },
-      ];
-    default:
-      return [];
-  }
-});
-
-function navigateBreadcrumb(crumb) {
-  if (!crumb?.to) return;
-  const target = { ...crumb.to };
-  // Preserve a share token if one is in the URL, matching App.pushAppRoute.
-  if (breadcrumbRoute.query.token) {
-    target.query = { token: breadcrumbRoute.query.token, ...(target.query || {}) };
-  }
-  breadcrumbRouter.push(target).catch(() => {});
-}
+// The trail logic lives in useBreadcrumb, shared with the desktop title bar.
+// In the desktop shell the breadcrumb renders in the title bar instead, so the
+// in-grid overlay below is gated on !isDesktop.
+const isDesktop =
+  typeof window !== "undefined" && !!window.pixlstashDesktop;
+const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 watch(
   visibleRangeLabel,
@@ -3399,6 +3342,7 @@ const snapshotsWithDeleted = ref([]);
 const snapshotsWithDeletedOpen = ref(false);
 
 function showSnapshotsWithDeleted(response) {
+  if (userPrefsStore.hidePurgeSnapshotWarning) return;
   const snaps = response?.data?.snapshots_with_deleted;
   if (Array.isArray(snaps) && snaps.length) {
     snapshotsWithDeleted.value = snaps;
@@ -6149,6 +6093,12 @@ function handleEmptyStateReset() {
 
 .grid-content-area {
   --selbar-height: 48px;
+  /* Container context for the floating SelectionBar's `@container selbar`
+     query. The bar itself is `width: max-content` and cannot host the
+     container (inline-size containment collapses the pill — see the note in
+     SelectionBar.vue), so the query tracks the available grid-content width
+     here, on the bar's `position: relative` containing block. */
+  container: selbar / inline-size;
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -6304,7 +6254,12 @@ function handleEmptyStateReset() {
   overflow-x: hidden;
   width: 100%;
   padding-right: 0px;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgb(var(--v-theme-on-accent));
+  /* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue */
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
+  scrollbar-width: thin;
+}
+.grid-scroll-wrapper:hover {
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
 }
 .empty-state {
   position: absolute;
@@ -6351,7 +6306,9 @@ function handleEmptyStateReset() {
   width: 100%;
   box-sizing: border-box;
   flex: 1 1 0%;
-  padding: 0 4px 2px 0 !important;
+  /* No right padding: the scrollbar's own symmetric gutter provides the gap to
+     the thumb, so thumbnails sit an equal distance on both sides of it. */
+  padding: 0 0 2px 0 !important;
   align-content: start;
   justify-content: start;
 }
@@ -6360,7 +6317,7 @@ function handleEmptyStateReset() {
   gap: 0px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar {
-  width: 10px;
+  width: 8px;
 }
 .image-card-cursor .thumbnail-img {
   outline: 2px solid rgba(var(--v-theme-primary), 0.9);
@@ -6854,22 +6811,25 @@ function handleEmptyStateReset() {
 
 <style>
 /* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
-/* Thumb uses transparent border + background-clip trick: expands on hover, colour stays the same */
+/* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue:
+   nearly invisible at rest, fades in on hover/use. The transparent border +
+   background-clip insets the thumb equally from both track edges so it floats
+   as a centred pill with symmetric gutters (no flush-against-the-panel edge). */
 .grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgb(var(--v-theme-accent)) !important;
+  background: rgba(var(--v-theme-on-surface), 0.05) !important;
   background-clip: padding-box !important;
-  border: 3px solid transparent !important;
+  border: 2px solid transparent !important;
   border-radius: 8px !important;
-  transition: border-width 0.15s ease !important;
+  transition: background 0.15s ease !important;
+}
+.grid-scroll-wrapper:hover::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-on-surface), 0.18) !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--v-theme-accent)) !important;
-  background-clip: padding-box !important;
-  border: 1px solid transparent !important;
-  border-radius: 8px !important;
+  background: rgba(var(--v-theme-on-surface), 0.3) !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: rgba(var(--v-theme-shadow), 0.15) !important;
+  background: transparent !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-corner {
   background: transparent !important;

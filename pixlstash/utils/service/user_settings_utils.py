@@ -4,6 +4,10 @@ import json
 
 from pixlstash.utils.service.system_utils import default_max_vram_gb, MAX_VRAM_BUDGET_GB  # noqa: F401
 
+# Bounds (in pixels) for the draggable, non-docked sidebar width.
+SIDEBAR_WIDTH_MIN = 220
+SIDEBAR_WIDTH_MAX = 300
+
 
 def _thumbnail_size(value):
     """Parse a raw thumbnail size value into an int, or return None."""
@@ -39,6 +43,7 @@ def serialize_user_config(user) -> dict:
         "descending",
         "columns",
         "sidebar_thumbnail_size",
+        "sidebar_width",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -46,6 +51,7 @@ def serialize_user_config(user) -> dict:
         "show_resolution",
         "show_problem_icon",
         "compact_mode",
+        "sidebar_docked",
         "date_format",
         "theme_mode",
         "comfyui_url",
@@ -84,6 +90,12 @@ def serialize_user_config(user) -> dict:
     if sidebar_size not in allowed_sidebar_sizes:
         sidebar_size = min(allowed_sidebar_sizes, key=lambda v: abs(v - sidebar_size))
     config["sidebar_thumbnail_size"] = sidebar_size
+
+    sidebar_width = _thumbnail_size(config.get("sidebar_width"))
+    if sidebar_width is None:
+        sidebar_width = default_user.sidebar_width
+    sidebar_width = max(SIDEBAR_WIDTH_MIN, min(SIDEBAR_WIDTH_MAX, sidebar_width))
+    config["sidebar_width"] = sidebar_width
 
     config["smart_score_penalised_tags"] = smart_score_penalised_tags(
         getattr(source, "smart_score_penalised_tags", None),
@@ -136,6 +148,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "descending",
         "columns",
         "sidebar_thumbnail_size",
+        "sidebar_width",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -143,6 +156,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "show_resolution",
         "show_problem_icon",
         "compact_mode",
+        "sidebar_docked",
         "expand_all_stacks",
         "show_stacks",
         "date_format",
@@ -334,6 +348,15 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = min(allowed_sizes, key=lambda v: abs(v - new_value))
             if user.sidebar_thumbnail_size != new_value:
                 user.sidebar_thumbnail_size = new_value
+                updated = True
+            continue
+        if key == "sidebar_width":
+            new_value = _thumbnail_size(value)
+            if new_value is None:
+                continue
+            new_value = max(SIDEBAR_WIDTH_MIN, min(SIDEBAR_WIDTH_MAX, new_value))
+            if user.sidebar_width != new_value:
+                user.sidebar_width = new_value
                 updated = True
             continue
         if key == "tagger_settings":

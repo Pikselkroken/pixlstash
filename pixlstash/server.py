@@ -3,6 +3,7 @@ import uvicorn
 import os
 import json
 import re
+import signal
 import socket
 import asyncio
 import threading
@@ -96,7 +97,11 @@ def _get_lan_ip() -> str | None:
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except OSError as exc:
+        # No default route / unreachable interface: we cannot determine the LAN
+        # IP. Log it so a misconfigured host that can't add the LAN IP to the
+        # cert SAN leaves a diagnostic instead of failing silently.
+        logger.warning("Could not determine LAN IP: %s", exc)
         return None
 
 
@@ -128,12 +133,13 @@ class VersionResponse(BaseModel):
             "Always exactly one of: `docker` (the reliable signal — set via "
             "the `PIXLSTASH_IN_DOCKER=1` env flag or the presence of "
             "`/.dockerenv`), `pip` (the default for a plain Python/pip "
-            "install), or `other` (the uncertain fallback — e.g. an installer "
-            "such as the Windows Inno Setup build that declares "
-            "`PIXLSTASH_INSTALL_TYPE=other`). Clients should treat any "
-            "unrecognised value as `other`."
+            "install), `electron` (the cross-platform desktop app, which "
+            "declares `PIXLSTASH_INSTALL_TYPE=electron`), or `other` (the "
+            "uncertain fallback — e.g. the Windows Inno Setup build that "
+            "declares `PIXLSTASH_INSTALL_TYPE=other`). Clients should treat "
+            "any unrecognised value as `other`."
         ),
-        examples=["docker", "pip", "other"],
+        examples=["docker", "pip", "electron", "other"],
     )
     docker_variant: str = Field(
         description=(
@@ -988,7 +994,7 @@ class Server:
     # "docker" is the reliable signal, "pip" the default, "other" the explicit
     # opt-out used by installers (e.g. the Windows Inno Setup wheel build) that
     # otherwise look like a plain pip install.
-    INSTALL_TYPES = ("docker", "pip", "other")
+    INSTALL_TYPES = ("docker", "pip", "electron", "other")
 
     @staticmethod
     def detect_install_type() -> str:
@@ -1054,6 +1060,33 @@ class Server:
         ).run()
         write_json_atomic(server_config_path, self._server_config)
 
+        # Internal loopback transport (Electron desktop shell).
+        #
+        # The desktop app launches this backend purely as a private, in-process
+        # service: a free *ephemeral* port on 127.0.0.1, spoken to over plain
+        # HTTP (see electron/src/backend/ServerProcess.ts — it hardcodes
+        # http://127.0.0.1:<port>, health-checks it over node:http, and only
+        # whitelists http loopback). That internal transport is intrinsic to the
+        # loopback and must NOT be derived from server-config: a config whose
+        # require_ssl is enabled for *external* exposure must not turn this
+        # internal connection into HTTPS, or the shell can never reach it.
+        #
+        # The loopback scheme/host/port are therefore derived independently in
+        # run() (see _run_electron_listeners) — always plain HTTP on the
+        # PIXLSTASH_HOST/PIXLSTASH_PORT the shell forces. require_ssl /
+        # ssl_keyfile / ssl_certfile are left untouched here because they now
+        # govern only the optional *external* listener the desktop app can
+        # enable, never this internal connection.
+        #
+        # cookie_secure is the one thing we must still pin off: the cookie jar is
+        # process-wide (shared by both listeners) and the window speaks HTTP to
+        # the loopback, so a Secure cookie would be dropped and the window could
+        # never authenticate. The external HTTPS listener is a different origin
+        # and simply serves the same (non-Secure) cookie over TLS. Applied only
+        # to the in-memory copy; the on-disk config keeps the user's settings.
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
+            self._server_config["cookie_secure"] = False
+
         # SSL config
         if self._server_config.get("require_ssl", False):
             self._ensure_ssl_certificates()
@@ -1099,6 +1132,10 @@ class Server:
             logger,
         )
         self._user = self.auth.ensure_user()
+        # Desktop (Electron) shell: register the pre-authenticated loopback
+        # owner session so the local window opens straight into the library.
+        # No-op for every other install type (env var unset).
+        self.auth.seed_desktop_session()
         if self._user and self._user.description is not None:
             self.vault.set_description(self._user.description)
         self.vault.set_keep_models_in_memory(
@@ -1454,19 +1491,30 @@ class Server:
         version = self._get_version()
         host = self._server_config.get("host", "127.0.0.1")
         port = self._server_config.get("port", 9537)
+        # Env overrides (honoured by the Docker entrypoint and the Electron
+        # desktop shell, which binds the backend to a free loopback port).
+        # An unset/blank value leaves the config-derived value untouched.
+        host = os.environ.get("PIXLSTASH_HOST", "").strip() or host
+        _port_override = os.environ.get("PIXLSTASH_PORT", "").strip()
+        if _port_override:
+            try:
+                port = int(_port_override)
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid PIXLSTASH_PORT=%r (not an integer).",
+                    _port_override,
+                )
+        # Desktop shell: the window reaches the backend over an ephemeral
+        # loopback HTTP port, and remote access (if enabled) is a *second*,
+        # independent listener. This needs two bound sockets in one process,
+        # which uvicorn.run() can't express, so it has its own launch path.
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
+            self._run_electron_listeners(version, host, port)
+            return
+
         scheme = "https" if self._server_config.get("require_ssl", False) else "http"
         server_url = f"{scheme}://{host}:{port}"
-        _w = 54
-        _b = "═" * _w
-        print(
-            f"\n"
-            f"  ╔{_b}╗\n"
-            f"  ║{'  PixlStash  v' + version:<{_w}}║\n"
-            f"  ╠{_b}╣\n"
-            f"  ║{'  GitHub : https://github.com/pikselkroken/pixlstash':<{_w}}║\n"
-            f"  ║{'  Server : ' + server_url:<{_w}}║\n"
-            f"  ╚{_b}╝\n"
-        )
+        self._print_banner(version, [("Server", server_url)])
         uvicorn_kwargs = dict(
             host=host,
             port=port,
@@ -1480,6 +1528,178 @@ class Server:
             )
         try:
             uvicorn.run(self.api, **uvicorn_kwargs)
+        finally:
+            if hasattr(self, "vault"):
+                self.vault.close()
+
+    @staticmethod
+    def _print_banner(version, labelled_urls):
+        """Print the startup box, one ``Label : url`` row per listener."""
+        _w = 54
+        _b = "═" * _w
+        lines = [
+            f"  ╔{_b}╗",
+            f"  ║{'  PixlStash  v' + version:<{_w}}║",
+            f"  ╠{_b}╣",
+            f"  ║{'  GitHub : https://github.com/pikselkroken/pixlstash':<{_w}}║",
+        ]
+        for label, url in labelled_urls:
+            lines.append(f"  ║{'  ' + f'{label:<6}' + ' : ' + url:<{_w}}║")
+        lines.append(f"  ╚{_b}╝")
+        print("\n" + "\n".join(lines) + "\n")
+
+    def _external_listener_password_ready(self) -> bool:
+        """Return True only if the owner account has a password set.
+
+        The external (remote access) listener binds ``0.0.0.0`` and is reachable
+        from the LAN. The desktop owner is auto-logged-in via the seeded loopback
+        session and never goes through registration, so ``password_hash`` can be
+        ``None``. Binding the external listener in that state lets any LAN device
+        claim the empty owner account, so we refuse to expose it until a password
+        exists. Fails closed: any error determining the state is treated as "not
+        ready" and logged.
+        """
+        auth = getattr(self, "auth", None)
+        if auth is None:
+            # No auth service wired (e.g. a unit-test stand-in). Fail closed.
+            logger.error(
+                "Refusing external listener: no auth service available to verify "
+                "an owner password is set."
+            )
+            return False
+        try:
+            user = auth.get_user()
+        except Exception as exc:
+            logger.error(
+                "Refusing external listener: failed to load the owner user to "
+                "verify a password is set: %s",
+                exc,
+            )
+            return False
+        if user is None or not user.password_hash:
+            return False
+        return True
+
+    def _build_electron_configs(self, loop_host, loop_port):
+        """Build the uvicorn configs (and banner rows) for the desktop listeners.
+
+        Always yields the loopback listener — plain HTTP on the ephemeral
+        ``loop_host``/``loop_port`` the shell forces (PIXLSTASH_HOST/PORT) — and,
+        when the user has enabled remote access, a second *external* listener on
+        the configured port (optionally HTTPS). Both serve the same FastAPI app;
+        the external one runs with ``lifespan='off'`` so the loopback server is
+        the sole owner of the app lifespan (the vault starts/stops exactly once).
+
+        Returns ``(configs, banner)`` where ``banner`` is a list of
+        ``(label, url)`` rows. Pure (no side effects beyond logging) so it can be
+        unit-tested without binding sockets.
+        """
+        configs = [
+            uvicorn.Config(
+                self.api,
+                host=loop_host,
+                port=loop_port,
+                log_config=uvicorn_log_config,
+            )
+        ]
+        banner = [("Window", f"http://{loop_host}:{loop_port}")]
+
+        if self._server_config.get("external_server_enabled", False):
+            if not Server._external_listener_password_ready(self):
+                logger.error(
+                    "Refusing to bind the external (remote access) listener: the "
+                    "owner account has no password set. Set an owner password "
+                    "before enabling remote access so a LAN device cannot claim "
+                    "the account. Serving the loopback window only."
+                )
+                return configs, banner
+            ext_host = "0.0.0.0"
+            ext_port = int(self._server_config.get("port", 9537))
+            ext_kwargs = dict(
+                host=ext_host,
+                port=ext_port,
+                log_config=uvicorn_log_config,
+                lifespan="off",
+            )
+            scheme = "http"
+            if self._server_config.get("require_ssl", False):
+                ext_kwargs["ssl_keyfile"] = self._server_config.get("ssl_keyfile")
+                ext_kwargs["ssl_certfile"] = self._server_config.get("ssl_certfile")
+                scheme = "https"
+                print(
+                    "[SSL] External listener using SSL: "
+                    f"keyfile={self._server_config.get('ssl_keyfile')}, "
+                    f"certfile={self._server_config.get('ssl_certfile')}"
+                )
+            configs.append(uvicorn.Config(self.api, **ext_kwargs))
+            banner.append(("Remote", f"{scheme}://{ext_host}:{ext_port}"))
+
+        return configs, banner
+
+    def _run_electron_listeners(self, version, loop_host, loop_port):
+        """Serve the desktop backend's loopback and (optional) external listeners.
+
+        See :meth:`_build_electron_configs` for the listener layout. The two
+        servers run in one event loop; a single combined signal handler stops
+        both on SIGTERM/SIGINT.
+        """
+        configs, banner = self._build_electron_configs(loop_host, loop_port)
+        self._print_banner(version, banner)
+
+        servers = [uvicorn.Server(config) for config in configs]
+        for server in servers:
+            # We install one combined signal handler below so a single
+            # SIGTERM/SIGINT stops *both* listeners; uvicorn's per-server
+            # handlers would only stop the server that registered last.
+            server.install_signal_handlers = False
+
+        # ``banner`` rows are produced in the same order as ``configs`` by
+        # ``_build_electron_configs`` (loopback first, optional external second),
+        # so the label for each server is its banner row. Fall back to the bound
+        # socket if the banner is somehow shorter than the server list.
+        labels = [f"{label} ({url})" for label, url in banner[: len(servers)]]
+        while len(labels) < len(servers):
+            cfg = servers[len(labels)].config
+            labels.append(f"listener ({cfg.host}:{cfg.port})")
+
+        async def _serve():
+            running_loop = asyncio.get_running_loop()
+
+            def _stop():
+                for server in servers:
+                    server.should_exit = True
+
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    running_loop.add_signal_handler(sig, _stop)
+                except NotImplementedError:
+                    # Windows asyncio loops don't support add_signal_handler;
+                    # the desktop shell force-kills the process tree there.
+                    pass
+
+            async def _serve_one(server, label):
+                # Wrap each listener so a bind failure (e.g. the external
+                # 0.0.0.0 socket already in use, or the loopback ephemeral port
+                # stolen between the bind-check and the bind) is logged with
+                # *which* socket failed before it propagates. A bare
+                # ``asyncio.gather`` surfaces the first exception with no
+                # indication of which listener raised it.
+                try:
+                    await server.serve()
+                except Exception as exc:
+                    logger.error("Desktop %s failed: %s", label, exc, exc_info=True)
+                    # Stop the sibling listener so we don't leave a half-running
+                    # backend, then re-raise so the process exits non-zero.
+                    for other in servers:
+                        other.should_exit = True
+                    raise
+
+            await asyncio.gather(
+                *(_serve_one(server, label) for server, label in zip(servers, labels))
+            )
+
+        try:
+            asyncio.run(_serve())
         finally:
             if hasattr(self, "vault"):
                 self.vault.close()
@@ -1499,12 +1719,42 @@ class Server:
         if self._server_config.get("generate_thumbnails_on_startup", True):
             await loop.run_in_executor(None, self._generate_missing_thumbnails)
         self.vault.start()
-        host = self._server_config.get("host", "127.0.0.1")
-        port = self._server_config.get("port", 9537)
-        scheme = "https" if self._server_config.get("require_ssl", False) else "http"
-        logger.info(
-            "PixlStash is ready. Open in your browser: %s://%s:%s/", scheme, host, port
-        )
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
+            # The desktop window uses the ephemeral loopback HTTP port (env), not
+            # the configured host/port — those describe the optional external
+            # listener and only apply when it is enabled. Report what is actually
+            # serving rather than the config, which previously logged a phantom
+            # https://0.0.0.0:<port> URL even with remote access off.
+            loop_host = os.environ.get("PIXLSTASH_HOST", "").strip() or "127.0.0.1"
+            loop_port = os.environ.get(
+                "PIXLSTASH_PORT", ""
+            ).strip() or self._server_config.get("port", 9537)
+            logger.info(
+                "PixlStash is ready (desktop window): http://%s:%s/",
+                loop_host,
+                loop_port,
+            )
+            if self._server_config.get("external_server_enabled", False):
+                ext_scheme = (
+                    "https" if self._server_config.get("require_ssl", False) else "http"
+                )
+                logger.info(
+                    "Remote access enabled: %s://0.0.0.0:%s/",
+                    ext_scheme,
+                    self._server_config.get("port", 9537),
+                )
+        else:
+            host = self._server_config.get("host", "127.0.0.1")
+            port = self._server_config.get("port", 9537)
+            scheme = (
+                "https" if self._server_config.get("require_ssl", False) else "http"
+            )
+            logger.info(
+                "PixlStash is ready. Open in your browser: %s://%s:%s/",
+                scheme,
+                host,
+                port,
+            )
         yield
         # Shutdown logic — only clear _ws_loop if this lifespan instance set it
         if was_set_by_us:
@@ -1536,6 +1786,10 @@ class Server:
                 "require_ssl": False,
                 # ssl_keyfile / ssl_certfile are added by the require_ssl
                 # gating block below — only when SSL is actually enabled.
+                # Whether the desktop app exposes a second, external listener on
+                # host:port (loopback access is always on; see run()). Ignored by
+                # the standalone server, which binds host:port directly.
+                "external_server_enabled": False,
                 "cookie_samesite": "Lax",
                 "cookie_secure": False,
                 "image_root": default_image_root,
@@ -1563,6 +1817,8 @@ class Server:
                     server_config["log_file"] = default_log_path
                 if "require_ssl" not in server_config:
                     server_config["require_ssl"] = False
+                if "external_server_enabled" not in server_config:
+                    server_config["external_server_enabled"] = False
                 if "cookie_samesite" not in server_config:
                     server_config["cookie_samesite"] = "Lax"
                 if "cookie_secure" not in server_config:
@@ -1587,6 +1843,20 @@ class Server:
                     server_config["filesystem_roots"] = []
                 if "daily_snapshots" not in server_config:
                     server_config["daily_snapshots"] = True
+
+        # Inference-device override. The Electron desktop launches the backend
+        # with its own --server-config and selects the device by which runtime is
+        # active: the bundled env ships CPU-only torch, GPU wheels are added on
+        # demand as overlays. It passes the active runtime's device via
+        # PIXLSTASH_DEFAULT_DEVICE so the backend uses what the runtime actually
+        # provides, regardless of the config's default_device (which can't know
+        # whether torch is the CPU build or a GPU overlay). General-purpose: a
+        # Docker deploy can use it too. Blank/unset leaves the config untouched.
+        _device_override = (
+            os.environ.get("PIXLSTASH_DEFAULT_DEVICE", "").strip().lower()
+        )
+        if _device_override:
+            server_config["default_device"] = _device_override
 
         # SSL key/cert paths live in the config *only* when SSL is enabled.
         # When require_ssl is off they are never read (see _ensure_ssl_certificates
@@ -1628,6 +1898,7 @@ class Server:
 
     def _ensure_ssl_certificates(self):
         import datetime
+        import ipaddress
 
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes, serialization
@@ -1649,6 +1920,18 @@ class Server:
                 subject = issuer = x509.Name(
                     [x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]
                 )
+                # The external listener binds 0.0.0.0 and is reached by LAN IP,
+                # so cover localhost AND the loopback/LAN addresses in the SAN —
+                # otherwise every remote HTTPS connection is a hostname *mismatch*
+                # (worse than a plain untrusted-CA warning).
+                san = [x509.DNSName("localhost")]
+                for ip_text in ("127.0.0.1", _get_lan_ip()):
+                    if not ip_text:
+                        continue
+                    try:
+                        san.append(x509.IPAddress(ipaddress.ip_address(ip_text)))
+                    except ValueError:
+                        logger.debug("Skipping unparseable SAN address %r.", ip_text)
                 now = datetime.datetime.now(datetime.timezone.utc)
                 cert = (
                     x509.CertificateBuilder()
@@ -1659,7 +1942,7 @@ class Server:
                     .not_valid_before(now)
                     .not_valid_after(now + datetime.timedelta(days=365))
                     .add_extension(
-                        x509.SubjectAlternativeName([x509.DNSName("localhost")]),
+                        x509.SubjectAlternativeName(san),
                         critical=False,
                     )
                     .sign(private_key, hashes.SHA256())

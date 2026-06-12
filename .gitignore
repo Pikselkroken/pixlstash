@@ -28,3 +28,6 @@ frontend/e2e/.auth/
 frontend/test-results/
 test-data/images/snapshots/
 test-results
+
+# Desktop runtime build cache (CPython tarball + pip wheels)
+.build-cache/

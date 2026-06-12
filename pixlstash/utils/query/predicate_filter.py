@@ -83,14 +83,13 @@ class PredicateFilter(BaseModel):
     """A declarative, serialisable predicate over ``Picture`` rows.
 
     All fields are optional / defaulted.  The defaults describe the predicate used by
-    a "give me the matching live pictures" query: non-deleted, not import-excluded,
-    no other restrictions — which is exactly what single-picture :meth:`matches`
-    wants for auto-triage.
+    a "give me the matching live pictures" query: non-deleted, no other restrictions
+    — which is exactly what single-picture :meth:`matches` wants for auto-triage.
 
     Each builder site sets the subset of fields it needs and toggles the
     flag fields (``include_deleted`` / ``only_deleted`` / ``apply_deleted_filter`` /
-    ``include_unimported`` / ``exclude_import_excluded``) so that the centralised
-    compiler reproduces that site's emitted predicate exactly.
+    ``include_unimported``) so that the centralised compiler reproduces that site's
+    emitted predicate exactly.
     """
 
     # --- intrinsic attribute predicates ---
@@ -122,7 +121,6 @@ class PredicateFilter(BaseModel):
     # a membership branch) and the compiler emits no ``deleted`` clause.
     apply_deleted_filter: bool = True
     include_unimported: bool = True
-    exclude_import_excluded: bool = True
 
     def _smart_score_bucket_predicates(self) -> list[ColumnElement]:
         bucket = self.smart_score_bucket
@@ -195,9 +193,6 @@ class PredicateFilter(BaseModel):
                 preds.append(Picture.deleted.is_(True))
             elif not self.include_deleted:
                 preds.append(Picture.deleted.is_(False))
-
-        if self.exclude_import_excluded:
-            preds.append(Picture.import_excluded.is_(False))
 
         if not self.include_unimported:
             preds.append(Picture.imported_at.is_not(None))

@@ -1815,7 +1815,6 @@ def register_routes(router, server):
         def restore_pictures(session: Session, ids: list[int] | None):
             query = select(Picture).where(
                 Picture.deleted.is_(True),
-                Picture.import_excluded.is_(False),
             )
             if ids is not None:
                 query = query.where(Picture.id.in_(ids))
@@ -1880,7 +1879,6 @@ def register_routes(router, server):
                 Picture.pixel_sha,
             ).where(
                 Picture.deleted.is_(True),
-                Picture.import_excluded.is_(False),
             )
             if ids is not None:
                 query = query.where(Picture.id.in_(ids))
@@ -1892,9 +1890,11 @@ def register_routes(router, server):
         if not rows:
             return {"status": "success", "deleted_count": 0}
 
-        # Find reference folders where files must not be deleted; for those
-        # pictures keep the DB row as a scan sentinel (import_excluded=True) so
-        # the file is never re-imported on the next scan pass.
+        # allow_delete_file=False on a reference folder protects only the source
+        # file on disk — never the DB row or the deletion ledger.  Every deleted
+        # picture loses its row and gains a DeletedFileLog entry (so the file is
+        # never re-imported / resurrected); these folder ids only decide whether
+        # the physical file is also removed.
         def fetch_no_delete_folder_ids(session: Session) -> set[int]:
             result = session.exec(
                 select(ReferenceFolder.id).where(
@@ -1907,10 +1907,9 @@ def register_routes(router, server):
             fetch_no_delete_folder_ids, priority=DBPriority.IMMEDIATE
         )
 
-        full_delete_ids: list[int] = []
-        full_delete_file_paths: list[str] = []
-        full_delete_log_records: list[dict] = []
-        sentinel_ids: list[int] = []
+        picture_ids: list[int] = []
+        file_paths: list[str] = []
+        log_records: list[dict] = []
 
         for row in rows:
             pic_id, file_path, ref_folder_id, pixel_sha = (
@@ -1919,43 +1918,24 @@ def register_routes(router, server):
                 row[2],
                 row[3],
             )
-            if ref_folder_id is not None and ref_folder_id in no_delete_folder_ids:
-                # Source file is protected — keep the DB row as a scan sentinel.
-                if pic_id is not None:
-                    sentinel_ids.append(pic_id)
-            else:
-                if pic_id is not None:
-                    full_delete_ids.append(pic_id)
-                if file_path:
-                    full_delete_file_paths.append(file_path)
-                    full_delete_log_records.append(
-                        {
-                            "path_sha": DeletedFileLog.hash_path(file_path),
-                            "pixel_sha": pixel_sha,
-                        }
-                    )
-
-        if sentinel_ids:
-
-            def mark_sentinels(session: Session, ids: list[int]) -> None:
-                session.exec(
-                    update(Picture)
-                    .where(Picture.id.in_(ids))
-                    .values(import_excluded=True)
+            if pic_id is not None:
+                picture_ids.append(pic_id)
+            if file_path:
+                # Log every deleted picture so it can never be resurrected,
+                # regardless of whether the on-disk file is protected.
+                log_records.append(
+                    {
+                        "path_sha": DeletedFileLog.hash_path(file_path),
+                        "pixel_sha": pixel_sha,
+                    }
                 )
-                session.commit()
-
-            server.vault.db.run_task(
-                mark_sentinels, sentinel_ids, priority=DBPriority.IMMEDIATE
-            )
-            logger.debug(
-                "Scrapheap flush: kept %d picture(s) as import sentinels "
-                "(allow_delete_file=False on reference folder).",
-                len(sentinel_ids),
-            )
-
-        picture_ids = full_delete_ids
-        file_paths = full_delete_file_paths
+                # Only enqueue the physical file for removal when its reference
+                # folder permits it; a protected file stays on disk.
+                file_protected = (
+                    ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
+                )
+                if not file_protected:
+                    file_paths.append(file_path)
 
         def delete_files(image_root: str, paths: list[str]):
             for rel_path in paths:
@@ -2016,7 +1996,7 @@ def register_routes(router, server):
         deleted_count = server.vault.db.run_task(
             delete_rows,
             picture_ids,
-            full_delete_log_records,
+            log_records,
             priority=DBPriority.IMMEDIATE,
         )
         server.vault.notify(EventType.CHANGED_PICTURES)
@@ -2026,12 +2006,12 @@ def register_routes(router, server):
         # to delete those snapshots if the deletion was for privacy. Discovery
         # reads only the JSON manifests (no snapshot DB is opened).
         snapshots_with_deleted = server.vault.snapshot_service.snapshots_containing(
-            full_delete_ids + sentinel_ids
+            picture_ids
         )
 
         return {
             "status": "success",
-            "deleted_count": deleted_count + len(sentinel_ids),
+            "deleted_count": deleted_count,
             "snapshots_with_deleted": snapshots_with_deleted,
         }
 

@@ -22,6 +22,7 @@ class User(SQLModel, table=True):
     descending: bool = Field(default=True)
     columns: Optional[int] = Field(default=4)
     sidebar_thumbnail_size: Optional[int] = Field(default=48)
+    sidebar_width: Optional[int] = Field(default=240)
     show_stars: bool = Field(default=True)
     show_face_bboxes: Optional[bool] = Field(default=False)
     show_hand_bboxes: Optional[bool] = Field(default=False)
@@ -30,6 +31,8 @@ class User(SQLModel, table=True):
     show_problem_icon: Optional[bool] = Field(default=True)
     show_stacks: Optional[bool] = Field(default=True)
     compact_mode: Optional[bool] = Field(default=True)
+    # Sidebar width preference: False = full sidebar, True = narrow icon dock.
+    sidebar_docked: Optional[bool] = Field(default=False)
     date_format: Optional[str] = Field(default="locale")
     theme_mode: Optional[str] = Field(default="light")
     comfyui_url: Optional[str] = Field(default=None)

@@ -10,6 +10,7 @@ from PIL import Image
 from sqlmodel import Session, delete, select
 
 from pixlstash.database import DBPriority
+from pixlstash.db_models.deleted_file_log import DeletedFileLog
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
@@ -134,7 +135,6 @@ class ReferenceFolderScanTask(BaseTask):
                 session.exec(
                     select(Picture).where(
                         Picture.reference_folder_id == folder_id,
-                        Picture.import_excluded.is_(False),
                     )
                 ).all()
             )
@@ -146,50 +146,30 @@ class ReferenceFolderScanTask(BaseTask):
             p.file_path: p for p in existing_pictures if p.file_path
         }
 
-        # Fetch sentinel records: pictures the user permanently removed from the
-        # scrapheap when allow_delete_file=False.  Their files are still on disk
-        # but must not be re-imported.
-        def fetch_sentinels(session: Session) -> list[tuple[str, int]]:
-            rows = session.exec(
-                select(Picture.file_path, Picture.id).where(
-                    Picture.reference_folder_id == folder_id,
-                    Picture.import_excluded.is_(True),
-                )
-            ).all()
-            return [(row[0], row[1]) for row in rows if row[0] and row[1] is not None]
+        # Fetch the permanent-deletion ledger.  When a user empties the
+        # scrapheap and the reference folder forbids file deletion
+        # (allow_delete_file=False), the Picture row is removed but the file
+        # stays on disk; a DeletedFileLog row records the path hash so the file
+        # is never re-imported.  Match disk paths against the ledger by the same
+        # path_sha used by the writer so a still-present file is skipped.
+        def fetch_deleted_path_shas(session: Session) -> set[str]:
+            rows = session.exec(select(DeletedFileLog.path_sha)).all()
+            return {sha for sha in rows if sha}
 
-        sentinel_items: list[tuple[str, int]] = self._db.run_task(
-            fetch_sentinels, priority=DBPriority.LOW
+        deleted_path_shas: set[str] = self._db.run_task(
+            fetch_deleted_path_shas, priority=DBPriority.LOW
         )
-        sentinel_paths: set[str] = {path for path, _ in sentinel_items}
 
-        # Determine what is new and what has been removed.
-        new_paths = disk_paths - set(existing_by_path.keys()) - sentinel_paths
+        # Determine what is new and what has been removed.  A disk path is new
+        # only if it is not already indexed and not in the permanent-deletion
+        # ledger.
+        candidate_new = disk_paths - set(existing_by_path.keys())
+        new_paths = {
+            p
+            for p in candidate_new
+            if DeletedFileLog.hash_path(p) not in deleted_path_shas
+        }
         removed_paths = set(existing_by_path.keys()) - disk_paths
-
-        # Clean up sentinel records whose source file has since been removed
-        # from disk — the sentinel is no longer needed.
-        stale_sentinel_ids = [
-            pic_id for path, pic_id in sentinel_items if path not in disk_paths
-        ]
-        if stale_sentinel_ids:
-
-            def delete_stale_sentinels(session: Session, ids: list[int]) -> None:
-                for pic_id in ids:
-                    pic = session.get(Picture, pic_id)
-                    if pic is not None:
-                        session.delete(pic)
-                session.commit()
-
-            self._db.run_task(
-                delete_stale_sentinels, stale_sentinel_ids, priority=DBPriority.LOW
-            )
-            logger.info(
-                "Reference folder %s: cleaned up %d stale sentinel record(s) "
-                "(source files removed from disk).",
-                self._folder_path,
-                len(stale_sentinel_ids),
-            )
 
         # --- Handle removed files ---
         if removed_paths:

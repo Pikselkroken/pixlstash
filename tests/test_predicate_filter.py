@@ -93,10 +93,9 @@ def _assert_matches_agrees(session, flt: PredicateFilter, expected: set[int]):
 # --------------------------------------------------------------------------- #
 
 
-def test_default_excludes_deleted_and_import_excluded(session):
+def test_default_excludes_deleted(session):
     live = _add_picture(session, file_path="a.jpg")
     _add_picture(session, file_path="b.jpg", deleted=True)
-    _add_picture(session, file_path="c.jpg", import_excluded=True)
 
     flt = PredicateFilter()
     _assert_matches_agrees(session, flt, {live.id})
@@ -106,7 +105,7 @@ def test_only_deleted(session):
     _add_picture(session, file_path="a.jpg")
     gone = _add_picture(session, file_path="b.jpg", deleted=True)
 
-    flt = PredicateFilter(only_deleted=True, exclude_import_excluded=False)
+    flt = PredicateFilter(only_deleted=True)
     _assert_matches_agrees(session, flt, {gone.id})
 
 
@@ -114,7 +113,7 @@ def test_include_deleted(session):
     a = _add_picture(session, file_path="a.jpg")
     b = _add_picture(session, file_path="b.jpg", deleted=True)
 
-    flt = PredicateFilter(include_deleted=True, exclude_import_excluded=False)
+    flt = PredicateFilter(include_deleted=True)
     _assert_matches_agrees(session, flt, {a.id, b.id})
 
 
@@ -122,7 +121,7 @@ def test_apply_deleted_filter_false_emits_no_deleted_clause(session):
     a = _add_picture(session, file_path="a.jpg")
     b = _add_picture(session, file_path="b.jpg", deleted=True)
 
-    flt = PredicateFilter(apply_deleted_filter=False, exclude_import_excluded=False)
+    flt = PredicateFilter(apply_deleted_filter=False)
     _assert_matches_agrees(session, flt, {a.id, b.id})
 
 
@@ -424,7 +423,6 @@ def test_from_query_params_empty_leaves_defaults():
     assert flt.face_filter is None
     # Defaults describe the "live pictures" predicate.
     assert flt.apply_deleted_filter is True
-    assert flt.exclude_import_excluded is True
 
 
 def test_from_query_params_children_only_override():
