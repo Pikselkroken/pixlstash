@@ -1,3 +1,6 @@
+# [1.5.3] [Security:Low]
+- Update torch to 2.12 due to a possible memory corruption
+
 # [1.5.2] [Security:Moderate]
 - Fix some more scoping issues + add ready flag to character-likeness query to let client improve performance
 
