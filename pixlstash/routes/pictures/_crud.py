@@ -58,7 +58,10 @@ from pixlstash.utils.service.caption_utils import (
     serialize_tag_objects,
     sync_picture_sidecar,
 )
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_character_ids
+from pixlstash.utils.service.filter_helpers import (
+    fetch_scope_allowed_character_ids,
+    fetch_scope_allowed_picture_ids,
+)
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.watermark import apply_watermark, get_watermark_bytes
 
@@ -1217,6 +1220,7 @@ def register_routes(router, server):
         response_model=BatchCharacterLikenessResponse,
     )
     def get_pictures_character_likeness_batch(
+        request: Request,
         payload: BatchCharacterLikenessRequest = Body(...),
     ):
         reference_character_id = payload.reference_character_id
@@ -1257,6 +1261,20 @@ def register_routes(router, server):
 
         requested_ids = list(payload.picture_ids)
         unique_ids = list(dict.fromkeys(requested_ids))
+
+        # Object-level scope enforcement BEFORE any DB read or return, so every
+        # branch below is uniformly gated (mirrors the single-id sibling
+        # get_picture_character_likeness, which calls enforce_picture_scope).
+        # fetch_scope_allowed_picture_ids returns None for unscoped/owner tokens
+        # (full access) and a fail-closed set for scoped resource tokens.
+        # Out-of-scope ids are dropped from the set we query and fall through to
+        # deny_result in classify(), so they are indistinguishable from missing
+        # ids (no existence/score leak, no per-id 403 oracle).
+        allowed_ids = fetch_scope_allowed_picture_ids(server, request)
+        if allowed_ids is not None:
+            scoped_ids = [pid for pid in unique_ids if pid in allowed_ids]
+        else:
+            scoped_ids = unique_ids
 
         def deny_result(picture_id: int) -> dict:
             # Deny-by-default: indistinguishable from an out-of-scope/ineligible
@@ -1361,7 +1379,7 @@ def register_routes(router, server):
             in_set_ids,
             matched_ids,
             scorable_match_ids,
-        ) = server.vault.db.run_task(gather_signals, unique_ids)
+        ) = server.vault.db.run_task(gather_signals, scoped_ids)
 
         # Determine whether the reference character has any usable reference
         # faces at all. When it does not, the single-id endpoint reports an
@@ -1384,7 +1402,7 @@ def register_routes(router, server):
         # path's compute_character_likeness_for_faces), so scores are
         # bit-for-bit equal.
         scorable_ids = [
-            pid for pid in unique_ids if pid in live_ids and pid in scorable_match_ids
+            pid for pid in scoped_ids if pid in live_ids and pid in scorable_match_ids
         ]
         likeness_by_id: dict[int, float] = {}
         if scorable_ids and has_reference:
