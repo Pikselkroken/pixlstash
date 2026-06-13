@@ -12,6 +12,9 @@ execs the real server. The server also serves the built SPA from
 
 Env:
     PIXLSTASH_E2E_PORT   Port to bind (default 9600).
+    PIXLSTASH_E2E_DATA   Fixture directory to serve (default ``test-data``).
+                         The screenshot-reproduction harness points this at
+                         ``demo-data`` for a richer, more varied library.
 
 The work directory (``<tmp>/pixlstash-e2e``) is recreated on every launch, so
 nothing accumulates and the committed fixture is never modified.
@@ -26,10 +29,12 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC_DATA = REPO_ROOT / "test-data"
+SRC_DATA = Path(os.environ.get("PIXLSTASH_E2E_DATA") or (REPO_ROOT / "test-data"))
 SRC_IMAGES = SRC_DATA / "images"
 PORT = int(os.environ.get("PIXLSTASH_E2E_PORT", "9600"))
-WORK_DIR = Path(tempfile.gettempdir()) / "pixlstash-e2e"
+# Isolate the work dir per fixture so a screenshots run (demo-data) never stomps
+# a parallel e2e run (test-data) using the shared temp directory.
+WORK_DIR = Path(tempfile.gettempdir()) / f"pixlstash-e2e-{SRC_DATA.name}"
 
 
 def _ignore_backups(_dir, names):

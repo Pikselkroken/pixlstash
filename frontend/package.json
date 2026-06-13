@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "screenshots": "playwright test --config=playwright.screenshots.config.js",
+    "screenshots:script": "node ../website/screenshots/extract-script.mjs"
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",

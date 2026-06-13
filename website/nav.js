@@ -6,7 +6,7 @@
     { href: "comfyui.html", label: "ComfyUI" },
     {
       href: "whatsnew.html",
-      label: "What's New in 1.5",
+      label: "What's New in 1.6",
       className: "nav-link--whatsnew",
     },
     { href: "api.html", label: "API" },
