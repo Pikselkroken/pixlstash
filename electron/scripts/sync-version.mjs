@@ -38,7 +38,7 @@ function pep440ToSemver(v) {
     rest = rest.slice(g[0].length);
   }
   if ((g = rest.match(/^[._-]?dev[._-]?(\d+)/i))) { pre.push('dev', g[1]); rest = rest.slice(g[0].length); }
-  if ((g = rest.match(/^[._-]?post[._-]?(\d+)/i))) { pre.push('post', g[1]); rest = rest.slice(g[0].length); }
+  if ((g = rest.match(/^[._-]?post[._-]?(\d+)/i))) { pre.push('post', g[1]); }
   return pre.length ? `${major}.${minor}.${patch}-${pre.join('.')}` : `${major}.${minor}.${patch}`;
 }
 
