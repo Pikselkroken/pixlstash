@@ -1,9 +1,11 @@
-# [1.6.0]
+# [1.6.0] [Security:High]
 - New cross-platform desktop app (Windows/macOS/Linux) built on Electron. It runs the PixlStash server for you in a native window — no Python, Node, or browser tab required.
 - LM Studio-style downloadable compute backends: on first run the app auto-detects your hardware and fetches a matching AI runtime (NVIDIA CUDA, Apple Silicon Metal, or CPU). Manage and switch backends from Backends → Compute Backends…
 - Seamless local sign-in: the desktop window opens straight into your library, while password and share-token auth stay intact for remote access.
 - Honour `PIXLSTASH_HOST` / `PIXLSTASH_PORT` env overrides when starting the server.
 - Report a distinct `electron` install type in active-install telemetry.
+- Bump esbuild from 0.27.2 due to security issue
+- Fix problem initialising CUDA on Windows
 
 # [1.5.2] [Security:Moderate]
 - Fix some more scoping issues + add ready flag to character-likeness query to let client improve performance
