@@ -6,6 +6,53 @@ import { join } from 'node:path';
 export type Accel = 'cpu' | 'cu128' | 'rocm' | 'metal';
 
 /**
+ * The accepted {@link Accel} values, as a runtime array (the union type is erased
+ * at compile time). The single source of truth for validating any externally
+ * supplied accelerator string — keep it in step with the `Accel` union above.
+ */
+export const ACCEL_VALUES: readonly Accel[] = ['cpu', 'cu128', 'rocm', 'metal'];
+
+/** True only when `value` is one of the known {@link Accel} members. */
+export function isAccel(value: unknown): value is Accel {
+  return typeof value === 'string' && (ACCEL_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * Parse the developer/CI hardware-detection override. The override fakes which
+ * GPU the machine appears to have so the backend-download/overlay flow can be
+ * exercised on hardware that lacks the matching GPU. It is read from, in order
+ * of precedence:
+ *
+ *   1. a `--force-backend=<accel>` argv flag (wins), and
+ *   2. the `PIXLSTASH_FORCE_BACKEND=<accel>` env var (CI convenience).
+ *
+ * SECURITY: the value is validated against the {@link Accel} enum and anything
+ * else is rejected (returns `null` after a warning). This flag must NEVER feed an
+ * install index — the download still resolves only through the hardcoded
+ * {@link TORCH_INDEX} map keyed by the validated `Accel`, so an arbitrary string
+ * can never become an arbitrary-wheel-install vector. Returns the validated
+ * `Accel`, or `null` when no (valid) override is present.
+ */
+export function parseForcedBackend(
+  argv: readonly string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (message: string) => void = (m) => console.warn(m),
+): Accel | null {
+  // argv wins over the env var when both are set.
+  const flag = argv.find((a) => a.startsWith('--force-backend='));
+  const raw = flag !== undefined ? flag.slice('--force-backend='.length) : env.PIXLSTASH_FORCE_BACKEND;
+  if (raw === undefined || raw === '') return null;
+  if (!isAccel(raw)) {
+    warn(
+      `[force-backend] ignoring invalid backend override '${raw}'; ` +
+        `expected one of ${ACCEL_VALUES.join(', ')}`,
+    );
+    return null;
+  }
+  return raw;
+}
+
+/**
  * Versions + accelerator baked into the runtime embedded in the installer.
  * Written by scripts/build_desktop_runtime.py to resources/runtime.json and
  * read at boot. The bundled env always works offline (CPU on Windows/Linux,

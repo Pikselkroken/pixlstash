@@ -27,6 +27,7 @@ import {
   defaultLibraryDir,
   isDevBackend,
   overlayDir,
+  parseForcedBackend,
   readRuntimeInfo,
   serverConfigPath,
   serverLogPath,
@@ -85,6 +86,20 @@ let hideToTrayOnClose = true;
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
 let runtime: RuntimeInfo | null = null;
+
+// Debug/CI override: fake the GPU hardware probe so the backend-download/overlay
+// flow can be exercised on a machine without the matching GPU. Validated against
+// the Accel enum (invalid values are ignored with a warning); it only flips which
+// accelerator detectHardware() reports — it never feeds the install index, which
+// stays pinned to the hardcoded TORCH_INDEX map. Parsed once at startup.
+const forcedBackend: Accel | null = parseForcedBackend();
+if (forcedBackend) {
+  console.warn(
+    `[force-backend] hardware detection is OVERRIDDEN to '${forcedBackend}' ` +
+      `(${ACCEL_LABELS[forcedBackend]}) via --force-backend / PIXLSTASH_FORCE_BACKEND. ` +
+      `This is a debug/CI flag: it does NOT guarantee the GPU is actually present or works.`,
+  );
+}
 
 function sendPhase(payload: Record<string, unknown>): void {
   mainWindow?.webContents.send('app:phase', payload);
@@ -557,7 +572,7 @@ async function activeOverlayAccel(): Promise<Accel | null> {
 async function boot(): Promise<void> {
   try {
     sendPhase({ phase: 'detect' });
-    hardware = await detectHardware();
+    hardware = await detectHardware(forcedBackend);
 
     if (isDevBackend()) {
       await startAndLoad(null);

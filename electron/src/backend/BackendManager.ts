@@ -52,6 +52,60 @@ export interface OverlayMeta {
 export const OVERLAY_ACCELS: Accel[] = ['cu128', 'rocm'];
 
 /**
+ * Build the `pip install` argument list for a GPU overlay. Pure (no I/O) so the
+ * install contract is unit-testable: which index-url is used, how torch/
+ * torchvision are pinned, and the exact-match-vs-lagging-index fallback.
+ *
+ * The index ALWAYS comes from the hardcoded {@link TORCH_INDEX} map keyed by the
+ * validated `Accel` — never from caller-supplied data. `availableTorch` is the
+ * public torch versions the index publishes (newest first), used only to decide
+ * between an exact pin and the lagging-index fallback; it can never introduce a
+ * new index.
+ *
+ * @param accel       the (validated) overlay accelerator
+ * @param info        the bundled runtime versions to stay ABI-compatible with
+ * @param constraints path to the pip constraints file
+ * @param dir         the overlay --target directory
+ * @param availableTorch public torch versions on the index (newest first); empty
+ *                        when the index couldn't be queried
+ * @param userIndexUrl  optional corporate-mirror pip index (PIXLSTASH_PIP_INDEX_URL)
+ */
+export function buildOverlayPipArgs(
+  accel: Accel,
+  info: RuntimeInfo,
+  constraints: string,
+  dir: string,
+  availableTorch: readonly string[],
+  userIndexUrl: string | undefined,
+): { args: string[]; usedFallback: boolean } {
+  const args = ['-m', 'pip', 'install', '--no-cache-dir', '--target', dir, '-c', constraints];
+  const index = TORCH_INDEX[accel];
+  if (index) {
+    args.push('--index-url', index, '--extra-index-url', userIndexUrl ?? 'https://pypi.org/simple');
+  } else if (userIndexUrl) {
+    args.push('--index-url', userIndexUrl);
+  }
+  // Pin torch to the bundled *public* version, dropping the +cpu/+cu128 local
+  // tag (the GPU index serves its own local build). If the GPU index lags the
+  // bundled CPU build — its torch version isn't published there yet — fall back
+  // to the index's newest and let pip choose the matching torchvision. The
+  // overlay fully shadows the bundled torch, so an exact version match isn't
+  // required, only a self-consistent torch+torchvision pair.
+  const torchWant = basePep440(info.torch);
+  let usedFallback = false;
+  if (availableTorch.length && !availableTorch.includes(torchWant)) {
+    usedFallback = true;
+    args.push(`torch==${availableTorch[0]}`, 'torchvision');
+  } else {
+    args.push(`torch==${torchWant}`, `torchvision==${basePep440(info.torchvision)}`);
+  }
+  if (ONNX_PACKAGE[accel] === 'onnxruntime-gpu') {
+    args.push(`onnxruntime-gpu==${basePep440(info.onnxruntime)}`);
+  }
+  return { args, usedFallback };
+}
+
+/**
  * Manages the on-demand GPU wheel overlays. The bundled env (CPU on Windows/
  * Linux, Metal on macOS) always works; this installs torch/onnxruntime-gpu for a
  * discrete GPU into a `userData/backends/<accel>` directory that ServerProcess
@@ -122,33 +176,22 @@ export class BackendManager {
     const constraints = join(dir, 'constraints.txt');
     await writeFile(constraints, await this.bundledConstraints());
 
-    const args = ['-m', 'pip', 'install', '--no-cache-dir', '--target', dir, '-c', constraints];
     const index = TORCH_INDEX[accel];
-    if (index) {
-      args.push('--index-url', index, '--extra-index-url', pipIndexUrl() ?? 'https://pypi.org/simple');
-    } else if (pipIndexUrl()) {
-      args.push('--index-url', pipIndexUrl()!);
-    }
-    // Pin torch to the bundled *public* version, dropping the +cpu/+cu128 local
-    // tag (the GPU index serves its own local build). If the GPU index lags the
-    // bundled CPU build — its torch version isn't published there yet — fall back
-    // to the index's newest and let pip choose the matching torchvision. The
-    // overlay fully shadows the bundled torch, so an exact version match isn't
-    // required, only a self-consistent torch+torchvision pair.
-    const torchWant = basePep440(info.torch);
     const available = index ? await this.indexVersions('torch', index) : [];
-    if (available.length && !available.includes(torchWant)) {
+    const { args, usedFallback } = buildOverlayPipArgs(
+      accel,
+      info,
+      constraints,
+      dir,
+      available,
+      pipIndexUrl(),
+    );
+    if (usedFallback) {
       onProgress({
         phase: 'prepare',
-        message: `torch ${torchWant} isn't on the GPU index; using ${available[0]}`,
+        message: `torch ${basePep440(info.torch)} isn't on the GPU index; using ${available[0]}`,
         fraction: -1,
       });
-      args.push(`torch==${available[0]}`, 'torchvision');
-    } else {
-      args.push(`torch==${torchWant}`, `torchvision==${basePep440(info.torchvision)}`);
-    }
-    if (ONNX_PACKAGE[accel] === 'onnxruntime-gpu') {
-      args.push(`onnxruntime-gpu==${basePep440(info.onnxruntime)}`);
     }
 
     await this.runPip(args, onProgress);
