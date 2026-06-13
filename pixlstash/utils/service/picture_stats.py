@@ -4,7 +4,7 @@ import dataclasses
 import time
 
 from fastapi import HTTPException
-from sqlalchemy import Integer, and_, case, cast, desc, exists, func, or_, text
+from sqlalchemy import Integer, and_, case, cast, desc, exists, func, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Face, Picture, Tag, TagPrediction
@@ -15,6 +15,7 @@ from pixlstash.utils.service.filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
+from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 logger = get_logger(__name__)
 
@@ -184,122 +185,26 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
             raise HTTPException(status_code=400, detail="Invalid project_id") from exc
         pic_q = pic_q.where(project_membership_exists_clause(pid_int, Picture))
 
-    if params.format_filter:
-        pic_q = pic_q.where(
-            Picture.format.in_([f.upper() for f in params.format_filter])
-        )
-    if params.min_score is not None:
-        pic_q = pic_q.where(Picture.score >= params.min_score)
-    if params.max_score is not None:
-        pic_q = pic_q.where(Picture.score <= params.max_score)
-
-    if params.smart_score_bucket == "unscored":
-        pic_q = pic_q.where(Picture.smart_score.is_(None))
-    elif params.smart_score_bucket == "1-2":
-        pic_q = pic_q.where(Picture.smart_score.is_not(None), Picture.smart_score < 2.0)
-    elif params.smart_score_bucket == "2-3":
-        pic_q = pic_q.where(Picture.smart_score >= 2.0, Picture.smart_score < 3.0)
-    elif params.smart_score_bucket == "3-4":
-        pic_q = pic_q.where(Picture.smart_score >= 3.0, Picture.smart_score < 4.0)
-    elif params.smart_score_bucket == "4-5":
-        pic_q = pic_q.where(Picture.smart_score >= 4.0)
-
-    if params.resolution_bucket == "unknown":
-        pic_q = pic_q.where(or_(Picture.width.is_(None), Picture.height.is_(None)))
-    elif params.resolution_bucket == "lt1mp":
-        pic_q = pic_q.where(
-            Picture.width.is_not(None),
-            Picture.height.is_not(None),
-            Picture.width * Picture.height < 1_000_000,
-        )
-    elif params.resolution_bucket == "1-4mp":
-        pic_q = pic_q.where(
-            Picture.width.is_not(None),
-            Picture.height.is_not(None),
-            Picture.width * Picture.height >= 1_000_000,
-            Picture.width * Picture.height < 4_000_000,
-        )
-    elif params.resolution_bucket == "4-8mp":
-        pic_q = pic_q.where(
-            Picture.width.is_not(None),
-            Picture.height.is_not(None),
-            Picture.width * Picture.height >= 4_000_000,
-            Picture.width * Picture.height < 8_000_000,
-        )
-    elif params.resolution_bucket == "8-16mp":
-        pic_q = pic_q.where(
-            Picture.width.is_not(None),
-            Picture.height.is_not(None),
-            Picture.width * Picture.height >= 8_000_000,
-            Picture.width * Picture.height < 16_000_000,
-        )
-    elif params.resolution_bucket == "16plus":
-        pic_q = pic_q.where(
-            Picture.width.is_not(None),
-            Picture.height.is_not(None),
-            Picture.width * Picture.height >= 16_000_000,
-        )
-
-    if params.file_path_prefix:
-        pic_q = pic_q.where(Picture.file_path.startswith(params.file_path_prefix))
-    if params.import_source_folder:
-        pic_q = pic_q.where(Picture.import_source_folder == params.import_source_folder)
-    for tag in params.tags_filter:
-        pic_q = pic_q.where(
-            exists(
-                select(Tag.id).where(
-                    Tag.picture_id == Picture.id,
-                    Tag.tag == tag,
-                )
-            )
-        )
-    for tag in params.rejected_tags:
-        pic_q = pic_q.where(
-            ~exists(
-                select(Tag.id).where(
-                    Tag.picture_id == Picture.id,
-                    Tag.tag == tag,
-                )
-            )
-        )
-
-    if params.face_filter == "with_face":
-        pic_q = pic_q.where(
-            exists(
-                select(Face.id).where(
-                    Face.picture_id == Picture.id,
-                    Face.face_index != -1,
-                )
-            )
-        )
-    elif params.face_filter == "without_face":
-        pic_q = pic_q.where(
-            ~exists(
-                select(Face.id).where(
-                    Face.picture_id == Picture.id,
-                    Face.face_index != -1,
-                )
-            )
-        )
-
-    for i, entry in enumerate(params.confidence_above):
-        ca_tag, ca_thresh = entry.rsplit(":", 1)
-        pic_q = pic_q.where(
-            text(
-                f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-            ).bindparams(**{f"ca_tag_{i}": ca_tag, f"ca_thresh_{i}": float(ca_thresh)})
-        )
-    for i, entry in enumerate(params.confidence_below):
-        cb_tag, cb_thresh = entry.rsplit(":", 1)
-        pic_q = pic_q.where(
-            text(
-                f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
-                f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
-            ).bindparams(**{f"cb_tag_{i}": cb_tag, f"cb_thresh_{i}": float(cb_thresh)})
-        )
+    # Intrinsic-attribute predicates via the shared compiler.  The stats sidebar
+    # uppercases formats and matches a file-path prefix as a whole sub-tree (not just
+    # direct children).  The deleted lifecycle clause was already applied above, and
+    # this site never filters on import-excluded / unimported / comfyui / hidden tags.
+    pic_q = PredicateFilter(
+        format=[f.upper() for f in params.format_filter] or None,
+        min_score=params.min_score,
+        max_score=params.max_score,
+        smart_score_bucket=params.smart_score_bucket,
+        resolution_bucket=params.resolution_bucket,
+        file_path_prefix=params.file_path_prefix or None,
+        file_path_prefix_children_only=False,
+        import_source_folder=params.import_source_folder or None,
+        tags_filter=params.tags_filter or None,
+        tags_rejected_filter=params.rejected_tags or None,
+        tags_confidence_above_filter=params.confidence_above or None,
+        tags_confidence_below_filter=params.confidence_below or None,
+        face_filter=params.face_filter,
+        apply_deleted_filter=False,
+    ).apply(pic_q)
 
     return pic_q.subquery()
 

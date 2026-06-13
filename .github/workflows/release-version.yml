@@ -136,7 +136,7 @@ jobs:
           # Mirror the identical payload to the per-install-type manifests.
           per_type_dir = Path("main/website/latest-version")
           per_type_dir.mkdir(parents=True, exist_ok=True)
-          for install_type in ("docker", "pip", "other"):
+          for install_type in ("docker", "pip", "electron", "other"):
               per_type_path = per_type_dir / f"{install_type}.json"
               per_type_path.write_text(payload_text)
               print(f"Updated {per_type_path}: {payload}")
@@ -164,15 +164,16 @@ jobs:
             - `website/latest-version.json` — updated to this release (if it is
               strictly newer than the currently published version; skipped otherwise).
               The `[Security: ...]` tag was taken from the release tag's own `CHANGELOG.md`.
-            - `website/latest-version/{docker,pip,other}.json` — per-install-type
+            - `website/latest-version/{docker,pip,electron,other}.json` — per-install-type
               manifests carrying the **identical** payload as the legacy file. These
               back the PATH-encoded version-check URLs so Cloudflare zone analytics can
-              bucket active installs by type (docker vs pip vs other). Updated/skipped
-              in lock-step with the legacy `latest-version.json` above.
+              bucket active installs by type (docker vs pip vs electron vs other).
+              Updated/skipped in lock-step with the legacy `latest-version.json` above.
           add-paths: |
             website/latest-version.json
             website/latest-version/docker.json
             website/latest-version/pip.json
+            website/latest-version/electron.json
             website/latest-version/other.json
             website/api
           delete-branch: true

@@ -1,6 +1,5 @@
 import base64
 import json
-import os
 import sys
 import numpy as np
 
@@ -199,12 +198,6 @@ class Picture(SQLModel, table=True):
     text_score: Optional[float] = Field(default=None, index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
-    # When True, the source file could not be deleted (allow_delete_file=False on
-    # the reference folder) but the user has permanently removed the picture from
-    # the scrapheap.  The record is kept in the DB so the reference-folder scan
-    # does not re-import the file on the next pass.  These pictures are invisible
-    # to all normal queries via find().
-    import_excluded: bool = Field(default=False, index=True)
     stack_id: Optional[int] = Field(
         default=None, foreign_key="picturestack.id", index=True
     )
@@ -436,6 +429,9 @@ class Picture(SQLModel, table=True):
         """
         if candidate_ids is not None and not candidate_ids:
             return []
+        # Imported lazily to avoid a circular import (predicate_filter imports Picture).
+        from pixlstash.utils.query.predicate_filter import PredicateFilter
+
         # 1. Generate SBERT embedding for tag search (Text-to-Text)
         query_embedding = text_to_embedding(query)
         if query_embedding is None:
@@ -531,15 +527,11 @@ class Picture(SQLModel, table=True):
             .limit(limit)
         )
 
-        if only_deleted:
-            stmt = stmt.where(cls.deleted.is_(True))
-        elif not include_deleted:
-            stmt = stmt.where(cls.deleted.is_(False))
-
-        stmt = stmt.where(cls.import_excluded.is_(False))
-
-        if not include_unimported:
-            stmt = stmt.where(cls.imported_at.is_not(None))
+        # The deleted / unimported lifecycle predicates are applied exactly once,
+        # by the PredicateFilter compiler below (it receives only_deleted /
+        # include_deleted / include_unimported). The previously-inline copy here
+        # was redundant (idempotent AND, no row drift) and is removed so the
+        # filter has a single owner.
 
         # Apply select_fields logic (like in find)
         if select_fields:
@@ -560,95 +552,27 @@ class Picture(SQLModel, table=True):
             for rel_attr in rel_attrs:
                 stmt = stmt.options(selectinload(rel_attr))
 
-        if format:
-            stmt = stmt.where(cls.format.in_(format))
-
         if candidate_ids:
             stmt = stmt.where(cls.id.in_(candidate_ids))
 
-        if min_score is not None:
-            stmt = stmt.where(cls.score >= min_score)
-        if max_score is not None:
-            stmt = stmt.where(cls.score <= max_score)
-
-        if smart_score_bucket == "unscored":
-            stmt = stmt.where(cls.smart_score.is_(None))
-        elif smart_score_bucket == "1-2":
-            stmt = stmt.where(cls.smart_score.is_not(None), cls.smart_score < 2.0)
-        elif smart_score_bucket == "2-3":
-            stmt = stmt.where(cls.smart_score >= 2.0, cls.smart_score < 3.0)
-        elif smart_score_bucket == "3-4":
-            stmt = stmt.where(cls.smart_score >= 3.0, cls.smart_score < 4.0)
-        elif smart_score_bucket == "4-5":
-            stmt = stmt.where(cls.smart_score >= 4.0)
-
-        if resolution_bucket == "unknown":
-            stmt = stmt.where(or_(cls.width.is_(None), cls.height.is_(None)))
-        elif resolution_bucket == "lt1mp":
-            stmt = stmt.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height < 1_000_000,
-            )
-        elif resolution_bucket == "1-4mp":
-            stmt = stmt.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 1_000_000,
-                cls.width * cls.height < 4_000_000,
-            )
-        elif resolution_bucket == "4-8mp":
-            stmt = stmt.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 4_000_000,
-                cls.width * cls.height < 8_000_000,
-            )
-        elif resolution_bucket == "8-16mp":
-            stmt = stmt.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 8_000_000,
-                cls.width * cls.height < 16_000_000,
-            )
-        elif resolution_bucket == "16plus":
-            stmt = stmt.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 16_000_000,
-            )
-
-        if comfyui_models_filter:
-            for i, m in enumerate(comfyui_models_filter):
-                stmt = stmt.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :comfyui_model_{i})"
-                    ).bindparams(**{f"comfyui_model_{i}": m})
-                )
-
-        if comfyui_loras_filter:
-            for i, m in enumerate(comfyui_loras_filter):
-                stmt = stmt.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :comfyui_lora_{i})"
-                    ).bindparams(**{f"comfyui_lora_{i}": m})
-                )
-
-        if tags_filter:
-            for i, tag in enumerate(tags_filter):
-                stmt = stmt.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
-                    ).bindparams(**{f"tag_filter_{i}": tag})
-                )
-
-        if tags_rejected_filter:
-            for i, tag in enumerate(tags_rejected_filter):
-                stmt = stmt.where(
-                    text(
-                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
-                    ).bindparams(**{f"rejected_tag_filter_{i}": tag})
-                )
+        # Lifecycle + intrinsic predicates via the shared compiler.  semantic_search
+        # carries a subset of the vocabulary (no hidden-tags / confidence / face /
+        # file-path); unset fields are no-ops.  ComfyUI here is AND-of-EXISTS (no
+        # stack expansion), which PredicateFilter emits directly.
+        stmt = PredicateFilter(
+            format=format,
+            min_score=min_score,
+            max_score=max_score,
+            smart_score_bucket=smart_score_bucket,
+            resolution_bucket=resolution_bucket,
+            comfyui_models_filter=comfyui_models_filter,
+            comfyui_loras_filter=comfyui_loras_filter,
+            tags_filter=tags_filter,
+            tags_rejected_filter=tags_rejected_filter,
+            only_deleted=only_deleted,
+            include_deleted=include_deleted,
+            include_unimported=include_unimported,
+        ).apply(stmt)
 
         results = session.exec(stmt).all()
 
@@ -758,6 +682,13 @@ class Picture(SQLModel, table=True):
         When count_only=True, returns the integer count of matching pictures
         instead of the picture objects.  Sort, offset, and limit are ignored.
         """
+        # Imported lazily: predicate_filter imports Picture, so a module-level
+        # import here would be circular.
+        from pixlstash.utils.query.predicate_filter import (
+            PredicateFilter,
+            comfyui_leaf_parts,
+        )
+
         query = select(func.count(cls.id)) if count_only else select(cls)
 
         logger.debug("Got search parameters: %s", search)
@@ -779,15 +710,11 @@ class Picture(SQLModel, table=True):
             for rel_attr in rel_attrs:
                 query = query.options(selectinload(rel_attr))
 
-        if only_deleted:
-            query = query.where(cls.deleted.is_(True))
-        elif not include_deleted:
-            query = query.where(cls.deleted.is_(False))
-
-        query = query.where(cls.import_excluded.is_(False))
-
-        if not include_unimported:
-            query = query.where(cls.imported_at.is_not(None))
+        # The deleted / unimported lifecycle predicates are applied exactly once,
+        # by the PredicateFilter compiler below (it receives only_deleted /
+        # include_deleted / include_unimported). The previously-inline copy here
+        # was redundant (idempotent AND, no row drift) and is removed so the
+        # filter has a single owner.
 
         for attr, value in search.items():
             if attr == "project_id":
@@ -819,186 +746,39 @@ class Picture(SQLModel, table=True):
                 else:
                     query = query.where(getattr(cls, attr) == value)
 
-        if file_path_prefix is not None:
-            # Normalise to always end with a path separator so that a prefix
-            # like "/ref/photos" does not accidentally match "/ref/photos2/a.jpg".
-            # Support both Unix ("/") and Windows ("\") separators.
-            if file_path_prefix.endswith("/") or file_path_prefix.endswith("\\"):
-                prefix = file_path_prefix
-            else:
-                prefix = file_path_prefix + os.sep
-            # Escape LIKE special characters in the literal prefix.
-            escaped = (
-                prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            )
-            query = query.where(cls.file_path.like(escaped + "%", escape="\\"))
-            # Only show direct children — exclude files that have another path
-            # separator after the prefix (i.e. files in sub-directories).
-            # Check for both "/" (Unix) and "\" (Windows) to handle all platforms.
-            query = query.where(~cls.file_path.like(escaped + "%/%", escape="\\"))
-            query = query.where(~cls.file_path.like(escaped + "%\\\\%", escape="\\"))
+        # All lifecycle + intrinsic-attribute predicates are compiled by the shared
+        # PredicateFilter (the single source of truth for the WHERE logic that used
+        # to be duplicated across the builder sites).  ComfyUI membership is the one
+        # leaf find() does NOT delegate: it expands the match across stack members
+        # (an OR over the whole stack), so it is applied separately below.
+        predicate_filter = PredicateFilter(
+            format=format,
+            min_score=min_score,
+            max_score=max_score,
+            smart_score_bucket=smart_score_bucket,
+            resolution_bucket=resolution_bucket,
+            tags_filter=tags_filter,
+            tags_rejected_filter=tags_rejected_filter,
+            hidden_tags_filter=hidden_tags_filter,
+            tags_confidence_above_filter=tags_confidence_above_filter,
+            tags_confidence_below_filter=tags_confidence_below_filter,
+            face_filter=face_filter,
+            file_path_prefix=file_path_prefix,
+            only_deleted=only_deleted,
+            include_deleted=include_deleted,
+            include_unimported=include_unimported,
+        )
+        query = predicate_filter.apply(query)
 
-        if format:
-            query = query.where(cls.format.in_(format))
-
-        if min_score is not None:
-            query = query.where(cls.score >= min_score)
-        if max_score is not None:
-            query = query.where(cls.score <= max_score)
-
-        if smart_score_bucket == "unscored":
-            query = query.where(cls.smart_score.is_(None))
-        elif smart_score_bucket == "1-2":
-            query = query.where(cls.smart_score.is_not(None), cls.smart_score < 2.0)
-        elif smart_score_bucket == "2-3":
-            query = query.where(cls.smart_score >= 2.0, cls.smart_score < 3.0)
-        elif smart_score_bucket == "3-4":
-            query = query.where(cls.smart_score >= 3.0, cls.smart_score < 4.0)
-        elif smart_score_bucket == "4-5":
-            query = query.where(cls.smart_score >= 4.0)
-
-        if resolution_bucket == "unknown":
-            query = query.where(or_(cls.width.is_(None), cls.height.is_(None)))
-        elif resolution_bucket == "lt1mp":
-            query = query.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height < 1_000_000,
-            )
-        elif resolution_bucket == "1-4mp":
-            query = query.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 1_000_000,
-                cls.width * cls.height < 4_000_000,
-            )
-        elif resolution_bucket == "4-8mp":
-            query = query.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 4_000_000,
-                cls.width * cls.height < 8_000_000,
-            )
-        elif resolution_bucket == "8-16mp":
-            query = query.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 8_000_000,
-                cls.width * cls.height < 16_000_000,
-            )
-        elif resolution_bucket == "16plus":
-            query = query.where(
-                cls.width.is_not(None),
-                cls.height.is_not(None),
-                cls.width * cls.height >= 16_000_000,
-            )
-
-        # Build comfyui filter conditions.  Two parallel lists are maintained:
-        # comfyui_self_parts   – SQL fragments that test the picture row itself.
+        # Build comfyui filter conditions via the shared leaf-snippet helper.  Two
+        # parallel fragment lists are returned:
+        # comfyui_self_parts   – fragments that test the picture row itself.
         # comfyui_member_parts – equivalent fragments that test an aliased member
         #                        row (_m) used in a stack-member EXISTS subquery.
         # comfyui_bind_params  – shared bind-parameter dict (same names in both).
-        comfyui_self_parts: list[str] = []
-        comfyui_member_parts: list[str] = []
-        comfyui_bind_params: dict = {}
-        if comfyui_models_filter:
-            for i, m in enumerate(comfyui_models_filter):
-                comfyui_self_parts.append(
-                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :cmf_{i})"
-                )
-                comfyui_member_parts.append(
-                    f"EXISTS (SELECT 1 FROM json_each(_m.comfyui_models) WHERE value = :cmf_{i})"
-                )
-                comfyui_bind_params[f"cmf_{i}"] = m
-        if comfyui_loras_filter:
-            for i, m in enumerate(comfyui_loras_filter):
-                comfyui_self_parts.append(
-                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :clf_{i})"
-                )
-                comfyui_member_parts.append(
-                    f"EXISTS (SELECT 1 FROM json_each(_m.comfyui_loras) WHERE value = :clf_{i})"
-                )
-                comfyui_bind_params[f"clf_{i}"] = m
-
-        if tags_filter:
-            for i, tag in enumerate(tags_filter):
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
-                    ).bindparams(**{f"tag_filter_{i}": tag})
-                )
-
-        if tags_rejected_filter:
-            for i, tag in enumerate(tags_rejected_filter):
-                query = query.where(
-                    text(
-                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
-                    ).bindparams(**{f"rejected_tag_filter_{i}": tag})
-                )
-
-        if hidden_tags_filter:
-            placeholders = ", ".join(f":ht_{i}" for i in range(len(hidden_tags_filter)))
-            query = query.where(
-                text(
-                    f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id"
-                    f" AND LOWER(tag.tag) IN ({placeholders}))"
-                ).bindparams(**{f"ht_{i}": t for i, t in enumerate(hidden_tags_filter)})
-            )
-
-        if tags_confidence_above_filter:
-            for i, entry in enumerate(tags_confidence_above_filter):
-                tag, threshold = entry.rsplit(":", 1)
-                if float(threshold) <= 0.0:
-                    query = query.where(
-                        text(
-                            f"("
-                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                            f") OR ("
-                            f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ca_tag_{i})"
-                            f")"
-                        ).bindparams(
-                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
-                        )
-                    )
-                else:
-                    query = query.where(
-                        text(
-                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                        ).bindparams(
-                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
-                        )
-                    )
-
-        if tags_confidence_below_filter:
-            for i, entry in enumerate(tags_confidence_below_filter):
-                tag, threshold = entry.rsplit(":", 1)
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
-                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
-                    ).bindparams(
-                        **{f"cb_tag_{i}": tag, f"cb_thresh_{i}": float(threshold)}
-                    )
-                )
-
-        if face_filter == "with_face":
-            query = query.where(
-                text(
-                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
-        elif face_filter == "without_face":
-            query = query.where(
-                text(
-                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
+        comfyui_self_parts, comfyui_member_parts, comfyui_bind_params = (
+            comfyui_leaf_parts(comfyui_models_filter, comfyui_loras_filter)
+        )
 
         # A stack leader is either an unstacked picture or the picture with
         # stack_position == 0 in its stack.  This inline condition replaces the
@@ -1230,6 +1010,9 @@ class Picture(SQLModel, table=True):
         guest_token_id: Optional[int] = None,
         count_only: bool = False,
     ):
+        # Imported lazily to avoid a circular import (predicate_filter imports Picture).
+        from pixlstash.utils.query.predicate_filter import PredicateFilter
+
         query = select(func.count(cls.id)) if count_only else select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
             enforce_stack_assignment=True,
@@ -1258,142 +1041,24 @@ class Picture(SQLModel, table=True):
                 )
             )
 
-        if format:
-            query = query.where(Picture.format.in_(format))
-
-        if min_score is not None:
-            query = query.where(Picture.score >= min_score)
-        if max_score is not None:
-            query = query.where(Picture.score <= max_score)
-
-        if smart_score_bucket == "unscored":
-            query = query.where(Picture.smart_score.is_(None))
-        elif smart_score_bucket == "1-2":
-            query = query.where(
-                Picture.smart_score.is_not(None), Picture.smart_score < 2.0
-            )
-        elif smart_score_bucket == "2-3":
-            query = query.where(Picture.smart_score >= 2.0, Picture.smart_score < 3.0)
-        elif smart_score_bucket == "3-4":
-            query = query.where(Picture.smart_score >= 3.0, Picture.smart_score < 4.0)
-        elif smart_score_bucket == "4-5":
-            query = query.where(Picture.smart_score >= 4.0)
-
-        if resolution_bucket == "unknown":
-            query = query.where(or_(Picture.width.is_(None), Picture.height.is_(None)))
-        elif resolution_bucket == "lt1mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height < 1_000_000,
-            )
-        elif resolution_bucket == "1-4mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 1_000_000,
-                Picture.width * Picture.height < 4_000_000,
-            )
-        elif resolution_bucket == "4-8mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 4_000_000,
-                Picture.width * Picture.height < 8_000_000,
-            )
-        elif resolution_bucket == "8-16mp":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 8_000_000,
-                Picture.width * Picture.height < 16_000_000,
-            )
-        elif resolution_bucket == "16plus":
-            query = query.where(
-                Picture.width.is_not(None),
-                Picture.height.is_not(None),
-                Picture.width * Picture.height >= 16_000_000,
-            )
-
-        if tags_filter:
-            for i, tag in enumerate(tags_filter):
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
-                    ).bindparams(**{f"tag_filter_{i}": tag})
-                )
-
-        if tags_rejected_filter:
-            for i, tag in enumerate(tags_rejected_filter):
-                query = query.where(
-                    text(
-                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
-                    ).bindparams(**{f"rejected_tag_filter_{i}": tag})
-                )
-
-        if hidden_tags_filter:
-            placeholders = ", ".join(f":ht_{i}" for i in range(len(hidden_tags_filter)))
-            query = query.where(
-                text(
-                    f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id"
-                    f" AND LOWER(tag.tag) IN ({placeholders}))"
-                ).bindparams(**{f"ht_{i}": t for i, t in enumerate(hidden_tags_filter)})
-            )
-
-        if tags_confidence_above_filter:
-            for i, entry in enumerate(tags_confidence_above_filter):
-                tag, threshold = entry.rsplit(":", 1)
-                if float(threshold) <= 0.0:
-                    query = query.where(
-                        text(
-                            f"("
-                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                            f") OR ("
-                            f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ca_tag_{i})"
-                            f")"
-                        ).bindparams(
-                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
-                        )
-                    )
-                else:
-                    query = query.where(
-                        text(
-                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                        ).bindparams(
-                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
-                        )
-                    )
-
-        if tags_confidence_below_filter:
-            for i, entry in enumerate(tags_confidence_below_filter):
-                tag, threshold = entry.rsplit(":", 1)
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
-                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
-                    ).bindparams(
-                        **{f"cb_tag_{i}": tag, f"cb_thresh_{i}": float(threshold)}
-                    )
-                )
-
-        if face_filter == "with_face":
-            query = query.where(
-                text(
-                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
-        elif face_filter == "without_face":
-            query = query.where(
-                text(
-                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
+        # Intrinsic-attribute predicates via the shared compiler.  The unassigned /
+        # project / deleted scoping is applied above; stack-leader collapsing stays
+        # below.  find_unassigned never filters on comfyui / file-path / import-source
+        # / import-excluded, so those fields are left unset.
+        query = PredicateFilter(
+            format=format,
+            min_score=min_score,
+            max_score=max_score,
+            smart_score_bucket=smart_score_bucket,
+            resolution_bucket=resolution_bucket,
+            tags_filter=tags_filter,
+            tags_rejected_filter=tags_rejected_filter,
+            hidden_tags_filter=hidden_tags_filter,
+            tags_confidence_above_filter=tags_confidence_above_filter,
+            tags_confidence_below_filter=tags_confidence_below_filter,
+            face_filter=face_filter,
+            apply_deleted_filter=False,
+        ).apply(query)
 
         if stack_leaders_only:
             project_scope_active = project_id is not None or only_unassigned_project

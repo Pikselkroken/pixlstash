@@ -51,6 +51,14 @@ In `~/.config/pixlstash/server-config.json`:
 > **Warning:** Use JSON boolean `true`/`false`, not strings like `"yes"`/`"no"` — Python
 > treats any non-empty string as truthy.
 
+> **Desktop app:** These settings apply only to the externally-exposed server. The PixlStash
+> desktop app talks to its own backend over a private loopback connection (`127.0.0.1`, on an
+> ephemeral port) that is **always plain HTTP** — it deliberately ignores `require_ssl`, so
+> enabling HTTPS here for LAN/iOS access never turns the internal connection into HTTPS (which
+> the desktop shell can't reach) and never breaks the desktop window. The on-disk config above
+> is left untouched. Enforced in `Server.__init__` (`pixlstash/server.py`), keyed off the
+> `PIXLSTASH_INSTALL_TYPE=electron` launch signal the desktop shell sets.
+
 ## Installing the Certificate on iPhone (iOS)
 
 iOS requires the cert to be explicitly trusted as a root CA. Do this once per cert (redo after regenerating).

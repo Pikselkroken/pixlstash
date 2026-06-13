@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+import os
 import re
 import secrets
 import threading
@@ -158,6 +159,25 @@ def is_local_ip(ip: str) -> bool:
         return True
 
 
+def is_loopback_ip(ip: str) -> bool:
+    """Return True only if *ip* is a loopback address (127.0.0.0/8, ::1).
+
+    Unlike :func:`is_local_ip`, RFC 1918 private LAN addresses are **not**
+    treated as loopback. This is the correct gate for high-privilege paths that
+    must never be reachable from another host on the LAN (the seeded desktop
+    owner session and first-owner registration): the real desktop window always
+    talks to the backend over 127.0.0.1, so pinning to loopback loses nothing
+    while closing the LAN to those paths.
+
+    Non-parseable strings (e.g. ``"testclient"`` from FastAPI's in-process
+    ``TestClient``) are treated as loopback so that unit tests are not blocked.
+    """
+    try:
+        return ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        return True
+
+
 @dataclass
 class TokenScope:
     """Scope restriction carried on request.state for token-authenticated requests."""
@@ -195,6 +215,12 @@ class AuthService:
         self._server_config_path = server_config_path
         self._logger = logger
         self.active_session_ids: dict[str, int] = {}
+        # The pre-authenticated Electron desktop owner session, if seeded (see
+        # seed_desktop_session). It grants full owner access and is therefore
+        # pinned to local connections only: the desktop window reaches the
+        # backend over loopback, so this session must never authenticate a
+        # request arriving on the optional external listener.
+        self._desktop_session_token: Optional[str] = None
         self.user: Optional[User] = None
         self.password_hash: Optional[str] = None
         self.username: Optional[str] = None
@@ -269,16 +295,46 @@ class AuthService:
             return sum(1 for ts in self._guest_sessions.values() if ts >= active_cutoff)
 
     def ensure_secure_when_required(self, request: Request):
-        if self._server_config.get("require_ssl", False):
-            if request.url.scheme != "https":
-                raise HTTPException(
-                    status_code=403,
-                    detail="HTTPS is required for this operation.",
-                )
+        if not self._server_config.get("require_ssl", False):
+            return
+        if request.url.scheme == "https":
+            return
+        # require_ssl governs the *external* surface only. The Electron desktop
+        # window always reaches the backend over a plain-HTTP loopback connection
+        # by design (require_ssl drives the separate external listener, not this
+        # one), and a standalone HTTPS-only server never serves plaintext at all.
+        # So a local/loopback client must not be forced onto HTTPS — only a
+        # genuinely remote plaintext request is rejected.
+        if is_local_ip(self._get_real_client_ip(request)):
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="HTTPS is required for this operation.",
+        )
 
     def _get_real_client_ip(self, request: Request) -> str:
         trusted = self._server_config.get("trusted_proxies", [])
         return get_real_client_ip(request, trusted)
+
+    def _get_real_client_ip_ws(self, websocket) -> str:
+        """Return the real client IP for a WebSocket handshake.
+
+        Mirrors :meth:`_get_real_client_ip` for the WS object, which exposes the
+        direct peer as ``websocket.client.host`` and forwarded hops in the
+        handshake headers. Falls back to loopback when the client is unknown.
+        """
+        direct_ip = (
+            websocket.client.host if getattr(websocket, "client", None) else "127.0.0.1"
+        )
+        trusted = self._server_config.get("trusted_proxies", [])
+        if direct_ip not in trusted:
+            return direct_ip
+        forwarded_for = websocket.headers.get("X-Forwarded-For", "")
+        hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
+        for hop in reversed(hops):
+            if hop not in trusted:
+                return hop
+        return direct_ip
 
     def _require_local_for_write(self, http_request: Optional[Request]) -> None:
         """Raise 403 if require_local_for_write is enabled and the client is not on the local network."""
@@ -291,6 +347,31 @@ class AuthService:
             raise HTTPException(
                 status_code=403,
                 detail="Full access is restricted to local network connections. Use a share token for remote access.",
+            )
+
+    def _require_loopback_for_registration(
+        self, http_request: Optional[Request]
+    ) -> None:
+        """Raise 403 if a first-owner registration is attempted from a non-loopback host.
+
+        Claiming the (empty) owner account by setting its username/password the
+        first time must only ever happen from the local desktop window, i.e. over
+        loopback. ``is_local_ip`` is deliberately **not** used here: it treats the
+        whole RFC 1918 LAN as "local", which would let any co-network device
+        register the owner account before the legitimate user does and take over
+        the entire library. Pin to loopback so the LAN cannot claim the account.
+        """
+        if http_request is None:
+            return  # programmatic call (e.g. tests) — treat as loopback
+        client_ip = self._get_real_client_ip(http_request)
+        if not is_loopback_ip(client_ip):
+            self._logger.warning(
+                "Rejected first-owner registration from non-loopback IP %s.",
+                client_ip,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Initial setup must be completed from the device running PixlStash.",
             )
 
     def _validate_bcrypt_password_length(self, password: Optional[str]):
@@ -339,6 +420,59 @@ class AuthService:
         self.password_hash = user.password_hash if user else None
         self.username = user.username if user else None
         return user
+
+    # Env var the Electron desktop shell uses to hand the server a
+    # pre-authenticated owner session token (see seed_desktop_session).
+    DESKTOP_SESSION_ENV = "PIXLSTASH_DESKTOP_SESSION"
+    # Minimum accepted length of the desktop session token. The shell ships a
+    # 32-byte token rendered as 64 hex chars; 32 is the documented floor of that
+    # contract (see seed_desktop_session and ServerProcess.ts).
+    DESKTOP_SESSION_MIN_LEN = 32
+
+    def seed_desktop_session(self) -> Optional[str]:
+        """Register a pre-authenticated owner session for the local desktop app.
+
+        When PixlStash runs inside the Electron desktop shell, the shell
+        generates a high-entropy token once per launch, passes it to the server
+        via the ``PIXLSTASH_DESKTOP_SESSION`` env var, and injects the same value
+        as the ``session_id`` cookie in its own ``BrowserWindow``.  Seeding the
+        token into :attr:`active_session_ids` here means the local window opens
+        straight into the library with no login/registration prompt.
+
+        This affects only the loopback owner: remote browsers and API clients
+        present a *different* cookie/token and continue to authenticate via the
+        normal password login (:meth:`login`) or share tokens.  Returns the
+        seeded token, or ``None`` when no (valid) token was supplied.
+        """
+        token = os.environ.get(self.DESKTOP_SESSION_ENV, "").strip()
+        if not token:
+            return None
+        # Guard against a weak/guessable token leaking owner access. The shell
+        # (electron/src/backend/ServerProcess.ts) supplies a 32-byte random token
+        # as 64 hex chars, so the documented contract is 32+ chars. Pin the floor
+        # to that contract (DESKTOP_SESSION_MIN_LEN) rather than an arbitrary 16,
+        # so a regression in the shell's generator to a shorter token is rejected
+        # instead of accepted as a full-owner credential.
+        if len(token) < self.DESKTOP_SESSION_MIN_LEN:
+            self._logger.warning(
+                "Ignoring %s: token too short (got %d chars, expected >=%d).",
+                self.DESKTOP_SESSION_ENV,
+                len(token),
+                self.DESKTOP_SESSION_MIN_LEN,
+            )
+            return None
+        user = self.ensure_user()
+        if not user or user.id is None:
+            self._logger.error(
+                "Could not seed desktop session: failed to ensure an owner user."
+            )
+            return None
+        self.active_session_ids[token] = user.id
+        self._desktop_session_token = token
+        self._logger.info(
+            "Seeded a pre-authenticated desktop session for the local owner."
+        )
+        return token
 
     def set_password_hash(self, hashed_password: str):
         def update_user(session: Session):
@@ -599,6 +733,21 @@ class AuthService:
         session_id = websocket.cookies.get("session_id")
         if session_id:
             user_id = self.active_session_ids.get(session_id)
+            # Mirror the HTTP path's fail-closed backstop: the seeded desktop
+            # owner session is loopback-only and must never authenticate a
+            # WebSocket arriving on the optional external listener. Without this,
+            # a non-browser LAN client presenting the desktop session token as a
+            # session_id cookie would be authenticated as full owner on /ws/*.
+            if (
+                user_id is not None
+                and session_id == self._desktop_session_token
+                and not is_loopback_ip(self._get_real_client_ip_ws(websocket))
+            ):
+                self._logger.warning(
+                    "Rejected desktop owner WebSocket session from non-loopback IP %s.",
+                    self._get_real_client_ip_ws(websocket),
+                )
+                user_id = None
             if user_id is not None:
                 return WebSocketAuth(user_id=user_id, is_owner=True)
 
@@ -680,6 +829,19 @@ class AuthService:
                 )
             if not bcrypt.verify(payload.current_password, user.password_hash):
                 raise HTTPException(status_code=401, detail="Invalid password")
+        else:
+            # The account has no password set yet (the auto-logged-in desktop
+            # owner before it is claimed). Without this guard, the current-
+            # password check above is skipped entirely, so anyone holding a
+            # session for the unclaimed account could set its password. Today
+            # only the loopback desktop window can reach an authenticated
+            # session for it, but that is an *indirect* defence (the session
+            # backstop); make it explicit and fail-closed here. Setting the
+            # first password on an unclaimed account is a claim, so gate it to
+            # loopback exactly like first-owner registration
+            # (_require_loopback_for_registration), keeping the two claim paths
+            # consistent.
+            self._require_loopback_for_registration(request)
 
         hashed_password = bcrypt.hash(payload.new_password)
 
@@ -1053,7 +1215,7 @@ class AuthService:
                 headers={"Retry-After": str(int(remaining) + 1)},
             )
         try:
-            response = self._do_login(request)
+            response = self._do_login(request, http_request)
         except HTTPException as exc:
             if exc.status_code == 401:
                 self._failed_login_attempts += 1
@@ -1076,7 +1238,7 @@ class AuthService:
         self._login_lockout_until = 0.0
         return response
 
-    def _do_login(self, request) -> Response:
+    def _do_login(self, request, http_request: Optional[Request] = None) -> Response:
         if not request.token and self._server_config.get(
             "disable_password_auth", False
         ):
@@ -1131,6 +1293,10 @@ class AuthService:
 
             user = self.get_user() or self.ensure_user()
             if not user.username or not user.password_hash:
+                # First-owner registration: claiming the empty owner account by
+                # setting its credentials. This must be loopback-only so a LAN
+                # device cannot claim the account before the real owner does.
+                self._require_loopback_for_registration(http_request)
                 self._validate_bcrypt_password_length(request.password)
                 hashed_password = bcrypt.hash(request.password)
 
@@ -1238,6 +1404,25 @@ class AuthService:
 
             session_id = request.cookies.get("session_id")
             user_id = self.active_session_ids.get(session_id) if session_id else None
+
+            # The seeded Electron desktop owner session is loopback-only: the
+            # window talks to the backend over 127.0.0.1, so this high-privilege
+            # session must never grant access on the optional external listener
+            # (even though the cookie is scoped to the loopback origin and so is
+            # not normally sent there — this is the fail-closed backstop). Pin to
+            # loopback, not the broad LAN: the external listener is reached over
+            # the LAN, so an is_local_ip check would leave the whole LAN open.
+            # Drop it for non-loopback clients and let normal token auth take over.
+            if (
+                user_id is not None
+                and session_id == self._desktop_session_token
+                and not is_loopback_ip(self._get_real_client_ip(request))
+            ):
+                self._logger.warning(
+                    "Rejected desktop owner session from non-local IP %s.",
+                    self._get_real_client_ip(request),
+                )
+                user_id = None
 
             if user_id is not None:
                 # Cookie session — full owner access, no scope restriction

@@ -113,12 +113,15 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
 
             # Step 2 — insert a couple of real picture rows (fill the
             # NOT NULL columns the schema requires).
+            # Note: import_excluded was dropped by migration 0052; the table
+            # built above (current model via baseline create_all) no longer has
+            # it, so the INSERT must not reference it.
             conn.execute(
                 "INSERT INTO picture "
-                "(id, file_path, original_file_name, deleted, import_excluded) "
+                "(id, file_path, original_file_name, deleted) "
                 "VALUES "
-                "(1001, 'a/b/c1.jpg', 'c1.jpg', 0, 0), "
-                "(1002, 'a/b/c2.jpg', 'c2.jpg', 0, 0)"
+                "(1001, 'a/b/c1.jpg', 'c1.jpg', 0), "
+                "(1002, 'a/b/c2.jpg', 'c2.jpg', 0)"
             )
             conn.commit()
 

@@ -29,6 +29,9 @@ class WorkPlanner:
         from pixlstash.tasks.missing_face_extraction_finder import (
             MissingFaceExtractionFinder,
         )
+        from pixlstash.tasks.missing_face_model_refresh_finder import (
+            MissingFaceModelRefreshFinder,
+        )
         from pixlstash.tasks.missing_image_embedding_finder import (
             MissingImageEmbeddingFinder,
         )
@@ -63,6 +66,10 @@ class WorkPlanner:
 
         return {
             TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
+                database=database,
+                engine_getter=engine_getter,
+            ),
+            TaskType.FACE_MODEL_REFRESH: MissingFaceModelRefreshFinder(
                 database=database,
                 engine_getter=engine_getter,
             ),

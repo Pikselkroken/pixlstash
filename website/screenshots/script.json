@@ -1,0 +1,538 @@
+[
+  {
+    "page": "introduction.html",
+    "asset": "01-PictureImport.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "introduction.html",
+    "asset": "02-CharacterAssignment.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "introduction.html",
+    "asset": "03-Tagging.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "introduction.html",
+    "asset": "04-SmartScore.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "introduction.html",
+    "asset": "05-SemanticSearch.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "introduction.html",
+    "asset": "06-Export.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "introduction.html",
+    "asset": "07-CreatingToken.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "08-ComfyUI-FaceSearch.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "09-ComfyUI-OutPaint.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "api.html",
+    "asset": "ai-toolkit.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyFaceLikenessGate.jpg",
+    "label": "Face Likeness Gate write scope",
+    "alt": "PixlStash Face Likeness Gate splitting a batch into accepted and rejected by character match",
+    "caption": "Keep only the generations that actually match a reference character. Wire in a Character Loader plus a batch of images, set a likeness threshold, and the gate splits the batch into accepted and rejected streams (with counts) — so you never waste compute polishing an off-model render. Requires PixlStash v1.4+ and a running face-extraction worker.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyFaceLikenessGateUpscale.jpg",
+    "label": "Face likeness gate → upscale",
+    "alt": "Generate with a character LoRA, gate by face likeness, then upscale and save the matches",
+    "caption": "Run it end to end: generate with a character LoRA, gate by face likeness, then upscale the accepted frames and save accepted and rejected streams to separate sets.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyImageEdit.jpg",
+    "label": "Image edit by prompt",
+    "alt": "Editing a loaded vault image with a text instruction in ComfyUI",
+    "caption": "Load a picture from the vault and edit it with a plain-language instruction (\"replace her top with a blue wooly jumper\"), then save it tagged to the same character.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyInstallation.jpg",
+    "label": "Installing ComfyUI-PixlStash from the ComfyUI Manager custom-nodes browser",
+    "alt": "Installing ComfyUI-PixlStash from the ComfyUI Manager custom-nodes browser",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyOutpaint.jpg",
+    "label": "Outpaint",
+    "alt": "Outpainting a loaded vault image beyond its original frame in ComfyUI",
+    "caption": "Extend a loaded vault image beyond its original frame, then save the wider result back with its metadata intact.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyResult.jpg",
+    "label": "Results land back in your vault",
+    "alt": "Generated and edited images saved back into a PixlStash set",
+    "caption": "Because the Picture Saver writes straight to PixlStash, everything you generate or edit shows up organised by project, set, and character — ready to search, tag, and curate.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyUpscale.jpg",
+    "label": "Upscale",
+    "alt": "Upscaling a vault image and saving it back in ComfyUI",
+    "caption": "Upscale a vault image and write the higher-resolution result straight back to PixlStash with metadata preserved.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyWorkflow.png",
+    "label": "Load & save round-trip",
+    "alt": "A PixlStash load-and-save round-trip workflow in ComfyUI",
+    "caption": "The starting point: load images from a project, set, or character and save the results straight back into your vault.",
+    "kind": "image"
+  },
+  {
+    "page": "install.html",
+    "asset": "docker-mark-black.svg",
+    "label": "",
+    "alt": "",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "FaceLikenessSearch.jpg",
+    "label": "Likeness Search read scope",
+    "alt": "PixlStash Likeness Search node matching a reference face against the vault",
+    "caption": "Search by likeness to a face, or combine several reference images into a single embedding query (e.g. \"an old man and a young man drinking beer\"). Filter by project, character, and set by wiring those inputs. Requires PixlStash v1.4+.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "MultiLikenessSearch.jpg",
+    "label": "Likeness Search read scope",
+    "alt": "PixlStash Likeness Search combining multiple reference images into one query",
+    "caption": "Search by likeness to a face, or combine several reference images into a single embedding query (e.g. \"an old man and a young man drinking beer\"). Filter by project, character, and set by wiring those inputs. Requires PixlStash v1.4+.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ReverseImageSearch.jpg",
+    "label": "Reverse image & face search",
+    "alt": "PixlStash context menu with reverse image search and find similar faces",
+    "caption": "Right-click any picture to run a reverse image search for visually similar pictures, or find other pictures containing the same face.",
+    "kind": "image"
+  },
+  {
+    "page": "index.html",
+    "asset": "ScreenshotApp.jpg",
+    "label": "PixlStash 1.6: desktop app and ComfyUI face search",
+    "alt": "PixlStash 1.6: desktop app and ComfyUI face search",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotBackend.jpg",
+    "label": "PixlStash desktop Backend settings — compute acceleration and remote access",
+    "alt": "PixlStash desktop Backend settings — compute acceleration and remote access",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotBreadcrumb.jpg",
+    "label": "Breadcrumb navigation showing the path to the current view in PixlStash",
+    "alt": "Breadcrumb navigation showing the path to the current view in PixlStash",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotCharacters.jpg",
+    "label": "People management",
+    "alt": "PixlStash character management view",
+    "caption": "Manage and organize people in your dataset efficiently.",
+    "kind": "image"
+  },
+  {
+    "page": "api.html",
+    "asset": "ScreenshotChat1.jpg",
+    "label": "LM-Studio chat showing PixlStash pictures inline",
+    "alt": "LM-Studio chat showing PixlStash pictures inline",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "api.html",
+    "asset": "ScreenshotChat2.jpg",
+    "label": "LM-Studio chat displaying matching reference images",
+    "alt": "LM-Studio chat displaying matching reference images",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "api.html",
+    "asset": "ScreenshotChat3.jpg",
+    "label": "LM-Studio chat with PixlStash search results",
+    "alt": "LM-Studio chat with PixlStash search results",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotComfyUi.jpg",
+    "label": "ComfyUI Integration",
+    "alt": "PixlStash ComfyUI integration view",
+    "caption": "Run your own ComfyUI workflows directly from PixlStash with progress tracking.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotContext.jpg",
+    "label": "Context menus",
+    "alt": "Context menu in the PixlStash image grid",
+    "caption": "Right-click anywhere in the grid or sidebar to rate, tag, assign, move, share, or delete without leaving your current view.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotDemo.jpg",
+    "label": "PixlStash demo site",
+    "alt": "PixlStash demo site",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotDragCharacters.jpg",
+    "label": "Dragging a character onto a different project in the PixlStash sidebar",
+    "alt": "Dragging a character onto a different project in the PixlStash sidebar",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotGrid.jpg",
+    "label": "Image grid",
+    "alt": "PixlStash grid view",
+    "caption": "Pretty image view with scoring, stacking and sorting.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotGridSelection.jpg",
+    "label": "Batch operations",
+    "alt": "PixlStash grid selection with set and character actions",
+    "caption": "Select images, tag or assign to sets or characters and perform batch actions.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotGridSimilarity.jpg",
+    "label": "Similarity sorting",
+    "alt": "PixlStash grid sorted by character similarity",
+    "caption": "Easily find pictures containing particular characters.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotIconColor.jpg",
+    "label": "Custom icons for sets",
+    "alt": "Coloured icon picker for picture sets in PixlStash",
+    "caption": "Give each picture set its own coloured icon for instant recognition, no matter how similar the contents look.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotImageOverlay.jpg",
+    "label": "Picture inspection",
+    "alt": "PixlStash image overlay view",
+    "caption": "Review and edit automatic descriptions and tags.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotImageOverlay2.jpg",
+    "label": "Face detection",
+    "alt": "PixlStash image overlay tag management",
+    "caption": "Detect and assign faces to people in your photos.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotJoyCaption.jpg",
+    "label": "Tagger and description plugin settings in PixlStash 1.3",
+    "alt": "Tagger and description plugin settings in PixlStash 1.3",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotKeyboard.jpg",
+    "label": "Lots of keyboard shortcuts",
+    "alt": "PixlStash keyboard shortcuts view",
+    "caption": "Lots of convenient keyboard shortcuts for navigation, selection, scoring, tagging, and more.",
+    "kind": "image"
+  },
+  {
+    "page": "api.html",
+    "asset": "ScreenshotLmStudio.jpg",
+    "label": "LM-Studio configured to talk to a PixlStash server",
+    "alt": "LM-Studio configured to talk to a PixlStash server",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "index.html",
+    "asset": "ScreenshotMain.jpg",
+    "label": "PixlStash interface",
+    "alt": "PixlStash interface",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotOverlap.jpg",
+    "label": "Multi-select with Overlap mode showing pictures containing both selected people",
+    "alt": "Multi-select with Overlap mode showing pictures containing both selected people",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotOverlapNew.jpg",
+    "label": "Boolean set operations",
+    "alt": "PixlStash boolean set operations toolbar",
+    "caption": "Ctrl-click multiple characters or picture sets, then combine them with Union, Overlap, Difference, or Unique (XOR) operations.",
+    "kind": "image"
+  },
+  {
+    "page": "api.html",
+    "asset": "ScreenshotPhotographySaver.jpg",
+    "label": "ComfyUI-PixlStash PhotographySaver node — saves outputs to a vault with metadata",
+    "alt": "ComfyUI-PixlStash PhotographySaver node — saves outputs to a vault with metadata",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotPictureStatistics.png",
+    "label": "Statistics sidebar",
+    "alt": "Picture statistics sidebar in PixlStash",
+    "caption": "Get a rapid overview of your picture sets, tag distribution, tag prediction confidence, and picture statistics at a glance.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotPlugins.jpg",
+    "label": "Add your own image filter plugins",
+    "alt": "PixlStash plugins",
+    "caption": "Extend PixlStash's functionality with custom Python plugins for image processing.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotProject.jpg",
+    "label": "Project Organisation",
+    "alt": "PixlStash project organisation view",
+    "caption": "Organise your projects efficiently with intuitive controls and additional metadata (here in dark theme)",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotReferenceFolders.jpg",
+    "label": "PixlStash screenshot with reference folders, context menu, and statistics sidebar",
+    "alt": "PixlStash screenshot with reference folders, context menu, and statistics sidebar",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotReferenceFoldersNew.jpg",
+    "label": "Reference folders",
+    "alt": "PixlStash reference folders and import folders",
+    "caption": "Keep your existing folder structure while still benefiting from PixlStash's organisation and metadata features. Manage reference and import folders directly from the UI.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ScreenshotSearchEdit.jpg",
+    "label": "Search → image edit → save",
+    "alt": "Face likeness search feeding a ComfyUI image-edit pipeline, end to end",
+    "caption": "End to end: find source images by face or meaning, run them through an edit pipeline, and save the edited results back to PixlStash.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotSelectiveRestore.jpg",
+    "label": "Selective restore",
+    "alt": "PixlStash selective restore of selected pictures from a snapshot",
+    "caption": "Don't want to roll back everything? Restore just the pictures you select. Anything not selected is left untouched.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotShare1.jpg",
+    "label": "Picture sharing",
+    "alt": "Sharing dialog in PixlStash showing a generated share link",
+    "caption": "Share pictures, sets, characters, and projects with a read-only link with no account required for viewers. Tokens are scoped and revocable. Optionally add your own watermarks for branding.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotShare2.jpg",
+    "label": "Shared picture view as seen by a recipient",
+    "alt": "Shared picture view as seen by a recipient",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotSidebar2.jpg",
+    "label": "Redesigned PixlStash sidebar",
+    "alt": "Redesigned PixlStash sidebar",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotSnapshots.jpg",
+    "label": "Snapshots & restore",
+    "alt": "PixlStash snapshots panel with daily, weekly, and monthly restore points",
+    "caption": "Automatic, compressed snapshots of your metadata — never the image files — on a daily, weekly, and monthly schedule. Roll back to any restore point in one click; a safety snapshot is taken first.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotTaggers.jpg",
+    "label": "PixlStash 1.3 — tagger and description engine settings",
+    "alt": "PixlStash 1.3 — tagger and description engine settings",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotTagging.jpg",
+    "label": "Tag autocompletion",
+    "alt": "Tag autocompletion",
+    "caption": "Tag with a keyboard shortcut and let PixlStash suggest tags as you type.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotTagStatistics.png",
+    "label": "Statistics sidebar",
+    "alt": "Tag distribution and statistics sidebar in PixlStash",
+    "caption": "Get a rapid overview of your picture sets, tag distribution, tag prediction confidence, and picture statistics at a glance.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotTaskManager.jpg",
+    "label": "Task manager in the statistics sidebar showing processing throughput",
+    "alt": "Task manager in the statistics sidebar showing processing throughput",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotToolbar.jpg",
+    "label": "New PixlStash toolbar design",
+    "alt": "New PixlStash toolbar design",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotUrl.jpg",
+    "label": "Browser URL bar showing a persistent PixlStash view URL",
+    "alt": "Browser URL bar showing a persistent PixlStash view URL",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotWhatsNew1_2.jpg",
+    "label": "PixlStash 1.2 — redesigned sidebar and toolbar",
+    "alt": "PixlStash 1.2 — redesigned sidebar and toolbar",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "SemanticSearch.jpg",
+    "label": "Semantic Search read scope",
+    "alt": "PixlStash Semantic Search node pulling images from a vault by a text query",
+    "caption": "Pull images out of the vault by meaning. Type a text string and the node uses PixlStash's semantic search to return the closest matches. Filter by project, character, and set. Requires PixlStash v1.4+.",
+    "kind": "image"
+  },
+  {
+    "page": "install.html",
+    "asset": "SmartScreen.png",
+    "label": "Windows SmartScreen – click More info then Run anyway",
+    "alt": "Windows SmartScreen – click More info then Run anyway",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "index.html",
+    "asset": "VideoMain.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  }
+]

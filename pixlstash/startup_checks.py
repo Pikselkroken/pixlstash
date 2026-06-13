@@ -199,6 +199,16 @@ class StartupChecks:
         host = str(self._server_config.get("host", "localhost"))
         port = int(self._server_config.get("port", 8000))
 
+        # Under the Electron desktop shell the configured host:port describes the
+        # optional *external* listener, not the connection the window uses (that
+        # is an always-free ephemeral loopback port — see Server.run). So only
+        # check the configured port when remote access is actually enabled, and
+        # check it on the interface it will really bind (0.0.0.0).
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
+            if not self._server_config.get("external_server_enabled", False):
+                return
+            host = "0.0.0.0"
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -263,7 +273,16 @@ class StartupChecks:
                     gpu_installed = True
             except metadata.PackageNotFoundError:
                 continue
-            except Exception:
+            except Exception as exc:
+                # An unexpected metadata-read error must not be silently
+                # swallowed: log it with the package name so a broken install
+                # is diagnosable, then treat the package as "not detected".
+                self._logger.warning(
+                    "[startup-check] Could not read distribution metadata for "
+                    "%s while checking for an onnxruntime conflict: %s",
+                    package_name,
+                    exc,
+                )
                 continue
         return cpu_installed and gpu_installed
 
@@ -274,6 +293,18 @@ class StartupChecks:
 
         is_auto_mode = device_value == "auto"
         is_explicit_gpu = device_value == "cuda"
+
+        # PyTorch's ROCm build drives the AMD GPU through the CUDA API (torch.cuda.*
+        # works, HIP masquerades as CUDA), so the checks below run unchanged; only
+        # torch.version.hip distinguishes it. ROCm is experimental and unverified,
+        # and we ship the CPU ONNX Runtime alongside it, so the ONNX models run on
+        # CPU by design while torch uses the GPU.
+        is_rocm = (
+            torch is not None
+            and getattr(getattr(torch, "version", None), "hip", None) is not None
+        )
+        accel_name = "ROCm" if is_rocm else "CUDA"
+        accel_note = " (experimental, unverified)" if is_rocm else ""
 
         if device_value == "cpu":
             outcome.notes.append(
@@ -292,22 +323,49 @@ class StartupChecks:
             )
             return
 
-        if not torch.cuda.is_available():
+        try:
+            gpu_available = torch.cuda.is_available()
+        except Exception as exc:
+            # A broken ROCm/CUDA install (unsupported gfx arch, missing driver) can
+            # raise here rather than returning False; treat any error as "no GPU"
+            # and fall back to CPU cleanly instead of crashing startup.
+            gpu_available = False
+            outcome.notes.append(f"GPU availability probe failed ({exc}).")
+        if not gpu_available:
             self._handle_gpu_check_failure(
                 outcome,
                 is_auto_mode,
                 is_explicit_gpu,
-                "CUDA is unavailable; forcing CPU inference.",
-                "CUDA is unavailable while default_device is set to cuda.",
+                f"{accel_name} is unavailable; forcing CPU inference.",
+                f"{accel_name} is unavailable while default_device is set to cuda.",
             )
             return
 
         providers = []
         try:
             providers = ort.get_available_providers() if ort is not None else []
-        except Exception:
+        except Exception as exc:
+            # A failure here means a broken ONNX Runtime install. Do not swallow
+            # it silently: without this log a broken ORT masquerades as "no CUDA
+            # provider" on a CUDA box, sending inference to CPU with no clue why.
             providers = []
-        if "CUDAExecutionProvider" not in providers:
+            self._logger.warning(
+                "[startup-check] ort.get_available_providers() failed (%s); "
+                "treating ONNX Runtime as having no available providers. ONNX "
+                "models will run on CPU.",
+                exc,
+            )
+        if is_rocm:
+            # The ROCm/MIGraphX ONNX Runtime build isn't on PyPI, so we bundle the
+            # CPU ORT on ROCm; the InsightFace face-extraction and optional WD14
+            # ONNX models run on CPU by design while PyTorch (HIP) uses the GPU for
+            # embeddings, captioning and the other torch workloads. This is expected
+            # on ROCm, so it's a note rather than a warning.
+            outcome.notes.append(
+                "AMD GPU (ROCm) is experimental and unverified. PyTorch will use the "
+                "GPU; the ONNX face-extraction and WD14 tagger models run on CPU."
+            )
+        elif "CUDAExecutionProvider" not in providers:
             provider_list = ", ".join(providers) if providers else "none"
             onnx_package = self._detect_onnxruntime_package()
             gpu_arch_note = self._detect_gpu_arch_note()
@@ -377,7 +435,8 @@ class StartupChecks:
             return
 
         outcome.notes.append(
-            f"GPU check passed ({free_mb:.0f} MB free VRAM); using CUDA inference."
+            f"GPU check passed ({free_mb:.0f} MB free VRAM); "
+            f"using {accel_name}{accel_note} inference."
         )
 
     def _force_cpu_with_warning(

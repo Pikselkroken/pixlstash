@@ -1,0 +1,120 @@
+name: ROCm overlay install check
+
+# Exercises the AMD ROCm GPU torch overlay download/install path on a plain
+# Linux x86_64 runner with NO AMD GPU. The ROCm wheels are manylinux x86_64 and
+# install fine without a GPU; the GPU is only needed at runtime. The point of
+# this job is to prove that the bundled torch pin can still be fetched from the
+# PyTorch ROCm index AND that what comes back is the genuine HIP/ROCm build
+# (torch.version.hip is truthy), not a silent CPU fallback. This guards against
+# the bundled pin drifting out of step with what the rocm index publishes.
+#
+# Not run on every push/PR: the ROCm torch wheel is ~2-3 GB and slow to fetch.
+# Manual (workflow_dispatch) plus a weekly schedule, so drift is caught within a
+# week without taxing the PR path.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 05:17 UTC every Monday. Off-the-hour minute so we don't pile onto the
+    # top-of-hour scheduler backlog. GitHub may delay scheduled runs under load.
+    - cron: '17 5 * * 1'
+
+# Don't stack overlapping manual + scheduled runs of this heavy job.
+concurrency:
+  group: rocm-overlay-install
+  cancel-in-progress: false
+
+jobs:
+  rocm-overlay-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.0
+
+      - name: Set up Python
+        # Pinned to 3.12 to match the rest of CI and the bundled runtime. The
+        # rocm7.1 index publishes cp310-cp314 wheels, so 3.12 has a matching
+        # torch-2.10.0+rocm7.1 cp312 manylinux_2_28_x86_64 wheel.
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Read bundled torch pins from requirements.txt
+        id: pins
+        run: |
+          set -euo pipefail
+          # Source of truth for the overlay pins is requirements.txt, the same
+          # versions build_desktop_runtime.py bakes into the bundled runtime.
+          torch="$(grep -E '^torch==' requirements.txt | head -n1 | cut -d= -f3)"
+          torchvision="$(grep -E '^torchvision==' requirements.txt | head -n1 | cut -d= -f3)"
+          if [ -z "$torch" ] || [ -z "$torchvision" ]; then
+            echo "::error::Could not parse torch/torchvision pins from requirements.txt"
+            exit 1
+          fi
+          echo "torch=$torch" >> "$GITHUB_OUTPUT"
+          echo "torchvision=$torchvision" >> "$GITHUB_OUTPUT"
+          echo "Bundled pins: torch==$torch torchvision==$torchvision"
+
+      - name: Install ROCm torch overlay (no GPU) and assert HIP build
+        env:
+          TORCH_VERSION: ${{ steps.pins.outputs.torch }}
+          TORCHVISION_VERSION: ${{ steps.pins.outputs.torchvision }}
+        run: |
+          set -euo pipefail
+
+          # --- MIRRORS electron/src/backend/BackendManager.ts installOverlay() ---
+          # This reproduces the production rocm install: the rocm7.1 index-url
+          # from TORCH_INDEX.rocm in electron/src/config.ts, pypi.org as the
+          # --extra-index-url for shared pure-Python deps, --target to a throwaway
+          # overlay dir, and the bundled torch/torchvision pins (PEP 440 base
+          # version, no +rocm local tag). It does NOT run the real Node code
+          # because installOverlay imports electron's `app` and shells out to the
+          # *bundled* interpreter (a packaged runtime that doesn't exist in CI),
+          # so wiring it up would mean building the whole desktop runtime first.
+          # KEEP THIS IN SYNC: if installOverlay's index-url, pins, or --target
+          # contract changes, update this step. The index-url lives in
+          # config.ts TORCH_INDEX.rocm (currently rocm7.1).
+          #
+          # LIMITATION (told to the CSO): because this mirrors rather than calls
+          # installOverlay, it does not cover the constraints.txt generation
+          # (bundledConstraints / pip freeze of the bundled env) or the
+          # indexVersions() drift-fallback branch. It covers the load-bearing
+          # security/drift assertion: the bundled pin is fetchable from the rocm
+          # index and is the HIP build. The Electron-side logic is covered by the
+          # electron job's unit tests, not here.
+
+          ROCM_INDEX_URL="https://download.pytorch.org/whl/rocm7.1"
+          OVERLAY_DIR="${RUNNER_TEMP}/rocm-overlay"
+          mkdir -p "$OVERLAY_DIR"
+
+          echo "Installing torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} from ${ROCM_INDEX_URL}"
+          echo "::notice::Scope note — this job mirrors installOverlay's pip call; constraints.txt and the indexVersions() fallback branch are NOT exercised here (covered by Electron unit tests). It DOES exercise the rocm-index fetch + HIP-build assertion."
+
+          # --no-cache-dir matches installOverlay and keeps the assertion honest:
+          # a freshly resolved download from the rocm index is the whole point, so
+          # we never want a cached wheel masking a pin that's gone missing.
+          python -m pip install --upgrade pip
+          python -m pip install \
+            --no-cache-dir \
+            --target "$OVERLAY_DIR" \
+            --index-url "$ROCM_INDEX_URL" \
+            --extra-index-url "https://pypi.org/simple" \
+            "torch==${TORCH_VERSION}" \
+            "torchvision==${TORCHVISION_VERSION}"
+
+          # Assert it is the genuine ROCm/HIP build, not the CPU build. The
+          # overlay is loaded via PYTHONPATH in production; do the same here.
+          echo "Verifying the installed torch is a HIP/ROCm build…"
+          PYTHONPATH="$OVERLAY_DIR" python - <<'PY'
+          import torch
+
+          hip = torch.version.hip
+          assert hip, (
+              f"torch {torch.__version__} reports torch.version.hip={hip!r} — "
+              "this is NOT a ROCm/HIP build. The rocm index likely no longer "
+              "publishes the bundled pin, or resolved a CPU wheel instead."
+          )
+          print(f"OK: torch {torch.__version__} is a HIP build (torch.version.hip={hip})")
+          PY

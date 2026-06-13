@@ -4,11 +4,17 @@ import { isReadOnly, logout } from "../../utils/apiClient";
 import AccountSection from "./AccountSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
+import ComputeSection from "./ComputeSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
 import WorkflowsSection from "./WorkflowsSection.vue";
 
 const appVersion = __APP_VERSION__;
+
+// The desktop app injects this bridge (Electron preload); a plain browser does
+// not, so the Compute tab is desktop-only.
+const isDesktop =
+  typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -90,6 +96,7 @@ watch(
           <v-tab v-if="!isReadOnly" value="smart-score">Smart Score</v-tab>
           <v-tab v-if="!isReadOnly" value="workflows">Workflows</v-tab>
           <v-tab v-if="!isReadOnly" value="snapshots">Snapshots</v-tab>
+          <v-tab v-if="isDesktop && !isReadOnly" value="compute">Backend</v-tab>
           <v-tab v-if="!isReadOnly" value="account">Account Settings</v-tab>
         </v-tabs>
         <v-card-text class="settings-dialog-body">
@@ -136,6 +143,9 @@ watch(
             </v-window-item>
             <v-window-item value="snapshots">
               <SnapshotsSection :open="dialogOpen" />
+            </v-window-item>
+            <v-window-item v-if="isDesktop" value="compute">
+              <ComputeSection :open="dialogOpen" />
             </v-window-item>
             <v-window-item value="account">
               <AccountSection

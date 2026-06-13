@@ -1,13 +1,15 @@
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 
 function loadStatsOpen() {
   try {
     const stored = window.localStorage?.getItem("pixlstash:statsSidebarOpen");
     if (stored !== null) return stored !== "false";
-    return !window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+    // Default hidden so the grid is uncluttered on first run; the user opens the
+    // stats panel from the toolbar toggle and the choice is then persisted.
+    return false;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -22,6 +24,7 @@ function saveStatsOpen(val) {
   }
 }
 
+// Width: full sidebar vs. narrow icon dock. Set in Settings → Appearance.
 function loadSidebarDocked() {
   try {
     return window.localStorage?.getItem("pixlstash:sidebarDocked") === "true";
@@ -41,15 +44,79 @@ function saveSidebarDocked(val) {
   }
 }
 
+// Visibility: pinned (always shown, pushes the grid) vs. unpinned/auto (hidden,
+// slides in as an overlay on hover). Toggled from the sidebar's Library header.
+function loadSidebarPinned() {
+  try {
+    const stored = window.localStorage?.getItem("pixlstash:sidebarPinned");
+    if (stored === "true") return true;
+    if (stored === "false") return false;
+  } catch {
+    // ignore
+  }
+  return true;
+}
+
+function saveSidebarPinned(val) {
+  try {
+    window.localStorage?.setItem(
+      "pixlstash:sidebarPinned",
+      val ? "true" : "false",
+    );
+  } catch {
+    // ignore
+  }
+}
+
 export const useSidebarStore = defineStore("sidebar", () => {
-  const sidebarVisible = ref(true);
-  const sidebarDocked = ref(loadSidebarDocked());
+  const sidebarDocked = ref(loadSidebarDocked()); // width pref
+  const sidebarPinned = ref(loadSidebarPinned()); // visibility pref
+  // Transient reveal state for auto-hide: true while the sidebar is peeked open.
+  const autoRevealed = ref(false);
   const statsOpen = ref(loadStatsOpen());
+  // Responsive override: a narrow/mobile window is always auto-hide + full width.
   const sidebarForcedHidden = ref(false);
   const statsForcedHidden = ref(false);
 
-  function toggleSidebar() {
-    sidebarVisible.value = !sidebarVisible.value;
+  const effectivePinned = computed(() =>
+    sidebarForcedHidden.value ? false : sidebarPinned.value,
+  );
+  // Width used by the layout — forced to full on mobile.
+  const effectiveDocked = computed(() =>
+    sidebarForcedHidden.value ? false : sidebarDocked.value,
+  );
+
+  // True when the sidebar should currently be on screen.
+  const sidebarVisible = computed(
+    () => effectivePinned.value || autoRevealed.value,
+  );
+  // True when the sidebar floats over the grid (auto-hide / drawer) rather than
+  // taking layout space.
+  const sidebarOverlay = computed(() => !effectivePinned.value);
+
+  function setSidebarDocked(val) {
+    sidebarDocked.value = !!val;
+    saveSidebarDocked(sidebarDocked.value);
+  }
+
+  function setSidebarPinned(val) {
+    sidebarPinned.value = !!val;
+    saveSidebarPinned(sidebarPinned.value);
+    // When unpinning, keep it revealed — the pointer is still inside the sidebar
+    // — until the pointer leaves. When pinning, clear the transient reveal.
+    autoRevealed.value = !sidebarPinned.value;
+  }
+
+  function toggleSidebarPinned() {
+    setSidebarPinned(!sidebarPinned.value);
+  }
+
+  function revealSidebar() {
+    if (sidebarOverlay.value) autoRevealed.value = true;
+  }
+
+  function hideAutoSidebar() {
+    autoRevealed.value = false;
   }
 
   function toggleStats() {
@@ -57,19 +124,31 @@ export const useSidebarStore = defineStore("sidebar", () => {
     saveStatsOpen(statsOpen.value);
   }
 
+  // Back-compat helpers used elsewhere.
+  function toggleSidebar() {
+    toggleSidebarPinned();
+  }
   function persistSidebarDocked(val) {
-    sidebarDocked.value = val;
-    saveSidebarDocked(val);
+    setSidebarDocked(val);
   }
 
   return {
-    sidebarVisible,
     sidebarDocked,
+    sidebarPinned,
+    autoRevealed,
+    effectiveDocked,
+    sidebarVisible,
+    sidebarOverlay,
     statsOpen,
     sidebarForcedHidden,
     statsForcedHidden,
-    toggleSidebar,
+    setSidebarDocked,
+    setSidebarPinned,
+    toggleSidebarPinned,
+    revealSidebar,
+    hideAutoSidebar,
     toggleStats,
+    toggleSidebar,
     persistSidebarDocked,
   };
 });

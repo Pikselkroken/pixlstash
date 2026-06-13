@@ -4,13 +4,13 @@
       <v-icon size="20" class="token-error-icon">mdi-link-off</v-icon>
       {{ tokenError }}
     </div>
-    <h1 class="headline">
-      {{
-        needsRegistration
-          ? "Register Password for PixlStash"
-          : "Log In to PixlStash"
-      }}
+    <h1 class="sr-only">
+      {{ needsRegistration ? "Register for PixlStash" : "Log in to PixlStash" }}
     </h1>
+    <div class="login-brand">
+      <img src="/Logo.png" alt="" class="login-logo" />
+      <WordmarkLogo class="login-wordmark" />
+    </div>
     <p class="subtitle">
       {{
         needsRegistration
@@ -67,6 +67,7 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../../utils/apiClient";
+import WordmarkLogo from "../WordmarkLogo.vue";
 
 const props = defineProps({
   tokenError: { type: String, default: null },
@@ -109,6 +110,26 @@ async function handleLogin() {
   color-scheme: dark;
 }
 
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 1.75rem;
+}
+
+.login-logo {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+}
+
+.login-wordmark {
+  /* Tiny5 brand wordmark (WordmarkLogo.vue). */
+  font-size: 2.1rem;
+  color: rgb(var(--v-theme-on-dark-surface));
+  --wordmark-accent: rgb(var(--v-theme-accent));
+}
+
 .token-error-banner {
   display: flex;
   align-items: center;
@@ -129,10 +150,18 @@ async function handleLogin() {
   color: rgb(var(--v-theme-error));
 }
 
-.headline {
-  margin: 0 0 0.25rem;
-  color: rgb(var(--v-theme-on-dark-surface));
-  text-align: center;
+/* Visually hidden but exposed to assistive tech, so the login page keeps an
+   <h1> document-outline landmark behind the logo + wordmark brand block. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .subtitle {

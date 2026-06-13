@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.5</title>
+    <title>What's New in PixlStash 1.6</title>
     <meta
       name="description"
-      content="Explore what's new in PixlStash 1.5: automatic compressed snapshots, one-click and selective restore, a change-aware restore preview, breadcrumb navigation, drag characters and sets between projects, and the new snapshot REST API with examples."
+      content="What's new in PixlStash 1.6: the new PixlStash Desktop app for Windows, macOS, and Linux — runs offline out of the box, opens straight into your library, adds GPU acceleration on demand, lives in the system tray, and can share your library over the network."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="pixlstash.css" />
@@ -534,39 +534,56 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- ── PixlStash 1.5 ──────────────────────────────────────────── -->
+      <!-- ── PixlStash 1.6 ──────────────────────────────────────────── -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.5</span>
-            <h1>Snapshots and restore with a full API</h1>
+            <span class="release-kicker">PixlStash 1.6</span>
+            <h1>PixlStash comes to the desktop</h1>
             <p>
-              PixlStash 1.5 puts a safety net under all your organising work.
-              Automatic, compressed snapshots capture your library's metadata:
-              tags, scores, faces, descriptions, and how everything is
-              organised, so any mistake is one click from undone. Roll all your
-              metadata back, or restore just the pictures you select.
+              PixlStash 1.6 introduces the <strong>PixlStash Desktop</strong>
+              app for Windows and Linux: one download that wraps the local
+              server in a native window. It runs offline out of the box and
+              opens straight into your library. No terminal, no Docker, no login
+              screen.
             </p>
-            <p>(Your image files are never touched.)</p>
+            <p>
+              Already running PixlStash from pip, Docker, or the Windows
+              installer? The desktop app picks up your existing library, so
+              nothing moves and nothing is lost.
+            </p>
             <ul class="release-bullets">
               <li>
-                Automatic daily / weekly / monthly snapshots, compressed with
-                zstd
+                A native app for Windows, and Linux: one download, simple
+                install.
               </li>
-              <li>Full metadata restore with an automatic safety snapshot</li>
-              <li>Selective restore of just the pictures you choose</li>
               <li>
-                Breadcrumb navigation and drag characters &amp; sets between
-                projects
+                Runs offline out of the box and opens straight into your
+                library, no login
               </li>
-              <li>A clean snapshot &amp; restore REST API</li>
+              <li>
+                GPU acceleration added on demand. NVIDIA CUDA and experimental
+                AMD ROCm
+              </li>
+              <li>
+                Lives in the system tray and keeps serving in the background
+                when you close the window
+              </li>
+              <li>
+                Optional remote access so other devices on your network can open
+                your library
+              </li>
+              <li>
+                Don't worry: PixlStash server isn't going anywhere. It remains
+                and will remain a clear focus.
+              </li>
             </ul>
           </div>
           <div class="release-hero-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotSnapshots.jpg"
-              alt="PixlStash 1.5 — snapshots panel with daily, weekly, and monthly restore points"
+              src="assets/ScreenshotApp.jpg"
+              alt="PixlStash 1.6 — the desktop app showing the library grid in a native window"
             />
           </div>
         </div>
@@ -575,108 +592,212 @@
       <section class="section-grid">
         <article class="update-card update-card--feature">
           <div class="update-card-body">
-            <h2>Restore only what you choose</h2>
+            <h2>Match the speed to your hardware</h2>
             <p>
-              A full restore rolls all your metadata back to a point in time,
-              but you don't always want that. Select any pictures and restore
-              just their metadata from a snapshot, leaving everything else
-              exactly as it is.
+              The app ships with a built-in runtime that works on any machine:
+              CPU on Windows and Linux. If you have a discrete GPU, add
+              acceleration on demand from the
+              <strong>Backend</strong> settings and choose from NVIDIA CUDA or
+              experimental AMD ROCm libraries download straight from PyPI into a
+              private overlay, and the bundled runtime is never touched. The
+              same panel turns on optional <strong>remote access</strong> so
+              other devices on your network can open the library in a browser in
+              the same way as PixlStash server.
             </p>
           </div>
           <div class="update-card-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotSelectiveRestore.jpg"
-              alt="Selective restore previewing exactly which selected pictures will change"
+              src="assets/ScreenshotBackend.jpg"
+              alt="PixlStash desktop Backend settings — compute acceleration and remote access"
             />
-          </div>
-        </article>
-      </section>
-
-      <section class="section-grid">
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotBreadcrumb.jpg"
-            alt="Breadcrumb navigation showing the path to the current view in PixlStash"
-          />
-          <div class="update-card-body">
-            <h2>Find your way with breadcrumbs</h2>
-            <p>
-              A breadcrumb trail above the grid always shows where you are:
-              project, character, or set. This allows you to jump back up the
-              hierarchy with a single click. No more guessing how you reached a
-              view or navigating back from scratch.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotDragCharacters.jpg"
-            alt="Dragging a character onto a different project in the PixlStash sidebar"
-          />
-          <div class="update-card-body">
-            <h2>Drag characters &amp; sets between projects</h2>
-            <p>
-              Reorganise on the fly: grab a character or picture set in the
-              sidebar and drop it onto another project. Their pictures are
-              re-assigned for you — reference-aware, so a picture that still
-              belongs elsewhere stays put. Reshaping large libraries is now a
-              drag away.
-            </p>
           </div>
         </article>
       </section>
 
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
-          <h2>Snapshots without the disk bill — or the wait</h2>
+          <h2>Runs offline, lives in your tray</h2>
           <p>
-            A snapshot copies only your <strong>metadata database</strong> —
-            never the image files, which would be wildly impractical to
-            duplicate over and over. That database is compressed with
-            <strong>zstd</strong> for roughly a 3× saving, yet still keeps the
-            expensive parts — CLIP embeddings and face data — so a restore comes
-            back fully populated with no re-tagging or re-embedding pass
-            afterwards. Retention follows a true grandfather-father-son policy:
-            the most recent <strong>7 daily</strong>, <strong>4 weekly</strong>,
-            and <strong>12 monthly</strong> snapshots are kept and the oldest
-            are pruned for you.
+            Everything is local. The bundled runtime means the app works with no
+            internet connection, and it opens directly into your library with no
+            login prompt because it talks to its own private local server. Close
+            the window and PixlStash keeps running in the system tray, so your
+            library — and any remote access you enabled — stays a click away.
+            The pip, Docker, and source installs are all still fully supported;
+            the desktop app is simply the easiest way to run PixlStash on your
+            own machine.
           </p>
         </div>
       </article>
 
-      <section class="api-block">
-        <div class="api-block-head">
-          <h2>The snapshot &amp; restore API</h2>
+      <section class="release-cta">
+        <div>
+          <h3>Get the desktop app</h3>
           <p>
-            Everything the snapshots panel does is a plain REST call, so you can
-            script metadata snapshots and restores straight into your own
-            pipelines. Authenticate with an owner token and talk to the
-            endpoints under <code>/api/v1</code>.
+            Download PixlStash Desktop for Windows, macOS, or Linux — or keep
+            using pip, Docker, or the source build.
           </p>
         </div>
-        <div class="api-auth">
-          Every request carries an owner token:
-          <code>Authorization: Bearer &lt;token&gt;</code>
+        <div class="release-cta-actions">
+          <a class="release-btn release-btn-primary" href="install.html"
+            >Download</a
+          >
+          <a class="release-btn release-btn-secondary" href="upgrade.html"
+            >Upgrade guide</a
+          >
         </div>
-        <div class="api-endpoints">
-          <div class="endpoint">
-            <div class="endpoint-head">
-              <span class="method method--get">GET</span>
-              <span class="endpoint-path">/snapshots</span>
+      </section>
+
+      <!-- ── PixlStash 1.5 (previous release) ────────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release — PixlStash 1.5</span>
+
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.5</span>
+              <h1>Snapshots and restore with a full API</h1>
+              <p>
+                PixlStash 1.5 puts a safety net under all your organising work.
+                Automatic, compressed snapshots capture your library's metadata:
+                tags, scores, faces, descriptions, and how everything is
+                organised, so any mistake is one click from undone. Roll all
+                your metadata back, or restore just the pictures you select.
+              </p>
+              <p>(Your image files are never touched.)</p>
+              <ul class="release-bullets">
+                <li>
+                  Automatic daily / weekly / monthly snapshots, compressed with
+                  zstd
+                </li>
+                <li>Full metadata restore with an automatic safety snapshot</li>
+                <li>Selective restore of just the pictures you choose</li>
+                <li>
+                  Breadcrumb navigation and drag characters &amp; sets between
+                  projects
+                </li>
+                <li>A clean snapshot &amp; restore REST API</li>
+              </ul>
             </div>
-            <p class="endpoint-desc">List every restore point, newest first.</p>
-            <div class="code-block">
-              <span class="code-block-label">Request</span>
-              <pre><span class="tok-cmd">curl</span> -H "Authorization: Bearer $TOKEN" \
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotSnapshots.jpg"
+                alt="PixlStash 1.5 — snapshots panel with daily, weekly, and monthly restore points"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>Restore only what you choose</h2>
+              <p>
+                A full restore rolls all your metadata back to a point in time,
+                but you don't always want that. Select any pictures and restore
+                just their metadata from a snapshot, leaving everything else
+                exactly as it is.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotSelectiveRestore.jpg"
+                alt="Selective restore previewing exactly which selected pictures will change"
+              />
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotBreadcrumb.jpg"
+              alt="Breadcrumb navigation showing the path to the current view in PixlStash"
+            />
+            <div class="update-card-body">
+              <h2>Find your way with breadcrumbs</h2>
+              <p>
+                A breadcrumb trail above the grid always shows where you are:
+                project, character, or set. This allows you to jump back up the
+                hierarchy with a single click. No more guessing how you reached
+                a view or navigating back from scratch.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotDragCharacters.jpg"
+              alt="Dragging a character onto a different project in the PixlStash sidebar"
+            />
+            <div class="update-card-body">
+              <h2>Drag characters &amp; sets between projects</h2>
+              <p>
+                Reorganise on the fly: grab a character or picture set in the
+                sidebar and drop it onto another project. Their pictures are
+                re-assigned for you — reference-aware, so a picture that still
+                belongs elsewhere stays put. Reshaping large libraries is now a
+                drag away.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Snapshots without the disk bill — or the wait</h2>
+            <p>
+              A snapshot copies only your <strong>metadata database</strong> —
+              never the image files, which would be wildly impractical to
+              duplicate over and over. That database is compressed with
+              <strong>zstd</strong> for roughly a 3× saving, yet still keeps the
+              expensive parts — CLIP embeddings and face data — so a restore
+              comes back fully populated with no re-tagging or re-embedding pass
+              afterwards. Retention follows a true grandfather-father-son
+              policy: the most recent <strong>7 daily</strong>,
+              <strong>4 weekly</strong>, and
+              <strong>12 monthly</strong> snapshots are kept and the oldest are
+              pruned for you.
+            </p>
+          </div>
+        </article>
+
+        <section class="api-block">
+          <div class="api-block-head">
+            <h2>The snapshot &amp; restore API</h2>
+            <p>
+              Everything the snapshots panel does is a plain REST call, so you
+              can script metadata snapshots and restores straight into your own
+              pipelines. Authenticate with an owner token and talk to the
+              endpoints under <code>/api/v1</code>.
+            </p>
+          </div>
+          <div class="api-auth">
+            Every request carries an owner token:
+            <code>Authorization: Bearer &lt;token&gt;</code>
+          </div>
+          <div class="api-endpoints">
+            <div class="endpoint">
+              <div class="endpoint-head">
+                <span class="method method--get">GET</span>
+                <span class="endpoint-path">/snapshots</span>
+              </div>
+              <p class="endpoint-desc">
+                List every restore point, newest first.
+              </p>
+              <div class="code-block">
+                <span class="code-block-label">Request</span>
+                <pre><span class="tok-cmd">curl</span> -H "Authorization: Bearer $TOKEN" \
      https://your-server/api/v1/snapshots</pre>
-            </div>
-            <div class="code-block">
-              <span class="code-block-label">Response</span>
-              <pre>
+              </div>
+              <div class="code-block">
+                <span class="code-block-label">Response</span>
+                <pre>
 [
   {
     "id": 42,
@@ -688,44 +809,46 @@
     "is_compatible": true
   }
 ]</pre
-              >
+                >
+              </div>
             </div>
-          </div>
 
-          <div class="endpoint">
-            <div class="endpoint-head">
-              <span class="method method--post">POST</span>
-              <span class="endpoint-path">/snapshots</span>
-            </div>
-            <p class="endpoint-desc">
-              Take a manual snapshot right now, optionally labelled.
-            </p>
-            <div class="code-block">
-              <span class="code-block-label">Request</span>
-              <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots \
+            <div class="endpoint">
+              <div class="endpoint-head">
+                <span class="method method--post">POST</span>
+                <span class="endpoint-path">/snapshots</span>
+              </div>
+              <p class="endpoint-desc">
+                Take a manual snapshot right now, optionally labelled.
+              </p>
+              <div class="code-block">
+                <span class="code-block-label">Request</span>
+                <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"label": "before big cleanup"}'</pre>
-            </div>
-            <div class="code-block">
-              <span class="code-block-label">Response</span>
-              <pre>
+              </div>
+              <div class="code-block">
+                <span class="code-block-label">Response</span>
+                <pre>
 { "id": 51, "kind": "MANUAL", "label": "before big cleanup", "picture_count": 1030 }</pre
-              >
+                >
+              </div>
             </div>
-          </div>
 
-          <div class="endpoint">
-            <div class="endpoint-head">
-              <span class="method method--get">GET</span>
-              <span class="endpoint-path">/snapshots/{id}/restore/preview</span>
-            </div>
-            <p class="endpoint-desc">
-              Dry-run a full restore — it counts only what actually changes.
-            </p>
-            <div class="code-block">
-              <span class="code-block-label">Response</span>
-              <pre>
+            <div class="endpoint">
+              <div class="endpoint-head">
+                <span class="method method--get">GET</span>
+                <span class="endpoint-path"
+                  >/snapshots/{id}/restore/preview</span
+                >
+              </div>
+              <p class="endpoint-desc">
+                Dry-run a full restore — it counts only what actually changes.
+              </p>
+              <div class="code-block">
+                <span class="code-block-label">Response</span>
+                <pre>
 {
   "summary": {
     "pictures_to_revert": 12,
@@ -736,51 +859,51 @@
   },
   "warnings": []
 }</pre
-              >
+                >
+              </div>
             </div>
-          </div>
 
-          <div class="endpoint">
-            <div class="endpoint-head">
-              <span class="method method--post">POST</span>
-              <span class="endpoint-path">/snapshots/{id}/restore</span>
-            </div>
-            <p class="endpoint-desc">
-              Restore all metadata to this snapshot — a safety snapshot is taken
-              first.
-            </p>
-            <div class="code-block">
-              <span class="code-block-label">Request</span>
-              <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots/42/restore \
+            <div class="endpoint">
+              <div class="endpoint-head">
+                <span class="method method--post">POST</span>
+                <span class="endpoint-path">/snapshots/{id}/restore</span>
+              </div>
+              <p class="endpoint-desc">
+                Restore all metadata to this snapshot — a safety snapshot is
+                taken first.
+              </p>
+              <div class="code-block">
+                <span class="code-block-label">Request</span>
+                <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots/42/restore \
      -H "Authorization: Bearer $TOKEN"</pre>
-            </div>
-            <div class="code-block">
-              <span class="code-block-label">Response</span>
-              <pre>
+              </div>
+              <div class="code-block">
+                <span class="code-block-label">Response</span>
+                <pre>
 { "snapshot_id": 42, "resource_type": "full", "missing_files_count": 0, "errors": [] }</pre
-              >
+                >
+              </div>
             </div>
-          </div>
 
-          <div class="endpoint">
-            <div class="endpoint-head">
-              <span class="method method--post">POST</span>
-              <span class="endpoint-path">/snapshots/{id}/restore/batch</span>
-            </div>
-            <p class="endpoint-desc">
-              Selective restore — bring back only the resources you list.
-            </p>
-            <div class="code-block">
-              <span class="code-block-label">Request — curl</span>
-              <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots/42/restore/batch \
+            <div class="endpoint">
+              <div class="endpoint-head">
+                <span class="method method--post">POST</span>
+                <span class="endpoint-path">/snapshots/{id}/restore/batch</span>
+              </div>
+              <p class="endpoint-desc">
+                Selective restore — bring back only the resources you list.
+              </p>
+              <div class="code-block">
+                <span class="code-block-label">Request — curl</span>
+                <pre><span class="tok-cmd">curl</span> -X POST https://your-server/api/v1/snapshots/42/restore/batch \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"resources": [{"type": "picture", "id": 8123},
                         {"type": "picture", "id": 8124}]}'</pre>
-            </div>
-            <div class="code-block">
-              <span class="code-block-label">Request — Python</span>
-              <pre><span class="tok-comment"># pip install requests</span>
+              </div>
+              <div class="code-block">
+                <span class="code-block-label">Request — Python</span>
+                <pre><span class="tok-comment"># pip install requests</span>
 import requests
 
 r = requests.post(
@@ -789,37 +912,20 @@ r = requests.post(
     json={"resources": [{"type": "picture", "id": 8123}]},
 )
 print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count': 1, 'errors': []}</span></pre>
-            </div>
-            <div class="code-block">
-              <span class="code-block-label">Response</span>
-              <pre>
+              </div>
+              <div class="code-block">
+                <span class="code-block-label">Response</span>
+                <pre>
 { "snapshot_id": 42, "upserted_count": 2, "errors": [] }</pre
-              >
+                >
+              </div>
             </div>
           </div>
-        </div>
-        <div class="api-more">
-          <a href="api.html">Browse the full interactive API reference →</a>
-        </div>
-      </section>
-
-      <section class="release-cta">
-        <div>
-          <h3>Ready to upgrade?</h3>
-          <p>
-            Follow upgrade steps for pip, Docker, Windows installer, or source
-            builds.
-          </p>
-        </div>
-        <div class="release-cta-actions">
-          <a class="release-btn release-btn-primary" href="upgrade.html"
-            >Upgrade now</a
-          >
-          <a class="release-btn release-btn-secondary" href="index.html"
-            >Back to home</a
-          >
-        </div>
-      </section>
+          <div class="api-more">
+            <a href="api.html">Browse the full interactive API reference →</a>
+          </div>
+        </section>
+      </div>
 
       <!-- ── PixlStash 1.4 (previous release) ────────────────────────── -->
       <div class="prev-release">

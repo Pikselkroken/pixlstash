@@ -37,6 +37,7 @@ from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
+from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 logger = get_logger(__name__)
 
@@ -893,14 +894,13 @@ def create_router(server) -> APIRouter:
         resolution_bucket: str | None = Query(None),
         expand_stacks: bool = Query(False),
     ):
-        tags_filter = request.query_params.getlist("tag") or None
-        tags_rejected_filter = request.query_params.getlist("rejected_tag") or None
-        tags_confidence_above_filter = (
-            request.query_params.getlist("tag_confidence_above") or None
-        )
-        tags_confidence_below_filter = (
-            request.query_params.getlist("tag_confidence_below") or None
-        )
+        # Intrinsic tag/confidence query params are parsed by the shared parser; the
+        # remaining filters (format/scores/buckets) arrive as typed Query args above.
+        _predicate_filter = PredicateFilter.from_query_params(request)
+        tags_filter = _predicate_filter.tags_filter
+        tags_rejected_filter = _predicate_filter.tags_rejected_filter
+        tags_confidence_above_filter = _predicate_filter.tags_confidence_above_filter
+        tags_confidence_below_filter = _predicate_filter.tags_confidence_below_filter
         try:
             id = int(id)
         except (TypeError, ValueError):

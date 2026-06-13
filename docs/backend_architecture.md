@@ -380,6 +380,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets | Get picture set thumbnail                        |
 | GET    | /api/v1/pictures                                                              | pictures     | List pictures                                    |
 | POST   | /api/v1/pictures/apply-scores                                                 | pictures     | Batch apply manual scores                        |
+| POST   | /api/v1/pictures/character_likeness/batch                                     | pictures     | Batch picture character likeness                 |
 | GET    | /api/v1/pictures/count                                                        | pictures     | Total picture count for a listing filter         |
 | GET    | /api/v1/pictures/export                                                       | pictures     | Start picture export job                         |
 | GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures     | Download completed export                        |
@@ -389,6 +390,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/import/status                                                | pictures     | Get import job status                            |
 | POST   | /api/v1/pictures/likeness-search                                              | pictures     | Search by image likeness                         |
 | PATCH  | /api/v1/pictures/project                                                      | pictures     | Set project for pictures                         |
+| POST   | /api/v1/pictures/score_character_likeness                                     | pictures     | Score uploaded images by character likeness      |
 | DELETE | /api/v1/pictures/scrapheap                                                    | pictures     | Permanently delete scrapheap pictures            |
 | POST   | /api/v1/pictures/scrapheap/restore                                            | pictures     | Restore deleted pictures                         |
 | GET    | /api/v1/pictures/search                                                       | pictures     | Search pictures by text                          |

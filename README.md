@@ -36,6 +36,13 @@ PixlStash runs on your machine and serves the UI at a local (or Internet-facing)
   </a>
 </p>
 
+PixlStash is available as a **native desktop app for Windows, macOS, and Linux**
+(no Python or browser tab required), as a Windows installer, a Docker image, or a
+pip package. The desktop app ships a ready-to-run CPU runtime (Metal on Apple
+Silicon), so it works offline out of the box, and auto-detects your hardware to
+offer optional GPU acceleration (NVIDIA CUDA / AMD ROCm), which it installs on
+demand straight from PyPI / PyTorch.
+
 Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
 
 
@@ -46,6 +53,11 @@ On first run, PixlStash creates a user config directory and stores:
 - Server config
 - Database
 - Imported media files
+
+The **desktop app** uses this same platform user data directory, so a desktop
+install shares its library with a pip or Docker install on the same machine. If
+you add GPU acceleration, the desktop app stores the downloaded GPU wheels under
+the app's own user-data directory.
 
 > **Model downloads:** On first startup, PixlStash automatically downloads the AI models required for tagging, captioning, and quality scoring. This includes several hundred MB of model weights. Downloads are stored in the platform user data directory:
 >
@@ -243,10 +255,36 @@ Import Folders UI/API, not in `server-config.json`.
 
 ### Processing
 
-| Key                              | Default | Description                                          |
-| -------------------------------- | ------- | ---------------------------------------------------- |
-| `default_device`                 | `"cpu"` | Device used for AI processing (`"cpu"` or `"cuda"`). |
-| `generate_thumbnails_on_startup` | `true`  | Generate missing thumbnails when the server starts.  |
+| Key                              | Default        | Description                                                                                                  |
+| -------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `default_device`                 | `"cpu"`        | Device used for AI processing (`"cpu"` or `"cuda"`).                                                        |
+| `insightface_model_pack`         | `"buffalo_l"`  | InsightFace model pack used by the face detection / recognition pipeline. One of `"buffalo_l"` or `"auraface"`. |
+| `generate_thumbnails_on_startup` | `true`         | Generate missing thumbnails when the server starts.                                                         |
+
+#### Face model pack and licensing
+
+`insightface_model_pack` selects which InsightFace model pack powers face
+detection and face recognition. The licensing decision is yours;
+PixlStash simply makes the choice available.
+
+- **`buffalo_l`** (default): the standard InsightFace pack. Its recognition
+  weights are trained on the WebFace600K dataset, which is licensed for
+  **non-commercial research use only**. This is the right choice for personal
+  and research use, and it downloads automatically on first use.
+- **`auraface`**: the [`fal/AuraFace-v1`](https://huggingface.co/fal/AuraFace-v1)
+  pack, whose weights are **Apache-2.0 licensed** and therefore suitable if you
+  need to use face features in a **commercial** setting. It uses the same
+  SCRFD-10G face detector as `buffalo_l`, so switching only changes the
+  recognition embedding. When selected, PixlStash downloads the pack from a
+  pinned HuggingFace revision into `~/.insightface/models/auraface/` on first
+  use. If the automatic download fails (for example, no network access), you can
+  place the pack's `.onnx` files in that directory manually and restart.
+
+Changing this setting on an existing library does **not** delete your faces or
+your manual character assignments. PixlStash detects faces whose embeddings came
+from a different pack and refreshes those embeddings in place, in the background,
+keeping each face's identity intact. New imports are always processed first, so a
+refresh sweep never starves brand-new pictures.
 
 To remove stale database records for missing source files at startup, run:
 
@@ -271,6 +309,7 @@ python -m pixlstash.app --cleanup-missing-pictures
   "require_ssl": false,
   "image_root": "/home/user/.config/pixlstash/images",
   "default_device": "cpu",
+  "insightface_model_pack": "buffalo_l",
   "generate_thumbnails_on_startup": true
 }
 ```

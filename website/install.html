@@ -7,12 +7,12 @@
     <title>Install PixlStash</title>
     <meta
       name="description"
-      content="Install PixlStash — Windows installer, Docker, pip, or from source."
+      content="Install PixlStash — Desktop App, Server Installer for Windows, Docker, pip, or from source."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="pixlstash.css" />
@@ -178,6 +178,29 @@
           class="tab-btn active"
           role="tab"
           aria-selected="true"
+          aria-controls="panel-desktop"
+          data-tab="desktop"
+        >
+          <svg
+            class="tab-icon"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <rect x="1" y="2" width="14" height="9" rx="1" />
+            <path
+              d="M5 14h6"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+            />
+          </svg>
+          Desktop App
+        </button>
+        <button
+          class="tab-btn"
+          role="tab"
+          aria-selected="false"
           aria-controls="panel-windows"
           data-tab="windows"
         >
@@ -189,7 +212,7 @@
           >
             <path d="M0 0h7v7H0zm9 0h7v7H9zM0 9h7v7H0zm9 0h7v7H9z" />
           </svg>
-          Windows Installer
+          Server Installer for Windows
         </button>
         <button
           class="tab-btn"
@@ -273,12 +296,74 @@
 
       <!-- Tab panels -->
       <div class="tab-panels">
-        <!-- ── Windows ── -->
-        <div class="tab-panel active" id="panel-windows" role="tabpanel">
-          <p class="section-title">Windows Installer</p>
+        <!-- ── Desktop App ── -->
+        <div class="tab-panel active" id="panel-desktop" role="tabpanel">
+          <p class="section-title">Desktop App</p>
           <p class="section-subtitle">
-            The easiest way to get started on Windows — no Python or Node.js
-            required.
+            A native PixlStash window for Windows, and Linux: no Python,
+            Node.js, or browser tab required. The app auto-detects your hardware
+            and downloads a matching AI backend (NVIDIA, experimetal AMD or CPU)
+            on first run.
+          </p>
+
+          <div class="method-steps">
+            <div class="step">
+              <span class="step-label">1 — Download the app</span>
+              <p class="step-note">
+                Grab the installer for your platform from the
+                <a
+                  href="https://github.com/pikselkroken/pixlstash/releases/latest"
+                  target="_blank"
+                  rel="noopener"
+                  >latest release on GitHub</a
+                >: <code>.exe</code> (Windows) or <code>.AppImage</code>/<code
+                  >.deb</code
+                >
+                (Linux).
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label">2 — Launch &amp; pick a backend</span>
+              <p class="step-note">
+                On first run, PixlStash detects your hardware and recommends a
+                compute backend (the Python + AI runtime). The download is a few
+                hundred&nbsp;MB to a few&nbsp;GB depending on the backend; it is
+                fetched once and reused.
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label">3 — Use PixlStash</span>
+              <p class="step-note">
+                The window opens straight into your library — no login prompt
+                for the local user. Your data lives in the standard per-user
+                location, so it is shared with a pip or Docker install on the
+                same machine. You can switch or update backends any time from
+                <strong>Backends → Compute Backends…</strong>.
+              </p>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="step">
+              <p class="sub-heading">⚠️ Unsigned builds</p>
+              <p class="step-note">
+                Until the builds are signed with paid certificates, Windows
+                SmartScreen may warn that the app is from an unidentified
+                developer. On Windows click
+                <strong>More info → Run anyway</strong>;
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Windows ── -->
+        <div class="tab-panel" id="panel-windows" role="tabpanel">
+          <p class="section-title">Server Installer for Windows</p>
+          <p class="section-subtitle">
+            The easiest way to get started with the server on Windows — no
+            Python or Node.js required.
           </p>
 
           <div class="method-steps">

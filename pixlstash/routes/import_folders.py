@@ -115,7 +115,6 @@ def create_router(server) -> APIRouter:
                 .where(
                     Picture.import_source_folder.is_not(None),
                     Picture.deleted.is_(False),
-                    Picture.import_excluded.is_(False),
                 )
                 .group_by(Picture.import_source_folder)
             ).all()
