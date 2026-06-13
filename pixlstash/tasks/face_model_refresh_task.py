@@ -33,7 +33,6 @@ from sqlmodel import select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.face import Face
-from pixlstash.db_models.picture import Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 from pixlstash.tasks.face_extraction_task import CROP_EXPAND_SCALE, FaceExtractionTask
@@ -78,6 +77,10 @@ class FaceModelRefreshTask(BaseTask):
 
     _IMAGE_EXTS = FaceExtractionTask._IMAGE_EXTS
     _VIDEO_EXTS = FaceExtractionTask._VIDEO_EXTS
+    # Upper bound on frames fed to one batched detect+recognise call. Bounds peak
+    # memory (loaded frames held at once) while still batching the recognition
+    # pass across many faces in a single ONNX call.
+    _DETECT_BATCH_IMAGES = 64
 
     def __init__(self, database, engine, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -117,20 +120,24 @@ class FaceModelRefreshTask(BaseTask):
                 self._engine, cpu_spillover=self._cpu_spillover_enabled
             )
 
-    def _detect_for_picture(self, pic) -> list:
-        """Detect faces for one picture, returning Face objects (not persisted).
+    def _load_detection_units(self, pic) -> list:
+        """Load the frames to run detection on for one picture (no inference).
 
-        The returned faces carry ``features``, ``frame_index``, ``model_pack`` and
-        an expanded ``bbox`` in original-pixel space, with ``face_index`` assigned
-        by the same sorted-bbox rule the extractor uses.
+        Returns a list of ``(frame_index, image, inv_scale)`` tuples — one per
+        image, or one per sampled frame for a video. The image is a BGR
+        ``np.ndarray`` already scaled down to ``INFERENCE_MAX_SIDE``; ``inv_scale``
+        maps detected bboxes back to original-pixel space. Returns an empty list
+        when the picture cannot be loaded or is an unsupported type.
+
+        Decoupling load from inference lets the caller batch the (expensive)
+        recognition pass across every frame in the picture batch in a single
+        ONNX call, instead of one call per image as before.
         """
-        model_pack = getattr(self._engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
         file_path = str(
             ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
         )
         ext = os.path.splitext(file_path)[1].lower()
-        face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
-        faces: list[Face] = []
+        units: list[tuple[int, object, float]] = []
 
         if ext in self._IMAGE_EXTS:
             img, inv_scale = ImageUtils.load_image_bgr_reduced(
@@ -144,29 +151,7 @@ class FaceModelRefreshTask(BaseTask):
                     pic.id,
                 )
                 return []
-            detections = FaceExtractionTask.detect_faces_in_images(
-                self._insightface_app, [img]
-            )[0]
-            for det in detections:
-                expanded = Face.expand_face_bbox(
-                    det.bbox, img.shape[1], img.shape[0], face_expand_fraction
-                )
-                if inv_scale != 1.0 and expanded:
-                    expanded = [v * inv_scale for v in expanded]
-                features_bytes = None
-                if getattr(det, "embedding", None) is not None:
-                    features_bytes = det.embedding.astype("float32").tobytes()
-                faces.append(
-                    Face(
-                        picture_id=pic.id,
-                        face_index=-1,
-                        bbox=expanded,
-                        character_id=None,
-                        frame_index=0,
-                        features=features_bytes,
-                        model_pack=model_pack,
-                    )
-                )
+            units.append((0, img, inv_scale))
         elif ext in self._VIDEO_EXTS:
             cap = cv2.VideoCapture(file_path)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -186,27 +171,9 @@ class FaceModelRefreshTask(BaseTask):
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     continue
-                detections = FaceExtractionTask.detect_faces_in_images(
-                    self._insightface_app, [frame]
-                )[0]
-                for det in detections:
-                    expanded = Face.expand_face_bbox(
-                        det.bbox, frame.shape[1], frame.shape[0], face_expand_fraction
-                    )
-                    features_bytes = None
-                    if getattr(det, "embedding", None) is not None:
-                        features_bytes = det.embedding.astype("float32").tobytes()
-                    faces.append(
-                        Face(
-                            picture_id=pic.id,
-                            face_index=-1,
-                            bbox=expanded,
-                            character_id=None,
-                            frame_index=frame_index,
-                            features=features_bytes,
-                            model_pack=model_pack,
-                        )
-                    )
+                # Video frames are read at native resolution (no reduction), so
+                # bboxes are already in original-pixel space: inv_scale == 1.0.
+                units.append((frame_index, frame, 1.0))
             cap.release()
         else:
             logger.warning(
@@ -216,8 +183,47 @@ class FaceModelRefreshTask(BaseTask):
             )
             return []
 
-        # Assign face_index per frame by sorted bbox position (same rule as the
-        # extractor) so (frame_index, face_index) lines up across packs.
+        return units
+
+    def _faces_from_detections(self, pic, frame_index, image, inv_scale, detections):
+        """Build (unindexed) Face objects for one frame's detections.
+
+        ``face_index`` is left at the ``-1`` sentinel here; the caller assigns it
+        per frame by sorted bbox position once all of a picture's frames have been
+        assembled (the same sorted-bbox rule the extractor uses).
+        """
+        model_pack = getattr(self._engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
+        face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
+        faces: list[Face] = []
+        for det in detections:
+            expanded = Face.expand_face_bbox(
+                det.bbox, image.shape[1], image.shape[0], face_expand_fraction
+            )
+            if inv_scale != 1.0 and expanded:
+                expanded = [v * inv_scale for v in expanded]
+            features_bytes = None
+            if getattr(det, "embedding", None) is not None:
+                features_bytes = det.embedding.astype("float32").tobytes()
+            faces.append(
+                Face(
+                    picture_id=pic.id,
+                    face_index=-1,
+                    bbox=expanded,
+                    character_id=None,
+                    frame_index=frame_index,
+                    features=features_bytes,
+                    model_pack=model_pack,
+                )
+            )
+        return faces
+
+    @staticmethod
+    def _assign_face_indices(faces: list) -> list:
+        """Assign face_index per frame by sorted bbox position (extractor rule).
+
+        Mutates the faces in place (sets ``face_index``) so ``(frame_index,
+        face_index)`` lines up across packs, and returns the same list.
+        """
         by_frame: dict[int, list[Face]] = {}
         for f in faces:
             by_frame.setdefault(f.frame_index, []).append(f)
@@ -233,6 +239,91 @@ class FaceModelRefreshTask(BaseTask):
                 f.face_index = idx
         return faces
 
+    def _detect_batch(self, pictures: list) -> dict:
+        """Detect faces across a batch of pictures with batched recognition.
+
+        Loads each picture's frame(s), runs detect+recognise in bounded chunks
+        (so the recognition ONNX call batches across many faces at once instead
+        of one call per image), and assembles per-picture Face objects with
+        ``face_index`` assigned by the extractor's sorted-bbox rule.
+
+        Returns ``{picture_id: list[Face]}``. A picture maps to an empty list
+        when it produced no usable detections — including an unsupported type or
+        an unreadable file (``_load_detection_units`` returns ``[]`` and logs);
+        the refresh writer turns that into a sentinel row stamped with the new
+        pack, so it is not re-selected forever. A picture is OMITTED from the
+        dict only on a transient failure (an exception while loading frames, or a
+        batched-detection error for its chunk) so the caller leaves its rows
+        stale for the finder to retry rather than wiping faces on a blip.
+        """
+        # Flat work list: one entry per frame, tagged with its picture so results
+        # can be regrouped after the batched detect.
+        units: list[
+            tuple[object, int, object, float]
+        ] = []  # (pic, frame_idx, img, inv)
+        loaded_picture_ids: set[int] = set()
+        for pic in pictures:
+            if self._stop_event.is_set():
+                break
+            if pic.id is None:
+                continue
+            try:
+                pic_units = self._load_detection_units(pic)
+            except Exception as exc:
+                logger.warning(
+                    "FaceModelRefreshTask: loading frames failed for picture %s: %s",
+                    pic.id,
+                    exc,
+                )
+                continue
+            loaded_picture_ids.add(pic.id)
+            for frame_index, img, inv_scale in pic_units:
+                units.append((pic, frame_index, img, inv_scale))
+
+        # Every successfully loaded picture starts with an empty face list, so a
+        # picture with zero detections still maps to [] (a real no-faces signal),
+        # while a picture that never loaded is absent entirely.
+        faces_by_picture: dict[int, list[Face]] = {
+            pid: [] for pid in loaded_picture_ids
+        }
+
+        for start in range(0, len(units), self._DETECT_BATCH_IMAGES):
+            if self._stop_event.is_set():
+                break
+            chunk = units[start : start + self._DETECT_BATCH_IMAGES]
+            images = [img for (_pic, _fi, img, _inv) in chunk]
+            try:
+                detections = FaceExtractionTask.detect_faces_in_images(
+                    self._insightface_app, images
+                )
+            except Exception as exc:
+                # A whole-chunk detection failure must not silently drop the
+                # pictures in it as "no faces" (that would wipe their rows). Log
+                # and remove them from the result so they stay stale and are
+                # re-selected by the finder.
+                logger.error(
+                    "FaceModelRefreshTask: batched detection failed for a chunk "
+                    "of %d frames: %s",
+                    len(images),
+                    exc,
+                    exc_info=True,
+                )
+                for pic, _fi, _img, _inv in chunk:
+                    faces_by_picture.pop(pic.id, None)
+                continue
+            for (pic, frame_index, img, inv_scale), dets in zip(chunk, detections):
+                if pic.id not in faces_by_picture:
+                    # Removed by a sibling chunk's failure above.
+                    continue
+                faces_by_picture[pic.id].extend(
+                    self._faces_from_detections(pic, frame_index, img, inv_scale, dets)
+                )
+
+        # Assign face_index per picture (per frame) now that all frames are in.
+        for pid in list(faces_by_picture.keys()):
+            self._assign_face_indices(faces_by_picture[pid])
+        return faces_by_picture
+
     def _run_task(self) -> dict:
         if not self._pictures:
             return {"changed_count": 0, "picture_ids": []}
@@ -240,29 +331,63 @@ class FaceModelRefreshTask(BaseTask):
         model_pack = getattr(self._engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
         self._init_insightface_app()
 
-        changed_ids: list[int] = []
+        # Detect across the whole batch with batched recognition rather than one
+        # detect_faces_in_images call per image. BatchedFaceRunner runs detection
+        # per image (RetinaFace is inherently batch=1) but collects every aligned
+        # face crop and runs ONE recognition (embedding) ONNX call across all of
+        # them. Feeding it the batch's frames together therefore replaces N
+        # single-crop recognition calls with one — the hot path for a full
+        # re-embedding sweep (CLAUDE.md throughput/batching practice). The crops
+        # are normalised to a fixed recogniser input size, so mixed source-image
+        # sizes batch cleanly.
+        new_faces_by_picture = self._detect_batch(self._pictures)
+
+        # Collect (picture_id, Future) for each dispatched write so we can block
+        # on the commits BEFORE run() returns. on_task_complete releases the
+        # finder's claim the moment run() returns; if we returned while the
+        # model_pack-updating writes were still queued (fire-and-forget), the
+        # stale-pack finder would re-select the same rows and re-run full GPU
+        # detection on them. Blocking on .result() keeps the claim alive until
+        # the commit lands.
+        pending: list[tuple[int, object]] = []
         for pic in self._pictures:
-            if self._stop_event.is_set():
-                break
             if pic.id is None:
                 continue
-            try:
-                new_faces = self._detect_for_picture(pic)
-            except Exception as exc:
-                logger.warning(
-                    "FaceModelRefreshTask: detection failed for picture %s: %s",
-                    pic.id,
-                    exc,
-                )
+            if pic.id not in new_faces_by_picture:
+                # Load/detect failed or was skipped for this picture (already
+                # logged in _detect_batch); leave its rows stale so the finder
+                # re-selects it rather than wiping faces on a transient failure.
                 continue
-            self._db.submit_task(
+            new_faces = new_faces_by_picture[pic.id]
+            future = self._db.submit_task(
                 self._refresh_picture_faces,
                 pic.id,
                 new_faces,
                 model_pack,
                 priority=DBPriority.HIGH,
             )
-            changed_ids.append(pic.id)
+            pending.append((pic.id, future))
+
+        # Block on the write commits. A picture is only counted as changed once
+        # its in-place refresh has actually committed. A write that raised (e.g.
+        # a persistent DB failure) is logged with context and NOT counted — the
+        # row keeps the old pack, so the finder will correctly re-select it for
+        # another attempt instead of the failure being silently masked.
+        changed_ids: list[int] = []
+        for picture_id, future in pending:
+            try:
+                future.result()
+            except Exception as exc:
+                logger.error(
+                    "FaceModelRefreshTask: in-place refresh did not commit for "
+                    "picture %s (model_pack=%s): %s",
+                    picture_id,
+                    model_pack,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            changed_ids.append(picture_id)
 
         return {"changed_count": len(changed_ids), "picture_ids": sorted(changed_ids)}
 
@@ -397,21 +522,32 @@ class FaceModelRefreshTask(BaseTask):
         try:
             session.commit()
         except IntegrityError as exc:
+            # An IntegrityError here is a known, recoverable per-picture data
+            # collision (e.g. a transient unique-constraint race on
+            # (picture_id, frame_index, face_index)). Roll back and swallow: the
+            # rows keep their old pack, so the finder re-selects this picture on
+            # the next pass and tries again. Logged at warning with context.
             session.rollback()
             logger.warning(
                 "FaceModelRefreshTask: in-place refresh failed for picture %s "
-                "(IntegrityError: %s); skipping.",
+                "(IntegrityError: %s); will be retried by the finder.",
                 picture_id,
                 exc,
             )
         except Exception as exc:
+            # Any other failure is unexpected. Roll back, log with full context,
+            # and RE-RAISE so the failure surfaces on the submit_task future
+            # rather than being silently masked. _run_task blocks on that future
+            # and excludes the picture from changed_ids; because the row keeps
+            # the old model_pack, the finder re-selects it. (The previous code
+            # here ran a dead no-op session.get(...) and swallowed the error,
+            # which left stale rows the finder re-selected forever with no
+            # signal that anything was wrong.)
             session.rollback()
-            logger.warning(
+            logger.error(
                 "FaceModelRefreshTask: in-place refresh failed for picture %s: %s",
                 picture_id,
                 exc,
+                exc_info=True,
             )
-            # Re-attach the picture so the work column logic still fires.
-            picture = session.get(Picture, picture_id)
-            if picture is not None:
-                _ = picture.id
+            raise

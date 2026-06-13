@@ -7,6 +7,7 @@ These tests never hit the network or load real models: ``FaceAnalysis`` and
 import os
 import time
 import types
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 import numpy as np
@@ -576,3 +577,183 @@ def test_bbox_iou_basics():
     assert _bbox_iou([0, 0, 10, 10], [0, 0, 10, 10]) == 1.0
     assert _bbox_iou([0, 0, 10, 10], [20, 20, 30, 30]) == 0.0
     assert _bbox_iou(None, [0, 0, 1, 1]) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# §7 — claim-vs-commit timing and commit-failure handling (B2)
+# --------------------------------------------------------------------------- #
+#
+# The synchronous _FakeDB above masks the async behaviour that caused B2: it
+# commits inside submit_task before the call even returns. _AsyncFakeDB runs the
+# write on a real background thread (with a deliberate delay) and returns a real
+# Future, so a fire-and-forget _run_task would return BEFORE the commit landed —
+# exactly the bug. _run_task must block on the write futures.
+
+
+class _AsyncFakeDB:
+    """DB shim that runs each submitted write on a background thread.
+
+    submit_task returns a real ``concurrent.futures.Future``; the write does not
+    commit until ``commit_delay_s`` has elapsed on the worker thread. This makes
+    "claim released / run() returned before the write committed" observable.
+    """
+
+    def __init__(self, engine, image_root, commit_delay_s=0.2):
+        self._engine = engine
+        self.image_root = image_root
+        self._commit_delay_s = commit_delay_s
+        self._executor = ThreadPoolExecutor(max_workers=2)
+
+    def submit_task(self, fn, *args, priority=None, **kwargs):
+        def _work():
+            time.sleep(self._commit_delay_s)
+            with Session(self._engine) as session:
+                return fn(session, *args, **kwargs)
+
+        return self._executor.submit(_work)
+
+    def run_immediate_read_task(self, fn, *args, **kwargs):
+        with Session(self._engine) as session:
+            return fn(session, *args, **kwargs)
+
+    def shutdown(self):
+        self._executor.shutdown(wait=True)
+
+
+def _seed_stale_picture(engine, file_path="p.jpg"):
+    with Session(engine) as session:
+        pic = Picture(file_path=file_path)
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        pic_id = pic.id
+        face = Face(
+            picture_id=pic_id, frame_index=0, face_index=0, bbox=[10, 10, 30, 30]
+        )
+        face.model_pack = "buffalo_l"
+        face.features = np.zeros(512, dtype="float32").tobytes()
+        session.add(face)
+        session.commit()
+    return pic_id
+
+
+def _patch_detection(monkeypatch, task):
+    """Stub init + load + detect so the refresh runs without models or files."""
+    monkeypatch.setattr(task, "_init_insightface_app", lambda: None)
+    task._insightface_app = mock.MagicMock(name="FaceAnalysisStub")
+    fake_img = np.zeros((64, 64, 3), dtype="uint8")
+    monkeypatch.setattr(
+        "pixlstash.tasks.face_model_refresh_task.ImageUtils.resolve_picture_path",
+        lambda image_root, file_path: os.path.join(image_root, file_path),
+    )
+    monkeypatch.setattr(
+        "pixlstash.tasks.face_model_refresh_task.ImageUtils.load_image_bgr_reduced",
+        lambda path, max_side: (fake_img, 1.0),
+    )
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "detect_faces_in_images",
+        staticmethod(
+            lambda app, images: [
+                [_FakeDetection([10, 10, 30, 30], np.ones(512))] for _ in images
+            ]
+        ),
+    )
+
+
+def test_run_task_blocks_until_writes_commit(tmp_path, monkeypatch):
+    """C1: run() must not return before the model_pack writes have committed.
+
+    With the old fire-and-forget code, _run_task returned while the write was
+    still queued, so the still-stale row would be re-selected. The fix blocks on
+    the submit futures, so by the time run() returns the new pack is persisted.
+    """
+    engine = _make_sqlite(tmp_path)
+    img_root = tmp_path / "imgs"
+    img_root.mkdir()
+    pic_id = _seed_stale_picture(engine)
+
+    db = _AsyncFakeDB(engine, str(img_root), commit_delay_s=0.3)
+    inf_engine = _make_engine("auraface")
+
+    with Session(engine) as session:
+        pics = list(session.exec(select(Picture)).all())
+
+    task = FaceModelRefreshTask(database=db, engine=inf_engine, pictures=pics)
+    _patch_detection(monkeypatch, task)
+
+    try:
+        result = task.run()
+
+        # The instant run() returns, the write MUST already be committed: the
+        # finder's claim is released here, so a still-stale row would be
+        # re-selected for redundant GPU detection.
+        with Session(engine) as session:
+            packs = session.exec(select(Face.model_pack)).all()
+        assert set(packs) == {"auraface"}, (
+            "run() returned before the model_pack write committed (claim-vs-commit "
+            f"race): {packs}"
+        )
+        assert result["changed_count"] == 1
+        assert result["picture_ids"] == [pic_id]
+    finally:
+        db.shutdown()
+
+
+def test_commit_failure_surfaces_and_excludes_picture(tmp_path, monkeypatch):
+    """C2: a persistent commit failure is logged and NOT counted as changed.
+
+    The previous code swallowed the generic exception and ran dead no-op code,
+    so the failure was invisible and the row stayed stale forever with no signal.
+    Now _commit re-raises, the failure surfaces on the future, and _run_task
+    excludes the picture from changed_ids (the row stays stale, so the finder
+    re-selects it — a genuine retry, not silent masking).
+    """
+    engine = _make_sqlite(tmp_path)
+    img_root = tmp_path / "imgs"
+    img_root.mkdir()
+    pic_id = _seed_stale_picture(engine)
+
+    db = _AsyncFakeDB(engine, str(img_root), commit_delay_s=0.0)
+    inf_engine = _make_engine("auraface")
+
+    with Session(engine) as session:
+        pics = list(session.exec(select(Picture)).all())
+
+    task = FaceModelRefreshTask(database=db, engine=inf_engine, pictures=pics)
+    _patch_detection(monkeypatch, task)
+
+    # Force a persistent (non-Integrity) commit failure.
+    def _boom(session, picture_id):
+        raise RuntimeError("simulated persistent DB write failure")
+
+    monkeypatch.setattr(FaceModelRefreshTask, "_commit", staticmethod(_boom))
+
+    try:
+        result = task.run()
+        # The failing picture is not counted as changed.
+        assert result["changed_count"] == 0, result
+        assert result["picture_ids"] == [], result
+        # The row stays stale (old pack), so the finder will re-select it.
+        with Session(engine) as session:
+            packs = session.exec(select(Face.model_pack)).all()
+        assert "buffalo_l" in packs, packs
+        _ = pic_id
+    finally:
+        db.shutdown()
+
+
+def test_commit_reraises_on_unexpected_error(tmp_path):
+    """C2 (unit): _commit re-raises a non-Integrity failure instead of swallowing it."""
+    engine = _make_sqlite(tmp_path)
+    pic_id = _seed_stale_picture(engine)
+
+    class _ExplodingSession:
+        def commit(self):
+            raise RuntimeError("boom")
+
+        def rollback(self):
+            pass
+
+    with pytest.raises(RuntimeError, match="boom"):
+        FaceModelRefreshTask._commit(_ExplodingSession(), pic_id)

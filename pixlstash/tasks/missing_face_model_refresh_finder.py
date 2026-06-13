@@ -73,7 +73,7 @@ class MissingFaceModelRefreshFinder(BaseTaskFinder):
     @staticmethod
     def _fetch_stale_pack_pictures(session: Session, current_pack: str):
         # A picture is stale if any of its faces was produced by a different pack
-        # (or has no recorded pack — defensive; the 0052 migration backfills
+        # (or has no recorded pack — defensive; the 0053 migration backfills
         # pre-existing rows to buffalo_l so NULL should not normally occur).
         stale_face_subq = (
             select(Face.picture_id)
