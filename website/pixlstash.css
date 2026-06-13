@@ -11,6 +11,9 @@
   --accent: #8ea604;
   --accent-2: #7f8f1a;
   --accent-3: #2f8b5f;
+  /* Brand orange — the logo accent, used for the "Stash" half of the wordmark.
+     Matches --logo-accent in the desktop/web app theme. */
+  --logo-accent: #f28f3b;
   --warning: #c4942f;
   --shadow: rgba(17, 20, 26, 0.18);
   --toolbar: #696f76;
@@ -85,6 +88,11 @@ a {
   font-size: 2.2rem;
   letter-spacing: 0.02em;
   color: var(--toolbar-text);
+}
+
+/* "Stash" half of the wordmark in the brand orange. */
+.brand-stash {
+  color: var(--logo-accent);
 }
 
 .nav-links {

@@ -38,7 +38,7 @@
   nav.innerHTML = `
         <div class="brand">
           <img src="assets/logo.png" alt="PixlStash logo" />
-          <span class="brand-name">PixlStash</span>
+          <span class="brand-name">Pixl<span class="brand-stash">Stash</span></span>
         </div>
         <div class="nav-links">
           ${navLinksHTML}
