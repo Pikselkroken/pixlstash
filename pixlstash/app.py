@@ -176,7 +176,39 @@ def _prompt_bootstrap_credentials(server) -> None:
     print("Bootstrap credentials saved.\n")
 
 
+def _force_utf8_streams():
+    """Force UTF-8 on stdout/stderr so non-ASCII output never crashes startup.
+
+    On Windows the standard streams default to the legacy ANSI codepage
+    (typically ``cp1252``) rather than UTF-8. Any ``print`` of non-Latin-1
+    characters — e.g. the box-drawing glyphs in the startup banner or the
+    arrows in log messages — then raises ``UnicodeEncodeError`` and takes the
+    whole backend down before the server can serve a request. Reconfiguring the
+    streams to UTF-8 (with ``backslashreplace`` as a never-crash safety net for
+    any stream that still can't encode a glyph) removes that failure class.
+
+    Best-effort: in frozen/packaged builds ``sys.stdout`` may be ``None`` or a
+    stream without ``reconfigure`` (Python < 3.7 semantics); any such case is
+    logged and skipped rather than allowed to abort startup.
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception as exc:
+            logger.warning(
+                "Could not reconfigure sys.%s to UTF-8 (%s); non-ASCII output "
+                "may be mangled on this platform.",
+                name,
+                exc,
+            )
+
+
 def main():
+    _force_utf8_streams()
     parser = argparse.ArgumentParser(description=f"Run the {APP_NAME} server.")
     parser.add_argument(
         "--server-config",
