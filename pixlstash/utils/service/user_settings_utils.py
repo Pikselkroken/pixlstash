@@ -359,6 +359,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.sidebar_width = new_value
                 updated = True
             continue
+        if key == "sidebar_docked":
+            # Boolean toggle: coerce like the other boolean settings so a client
+            # PATCHing the string "false" does not persist as a truthy value.
+            if value in ("", None, "null"):
+                new_value = False
+            else:
+                new_value = bool(value)
+            if user.sidebar_docked != new_value:
+                user.sidebar_docked = new_value
+                updated = True
+            continue
         if key == "tagger_settings":
             updated |= _apply_tagger_settings_patch(user, value)
             continue
