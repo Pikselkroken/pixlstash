@@ -59,7 +59,9 @@ frontend/src/
 │   ├── useGridDragDrop.js       # Drag-and-drop reordering and import in ImageGrid
 │   ├── useStackOrdering.js      # Stack expand/collapse, reorder, visual mapping in ImageGrid
 │   ├── useGridFetch.js          # Grid image fetch state + all fetch/query-param functions
-│   └── useGridKeyboardNav.js    # Keyboard navigation and keyboard-driven actions for ImageGrid
+│   ├── useGridKeyboardNav.js    # Keyboard navigation and keyboard-driven actions for ImageGrid
+│   ├── useBreadcrumb.js         # Current-view breadcrumb trail from route + id→name maps; shared by in-grid nav and TitleBar
+│   └── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │
 ├── utils/
 │   ├── apiClient.js             # Axios instance, auth state, session/token helpers
@@ -75,10 +77,12 @@ frontend/src/
 │   └── index.js                 # Vue Router config: app routes + history mode
 │
 └── components/
-    ├── views/       # Full-page / full-screen UI surfaces
-    ├── panels/      # Large structural panels that form the app shell
+    ├── TitleBar.vue             # Desktop-only custom window title bar (Electron): wordmark, breadcrumb, window controls, update alert
+    ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
+    ├── views/       # Full-page / full-screen UI surfaces (ImageGrid, ImageOverlay, LoginScreen, SearchOverlay, overlay panels)
+    ├── panels/      # Large structural panels that form the app shell (SideBar, Toolbar, SelectionBar, SelectionMenu, StatsSidebar, …)
     ├── editors/     # Entity create / edit / delete dialogs
-    ├── settings/    # Settings dialog and its section sub-components
+    ├── settings/    # Settings dialog and its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute)
     ├── io/          # Import / export / external-service connection
     └── widgets/     # Reusable primitives used across multiple domains
 ```
@@ -156,9 +160,9 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useGridStore` | `useGridStore.js` | `columns`, `thumbnailSize`, `sidebarThumbnailSize`, `gridVersion`, `wsUpdateKey`, `showStars`, `showFaceBboxes`, `showProblemIcon`, `showStacks`, `stackThreshold`, `expandedStackCount`, `totalStackCount`, `compactMode`, `visibleRangeLabel` |
 | `useExportStore` | `useExportStore.js` | `exportType`, `exportCaptionMode`, `exportResolution`, `exportTagFormat`, `exportIncludeCharacterName`, `exportUseOriginalFileNames`, etc. |
 | `useWsStore` | `useWsStore.js` | `wsTagUpdate`, `wsPluginProgress`, `pendingExternalImportCount`, `updatesSocket` |
-| `useUserPrefsStore` | `useUserPrefsStore.js` | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights`, `dateFormat`, `themeMode` |
+| `useUserPrefsStore` | `useUserPrefsStore.js` | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights`, `dateFormat`, `themeMode`, `sidebarWidth` (drag-resizable, clamped 120–300), `showKeyboardHint` |
 | `useProjectStore` | `useProjectStore.js` | `projectViewMode` *(sidebar-display only — see below)*, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
-| `useSidebarStore` | `useSidebarStore.js` | `sidebarVisible`, `sidebarDocked`, `statsOpen`, `sidebarForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId` |
+| `useSidebarStore` | `useSidebarStore.js` | `sidebarDocked` (width pref), `sidebarPinned` (visibility pref), `statsOpen`, `sidebarForcedHidden`, `statsForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId`; computeds `effectivePinned`, `effectiveDocked`, `sidebarVisible`, `sidebarOverlay` model the pin / dock / auto-hide behaviour (mobile `*ForcedHidden` overrides win). All localStorage access is try/caught. |
 | `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
 
@@ -187,6 +191,12 @@ Auth gate. Renders `LoginScreen` or `App` based on `isAuthenticated`. Handles `?
 
 #### `App.vue` (~1 700 lines)
 Application shell. Owns all global state. Renders `SideBar` + `ImageGrid` + `StatsSidebar`. Manages WebSocket, keyboard shortcuts, window drag/drop, paste, config loading, export, update checks.
+
+#### `TitleBar.vue` (~400 lines)
+Desktop-only custom window title bar for the Electron shell. All desktop calls go through `window.pixlstashDesktop?.…` optional chaining, so it no-ops in a plain browser. Renders the `WordmarkLogo`, the breadcrumb trail (`useBreadcrumb`), the app version, the "new version available" / security update alert (`useVersionCheck`, with `enabled = Boolean(desktop)` so exactly one owner runs the check), and the OS window controls (minimize / maximize / close, hidden on macOS where the OS draws them). Props: `installType`, `checkForUpdates`.
+
+#### `WordmarkLogo.vue` (30 lines)
+Presentational "PixlStash" brand wordmark in the Tiny5 pixel font (replaced the prior SVG outline). "Pixl" uses `currentColor`; "Stash" uses `var(--wordmark-accent, currentColor)`, so a caller that sets only `color` gets a single-tone wordmark and one that also sets `--wordmark-accent` gets the two-tone split. Sized via `font-size` on the host. No props.
 
 ---
 
@@ -258,16 +268,27 @@ Full-screen image lightbox. Responsibilities:
 - Key props: `open`, `initialImageId`, `allImages`, `tagUpdate`, `hiddenTags`, `applyTagFilter`, `availablePlugins`, `comfyuiProgress`, `guestScore`
 - Emits: `close`, `apply-score`, `set-guest-score`, `add-tag`, `remove-tag`, `update-description`, `overlay-change`, `added-to-set`, `set-project`, `comfyui-run`, `run-plugin`
 
-#### `Toolbar.vue` (~4 890 lines)
-Combined selection bar + top toolbar. Imports state directly from Pinia stores (`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`, `useExportStore`, `useSidebarStore`) — no `inject` or prop drilling.
+#### `Toolbar.vue` (`panels/`, ~3 300 lines)
+Top/grid toolbar. Imports state directly from Pinia stores (`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`, `useExportStore`, `useSidebarStore`) — no `inject` or prop drilling. The selection action UI that used to live here was extracted into `SelectionBar.vue` + `SelectionMenu.vue` (see below); `Toolbar` no longer holds any selection state.
 
 Responsibilities:
-- Selection action bar: count display, bulk-delete, move, add to set/character, stack operations, ComfyUI/plugin run.
 - Grid bar: sort selector, filter chips (tags, score, media type, resolution), column slider, stack controls, view mode toggles.
 - Top bar: search toggle, export menu, settings button, import button, sidebar/stats toggles.
 - Export menu: type (full/face), caption mode, resolution, tag format, character name inclusion.
-- Exposes: `openTagInput()`, `openPluginPanel()`, `openComfyuiPanel()`
-- Key emits: `clear-selection`, `delete-selected`, `added-to-set`, `add-to-character`, `remove-from-character`, `set-project`, `create-stack`, `remove-from-stack`, `dissolve-stacks`, `run-plugin`, `comfyui-run`, `tags-applied`
+- Props: `selectedCount`, `selectedCharacter`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `backendUrl`, `comfyuiConfigured`.
+- Key emits: `comfyui-run-grid`, `expand-all-stacks`, `collapse-all-stacks`, `confirm-export-zip`, `open-import`, `open-settings`.
+
+#### `SelectionBar.vue` (`panels/`)
+Floating selection action bar shown above the grid when images are selected (the leftover from the Toolbar split). Driven by props from `ImageGrid`; it renders the per-selection plugin/ComfyUI run menus, the tag/caption controls, and the `SelectionMenu` dropdown. Uses the `@container selbar` query against the grid-content wrapper, so its layout responds to the available grid width.
+- Key props: `selectedCount`, `selectedExpandedCount`, `selectedFaceCount`, `selectedGroupName`, `selectedSort`, `visible`, `scrapheapPicturesId`, `backendUrl`, `selectedImageIds`, `selectedMediaSupport`, `comfyuiClientId`, `comfyuiConfigured`, `selectedMultipleStackIds`, `groupingLockReason`, `availablePlugins`, `taggerPlugins`, `captionerPlugins`, `allGridImages`, `selectedCharacter`, `selectedSet`.
+- Exposes: `openTagInput()`, `openPluginPanel()`, `openComfyuiPanel()` (consumed by `ImageGrid` via `selectionBarRef`).
+- Key emits: `clear-selection`, `delete-selected`, `added-to-set`, `add-to-character`, `remove-from-character`, `set-project`, `create-stack`, `remove-from-stack`, `dissolve-stacks`, `create-stacks-from-groups`, `run-plugin`, `comfyui-run`, `tags-applied`, `auto-tag`, `generate-description`, `reverse-image-search`, `remove-from-group`, `selection-menu-open`.
+
+#### `SelectionMenu.vue` (`panels/`)
+The dropdown menu of bulk actions for the current selection, rendered by `SelectionBar`: add to project/character/set (via `AddToEntityControl`), stack/unstack/dissolve, tag/caption/describe, run plugin/ComfyUI, reverse image search, delete. Native-style menu using `styles/context-menu.css` classes (shares the look of `ImageGridContextMenu`).
+- Key props: `open`, `selectedCount`, `selectedImageIds`, `backendUrl`, `isReadOnly`, `isScrapheapView`, `groupingLockReason`, `taggerPlugins`, `captionerPlugins`, `comfyuiConfigured`, `hasPluginOptions`, `selectedSort`, `selectedGroupName`, `selectedMultipleStackIds`, `showRemoveFromStack`.
+- Exposes: `focusFirst()`, `containsFocus()`.
+- Key emits: same action set as `SelectionBar` plus `open-tag-input`, `open-plugin-panel`, `open-comfyui-panel`, `close`.
 
 #### `StatsSidebar.vue` (~2 560 lines)
 Right-side statistics panel. Responsibilities:
@@ -284,17 +305,31 @@ Right-side statistics panel. Responsibilities:
 ### Settings Dialog and Sub-sections
 
 #### `UserSettingsDialog.vue` (~2 580 lines)
-Multi-tab settings dialog. Tabs:
+Multi-tab settings dialog. Each tab now delegates to its own section component (the Behaviour, Workflows and Snapshots tabs were extracted from inline markup). Tabs:
 - **Appearance** → `<AppearanceSection>`
-- **Behaviour** → inline: hidden tags, VRAM limits, tagger configuration
-- **Smart Score** → `<SmartScoreSection>`
-- **Workflows** → inline: ComfyUI URL, workflow import/management
-- **Account** → `<AccountSection>`
+- **Behaviour** → `<BehaviourSection>` (`!isReadOnly`)
+- **Smart Score** → `<SmartScoreSection>` (`!isReadOnly`)
+- **Workflows** → `<WorkflowsSection>` (`!isReadOnly`)
+- **Snapshots** → `<SnapshotsSection>` (`!isReadOnly`)
+- **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
+- **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
 Emits: `update:public-url`
 
 #### `AppearanceSection.vue` (244 lines)
-Appearance tab content. Props: `sidebarThumbnailSize`, `themeMode`, `dateFormat`, `showKeyboardHint`. Emits corresponding `update:*` events. Contains own `clearGuestSession()` logic and `hasGuestSessionCookie` state.
+Appearance tab content: sidebar thumbnail size, sidebar width (Full / Dock toggle), theme, date format, keyboard-hint toggle, guest-session clear. Props: `sidebarThumbnailSize`, `themeMode`, `dateFormat`, `showKeyboardHint`. Emits corresponding `update:*` events. Contains own `clearGuestSession()` logic and `hasGuestSessionCookie` state. The sidebar width toggle reads/writes `useSidebarStore.sidebarDocked` directly.
+
+#### `BehaviourSection.vue`
+Behaviour tab content (extracted from inline `UserSettingsDialog` markup): hidden tags, VRAM limits, tagger configuration.
+
+#### `WorkflowsSection.vue`
+Workflows tab content (extracted from inline markup): ComfyUI URL, workflow import/management.
+
+#### `SnapshotsSection.vue`
+Snapshots tab content. Props: `open: Boolean`. Lists and manages snapshots (reuses `utils/snapshots.js` helpers).
+
+#### `ComputeSection.vue` (~595 lines)
+Desktop-only compute-runtime manager ("Backend" tab). Talks to the Electron preload bridge (`window.pixlstashDesktop`) to switch between the built-in CPU/Metal runtime and an on-demand GPU overlay; the same choice appears on the first-run welcome screen. Switching the runtime restarts the local server (which reloads the page). Props: `open: Boolean`. No-ops outside the desktop shell.
 
 #### `SmartScoreSection.vue` (409 lines)
 Penalised-tags configuration. Props: `open: Boolean`. Fetches `GET /users/me/config` on open and on `onMounted`. Saves directly via `PATCH /users/me/config`. Owns all penalised-tag CRUD state internally.
@@ -692,25 +727,36 @@ graph TD
     SideBar --> SettingsDlg["UserSettingsDialog.vue"]
 
     SettingsDlg --> AppSec["AppearanceSection.vue"]
+    SettingsDlg --> BehSec["BehaviourSection.vue"]
     SettingsDlg --> SmartSec["SmartScoreSection.vue"]
+    SettingsDlg --> WfSec["WorkflowsSection.vue"]
+    SettingsDlg --> SnapSec["SnapshotsSection.vue"]
+    SettingsDlg --> CompSec["ComputeSection.vue (desktop)"]
     SettingsDlg --> AccSec["AccountSection.vue"]
 
     FolderEd --> FolderBrowser["FolderBrowser.vue"]
 
+    App --> TitleBar["TitleBar.vue (desktop)"]
+    TitleBar --> Wordmark["WordmarkLogo.vue"]
+
     ImageGrid --> ImageOverlay["ImageOverlay.vue"]
     ImageGrid --> Toolbar["Toolbar.vue"]
+    ImageGrid --> SelectionBar["SelectionBar.vue"]
     ImageGrid --> CtxMenu["ImageGridContextMenu.vue"]
     ImageGrid --> Importer
     ImageGrid --> ComfyUI["ComfyUiRunner.vue"]
     ImageGrid --> EmptyScrap["EmptyScrapHeap.vue"]
 
-    ImageOverlay --> AddToEnt["AddToEntityControl.vue"]
+    SelectionBar --> SelectionMenu["SelectionMenu.vue"]
+    SelectionBar --> AddToEnt["AddToEntityControl.vue"]
+    SelectionBar --> PluginUI["PluginParametersUI.vue"]
+    SelectionMenu --> AddToEnt
+
+    ImageOverlay --> AddToEnt
     ImageOverlay --> StarRating["StarRatingOverlay.vue"]
     ImageOverlay --> Progress["ProgressOverlay.vue"]
     ImageOverlay --> ComfyUI
 
-    Toolbar --> AddToEnt
-    Toolbar --> PluginUI["PluginParametersUI.vue"]
     CtxMenu --> AddToEnt
 ```
 
@@ -859,19 +905,27 @@ graph LR
 
 ---
 
-### 12.5 Provide/Inject State Sharing
+### 12.5 Toolbar / SelectionBar store-direct state
+
+`Toolbar`, `SelectionBar` and `SelectionMenu` import the Pinia stores directly
+(`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`,
+`useExportStore`, `useSidebarStore`); the older `provide('gridBarState')` /
+`provide('toolbarState')` / `inject` wiring has been removed. `App.vue` no longer
+calls `provide()` for the toolbar.
 
 ```mermaid
 flowchart TD
-    App["App.vue<br/>provides gridBarState<br/>provides toolbarState"]
-    ImageGrid["ImageGrid.vue<br/>(passes Toolbar as child)"]
-    Toolbar["Toolbar.vue<br/>inject('gridBarState')<br/>inject('toolbarState')"]
+    Stores["Pinia stores<br/>useGridStore / useSortStore / useFilterStore<br/>useSearchStore / useExportStore / useSidebarStore"]
+    ImageGrid["ImageGrid.vue<br/>(renders Toolbar + SelectionBar)"]
+    Toolbar["Toolbar.vue<br/>imports stores directly"]
+    SelectionBar["SelectionBar.vue<br/>imports stores directly"]
+    SelectionMenu["SelectionMenu.vue"]
 
-    App -- "props: sort, filters,<br/>columns, showStars, …" --> ImageGrid
-    ImageGrid -- "renders" --> Toolbar
-    App -- "provide('gridBarState')" --> Toolbar
-    App -- "provide('toolbarState')" --> Toolbar
-
-    Toolbar -- "reads gridBarState.sortOptions<br/>gridBarState.mediaTypeFilter<br/>gridBarState.columns, …" --> GridBarUI["Grid bar UI rendered"]
-    Toolbar -- "reads toolbarState.searchInput<br/>toolbarState.exportType<br/>toolbarState.toggleSidebar(), …" --> TopBarUI["Top bar UI rendered"]
+    Stores -- "import { useXStore }" --> Toolbar
+    Stores -- "import { useXStore }" --> SelectionBar
+    ImageGrid -- "renders + props" --> Toolbar
+    ImageGrid -- "renders + props (selectionBarRef)" --> SelectionBar
+    SelectionBar -- "renders" --> SelectionMenu
+    Toolbar -- "emits: open-import, open-settings,<br/>confirm-export-zip, …" --> ImageGrid
+    SelectionBar -- "emits: delete-selected, added-to-set,<br/>add-to-character, comfyui-run, …" --> ImageGrid
 ```

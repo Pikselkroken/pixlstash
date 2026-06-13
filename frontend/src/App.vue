@@ -1890,6 +1890,10 @@ onBeforeUnmount(() => {
     clearTimeout(sidebarRefreshDebounceTimeout);
     sidebarRefreshDebounceTimeout = null;
   }
+  if (sidebarRefreshPicturesDebounceTimeout) {
+    clearTimeout(sidebarRefreshPicturesDebounceTimeout);
+    sidebarRefreshPicturesDebounceTimeout = null;
+  }
 });
 
 defineExpose({

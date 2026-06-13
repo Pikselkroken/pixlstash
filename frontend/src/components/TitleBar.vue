@@ -111,7 +111,9 @@ const close = () => desktop?.windowClose?.();
           aria-hidden="true"
         >⚠️</span></a
       ><button
+        type="button"
         class="titlebar-update-dismiss"
+        aria-label="Dismiss update alert"
         :title="`Dismiss v${latestVersion} update alert`"
         @click.prevent="dismissUpdateAlert"
       >

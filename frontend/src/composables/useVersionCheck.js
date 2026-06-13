@@ -46,9 +46,11 @@ export function useVersionCheck(installType, checkForUpdates, enabled = true) {
   const latestVersion = ref(null);
   const latestVersionUrl = ref(null);
   const latestSecurityLevel = ref(null);
-  const updateDismissed = ref(
-    localStorage.getItem(VERSION_CHECK_DISMISSED_KEY) === latestVersion.value,
-  );
+  // Only meaningful once a remote version exists; default to "not dismissed".
+  // The fetch path recomputes this as `dismissed === remote` once a version
+  // arrives. Initialising from `localStorage === latestVersion.value` here would
+  // be `null === null` → true on a fresh load, which is wrong.
+  const updateDismissed = ref(false);
 
   const isEnabled = () => Boolean(toValue(enabled));
 

@@ -156,7 +156,7 @@ async function clearGuestSession() {
       </button>
     </div>
     <div class="settings-section-desc">
-      Pin or unpin the sidebar from its header.
+      Show the sidebar at full width or as a narrow icon dock.
     </div>
   </div>
   <v-divider class="settings-section-divider" />
