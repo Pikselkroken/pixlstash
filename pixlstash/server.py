@@ -1856,7 +1856,22 @@ class Server:
             os.environ.get("PIXLSTASH_DEFAULT_DEVICE", "").strip().lower()
         )
         if _device_override:
-            server_config["default_device"] = _device_override
+            # Validate against the known device values (the same set
+            # StartupChecks accepts). An invalid value is rejected with a
+            # warning and ignored, leaving the config's own default_device in
+            # place, rather than being written straight through and silently
+            # falling back to CPU with no explanation.
+            _valid_devices = {"cpu", "cuda", "gpu", "auto"}
+            if _device_override in _valid_devices:
+                server_config["default_device"] = _device_override
+            else:
+                logger.warning(
+                    "Ignoring invalid PIXLSTASH_DEFAULT_DEVICE=%r; expected one "
+                    "of %s. Keeping configured default_device=%r.",
+                    _device_override,
+                    sorted(_valid_devices),
+                    server_config.get("default_device"),
+                )
 
         # SSL key/cert paths live in the config *only* when SSL is enabled.
         # When require_ssl is off they are never read (see _ensure_ssl_certificates

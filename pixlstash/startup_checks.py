@@ -273,7 +273,16 @@ class StartupChecks:
                     gpu_installed = True
             except metadata.PackageNotFoundError:
                 continue
-            except Exception:
+            except Exception as exc:
+                # An unexpected metadata-read error must not be silently
+                # swallowed: log it with the package name so a broken install
+                # is diagnosable, then treat the package as "not detected".
+                self._logger.warning(
+                    "[startup-check] Could not read distribution metadata for "
+                    "%s while checking for an onnxruntime conflict: %s",
+                    package_name,
+                    exc,
+                )
                 continue
         return cpu_installed and gpu_installed
 
@@ -335,8 +344,17 @@ class StartupChecks:
         providers = []
         try:
             providers = ort.get_available_providers() if ort is not None else []
-        except Exception:
+        except Exception as exc:
+            # A failure here means a broken ONNX Runtime install. Do not swallow
+            # it silently: without this log a broken ORT masquerades as "no CUDA
+            # provider" on a CUDA box, sending inference to CPU with no clue why.
             providers = []
+            self._logger.warning(
+                "[startup-check] ort.get_available_providers() failed (%s); "
+                "treating ONNX Runtime as having no available providers. ONNX "
+                "models will run on CPU.",
+                exc,
+            )
         if is_rocm:
             # The ROCm/MIGraphX ONNX Runtime build isn't on PyPI, so we bundle the
             # CPU ORT on ROCm; the InsightFace face-extraction and optional WD14

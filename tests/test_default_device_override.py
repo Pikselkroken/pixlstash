@@ -60,3 +60,38 @@ class TestDefaultDeviceOverride:
         cfg = Server.init_server_config(str(path))
 
         assert cfg["default_device"] == "auto"
+
+    def test_invalid_override_is_rejected_and_config_kept(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """An unknown device value must not be written through (and is logged).
+
+        Previously ``PIXLSTASH_DEFAULT_DEVICE=banana`` was written straight into
+        the config and silently fell back to CPU with no explanation. It must be
+        validated against the known set, warned about, and ignored — leaving the
+        configured value in place.
+        """
+        path = tmp_path / "server-config.json"
+        _write_config(path, default_device="auto")
+        monkeypatch.setenv(DEVICE_ENV, "banana")
+
+        with caplog.at_level("WARNING"):
+            cfg = Server.init_server_config(str(path))
+
+        assert cfg["default_device"] == "auto", (
+            "Invalid override must not overwrite the configured device"
+        )
+        assert any(
+            "banana" in r.message and "PIXLSTASH_DEFAULT_DEVICE" in r.message
+            for r in caplog.records
+        ), "Invalid override should be logged with a warning"
+
+    def test_gpu_override_accepted(self, tmp_path, monkeypatch):
+        """'gpu' is a known value (mapped to cuda by StartupChecks) and accepted."""
+        path = tmp_path / "server-config.json"
+        _write_config(path, default_device="auto")
+        monkeypatch.setenv(DEVICE_ENV, "gpu")
+
+        cfg = Server.init_server_config(str(path))
+
+        assert cfg["default_device"] == "gpu"
