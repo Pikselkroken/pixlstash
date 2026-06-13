@@ -527,13 +527,11 @@ class Picture(SQLModel, table=True):
             .limit(limit)
         )
 
-        if only_deleted:
-            stmt = stmt.where(cls.deleted.is_(True))
-        elif not include_deleted:
-            stmt = stmt.where(cls.deleted.is_(False))
-
-        if not include_unimported:
-            stmt = stmt.where(cls.imported_at.is_not(None))
+        # The deleted / unimported lifecycle predicates are applied exactly once,
+        # by the PredicateFilter compiler below (it receives only_deleted /
+        # include_deleted / include_unimported). The previously-inline copy here
+        # was redundant (idempotent AND, no row drift) and is removed so the
+        # filter has a single owner.
 
         # Apply select_fields logic (like in find)
         if select_fields:
@@ -712,13 +710,11 @@ class Picture(SQLModel, table=True):
             for rel_attr in rel_attrs:
                 query = query.options(selectinload(rel_attr))
 
-        if only_deleted:
-            query = query.where(cls.deleted.is_(True))
-        elif not include_deleted:
-            query = query.where(cls.deleted.is_(False))
-
-        if not include_unimported:
-            query = query.where(cls.imported_at.is_not(None))
+        # The deleted / unimported lifecycle predicates are applied exactly once,
+        # by the PredicateFilter compiler below (it receives only_deleted /
+        # include_deleted / include_unimported). The previously-inline copy here
+        # was redundant (idempotent AND, no row drift) and is removed so the
+        # filter has a single owner.
 
         for attr, value in search.items():
             if attr == "project_id":

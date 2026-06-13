@@ -442,3 +442,20 @@ def test_from_query_params_runs_against_db(session):
     req = _FakeRequest([("format", "PNG"), ("min_score", "3"), ("tag", "keep")])
     flt = PredicateFilter.from_query_params(req)
     _assert_matches_agrees(session, flt, {a.id})
+
+
+@pytest.mark.parametrize("param", ["min_score", "max_score"])
+def test_from_query_params_malformed_score_raises_422_not_500(param):
+    """A non-numeric min/max score is a client error (422), not an unhandled 500.
+
+    Pre-fix, ``from_query_params`` ran a bare ``int(raw)`` so ``?min_score=abc``
+    raised an unhandled ValueError and the route returned 500. It must raise an
+    HTTPException with a 4xx status and a clear message instead.
+    """
+    from fastapi import HTTPException
+
+    req = _FakeRequest([(param, "abc")])
+    with pytest.raises(HTTPException) as excinfo:
+        PredicateFilter.from_query_params(req)
+    assert excinfo.value.status_code == 422
+    assert param in str(excinfo.value.detail)

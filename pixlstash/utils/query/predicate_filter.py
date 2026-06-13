@@ -31,6 +31,7 @@ with a pre-resolved set via the caller's own ``Picture.id.in_(...)`` clause.
 import os
 from typing import List, Optional
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import or_, text
 from sqlalchemy.sql.elements import ColumnElement
@@ -357,7 +358,18 @@ class PredicateFilter(BaseModel):
 
         def _int_or_none(name: str) -> Optional[int]:
             raw = qp.get(name)
-            return int(raw) if raw is not None else None
+            if raw is None:
+                return None
+            try:
+                return int(raw)
+            except (TypeError, ValueError) as exc:
+                # A malformed numeric query param is a client error, not a
+                # server fault. Raise 422 with a clear message instead of
+                # letting a bare int() bubble up as an unhandled 500.
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid {name}: must be an integer",
+                ) from exc
 
         return cls(
             format=qp.getlist("format") or None,
