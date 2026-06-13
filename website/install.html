@@ -347,6 +347,33 @@
             <div class="divider"></div>
 
             <div class="step">
+              <p class="sub-heading">Linux — make the AppImage executable</p>
+              <p class="step-note">
+                A freshly downloaded <code>.AppImage</code> won't launch until you
+                mark it executable. Either
+                <strong
+                  >right-click → Properties → Permissions → Allow executing file
+                  as a program</strong
+                >, or run
+                <code>chmod +x PixlStash-*.AppImage</code> in a terminal, then
+                double-click it (or run <code>./PixlStash-*.AppImage</code>). The
+                <code>.deb</code> package installs normally and needs no extra
+                step.
+              </p>
+              <p class="step-note">
+                On newer distributions (e.g. Ubuntu&nbsp;24.04) the AppImage may
+                also need <strong>FUSE 2</strong>, which isn't installed by
+                default — if you see an error mentioning
+                <code>libfuse.so.2</code> or <em>"AppImages require FUSE to
+                run"</em>, install it with
+                <code>sudo apt install libfuse2</code> (Debian/Ubuntu) or your
+                distro's equivalent. As a one-off alternative you can run
+                <code>./PixlStash-*.AppImage --appimage-extract-and-run</code>,
+                which doesn't need FUSE.
+              </p>
+            </div>
+
+            <div class="step">
               <p class="sub-heading">⚠️ Unsigned builds</p>
               <p class="step-note">
                 Until the builds are signed with paid certificates, Windows
