@@ -27,12 +27,25 @@ function installDesktopBridge() {
     // Desktop prefs + remote-access / compute reads (Backend settings tab).
     getDesktopPrefs: val({ hideToTrayOnClose: true }),
     setDesktopPrefs: val(undefined),
-    getServerSettings: val({ enabled: false, port: 9537, ssl: false, urls: [] }),
+    getServerSettings: val({
+      enabled: true,
+      port: 9537,
+      ssl: false,
+      urls: ['http://192.168.1.24:9537'],
+    }),
     setServerSettings: val(undefined),
     checkServerPort: val({ available: true }),
     listAccelerators: val({
       bundled: { accel: 'cpu', label: 'Built-in (CPU)', active: true },
-      items: [],
+      items: [
+        {
+          accel: 'cu128',
+          label: 'NVIDIA GPU acceleration (CUDA 12.8)',
+          installed: false,
+          active: false,
+          recommended: true,
+        },
+      ],
     }),
     installAccelerator: val(undefined),
     useAccelerator: val(undefined),

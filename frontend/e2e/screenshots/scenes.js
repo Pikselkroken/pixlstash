@@ -50,8 +50,8 @@ async function selectN(grid, n = 3) {
 export const scenes = [
   {
     id: 'main-grid',
-    assets: ['ScreenshotMain.jpg', 'ScreenshotGrid.jpg'],
-    title: 'Main interface / image grid',
+    assets: ['ScreenshotMain.jpg', 'ScreenshotGrid.jpg', 'ScreenshotApp.jpg'],
+    title: 'Main interface / image grid (desktop app)',
     async setup({ grid }) {
       await readyGrid(grid)
       return null
@@ -190,6 +190,20 @@ export const scenes = [
     async setup({ grid, settings }) {
       await readyGrid(grid)
       await settings.open()
+      return settings.card
+    },
+  },
+  {
+    id: 'backend-settings',
+    assets: ['ScreenshotBackend.jpg'],
+    title: 'Desktop Backend settings (compute + remote access)',
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.open()
+      // The desktop-only "Backend" tab: compute acceleration + remote access.
+      await page.getByRole('tab', { name: 'Backend' }).click()
+      await expect(page.getByText('Compute acceleration')).toBeVisible()
+      await page.waitForTimeout(400)
       return settings.card
     },
   },

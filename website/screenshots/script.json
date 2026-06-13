@@ -176,6 +176,22 @@
     "kind": "image"
   },
   {
+    "page": "index.html",
+    "asset": "ScreenshotApp.jpg",
+    "label": "PixlStash 1.6: desktop app and ComfyUI face search",
+    "alt": "PixlStash 1.6: desktop app and ComfyUI face search",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotBackend.jpg",
+    "label": "PixlStash desktop Backend settings — compute acceleration and remote access",
+    "alt": "PixlStash desktop Backend settings — compute acceleration and remote access",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "whatsnew.html",
     "asset": "ScreenshotBreadcrumb.jpg",
     "label": "Breadcrumb navigation showing the path to the current view in PixlStash",
