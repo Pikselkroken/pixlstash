@@ -75,7 +75,7 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pixlstash-windows-installer-${{ steps.version.outputs.version }}
+          name: pixlstash-server-windows-${{ steps.version.outputs.version }}
           path: installer/windows/installer-output/*.exe
 
       - name: Attach installer to GitHub release

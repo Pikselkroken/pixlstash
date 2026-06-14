@@ -38,7 +38,10 @@ def setup_logging(log_file=None, log_level=LOG_LEVEL):
     root = logging_.getLogger()
     root.handlers = []  # Remove any default handlers
     if log_file:
-        handler = logging_.FileHandler(log_file)
+        # Force UTF-8: on Windows FileHandler would otherwise open with the
+        # legacy ANSI codepage (cp1252) and raise UnicodeEncodeError on the
+        # non-ASCII glyphs we log (arrows, box drawing, etc.).
+        handler = logging_.FileHandler(log_file, encoding="utf-8")
         # Use standard format for file logging
         formatter = logging_.Formatter(
             fmt="%(asctime)s %(levelname)s %(name)s: %(message)s"

@@ -3551,6 +3551,7 @@ defineExpose({
         </div>
       </div>
       <button
+        v-if="!props.docked"
         class="sidebar-pin-toggle sidebar-brand-pin"
         :class="{ pinned: sidebarStore.sidebarPinned }"
         type="button"
