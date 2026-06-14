@@ -41,6 +41,7 @@
     "appId": "dev.pixlstash.desktop",
     "productName": "PixlStash",
     "copyright": "Copyright © PixlStash",
+    "artifactName": "${productName}-desktop-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release",
       "buildResources": "assets"
