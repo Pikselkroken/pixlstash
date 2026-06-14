@@ -9,6 +9,17 @@ let _shareToken = null;
 const sessionContext = ref(null);
 const isReadOnly = computed(() => sessionContext.value?.scope === 'READ');
 
+// Per-tab client id, mirrored from useWsStore into module scope so the request
+// interceptor can attach it without depending on Pinia being initialised. Used
+// ONLY for echo-matching of our own WebSocket events — never for authorization.
+// Capped at 200 chars to match the backend's X-Client-Id limit.
+let _clientId = null;
+
+function setRequestClientId(clientId) {
+  _clientId =
+    typeof clientId === 'string' && clientId ? clientId.slice(0, 200) : null;
+}
+
 function activateShareToken(token) {
   _shareToken = token;
 }
@@ -62,20 +73,35 @@ const apiClient = axios.create({
   withCredentials: true,  // Ensure cookies are included in requests
 });
 
+// Mutating verbs carry the per-tab X-Client-Id so the backend can echo it back
+// on the resulting WebSocket event and the originating tab can suppress the
+// reload for its own optimistic op.
+const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
+
+function isMutatingRequest(config) {
+  const method = (config?.method || 'get').toLowerCase();
+  return MUTATING_METHODS.has(method);
+}
+
 apiClient.interceptors.request.use((config) => {
   const rawUrl = config?.url;
   if (!rawUrl || typeof rawUrl !== 'string') {
     return config;
   }
 
-  // For fully-qualified URLs, only inject the token when the request targets
-  // the same origin (skip external hosts like ComfyUI to prevent leakage),
-  // then return early — the URL needs no path rewriting.
+  // For fully-qualified URLs, only inject the token / client id when the
+  // request targets the same origin (skip external hosts like ComfyUI to
+  // prevent leakage), then return early — the URL needs no path rewriting.
   if (/^https?:\/\//i.test(rawUrl)) {
     const isSameOrigin = typeof window !== 'undefined' &&
         rawUrl.startsWith(window.location.origin);
-    if (isSameOrigin && _shareToken) {
-      config.params = {...(config.params || {}), token: _shareToken};
+    if (isSameOrigin) {
+      if (_shareToken) {
+        config.params = {...(config.params || {}), token: _shareToken};
+      }
+      if (_clientId && isMutatingRequest(config)) {
+        config.headers = {...(config.headers || {}), 'X-Client-Id': _clientId};
+      }
     }
     return config;
   }
@@ -83,6 +109,11 @@ apiClient.interceptors.request.use((config) => {
   // Inject share token into relative API requests.
   if (_shareToken) {
     config.params = {...(config.params || {}), token: _shareToken};
+  }
+
+  // Attach the per-tab client id to relative mutating requests.
+  if (_clientId && isMutatingRequest(config)) {
+    config.headers = {...(config.headers || {}), 'X-Client-Id': _clientId};
   }
 
   if (rawUrl.startsWith(API_PREFIX)) {
@@ -184,5 +215,6 @@ export {
   login,
   logout,
   sessionContext,
+  setRequestClientId,
   apiBaseUrl as API_BASE_URL,
 };

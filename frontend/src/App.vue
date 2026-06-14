@@ -28,6 +28,7 @@ import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
+import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -208,27 +209,13 @@ function pictureChangeAffectsView(fields) {
   return fields.some(pictureChangeFieldAffectsView);
 }
 
-function shouldRefreshForPictureChange() {
-  if (selectionStore.selectedSetIds.length) return false;
-  const selectedChar = selectionStore.selectedCharacter;
-  if (
-    selectedChar &&
-    selectedChar !== ALL_PICTURES_ID &&
-    selectedChar !== UNASSIGNED_PICTURES_ID &&
-    selectedChar !== SCRAPHEAP_PICTURES_ID
-  ) {
-    return false;
-  }
-  if ((searchStore.searchQuery || "").trim()) return false;
-  return true;
-}
-
 function sendUpdatesFilters() {
   if (!updatesSocket) return;
   if (updatesSocket.readyState !== WebSocket.OPEN) return;
   updatesSocket.send(
     JSON.stringify({
       type: "set_filters",
+      client_id: wsStore.clientId,
       selected_character: selectionStore.selectedCharacter,
       selected_set: selectionStore.selectedSet,
       selected_sets: selectionStore.selectedSetIds,
@@ -236,6 +223,37 @@ function sendUpdatesFilters() {
     }),
   );
 }
+
+// Imperative grid API surface used by the realtime-sync composable. Each method
+// delegates to the ImageGrid template-ref's defineExpose'd methods (Tier-3
+// imperative API), no-oping safely if the grid isn't mounted yet.
+const gridApi = {
+  insertGridImagesById: (ids) => gridContainer.value?.insertGridImagesById?.(ids),
+  refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
+  repositionImageByScore: (id, score) =>
+    gridContainer.value?.repositionImageByScore?.(id, score),
+  repositionImageBySmartScore: (id) =>
+    gridContainer.value?.repositionImageBySmartScore?.(id),
+  refreshSmartScoreForImage: (id) =>
+    gridContainer.value?.refreshSmartScoreForImage?.(id),
+  removeImagesById: (ids) => gridContainer.value?.removeImagesById?.(ids),
+  isImagesLoading: () => gridContainer.value?.isImagesLoading?.() ?? false,
+};
+
+function fullGridReload() {
+  gridStore.wsUpdateKey = Date.now();
+  gridStore.refreshGridVersion();
+}
+
+const gridRealtimeSync = useGridRealtimeSync({
+  getMyClientId: () => wsStore.clientId,
+  grid: gridApi,
+  wsStore,
+  pictureChangeAffectsView,
+  getSelectedSort: () => sortStore.selectedSort,
+  reload: fullGridReload,
+  refreshSidebar: (flash) => refreshSidebarPicturesDebounced(flash),
+});
 
 function connectUpdatesSocket() {
   if (updatesSocket) return;
@@ -259,45 +277,32 @@ function connectUpdatesSocket() {
       payload?.type === "pictures_changed" ||
       payload?.type === "picture_imported";
     if (isPictureChange) {
-      // Skip entirely when the changed fields can't affect the current view —
-      // this is what stops background smart_score recomputes from reloading the
-      // grid (and refreshing the sidebar) under a date sort, in any pile
-      // including the scrapheap.
-      if (
-        payload?.type === "pictures_changed" &&
-        !pictureChangeAffectsView(payload.fields)
-      ) {
-        return;
-      }
-      if (!wsStore.isUploadInProgress) {
-        refreshSidebarPicturesDebounced(true);
-      }
+      // LIKENESS_GROUPS reorders the whole grid wholesale, so a targeted op
+      // can't reconcile it — keep the existing wsTagUpdate signal that lets the
+      // grid re-rank in place. (Imports still flow through the normal path.)
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
       if (
         pictureIds.length > 0 &&
         sortStore.selectedSort === "LIKENESS_GROUPS" &&
-        payload?.type !== "picture_imported"
+        payload?.type !== "picture_imported" &&
+        pictureChangeAffectsView(payload.fields)
       ) {
+        if (!wsStore.isUploadInProgress) {
+          refreshSidebarPicturesDebounced(true);
+        }
         const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
         wsStore.wsTagUpdate = { key: nextKey, pictureIds };
         return;
       }
-      if (
-        payload?.type === "picture_imported" &&
-        payload?.source !== "user" &&
-        !wsStore.isUploadInProgress
-      ) {
-        // External import (API, watch-folder): show pill, don't auto-refresh
-        wsStore.pendingExternalImportCount += Math.max(1, pictureIds.length);
-      } else if (
-        shouldRefreshForPictureChange() ||
-        payload?.type === "picture_imported"
-      ) {
-        gridStore.wsUpdateKey = Date.now();
-        gridStore.refreshGridVersion();
+      // Own upload in progress: the import dialog drives the grid; ignore the
+      // echo so it doesn't double-count or reload mid-upload.
+      if (wsStore.isUploadInProgress && payload?.type === "picture_imported") {
+        return;
       }
+      // Everything else goes through the origin-aware decision table.
+      gridRealtimeSync.handleMessage(payload);
     } else if (payload?.type === "characters_changed") {
       refreshSidebar();
     } else if (payload?.type === "tags_changed") {
@@ -360,8 +365,26 @@ function disconnectUpdatesSocket() {
 }
 
 function loadPendingExternalImports() {
-  gridStore.wsUpdateKey = Date.now();
-  gridStore.refreshGridVersion();
+  const ids = wsStore.pendingExternalImportIds.slice();
+  wsStore.clearPendingExternalImportIds();
+  if (!ids.length) {
+    fullGridReload();
+    return;
+  }
+  // Splice just the new ids in place; fall back to a full reload if the grid
+  // ref isn't available (e.g. unmounted) or is mid-fetch.
+  const grid = gridContainer.value;
+  if (grid?.insertGridImagesById && !grid.isImagesLoading?.()) {
+    grid.insertGridImagesById(ids);
+  } else {
+    fullGridReload();
+  }
+}
+
+function loadSortChangedExternal() {
+  // The user opted in to the reshuffle — reconcile by refetching + re-sorting.
+  wsStore.clearSortChangedExternalIds();
+  fullGridReload();
 }
 
 function onRestoreConfirmed() {
@@ -612,7 +635,8 @@ async function handleSelectCharacter(payload) {
   if (charId !== ALL_PICTURES_ID) {
     filterStore.unassignedOnlyFilter = false;
   }
-  wsStore.pendingExternalImportCount = 0;
+  wsStore.clearPendingExternalImportIds();
+  wsStore.clearSortChangedExternalIds();
   selectionStore.selectedSet = null;
   selectionStore.selectedSetIds = [];
   await nextTick();
@@ -1786,7 +1810,8 @@ watch(
 watch(
   () => gridStore.gridVersion,
   () => {
-    wsStore.pendingExternalImportCount = 0;
+    wsStore.clearPendingExternalImportIds();
+    wsStore.clearSortChangedExternalIds();
   },
 );
 
@@ -2194,7 +2219,9 @@ defineExpose({
                 @import-started="wsStore.isUploadInProgress = true"
                 @import-ended="wsStore.isUploadInProgress = false"
                 :pendingExternalImportCount="wsStore.pendingExternalImportCount"
+                :sortChangedExternalCount="wsStore.sortChangedExternalCount"
                 @load-pending-imports="loadPendingExternalImports"
+                @load-sort-changed="loadSortChangedExternal"
                 @update:visible-range-label="
                   gridStore.visibleRangeLabel = $event
                 "

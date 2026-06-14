@@ -321,10 +321,14 @@
       :style="scrollWrapperStyle"
     >
       <div
-        v-if="props.pendingExternalImportCount > 0"
+        v-if="
+          props.pendingExternalImportCount > 0 ||
+          props.sortChangedExternalCount > 0
+        "
         class="pending-imports-pill-anchor"
       >
         <button
+          v-if="props.pendingExternalImportCount > 0"
           class="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
@@ -335,6 +339,13 @@
               : "new pictures"
           }}
           — click to load
+        </button>
+        <button
+          v-if="props.sortChangedExternalCount > 0"
+          class="pending-imports-pill"
+          @click="emit('load-sort-changed')"
+        >
+          ⟳ Sort order changed externally — click to refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
@@ -907,6 +918,7 @@ const emit = defineEmits([
   "update:embed-watermark",
   "update:visible-range-label",
   "load-pending-imports",
+  "load-sort-changed",
   "open-settings",
   "open-import",
   "confirm-export-zip",
@@ -986,6 +998,7 @@ const props = defineProps({
   publicUrl: { type: String, default: null },
   embedWatermark: { type: Boolean, default: false },
   pendingExternalImportCount: { type: Number, default: 0 },
+  sortChangedExternalCount: { type: Number, default: 0 },
 });
 
 // ============================================================
@@ -4605,6 +4618,109 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
   }
 }
 
+// Numeric sort key for a freshly-fetched grid item under the active sort,
+// mirroring the fields the grid already displays/sorts on (see
+// getCompactGroupLabel / sort-overlay logic). Returns a finite number used to
+// find the insert index; `id` is the implicit tiebreaker.
+function gridImageSortKey(img) {
+  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
+  if (sort === "IMPORTED_AT" && img?.imported_at) {
+    return Date.parse(img.imported_at) || 0;
+  }
+  if (sort.includes("DATE") && img?.created_at) {
+    return Date.parse(img.created_at) || 0;
+  }
+  if (sort.includes("SMART_SCORE")) {
+    return getGridSmartScoreValue(img) ?? 0;
+  }
+  if (
+    sort.includes("CHARACTER_LIKENESS") &&
+    typeof img?.character_likeness === "number"
+  ) {
+    return img.character_likeness;
+  }
+  if (sort === "TEXT_CONTENT" && typeof img?.text_score === "number") {
+    return img.text_score;
+  }
+  if (typeof img?.score === "number") return img.score;
+  // Unknown / id-ordered sort → fall back to the picture id.
+  return Number(getPictureId(img?.id)) || 0;
+}
+
+// Insert newly-added pictures into the grid at their sorted position without a
+// full reload. Always mutates lastFetchedGridImages then rebuilds, because the
+// v-for key embeds img.idx — splicing allGridImages directly would corrupt the
+// virtual-scroll window. Deferred to the pill while a streaming fetch is in
+// flight (that fetch writes allGridImages wholesale from a sized placeholder).
+async function insertGridImagesById(ids) {
+  const wanted = (Array.isArray(ids) ? ids : [])
+    .map((id) => getPictureId(id))
+    .filter((id) => id !== null);
+  if (!wanted.length) return;
+  if (imagesLoading.value) {
+    // A streaming fetch owns allGridImages wholesale; inserting now would be
+    // clobbered. The caller (useGridRealtimeSync) routes these to the pill
+    // instead while loading, so just bail.
+    console.warn(
+      "insertGridImagesById: skipped during in-flight grid fetch",
+      wanted,
+    );
+    return;
+  }
+
+  const existing = new Set(
+    (Array.isArray(lastFetchedGridImages.value)
+      ? lastFetchedGridImages.value
+      : []
+    ).map((img) => getPictureId(img?.id)),
+  );
+  const toFetch = wanted.filter((id) => !existing.has(id));
+  if (!toFetch.length) return;
+
+  let fetched;
+  try {
+    const params = new URLSearchParams();
+    toFetch.forEach((id) => params.append("id", id));
+    params.append("fields", "grid");
+    const res = await apiClient.get(
+      `${props.backendUrl}/pictures?${params.toString()}`,
+    );
+    fetched = Array.isArray(res.data) ? res.data : [];
+  } catch (e) {
+    console.error("insertGridImagesById: grid metadata fetch failed", {
+      ids: toFetch,
+      error: e,
+    });
+    return;
+  }
+  if (!fetched.length) return;
+
+  const descending = props.selectedDescending !== false;
+  const base = Array.isArray(lastFetchedGridImages.value)
+    ? lastFetchedGridImages.value.slice()
+    : [];
+  const inserted = [];
+  for (const pic of fetched) {
+    const picId = getPictureId(pic?.id);
+    if (picId === null || base.some((img) => getPictureId(img?.id) === picId)) {
+      continue;
+    }
+    const key = gridImageSortKey(pic);
+    let insertIndex = base.findIndex((img) => {
+      const otherKey = gridImageSortKey(img);
+      return descending ? otherKey < key : otherKey > key;
+    });
+    if (insertIndex === -1) insertIndex = base.length;
+    base.splice(insertIndex, 0, pic);
+    inserted.push(picId);
+  }
+  if (!inserted.length) return;
+
+  lastFetchedGridImages.value = base;
+  rebuildGridImagesFromLastFetch();
+  triggerNewImageHighlight(inserted);
+}
+
 async function refreshSmartScoreForImage(imageId) {
   if (!imageId || !isSmartScoreSortActive()) return;
   const latestInfo = await fetchImageInfo(imageId, { smartScore: true });
@@ -5693,6 +5809,12 @@ defineExpose({
   exportCurrentViewToZip,
   getExportCount,
   removeImagesById,
+  insertGridImagesById,
+  refreshGridImage,
+  repositionImageByScore,
+  repositionImageBySmartScore,
+  refreshSmartScoreForImage,
+  isImagesLoading: () => imagesLoading.value,
   clearFaceSelection,
   runComfyuiOnGridImages,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
@@ -6220,13 +6342,14 @@ function handleEmptyStateReset() {
   height: 0;
   overflow: visible;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
   pointer-events: none;
 }
 
 .pending-imports-pill {
-  position: absolute;
-  top: 8px;
   pointer-events: all;
   display: inline-flex;
   align-items: center;
