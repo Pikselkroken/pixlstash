@@ -946,6 +946,7 @@ def _process_comfyui_outputs(
     stack_id: int | None,
     source_picture_id: int | None,
     view_context: dict | None = None,
+    origin_client_id: str | None = None,
 ) -> None:
     try:
         images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
@@ -1009,8 +1010,18 @@ def _process_comfyui_outputs(
             )
 
         if new_ids:
+            # The in-app ComfyUI runner is a UI-initiated generation, so the
+            # output import is echoed to the originating tab (source "ui" +
+            # origin id) for a targeted grid insert. Externally-run ComfyUI
+            # arrives via the watch/reference finders, which stay external/null.
             server.vault.notify(
-                EventType.PICTURE_IMPORTED, {"ids": new_ids, "source": "user"}
+                EventType.PICTURE_IMPORTED,
+                {
+                    "ids": new_ids,
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "added",
+                },
             )
         if all_ids:
             server.vault.notify(EventType.CHANGED_PICTURES, all_ids)
@@ -1354,6 +1365,10 @@ def create_router(server) -> APIRouter:
         client_id = payload.get("client_id") or payload.get("clientId") or None
         if client_id is not None:
             client_id = str(client_id)
+        # The PixlStash per-tab origin id (X-Client-Id) — distinct from the
+        # ComfyUI websocket ``client_id`` above. Captured at request entry so
+        # the generated-output import echoes back to the originating tab.
+        origin_client_id = getattr(request.state, "origin_client_id", None)
 
         workflow_path, workflow_source = _resolve_workflow_path(workflow_name)
         if not workflow_path:
@@ -1437,6 +1452,7 @@ def create_router(server) -> APIRouter:
                         stack_id,
                         pic_id,
                     ),
+                    kwargs={"origin_client_id": origin_client_id},
                     daemon=True,
                 )
                 worker.start()
@@ -1467,6 +1483,9 @@ def create_router(server) -> APIRouter:
         client_id = payload.get("client_id") or payload.get("clientId") or None
         if client_id is not None:
             client_id = str(client_id)
+        # PixlStash per-tab origin id (X-Client-Id), distinct from the ComfyUI
+        # websocket ``client_id``. Echoed on the generated-output import.
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         raw_source_id = payload.get("source_picture_id")
         source_picture_id: int | None = (
             int(raw_source_id) if raw_source_id is not None else None
@@ -1569,7 +1588,10 @@ def create_router(server) -> APIRouter:
                     None,
                     source_picture_id,
                 ),
-                kwargs={"view_context": view_context},
+                kwargs={
+                    "view_context": view_context,
+                    "origin_client_id": origin_client_id,
+                },
                 daemon=True,
             )
             worker.start()

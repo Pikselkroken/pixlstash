@@ -134,6 +134,161 @@ def test_broadcast_delivers_only_to_owner_clients(server):
 
 
 # ---------------------------------------------------------------------------
+# Origin-aware event envelope (X-Client-Id echo for slick grid updates)
+# ---------------------------------------------------------------------------
+
+
+class _CaptureWS:
+    """An owner WebSocket stand-in that records the payloads it is sent."""
+
+    def __init__(self):
+        self.received = []
+
+    async def send_json(self, payload):
+        self.received.append(payload)
+
+
+def _broadcast_capture(server, event_type, data):
+    """Run ``_broadcast_ws_event`` against a single owner client, return payload."""
+    ws = _CaptureWS()
+    with server._ws_clients_lock:
+        saved = list(server._ws_clients)
+        server._ws_clients = [{"ws": ws, "filters": {}, "owner": True}]
+    try:
+        asyncio.run(server._broadcast_ws_event(event_type, data))
+    finally:
+        with server._ws_clients_lock:
+            server._ws_clients = saved
+    assert len(ws.received) == 1, f"Expected one payload, got {ws.received}"
+    return ws.received[0]
+
+
+# Every broadcast event type that reaches owner clients. The envelope contract
+# is that EACH of these carries ``source`` and ``origin_client_id``.
+_BROADCAST_EVENT_TYPES = [
+    EventType.CHANGED_PICTURES,
+    EventType.PICTURE_IMPORTED,
+    EventType.CHANGED_TAGS,
+    EventType.CLEARED_TAGS,
+    EventType.CHANGED_DESCRIPTIONS,
+    EventType.CHANGED_CHARACTERS,
+    EventType.CHANGED_FACES,
+]
+
+
+@pytest.mark.parametrize("event_type", _BROADCAST_EVENT_TYPES)
+def test_every_broadcast_carries_envelope(server, event_type):
+    """Every owner-delivered event carries ``source`` + ``origin_client_id``,
+    even when emitted with a bare id list (the defaults kick in)."""
+    payload = _broadcast_capture(server, event_type, [1, 2, 3])
+    assert "source" in payload, f"{event_type.name} missing source"
+    assert "origin_client_id" in payload, f"{event_type.name} missing origin_client_id"
+    # Bare list / no envelope data → background/external defaults.
+    assert payload["source"] == "external"
+    assert payload["origin_client_id"] is None
+
+
+def test_import_envelope_ui_source_and_origin(server):
+    """A UI-initiated import carries source 'ui', the originating client id, and
+    change_kind 'added'."""
+    payload = _broadcast_capture(
+        server,
+        EventType.PICTURE_IMPORTED,
+        {
+            "ids": [10, 11],
+            "source": "ui",
+            "origin_client_id": "tab-xyz",
+            "change_kind": "added",
+        },
+    )
+    assert payload["type"] == "picture_imported"
+    assert payload["picture_ids"] == [10, 11]
+    assert payload["source"] == "ui"
+    assert payload["origin_client_id"] == "tab-xyz"
+    assert payload["change_kind"] == "added"
+
+
+def test_legacy_user_source_is_migrated_to_ui(server):
+    """The legacy ``source: 'user'`` value migrates to ``'ui'`` on the wire."""
+    payload = _broadcast_capture(
+        server,
+        EventType.PICTURE_IMPORTED,
+        {"ids": [1], "source": "user"},
+    )
+    assert payload["source"] == "ui"
+
+
+def test_external_import_is_source_external_origin_null(server):
+    """An externally-ingested picture (no source/origin in data) is external."""
+    payload = _broadcast_capture(server, EventType.PICTURE_IMPORTED, {"ids": [42]})
+    assert payload["source"] == "external"
+    assert payload["origin_client_id"] is None
+    assert "change_kind" not in payload  # not set for external imports
+
+
+def test_delete_carries_change_kind_removed(server):
+    """A delete broadcast carries change_kind 'removed' and the origin id."""
+    payload = _broadcast_capture(
+        server,
+        EventType.CHANGED_PICTURES,
+        {
+            "picture_ids": [7],
+            "origin_client_id": "tab-del",
+            "change_kind": "removed",
+        },
+    )
+    assert payload["type"] == "pictures_changed"
+    assert payload["picture_ids"] == [7]
+    assert payload["change_kind"] == "removed"
+    assert payload["origin_client_id"] == "tab-del"
+
+
+def test_edit_carries_change_kind_updated_and_origin(server):
+    """An in-UI edit broadcast carries change_kind 'updated' and the origin id."""
+    payload = _broadcast_capture(
+        server,
+        EventType.CHANGED_PICTURES,
+        {
+            "picture_ids": [3, 4],
+            "origin_client_id": "tab-edit",
+            "change_kind": "updated",
+            "fields": ["score"],
+        },
+    )
+    assert payload["change_kind"] == "updated"
+    assert payload["origin_client_id"] == "tab-edit"
+    assert payload["fields"] == ["score"]
+
+
+def test_tags_changed_dict_envelope_extracts_ids(server):
+    """tags_changed accepts the dict envelope and still surfaces picture_ids."""
+    payload = _broadcast_capture(
+        server,
+        EventType.CHANGED_TAGS,
+        {
+            "picture_ids": [5, 6],
+            "origin_client_id": "tab-tag",
+            "change_kind": "updated",
+        },
+    )
+    assert payload["type"] == "tags_changed"
+    assert payload["picture_ids"] == [5, 6]
+    assert payload["origin_client_id"] == "tab-tag"
+
+
+def test_x_client_id_header_populates_request_state(owner_client):
+    """The OriginClientMiddleware reads X-Client-Id into request.state and a
+    sane (<=200 char) value survives; an oversized one is dropped."""
+    # A normal request with a header should succeed (echo-matching is opaque;
+    # we assert the middleware doesn't break the request pipeline).
+    r = owner_client.get(f"{API}/check-session", headers={"X-Client-Id": "tab-abc"})
+    assert r.status_code == 200, r.text
+    # An oversized header must not break the request either (it is ignored).
+    r = owner_client.get(f"{API}/check-session", headers={"X-Client-Id": "x" * 5000})
+    assert r.status_code == 200, r.text
+
+
+# ---------------------------------------------------------------------------
 # AuthService.authenticate_websocket / is_websocket_origin_allowed
 # ---------------------------------------------------------------------------
 

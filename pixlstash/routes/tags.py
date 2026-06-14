@@ -84,7 +84,8 @@ def create_router(server) -> APIRouter:
         description="Adds a tag to a picture and removes empty-tag sentinel when appropriate.",
         response_model=PictureTagsResponse,
     )
-    def add_tag_to_picture(id: str, payload: dict = Body(...)):
+    def add_tag_to_picture(request: Request, id: str, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             try:
                 pic_id = int(id)
@@ -134,7 +135,14 @@ def create_router(server) -> APIRouter:
                     return pic
 
                 server.vault.db.run_task(update_picture, pic.id, tag)
-                server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
+                server.vault.notify(
+                    EventType.CHANGED_TAGS,
+                    {
+                        "picture_ids": [pic_id],
+                        "origin_client_id": origin_client_id,
+                        "change_kind": "updated",
+                    },
+                )
 
             fresh_tags = _sync_sidecar(server, pic_id)
 
@@ -190,7 +198,8 @@ def create_router(server) -> APIRouter:
         description="Removes one tag from a picture by numeric tag id and restores empty-tag sentinel when needed.",
         response_model=PictureTagsResponse,
     )
-    def remove_tag_from_picture(id: str, tag_id: str):
+    def remove_tag_from_picture(request: Request, id: str, tag_id: str):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             try:
                 pic_id = int(id)
@@ -226,7 +235,14 @@ def create_router(server) -> APIRouter:
                 return pic
 
             server.vault.db.run_task(update_picture, pic_id, tag_id_int)
-            server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
+            server.vault.notify(
+                EventType.CHANGED_TAGS,
+                {
+                    "picture_ids": [pic_id],
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
 
             fresh_tags = _sync_sidecar(server, pic_id)
 
@@ -243,7 +259,10 @@ def create_router(server) -> APIRouter:
         description="Removes a tag value from the picture and its face/hand associations for that picture.",
         response_model=PictureTagsResponse,
     )
-    def remove_tag_from_picture_everywhere(id: str, payload: dict = Body(...)):
+    def remove_tag_from_picture_everywhere(
+        request: Request, id: str, payload: dict = Body(...)
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
@@ -275,7 +294,14 @@ def create_router(server) -> APIRouter:
             return pic
 
         server.vault.db.run_task(update_picture, pic_id, tag_value)
-        server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
+        server.vault.notify(
+            EventType.CHANGED_TAGS,
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         fresh_tags = _sync_sidecar(server, pic_id)
         return {"status": "success", "tags": fresh_tags}
 
@@ -285,7 +311,8 @@ def create_router(server) -> APIRouter:
         description="Removes all tags from a picture in a single operation and restores the empty-tag sentinel.",
         response_model=PictureTagsResponse,
     )
-    def clear_all_tags_on_picture(id: str):
+    def clear_all_tags_on_picture(request: Request, id: str):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
@@ -310,7 +337,14 @@ def create_router(server) -> APIRouter:
             return pic
 
         server.vault.db.run_task(do_clear, pic_id)
-        server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
+        server.vault.notify(
+            EventType.CHANGED_TAGS,
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         fresh_tags = _sync_sidecar(server, pic_id)
         return {"status": "success", "tags": fresh_tags}
 

@@ -145,7 +145,12 @@ def register_routes(router, server):
         description="Runs a named image plugin on selected pictures and imports outputs into stacks.",
         response_model=PicturePluginRunResponse,
     )
-    async def run_picture_plugin(name: str, payload: dict = Body(...)):
+    async def run_picture_plugin(
+        request: Request, name: str, payload: dict = Body(...)
+    ):
+        # Capture the originating tab's client id at request entry; the plugin
+        # output import echoes it so that tab can do a targeted grid insert.
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         raw_picture_ids = payload.get("picture_ids")
         if not isinstance(raw_picture_ids, list) or not raw_picture_ids:
             raise HTTPException(
@@ -182,7 +187,12 @@ def register_routes(router, server):
 
         try:
             return await plugin_service.run_plugin_on_pictures(
-                server, name, picture_ids, parameters, captions
+                server,
+                name,
+                picture_ids,
+                parameters,
+                captions,
+                origin_client_id=origin_client_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
