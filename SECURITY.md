@@ -6,9 +6,9 @@ PixlStash does not currently support older releases with security updates. Only 
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.5.x   | :white_check_mark: |
-| 1.4.x   | :x:                |
-| < 1.4.x | :x:                |
+| 1.6.x   | :white_check_mark: |
+| 1.5.x   | :x:                |
+| < 1.5.x | :x:                |
 
 ## Reporting a Vulnerability
 
