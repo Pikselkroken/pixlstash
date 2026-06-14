@@ -5,6 +5,7 @@
 // be changed afterwards. Switching the runtime restarts the local server, which
 // reloads this page — so a successful action ends with the app reloading.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { apiClient, login } from "../../utils/apiClient";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -22,6 +23,34 @@ let stopProgress = null;
 // from the backend config; `serverDraft` is what the form edits until Apply.
 const server = ref(null); // { enabled, port, ssl, urls }
 const serverDraft = ref({ enabled: false, port: 9537, ssl: false });
+
+// Owner-account state. A fresh desktop owner is auto-logged-in over loopback
+// with NO username/password, but remote devices must sign in — so the backend
+// refuses to bind the network listener until the owner is claimed. We collect a
+// username + password here and claim the account (POST /login, loopback-only)
+// before enabling remote access, so the server actually comes up reachable.
+const accountUsername = ref("");
+const accountHasPassword = ref(false);
+const ownerUsername = ref("");
+const ownerPassword = ref("");
+const ownerShowPassword = ref(false);
+const ownerError = ref("");
+
+// Claimed = has BOTH a username and a password. Either alone leaves remote login
+// broken (login matches on username; the listener gate checks the password).
+const accountClaimed = computed(
+  () => accountHasPassword.value && !!accountUsername.value,
+);
+// Show the owner-setup form whenever remote access is requested on an unclaimed
+// account (newly toggled on, or previously enabled but never actually bound).
+const needsOwnerSetup = computed(
+  () => serverDraft.value.enabled && !accountClaimed.value,
+);
+const ownerFormValid = computed(
+  () =>
+    ownerUsername.value.trim().length > 0 &&
+    ownerPassword.value.trim().length >= 8,
+);
 
 const serverDirty = computed(() => {
   if (!server.value) return false;
@@ -148,6 +177,21 @@ async function refreshServer() {
   }
 }
 
+async function refreshAuthState() {
+  try {
+    const res = await apiClient.get("/users/me/auth");
+    accountUsername.value = res.data?.username || "";
+    accountHasPassword.value = Boolean(res.data?.has_password);
+    // Prefill the form with any existing username so the user only fills gaps.
+    if (accountUsername.value && !ownerUsername.value) {
+      ownerUsername.value = accountUsername.value;
+    }
+  } catch (e) {
+    // Non-fatal: the form still works, the claim just won't be pre-filled.
+    console.warn("Failed to load owner account state:", e);
+  }
+}
+
 async function guarded(fn) {
   if (busy.value || !desktop) return;
   busy.value = true;
@@ -164,9 +208,42 @@ async function guarded(fn) {
 }
 
 // Persisting the settings restarts the backend, which reloads this page — so a
-// successful Apply ends with the app reloading onto the new loopback URL.
-const applyServer = () =>
-  guarded(() => desktop.setServerSettings({ ...serverDraft.value }));
+// successful Apply ends with the app reloading onto the new loopback URL. When
+// turning remote access ON for an unclaimed account, we first claim the owner
+// (set username + password via POST /login) so the network listener can bind;
+// without it the backend would refuse to expose the server and the host would
+// be silently unreachable.
+async function applyServer() {
+  if (busy.value || !desktop) return;
+  // Capture before any mutation — accountClaimed flips once the claim lands.
+  const claiming = serverDraft.value.enabled && !accountClaimed.value;
+  ownerError.value = "";
+  if (claiming && !ownerFormValid.value) {
+    ownerError.value =
+      "Choose a username and a password of at least 8 characters.";
+    return;
+  }
+  busy.value = true;
+  error.value = "";
+  try {
+    if (claiming) {
+      // Loopback-only first-owner claim; sets username AND password.
+      await login(ownerUsername.value.trim(), ownerPassword.value);
+      accountUsername.value = ownerUsername.value.trim();
+      accountHasPassword.value = true;
+      ownerPassword.value = "";
+    }
+    await desktop.setServerSettings({ ...serverDraft.value });
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    if (claiming) ownerError.value = detail;
+    else error.value = detail;
+  } finally {
+    busy.value = false;
+    progress.value = null;
+    await refresh();
+  }
+}
 
 const install = (accel) => guarded(() => desktop.installAccelerator(accel));
 const use = (accel) => guarded(() => desktop.useAccelerator(accel));
@@ -190,6 +267,7 @@ onMounted(() => {
   refresh();
   refreshServer();
   refreshDesktopPrefs();
+  refreshAuthState();
 });
 
 onUnmounted(() => {
@@ -204,6 +282,7 @@ watch(
       refresh();
       refreshServer();
       refreshDesktopPrefs();
+      refreshAuthState();
     }
   },
 );
@@ -296,7 +375,57 @@ watch(
         />
       </div>
 
-      <div v-if="server.enabled" class="compute-sub server-urls">
+      <!-- Remote access is saved-on but the listener can't bind without an owner
+           login: tell the user it's not actually active yet. -->
+      <div v-if="server.enabled && !accountClaimed" class="settings-error">
+        Remote access is enabled but not active yet — set an owner login below to
+        start it.
+      </div>
+
+      <!-- First-run owner setup. Remote devices sign in with this; the backend
+           refuses to expose the server until the owner account is claimed. -->
+      <div v-if="needsOwnerSetup" class="owner-setup">
+        <div class="compute-sub owner-setup-desc">
+          Remote devices sign in with an owner username and password. Set one now
+          — until you do, PixlStash keeps the network listener off so another
+          device on your network can't claim your library.
+        </div>
+        <input
+          v-model="ownerUsername"
+          type="text"
+          class="owner-input"
+          placeholder="Username"
+          autocomplete="username"
+          :disabled="busy"
+        />
+        <div class="owner-password-field">
+          <input
+            v-model="ownerPassword"
+            :type="ownerShowPassword ? 'text' : 'password'"
+            class="owner-input"
+            placeholder="Password (min 8 characters)"
+            autocomplete="new-password"
+            :disabled="busy"
+            @keydown.enter.prevent="applyServer"
+          />
+          <button
+            type="button"
+            class="owner-password-toggle"
+            :aria-label="ownerShowPassword ? 'Hide password' : 'Show password'"
+            @click="ownerShowPassword = !ownerShowPassword"
+          >
+            <v-icon size="18">{{
+              ownerShowPassword ? "mdi-eye-off" : "mdi-eye"
+            }}</v-icon>
+          </button>
+        </div>
+        <div v-if="ownerError" class="settings-error">{{ ownerError }}</div>
+      </div>
+
+      <div
+        v-if="server.enabled && accountClaimed"
+        class="compute-sub server-urls"
+      >
         <template v-if="server.urls.length">
           Reachable at:
           <span v-for="url in server.urls" :key="url" class="server-url">
@@ -311,10 +440,10 @@ watch(
       <v-btn
         size="small"
         class="settings-action-btn server-apply-btn"
-        :disabled="busy || !serverDirty"
+        :disabled="busy || (needsOwnerSetup ? !ownerFormValid : !serverDirty)"
         @click="applyServer"
       >
-        Apply &amp; restart
+        {{ needsOwnerSetup ? "Create login &amp; enable" : "Apply &amp; restart" }}
       </v-btn>
     </template>
     <div v-else class="settings-token-empty">Loading…</div>
@@ -571,6 +700,55 @@ watch(
 
 .server-apply-btn {
   align-self: flex-start;
+}
+
+.owner-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 8px;
+}
+
+.owner-setup-desc {
+  margin-bottom: 2px;
+}
+
+.owner-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
+  border-radius: 4px;
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: inherit;
+  outline: none;
+}
+
+.owner-input:focus {
+  border-color: rgb(var(--v-theme-primary));
+}
+
+.owner-password-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.owner-password-field .owner-input {
+  padding-right: 40px;
+}
+
+.owner-password-toggle {
+  position: absolute;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  cursor: pointer;
+  padding: 4px;
 }
 
 .settings-token-empty {

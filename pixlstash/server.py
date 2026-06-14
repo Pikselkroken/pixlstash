@@ -1735,14 +1735,29 @@ class Server:
                 loop_port,
             )
             if self._server_config.get("external_server_enabled", False):
-                ext_scheme = (
-                    "https" if self._server_config.get("require_ssl", False) else "http"
-                )
-                logger.info(
-                    "Remote access enabled: %s://0.0.0.0:%s/",
-                    ext_scheme,
-                    self._server_config.get("port", 9537),
-                )
+                # Only report remote access as active when the external listener
+                # actually bound. _build_electron_configs refuses to bind it when
+                # the owner has no password (a LAN device could otherwise claim
+                # the empty account); gate this log on the same condition so it
+                # never claims "enabled" for a listener that was refused.
+                if Server._external_listener_password_ready(self):
+                    ext_scheme = (
+                        "https"
+                        if self._server_config.get("require_ssl", False)
+                        else "http"
+                    )
+                    logger.info(
+                        "Remote access enabled: %s://0.0.0.0:%s/",
+                        ext_scheme,
+                        self._server_config.get("port", 9537),
+                    )
+                else:
+                    logger.warning(
+                        "Remote access is configured but NOT active: the owner "
+                        "account has no password set, so the external listener "
+                        "was refused. Set an owner password (Settings → "
+                        "Account), then restart, to expose it on the network."
+                    )
         else:
             host = self._server_config.get("host", "127.0.0.1")
             port = self._server_config.get("port", 9537)

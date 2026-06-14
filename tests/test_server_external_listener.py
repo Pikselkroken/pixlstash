@@ -144,6 +144,81 @@ def test_external_listener_refused_when_no_auth_service():
     assert configs[0].host == "127.0.0.1"
 
 
+def _fake_lifespan_server(config, password_set=True):
+    """A minimal stand-in carrying the few attributes Server.lifespan reads.
+
+    Reuses _fake_server's auth stub (password presence) and adds the no-op vault
+    and lifespan bookkeeping fields the startup path touches, so the lifespan can
+    run far enough to emit its ready/remote-access log lines without a real vault.
+    """
+    base = _fake_server(config, password_set=password_set)
+    return SimpleNamespace(
+        api=base.api,
+        _server_config=config,
+        auth=base.auth,
+        _ws_loop=None,
+        _shutdown_on_lifespan=False,
+        vault=SimpleNamespace(start=lambda: None, close=lambda: None),
+    )
+
+
+def _drive_lifespan(server):
+    import asyncio
+
+    async def _run():
+        async with Server.lifespan(server, app=object()):
+            pass
+
+    asyncio.run(_run())
+
+
+def test_lifespan_reports_remote_access_active_with_password(monkeypatch, caplog):
+    """With an owner password set, the ready log reports remote access active."""
+    import logging
+
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    server = _fake_lifespan_server(
+        {
+            "external_server_enabled": True,
+            "port": 9537,
+            "generate_thumbnails_on_startup": False,
+        },
+        password_set=True,
+    )
+    with caplog.at_level(logging.INFO, logger="pixlstash.server"):
+        _drive_lifespan(server)
+
+    assert "Remote access enabled: http://0.0.0.0:9537/" in caplog.text
+    assert "NOT active" not in caplog.text
+
+
+def test_lifespan_warns_remote_access_inactive_without_password(monkeypatch, caplog):
+    """Regression: without an owner password the external listener is refused, so
+    the ready log must NOT claim remote access is enabled — it warns instead.
+
+    This is the dishonest-log bug: the listener was refused for lack of a
+    password (see test_external_listener_refused_without_owner_password) yet the
+    startup log previously printed "Remote access enabled", which read as working
+    while the host was unreachable from the LAN.
+    """
+    import logging
+
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    server = _fake_lifespan_server(
+        {
+            "external_server_enabled": True,
+            "port": 9537,
+            "generate_thumbnails_on_startup": False,
+        },
+        password_set=False,
+    )
+    with caplog.at_level(logging.INFO, logger="pixlstash.server"):
+        _drive_lifespan(server)
+
+    assert "Remote access enabled" not in caplog.text
+    assert "Remote access is configured but NOT active" in caplog.text
+
+
 def _run_startup_port_check(server_config, server_config_path, logger):
     checks = StartupChecks(
         server_config=server_config,
