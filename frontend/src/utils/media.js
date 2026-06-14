@@ -237,6 +237,23 @@ export function isFileDrag(dataTransfer) {
   return types.includes('Files') || types.includes('application/x-moz-file');
 }
 
+/**
+ * True when a drag originates inside the app (grid thumbnails dragged onto a
+ * character / set / project), identified by our own `application/json` payload.
+ *
+ * This must be distinguished from an external OS file drop because the desktop
+ * shell (Electron) populates `dataTransfer.files` with the dragged in-page image
+ * as a real File — which the web does not — so a `files.length > 0` check alone
+ * misreads an internal assign-drag as a file import. Only `types` is readable
+ * during `dragover` (the payload itself is protected until `drop`), so key off
+ * the type list, the same signal the drop handlers use.
+ */
+export function isInternalImageDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+  return types.includes('application/json');
+}
+
 export function isVideo(img) {
   if (!img) return false;
   const format = MediaFormat(img);

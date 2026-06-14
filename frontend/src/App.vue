@@ -36,6 +36,7 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import ImageGrid from "./components/views/ImageGrid.vue";
 import SearchOverlay from "./components/views/SearchOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import { isInternalImageDrag } from "./utils/media.js";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -419,6 +420,13 @@ function isInsideImageGrid(event) {
 function isExternalFileDragEvent(event) {
   const dataTransfer = event?.dataTransfer;
   if (!dataTransfer) return false;
+  // An internal app drag (grid thumbnail → sidebar character/set/project) is
+  // never a file import — bail before the files check. On the desktop shell
+  // (Electron) such a drag ALSO populates dataTransfer.files with the dragged
+  // in-page image as a real File (the web does not), so without this guard the
+  // window-level import handler mistakes the assign-drag for an external file
+  // drop and imports the picture instead of assigning it.
+  if (isInternalImageDrag(dataTransfer)) return false;
   const files = dataTransfer.files;
   if (files && files.length > 0) return true;
   const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
