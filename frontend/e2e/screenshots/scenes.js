@@ -10,6 +10,35 @@
 // sidebar, api }.
 import { expect } from '@playwright/test'
 
+// listAccelerators() payloads for the desktop bridge, one per GPU vendor. Labels
+// mirror electron/src/config.ts ACCEL_LABELS and the shape mirrors main.ts's
+// describeAccelerators(): a bundled CPU runtime plus the single GPU overlay the
+// hardware detector offers for that machine, not yet installed.
+const cudaAccelerators = {
+  bundled: { accel: 'cpu', label: 'CPU', active: true },
+  items: [
+    {
+      accel: 'cu128',
+      label: 'NVIDIA GPU (CUDA 12.8)',
+      installed: false,
+      active: false,
+      recommended: true,
+    },
+  ],
+}
+const rocmAccelerators = {
+  bundled: { accel: 'cpu', label: 'CPU', active: true },
+  items: [
+    {
+      accel: 'rocm',
+      label: 'AMD GPU (ROCm, experimental)',
+      installed: false,
+      active: false,
+      recommended: true,
+    },
+  ],
+}
+
 async function readyGrid(grid) {
   await grid.goto()
   await grid.waitForThumbnailLoaded()
@@ -203,6 +232,38 @@ export const scenes = [
       // The desktop-only "Backend" tab: compute acceleration + remote access.
       await page.getByRole('tab', { name: 'Backend' }).click()
       await expect(page.getByText('Compute acceleration')).toBeVisible()
+      await page.waitForTimeout(400)
+      return settings.card
+    },
+  },
+  {
+    id: 'backend-cuda',
+    assets: ['ScreenshotBackendCuda.jpg'],
+    title: 'Desktop Backend settings — NVIDIA CUDA acceleration available',
+    // Show the Backend tab on an NVIDIA machine: the CUDA overlay is offered
+    // with an "Install (recommended)" action (the post-install "active" state
+    // can't be shown without a real overlay download).
+    bridge: { accelerators: cudaAccelerators },
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.open()
+      await page.getByRole('tab', { name: 'Backend' }).click()
+      await expect(page.getByText('NVIDIA GPU (CUDA 12.8)')).toBeVisible()
+      await page.waitForTimeout(400)
+      return settings.card
+    },
+  },
+  {
+    id: 'backend-rocm',
+    assets: ['ScreenshotBackendRocm.jpg'],
+    title: 'Desktop Backend settings — AMD ROCm acceleration available',
+    // Same tab on an AMD machine: the experimental ROCm overlay is offered.
+    bridge: { accelerators: rocmAccelerators },
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.open()
+      await page.getByRole('tab', { name: 'Backend' }).click()
+      await expect(page.getByText('AMD GPU (ROCm, experimental)')).toBeVisible()
       await page.waitForTimeout(400)
       return settings.card
     },
