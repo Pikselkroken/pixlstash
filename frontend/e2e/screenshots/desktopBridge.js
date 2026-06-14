@@ -10,10 +10,26 @@
 // the library view: window controls, version/settings/streaming hooks, and the
 // compute/server reads used if the settings dialog's Backend tab is shown.
 
-function installDesktopBridge() {
+// Labels mirror electron/src/config.ts ACCEL_LABELS so the captured settings
+// read exactly like the shipped app. The default lists the NVIDIA/CUDA upgrade
+// (the common case); pass `overrides.accelerators` to show a different machine
+// (e.g. an AMD/ROCm box) — see scenes.js.
+function installDesktopBridge(overrides) {
   const noop = () => {}
   const sub = () => () => {}
   const val = (v) => () => Promise.resolve(v)
+  const accelerators = (overrides && overrides.accelerators) || {
+    bundled: { accel: 'cpu', label: 'CPU', active: true },
+    items: [
+      {
+        accel: 'cu128',
+        label: 'NVIDIA GPU (CUDA 12.8)',
+        installed: false,
+        active: false,
+        recommended: true,
+      },
+    ],
+  }
   window.pixlstashDesktop = {
     bootstrap: val({}),
     // Window controls (TitleBar.vue wires these to the custom min/max/close).
@@ -35,18 +51,7 @@ function installDesktopBridge() {
     }),
     setServerSettings: val(undefined),
     checkServerPort: val({ available: true }),
-    listAccelerators: val({
-      bundled: { accel: 'cpu', label: 'Built-in (CPU)', active: true },
-      items: [
-        {
-          accel: 'cu128',
-          label: 'NVIDIA GPU acceleration (CUDA 12.8)',
-          installed: false,
-          active: false,
-          recommended: true,
-        },
-      ],
-    }),
+    listAccelerators: val(accelerators),
     installAccelerator: val(undefined),
     useAccelerator: val(undefined),
     removeAccelerator: val(undefined),
@@ -55,7 +60,11 @@ function installDesktopBridge() {
   }
 }
 
-/** Install the desktop stub bridge on a page BEFORE it navigates. */
-export async function useDesktopBridge(page) {
-  await page.addInitScript(installDesktopBridge)
+/**
+ * Install the desktop stub bridge on a page BEFORE it navigates. Pass
+ * `overrides.accelerators` (the listAccelerators payload) to drive the Backend
+ * tab's compute section into a specific machine's state.
+ */
+export async function useDesktopBridge(page, overrides = {}) {
+  await page.addInitScript(installDesktopBridge, overrides)
 }

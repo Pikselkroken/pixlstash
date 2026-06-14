@@ -70,8 +70,9 @@ test.describe('reproduce website screenshots', () => {
   for (const scene of scenes) {
     test(`${scene.id} → ${scene.assets.join(', ')}`, async ({ page, apiContext }) => {
       // Render as the desktop app (custom title bar + window controls) unless
-      // the scene opts out (e.g. a recipient browser view).
-      if (!scene.browser) await useDesktopBridge(page)
+      // the scene opts out (e.g. a recipient browser view). A scene may supply
+      // `bridge` overrides (e.g. a CUDA/ROCm accelerator list) for the capture.
+      if (!scene.browser) await useDesktopBridge(page, scene.bridge)
       const ctx = ctxFor(page)
       ctx.api = apiContext
       const target = await scene.setup(ctx)
