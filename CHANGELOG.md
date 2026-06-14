@@ -1,3 +1,7 @@
+# [1.6.1]
+- Fix drag and drop of pictures onto characters in the Electron app
+- Help users make a username and password on a fresh install when enabling the server
+
 # [1.6.0] [Security:High]
 - New cross-platform desktop app (Windows/macOS/Linux) built on Electron. It runs the PixlStash server for you in a native window — no Python, Node, or browser tab required.
 - LM Studio-style downloadable compute backends: on first run the app auto-detects your hardware and fetches a matching AI runtime (NVIDIA CUDA, Apple Silicon Metal, or CPU). Manage and switch backends from Backends → Compute Backends…
