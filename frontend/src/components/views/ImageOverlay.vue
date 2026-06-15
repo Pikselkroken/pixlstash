@@ -2210,6 +2210,25 @@ function onPanEnd(event) {
 function handleMediaDragStart(event) {
   if (isZoomed.value) {
     event.preventDefault();
+    return;
+  }
+  // Tag this as an internal app drag using the same `application/json`
+  // image-ids payload the grid thumbnails use. Without a payload the desktop
+  // shell (Electron) attaches the in-page image to dataTransfer.files, so
+  // dropping it back onto the full-viewport overlay is misread by the
+  // window-level handler as an external file drop and triggers an import.
+  // The marker makes isInternalImageDrag() recognise it and bail, and also
+  // lets the open image be dropped onto a sidebar character/set/project to
+  // assign it, matching grid behaviour.
+  const id = image.value?.id;
+  if (id == null) return;
+  try {
+    event.dataTransfer?.setData(
+      "application/json",
+      JSON.stringify({ type: "image-ids", imageIds: [id] }),
+    );
+  } catch (err) {
+    console.error("[ERROR] Failed to set overlay drag data:", err);
   }
 }
 
