@@ -61,6 +61,7 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_character_ids,
     fetch_scope_allowed_picture_ids,
+    VALID_COMBINE_MODES,
 )
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.watermark import apply_watermark, get_watermark_bytes
@@ -1496,10 +1497,11 @@ def register_routes(router, server):
             "Scores one or more uploaded images by how closely a detected face "
             "matches a reference character, without importing or persisting "
             "anything. Faces are detected in-memory on the GPU face queue and "
-            "compared against the reference character's reference faces with the "
-            "same softmax-weighted cosine similarity as the stored-picture "
-            "`character_likeness` endpoints, so the scores are directly "
-            "comparable.\n\n"
+            "compared against the reference character's reference faces with "
+            "cosine similarity. By default (`combine=softmax`) the aggregation "
+            "matches the stored-picture `character_likeness` endpoints, so the "
+            "scores are directly comparable; see `combine` to change how a "
+            "character's multiple reference faces are aggregated.\n\n"
             "Returns one result per uploaded file, in upload order, as "
             "`{index, character_likeness, eligible}`:\n"
             "- `index`: 0-based position of the file in the request.\n"
@@ -1526,9 +1528,33 @@ def register_routes(router, server):
             ...,
             description="Character to score each uploaded image's face(s) against.",
         ),
+        combine: str = Form(
+            "softmax",
+            description=(
+                "How to aggregate each frame's face similarity across the "
+                "reference character's multiple reference faces. `softmax` "
+                "(default) is the legacy softmax-weighted average and keeps "
+                "scores directly comparable with the stored-picture "
+                "`character_likeness` endpoints. `max` accepts a frame that "
+                "matches any single reference face (lenient gate), `min` "
+                "requires matching every reference face (strict), `mean` is the "
+                "plain average; `harmonic_mean` and `geometric_mean` are also "
+                "accepted."
+            ),
+        ),
     ):
         # ── Authentication & scope ────────────────────────────────────────
         server.auth.require_user_id(request)
+        combine_mode = (combine or "softmax").strip().lower()
+        allowed_combine = VALID_COMBINE_MODES | {"softmax"}
+        if combine_mode not in allowed_combine:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid combine '{combine}'. "
+                    f"Valid values: {', '.join(sorted(allowed_combine))}."
+                ),
+            )
         scope_allowed = fetch_scope_allowed_character_ids(server, request)
         if (
             scope_allowed is not None
@@ -1629,7 +1655,7 @@ def register_routes(router, server):
                 continue
 
             likeness_map = compute_character_likeness_for_faces(
-                reference_faces, candidate_faces
+                reference_faces, candidate_faces, combine=combine_mode
             )
             score = max(likeness_map.values(), default=0.0)
             results.append(

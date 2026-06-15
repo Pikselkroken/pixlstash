@@ -1,3 +1,7 @@
+# [1.6.2] [Security:High]
+- Update several NPM packages (hasown, mime-types, form-data) for a [Security:High] alert
+- Support for batched combine mode for the face likeness gate node
+
 # [1.6.1]
 - Fix drag and drop of pictures onto characters in the Electron app
 - Help users make a username and password on a fresh install when enabling the server

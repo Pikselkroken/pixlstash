@@ -26,6 +26,7 @@ from pixlstash.utils.quality.smart_score_utils import (
     SmartScoreUtils,
     smart_score_penalised_tags,
 )
+from pixlstash.utils.service.filter_helpers import combine_likeness_scores
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.pixl_logging import get_logger
 
@@ -249,12 +250,25 @@ def get_smart_score_penalised_tags_from_request(server, request):
 def compute_character_likeness_for_faces(
     reference_faces: list[Face],
     candidate_faces: list[Face],
+    combine: str = "softmax",
 ) -> dict[int, float]:
     """Compute likeness scores for candidate faces against reference faces.
 
     Args:
         reference_faces: Reference faces to compare against.
         candidate_faces: Candidate faces to score.
+        combine: How to aggregate each candidate face's cosine similarity
+            across the character's multiple reference faces.
+
+            - ``"softmax"`` (default): the legacy softmax-weighted average
+              (alpha=5), which leans toward the best-matching reference faces.
+              This is the behaviour every existing caller relied on, so it stays
+              the default and their scores are unchanged.
+            - ``"mean"`` / ``"max"`` / ``"min"`` / ``"harmonic_mean"`` /
+              ``"geometric_mean"``: reduce across reference faces via
+              :func:`combine_likeness_scores`. ``"max"`` scores a face on its
+              single best-matching reference (lenient), ``"min"`` requires
+              matching every reference (strict), ``"mean"`` is the plain average.
 
     Returns:
         A mapping of face_id to likeness score.
@@ -293,17 +307,24 @@ def compute_character_likeness_for_faces(
     ref = np.stack(ref_arrs)
     cand_norm = cand / np.maximum(np.linalg.norm(cand, axis=1, keepdims=True), 1e-8)
     ref_norm = ref / np.maximum(np.linalg.norm(ref, axis=1, keepdims=True), 1e-8)
-    sims = cand_norm @ ref_norm.T
-    alpha = 5.0
-    sims = np.clip(sims, -1.0, 1.0)
-    weights = np.exp(alpha * sims)
-    denom = np.sum(weights, axis=1, keepdims=True)
-    denom = np.where(denom == 0, 1.0, denom)
-    softmax_avg = np.sum(weights * sims, axis=1) / denom.squeeze(1)
+    # (N_cand, N_ref) per-candidate, per-reference cosine similarity.
+    sims = np.clip(cand_norm @ ref_norm.T, -1.0, 1.0)
+
+    if combine == "softmax":
+        alpha = 5.0
+        weights = np.exp(alpha * sims)
+        denom = np.sum(weights, axis=1, keepdims=True)
+        denom = np.where(denom == 0, 1.0, denom)
+        per_candidate = np.sum(weights * sims, axis=1) / denom.squeeze(1)
+    else:
+        # combine_likeness_scores reduces across axis 0; we want to reduce across
+        # reference faces (axis 1), so transpose to (N_ref, N_cand) and it
+        # returns one score per candidate face.
+        per_candidate = combine_likeness_scores(sims.T, combine)
 
     return {
         face_id: float(likeness)
-        for face_id, likeness in zip(face_ids, softmax_avg, strict=False)
+        for face_id, likeness in zip(face_ids, per_candidate, strict=False)
     }
 
 
