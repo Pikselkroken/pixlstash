@@ -86,6 +86,13 @@ def create_router(server) -> APIRouter:
         show_problem_icon: Optional[bool] = None
         compact_mode: Optional[bool] = None
         sidebar_docked: Optional[bool] = None
+        hide_purge_snapshot_warning: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When true, the post-purge warning about deleted pictures still "
+                "present in snapshots is suppressed for this user."
+            ),
+        )
         expand_all_stacks: Optional[bool] = None
         date_format: Optional[str] = None
         theme_mode: Optional[str] = None

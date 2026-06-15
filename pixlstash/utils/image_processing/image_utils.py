@@ -185,19 +185,50 @@ class ImageUtils:
     def write_thumbnail_bytes(
         image_root: Optional[str], file_path: Optional[str], thumbnail: bytes
     ) -> Optional[str]:
-        """Write thumbnail bytes to disk and return the path, or None on failure."""
+        """Write thumbnail bytes to disk and return the path, or None on failure.
+
+        The write is atomic: bytes are written to a temp file in the same
+        directory and then ``os.replace``d onto the final path. This matters
+        because background tasks (e.g. face extraction) overwrite an existing
+        thumbnail while the web server may be serving it via ``FileResponse``.
+        An in-place ``open(..., "wb")`` truncates first, so a concurrent reader
+        can observe a 0-byte or partial file and cache a broken image. A rename
+        is atomic on the same filesystem, so readers always see either the old
+        or the new complete thumbnail, never a partial one.
+        """
         if not thumbnail:
             return None
         thumb_path = ImageUtils.get_thumbnail_path(image_root, file_path)
         if not thumb_path:
             return None
+        thumb_dir = os.path.dirname(thumb_path)
+        tmp_path = None
         try:
-            os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
-            with open(thumb_path, "wb") as handle:
+            os.makedirs(thumb_dir, exist_ok=True)
+            # delete=False so we can os.replace it; same dir guarantees the
+            # rename stays on one filesystem (a cross-device rename is not
+            # atomic and would raise).
+            with tempfile.NamedTemporaryFile(
+                dir=thumb_dir,
+                prefix=".thumb-",
+                suffix=THUMBNAIL_EXTENSION,
+                delete=False,
+            ) as handle:
+                tmp_path = handle.name
                 handle.write(thumbnail)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, thumb_path)
             return thumb_path
         except Exception as exc:
             logger.warning("Failed to write thumbnail %s: %s", thumb_path, exc)
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as rm_err:
+                    logger.warning(
+                        "Failed to remove temp thumbnail %s: %s", tmp_path, rm_err
+                    )
             return None
 
     @staticmethod

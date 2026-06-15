@@ -1,27 +1,6 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
-import { isReadOnly } from "../utils/apiClient";
-
-const PURGE_SNAPSHOT_WARNING_KEY = "pixlstash:hidePurgeSnapshotWarning";
-
-function loadHidePurgeSnapshotWarning() {
-  try {
-    return window.localStorage?.getItem(PURGE_SNAPSHOT_WARNING_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function saveHidePurgeSnapshotWarning(val) {
-  try {
-    window.localStorage?.setItem(
-      PURGE_SNAPSHOT_WARNING_KEY,
-      val ? "true" : "false",
-    );
-  } catch {
-    // ignore
-  }
-}
+import { apiClient, isReadOnly } from "../utils/apiClient";
 
 export const useUserPrefsStore = defineStore("userPrefs", () => {
   const dateFormat = ref("locale");
@@ -36,13 +15,25 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
   const sidebarWidth = ref(240);
   const publicUrl = ref(null);
   const embedWatermark = ref(false);
-  // Per-device dismissal of the "deleted pictures still in snapshots" warning
-  // shown after a purge. Stored client-side only via localStorage.
-  const hidePurgeSnapshotWarning = ref(loadHidePurgeSnapshotWarning());
+  // Dismissal of the "deleted pictures still in snapshots" warning shown after
+  // a purge. Persisted server-side per user (hydrated from /users/me/config in
+  // App.vue), so it follows the account across devices/browsers.
+  const hidePurgeSnapshotWarning = ref(false);
 
-  function setHidePurgeSnapshotWarning(val) {
-    hidePurgeSnapshotWarning.value = Boolean(val);
-    saveHidePurgeSnapshotWarning(hidePurgeSnapshotWarning.value);
+  async function setHidePurgeSnapshotWarning(val) {
+    const next = Boolean(val);
+    if (hidePurgeSnapshotWarning.value === next) return;
+    hidePurgeSnapshotWarning.value = next;
+    // Read-only/scoped tokens cannot patch user config (and never reach the
+    // purge flow that shows this dialog), so skip the request for them.
+    if (isReadOnly.value) return;
+    try {
+      await apiClient.patch("/users/me/config", {
+        hide_purge_snapshot_warning: next,
+      });
+    } catch (e) {
+      console.error("Failed to persist hide_purge_snapshot_warning:", e);
+    }
   }
 
   return {

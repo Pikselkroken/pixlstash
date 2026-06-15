@@ -684,6 +684,8 @@ import {
   isSupportedVideoFile,
   getOverlayFormat,
   buildMediaUrl,
+  MediaFormat,
+  mediaMimeType,
 } from "../../utils/media.js";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
@@ -781,9 +783,38 @@ const overlayExpandedStackLoading = ref(new Set());
 const overlayStackSignatures = ref(new Map());
 const overlayStackReloadToken = ref(0);
 
+// Frozen navigation backbone. The filmstrip and prev/next read membership from
+// `allImages` (the grid's allGridImages). While the overlay is open we snapshot
+// that sequence so the user's own edits (e.g. removing the tag a filtered view
+// is filtered on) and any background refetch can't drop the current picture or
+// its neighbours out from under the navigation. The snapshot is captured on
+// open and cleared on close; on close ImageGrid applies the deferred grid
+// reconcile so the now-non-matching picture leaves the grid. The currently
+// displayed card stays fresh independently: it lives in `image.value` and is
+// updated by local edits / fetchOverlayMetadata, not by this snapshot.
+const frozenAllImages = ref(null);
+
+// Membership source for everything that builds the navigation sequence. While
+// open, read the frozen snapshot; otherwise read live `allImages`.
+const overlayImages = computed(() => {
+  if (
+    open.value &&
+    Array.isArray(frozenAllImages.value) &&
+    frozenAllImages.value.length
+  ) {
+    return frozenAllImages.value;
+  }
+  return Array.isArray(allImages.value) ? allImages.value : [];
+});
+
+function captureFrozenAllImages() {
+  const list = Array.isArray(allImages.value) ? allImages.value : [];
+  frozenAllImages.value = list.slice();
+}
+
 const allImageById = computed(() => {
   const map = new Map();
-  const list = Array.isArray(allImages.value) ? allImages.value : [];
+  const list = overlayImages.value;
   for (const item of list) {
     if (!item || item.id == null) continue;
     map.set(String(item.id), item);
@@ -793,7 +824,7 @@ const allImageById = computed(() => {
 
 const allImagesByStackId = computed(() => {
   const map = new Map();
-  const list = Array.isArray(allImages.value) ? allImages.value : [];
+  const list = overlayImages.value;
   for (const item of list) {
     const stackId = getOverlayStackId(item);
     if (!stackId || item?.id == null) continue;
@@ -1035,6 +1066,9 @@ const showComfyuiCaptionHelp = computed(() => {
 watch(open, (value) => {
   if (!value) {
     resetOverlayStackState();
+    // Release the frozen navigation backbone so the next open re-snapshots the
+    // current grid, and so closed-overlay reads fall through to live allImages.
+    frozenAllImages.value = null;
     pluginMenuOpen.value = false;
     comfyuiMenuOpen.value = false;
     chromeHidden.value = false;
@@ -1044,6 +1078,9 @@ watch(open, (value) => {
     resetPan();
     resetComfyState();
   } else {
+    // Snapshot the grid sequence up front so prev/next stay stable for the
+    // whole lifetime of the overlay regardless of edits or background refetches.
+    captureFrozenAllImages();
     resetOverlayStackState();
     applyInitialExpandedStackState();
     pluginMenuOpen.value = false;
@@ -1209,7 +1246,7 @@ function getFullImageUrl(targetImage = null) {
 function getOverlayImageList() {
   const expanded = filmstripImages.value;
   if (Array.isArray(expanded) && expanded.length) return expanded;
-  return Array.isArray(allImages.value) ? allImages.value : [];
+  return overlayImages.value;
 }
 
 const filmstripImageById = computed(() => {
@@ -1365,7 +1402,7 @@ function normalizeOverlayStackMembersForStack(stackId, members) {
 
 const overlayStackCounts = computed(() => {
   const counts = new Map();
-  const list = Array.isArray(allImages.value) ? allImages.value : [];
+  const list = overlayImages.value;
   for (const img of list) {
     const stackId = getOverlayStackId(img);
     if (!stackId) continue;
@@ -1657,8 +1694,7 @@ function prefetchFilmstripStackMembers(item) {
 }
 
 const filmstripImages = computed(() => {
-  const images = Array.isArray(allImages.value) ? allImages.value : [];
-  return collapseOverlayStackImages(images);
+  return collapseOverlayStackImages(overlayImages.value);
 });
 
 watch(
@@ -2212,21 +2248,35 @@ function handleMediaDragStart(event) {
     event.preventDefault();
     return;
   }
-  // Tag this as an internal app drag using the same `application/json`
-  // image-ids payload the grid thumbnails use. Without a payload the desktop
-  // shell (Electron) attaches the in-page image to dataTransfer.files, so
-  // dropping it back onto the full-viewport overlay is misread by the
-  // window-level handler as an external file drop and triggers an import.
-  // The marker makes isInternalImageDrag() recognise it and bail, and also
-  // lets the open image be dropped onto a sidebar character/set/project to
-  // assign it, matching grid behaviour.
-  const id = image.value?.id;
-  if (id == null) return;
+  const data = image.value;
+  const id = data?.id;
+  const dt = event.dataTransfer;
+  if (id == null || !dt) return;
   try {
-    event.dataTransfer?.setData(
+    // Internal-drag marker (same payload the grid thumbnails use): lets the
+    // open image be dropped onto a sidebar character/set/project to assign it,
+    // and stops the window-level handler from mistaking the drag for an
+    // external file import. See isInternalImageDrag().
+    dt.setData(
       "application/json",
       JSON.stringify({ type: "image-ids", imageIds: [id] }),
     );
+    // Deterministic drag-out to the OS file manager. The browser's native
+    // <img>/<video> drag only yields a real file for some formats (and never
+    // for a <video>), which is why drag-out worked for some files and not
+    // others. The DownloadURL hint tells Chromium/Electron to fetch and save
+    // the actual media file wherever it is dropped, for every media type.
+    // Format: "<mime>:<filename>:<absolute-url>".
+    const url = getFullImageUrl(data);
+    if (url) {
+      const absoluteUrl = new URL(url, window.location.href).href;
+      const ext = MediaFormat(data);
+      const filename = data.original_file_name || `${id}${ext ? `.${ext}` : ""}`;
+      dt.setData(
+        "DownloadURL",
+        `${mediaMimeType(data)}:${filename}:${absoluteUrl}`,
+      );
+    }
   } catch (err) {
     console.error("[ERROR] Failed to set overlay drag data:", err);
   }

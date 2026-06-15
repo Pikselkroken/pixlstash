@@ -545,11 +545,19 @@ def register_routes(router, server):
                     )
                     server.vault.notify(EventType.CHANGED_PICTURES)
                     if imported_ids:
+                        # A genuine PixlStash tab attaches X-Client-Id (captured
+                        # as origin_client_id); an external API client — e.g. a
+                        # ComfyUI node POSTing generated output to
+                        # /pictures/import — does not. Tag the former "ui" (slick
+                        # in-place insert) and the latter "external" so an
+                        # outside push raises the New-pictures pill instead of
+                        # auto-inserting cards under the user.
+                        import_source = "ui" if origin_client_id else "external"
                         server.vault.notify(
                             EventType.PICTURE_IMPORTED,
                             {
                                 "ids": imported_ids,
-                                "source": "ui",
+                                "source": import_source,
                                 "origin_client_id": origin_client_id,
                                 "change_kind": "added",
                             },

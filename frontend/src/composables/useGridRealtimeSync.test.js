@@ -13,6 +13,8 @@ function makeHarness(overrides = {}) {
     refreshSmartScoreForImage: vi.fn(),
     removeImagesById: vi.fn(),
     isImagesLoading: vi.fn(() => false),
+    isOverlayOpen: vi.fn(() => overrides.overlayOpen === true),
+    markOverlayDeferredRefresh: vi.fn(),
   };
   const wsStore = {
     isUploadInProgress: false,
@@ -273,5 +275,83 @@ describe("useGridRealtimeSync decision table", () => {
     const res = h.sync.handleMessage({ type: "characters_changed" });
     expect(res.action).toBe("ignored");
     expect(res.reason).toBe("not-a-picture-event");
+  });
+});
+
+describe("useGridRealtimeSync — pills deferred while the overlay is open", () => {
+  it("external sort-affecting update defers to overlay close, raises no pill", () => {
+    const h = makeHarness({ selectedSort: "SMART_SCORE", overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [30],
+      change_kind: "updated",
+      fields: ["smart_score"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe(
+      "external-updated-sort-affecting-overlay-deferred",
+    );
+    expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("external add defers to overlay close, no New-pictures pill", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "picture_imported",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [20, 21],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("external-added-overlay-deferred");
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("foreign-ui add defers to overlay close instead of inserting live", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [10, 11],
+      change_kind: "added",
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("foreign-ui-added-overlay-deferred");
+    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("still raises the pill for the same event when no overlay is open", () => {
+    const h = makeHarness({ selectedSort: "SMART_SCORE", overlayOpen: false });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [30],
+      change_kind: "updated",
+      fields: ["smart_score"],
+    });
+    expect(res.action).toBe("pill");
+    expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([30]);
+    expect(h.grid.markOverlayDeferredRefresh).not.toHaveBeenCalled();
+  });
+
+  it("external removal is NOT deferred while overlay open (no stale 404 card)", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [40],
+      change_kind: "removed",
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("external-removed");
+    expect(h.grid.removeImagesById).toHaveBeenCalledWith([40]);
   });
 });

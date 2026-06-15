@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 from collections import defaultdict, OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from PIL import Image
@@ -35,6 +36,19 @@ from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_i
 
 
 logger = get_logger(__name__)
+
+
+# Dedicated, bounded pool for on-the-fly thumbnail generation (full-resolution
+# decode + resize + encode). Kept separate from asyncio's default executor so a
+# large import job (which runs on the default executor via run_in_executor) can
+# never starve on-demand thumbnail builds, and so the rare heavy build can't
+# monopolise every default-executor thread. Small on purpose: this work is CPU
+# bound and competes with the background TaskRunner workers.
+_THUMBNAIL_EXECUTOR_WORKERS = min(4, (os.cpu_count() or 2))
+_thumbnail_executor = ThreadPoolExecutor(
+    max_workers=_THUMBNAIL_EXECUTOR_WORKERS,
+    thread_name_prefix="thumb-gen",
+)
 
 
 def register_routes(router, server):
@@ -227,12 +241,15 @@ def register_routes(router, server):
 
                 return "memory-only", resolved, thumbnail_bytes, None
 
+            loop = asyncio.get_running_loop()
             (
                 status,
                 resolved_path,
                 thumbnail_bytes,
                 saved_thumb,
-            ) = await asyncio.to_thread(build_thumbnail_blocking)
+            ) = await loop.run_in_executor(
+                _thumbnail_executor, build_thumbnail_blocking
+            )
 
             if status == "saved" and saved_thumb:
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0

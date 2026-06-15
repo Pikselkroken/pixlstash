@@ -69,6 +69,22 @@ export function useGridRealtimeSync(deps) {
     refreshSidebar = () => {},
   } = deps;
 
+  function isOverlayOpen() {
+    return grid.isOverlayOpen?.() === true;
+  }
+
+  // While the lightbox overlay is open the grid sequence is frozen for
+  // navigation (see ImageOverlay's frozen filmstrip). A pill would either flash
+  // a "sort order changed" / "new pictures" prompt for the user's own in-overlay
+  // edits or reshuffle the grid under them. Instead, flag a deferred in-place
+  // reconcile that ImageGrid.closeOverlay() runs on close (refetch → re-filter +
+  // re-sort), and raise no pill. Returns true when the change was deferred.
+  function deferWhileOverlayOpen() {
+    if (!isOverlayOpen()) return false;
+    grid.markOverlayDeferredRefresh?.();
+    return true;
+  }
+
   function isSmartScoreSort() {
     return String(getSelectedSort() || "").includes("SMART_SCORE");
   }
@@ -132,6 +148,9 @@ export function useGridRealtimeSync(deps) {
       return { action: TARGETED, reason: "foreign-ui-removed" };
     }
     if (changeKind === "added") {
+      if (deferWhileOverlayOpen()) {
+        return { action: TARGETED, reason: "foreign-ui-added-overlay-deferred" };
+      }
       if (grid.isImagesLoading?.()) {
         // Streaming fetch owns allGridImages; defer to the pill.
         wsStore.addPendingExternalImportIds?.(pictureIds);
@@ -156,11 +175,23 @@ export function useGridRealtimeSync(deps) {
       return { action: TARGETED, reason: "external-removed" };
     }
     if (changeKind === "added") {
+      if (deferWhileOverlayOpen()) {
+        return { action: TARGETED, reason: "external-added-overlay-deferred" };
+      }
       wsStore.addPendingExternalImportIds?.(pictureIds);
       return { action: PILL, reason: "external-added" };
     }
     // updated
     if (pictureChangeAffectsView(fields)) {
+      if (deferWhileOverlayOpen()) {
+        // The classic case: the user's own tag edit kicks off a background
+        // smart_score recompute that arrives origin-less (external) and would
+        // raise the "sort order changed" pill. Defer it to overlay close.
+        return {
+          action: TARGETED,
+          reason: "external-updated-sort-affecting-overlay-deferred",
+        };
+      }
       // Would reshuffle the grid — raise the pill instead of moving cards under
       // the user.
       wsStore.addSortChangedExternalIds?.(pictureIds);

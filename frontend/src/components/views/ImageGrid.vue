@@ -1477,9 +1477,15 @@ async function runComfyuiOnGridImages({
   }
 }
 
-function onComfyuiRefreshGrid({ preserveScroll } = {}) {
-  if (preserveScroll) preserveScrollOnNextFetch.value = true;
-  debouncedFetchAllGridImages();
+function onComfyuiRefreshGrid() {
+  // The new grid card for an in-app ComfyUI result now arrives via the
+  // origin-aware WebSocket `picture_imported` insert (useGridRealtimeSync →
+  // insertGridImagesById), so this no longer triggers a full grid refetch and
+  // the old "pops in → disappears → comes back" flicker is gone. The runner
+  // still fires this on completion/retry; we use it only to reconcile an OPEN
+  // overlay (i2i/upscale) to the freshly-stacked output. maybeRefreshOverlayForComfyui
+  // is a guarded no-op when the overlay is closed or no comfyui refresh is pending.
+  void maybeRefreshOverlayForComfyui();
 }
 
 function getNowMs() {
@@ -1855,6 +1861,14 @@ watch(
       return;
     if (pauseGridAutoUpdates.value) {
       pendingGridRefreshAfterImport.value = true;
+      return;
+    }
+    if (overlayOpen.value) {
+      // A tag edit under an active tag filter would re-query and drop the
+      // now-non-matching picture from the grid mid-view (the streaming refetch
+      // replaces allGridImages). Defer the reconcile until the overlay closes so
+      // prev/next stay stable; closeOverlay() applies the filter removal in place.
+      pendingOverlayGridRefresh.value = true;
       return;
     }
     // Coalesce all task-driven tag updates into an infrequent full refresh to
@@ -4719,6 +4733,12 @@ async function insertGridImagesById(ids) {
   lastFetchedGridImages.value = base;
   rebuildGridImagesFromLastFetch();
   triggerNewImageHighlight(inserted);
+
+  // An in-app ComfyUI result lands here (origin-aware WS picture_imported insert).
+  // If the overlay is open with a pending comfyui refresh, reconcile it now that
+  // the new stacked output is present in lastFetchedGridImages — this is the i2i/
+  // upscale lightbox case that previously relied on the full-grid refetch.
+  void maybeRefreshOverlayForComfyui();
 }
 
 async function refreshSmartScoreForImage(imageId) {
@@ -5815,10 +5835,22 @@ defineExpose({
   repositionImageBySmartScore,
   refreshSmartScoreForImage,
   isImagesLoading: () => imagesLoading.value,
+  isOverlayOpen: () => overlayOpen.value,
+  markOverlayDeferredRefresh,
   clearFaceSelection,
   runComfyuiOnGridImages,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
 });
+
+// Queue a deferred in-place grid reconcile to run when the overlay closes.
+// Used by the realtime-sync decision table: while the overlay is open we never
+// raise a pill or reshuffle the grid under the frozen filmstrip; instead we
+// flag the refetch so closeOverlay() applies the filter-removal / re-sort
+// directly (see closeOverlay's pendingOverlayGridRefresh branch).
+function markOverlayDeferredRefresh() {
+  if (!overlayOpen.value) return;
+  pendingOverlayGridRefresh.value = true;
+}
 
 // Remove images by ID (for event-driven removal)
 function removeImagesById(imageIds) {

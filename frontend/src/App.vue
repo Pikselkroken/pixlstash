@@ -238,6 +238,9 @@ const gridApi = {
     gridContainer.value?.refreshSmartScoreForImage?.(id),
   removeImagesById: (ids) => gridContainer.value?.removeImagesById?.(ids),
   isImagesLoading: () => gridContainer.value?.isImagesLoading?.() ?? false,
+  isOverlayOpen: () => gridContainer.value?.isOverlayOpen?.() ?? false,
+  markOverlayDeferredRefresh: () =>
+    gridContainer.value?.markOverlayDeferredRefresh?.(),
 };
 
 function fullGridReload() {
@@ -1378,6 +1381,9 @@ async function fetchConfig() {
       userPrefsStore.publicUrl = res.data.public_url;
     }
     userPrefsStore.embedWatermark = Boolean(res.data?.embed_watermark);
+    userPrefsStore.hidePurgeSnapshotWarning = Boolean(
+      res.data?.hide_purge_snapshot_warning,
+    );
     const cfu = res.data?.check_for_updates;
     userPrefsStore.checkForUpdates =
       cfu === true ? true : cfu === false ? false : null;

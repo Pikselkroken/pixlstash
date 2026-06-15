@@ -103,11 +103,15 @@ body {
   background-color: rgb(var(--v-theme-accent));
 }
 
-.export-dialog-card :deep(.v-card-text) {
+/* Plain global stylesheet: ':deep()' is a Vue scoped-style construct and does
+   nothing here (global rules already cross component boundaries), so it is
+   dropped. Keeping it makes lightningcss reject ':deep' as an invalid
+   pseudo-class at build time. */
+.export-dialog-card .v-card-text {
   padding: 12px 16px 8px;
 }
 
-.export-dialog-card :deep(.v-card-actions) {
+.export-dialog-card .v-card-actions {
   padding: 8px 16px 12px;
   gap: 12px;
 }

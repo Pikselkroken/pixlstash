@@ -53,7 +53,10 @@ def patch_runtime(monkeypatch):
 
 def test_rocm_passes_and_labels_experimental(patch_runtime):
     # ROCm build: torch reports the GPU available; only CPU ONNX Runtime present.
-    patch_runtime(_make_torch(hip="6.4.43482", available=True), _make_ort(["CPUExecutionProvider"]))
+    patch_runtime(
+        _make_torch(hip="6.4.43482", available=True),
+        _make_ort(["CPUExecutionProvider"]),
+    )
     outcome = StartupCheckOutcome()
     _checks("cuda")._check_device_and_vram(outcome)
 
@@ -69,7 +72,10 @@ def test_rocm_passes_and_labels_experimental(patch_runtime):
 def test_rocm_probe_failure_falls_back_to_cpu(patch_runtime):
     # A broken ROCm install raises from is_available(); must fall back, not crash.
     boom = RuntimeError("HIP error: no ROCm-capable device is detected")
-    patch_runtime(_make_torch(hip="6.4.43482", available=boom), _make_ort(["CPUExecutionProvider"]))
+    patch_runtime(
+        _make_torch(hip="6.4.43482", available=boom),
+        _make_ort(["CPUExecutionProvider"]),
+    )
     outcome = StartupCheckOutcome()
     _checks("auto")._check_device_and_vram(outcome)  # auto => graceful CPU fallback
 
