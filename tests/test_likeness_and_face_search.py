@@ -113,6 +113,76 @@ def test_score_character_likeness_basic():
             assert server.vault.db.run_task(_picture_count) == 0
 
 
+def test_score_character_likeness_combine_param():
+    """The gate-scoring endpoint accepts a valid `combine` strategy and rejects
+    an unknown one with 400."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            assert (
+                client.post(
+                    "/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                ).status_code
+                == 200
+            )
+
+            resp = client.post(f"{API_PREFIX}/characters", json={"name": "Gate Ref"})
+            assert resp.status_code == 200, resp.text
+            character_id = resp.json()["character"]["id"]
+
+            # A valid combine strategy passes validation. (It may still 503 in
+            # an environment without an inference engine, so assert only that it
+            # is not rejected as a bad request — the happy path is covered by
+            # test_score_character_likeness_basic.)
+            resp = client.post(
+                f"{API_PREFIX}/pictures/score_character_likeness",
+                files=[("files", ("a.png", random_images[0], "image/png"))],
+                data={"reference_character_id": character_id, "combine": "max"},
+            )
+            assert resp.status_code != 400, resp.text
+
+            # An unknown combine strategy is rejected with 400 before any
+            # scoring or inference is attempted.
+            resp = client.post(
+                f"{API_PREFIX}/pictures/score_character_likeness",
+                files=[("files", ("a.png", random_images[0], "image/png"))],
+                data={"reference_character_id": character_id, "combine": "bogus"},
+            )
+            assert resp.status_code == 400, resp.text
+            assert "combine" in resp.json()["detail"].lower()
+
+
+def test_compute_character_likeness_combine_modes():
+    """compute_character_likeness_for_faces reduces across reference faces per
+    the combine strategy, and defaults to the legacy softmax behaviour."""
+    import types
+    import numpy as np
+    from pixlstash.picture_scoring import compute_character_likeness_for_faces
+
+    def face(vec, fid=None):
+        return types.SimpleNamespace(
+            features=np.asarray(vec, dtype=np.float32).tobytes(), id=fid
+        )
+
+    # Candidate strongly matches reference A, weakly matches reference B.
+    refs = [face([1.0, 0.0, 0.0]), face([0.0, 1.0, 0.0])]
+    cands = [face([0.9, 0.1, 0.0], fid=42)]
+
+    def score(mode=None):
+        kwargs = {} if mode is None else {"combine": mode}
+        return compute_character_likeness_for_faces(refs, cands, **kwargs)[42]
+
+    sim_a, sim_b = score("max"), score("min")
+    assert sim_a > sim_b  # max picks the strong reference, min the weak one
+    assert abs(score("mean") - (sim_a + sim_b) / 2.0) < 1e-5
+    # softmax (the default) leans toward the best match: between mean and max.
+    assert score("mean") < score("softmax") <= sim_a
+    # Omitting combine must equal the explicit softmax default (backward compat).
+    assert abs(score() - score("softmax")) < 1e-9
+
+
 def test_score_character_likeness_requires_auth():
     """The scoring endpoint rejects unauthenticated requests."""
     with tempfile.TemporaryDirectory() as temp_dir:
