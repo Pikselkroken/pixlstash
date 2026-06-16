@@ -46,7 +46,9 @@
               ref="pathInputRef"
               v-model="localHostPath"
               label="Local folder (host path)"
-              :placeholder="isImport ? '/home/you/Pictures/import' : '/home/you/Pictures'"
+              :placeholder="
+                isImport ? '/home/you/Pictures/import' : '/home/you/Pictures'
+              "
               density="comfortable"
               variant="filled"
               hide-details
@@ -77,7 +79,9 @@
                 icon
                 class="editor-copy-btn"
                 title="Copy container path"
-                @click="copyToClipboard(dockerSuggestedPath, 'Container path copied.')"
+                @click="
+                  copyToClipboard(dockerSuggestedPath, 'Container path copied.')
+                "
               >
                 <v-icon size="16">mdi-content-copy</v-icon>
               </v-btn>
@@ -102,14 +106,18 @@
                 <code>docker run</code> command:
               </div>
               <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{ dockerMountSnippet }}</code>
+                <code class="editor-docker-snippet">{{
+                  dockerMountSnippet
+                }}</code>
                 <v-btn
                   variant="outlined"
                   size="small"
                   icon
                   class="editor-copy-btn"
                   title="Copy mount line"
-                  @click="copyToClipboard(dockerMountSnippet, 'Mount line copied.')"
+                  @click="
+                    copyToClipboard(dockerMountSnippet, 'Mount line copied.')
+                  "
                 >
                   <v-icon size="16">mdi-content-copy</v-icon>
                 </v-btn>
@@ -119,14 +127,21 @@
                 This removes the old container, not the image.
               </div>
               <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{ dockerRemoveContainerSnippet }}</code>
+                <code class="editor-docker-snippet">{{
+                  dockerRemoveContainerSnippet
+                }}</code>
                 <v-btn
                   variant="outlined"
                   size="small"
                   icon
                   class="editor-copy-btn"
                   title="Copy remove-container command"
-                  @click="copyToClipboard(dockerRemoveContainerSnippet, 'Remove-container command copied.')"
+                  @click="
+                    copyToClipboard(
+                      dockerRemoveContainerSnippet,
+                      'Remove-container command copied.',
+                    )
+                  "
                 >
                   <v-icon size="16">mdi-content-copy</v-icon>
                 </v-btn>
@@ -141,16 +156,22 @@
                 Existing reference and import folder mounts are included.
               </div>
               <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet editor-docker-snippet--full">{{
-                  dockerRestartCommandSnippet
-                }}</code>
+                <code
+                  class="editor-docker-snippet editor-docker-snippet--full"
+                  >{{ dockerRestartCommandSnippet }}</code
+                >
                 <v-btn
                   variant="outlined"
                   size="small"
                   icon
                   class="editor-copy-btn"
                   title="Copy full restart command"
-                  @click="copyToClipboard(dockerRestartCommandSnippet, 'Restart command copied.')"
+                  @click="
+                    copyToClipboard(
+                      dockerRestartCommandSnippet,
+                      'Restart command copied.',
+                    )
+                  "
                 >
                   <v-icon size="16">mdi-content-copy</v-icon>
                 </v-btn>
@@ -175,14 +196,18 @@
                 <li>Add a mount to your docker run command:</li>
               </ol>
               <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{ dockerMountSnippet }}</code>
+                <code class="editor-docker-snippet">{{
+                  dockerMountSnippet
+                }}</code>
                 <v-btn
                   variant="outlined"
                   size="small"
                   icon
                   class="editor-copy-btn"
                   title="Copy mount snippet"
-                  @click="copyToClipboard(dockerMountSnippet, 'Mount snippet copied.')"
+                  @click="
+                    copyToClipboard(dockerMountSnippet, 'Mount snippet copied.')
+                  "
                 >
                   <v-icon size="16">mdi-content-copy</v-icon>
                 </v-btn>
@@ -195,14 +220,21 @@
                 This removes the old container, not the image.
               </div>
               <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{ dockerRemoveContainerSnippet }}</code>
+                <code class="editor-docker-snippet">{{
+                  dockerRemoveContainerSnippet
+                }}</code>
                 <v-btn
                   variant="outlined"
                   size="small"
                   icon
                   class="editor-copy-btn"
                   title="Copy remove-container command"
-                  @click="copyToClipboard(dockerRemoveContainerSnippet, 'Remove-container command copied.')"
+                  @click="
+                    copyToClipboard(
+                      dockerRemoveContainerSnippet,
+                      'Remove-container command copied.',
+                    )
+                  "
                 >
                   <v-icon size="16">mdi-content-copy</v-icon>
                 </v-btn>
@@ -220,16 +252,22 @@
                 <code>/absolute/host/path/for-*</code> placeholder values.
               </div>
               <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet editor-docker-snippet--full">{{
-                  dockerRestartCommandSnippet
-                }}</code>
+                <code
+                  class="editor-docker-snippet editor-docker-snippet--full"
+                  >{{ dockerRestartCommandSnippet }}</code
+                >
                 <v-btn
                   variant="outlined"
                   size="small"
                   icon
                   class="editor-copy-btn"
                   title="Copy full restart command"
-                  @click="copyToClipboard(dockerRestartCommandSnippet, 'Restart command copied.')"
+                  @click="
+                    copyToClipboard(
+                      dockerRestartCommandSnippet,
+                      'Restart command copied.',
+                    )
+                  "
                 >
                   <v-icon size="16">mdi-content-copy</v-icon>
                 </v-btn>
@@ -278,14 +316,21 @@
               Copy this if you need to restart with the current folder mounts.
             </div>
             <div class="editor-docker-snippet-wrap">
-              <code class="editor-docker-snippet">{{ dockerRemoveContainerSnippet }}</code>
+              <code class="editor-docker-snippet">{{
+                dockerRemoveContainerSnippet
+              }}</code>
               <v-btn
                 variant="outlined"
                 size="small"
                 icon
                 class="editor-copy-btn"
                 title="Copy remove-container command"
-                @click="copyToClipboard(dockerRemoveContainerSnippet, 'Remove-container command copied.')"
+                @click="
+                  copyToClipboard(
+                    dockerRemoveContainerSnippet,
+                    'Remove-container command copied.',
+                  )
+                "
               >
                 <v-icon size="16">mdi-content-copy</v-icon>
               </v-btn>
@@ -312,7 +357,12 @@
                 icon
                 class="editor-copy-btn"
                 title="Copy full restart command"
-                @click="copyToClipboard(dockerEditRestartCommandSnippet, 'Restart command copied.')"
+                @click="
+                  copyToClipboard(
+                    dockerEditRestartCommandSnippet,
+                    'Restart command copied.',
+                  )
+                "
               >
                 <v-icon size="16">mdi-content-copy</v-icon>
               </v-btn>
@@ -356,7 +406,8 @@
             />
             <div class="editor-toggle-desc">
               Tag changes made in PixlStash are written back to a
-              <code>.txt</code> sidecar file next to each image.
+              <code>.txt</code> sidecar file next to each image. Changes made
+              outside PixlStash are monitored and brought back into the app.
             </div>
           </div>
 
@@ -394,12 +445,16 @@
             <div class="editor-delete-confirm-text">
               <template v-if="isImport">
                 Remove
-                <strong>{{ activeFolder?.label || activeFolder?.folder }}</strong>
+                <strong>{{
+                  activeFolder?.label || activeFolder?.folder
+                }}</strong>
                 from automatic import monitoring?
               </template>
               <template v-else>
                 Remove
-                <strong>{{ activeFolder?.label || activeFolder?.folder }}</strong>
+                <strong>{{
+                  activeFolder?.label || activeFolder?.folder
+                }}</strong>
                 from PixlStash? The original files on disk will not be deleted.
               </template>
             </div>
@@ -458,7 +513,11 @@
     :registered-paths="props.registeredPaths"
     :image-root="props.imageRoot"
     :already-registered-label="`Already a${isImport ? 'n import' : ' reference'} folder`"
-    @select="(path) => { localPath = path }"
+    @select="
+      (path) => {
+        localPath = path;
+      }
+    "
     @close="browseOpen = false"
   />
 </template>
@@ -503,7 +562,9 @@ const emit = defineEmits(["close", "saved", "deleted"]);
 // --- Type-derived helpers ---
 
 const isImport = computed(() => props.type === "import");
-const apiBase = computed(() => (isImport.value ? "/import-folders" : "/reference-folders"));
+const apiBase = computed(() =>
+  isImport.value ? "/import-folders" : "/reference-folders",
+);
 const containerPrefix = computed(() =>
   isImport.value ? "/data/import/pictures-" : "/data/ref/pictures-",
 );
@@ -566,7 +627,10 @@ const inferredOwnImportMounts = computed(() => {
   let fallback = 1;
   return (props.registeredFolders || [])
     .map((folder) => {
-      const inferred = inferImportMount(folder, String(fallback).padStart(3, "0"));
+      const inferred = inferImportMount(
+        folder,
+        String(fallback).padStart(3, "0"),
+      );
       fallback += 1;
       return inferred;
     })
@@ -646,7 +710,11 @@ const dockerMountSnippet = computed(() => {
   const hostPath =
     String(localHostPath.value || "").trim() ||
     (isImport.value ? localPath.value : "/absolute/host/path");
-  return buildDockerVolumeFlag(hostPath, dockerSuggestedPath.value, shellFormat.value);
+  return buildDockerVolumeFlag(
+    hostPath,
+    dockerSuggestedPath.value,
+    shellFormat.value,
+  );
 });
 
 const dockerExistingOwnMountSnippets = computed(() => {
@@ -654,12 +722,15 @@ const dockerExistingOwnMountSnippets = computed(() => {
   if (isImport.value) {
     return inferredOwnImportMounts.value
       .filter((m) => normalizeFolderPath(m.containerPath) !== newPath)
-      .map((m) => buildDockerVolumeFlag(m.hostPath, m.containerPath, shellFormat.value));
+      .map((m) =>
+        buildDockerVolumeFlag(m.hostPath, m.containerPath, shellFormat.value),
+      );
   }
   return normalizedOwnPathList.value
     .filter((p) => p !== newPath)
     .map((p) => {
-      const hp = ownHostPathByContainerPath.value.get(p) || hostPathPlaceholderFor(p);
+      const hp =
+        ownHostPathByContainerPath.value.get(p) || hostPathPlaceholderFor(p);
       return buildDockerVolumeFlag(hp, p, shellFormat.value);
     });
 });
@@ -671,7 +742,8 @@ const dockerAllOwnMountSnippets = computed(() => {
     );
   }
   return normalizedOwnPathList.value.map((p) => {
-    const hp = ownHostPathByContainerPath.value.get(p) || hostPathPlaceholderFor(p);
+    const hp =
+      ownHostPathByContainerPath.value.get(p) || hostPathPlaceholderFor(p);
     return buildDockerVolumeFlag(hp, p, shellFormat.value);
   });
 });
@@ -896,8 +968,7 @@ async function save() {
     emit("saved");
   } catch (error) {
     saveError.value =
-      error?.response?.data?.detail ||
-      `Failed to save ${props.type} folder.`;
+      error?.response?.data?.detail || `Failed to save ${props.type} folder.`;
   } finally {
     saveLoading.value = false;
   }
@@ -912,8 +983,7 @@ async function doDelete() {
     emit("deleted");
   } catch (error) {
     saveError.value =
-      error?.response?.data?.detail ||
-      `Failed to remove ${props.type} folder.`;
+      error?.response?.data?.detail || `Failed to remove ${props.type} folder.`;
     confirmingDelete.value = false;
   } finally {
     deleteLoading.value = false;
