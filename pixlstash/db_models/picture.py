@@ -257,19 +257,32 @@ class Picture(SQLModel, table=True):
             index=True,
         ),
     )
-    # Absolute path to the sidecar caption file (.txt or .caption) that was
-    # present when this reference-folder picture was first indexed.  NULL when
-    # no sidecar existed at scan time or for non-reference-folder pictures.
-    caption_file: Optional[str] = Field(
+    # Absolute path to the tags sidecar file (comma-separated tags) tracked for
+    # this reference-folder picture.  NULL when no tags sidecar exists / applies.
+    tags_file: Optional[str] = Field(
         default=None,
-        sa_column=Column("caption_file", String, default=None, nullable=True),
+        sa_column=Column("tags_file", String, default=None, nullable=True),
     )
-    # Unix timestamp (float) of the sidecar file's mtime when it was last read
-    # into the database.  Used to detect changes or new appearances on
-    # subsequent scans without reading file content unnecessarily.
-    caption_file_mtime: Optional[float] = Field(
+    # Unix timestamp (float) of the tags sidecar's mtime when it was last read or
+    # written.  Used to detect external changes on subsequent scans without
+    # reading file content, and to avoid re-importing our own write-back.
+    tags_file_mtime: Optional[float] = Field(
         default=None,
-        sa_column=Column("caption_file_mtime", Float, default=None, nullable=True),
+        sa_column=Column("tags_file_mtime", Float, default=None, nullable=True),
+    )
+    # Absolute path to the description sidecar file (free-form text) tracked for
+    # this reference-folder picture.  NULL when none exists / applies.
+    description_file: Optional[str] = Field(
+        default=None,
+        sa_column=Column("description_file", String, default=None, nullable=True),
+    )
+    # Unix timestamp (float) of the description sidecar's mtime when last read or
+    # written.
+    description_file_mtime: Optional[float] = Field(
+        default=None,
+        sa_column=Column(
+            "description_file_mtime", Float, default=None, nullable=True
+        ),
     )
     # SHA-256 hex digest of the picture's user-visible metadata (column values
     # + sorted tag strings).  Recomputed automatically via an after_flush hook

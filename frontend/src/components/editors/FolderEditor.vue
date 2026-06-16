@@ -396,19 +396,80 @@
             </div>
           </div>
 
-          <!-- Reference-only: sync captions (edit mode) -->
-          <div v-if="!isImport && isEditMode" class="editor-toggle-row">
-            <v-checkbox
-              v-model="localSyncCaptions"
-              label="Sync caption files"
-              density="compact"
-              hide-details
-            />
-            <div class="editor-toggle-desc">
-              Tag changes made in PixlStash are written back to a
-              <code>.txt</code> sidecar file next to each image. Changes made
-              outside PixlStash are monitored and brought back into the app.
-            </div>
+          <!-- Reference-only: caption file sync (create + edit) -->
+          <div v-if="!isImport" class="editor-sync-section">
+            <button
+              type="button"
+              class="editor-sync-header"
+              @click="syncSectionOpen = !syncSectionOpen"
+            >
+              <v-icon size="18">{{
+                syncSectionOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+              }}</v-icon>
+              <span>Synchronise caption files?</span>
+              <span class="editor-sync-summary">{{ syncSummary }}</span>
+            </button>
+            <v-expand-transition>
+              <div v-show="syncSectionOpen" class="editor-sync-body">
+                <div class="editor-sync-intro">
+                  Keep <code>.txt</code> sidecar files next to each image in sync
+                  with PixlStash. Tags and descriptions are stored in separate
+                  files: changes made outside PixlStash are read back in, and
+                  changes made here are written out (the files are created when
+                  they don't exist yet).
+                </div>
+
+                <!-- Tags -->
+                <div class="editor-toggle-row">
+                  <v-checkbox
+                    v-model="localSyncTags"
+                    label="Sync tags"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="localSyncTags" class="editor-sync-suffix">
+                    <v-text-field
+                      v-model="localTagsSuffix"
+                      label="Tags filename suffix"
+                      :placeholder="DEFAULT_TAGS_SUFFIX"
+                      density="compact"
+                      variant="filled"
+                      hide-details
+                    />
+                    <div class="editor-toggle-desc">
+                      e.g. <code>{{ tagsExample }}</code>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Descriptions -->
+                <div class="editor-toggle-row">
+                  <v-checkbox
+                    v-model="localSyncDescriptions"
+                    label="Sync descriptions"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="localSyncDescriptions" class="editor-sync-suffix">
+                    <v-text-field
+                      v-model="localDescriptionSuffix"
+                      label="Description filename suffix"
+                      :placeholder="DEFAULT_DESCRIPTION_SUFFIX"
+                      density="compact"
+                      variant="filled"
+                      hide-details
+                    />
+                    <div class="editor-toggle-desc">
+                      e.g. <code>{{ descriptionExample }}</code>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="detectInfo" class="editor-sync-detected">
+                  {{ detectInfo }}
+                </div>
+              </div>
+            </v-expand-transition>
           </div>
 
           <!-- Reference-only: allow delete (edit mode) -->
@@ -539,6 +600,11 @@ import FolderBrowser from "./FolderBrowser.vue";
 
 const appVersion = __APP_VERSION__;
 
+// Default sidecar filename suffixes used when no convention is detected or
+// inherited (kept in sync with the backend defaults in caption_file_utils.py).
+const DEFAULT_TAGS_SUFFIX = "_tags.txt";
+const DEFAULT_DESCRIPTION_SUFFIX = "_description.txt";
+
 const props = defineProps({
   /** "import" or "reference" — determines API endpoints, labels, and form fields */
   type: { type: String, required: true },
@@ -583,7 +649,12 @@ const localLabelTouched = ref(false);
 const suppressLabelTouch = ref(false);
 const frozenEditFolder = ref(null);
 const localDeleteAfterImport = ref(false);
-const localSyncCaptions = ref(false);
+const localSyncDescriptions = ref(false);
+const localSyncTags = ref(false);
+const localDescriptionSuffix = ref(DEFAULT_DESCRIPTION_SUFFIX);
+const localTagsSuffix = ref(DEFAULT_TAGS_SUFFIX);
+const syncSectionOpen = ref(false);
+const detectInfo = ref("");
 const localAllowDelete = ref(false);
 const saveError = ref("");
 const saveLoading = ref(false);
@@ -612,6 +683,36 @@ const isValid = computed(() => {
 
 const suggestedDisplayLabel = computed(() =>
   deriveLabelFromHostPath(localHostPath.value),
+);
+
+// The most recently added reference folder, used to inherit sync defaults when
+// adding a new one (so a user who switched to e.g. ".txt"/".caption" keeps it).
+const lastAddedReferenceFolder = computed(() => {
+  if (isImport.value) return null;
+  const folders = props.registeredFolders || [];
+  let best = null;
+  for (const folder of folders) {
+    if (best === null || Number(folder.id) > Number(best.id)) best = folder;
+  }
+  return best;
+});
+
+const syncSummary = computed(() => {
+  const parts = [];
+  if (localSyncTags.value) parts.push("tags");
+  if (localSyncDescriptions.value) parts.push("descriptions");
+  if (!parts.length) return "Off";
+  return parts.map((p) => p[0].toUpperCase() + p.slice(1)).join(" + ");
+});
+
+function sidecarExample(suffix, fallback) {
+  return "image" + (String(suffix || "").trim() || fallback);
+}
+const tagsExample = computed(() =>
+  sidecarExample(localTagsSuffix.value, DEFAULT_TAGS_SUFFIX),
+);
+const descriptionExample = computed(() =>
+  sidecarExample(localDescriptionSuffix.value, DEFAULT_DESCRIPTION_SUFFIX),
 );
 
 function setLabelWithoutTouch(value) {
@@ -853,12 +954,19 @@ watch(
     shellFormat.value = defaultShellFormat;
     confirmingDelete.value = false;
     saveError.value = "";
+    detectInfo.value = "";
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       localLabel.value = editingFolder.label || "";
       localHostPath.value = String(editingFolder.host_path || "");
       localDeleteAfterImport.value = Boolean(editingFolder.delete_after_import);
-      localSyncCaptions.value = Boolean(editingFolder.sync_captions);
+      localSyncDescriptions.value = Boolean(editingFolder.sync_descriptions);
+      localSyncTags.value = Boolean(editingFolder.sync_tags);
+      localTagsSuffix.value = editingFolder.tags_suffix || DEFAULT_TAGS_SUFFIX;
+      localDescriptionSuffix.value =
+        editingFolder.description_suffix || DEFAULT_DESCRIPTION_SUFFIX;
+      syncSectionOpen.value =
+        localSyncTags.value || localSyncDescriptions.value;
       localAllowDelete.value = Boolean(editingFolder.allow_delete_file);
       return;
     }
@@ -871,7 +979,16 @@ watch(
       setLabelWithoutTouch("");
     }
     localDeleteAfterImport.value = false;
-    localSyncCaptions.value = false;
+    // Seed sync defaults from the most recently added reference folder, falling
+    // back to the hardcoded defaults. Folder-content detection (non-Docker) may
+    // override these once a path is entered.
+    const last = lastAddedReferenceFolder.value;
+    localSyncTags.value = last ? Boolean(last.sync_tags) : false;
+    localSyncDescriptions.value = last ? Boolean(last.sync_descriptions) : false;
+    localTagsSuffix.value = (last && last.tags_suffix) || DEFAULT_TAGS_SUFFIX;
+    localDescriptionSuffix.value =
+      (last && last.description_suffix) || DEFAULT_DESCRIPTION_SUFFIX;
+    syncSectionOpen.value = localSyncTags.value || localSyncDescriptions.value;
     localAllowDelete.value = false;
     copyStatus.value = "";
     nextTick(() => {
@@ -910,6 +1027,49 @@ watch(
   { immediate: true },
 );
 
+// --- Sidecar convention detection (reference folders, non-Docker create) ---
+
+let detectTimer = null;
+
+async function detectSidecars(path) {
+  const trimmed = String(path || "").trim();
+  if (!trimmed) return;
+  try {
+    const { data } = await apiClient.get("/reference-folders/detect-sidecars", {
+      params: { path: trimmed },
+    });
+    // Ignore a stale response if the path changed while the request was in flight.
+    if (String(localPath.value || "").trim() !== trimmed) return;
+    const found = [];
+    if (data?.found_tags) {
+      localSyncTags.value = true;
+      if (data.tags_suffix) localTagsSuffix.value = data.tags_suffix;
+      found.push("tags");
+    }
+    if (data?.found_descriptions) {
+      localSyncDescriptions.value = true;
+      if (data.description_suffix)
+        localDescriptionSuffix.value = data.description_suffix;
+      found.push("descriptions");
+    }
+    if (found.length) {
+      syncSectionOpen.value = true;
+      detectInfo.value = `Found existing ${found.join(" and ")} sidecars in this folder.`;
+    } else {
+      detectInfo.value = "";
+    }
+  } catch {
+    // Detection is best-effort — ignore errors (e.g. an inaccessible path).
+  }
+}
+
+watch([() => props.open, localPath], ([isOpen]) => {
+  if (!isOpen || isEditMode.value || isImport.value || props.inDocker) return;
+  if (detectTimer) clearTimeout(detectTimer);
+  const path = localPath.value;
+  detectTimer = setTimeout(() => detectSidecars(path), 400);
+});
+
 function handleKeydown(event) {
   if (event.key === "Escape") emit("close");
 }
@@ -925,12 +1085,26 @@ watch(
         clearTimeout(copyStatusTimer);
         copyStatusTimer = null;
       }
+      if (detectTimer) {
+        clearTimeout(detectTimer);
+        detectTimer = null;
+      }
       copyStatus.value = "";
     }
   },
 );
 
 // --- API actions ---
+
+// Return the suffix to submit, or undefined to leave it unset. An unmodified
+// default is left unset so the backend's first scan can auto-detect the real
+// convention on disk (notably for Docker folders, where in-dialog detection
+// can't reach the not-yet-mounted path).
+function suffixForSubmit(value, def) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed || trimmed === def) return undefined;
+  return trimmed;
+}
 
 async function save() {
   if (!isValid.value) return;
@@ -944,7 +1118,15 @@ async function save() {
         patchData.delete_after_import = localDeleteAfterImport.value;
       } else {
         patchData.allow_delete_file = localAllowDelete.value;
-        patchData.sync_captions = localSyncCaptions.value;
+        patchData.sync_descriptions = localSyncDescriptions.value;
+        patchData.sync_tags = localSyncTags.value;
+        patchData.tags_suffix =
+          suffixForSubmit(localTagsSuffix.value, DEFAULT_TAGS_SUFFIX) ?? null;
+        patchData.description_suffix =
+          suffixForSubmit(
+            localDescriptionSuffix.value,
+            DEFAULT_DESCRIPTION_SUFFIX,
+          ) ?? null;
       }
       await apiClient.patch(`${apiBase.value}/${editingFolder.id}`, patchData);
     } else {
@@ -962,6 +1144,17 @@ async function save() {
       };
       if (isImport.value) {
         createData.delete_after_import = localDeleteAfterImport.value;
+      } else {
+        createData.sync_descriptions = localSyncDescriptions.value;
+        createData.sync_tags = localSyncTags.value;
+        createData.tags_suffix = suffixForSubmit(
+          localTagsSuffix.value,
+          DEFAULT_TAGS_SUFFIX,
+        );
+        createData.description_suffix = suffixForSubmit(
+          localDescriptionSuffix.value,
+          DEFAULT_DESCRIPTION_SUFFIX,
+        );
       }
       await apiClient.post(apiBase.value, createData);
     }
@@ -1213,6 +1406,63 @@ async function copyToClipboard(value, successMessage) {
 .editor-toggle-desc--warning {
   color: rgb(var(--v-theme-error));
   opacity: 1;
+}
+
+.editor-sync-section {
+  border: 1px solid rgba(var(--v-theme-primary), 0.18);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.editor-sync-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(var(--v-theme-primary), 0.06);
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  border: none;
+  color: inherit;
+}
+
+.editor-sync-header:hover {
+  background: rgba(var(--v-theme-primary), 0.1);
+}
+
+.editor-sync-summary {
+  margin-left: auto;
+  font-size: 0.76rem;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.editor-sync-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.editor-sync-intro {
+  font-size: 0.78rem;
+  opacity: 0.75;
+  line-height: 1.4;
+}
+
+.editor-sync-suffix {
+  padding-left: 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.editor-sync-detected {
+  font-size: 0.76rem;
+  color: rgb(var(--v-theme-accent));
 }
 
 .editor-error {

@@ -13,12 +13,20 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.deleted_file_log import DeletedFileLog
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
-from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL, is_tag_sentinel
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.utils.caption_file_utils import (
-    find_caption_file,
-    get_caption_file_mtime,
-    read_caption_file,
+    DEFAULT_DESCRIPTION_SUFFIX,
+    DEFAULT_TAGS_SUFFIX,
+    SIDECAR_TYPE_DESCRIPTION,
+    SIDECAR_TYPE_TAGS,
+    detect_folder_suffixes,
+    get_sidecar_mtime,
+    read_description_sidecar,
+    read_tags_sidecar,
+    resolve_typed_sidecar,
+    write_sidecar,
+    writeback_path,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils, THUMBNAIL_EXTENSION
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -84,6 +92,10 @@ class ReferenceFolderScanTask(BaseTask):
         self._folder_path = folder_path
         self._resolved_path = resolved_path
         self._other_resolved_paths = other_resolved_paths
+        # Sidecar filename suffixes for this folder, loaded at the start of
+        # _run_task(); None means "use known conventions / module defaults".
+        self._tags_suffix: str | None = None
+        self._description_suffix: str | None = None
 
     def _run_task(self):
         resolved = self._resolved_path
@@ -106,6 +118,49 @@ class ReferenceFolderScanTask(BaseTask):
             )
             self._set_status(ReferenceFolderStatus.MOUNT_ERROR)
             return {"status": "mount_error", "folder_id": folder_id}
+
+        # Load the folder's sidecar configuration once. The suffixes drive how
+        # tags/description sidecars are resolved for new and existing pictures;
+        # the sync flags decide whether missing sidecars are exported to disk.
+        def fetch_folder_config(session: Session):
+            rf = session.get(ReferenceFolder, folder_id)
+            if rf is None:
+                return None
+            return (
+                rf.tags_suffix,
+                rf.description_suffix,
+                bool(rf.sync_tags),
+                bool(rf.sync_descriptions),
+            )
+
+        config = self._db.run_task(fetch_folder_config, priority=DBPriority.LOW)
+        (
+            self._tags_suffix,
+            self._description_suffix,
+            sync_tags,
+            sync_descriptions,
+        ) = config or (None, None, False, False)
+
+        # When a synced folder has no explicit suffix yet (a migrated folder or a
+        # Docker folder added before its mount was reachable), detect the naming
+        # convention already on disk and lock it in.  This keeps exports aligned
+        # with any existing sidecars instead of creating duplicates under the
+        # default names.  Only runs while a suffix is unset and sync is on.
+        if (sync_tags or sync_descriptions) and (
+            self._tags_suffix is None or self._description_suffix is None
+        ):
+            detected = detect_folder_suffixes(resolved)
+            seed: dict[str, str] = {}
+            if self._tags_suffix is None:
+                self._tags_suffix = detected["tags_suffix"] or DEFAULT_TAGS_SUFFIX
+                seed["tags_suffix"] = self._tags_suffix
+            if self._description_suffix is None:
+                self._description_suffix = (
+                    detected["description_suffix"] or DEFAULT_DESCRIPTION_SUFFIX
+                )
+                seed["description_suffix"] = self._description_suffix
+            if seed:
+                self._persist_suffixes(seed)
 
         # Collect all supported files currently on disk.
         # Skip PixlStash-generated thumbnail files (e.g. foo_thumb.webp) that
@@ -212,74 +267,91 @@ class ReferenceFolderScanTask(BaseTask):
                 len(imported_picture_ids),
             )
 
-        # --- Handle caption file changes for existing pictures ---
-        # Compare each existing picture's stored caption_file_mtime against the
-        # file's current mtime using a cheap os.stat() call so we only read
-        # file content when something has actually changed.
-        caption_updates: list[tuple] = []
+        # --- Handle sidecar changes (and exports) for existing pictures ---
+        # For each picture we reconcile the tags sidecar and the description
+        # sidecar independently in both directions:
+        #   read  — an external file that appeared or changed is imported (cheap
+        #           os.stat() gate so content is only read when mtime differs);
+        #   write — when the folder syncs that type and a picture with content
+        #           has no sidecar yet, the file is created on disk (export).
+        # An empty sidecar is never created.
+        tags_by_pic: dict[int, list[str]] = {}
+        if sync_tags:
+            tags_by_pic = self._fetch_folder_tags(folder_id)
+
+        caption_updates: list[dict] = []
         for file_path, pic in existing_by_path.items():
-            if file_path in removed_paths:
+            if file_path in removed_paths or pic.deleted:
+                # Don't touch sidecar data for removed/scrapheap pictures.
                 continue
-            if pic.deleted:
-                # Don't update caption data for scrapheap pictures.
-                continue
-            current_caption = find_caption_file(file_path)
-            current_mtime = (
-                get_caption_file_mtime(current_caption) if current_caption else None
+            update: dict = {"pic_id": pic.id}
+            self._reconcile_sidecar(
+                update,
+                file_path,
+                SIDECAR_TYPE_TAGS,
+                self._tags_suffix,
+                stored_path=pic.tags_file,
+                stored_mtime=pic.tags_file_mtime,
+                sync=sync_tags,
+                export_content=", ".join(tags_by_pic.get(pic.id, [])),
             )
-            stored_mtime = pic.caption_file_mtime
-            stored_caption = pic.caption_file
-
-            # No sidecar now and none before — nothing to do.
-            if current_caption is None and stored_caption is None:
-                continue
-
-            # Sidecar has appeared, changed path (ext swap), or its mtime
-            # differs from what we last recorded.
-            changed = current_caption != stored_caption or current_mtime != stored_mtime
-            if not changed:
-                continue
-
-            if current_caption is None:
-                # Sidecar disappeared — clear stored references.
-                caption_updates.append((pic.id, None, None, None, []))
-                continue
-
-            new_tags, new_description = read_caption_file(current_caption)
-            caption_updates.append(
-                (pic.id, current_caption, current_mtime, new_description, new_tags)
+            self._reconcile_sidecar(
+                update,
+                file_path,
+                SIDECAR_TYPE_DESCRIPTION,
+                self._description_suffix,
+                stored_path=pic.description_file,
+                stored_mtime=pic.description_file_mtime,
+                sync=sync_descriptions,
+                export_content=(pic.description or "").strip(),
             )
+            if len(update) > 1:
+                caption_updates.append(update)
 
         caption_updated_picture_ids: list[int] = []
         if caption_updates:
 
             def apply_caption_updates(
                 session: Session,
-                updates: list[tuple],
+                updates: list[dict],
             ) -> None:
-                for pic_id, caption_path, mtime, description, tags in updates:
-                    pic_db = session.get(Picture, pic_id)
+                for u in updates:
+                    pic_db = session.get(Picture, u["pic_id"])
                     if pic_db is None:
                         continue
-                    pic_db.caption_file = caption_path
-                    pic_db.caption_file_mtime = mtime
-                    if description is not None:
-                        pic_db.description = description
+                    if "tags_file" in u:
+                        pic_db.tags_file = u["tags_file"]
+                        pic_db.tags_file_mtime = u["tags_file_mtime"]
+                    if "description_file" in u:
+                        pic_db.description_file = u["description_file"]
+                        pic_db.description_file_mtime = u["description_file_mtime"]
+                    if u.get("new_description") is not None:
+                        pic_db.description = u["new_description"]
                     session.add(pic_db)
-                    # Always replace tags — even an empty list means all tags were removed.
-                    session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-                    if tags:
-                        session.add_all([Tag(picture_id=pic_id, tag=t) for t in tags])
-                    else:
-                        session.add(Tag(picture_id=pic_id, tag=TAG_PENDING_SENTINEL))
+                    if "new_tags" in u:
+                        # Replace tags — an empty list means all tags were removed.
+                        session.exec(
+                            delete(Tag).where(Tag.picture_id == u["pic_id"])
+                        )
+                        tags = u["new_tags"]
+                        if tags:
+                            session.add_all(
+                                [Tag(picture_id=u["pic_id"], tag=t) for t in tags]
+                            )
+                        else:
+                            session.add(
+                                Tag(
+                                    picture_id=u["pic_id"], tag=TAG_PENDING_SENTINEL
+                                )
+                            )
                 session.commit()
 
             self._db.run_task(
                 apply_caption_updates, caption_updates, priority=DBPriority.LOW
             )
-            caption_updated_picture_ids = [pic_id for pic_id, *_ in caption_updates]
+            caption_updated_picture_ids = [u["pic_id"] for u in caption_updates]
             logger.info(
-                "Reference folder %s: updated caption data for %d existing pictures.",
+                "Reference folder %s: reconciled sidecar data for %d existing pictures.",
                 self._folder_path,
                 len(caption_updates),
             )
@@ -294,6 +366,77 @@ class ReferenceFolderScanTask(BaseTask):
             "caption_updated_picture_ids": caption_updated_picture_ids,
             "imported_picture_ids": imported_picture_ids,
         }
+
+    def _fetch_folder_tags(self, folder_id: int) -> dict[int, list[str]]:
+        """Return ``{picture_id: [tag, ...]}`` for this folder's pictures.
+
+        Used only when the folder exports tags, so the export step knows what to
+        write into newly-created sidecars.  Sentinel/placeholder tags are
+        excluded.  A single join avoids the SQLite bound-variable limit.
+        """
+
+        def fetch(session: Session) -> dict[int, list[str]]:
+            rows = session.exec(
+                select(Tag.picture_id, Tag.tag)
+                .join(Picture, Tag.picture_id == Picture.id)
+                .where(Picture.reference_folder_id == folder_id)
+            ).all()
+            out: dict[int, list[str]] = {}
+            for pic_id, tag in rows:
+                if tag and not is_tag_sentinel(tag):
+                    out.setdefault(pic_id, []).append(tag)
+            return out
+
+        return self._db.run_task(fetch, priority=DBPriority.LOW)
+
+    def _reconcile_sidecar(
+        self,
+        update: dict,
+        file_path: str,
+        sidecar_type: str,
+        suffix: str | None,
+        *,
+        stored_path: str | None,
+        stored_mtime: float | None,
+        sync: bool,
+        export_content: str,
+    ) -> None:
+        """Reconcile one sidecar type for one picture, mutating *update* in place.
+
+        Read direction: when the file exists and its (path, mtime) differs from
+        what was last recorded, queue an import of its content.  Write direction:
+        when *sync* is on, the file is missing, and *export_content* is non-empty,
+        create the file on disk now and record its new path/mtime.  A vanished
+        file only clears the stored reference (the database data is kept).
+        """
+        is_tags = sidecar_type == SIDECAR_TYPE_TAGS
+        path_key = "tags_file" if is_tags else "description_file"
+        mtime_key = "tags_file_mtime" if is_tags else "description_file_mtime"
+
+        current_path = resolve_typed_sidecar(file_path, sidecar_type, suffix)
+        if current_path is not None:
+            current_mtime = get_sidecar_mtime(current_path)
+            if current_path != stored_path or current_mtime != stored_mtime:
+                update[path_key] = current_path
+                update[mtime_key] = current_mtime
+                if is_tags:
+                    update["new_tags"] = read_tags_sidecar(current_path)
+                else:
+                    update["new_description"] = read_description_sidecar(current_path)
+            return
+
+        # No sidecar on disk. Drop a stale stored reference (keep the DB data).
+        if stored_path is not None:
+            update[path_key] = None
+            update[mtime_key] = None
+
+        # Export: create the file from the database when there is content to write.
+        if sync and export_content:
+            target = writeback_path(file_path, sidecar_type, suffix, None)
+            new_mtime = write_sidecar(target, export_content)
+            if new_mtime is not None:
+                update[path_key] = target
+                update[mtime_key] = new_mtime
 
     def _build_picture_chunk(
         self,
@@ -422,21 +565,48 @@ class ReferenceFolderScanTask(BaseTask):
         if created_at:
             pic.created_at = created_at
 
-        # Detect and read sidecar caption file (.txt or .caption).
-        caption_path = find_caption_file(file_path)
-        if caption_path:
-            pic.caption_file = caption_path
-            pic.caption_file_mtime = get_caption_file_mtime(caption_path)
-            sidecar_tags, sidecar_description = read_caption_file(caption_path)
-            if sidecar_description and not pic.description:
-                pic.description = sidecar_description
+        # Detect and read the tags and description sidecars independently, using
+        # the folder's configured suffixes (falling back to known conventions).
+        tags_path = resolve_typed_sidecar(
+            file_path, SIDECAR_TYPE_TAGS, self._tags_suffix
+        )
+        if tags_path:
+            pic.tags_file = tags_path
+            pic.tags_file_mtime = get_sidecar_mtime(tags_path)
+            sidecar_tags = read_tags_sidecar(tags_path)
             # Tags are stored via the Tag relationship and cannot be set on the
             # unsaved Picture directly; stash them as a transient attribute so
             # the caller can persist them after the Picture is inserted.
             if sidecar_tags:
                 pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
 
+        description_path = resolve_typed_sidecar(
+            file_path, SIDECAR_TYPE_DESCRIPTION, self._description_suffix
+        )
+        if description_path:
+            pic.description_file = description_path
+            pic.description_file_mtime = get_sidecar_mtime(description_path)
+            sidecar_description = read_description_sidecar(description_path)
+            if sidecar_description and not pic.description:
+                pic.description = sidecar_description
+
         return pic
+
+    def _persist_suffixes(self, suffixes: dict[str, str]) -> None:
+        """Store auto-detected sidecar suffixes on the folder (only fills NULLs)."""
+
+        def update(session: Session) -> None:
+            rf = session.get(ReferenceFolder, self._folder_id)
+            if rf is None:
+                return
+            if suffixes.get("tags_suffix") and rf.tags_suffix is None:
+                rf.tags_suffix = suffixes["tags_suffix"]
+            if suffixes.get("description_suffix") and rf.description_suffix is None:
+                rf.description_suffix = suffixes["description_suffix"]
+            session.add(rf)
+            session.commit()
+
+        self._db.run_task(update, priority=DBPriority.LOW)
 
     def _set_status(
         self,

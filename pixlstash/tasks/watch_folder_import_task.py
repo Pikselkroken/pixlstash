@@ -10,9 +10,12 @@ from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.utils.caption_file_utils import (
-    find_caption_file,
-    get_caption_file_mtime,
-    read_caption_file,
+    SIDECAR_TYPE_DESCRIPTION,
+    SIDECAR_TYPE_TAGS,
+    get_sidecar_mtime,
+    read_description_sidecar,
+    read_tags_sidecar,
+    resolve_typed_sidecar,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
@@ -102,16 +105,27 @@ class WatchFolderImportTask(BaseTask):
                 if isinstance(import_source_folder, str) and import_source_folder:
                     pic.import_source_folder = import_source_folder
 
-                # Detect sidecar caption file (.txt / .caption) next to the image.
-                caption_path = find_caption_file(file_path)
-                if caption_path:
-                    pic.caption_file = caption_path
-                    pic.caption_file_mtime = get_caption_file_mtime(caption_path)
-                    sidecar_tags, sidecar_description = read_caption_file(caption_path)
-                    if sidecar_description and not pic.description:
-                        pic.description = sidecar_description
+                # Detect tags + description sidecars next to the source image.
+                # Import folders have no per-folder suffix config, so probe the
+                # known conventions (configured_suffix=None).
+                tags_path = resolve_typed_sidecar(
+                    file_path, SIDECAR_TYPE_TAGS, None
+                )
+                if tags_path:
+                    pic.tags_file = tags_path
+                    pic.tags_file_mtime = get_sidecar_mtime(tags_path)
+                    sidecar_tags = read_tags_sidecar(tags_path)
                     if sidecar_tags:
                         pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
+                desc_path = resolve_typed_sidecar(
+                    file_path, SIDECAR_TYPE_DESCRIPTION, None
+                )
+                if desc_path:
+                    pic.description_file = desc_path
+                    pic.description_file_mtime = get_sidecar_mtime(desc_path)
+                    sidecar_description = read_description_sidecar(desc_path)
+                    if sidecar_description and not pic.description:
+                        pic.description = sidecar_description
 
                 new_pictures.append(pic)
 
