@@ -176,12 +176,17 @@ class QualityUtils:
             return changed
 
         # Bulk-delete stale Quality rows and bulk-reset likeness_parameters in
-        # two statements instead of N individual gets + adds.
+        # two statements instead of N individual gets + adds.  Reset
+        # size_bin_index alongside likeness_parameters: the likeness-parameters
+        # finder treats size_bin_index IS NULL as the sole pending-work
+        # indicator (see LikenessParameterUtils.find_next_work), so clearing the
+        # blob without clearing the index would leave the picture invisible to
+        # the finder and its likeness_parameters permanently NULL.
         session.exec(delete(Quality).where(Quality.picture_id.in_(surviving_ids)))
         session.exec(
             sa_update(Picture)
             .where(Picture.id.in_(surviving_ids))
-            .values(likeness_parameters=None)
+            .values(likeness_parameters=None, size_bin_index=None)
         )
 
         for pic, quality in zip(pics, qualities):
