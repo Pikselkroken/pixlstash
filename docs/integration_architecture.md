@@ -69,7 +69,8 @@ Single shared **axios** instance with:
 
 1. Skip absolute URLs to other origins (avoids leaking the share token to third-party hosts such as a local ComfyUI).
 2. If a share token is active, inject `?token=<token>` as a query param.
-3. Prepend `/api/v1` to any relative URL that doesn't already start with it.
+3. On **mutating** requests (`POST`/`PUT`/`PATCH`/`DELETE`) inject the per-tab **`X-Client-Id`** header (the same-origin guard above applies, so it is never leaked off-origin). See §8.1.
+4. Prepend `/api/v1` to any relative URL that doesn't already start with it.
 
 ### Response interceptor
 
@@ -161,6 +162,7 @@ Two endpoints, both under the API prefix:
 ```json
 {
   "type": "set_filters",
+  "client_id": "<opaque per-tab uuid>",
   "selected_character": "<id|null>",
   "selected_set": "<id|null>",
   "selected_sets": ["<id>", ...],
@@ -170,28 +172,76 @@ Two endpoints, both under the API prefix:
 
 When filters change in the UI, the SPA re-sends a `set_filters` message.
 
+`client_id` carries the tab's `X-Client-Id` over the socket because browsers cannot set custom headers on a WebSocket handshake. The server stores it on the per-client record (capped at 200 chars, ignored if longer). It is **forward-looking only** — for v1 the frontend matches the echoed `origin_client_id` against its own id locally, so the server does not yet need it to route events. See §8.1.
+
 ---
 
 ## 8. Real-Time Event Contract
 
 The backend's [EventType](../pixlstash/event_types.py) enum names are **not** sent verbatim. Wire payloads use **snake_case** `type` strings. Both sides must agree on these strings — they are the integration contract.
 
-| Wire `type` | Trigger | Payload fields | Frontend behaviour |
+### Uniform event envelope
+
+`_broadcast_ws_event` ([server.py](../pixlstash/server.py)) stamps **every** picture/mutation event with the same origin-aware envelope so the SPA can decide *who* caused a change and *what* changed, and drive the grid by intent instead of doing a full reload on every event:
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | Wire type: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. |
+| `event` | string | Backend `EventType.name`; diagnostic only, not part of the behavioural contract. |
+| `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
+| `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
+| `picture_ids` | `number[]` | Affected picture ids. |
+| `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). |
+| `change_kind` | `"added"` \| `"updated"` \| `"removed"` (optional) | Set at the emit site where cheap (`removed` on deletes is free; `added` is implicit for `picture_imported`). **Omitted entirely when unset** — the SPA infers `added` for `picture_imported` and falls back to `updated` otherwise. |
+
+Per-type payload specifics (all carry the envelope fields above):
+
+| Wire `type` | Trigger | Type-specific fields | Frontend behaviour |
 |-------------|---------|---------------|--------------------|
-| `pictures_changed` | Picture metadata/score/quality updated | `picture_ids: number[]`, optional `fields: string[]` | Debounced sidebar refresh + grid version bump; for `LIKENESS_GROUPS` sort, dispatch a tag-update event instead. When `fields` is present and **none** of the named fields affect the SPA's current sort/filters (e.g. `["smart_score"]` under a date sort), the SPA skips the refresh entirely. Omit `fields` for changes that may affect any view (user edits, imports) so the SPA always refreshes. |
-| `picture_imported` | New picture entered the vault (ComfyUI, watch folder, API) | `picture_ids: number[]` | If no upload is in progress, increment "pending external imports" pill; refresh grid when in the all-pictures view |
+| `pictures_changed` | Picture metadata/score/quality updated | optional `fields: string[]` | Routed through the decision rule (§8.2). When `fields` is present and **none** of the named fields affect the SPA's current sort/filters (e.g. `["smart_score"]` under a date sort), a same-view change is applied silently or ignored. Omit `fields` for changes that may affect any view (user edits) so the SPA always reconciles. |
+| `picture_imported` | New picture entered the vault (ComfyUI, watch folder, API) | — | Slick in-place insert for the initiating tab, targeted insert for a foreign owner tab, or the **"New pictures"** pill for external imports (§8.2). |
 | `characters_changed` | Character created/updated/deleted or face reassigned | — | Refresh sidebar (character list) |
 | `tags_changed` | Tags or tag predictions changed | `picture_ids: number[]` | Bump `wsTagUpdate` so affected grid cards re-render |
 | `plugin_progress` | Image plugin run progress | `plugin`, `progress`, `total`, `picture_id` | Update `wsPluginProgress` for the plugin progress UI |
 
+> **`source` migration:** the import emit's legacy value `"user"` is migrated to `"ui"`. During the transition the frontend (`normaliseSource`) accepts **both** — the real signal is the `origin_client_id` match, so accepting the legacy value just over-notifies (safe). Drop the legacy acceptance once both ends have shipped.
+
 **Rules for adding a new event:**
 1. Add the enum to `event_types.py`.
 2. Use a snake_case wire `type` and document it here.
-3. Always include enough context (typically `picture_ids`) so the SPA can do targeted updates rather than full reloads.
+3. Always include enough context (`picture_ids`, and `change_kind` where cheap) so the SPA can do targeted updates rather than full reloads.
 4. For a `pictures_changed` event raised by background work that only touches non-visible/non-sortable columns (embeddings, scores), tag it with `fields` (pass `{"picture_ids": [...], "fields": [...]}` to `notify`) so the SPA can skip the refresh under unaffected sorts. Map the field in `App.vue#pictureChangeFieldAffectsView`.
-5. Update `App.vue#onmessage` to handle it.
+5. Mutating in-request emits must pass `source`/`origin_client_id` (and `change_kind`) into the event `data` dict — see §8.1.
+6. Handle it via `useGridRealtimeSync` (picture events) or the remaining `App.vue` branches (tags/descriptions/characters/plugin).
 
-**Backend filtering**: the server uses the client's last `set_filters` to decide whether to push an event. Events outside the client's current view are dropped server-side to reduce noise.
+**Backend filtering**: the server uses the client's last `set_filters` to decide whether to push an event. Events outside the client's current view are dropped server-side to reduce noise. The stream is **owner-only** — scoped/READ tokens may connect but receive nothing.
+
+### 8.1 Client id & origin attribution
+
+Each browser **tab** generates one opaque id (`crypto.randomUUID()`), persisted in `sessionStorage` (survives reload; in-memory fallback in private mode). It is:
+
+- stored in `useWsStore` and mirrored into `apiClient.js` module scope (to dodge Pinia-init timing);
+- sent on **every mutating HTTP request** as the `X-Client-Id` header (≤200 chars — an oversized value is **dropped, not truncated**, so a crafted long value can never collide with a legitimate short one);
+- sent over the socket via `set_filters.client_id` (§7), because browsers can't set headers on a WS handshake.
+
+The backend's `OriginClientMiddleware` captures the header into `request.state.origin_client_id` (and a contextvar). Mutating handlers thread it into the event `data` dict so `_broadcast_ws_event` echoes it back as `origin_client_id`, letting the originating tab suppress the reload for its own optimistic op.
+
+**Security:** `X-Client-Id` is attacker-controllable and is used **only** for echo-matching — **never** for authorization or scoping. It is length-capped and not logged at INFO. The WS stream stays owner-only. See the security sign-off in [docs/reviews/feature-slick-grid-updates.md](reviews/feature-slick-grid-updates.md).
+
+### 8.2 Frontend decision rule
+
+The picture-event policy lives in [`useGridRealtimeSync.js`](../frontend/src/composables/useGridRealtimeSync.js) (App.vue keeps only socket lifecycle). For each picture event, in order:
+
+1. **Own-origin echo** (`origin_client_id === myClientId`) → **suppress** (the optimistic local op already applied it). **Exception:** an `updated` event whose `fields` include a *server-computed* sort field (`smart_score`, `character_likeness`) that is also the **active sort** → single-card `refreshSmartScoreForImage`/`refreshGridImage` reconcile, never a reload (the optimistic guess can diverge from server truth).
+2. **Foreign owner UI** (`source: "ui"`, different origin) → targeted op: `added` → insert at sorted position + highlight; `updated` → `refreshGridImage`/reposition, gated by `pictureChangeAffectsView(fields)` (ignored when the changed fields don't affect the current view); `removed` → `removeImagesById`.
+3. **External** (`source: "external"`) →
+   - `added` → the primary-coloured **"New pictures"** pill (never auto-inserts under the user);
+   - `removed` → removed **silently** in place (never leave a 404-clickable card);
+   - `updated` with `pictureChangeAffectsView(fields) === true` (would reorder the grid) → the sibling **"Sort order changed externally — click to refresh"** pill, instead of reshuffling under the user;
+   - `updated` with known fields that are **invisible** to the current sort/filter → **ignored** (e.g. a background `smart_score` recompute under a date sort) to avoid a per-card `/metadata` + thumbnail **refetch storm** for values that aren't even displayed.
+4. **Unrecognised shape** (e.g. a bulk sort/filter-defining change) → a rare, **logged** full-reload fallback.
+
+**ComfyUI classification:** the **in-app** runner is **UI-initiated but async** — there is no optimistic client-side copy to suppress, because the generation completes server-side after the request returns. `routes/comfyui.py` therefore emits a **single** `picture_imported` with `source: "ui"` and **no origin echo** (`origin_client_id` omitted), so **every** owner tab — including the initiating one — performs a slick in-place insert via `handleForeignUi` rather than the originator suppressing its own echo. It does **not** fire a second `pictures_changed`/`CHANGED_PICTURES` broadcast; the field-scoped `Missing*Finder` events (smart_score/quality) emit their own targeted events later. Externally-run ComfyUI lands via the watch/reference finders, which stay `source: "external"`, origin `null` → the "New pictures" pill.
 
 ---
 
@@ -222,7 +272,7 @@ The decision to watermark is made server-side per request based on `User.embed_w
 - **Content**: image files or `.zip` archives (extracted server-side).
 - **Deduplication**: server computes `pixel_sha` (SHA-256 of decoded pixels) and skips duplicates.
 - **Async**: the response includes a `task_id`. The frontend polls `GET /api/v1/pictures/import/{task_id}/status` for completion percentage.
-- **Real-time**: as pictures are persisted, the backend also broadcasts `picture_imported` over the WebSocket. The SPA distinguishes its **own** upload (drives a progress dialog) from **external** imports (shown via the "pending external imports" pill).
+- **Real-time**: as pictures are persisted, the backend also broadcasts `picture_imported` over the WebSocket carrying the uniform envelope (§8). The SPA distinguishes its **own** upload (drives a progress dialog) from a **foreign owner tab** (slick insert) and from **external** imports (the "New pictures" pill) via `source`/`origin_client_id`.
 
 **Contract**: the SPA sets `isUploadInProgress` for the duration of its own upload so that incoming `picture_imported` events don't double-count.
 
@@ -337,6 +387,7 @@ A focused list — read before changing anything that crosses the boundary.
 10. **`frontend/dist/` is part of the Python package.** Add the build step to release automation; never commit a stale `dist/`.
 11. **Host vs container paths**: do not let host paths leak into the database, and never display container paths in the UI.
 12. **WebSocket reconnect is silent.** If the backend changes the filter schema, old clients will keep sending stale filters until they reload — version the filter message if you change it incompatibly.
+13. **`X-Client-Id` / `origin_client_id` is for echo-matching only — never authorization.** It is attacker-controllable; any access decision based on it is a vulnerability. Every mutating in-request emit must carry `source`/`origin_client_id` in the event `data` dict, or the originating tab will full-reload on its own change.
 
 ---
 

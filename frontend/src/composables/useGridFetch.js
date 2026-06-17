@@ -575,6 +575,16 @@ export function useGridFetch(
         images = data;
       } else {
         fetchMode = "stream";
+        // Overlay open: the streaming path rebuilds a placeholder grid and
+        // re-fills allGridImages from the (now possibly narrower) filter query,
+        // which would drop the picture being viewed out of the grid mid-session.
+        // Unlike the id-list/search modes below, streaming writes allGridImages
+        // through its own return paths and never reaches the shared overlayOpen
+        // guard. Defer the whole reconcile to overlay close instead.
+        if (overlayOpen.value) {
+          pendingOverlayGridRefresh.value = true;
+          return;
+        }
         // Streaming: COUNT(*) → placeholder grid → parallel first/last batches → background fill.
         //   1. Fast SELECT COUNT(*) → total
         //   2. Pre-build placeholder grid so END key works before streaming starts

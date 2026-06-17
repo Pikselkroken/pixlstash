@@ -48,6 +48,7 @@ async def run_plugin_on_pictures(
     picture_ids: list[int],
     parameters: dict,
     captions: list[str] | None = None,
+    origin_client_id: str | None = None,
 ) -> dict:
     """Run a named image plugin on a list of pictures with progress tracking.
 
@@ -60,6 +61,10 @@ async def run_plugin_on_pictures(
         picture_ids: List of picture IDs to process.
         parameters: Plugin-specific parameter dict.
         captions: Optional per-picture captions, must match ``picture_ids`` length.
+        origin_client_id: Opaque ``X-Client-Id`` of the originating tab, captured
+            at request entry. Plugin output is a UI-initiated import, so it is
+            echoed on the PICTURE_IMPORTED event so the originating tab can do a
+            targeted grid insert instead of a full reload. Echo-matching only.
 
     Raises:
         ValueError: If the plugin name is not found.
@@ -165,7 +170,15 @@ async def run_plugin_on_pictures(
     created_ids = result.get("created_picture_ids") or []
     output_ids = result.get("output_picture_ids") or []
     if created_ids:
-        vault.notify(EventType.PICTURE_IMPORTED, {"ids": created_ids, "source": "user"})
+        vault.notify(
+            EventType.PICTURE_IMPORTED,
+            {
+                "ids": created_ids,
+                "source": "ui",
+                "origin_client_id": origin_client_id,
+                "change_kind": "added",
+            },
+        )
     if output_ids:
         vault.notify(EventType.CHANGED_PICTURES, output_ids)
 

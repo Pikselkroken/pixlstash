@@ -981,14 +981,15 @@ def _process_comfyui_outputs(
                 raw = src_pic.original_file_name or os.path.basename(src_pic.file_path)
                 source_file_stem = os.path.splitext(raw)[0] if raw else None
 
-        new_ids, duplicate_ids = _import_comfyui_outputs(
+        # Already-existing re-imports (`duplicate_ids`) are deliberately ignored:
+        # they are already in the grid and need no event.
+        new_ids, _duplicate_ids = _import_comfyui_outputs(
             server,
             entries,
             output_dir=output_dir,
             reference_folder_id=ref_folder_id,
             source_file_stem=source_file_stem,
         )
-        all_ids = [pid for pid in new_ids + duplicate_ids if pid is not None]
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)
         if new_ids:
@@ -1009,11 +1010,20 @@ def _process_comfyui_outputs(
             )
 
         if new_ids:
+            # In-app ComfyUI generation is UI-initiated, but async: there is no
+            # optimistic client-side copy to suppress. Emit `picture_imported`
+            # with source "ui" and NO origin echo so every owner tab (including
+            # the originator) performs a slick in-place insert rather than the
+            # originator suppressing its own echo. Externally-run ComfyUI arrives
+            # via the watch/reference finders, which stay external/null.
             server.vault.notify(
-                EventType.PICTURE_IMPORTED, {"ids": new_ids, "source": "user"}
+                EventType.PICTURE_IMPORTED,
+                {
+                    "ids": new_ids,
+                    "source": "ui",
+                    "change_kind": "added",
+                },
             )
-        if all_ids:
-            server.vault.notify(EventType.CHANGED_PICTURES, all_ids)
     except RuntimeError as exc:
         logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
         _emit_comfyui_failure_progress(server, prompt_id, str(exc))

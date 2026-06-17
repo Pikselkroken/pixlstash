@@ -68,6 +68,7 @@ from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
+from pixlstash.utils.request_origin import OriginClientMiddleware
 
 
 # Logging will be set up after config is loaded
@@ -1190,6 +1191,11 @@ class Server:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+        # Captures the originating tab's ``X-Client-Id`` header into
+        # ``request.state.origin_client_id`` / ``origin_client_id_var`` so
+        # mutation handlers can echo it back on the WebSocket event envelope.
+        # Echo-matching only — never used for authz/scoping.
+        self.api.add_middleware(OriginClientMiddleware)
         self._add_cors_exception_handler()
         self._setup_routes()
         self._install_custom_openapi()
@@ -1246,6 +1252,60 @@ class Server:
             or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
 
+    @staticmethod
+    def _source_from(data) -> str:
+        """Coarse origin class for the envelope. Defaults to ``"external"``.
+
+        Reads from the ``data`` dict ONLY — the broadcaster runs on
+        ``self._ws_loop`` (a different thread/task than the request), so the
+        origin contextvar is dead here and must never be consulted.
+        """
+        if isinstance(data, dict):
+            source = data.get("source")
+            if source == "user":  # legacy value migrated to "ui"
+                return "ui"
+            if source in ("ui", "external"):
+                return source
+        return "external"
+
+    @staticmethod
+    def _origin_from(data) -> str | None:
+        """Originating tab's ``X-Client-Id`` from the event ``data`` dict.
+
+        Defaults to ``None`` (background/external work). Read from ``data`` only
+        for the same threading reason as ``_source_from``.
+        """
+        if isinstance(data, dict):
+            origin = data.get("origin_client_id")
+            if isinstance(origin, str):
+                return origin
+        return None
+
+    @staticmethod
+    def _picture_ids_from(data) -> list:
+        """Picture ids from either a bare collection or an envelope dict.
+
+        Accepts a dict carrying ``picture_ids`` (or ``ids``) alongside the
+        origin/source envelope fields, or a bare ``list``/``tuple``/``set``.
+        """
+        if isinstance(data, dict):
+            ids = data.get("picture_ids")
+            if ids is None:
+                ids = data.get("ids")
+            return list(ids) if ids else []
+        if isinstance(data, (list, tuple, set)):
+            return list(data)
+        return []
+
+    @staticmethod
+    def _change_kind_from(data) -> str | None:
+        """Optional ``added``/``updated``/``removed`` hint from ``data``."""
+        if isinstance(data, dict):
+            kind = data.get("change_kind")
+            if kind in ("added", "updated", "removed"):
+                return kind
+        return None
+
     async def _broadcast_ws_event(self, event_type: EventType, data=None):
         with self._ws_clients_lock:
             clients = list(self._ws_clients)
@@ -1257,31 +1317,30 @@ class Server:
                 "event": event_type.name,
             }
         elif event_type == EventType.CHANGED_DESCRIPTIONS:
-            picture_ids = data if isinstance(data, (list, tuple, set)) else []
+            picture_ids = self._picture_ids_from(data)
             payload = {
                 "type": "descriptions_changed",
                 "event": event_type.name,
-                "picture_ids": list(picture_ids),
+                "picture_ids": picture_ids,
             }
         elif event_type in (EventType.CHANGED_TAGS, EventType.CLEARED_TAGS):
-            picture_ids = data if isinstance(data, (list, tuple, set)) else []
+            picture_ids = self._picture_ids_from(data)
             payload = {
                 "type": "tags_changed",
                 "event": event_type.name,
-                "picture_ids": list(picture_ids),
+                "picture_ids": picture_ids,
             }
         elif event_type == EventType.PICTURE_IMPORTED:
             if isinstance(data, dict):
                 picture_ids = data.get("ids") or []
-                source = data.get("source", "external")
             else:
                 picture_ids = data if isinstance(data, (list, tuple, set)) else []
-                source = "external"
+            # ``source`` / ``origin_client_id`` / ``change_kind`` are added by
+            # the uniform envelope below (read from ``data`` via the helpers).
             payload = {
                 "type": "picture_imported",
                 "event": event_type.name,
                 "picture_ids": list(picture_ids),
-                "source": source,
             }
         elif event_type == EventType.PLUGIN_PROGRESS:
             progress_payload = data if isinstance(data, dict) else {}
@@ -1318,6 +1377,16 @@ class Server:
             }
             if fields:
                 payload["fields"] = list(fields)
+        # Uniform origin-aware envelope on EVERY event. ``source`` and
+        # ``origin_client_id`` let the frontend recognise the echo of its own
+        # change (origin id match) and apply a targeted grid update instead of a
+        # full reload. ``change_kind`` is carried through when the emit site set
+        # it. All three are read from ``data`` only (see ``_source_from``).
+        payload["source"] = self._source_from(data)
+        payload["origin_client_id"] = self._origin_from(data)
+        change_kind = self._change_kind_from(data)
+        if change_kind:
+            payload["change_kind"] = change_kind
         stale = []
         for client in clients:
             ws = client.get("ws")
@@ -2317,7 +2386,12 @@ class Server:
             # stream. A resource-scoped / READ token may connect (authenticated)
             # but is never sent events outside its grant — see
             # ``_broadcast_ws_event``.
-            client = {"ws": websocket, "filters": {}, "owner": ws_auth.is_owner}
+            client = {
+                "ws": websocket,
+                "filters": {},
+                "owner": ws_auth.is_owner,
+                "client_id": None,
+            }
             with self._ws_clients_lock:
                 self._ws_clients.append(client)
             try:
@@ -2336,6 +2410,13 @@ class Server:
                             "search_query": payload.get("search_query"),
                         }
                         client["filters"] = filters
+                        # The originating tab's opaque client id. Stored for
+                        # forward-looking server-side echo matching; the FE
+                        # matches locally for v1. Echo-matching only — never
+                        # used for authz/scoping. Cap length defensively.
+                        raw_client_id = payload.get("client_id")
+                        if isinstance(raw_client_id, str) and len(raw_client_id) <= 200:
+                            client["client_id"] = raw_client_id
             except WebSocketDisconnect:
                 logger.debug("WebSocket client disconnected normally.")
             finally:

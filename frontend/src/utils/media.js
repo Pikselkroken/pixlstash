@@ -213,6 +213,41 @@ export function MediaFormat(source) {
   return '';
 }
 
+// Map a media extension (or a source with a derivable format) to a MIME type.
+// Used for the `DownloadURL` drag-out hint so the OS file manager creates a
+// correctly-typed file. Unknown formats fall back to a generic binary type,
+// which still downloads correctly.
+const MEDIA_MIME_TYPES = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+  cur: 'image/x-icon',
+  avif: 'image/avif',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  mkv: 'video/x-matroska',
+  flv: 'video/x-flv',
+  wmv: 'video/x-ms-wmv',
+};
+
+export function mediaMimeType(source) {
+  const ext = MediaFormat(source);
+  if (!ext) return 'application/octet-stream';
+  return MEDIA_MIME_TYPES[ext] || 'application/octet-stream';
+}
+
 export function getPictureId(id) {
   if (id === null || id === undefined) return null;
   return String(id);

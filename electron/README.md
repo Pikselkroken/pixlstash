@@ -1,14 +1,13 @@
 # PixlStash Desktop (Electron)
 
-A native desktop shell (Windows/macOS/Linux) around the local PixlStash server.
+A native desktop shell (Windows/Linux) around the local PixlStash server.
 Following the **LM Studio model** for the shell (a local server + a hardware-matched
 runtime manager), but with one key difference: the heavy ML stack is **not** an
 artifact we host. Instead:
 
 - The installer **bundles a fully-working runtime** — standalone CPython + the
-  `pixlstash` wheel + all deps + **CPU** torch on Windows/Linux, or **Metal** torch
-  on macOS (the default PyPI macOS wheel includes MPS). The app runs offline out of
-  the box.
+  `pixlstash` wheel + all deps + **CPU** torch on Windows/Linux. The app runs
+  offline out of the box.
 - **GPU acceleration is added on demand.** If a discrete GPU is detected, the app
   pip-installs the heavy wheels (`torch+cu128`/`torch+rocm`, `onnxruntime-gpu`)
   straight from PyPI / PyTorch into a writable overlay — **we host nothing**.

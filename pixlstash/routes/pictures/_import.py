@@ -11,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
 )
 from sqlalchemy import (
@@ -79,9 +80,15 @@ def register_routes(router, server):
         response_model=ImportStartResponse,
     )
     async def import_pictures(
+        request: Request,
         file: list[UploadFile] = File(None),
         project_id: int | None = Form(None),
     ):
+        # Capture the originating tab's client id synchronously, at request
+        # entry. The import runs on a detached executor thread where the origin
+        # contextvar is dead, so we stash this on the task record and carry it
+        # explicitly into the PICTURE_IMPORTED event below.
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         _MAX_UPLOAD_BYTES = 20 * 1024**3  # 20 GB per uploaded file / zip
         _MAX_ZIP_ENTRIES = 50_000  # max files inside a zip
         _MAX_ZIP_DECOMPRESSED_BYTES = 50 * 1024**3  # 50 GB total decompressed
@@ -538,9 +545,22 @@ def register_routes(router, server):
                     )
                     server.vault.notify(EventType.CHANGED_PICTURES)
                     if imported_ids:
+                        # A genuine PixlStash tab attaches X-Client-Id (captured
+                        # as origin_client_id); an external API client — e.g. a
+                        # ComfyUI node POSTing generated output to
+                        # /pictures/import — does not. Tag the former "ui" (slick
+                        # in-place insert) and the latter "external" so an
+                        # outside push raises the New-pictures pill instead of
+                        # auto-inserting cards under the user.
+                        import_source = "ui" if origin_client_id else "external"
                         server.vault.notify(
                             EventType.PICTURE_IMPORTED,
-                            {"ids": imported_ids, "source": "user"},
+                            {
+                                "ids": imported_ids,
+                                "source": import_source,
+                                "origin_client_id": origin_client_id,
+                                "change_kind": "added",
+                            },
                         )
                 else:
                     server.import_tasks[task_id]["status"] = "completed"

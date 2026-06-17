@@ -1223,7 +1223,10 @@ def create_router(server) -> APIRouter:
         description="Assigns provided face ids or largest faces from picture ids to a character.",
         response_model=CharacterFaceAssignmentResponse,
     )
-    def assign_face_to_character(character_id: int, payload: dict = Body(...)):
+    def assign_face_to_character(
+        request: Request, character_id: int, payload: dict = Body(...)
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         face_ids = payload.get("face_ids")
         picture_ids = payload.get("picture_ids")
         if face_ids is not None and not isinstance(face_ids, list):
@@ -1380,8 +1383,17 @@ def create_router(server) -> APIRouter:
                         f"Failed to set character {character_id} for face {face['id']}"
                     ),
                 )
-        server.vault.notify(EventType.CHANGED_CHARACTERS)
-        server.vault.notify(EventType.CHANGED_FACES)
+        server.vault.notify(
+            EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
+        )
+        server.vault.notify(
+            EventType.CHANGED_FACES,
+            {
+                "picture_ids": [face["picture_id"] for face in faces],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         return {
             "status": "success",
             "face_ids": [face["id"] for face in faces],
@@ -1394,7 +1406,10 @@ def create_router(server) -> APIRouter:
         description="Removes character assignment from provided face ids or from faces in provided picture ids.",
         response_model=CharacterFaceAssignmentResponse,
     )
-    def remove_character_from_faces(character_id: int, payload: dict = Body(...)):
+    def remove_character_from_faces(
+        request: Request, character_id: int, payload: dict = Body(...)
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         face_ids = payload.get("face_ids", None)
         picture_ids = payload.get("picture_ids", None)
         if not isinstance(face_ids, list) and not isinstance(picture_ids, list):
@@ -1437,8 +1452,17 @@ def create_router(server) -> APIRouter:
         )
 
         server.vault.db.run_task(Picture.clear_field, picture_ids, "text_embedding")
-        server.vault.notify(EventType.CHANGED_CHARACTERS)
-        server.vault.notify(EventType.CHANGED_FACES)
+        server.vault.notify(
+            EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
+        )
+        server.vault.notify(
+            EventType.CHANGED_FACES,
+            {
+                "picture_ids": picture_ids,
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         return {
             "status": "success",
             "face_ids": face_ids,

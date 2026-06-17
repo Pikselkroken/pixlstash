@@ -52,6 +52,7 @@ def serialize_user_config(user) -> dict:
         "show_problem_icon",
         "compact_mode",
         "sidebar_docked",
+        "hide_purge_snapshot_warning",
         "date_format",
         "theme_mode",
         "comfyui_url",
@@ -157,6 +158,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "show_problem_icon",
         "compact_mode",
         "sidebar_docked",
+        "hide_purge_snapshot_warning",
         "expand_all_stacks",
         "show_stacks",
         "date_format",
@@ -368,6 +370,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.sidebar_docked != new_value:
                 user.sidebar_docked = new_value
+                updated = True
+            continue
+        if key == "hide_purge_snapshot_warning":
+            # Boolean toggle: coerce like the other boolean settings so a client
+            # PATCHing the string "false" does not persist as a truthy value.
+            if value in ("", None, "null"):
+                new_value = False
+            else:
+                new_value = bool(value)
+            if user.hide_purge_snapshot_warning != new_value:
+                user.hide_purge_snapshot_warning = new_value
                 updated = True
             continue
         if key == "tagger_settings":

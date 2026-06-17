@@ -365,7 +365,8 @@ def register_routes(router, server):
         description="Assigns, removes, or clears project association for a batch of pictures.",
         response_model=SetProjectForPicturesResponse,
     )
-    def set_project_for_pictures(payload: dict = Body(...)):
+    def set_project_for_pictures(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         picture_ids_raw = payload.get("picture_ids")
         if not isinstance(picture_ids_raw, list):
             raise HTTPException(status_code=400, detail="picture_ids must be a list")
@@ -519,7 +520,14 @@ def register_routes(router, server):
         )
 
         if updated_ids:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": updated_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
 
         return {
             "status": "success",
@@ -536,7 +544,8 @@ def register_routes(router, server):
         description="Applies 0-5 manual scores to multiple pictures in one request while optionally enforcing only-unscored updates.",
         response_model=ApplyScoresResponse,
     )
-    def apply_scores_for_pictures(payload: dict = Body(...)):
+    def apply_scores_for_pictures(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         scores_payload = payload.get("scores")
         if not isinstance(scores_payload, dict) or not scores_payload:
             raise HTTPException(
@@ -668,7 +677,14 @@ def register_routes(router, server):
         )
 
         if updated_ids or reset_triggered:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": updated_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
 
         return {
             "status": "success",
@@ -933,7 +949,8 @@ def register_routes(router, server):
         description="Adds a face bounding box to a picture and frame index, updating sentinel/ordering behavior for manual annotations.",
         response_model=PictureFaceResponse,
     )
-    def create_picture_face(id: str, payload: dict = Body(...)):
+    def create_picture_face(request: Request, id: str, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
@@ -986,7 +1003,14 @@ def register_routes(router, server):
         face = server.vault.db.run_task(create_face, priority=DBPriority.IMMEDIATE)
         if not face:
             raise HTTPException(status_code=404, detail="Picture not found")
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         return safe_model_dict(face)
 
     @router.delete(
@@ -996,7 +1020,8 @@ def register_routes(router, server):
         description="Deletes a face at frame 0 by index and reindexes remaining faces for stable ordering.",
         response_model=FaceDeleteResponse,
     )
-    def delete_picture_face(id: str, index: int):
+    def delete_picture_face(request: Request, id: str, index: int):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
@@ -1050,7 +1075,14 @@ def register_routes(router, server):
         deleted = server.vault.db.run_task(delete_face, priority=DBPriority.IMMEDIATE)
         if not deleted:
             raise HTTPException(status_code=404, detail="Face not found")
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         return {"status": "success", "message": "Face deleted."}
 
     @router.get(
@@ -1831,7 +1863,16 @@ def register_routes(router, server):
                     server.vault.db.run_task(
                         _reset_smart_scores, priority=DBPriority.LOW
                     )
-            server.vault.notify(EventType.CHANGED_PICTURES, [picture_id])
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": [picture_id],
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                    "change_kind": "updated",
+                },
+            )
 
         # Write back description to caption sidecar when enabled.
         sync_picture_sidecar(server, picture_id)
@@ -1844,7 +1885,8 @@ def register_routes(router, server):
         description="Restores deleted pictures from scrapheap, either all deleted pictures or a provided picture id subset.",
         response_model=ScrapheapRestoreResponse,
     )
-    def restore_scrapheap(payload: dict | None = Body(None)):
+    def restore_scrapheap(request: Request, payload: dict | None = Body(None)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         picture_ids = None
         if payload:
             ids = payload.get("picture_ids")
@@ -1883,7 +1925,17 @@ def register_routes(router, server):
             picture_ids,
             priority=DBPriority.IMMEDIATE,
         )
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        # A restored picture re-enters active views. ``picture_ids`` is the
+        # caller-supplied subset (None == "restore all"); pass it through when
+        # known so the originating tab can target the affected cards.
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": list(picture_ids) if picture_ids else [],
+                "origin_client_id": origin_client_id,
+                "change_kind": "added",
+            },
+        )
         return {"status": "success", "restored_count": restored_count}
 
     @router.delete(
@@ -1893,9 +1945,11 @@ def register_routes(router, server):
         response_model=ScrapheapDeleteResponse,
     )
     def delete_scrapheap_selection(
+        request: Request,
         background_tasks: BackgroundTasks,
         payload: dict | None = Body(None),
     ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         ids = None
         if payload is not None:
             maybe_ids = (
@@ -2043,7 +2097,14 @@ def register_routes(router, server):
             log_records,
             priority=DBPriority.IMMEDIATE,
         )
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": list(picture_ids),
+                "origin_client_id": origin_client_id,
+                "change_kind": "removed",
+            },
+        )
 
         # Tell the caller which snapshots still hold metadata for the pictures
         # just purged. Snapshot archives are not scrubbed, so the user may want
@@ -2065,7 +2126,9 @@ def register_routes(router, server):
         description="Soft-deletes a picture by marking it deleted, making it appear in scrapheap views.",
         response_model=PictureDeleteResponse,
     )
-    def delete_picture(id: str):
+    def delete_picture(request: Request, id: str):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+
         def delete_pic(session, id):
             pic = session.get(Picture, id)
             if not pic:
@@ -2084,6 +2147,25 @@ def register_routes(router, server):
         success = server.vault.db.run_task(delete_pic, id)
         if not success:
             raise HTTPException(status_code=404, detail="Picture not found")
+        # Soft-delete removes the card from active grid views. Broadcast a
+        # ``removed`` event so other tabs drop the stale card (and never leave a
+        # 404-clickable thumbnail behind).
+        try:
+            removed_id = int(id)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": [removed_id],
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "removed",
+                },
+            )
+        except (TypeError, ValueError):
+            logger.warning(
+                "delete_picture: could not coerce id=%r to int for WS notify; "
+                "skipping the removed broadcast",
+                id,
+            )
         return JSONResponse(
             content={"status": "success", "message": f"Picture id={id} deleted."}
         )
