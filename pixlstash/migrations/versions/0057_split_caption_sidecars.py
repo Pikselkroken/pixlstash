@@ -12,8 +12,8 @@ Existing data is preserved: the old ``caption_file`` is split by extension
 (``.txt`` → tags, ``.caption`` → description) and the old ``sync_captions`` value
 is copied onto both new toggles.
 
-Revision ID: 0058_split_caption_sidecars
-Revises: 0057_add_tag_suggestion
+Revision ID: 0057_split_caption_sidecars
+Revises: 0056_add_hide_purge_snapshot_warning
 Create Date: 2026-06-16 00:00:00.000000
 
 """
@@ -24,8 +24,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0058_split_caption_sidecars"
-down_revision: Union[str, None] = "0057_add_tag_suggestion"
+revision: str = "0057_split_caption_sidecars"
+down_revision: Union[str, None] = "0056_add_hide_purge_snapshot_warning"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
