@@ -108,9 +108,7 @@ class WatchFolderImportTask(BaseTask):
                 # Detect tags + description sidecars next to the source image.
                 # Import folders have no per-folder suffix config, so probe the
                 # known conventions (configured_suffix=None).
-                tags_path = resolve_typed_sidecar(
-                    file_path, SIDECAR_TYPE_TAGS, None
-                )
+                tags_path = resolve_typed_sidecar(file_path, SIDECAR_TYPE_TAGS, None)
                 if tags_path:
                     pic.tags_file = tags_path
                     pic.tags_file_mtime = get_sidecar_mtime(tags_path)

@@ -284,7 +284,7 @@ def _suffix_for_sidecar(sidecar_path_str: str, image_stems: set[str]) -> str | N
                 best_stem = stem
     if best_stem is None:
         return None
-    return sidecar_path_str[len(best_stem):]
+    return sidecar_path_str[len(best_stem) :]
 
 
 def _looks_like_tags(text: str) -> bool:

@@ -66,9 +66,7 @@ def test_resolve_typed_sidecar_routes_bare_txt(tmp_path):
     img.write_bytes(b"x")
     _write(str(tmp_path / "photo.txt"), "cat, dog, tree")
     # The bare .txt classifies as tags, so it resolves for tags and not for descriptions.
-    assert resolve_typed_sidecar(str(img), "tags", None) == str(
-        tmp_path / "photo.txt"
-    )
+    assert resolve_typed_sidecar(str(img), "tags", None) == str(tmp_path / "photo.txt")
     assert resolve_typed_sidecar(str(img), "description", None) is None
     # An explicit suffix is matched exactly (and not found here).
     assert resolve_typed_sidecar(str(img), "tags", "_tags.txt") is None

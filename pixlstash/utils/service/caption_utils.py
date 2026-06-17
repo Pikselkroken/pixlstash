@@ -212,7 +212,11 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
             existing = resolve_typed_sidecar(
                 image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix
             )
-            if existing is None and pic_db.tags_file and os.path.isfile(pic_db.tags_file):
+            if (
+                existing is None
+                and pic_db.tags_file
+                and os.path.isfile(pic_db.tags_file)
+            ):
                 existing = pic_db.tags_file
             # Create a new file only when there is content; always update an
             # existing one (so clearing tags empties it).

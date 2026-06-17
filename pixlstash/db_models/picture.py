@@ -280,9 +280,7 @@ class Picture(SQLModel, table=True):
     # written.
     description_file_mtime: Optional[float] = Field(
         default=None,
-        sa_column=Column(
-            "description_file_mtime", Float, default=None, nullable=True
-        ),
+        sa_column=Column("description_file_mtime", Float, default=None, nullable=True),
     )
     # SHA-256 hex digest of the picture's user-visible metadata (column values
     # + sorted tag strings).  Recomputed automatically via an after_flush hook

@@ -330,9 +330,7 @@ class ReferenceFolderScanTask(BaseTask):
                     session.add(pic_db)
                     if "new_tags" in u:
                         # Replace tags — an empty list means all tags were removed.
-                        session.exec(
-                            delete(Tag).where(Tag.picture_id == u["pic_id"])
-                        )
+                        session.exec(delete(Tag).where(Tag.picture_id == u["pic_id"]))
                         tags = u["new_tags"]
                         if tags:
                             session.add_all(
@@ -340,9 +338,7 @@ class ReferenceFolderScanTask(BaseTask):
                             )
                         else:
                             session.add(
-                                Tag(
-                                    picture_id=u["pic_id"], tag=TAG_PENDING_SENTINEL
-                                )
+                                Tag(picture_id=u["pic_id"], tag=TAG_PENDING_SENTINEL)
                             )
                 session.commit()
 
