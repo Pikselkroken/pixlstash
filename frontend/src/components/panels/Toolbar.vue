@@ -326,6 +326,16 @@
         >
           <v-icon size="20">mdi-magnify</v-icon>
         </button>
+        <!-- ── Toolbar: Review suggested tag fixes ───────────────────── -->
+        <button
+          class="bar-btn bar-btn--icon"
+          type="button"
+          :disabled="isReadOnly"
+          title="Review suggested tag fixes"
+          @click="reviewFixesStore.overlayOpen = true"
+        >
+          <v-icon size="20">mdi-tag-check-outline</v-icon>
+        </button>
         <!-- ── Toolbar: Export ───────────────────────────────────────── -->
         <v-menu
           v-model="exportStore.exportMenuOpen"
@@ -428,6 +438,7 @@ import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
+import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
 import GbFilterPanel from "./GbFilterPanel.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
@@ -471,6 +482,7 @@ const gridStore = useGridStore();
 const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
+const reviewFixesStore = useReviewFixesStore();
 
 const tbComfyuiMenuOpen = ref(false);
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
