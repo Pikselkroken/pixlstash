@@ -27,6 +27,7 @@ Usage (from the repo root, using the project venv which has numpy):
 import argparse
 import csv
 import datetime
+import json
 import os
 import sqlite3
 import sys
@@ -63,8 +64,46 @@ def resolve_project_id(conn, project: str | None, project_id: int | None) -> int
     return int(row[0])
 
 
-def load_vault(db_path: str, tag: str, project: str | None, project_id: int | None):
-    """Load (ids, paths, normalized embeddings, has_tag mask) for non-deleted pictures.
+def load_tag_merges(override_path: str | None):
+    """Return ``(child -> parent merge map, source_label)``.
+
+    Source of truth is PixlStash's editable ``DEFAULT_TAG_MERGES`` constant (so it can
+    be loosened as the model improves). Pass ``--tag-remap`` to override with a JSON
+    file — e.g. pixltagger's ``pixlstash.json``, whose ``tag_remap`` may also contain
+    ``null`` ("drop") entries, which are ignored here since they don't merge into a parent.
+    """
+    if override_path:
+        try:
+            with open(override_path) as f:
+                data = json.load(f)
+        except Exception as e:
+            sys.exit(f"ERROR reading --tag-remap {override_path}: {e}")
+        raw = data.get("tag_remap", data) if isinstance(data, dict) else {}
+        return {k: v for k, v in raw.items() if isinstance(v, str)}, override_path
+    try:
+        # Import PixlStash's constant. scripts/ lives at <repo>/scripts, so the repo
+        # root (which contains the `pixlstash` package) is two levels up.
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
+
+        return dict(DEFAULT_TAG_MERGES), "pixlstash DEFAULT_TAG_MERGES"
+    except Exception:
+        return {}, None
+
+
+def load_vault(
+    db_path: str,
+    tag: str,
+    equiv_tags: set[str],
+    project: str | None,
+    project_id: int | None,
+):
+    """Load ids, paths, normalized embeddings, and two label masks for non-deleted pictures.
+
+    Returns ``has_literal`` (the picture carries ``tag`` itself) and ``has_concept`` (it
+    carries ``tag`` *or* any merge-equivalent child tag). ``has_concept`` drives neighbour
+    voting and "missing" eligibility; ``has_literal`` drives "remove" eligibility (you can
+    only remove a tag a picture actually has).
 
     Scoped to a single project when given, so the scan covers exactly the images used
     to train the model and not the rest of the vault. Opens read-only so a running
@@ -93,10 +132,18 @@ def load_vault(db_path: str, tag: str, project: str | None, project_id: int | No
             paths.append(file_path or "")
             blobs.append(blob)
 
-        tagged = {
+        literal = {
             row[0]
             for row in conn.execute(
                 "SELECT picture_id FROM tag WHERE tag = ?", (tag,)
+            )
+        }
+        placeholders = ",".join("?" * len(equiv_tags))
+        concept = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT picture_id FROM tag WHERE tag IN ({placeholders})",
+                tuple(sorted(equiv_tags)),
             )
         }
     finally:
@@ -113,8 +160,9 @@ def load_vault(db_path: str, tag: str, project: str | None, project_id: int | No
     emb = (emb / norms).astype(np.float32)
 
     id_arr = np.array(ids, dtype=np.int64)
-    has_tag = np.array([pid in tagged for pid in ids], dtype=bool)
-    return id_arr, paths, emb, has_tag
+    has_literal = np.array([pid in literal for pid in ids], dtype=bool)
+    has_concept = np.array([pid in concept for pid in ids], dtype=bool)
+    return id_arr, paths, emb, has_literal, has_concept
 
 
 def knn_disagreement(
@@ -166,11 +214,18 @@ def knn_disagreement(
     return pos_frac, twin_idx, twin_sim
 
 
-def write_suggestions(db_path: str, rows: list[dict], source: str) -> int:
+def write_suggestions(
+    db_path: str, rows: list[dict], source: str, replace_tag: str | None = None
+) -> int:
     """Upsert suspect rows into the tag_suggestion queue.
 
     Conflicts on (picture_id, tag, source) update the score/reason for rows still
     PENDING, but never resurrect a suggestion the user already ACCEPTED or DISMISSED.
+
+    When ``replace_tag`` is given, all *PENDING* rows for that tag + source are deleted
+    first, so a fresh scan fully rebuilds the tag's queue (purging stale suggestions, e.g.
+    ones generated before merge-awareness). Already-reviewed rows are still preserved.
+
     Requires the tag_suggestion table (migration 0057). Returns rows written/updated.
     """
     conn = sqlite3.connect(db_path)
@@ -181,6 +236,12 @@ def write_suggestions(db_path: str, rows: list[dict], source: str) -> int:
         if not has:
             sys.exit("ERROR: tag_suggestion table missing — run migration 0057 first "
                      "(alembic upgrade head, or start PixlStash once).")
+        if replace_tag is not None:
+            conn.execute(
+                "DELETE FROM tag_suggestion "
+                "WHERE status='PENDING' AND source=? AND tag=?",
+                (source, replace_tag),
+            )
         now = datetime.datetime.utcnow().isoformat()
         payload = []
         for r in rows:
@@ -238,7 +299,20 @@ def main():
                     help="Upsert suspects into the tag_suggestion review queue (preserves already-reviewed rows).")
     ap.add_argument("--source", default="near_neighbor",
                     help="Value stored in tag_suggestion.source when --write-db (default 'near_neighbor').")
+    ap.add_argument("--tag-remap", default=None,
+                    help="Override the tag-merge map with a JSON file (else PixlStash's "
+                         "DEFAULT_TAG_MERGES constant is used). Accepts pixltagger's "
+                         "pixlstash.json (reads its 'tag_remap') or a bare child->parent dict.")
+    ap.add_argument("--replace", action="store_true",
+                    help="With --write-db, first delete all PENDING suggestions for this "
+                         "tag+source so the scan fully rebuilds the queue (purges stale "
+                         "rows). Reviewed (accepted/dismissed) rows are kept.")
     args = ap.parse_args()
+
+    merges, merge_src = load_tag_merges(args.tag_remap)
+    # Tags that count as the target for voting + "missing" eligibility: the target
+    # itself plus every child tag that merges into it.
+    equiv = {args.tag} | {child for child, parent in merges.items() if parent == args.tag}
 
     db_path = resolve_db(args.db)
     project = args.project or None
@@ -246,24 +320,37 @@ def main():
     print(f"Scope:  {('project ' + repr(project)) if (project or args.project_id) else 'whole vault'}"
           + (f" (id {args.project_id})" if args.project_id is not None else ""))
     print(f"Tag:    {args.tag!r}")
+    merged_in = sorted(equiv - {args.tag})
+    if merged_in:
+        print(f"Merges: counting {merged_in} as {args.tag!r} too (source: {merge_src}).")
+    elif merge_src:
+        print(f"Merges: source {merge_src}; nothing merges into {args.tag!r}.")
+    else:
+        print("Merges: none loaded — using literal tags only.")
 
     t0 = time.time()
-    ids, paths, emb, has_tag = load_vault(db_path, args.tag, project, args.project_id)
+    ids, paths, emb, has_literal, has_concept = load_vault(
+        db_path, args.tag, equiv, project, args.project_id
+    )
     n = len(ids)
-    n_pos = int(has_tag.sum())
-    print(f"Loaded  {n} embedded pictures, {n_pos} tagged {args.tag!r} "
-          f"(base rate {n_pos / n:.1%}) in {time.time() - t0:.1f}s")
+    n_literal = int(has_literal.sum())
+    n_concept = int(has_concept.sum())
+    extra = f" (+{n_concept - n_literal} via merges)" if n_concept != n_literal else ""
+    print(f"Loaded  {n} embedded pictures, {n_literal} tagged {args.tag!r}, "
+          f"{n_concept} incl. merges{extra} — base rate {n_concept / n:.1%} in {time.time() - t0:.1f}s")
 
     t1 = time.time()
-    pos_frac, twin_idx, twin_sim = knn_disagreement(emb, has_tag, args.k)
+    # Neighbour voting + twin selection use the merged concept.
+    pos_frac, twin_idx, twin_sim = knn_disagreement(emb, has_concept, args.k)
     print(f"kNN ({args.k}) disagreement computed in {time.time() - t1:.1f}s")
 
     rows = []
     for i in range(n):
-        tagged = bool(has_tag[i])
-        if not tagged and pos_frac[i] >= args.add_threshold:
+        # ADD eligibility uses the merged concept (don't suggest a tag the picture
+        # already has via a merge); REMOVE eligibility uses the literal tag.
+        if not has_concept[i] and pos_frac[i] >= args.add_threshold:
             direction, score = "add", float(pos_frac[i])
-        elif tagged and pos_frac[i] <= args.remove_threshold:
+        elif has_literal[i] and pos_frac[i] <= args.remove_threshold:
             direction, score = "remove", float(1.0 - pos_frac[i])
         else:
             continue
@@ -302,7 +389,9 @@ def main():
     print(f"Wrote   {out_path}")
 
     if args.write_db:
-        n_written = write_suggestions(db_path, rows, args.source)
+        n_written = write_suggestions(
+            db_path, rows, args.source, replace_tag=args.tag if args.replace else None
+        )
         print(f"Queued  {n_written} rows into tag_suggestion (source={args.source!r}, "
               f"already-reviewed rows preserved)")
 

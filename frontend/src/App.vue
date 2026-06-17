@@ -27,6 +27,7 @@ import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
+import { useReviewFixesStore } from "./stores/useReviewFixesStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
@@ -36,6 +37,7 @@ import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import SearchOverlay from "./components/views/SearchOverlay.vue";
+import ReviewFixesOverlay from "./components/views/ReviewFixesOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import { isInternalImageDrag } from "./utils/media.js";
 
@@ -55,6 +57,7 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
+const reviewFixesStore = useReviewFixesStore();
 const snapshotsStore = useSnapshotsStore();
 
 // --- Router ---
@@ -1603,6 +1606,10 @@ function closeSearchOverlay() {
   searchStore.searchOverlayVisible = false;
 }
 
+// --- Review Suggested Fixes overlay ---
+// Visibility lives in the store so the grid toolbar can open it directly,
+// the same way the search button toggles searchStore.searchOverlayVisible.
+
 function handleClearSearch() {
   searchStore.searchQuery = "";
   searchStore.searchInput = "";
@@ -2347,6 +2354,11 @@ defineExpose({
         @search="handleUpdateSearchQuery"
         @close="closeSearchOverlay"
         @clear-history="clearSearchHistory"
+      />
+      <ReviewFixesOverlay
+        v-if="reviewFixesStore.overlayOpen"
+        :backendUrl="BACKEND_URL"
+        @close="reviewFixesStore.overlayOpen = false"
       />
     </div>
     <button

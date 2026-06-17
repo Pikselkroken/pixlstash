@@ -53,6 +53,9 @@ from pixlstash.routes.comfyui import create_router as create_comfyui_router
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
 )
+from pixlstash.routes.tag_suggestions import (
+    create_router as create_tag_suggestions_router,
+)
 from pixlstash.routes.reference_folders import (
     create_router as create_reference_folders_router,
 )
@@ -2468,6 +2471,11 @@ class Server:
             create_guest_scores_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+        )
+        self.api.include_router(
+            create_tag_suggestions_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tag_suggestions"],
         )
         self.api.include_router(
             create_pictures_router(self),

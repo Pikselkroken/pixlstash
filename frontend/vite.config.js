@@ -24,6 +24,10 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(readPixlStashVersion()),
   },
   build: {
+    // Resolves to <repo>/pixlstash/frontend/dist — i.e. the in-repo Python
+    // *package* (named "pixlstash"), which is what `python -m pixlstash.app`
+    // serves. NOT the sibling ~/Projects/pixlstash repo. Do not change to
+    // "../pixlstash-main/..." — that resolves to a doubled, bogus path.
     outDir: '../pixlstash/frontend/dist',
     emptyOutDir: true,
     chunkSizeWarningLimit: 1024,
