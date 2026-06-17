@@ -890,6 +890,7 @@ function setOverlayImageById(nextId) {
     const targetTags = getTagList(target.tags);
     const existingDescription = image.value?.description;
     const existingSmartScore = image.value?.smartScore;
+    const existingScore = image.value?.score;
     image.value = {
       ...target,
       // Preserve the existing description when re-setting the same image from filmstrip
@@ -901,6 +902,13 @@ function setOverlayImageById(nextId) {
       // Preserve smartScore fetched by fetchOverlayMetadata — grid images don't carry it.
       ...(isSameImage && existingSmartScore != null
         ? { smartScore: existingSmartScore }
+        : {}),
+      // Preserve the locally-edited score. `target` here is the frozen navigation
+      // snapshot captured on open, so it carries the pre-edit score. Re-applying it
+      // for the same image would clobber an optimistic rating change (a 0 toggle is a
+      // valid edit, hence the != null guard rather than a truthiness check).
+      ...(isSameImage && existingScore != null
+        ? { score: existingScore }
         : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
