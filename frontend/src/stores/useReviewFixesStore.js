@@ -17,7 +17,8 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
   const overlayOpen = ref(false); // whether the review overlay is showing
   const tags = ref([]); // [{ tag, add, remove, total }], busiest first
   const activeTag = ref(null);
-  const direction = ref("remove"); // "remove" | "add" | "" (both)
+  const direction = ref(""); // kept for the API; the UI no longer filters by it
+  const allTags = ref([]); // all vault tag values, for the scan-input autocomplete
   const items = ref([]); // ranked pending suggestions for activeTag/direction
   const loading = ref(false);
   const error = ref(null);
@@ -137,12 +138,13 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     await refreshBulkCount();
   }
 
-  async function setDirection(dir) {
-    direction.value = dir;
-    undoStack.value = [];
-    lastBulk.value = null;
-    await fetchQueue();
-    await refreshBulkCount();
+  async function fetchAllTags() {
+    try {
+      const res = await apiClient.get("/tags");
+      allTags.value = (res.data || []).map((t) => t.tag).filter(Boolean);
+    } catch {
+      allTags.value = [];
+    }
   }
 
   async function load() {
@@ -151,6 +153,7 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     await fetchSummary();
     await fetchQueue();
     await refreshBulkCount();
+    fetchAllTags(); // background; powers the scan-input autocomplete
   }
 
   // Run a near-neighbour scan for a tag (rebuilds its pending queue) and switch to it.
@@ -412,10 +415,10 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     scanning,
     scanError,
     scanTag,
+    allTags,
     fetchSummary,
     fetchQueue,
     selectTag,
-    setDirection,
     load,
     accept,
     dismiss,

@@ -485,8 +485,10 @@ def test_scan_tag_builds_and_rebuilds_queue():
         assert res["count"] >= 1
 
         rows = client.get("/tag_suggestions").json()
-        # A (tagged) disagrees with its untagged twin → a "remove" suspect.
-        assert any(r["picture_id"] == a and r["direction"] == "remove" for r in rows)
+        # The A/B disagreement is captured exactly once (reciprocal pair deduped),
+        # in whichever direction scored higher.
+        assert len(rows) == 1
+        assert {rows[0]["picture_id"], rows[0]["twin_picture_id"]} == {a, b}
 
         # Re-scanning rebuilds the same pending set (idempotent), not duplicates it.
         res2 = tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)

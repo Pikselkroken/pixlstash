@@ -37,7 +37,10 @@ import numpy as np
 
 # Share the kNN kernel with the in-app scan service so CLI and UI can never drift.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pixlstash.utils.near_neighbor import knn_disagreement  # noqa: E402
+from pixlstash.utils.near_neighbor import (  # noqa: E402
+    dedupe_by_pair,
+    knn_disagreement,
+)
 
 EMBEDDING_DIM = 512  # CLIP ViT-B-32 image_embedding blobs are 512 float32 = 2048 bytes.
 EMBEDDING_BYTES = EMBEDDING_DIM * 4
@@ -396,6 +399,9 @@ def main():
             }
         )
 
+    # A mutually-disagreeing pair yields both an ADD and a REMOVE suspect for the same
+    # two images — collapse to one per pair so it isn't reviewed twice.
+    rows = dedupe_by_pair(rows)
     # Highest-disagreement, most-near-identical first.
     rows.sort(key=lambda r: (r["score"], r["twin_sim"]), reverse=True)
     if args.limit:

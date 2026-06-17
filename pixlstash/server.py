@@ -56,6 +56,9 @@ from pixlstash.routes.tag_predictions import (
 from pixlstash.routes.tag_suggestions import (
     create_router as create_tag_suggestions_router,
 )
+from pixlstash.routes.tagger_runs import (
+    create_router as create_tagger_runs_router,
+)
 from pixlstash.routes.reference_folders import (
     create_router as create_reference_folders_router,
 )
@@ -2476,6 +2479,11 @@ class Server:
             create_tag_suggestions_router(self),
             prefix=API_V1_PREFIX,
             tags=["tag_suggestions"],
+        )
+        self.api.include_router(
+            create_tagger_runs_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tagger_runs"],
         )
         self.api.include_router(
             create_pictures_router(self),
