@@ -419,6 +419,25 @@ class TestReadTokenBlocksOwnerData:
             finally:
                 server.__exit__(None, None, None)
 
+    def test_cannot_detect_sidecars(self):
+        """READ token must not walk the server filesystem via sidecar detection."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
+                tmp
+            )
+            try:
+                r = TestClient(server.api).get(
+                    f"{API}/reference-folders/detect-sidecars",
+                    params={"path": tmp},
+                    headers={"Authorization": f"Bearer {read_token}"},
+                )
+                assert r.status_code == 403, (
+                    f"READ token must not probe the filesystem via detect-sidecars, "
+                    f"got {r.status_code}: {r.text}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
     def test_cannot_access_shared_resource_ids(self):
         """READ token must not enumerate which resources have been shared."""
         with tempfile.TemporaryDirectory() as tmp:

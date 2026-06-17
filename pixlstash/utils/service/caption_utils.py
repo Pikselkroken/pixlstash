@@ -1,6 +1,7 @@
 """Caption, tag, and hidden-tag processing utilities."""
 
 import json
+import os
 import re
 
 from sqlmodel import Session, select
@@ -8,7 +9,13 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.tag import is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.caption_file_utils import write_caption_file
+from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_DESCRIPTION,
+    SIDECAR_TYPE_TAGS,
+    resolve_typed_sidecar,
+    write_sidecar,
+    writeback_path,
+)
 
 _logger = get_logger(__name__)
 
@@ -150,14 +157,22 @@ def normalize_hidden_tags(value):
 
 
 def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
-    """Write current tags + description back to the caption sidecar file.
+    """Write current tags and description back to their sidecar files.
 
     Fetches all required data inside a single DB task so no detached-instance
-    attribute access is needed by the caller.  Early-exits when the picture has
-    no caption file or when the owning reference folder does not have
-    ``sync_captions`` enabled.  Only updates *existing* caption files — never
-    creates new ones.  Persists the new mtime so the next folder scan does not
-    re-import the write-back as an external change.
+    attribute access is needed by the caller.  Writes two independent sidecars,
+    each gated on the owning reference folder's toggle (``sync_tags`` /
+    ``sync_descriptions``):
+
+    - Tags are written to the configured tags sidecar; descriptions to the
+      configured description sidecar.
+    - A new sidecar is **created** for content that has none yet, but an empty
+      sidecar is never created (clearing content only empties a file that
+      already exists).
+    - The new mtime is persisted so the next folder scan does not re-import the
+      write-back as an external change.
+
+    Early-exits for non-reference pictures and folders with both toggles off.
 
     Args:
         server: The Server instance providing vault/db access.
@@ -184,16 +199,64 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
             if t.tag and not is_tag_sentinel(t.tag)
         ]
 
-        if pic_db.reference_folder_id and pic_db.caption_file:
-            rf = session.get(ReferenceFolder, pic_db.reference_folder_id)
-            if rf is not None and rf.sync_captions:
-                new_mtime = write_caption_file(
-                    pic_db.caption_file, current_tags, pic_db.description
+        if not pic_db.reference_folder_id or not pic_db.file_path:
+            return fresh_tags
+        rf = session.get(ReferenceFolder, pic_db.reference_folder_id)
+        if rf is None or not (rf.sync_tags or rf.sync_descriptions):
+            return fresh_tags
+
+        dirty = False
+        image_path = pic_db.file_path
+
+        if rf.sync_tags:
+            existing = resolve_typed_sidecar(
+                image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix
+            )
+            if (
+                existing is None
+                and pic_db.tags_file
+                and os.path.isfile(pic_db.tags_file)
+            ):
+                existing = pic_db.tags_file
+            # Create a new file only when there is content; always update an
+            # existing one (so clearing tags empties it).
+            if existing or current_tags:
+                target = writeback_path(
+                    image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix, existing
                 )
+                new_mtime = write_sidecar(target, ", ".join(current_tags))
                 if new_mtime is not None:
-                    pic_db.caption_file_mtime = new_mtime
-                    session.add(pic_db)
-                    session.commit()
+                    pic_db.tags_file = target
+                    pic_db.tags_file_mtime = new_mtime
+                    dirty = True
+
+        if rf.sync_descriptions:
+            description = (pic_db.description or "").strip()
+            existing = resolve_typed_sidecar(
+                image_path, SIDECAR_TYPE_DESCRIPTION, rf.description_suffix
+            )
+            if (
+                existing is None
+                and pic_db.description_file
+                and os.path.isfile(pic_db.description_file)
+            ):
+                existing = pic_db.description_file
+            if existing or description:
+                target = writeback_path(
+                    image_path,
+                    SIDECAR_TYPE_DESCRIPTION,
+                    rf.description_suffix,
+                    existing,
+                )
+                new_mtime = write_sidecar(target, description)
+                if new_mtime is not None:
+                    pic_db.description_file = target
+                    pic_db.description_file_mtime = new_mtime
+                    dirty = True
+
+        if dirty:
+            session.add(pic_db)
+            session.commit()
 
         return fresh_tags
 

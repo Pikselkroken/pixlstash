@@ -2,6 +2,7 @@
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from typing import Optional
@@ -13,6 +14,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.caption_file_utils import detect_folder_suffixes
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
@@ -23,17 +25,48 @@ from sqlmodel import Session, select
 
 logger = get_logger(__name__)
 
+# A sidecar suffix is concatenated directly onto an image's path stem to locate
+# and write its sidecar (see ``caption_file_utils.sidecar_path``), so it must
+# stay a bare filename fragment. Allow only letters, digits, '.', '_' and '-',
+# and reject anything with a path separator or "..": a value such as
+# ``"_t.txt/../../../etc/cron.d/evil"`` would otherwise redirect the write-back
+# outside the reference folder (CWE-22 path traversal -> arbitrary file write).
+_SIDECAR_SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _validate_sidecar_suffix(suffix: str) -> None:
+    if (
+        ".." in suffix
+        or "/" in suffix
+        or "\\" in suffix
+        or not _SIDECAR_SUFFIX_RE.match(suffix)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Sidecar suffix may only contain letters, digits, '.', '_' and "
+                "'-' (no path separators or '..')."
+            ),
+        )
+
 
 class ReferenceFolderCreateRequest(BaseModel):
     folder: str
     label: Optional[str] = None
     host_path: Optional[str] = None
+    sync_descriptions: Optional[bool] = None
+    sync_tags: Optional[bool] = None
+    description_suffix: Optional[str] = None
+    tags_suffix: Optional[str] = None
 
 
 class ReferenceFolderUpdateRequest(BaseModel):
     label: Optional[str] = None
     allow_delete_file: Optional[bool] = None
-    sync_captions: Optional[bool] = None
+    sync_descriptions: Optional[bool] = None
+    sync_tags: Optional[bool] = None
+    description_suffix: Optional[str] = None
+    tags_suffix: Optional[str] = None
     host_path: Optional[str] = None
 
 
@@ -45,9 +78,22 @@ class ReferenceFolderResponse(BaseModel):
     host_path: Optional[str]
     label: str
     allow_delete_file: bool
-    sync_captions: bool
+    sync_descriptions: bool
+    sync_tags: bool
+    description_suffix: Optional[str]
+    tags_suffix: Optional[str]
     status: str
     last_scanned: Optional[float]
+
+
+class ReferenceFolderDetectResponse(BaseModel):
+    """Sidecar naming convention detected inside a folder, used to prefill the
+    Add-folder dialog."""
+
+    tags_suffix: Optional[str]
+    description_suffix: Optional[str]
+    found_tags: bool
+    found_descriptions: bool
 
 
 class ReferenceFoldersListResponse(BaseModel):
@@ -105,6 +151,22 @@ def create_router(server) -> APIRouter:
             )
         return normalized
 
+    def _normalize_suffix(value: Optional[str]) -> Optional[str]:
+        """Trim and validate a sidecar suffix; empty means "auto / not configured".
+
+        The suffix is concatenated onto an image's path stem to locate and write
+        its sidecar, so it must be a bare filename fragment with no path
+        separators or ``..``; otherwise a crafted value would let the write-back
+        escape the reference folder (path traversal to arbitrary file write).
+        """
+        if value is None:
+            return None
+        suffix = str(value).strip()
+        if not suffix:
+            return None
+        _validate_sidecar_suffix(suffix)
+        return suffix
+
     def _to_response(rf: ReferenceFolder) -> ReferenceFolderResponse:
         return ReferenceFolderResponse(
             id=rf.id,
@@ -112,7 +174,10 @@ def create_router(server) -> APIRouter:
             host_path=rf.host_path,
             label=rf.label,
             allow_delete_file=rf.allow_delete_file,
-            sync_captions=rf.sync_captions,
+            sync_descriptions=rf.sync_descriptions,
+            sync_tags=rf.sync_tags,
+            description_suffix=rf.description_suffix,
+            tags_suffix=rf.tags_suffix,
             status=rf.status,
             last_scanned=rf.last_scanned,
         )
@@ -153,6 +218,35 @@ def create_router(server) -> APIRouter:
             image_root=getattr(server.vault, "image_root", None),
             folders=[_to_response(f) for f in folders],
         )
+
+    @router.get(
+        "/reference-folders/detect-sidecars",
+        summary="Detect sidecar naming convention in a folder",
+        description=(
+            "Scans a candidate folder for existing tags/description sidecar files "
+            "and returns the most common filename suffix found for each type, so "
+            "the Add-folder dialog can pre-fill sensible defaults. Returns empty "
+            "results when the path is not yet accessible (e.g. an unmounted Docker "
+            "volume)."
+        ),
+        response_model=ReferenceFolderDetectResponse,
+        tags=["folders"],
+    )
+    def detect_reference_folder_sidecars(request: Request, path: str):
+        server.auth.require_user_id(request)
+        folder = os.path.normpath(path)
+        error = validate_reference_folder_path(folder)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        if not os.path.isdir(folder):
+            # Path not reachable yet (e.g. Docker pending mount) — no detection.
+            return ReferenceFolderDetectResponse(
+                tags_suffix=None,
+                description_suffix=None,
+                found_tags=False,
+                found_descriptions=False,
+            )
+        return ReferenceFolderDetectResponse(**detect_folder_suffixes(folder))
 
     @router.post(
         "/reference-folders",
@@ -237,6 +331,10 @@ def create_router(server) -> APIRouter:
                 host_path=host_path,
                 label=label,
                 allow_delete_file=False,
+                sync_descriptions=bool(payload.sync_descriptions),
+                sync_tags=bool(payload.sync_tags),
+                description_suffix=_normalize_suffix(payload.description_suffix),
+                tags_suffix=_normalize_suffix(payload.tags_suffix),
                 status=initial_status,
             )
             session.add(rf)
@@ -284,10 +382,31 @@ def create_router(server) -> APIRouter:
                 rf.label = payload.label
             if payload.allow_delete_file is not None:
                 rf.allow_delete_file = payload.allow_delete_file
-            if payload.sync_captions is not None:
-                rf.sync_captions = payload.sync_captions
+
+            # Turning a sync type on schedules a re-scan so existing pictures get
+            # their sidecars exported to disk.
+            newly_enabled = False
+            if payload.sync_descriptions is not None:
+                newly_enabled = newly_enabled or (
+                    payload.sync_descriptions and not rf.sync_descriptions
+                )
+                rf.sync_descriptions = payload.sync_descriptions
+            if payload.sync_tags is not None:
+                newly_enabled = newly_enabled or (
+                    payload.sync_tags and not rf.sync_tags
+                )
+                rf.sync_tags = payload.sync_tags
+
+            if "description_suffix" in payload.model_fields_set:
+                rf.description_suffix = _normalize_suffix(payload.description_suffix)
+            if "tags_suffix" in payload.model_fields_set:
+                rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
+
+            if newly_enabled:
+                # The scan finder treats last_scanned=None as "scan now".
+                rf.last_scanned = None
             session.add(rf)
             session.commit()
             session.refresh(rf)

@@ -105,6 +105,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/server-config/watch-folders",
         "/api/v1/server-config/filesystem-roots",
         "/api/v1/filesystem/browse",
+        # Walks the server filesystem from a client-supplied path to detect
+        # sidecar naming. A folder/filesystem endpoint, so READ tokens (handed
+        # out to view a shared gallery) must not reach it.
+        "/api/v1/reference-folders/detect-sidecars",
     }
 )
 

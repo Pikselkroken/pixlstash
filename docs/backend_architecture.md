@@ -869,6 +869,31 @@ An endpoint in **neither** state is a bug, not a judgement call. There is no "I 
 
 Until all of the above is true, this is target state. **§16.1 remains the binding rule and the hard requirement still applies to every new endpoint.** New authorization work should move toward this central model rather than adding more per-handler opt-in checks; any new per-handler check is debt against this direction and should be flagged as such in review.
 
+### 16.3 Owner-only filesystem-capability endpoints (accepted risk, fix before multi-user)
+
+**The class.** A set of endpoints does not return per-object data; they let the caller drive the **server process's own filesystem authority** — reading, walking, and writing host paths, restarting the process, opening a folder in the host OS file manager. These are operator capabilities, not user capabilities:
+
+- [`reference_folders.py`](../pixlstash/routes/reference_folders.py) — create / update / delete reference folders (`folder`, `host_path`), `GET /reference-folders/detect-sidecars` (walks a client-supplied path), sidecar write-back, `restart_server`, `open_reference_folder`.
+- [`import_folders.py`](../pixlstash/routes/import_folders.py) — create / update / delete import folders.
+- [`filesystem.py`](../pixlstash/routes/filesystem.py) — `GET /filesystem/browse` (enumerates a client-supplied host path).
+
+**Current gate.** Every one of these is gated with `require_user_id` (authentication only); none uses `require_unscoped_owner`. Because the middleware populates `request.state.token_scope` only for non-`ALL` tokens (the `if matched_token.scope != "ALL"` branch in [`auth.py`](../pixlstash/auth.py)), an `ALL`-scope token — *including a resource-restricted one* (`scope=ALL` + `resource_type=project`) — leaves `token_scope = None` and is treated as owner-equivalent by these handlers. This is the same `ALL`+`resource_type` footgun as §16.2 item 4, applied to owner-only operations rather than picture-scoped reads. The correct gate for this class is `require_unscoped_owner` (it consults `request.state.matched_token.resource_type`), already used by [`snapshots.py`](../pixlstash/routes/snapshots.py) and [`config.py`](../pixlstash/routes/config.py).
+
+**Why this is accepted today (single-owner).** The exposure is bounded to effectively nil in the current single-owner product:
+
+- `READ`-scope tokens — the only tokens the share UI mints for non-owners — are **fully blocked** from this class: writes are rejected by the middleware, `detect-sidecars` and `filesystem/browse` are in `READ_BLOCKED_GET_PATHS`, and the list endpoints return empty for any scoped token.
+- `ALL`-scope tokens can only be minted by the owner (`create_token` refuses scoped callers, `auth.py:900`), and `require_local_for_write` (default on) blocks `ALL` tokens from non-local IPs. So a remote caller is blocked and the only `ALL`-token holder is the owner / the owner's own devices: `ALL == owner == operator` holds, and giving the operator filesystem access grants nothing they don't already have on their own box.
+- The path/write operations are further constrained by the system-directory blocklist ([`reference_folder_validator.py`](../pixlstash/utils/reference_folder_validator.py)) and sidecar-suffix validation (`reference_folders.py:_validate_sidecar_suffix`).
+
+**Requirement before multi-user (binding).** That equivalence dies the moment a second, non-owner principal can hold a token reaching these endpoints. **Before either of the following ships, this whole class MUST move from `require_user_id` → `require_unscoped_owner`, and subsequently → an explicit admin/operator role:**
+
+- multi-user support, or
+- any feature that issues an `ALL`-scope token (even resource-restricted) to anyone other than the owner.
+
+Treat it as a hard release-blocker for multi-user, in the spirit of the §16.1 hard requirement. The fix is small and is correct even single-user (a pure tightening), so it may be done opportunistically sooner. The three CodeQL `py/path-injection` alerts on `detect-sidecars` (#42/#43/#44) are the same boundary seen from the path-traversal side: dismiss them with a reference to this subsection rather than bolt on path-confinement, because confinement is not the real boundary — owner-gating is.
+
+**CSO sign-off (accepted risk).** Deferral approved for the single-owner product. Severity today: **LOW** (no non-owner principal exists; READ tokens blocked; remote `ALL` blocked by `require_local_for_write`). Severity at multi-user without the fix: **HIGH** (broken access control / CWE-22, OWASP A01 — a delegate could read or modify host filesystem config and restart the server). Compensating controls: `require_local_for_write`, READ-token blocking, owner-only token minting, path blocklist + suffix validation. Owner: backend / auth maintainer. Revisit: **mandatory at the start of multi-user work, and immediately if any non-owner `ALL`-token issuance lands first.**
+
 ---
 
 ## 17. Data Flow Pipeline
