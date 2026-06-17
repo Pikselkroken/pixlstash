@@ -9,9 +9,10 @@ from fastapi.testclient import TestClient
 
 from datetime import datetime
 
+import numpy as np
 from sqlmodel import select
 
-from pixlstash.db_models import Tag
+from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
@@ -207,9 +208,13 @@ def test_fix_twin_tags_the_twin_and_undoes():
         def fetch_id(session):
             from sqlmodel import select as _select
 
-            return session.exec(
-                _select(TagSuggestion).where(TagSuggestion.picture_id == suspect_id)
-            ).first().id
+            return (
+                session.exec(
+                    _select(TagSuggestion).where(TagSuggestion.picture_id == suspect_id)
+                )
+                .first()
+                .id
+            )
 
         server.vault.db.run_task(insert)
         sid = server.vault.db.run_immediate_read_task(fetch_id)
@@ -258,9 +263,11 @@ def test_swap_flips_both_labels_and_undoes():
 
         server.vault.db.run_task(insert)
         sid = server.vault.db.run_immediate_read_task(
-            lambda s: s.exec(
-                select(TagSuggestion).where(TagSuggestion.picture_id == suspect)
-            ).first().id
+            lambda s: (
+                s.exec(select(TagSuggestion).where(TagSuggestion.picture_id == suspect))
+                .first()
+                .id
+            )
         )
 
         # Swap: the tagged suspect becomes clean, the untagged twin gets the tag.
@@ -310,7 +317,9 @@ def test_summary_counts_by_tag_and_direction():
         pic_id = _upload_picture(client)
         # Two sources for the same (picture, tag) so the unique constraint holds;
         # the summary should aggregate both directions across sources.
-        _seed_suggestion(server, pic_id, "malformed hand", "remove", source="near_neighbor")
+        _seed_suggestion(
+            server, pic_id, "malformed hand", "remove", source="near_neighbor"
+        )
         _seed_suggestion(server, pic_id, "malformed hand", "add", source="model")
 
         resp = client.get("/tag_suggestions/summary")
@@ -400,9 +409,11 @@ def test_bulk_accept_resolves_by_confidence_and_reopens():
 
         server.vault.db.run_task(insert)
         sid = server.vault.db.run_immediate_read_task(
-            lambda s: s.exec(
-                select(TagSuggestion).where(TagSuggestion.picture_id == suspect)
-            ).first().id
+            lambda s: (
+                s.exec(select(TagSuggestion).where(TagSuggestion.picture_id == suspect))
+                .first()
+                .id
+            )
         )
 
         # The tagger is confident BOTH images have the malformation, so the decision is
@@ -433,6 +444,55 @@ def test_bulk_accept_resolves_by_confidence_and_reopens():
         ).json()
         assert reopened["count"] == 1
         assert not _has_tag(client, twin, "malformed hand")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _set_embedding(server, pic_id, vec):
+    blob = np.asarray(vec, dtype=np.float32).tobytes()
+
+    def upd(session):
+        pic = session.get(Picture, pic_id)
+        pic.image_embedding = blob
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(upd)
+
+
+def test_scan_tag_builds_and_rebuilds_queue():
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)  # Bad1.png
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]
+
+        # Identical unit embeddings → each other's nearest twin; only A is tagged.
+        vec = [1.0] + [0.0] * 511
+        _set_embedding(server, a, vec)
+        _set_embedding(server, b, vec)
+        _seed_tag(server, a, "malformed hand")
+
+        res = tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)
+        assert res["scanned"] == 2
+        assert res["count"] >= 1
+
+        rows = client.get("/tag_suggestions").json()
+        # A (tagged) disagrees with its untagged twin → a "remove" suspect.
+        assert any(r["picture_id"] == a and r["direction"] == "remove" for r in rows)
+
+        # Re-scanning rebuilds the same pending set (idempotent), not duplicates it.
+        res2 = tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)
+        assert res2["count"] == res["count"]
+        rows2 = client.get("/tag_suggestions").json()
+        assert len(rows2) == len(rows)
     finally:
         server.vault.close()
         temp_dir.cleanup()

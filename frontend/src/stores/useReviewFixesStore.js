@@ -28,6 +28,8 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
   const lastBulk = ref(null); // { ids, count } of the most recent bulk-accept, for undo
   const bulkSample = ref([]); // a few least-confident would-be resolutions, for preview
   const previewOpen = ref(false);
+  const scanning = ref(false); // a near-neighbour scan is running
+  const scanError = ref(null);
 
   // Session tally, for the progress line.
   const removedCount = ref(0);
@@ -149,6 +151,31 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     await fetchSummary();
     await fetchQueue();
     await refreshBulkCount();
+  }
+
+  // Run a near-neighbour scan for a tag (rebuilds its pending queue) and switch to it.
+  // Single-flight: ignored while one is already running.
+  async function scanTag(tag) {
+    const t = (tag || "").trim();
+    if (!t || scanning.value) return null;
+    scanning.value = true;
+    scanError.value = null;
+    try {
+      const res = await apiClient.post("/tag_suggestions/scan", { tag: t });
+      activeTag.value = t;
+      undoStack.value = [];
+      lastBulk.value = null;
+      await fetchSummary();
+      await fetchQueue();
+      await refreshBulkCount();
+      return res.data;
+    } catch (e) {
+      scanError.value =
+        e?.response?.data?.detail || e?.message || "Scan failed";
+      return null;
+    } finally {
+      scanning.value = false;
+    }
   }
 
   // Resolve the head of the queue: accept applies the fix, dismiss keeps the label.
@@ -382,6 +409,9 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     lastBulk,
     bulkSample,
     previewOpen,
+    scanning,
+    scanError,
+    scanTag,
     fetchSummary,
     fetchQueue,
     selectTag,

@@ -46,7 +46,9 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=True),
         sa.Column("reviewed_at", sa.DateTime(), nullable=True),
         sa.ForeignKeyConstraint(["picture_id"], ["picture.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["twin_picture_id"], ["picture.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["twin_picture_id"], ["picture.id"], ondelete="SET NULL"
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("picture_id", "tag", "source"),
     )
@@ -54,8 +56,12 @@ def upgrade() -> None:
     op.create_index("ix_tag_suggestion_tag", "tag_suggestion", ["tag"])
     op.create_index("ix_tag_suggestion_source", "tag_suggestion", ["source"])
     op.create_index("ix_tag_suggestion_status", "tag_suggestion", ["status"])
-    op.create_index("ix_tag_suggestion_twin_picture_id", "tag_suggestion", ["twin_picture_id"])
-    op.create_index("ix_tag_suggestion_status_score", "tag_suggestion", ["status", "score"])
+    op.create_index(
+        "ix_tag_suggestion_twin_picture_id", "tag_suggestion", ["twin_picture_id"]
+    )
+    op.create_index(
+        "ix_tag_suggestion_status_score", "tag_suggestion", ["status", "score"]
+    )
     op.create_index("ix_tag_suggestion_tag_status", "tag_suggestion", ["tag", "status"])
 
 

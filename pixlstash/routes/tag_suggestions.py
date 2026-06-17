@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import tag_suggestion_service
+from pixlstash.services import tag_scan_service, tag_suggestion_service
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
 
 logger = get_logger(__name__)
@@ -82,6 +82,25 @@ class BulkReopenRequest(BaseModel):
     """Batch-undo: reopen the given suggestion ids."""
 
     ids: list[int] = []
+
+
+class ScanRequest(BaseModel):
+    """Run a near-neighbour scan for one tag, rebuilding its pending queue."""
+
+    tag: str
+    project: Optional[str] = "PixlTagger"
+
+
+class ScanResultResponse(BaseModel):
+    """Result of a tag scan."""
+
+    model_config = ConfigDict(extra="allow")
+
+    tag: str
+    count: int
+    added: int = 0
+    removed: int = 0
+    scanned: int = 0
 
 
 class BulkResultResponse(BaseModel):
@@ -234,9 +253,7 @@ def create_router(server) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Suggestion not found")
         # Undo may have changed either the suspect or the twin — refresh both.
-        _notify_changed(
-            server, [result["picture_id"], result.get("twin_picture_id")]
-        )
+        _notify_changed(server, [result["picture_id"], result.get("twin_picture_id")])
         return {"status": "reopened", **result}
 
     @router.post(
@@ -274,17 +291,30 @@ def create_router(server) -> APIRouter:
     )
     def swap_tag_suggestion(suggestion_id: int):
         try:
-            result = tag_suggestion_service.swap_suggestion(
-                server.vault, suggestion_id
-            )
+            result = tag_suggestion_service.swap_suggestion(server.vault, suggestion_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="Suggestion not found")
         except ValueError:
             raise HTTPException(status_code=400, detail="Suggestion has no twin")
-        _notify_changed(
-            server, [result["picture_id"], result.get("twin_picture_id")]
-        )
+        _notify_changed(server, [result["picture_id"], result.get("twin_picture_id")])
         return {"status": "swapped", **result}
+
+    @router.post(
+        "/tag_suggestions/scan",
+        summary="Scan a tag for near-neighbour label disagreements",
+        description=(
+            "Runs the near-neighbour scan for the tag and rebuilds its PENDING "
+            "suggestions (reviewed rows are kept). Synchronous — fast on a typical vault."
+        ),
+        response_model=ScanResultResponse,
+    )
+    def scan_tag_suggestions(payload: ScanRequest):
+        tag = (payload.tag or "").strip()
+        if not tag:
+            raise HTTPException(status_code=400, detail="tag is required")
+        return tag_scan_service.scan_tag(
+            server.vault, tag, project=payload.project or None
+        )
 
     @router.post(
         "/tag_suggestions/bulk-accept",
