@@ -69,8 +69,18 @@ def sidecar_path(image_path: str, suffix: str) -> str:
     The image extension is stripped and *suffix* appended, so
     ``("photo.png", "_tags.txt")`` -> ``"photo_tags.txt"`` and
     ``("photo.png", ".txt")`` -> ``"photo.txt"``.
+
+    *suffix* must be a bare filename fragment. The API validates this at the
+    trust boundary; this is a defence-in-depth guard so a malicious suffix can
+    never redirect a read/write outside the image's own directory (path
+    traversal to arbitrary file write). Raises ``ValueError`` when it would.
     """
-    return os.path.splitext(image_path)[0] + suffix
+    result = os.path.splitext(image_path)[0] + suffix
+    if os.path.normpath(os.path.dirname(result)) != os.path.normpath(
+        os.path.dirname(image_path)
+    ):
+        raise ValueError(f"Sidecar suffix escapes the image directory: {suffix!r}")
+    return result
 
 
 def classify_sidecar(path: str) -> str | None:

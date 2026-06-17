@@ -13,15 +13,18 @@ import os
 import tempfile
 
 import pytest
+from fastapi import HTTPException
 from PIL import Image
 from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import Picture, ReferenceFolder, Tag
+from pixlstash.routes.reference_folders import _validate_sidecar_suffix
 from pixlstash.server import Server
 from pixlstash.utils.caption_file_utils import (
     classify_sidecar,
     detect_folder_suffixes,
     resolve_typed_sidecar,
+    sidecar_path,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
@@ -93,6 +96,59 @@ def test_detect_folder_suffixes_empty(tmp_path):
         "found_tags": False,
         "found_descriptions": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Sidecar suffix is a path component — it must not allow traversal (CWE-22)
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_path_allows_clean_suffix():
+    assert sidecar_path("/refs/f/photo.png", "_tags.txt") == "/refs/f/photo_tags.txt"
+    assert sidecar_path("/refs/f/photo.png", ".caption") == "/refs/f/photo.caption"
+    assert sidecar_path("/refs/f/photo.png", ".txt") == "/refs/f/photo.txt"
+
+
+@pytest.mark.parametrize(
+    "evil_suffix",
+    [
+        "_t.txt/../../../../etc/cron.d/evil",
+        "_t.txt/../../sibling.txt",
+        "/../../etc/passwd",
+        "../escape.txt",
+    ],
+)
+def test_sidecar_path_rejects_traversal(evil_suffix):
+    """A suffix that would redirect the write outside the image's own directory
+    must be rejected at the sink (defence in depth behind the API validator)."""
+    with pytest.raises(ValueError):
+        sidecar_path("/refs/f/photo.png", evil_suffix)
+
+
+def test_validate_sidecar_suffix_accepts_known_conventions():
+    for good in ("_tags.txt", "_description.txt", "_wd14.txt", ".caption", ".txt"):
+        _validate_sidecar_suffix(good)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "evil_suffix",
+    [
+        "_t.txt/../../../../etc/cron.d/evil",
+        "../escape.txt",
+        "a/b.txt",
+        "a\\b.txt",
+        "..",
+        "_t..txt",
+        "x" * 65,  # over the length cap
+        "_t .txt",  # space is not allowed
+    ],
+)
+def test_validate_sidecar_suffix_rejects_dangerous(evil_suffix):
+    """The API trust-boundary validator rejects anything that is not a bare
+    filename fragment, returning a 400 rather than storing a traversal path."""
+    with pytest.raises(HTTPException) as exc:
+        _validate_sidecar_suffix(evil_suffix)
+    assert exc.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------

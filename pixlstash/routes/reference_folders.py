@@ -2,6 +2,7 @@
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from typing import Optional
@@ -23,6 +24,30 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from sqlmodel import Session, select
 
 logger = get_logger(__name__)
+
+# A sidecar suffix is concatenated directly onto an image's path stem to locate
+# and write its sidecar (see ``caption_file_utils.sidecar_path``), so it must
+# stay a bare filename fragment. Allow only letters, digits, '.', '_' and '-',
+# and reject anything with a path separator or "..": a value such as
+# ``"_t.txt/../../../etc/cron.d/evil"`` would otherwise redirect the write-back
+# outside the reference folder (CWE-22 path traversal -> arbitrary file write).
+_SIDECAR_SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _validate_sidecar_suffix(suffix: str) -> None:
+    if (
+        ".." in suffix
+        or "/" in suffix
+        or "\\" in suffix
+        or not _SIDECAR_SUFFIX_RE.match(suffix)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Sidecar suffix may only contain letters, digits, '.', '_' and "
+                "'-' (no path separators or '..')."
+            ),
+        )
 
 
 class ReferenceFolderCreateRequest(BaseModel):
@@ -127,11 +152,20 @@ def create_router(server) -> APIRouter:
         return normalized
 
     def _normalize_suffix(value: Optional[str]) -> Optional[str]:
-        """Trim a sidecar suffix; an empty value means "auto / not configured"."""
+        """Trim and validate a sidecar suffix; empty means "auto / not configured".
+
+        The suffix is concatenated onto an image's path stem to locate and write
+        its sidecar, so it must be a bare filename fragment with no path
+        separators or ``..``; otherwise a crafted value would let the write-back
+        escape the reference folder (path traversal to arbitrary file write).
+        """
         if value is None:
             return None
         suffix = str(value).strip()
-        return suffix or None
+        if not suffix:
+            return None
+        _validate_sidecar_suffix(suffix)
+        return suffix
 
     def _to_response(rf: ReferenceFolder) -> ReferenceFolderResponse:
         return ReferenceFolderResponse(
