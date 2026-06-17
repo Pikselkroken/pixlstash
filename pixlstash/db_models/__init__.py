@@ -31,6 +31,7 @@ from .tag import (  # noqa: F401
 )
 from .tag_prediction import TagPrediction  # noqa: F401
 from .tag_suggestion import TagSuggestion  # noqa: F401
+from .tagger_run import TaggerRun  # noqa: F401
 from .import_folder import ImportFolder  # noqa: F401
 from .reference_folder import ReferenceFolder, ReferenceFolderStatus  # noqa: F401
 from .user import User  # noqa: F401

@@ -28,28 +28,19 @@
           </select>
         </label>
 
-        <div class="rf-direction" role="group" aria-label="Direction filter">
-          <button
-            v-for="opt in DIRECTION_OPTIONS"
-            :key="opt.value"
-            class="rf-dir-btn"
-            :class="{ 'rf-dir-btn--active': store.direction === opt.value }"
-            type="button"
-            @click="store.setDirection(opt.value)"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
-
         <div class="rf-scan">
           <input
             v-model="scanInput"
             class="rf-scan-input"
             type="text"
+            list="rf-tag-list"
             placeholder="tag to scan…"
             :disabled="store.scanning"
             @keydown.enter="doScan"
           />
+          <datalist id="rf-tag-list">
+            <option v-for="t in store.allTags" :key="t" :value="t" />
+          </datalist>
           <button
             class="rf-scan-btn"
             type="button"
@@ -365,12 +356,6 @@ const emit = defineEmits(["close"]);
 
 const store = useReviewFixesStore();
 const current = computed(() => store.current);
-
-const DIRECTION_OPTIONS = [
-  { value: "remove", label: "Wrongly applied" },
-  { value: "add", label: "Missing" },
-  { value: "", label: "Both" },
-];
 
 // "Scan a tag" control — prefilled with the active tag (re-scan), editable for a new one.
 const scanInput = ref("");

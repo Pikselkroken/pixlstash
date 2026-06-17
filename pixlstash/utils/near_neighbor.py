@@ -12,6 +12,24 @@ EMBEDDING_DIM = 512  # CLIP ViT-B-32 image_embedding blobs are 512 float32 = 204
 EMBEDDING_BYTES = EMBEDDING_DIM * 4
 
 
+def dedupe_by_pair(rows: list[dict]) -> list[dict]:
+    """Collapse rows describing the same unordered {picture, twin} pair, keeping the
+    highest-scoring one.
+
+    A pair where a tagged image and its untagged twin disagree yields two suspects — a
+    "remove" for the tagged one and an "add" for the untagged one — which are the *same*
+    review (the queue card is symmetric over the pair). Keeping one per pair avoids
+    showing it twice. Each row must have ``picture_id``, ``twin_picture_id`` and ``score``.
+    """
+    best: dict[frozenset, dict] = {}
+    for r in rows:
+        key = frozenset((r["picture_id"], r.get("twin_picture_id")))
+        cur = best.get(key)
+        if cur is None or r["score"] > cur["score"]:
+            best[key] = r
+    return list(best.values())
+
+
 def knn_disagreement(emb: np.ndarray, has_tag: np.ndarray, k: int, block: int = 1024):
     """For every image, the similarity-weighted positive fraction among its k nearest
     neighbours, plus its most-similar opposite-labelled neighbour ("twin").
