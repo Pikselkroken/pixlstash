@@ -248,6 +248,24 @@ export function mediaMimeType(source) {
   return MEDIA_MIME_TYPES[ext] || 'application/octet-stream';
 }
 
+// Sanitise a user-supplied name for use as a drag-out download filename. The
+// `DownloadURL` dataTransfer hint is "<mime>:<filename>:<url>", so a name that
+// carries path separators, a colon, or a newline can redirect or break the
+// saved file. This matters in the Electron shell, which sanitises drag-out
+// names less than a plain browser download does. Takes the basename (drops
+// everything up to the last / or \), replaces control chars and ':' with '_',
+// trims, and falls back to `fallback` when nothing usable remains.
+export function safeDownloadName(name, fallback = 'download') {
+  const raw = typeof name === 'string' ? name : '';
+  // Basename: strip everything up to and including the last / or \.
+  const slashIdx = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
+  const base = slashIdx >= 0 ? raw.slice(slashIdx + 1) : raw;
+  // Replace control chars (newlines, tabs, etc.) and the ':' separator with '_'.
+  // eslint-disable-next-line no-control-regex
+  const cleaned = base.replace(/[\u0000-\u001f\u007f:]/g, '_').trim();
+  return cleaned || fallback;
+}
+
 export function getPictureId(id) {
   if (id === null || id === undefined) return null;
   return String(id);
