@@ -41,6 +41,27 @@
           </button>
         </div>
 
+        <div class="rf-scan">
+          <input
+            v-model="scanInput"
+            class="rf-scan-input"
+            type="text"
+            placeholder="tag to scan…"
+            :disabled="store.scanning"
+            @keydown.enter="doScan"
+          />
+          <button
+            class="rf-scan-btn"
+            type="button"
+            :disabled="store.scanning || !scanInput.trim()"
+            :title="`Re-scan “${scanInput.trim()}” for near-neighbour disagreements`"
+            @click="doScan"
+          >
+            {{ store.scanning ? "Scanning…" : "Scan" }}
+          </button>
+          <span v-if="store.scanError" class="rf-scan-error">{{ store.scanError }}</span>
+        </div>
+
         <div class="rf-progress">
           <span class="rf-progress-remaining">{{ store.remainingTotal }} left</span>
           <span class="rf-progress-tally">
@@ -156,7 +177,7 @@
           <div class="rf-actions">
             <span class="rf-actions-label">Which really has “{{ current.tag }}”?</span>
             <button
-              class="rf-action rf-action--keep"
+              class="rf-action rf-action--leftonly"
               :class="{ 'rf-action--rec': verdict.strong && verdict.corner === 'leftonly' }"
               type="button"
               title="The flag is right and the twin is clean — only the left has it. No change."
@@ -264,12 +285,16 @@
                 class="rf-preview-img rf-preview-img--flagged"
                 :src="imgSrc(sampleLeft(s).id, sampleLeft(s).ext)"
                 :alt="`flagged #${sampleLeft(s).id}`"
+                title="Click to zoom"
+                @click="openZoom(sampleLeft(s).id, sampleLeft(s).ext)"
                 @error="onImgError($event, sampleLeft(s).id)"
               />
               <img
                 class="rf-preview-img"
                 :src="imgSrc(sampleRight(s).id, sampleRight(s).ext)"
                 :alt="`twin #${sampleRight(s).id}`"
+                title="Click to zoom"
+                @click="openZoom(sampleRight(s).id, sampleRight(s).ext)"
                 @error="onImgError($event, sampleRight(s).id)"
               />
             </div>
@@ -330,7 +355,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
 
 const props = defineProps({
@@ -346,6 +371,19 @@ const DIRECTION_OPTIONS = [
   { value: "add", label: "Missing" },
   { value: "", label: "Both" },
 ];
+
+// "Scan a tag" control — prefilled with the active tag (re-scan), editable for a new one.
+const scanInput = ref("");
+watch(
+  () => store.activeTag,
+  (t) => {
+    if (t && !scanInput.value) scanInput.value = t;
+  },
+  { immediate: true },
+);
+function doScan() {
+  store.scanTag(scanInput.value);
+}
 
 // The disagreeing pair always has one tagged and one untagged image. We put the
 // tagged one on the LEFT and the untagged one on the RIGHT, so "Left is right" /
@@ -572,12 +610,24 @@ function handleKeyDown(event) {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
 
   const key = event.key.toLowerCase();
-  let handled = true;
+
+  // Escape unwinds the topmost layer: zoom → preview → overlay.
   if (key === "escape") {
-    // Esc closes the zoom peek first; otherwise the whole overlay.
     if (zoom.value) closeZoom();
+    else if (store.previewOpen) store.previewOpen = false;
     else emit("close");
-  } else if (key === "l") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+
+  // The preview modal is a read-only spot-check — don't let review keys resolve the
+  // queue underneath it (clicking an image to zoom still works). A zoomed preview
+  // image is fine to keep open; only Esc (above) dismisses it.
+  if (store.previewOpen) return;
+
+  let handled = true;
+  if (key === "l") {
     markLeftOnly();
   } else if (key === "b") {
     markBoth();
@@ -697,6 +747,41 @@ onUnmounted(() => {
 .rf-dir-btn--active {
   background: #3b82f6;
   color: #fff;
+}
+
+.rf-scan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rf-scan-input {
+  background: #23252c;
+  color: #e8eaed;
+  border: 1px solid #34373f;
+  border-radius: 6px;
+  padding: 6px 10px;
+  width: 150px;
+  font-size: 0.85rem;
+}
+.rf-scan-btn {
+  background: #23252c;
+  color: #e8eaed;
+  border: 1px solid #34373f;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.rf-scan-btn:hover:not(:disabled) {
+  background: #2c2f37;
+}
+.rf-scan-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rf-scan-error {
+  color: #f28b82;
+  font-size: 0.8rem;
 }
 
 .rf-progress {
@@ -1019,6 +1104,14 @@ onUnmounted(() => {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.rf-action--leftonly {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+.rf-action--leftonly:hover {
+  background: #3b82f6;
+}
 .rf-action--both {
   background: #b3261e;
   border-color: #b3261e;
@@ -1155,6 +1248,7 @@ onUnmounted(() => {
   object-fit: cover;
   border-radius: 6px;
   background: #0c0d10;
+  cursor: zoom-in;
 }
 .rf-preview-img--flagged {
   box-shadow: inset 0 0 0 2px rgba(179, 38, 30, 0.7);

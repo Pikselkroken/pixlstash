@@ -18,7 +18,7 @@ Mirrors the vault-task conventions in :mod:`pixlstash.services.tag_prediction_se
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -68,10 +68,14 @@ def list_suggestions(
             q = q.where(TagSuggestion.tag == tag)
         if direction:
             q = q.where(TagSuggestion.direction == direction)
-        q = q.order_by(
-            TagSuggestion.score.desc(),
-            TagSuggestion.twin_sim.desc(),
-        ).offset(offset).limit(limit)
+        q = (
+            q.order_by(
+                TagSuggestion.score.desc(),
+                TagSuggestion.twin_sim.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
         return list(session.exec(q).all())
 
     return vault.db.run_immediate_read_task(_fetch)
@@ -157,8 +161,7 @@ def get_tagger_confidences(
             prev = best.get(key)
             # Prefer the most recent prediction (newest model wins).
             if prev is None or (
-                predicted_at is not None
-                and (prev[1] is None or predicted_at > prev[1])
+                predicted_at is not None and (prev[1] is None or predicted_at > prev[1])
             ):
                 best[key] = (conf, predicted_at)
         return {k: v[0] for k, v in best.items()}
@@ -218,9 +221,7 @@ def _apply_writeback(session: Session, suggestion: TagSuggestion) -> None:
             session.delete(existing)
     elif suggestion.direction == "add":
         if existing is None:
-            sentinel = session.exec(
-                select(Tag).where(Tag.picture_id == pic_id)
-            ).all()
+            sentinel = session.exec(select(Tag).where(Tag.picture_id == pic_id)).all()
             for t in sentinel:
                 if is_tag_sentinel(t.tag):
                     session.delete(t)
@@ -488,7 +489,12 @@ def bulk_accept(
                 }
                 for (s, corner, confidence) in marginal
             ]
-            return {"count": len(chosen), "sample": sample, "accepted_ids": [], "picture_ids": []}
+            return {
+                "count": len(chosen),
+                "sample": sample,
+                "accepted_ids": [],
+                "picture_ids": [],
+            }
 
         accepted_ids: list[int] = []
         pic_ids: set[int] = set()
