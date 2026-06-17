@@ -39,11 +39,13 @@ function installSetupBridge(gpu) {
       defaults: {
         imageRoot: 'C:\\Users\\You\\Pictures\\PixlStash',
         useGpu: true,
+        installLocation: 'C:\\Users\\You\\AppData\\Local\\Programs\\PixlStash\\backends',
       },
       importedFrom: null,
       gpu,
     }),
     pickLibraryFolder: val(null),
+    pickBackendLocation: val(null),
     commitSetup: val(undefined),
     onProgress: () => () => {},
     windowMinimize: val(undefined),
@@ -79,9 +81,10 @@ test.describe('first-run setup wizard (compute choice)', () => {
   for (const scene of wizardScenes) {
     test(`wizard → ${scene.asset}`, async ({ page }) => {
       // Snug window framing the title bar + 560px panel. The wizard content is
-      // top-aligned and ~624px tall, so 680 leaves a small bottom margin without
-      // acres of empty space (the real window is taller, 1280×860).
-      await page.setViewportSize({ width: 820, height: 680 })
+      // top-aligned; with the GPU install-location picker shown it's ~690px tall,
+      // so 760 leaves a small bottom margin without acres of empty space (the real
+      // window is taller, 1280×860).
+      await page.setViewportSize({ width: 820, height: 760 })
       await page.addInitScript(installSetupBridge, scene.gpu)
       await page.goto(pathToFileURL(SETUP_HTML).href)
       // The compute panel only un-hides once probeSetup resolves a detected GPU.

@@ -12,6 +12,9 @@ const els = {
   importedText: document.getElementById('importedText'),
   computePanel: document.getElementById('computePanel'),
   computeOptions: document.getElementById('computeOptions'),
+  installLocation: document.getElementById('installLocation'),
+  installPath: document.getElementById('installPath'),
+  pickInstall: document.getElementById('pickInstall'),
   start: document.getElementById('start'),
   error: document.getElementById('error'),
   progress: document.getElementById('progress'),
@@ -36,6 +39,13 @@ function showError(msg) {
 function selectedUseGpu() {
   const checked = els.computeOptions.querySelector('input[name="compute"]:checked');
   return checked ? checked.value === 'gpu' : false;
+}
+
+// The install-location picker only matters when a GPU runtime will be downloaded,
+// so reveal it exactly when GPU is the selected compute option.
+function updateInstallLocationVisibility() {
+  if (gpu.available && selectedUseGpu()) show(els.installLocation);
+  else hide(els.installLocation);
 }
 
 function renderCompute(defaultUseGpu) {
@@ -64,6 +74,7 @@ function renderCompute(defaultUseGpu) {
         .querySelectorAll('.choice')
         .forEach((c) => c.classList.remove('selected'));
       if (radio.checked) wrap.classList.add('selected');
+      updateInstallLocationVisibility();
     });
 
     const meta = document.createElement('div');
@@ -89,10 +100,12 @@ async function init() {
     els.importedText.textContent = `Imported your existing settings from ${p.importedFrom}.`;
     show(els.imported);
   }
+  els.installPath.value = p.defaults.installLocation || '';
   gpu = p.gpu || { available: false };
   if (gpu.available) {
     renderCompute(Boolean(p.defaults.useGpu));
     show(els.computePanel);
+    updateInstallLocationVisibility();
   }
 }
 
@@ -100,6 +113,12 @@ els.pick.addEventListener('click', async () => {
   if (busy) return;
   const dir = await api.pickLibraryFolder(els.folder.value);
   if (dir) els.folder.value = dir;
+});
+
+els.pickInstall.addEventListener('click', async () => {
+  if (busy) return;
+  const dir = await api.pickBackendLocation(els.installPath.value);
+  if (dir) els.installPath.value = dir;
 });
 
 els.start.addEventListener('click', async () => {
@@ -110,18 +129,21 @@ els.start.addEventListener('click', async () => {
     showError('Please choose a library folder.');
     return;
   }
+  const useGpu = gpu.available && selectedUseGpu();
   busy = true;
   els.start.disabled = true;
   els.pick.disabled = true;
+  els.pickInstall.disabled = true;
   els.start.textContent = 'Setting up…';
   try {
-    await api.commitSetup({ imageRoot, useGpu: gpu.available && selectedUseGpu() });
+    await api.commitSetup({ imageRoot, useGpu, installLocation: els.installPath.value.trim() });
     // Success → main process navigates this window to the library.
   } catch (e) {
     showError((e && e.message) || String(e));
     busy = false;
     els.start.disabled = false;
     els.pick.disabled = false;
+    els.pickInstall.disabled = false;
     els.start.textContent = 'Get started';
   }
 });

@@ -1,4 +1,5 @@
 # [1.6.2] [Security:High]
+- Desktop app: choose where the GPU runtime (~2.5 GB) installs instead of always using the system drive. On Windows it now defaults to *inside the install folder you picked*; the first-run wizard and Settings → Compute let you change it, and changing it moves an already-installed runtime so the download isn't repeated.
 - Update several NPM packages (hasown, mime-types, form-data) for a [Security:High] alert
 - Support for batched combine mode for the face likeness gate node
 

@@ -37,6 +37,13 @@
       <div id="computePanel" class="panel hidden">
         <div class="hw">Compute</div>
         <div id="computeOptions"></div>
+        <div id="installLocation" class="install-location hidden">
+          <div class="field">
+            <input id="installPath" type="text" aria-label="GPU install location" readonly />
+            <button id="pickInstall" class="secondary" type="button">Change…</button>
+          </div>
+          <div class="sub">The GPU runtime (~2.5&nbsp;GB) is stored here.</div>
+        </div>
       </div>
 
       <div id="error" class="error hidden"></div>

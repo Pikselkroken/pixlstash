@@ -19,6 +19,10 @@ const error = ref("");
 const progress = ref(null); // { message, fraction } while installing
 let stopProgress = null;
 
+// Where on-demand GPU overlays are stored. Lets the user keep the multi-GB
+// download off the system drive; changing it relocates an installed overlay.
+const backendLocation = ref("");
+
 // External-server (remote access) settings. `server` mirrors the saved state
 // from the backend config; `serverDraft` is what the form edits until Apply.
 const server = ref(null); // { enabled, port, ssl, urls }
@@ -146,6 +150,30 @@ async function refresh() {
   }
 }
 
+async function refreshLocation() {
+  if (!desktop?.getBackendLocation) return;
+  try {
+    const res = await desktop.getBackendLocation();
+    backendLocation.value = res?.dir || "";
+  } catch (e) {
+    error.value = e?.message || String(e);
+  }
+}
+
+// Pick a new folder and move any installed overlay there. setBackendLocation
+// restarts the backend when an overlay is active, which reloads this page; when
+// none is active it just returns and we update the shown path.
+async function changeLocation() {
+  if (busy.value || !desktop?.pickBackendLocation) return;
+  const dir = await desktop.pickBackendLocation(backendLocation.value);
+  if (!dir) return;
+  await guarded(async () => {
+    progress.value = { message: "Moving GPU files to the new location…", fraction: -1 };
+    const res = await desktop.setBackendLocation(dir);
+    backendLocation.value = res?.dir || dir;
+  });
+}
+
 async function refreshDesktopPrefs() {
   if (!desktop?.getDesktopPrefs) return;
   try {
@@ -265,6 +293,7 @@ onMounted(() => {
     });
   }
   refresh();
+  refreshLocation();
   refreshServer();
   refreshDesktopPrefs();
   refreshAuthState();
@@ -280,6 +309,7 @@ watch(
   (isOpen) => {
     if (isOpen) {
       refresh();
+      refreshLocation();
       refreshServer();
       refreshDesktopPrefs();
       refreshAuthState();
@@ -518,6 +548,21 @@ watch(
         machine.
       </div>
 
+      <div v-if="state.items.length && backendLocation" class="compute-row">
+        <div class="compute-meta">
+          <div class="compute-label">Install location</div>
+          <div class="compute-sub compute-location-path">{{ backendLocation }}</div>
+        </div>
+        <v-btn
+          variant="text"
+          size="small"
+          :disabled="busy"
+          @click="changeLocation"
+        >
+          Change…
+        </v-btn>
+      </div>
+
       <div v-if="progress" class="compute-progress">
         <v-progress-linear
           :indeterminate="!(progress.fraction >= 0)"
@@ -624,6 +669,10 @@ watch(
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.compute-location-path {
+  overflow-wrap: anywhere;
 }
 
 .compute-progress {
