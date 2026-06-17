@@ -4671,6 +4671,26 @@ async function insertGridImagesById(ids) {
     .map((id) => getPictureId(id))
     .filter((id) => id !== null);
   if (!wanted.length) return;
+
+  // Character-likeness sort can't be positioned incrementally. The likeness
+  // value is computed by a backend SQL function relative to the currently
+  // selected similarity character (find_pictures_by_character_likeness_sql),
+  // not stored on the picture, so it is NOT in the `fields=grid` projection
+  // (the backend has no character context to compute it there). gridImageSortKey
+  // therefore falls through to `score` and would splice the card at the wrong
+  // position. Fall back to a full refetch, which DOES recompute likeness — or,
+  // under an open overlay, defer it (the overlay-open deferral contract, §9.1)
+  // so we never restructure the filmstrip mid-view.
+  if (isCharacterLikenessSortActive()) {
+    if (overlayOpen.value) {
+      pendingOverlayGridRefresh.value = true;
+      return;
+    }
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+    return;
+  }
+
   if (imagesLoading.value) {
     // A streaming fetch owns allGridImages wholesale; inserting now would be
     // clobbered. The caller (useGridRealtimeSync) routes these to the pill
@@ -4709,7 +4729,7 @@ async function insertGridImagesById(ids) {
   }
   if (!fetched.length) return;
 
-  const descending = props.selectedDescending !== false;
+  const descending = props.selectedDescending === true;
   const base = Array.isArray(lastFetchedGridImages.value)
     ? lastFetchedGridImages.value.slice()
     : [];
