@@ -1358,6 +1358,13 @@ def create_router(server) -> APIRouter:
         if not picture_ids:
             raise HTTPException(status_code=400, detail="picture_ids must be integers")
 
+        # Scope guard (BOLA): i2i reads each source picture's bytes and uploads
+        # them to the ComfyUI host, so a scoped token must only reach its own
+        # pictures. Enforce per id before any fetch/upload (no-op for owner /
+        # unscoped tokens).
+        for pic_id in picture_ids:
+            enforce_picture_scope(server, request, pic_id)
+
         caption = payload.get("caption") or ""
         if not isinstance(caption, str):
             caption = str(caption)
@@ -1481,6 +1488,10 @@ def create_router(server) -> APIRouter:
         source_picture_id: int | None = (
             int(raw_source_id) if raw_source_id is not None else None
         )
+        # Scope guard (BOLA): if t2i references an existing source picture, a
+        # scoped token may only reference one within its grant (no-op for owner).
+        if source_picture_id is not None:
+            enforce_picture_scope(server, request, source_picture_id)
 
         raw_set_id = payload.get("set_id")
         raw_project_id = payload.get("project_id")

@@ -171,6 +171,22 @@ def register_routes(router, server):
                 status_code=400, detail="picture_ids must contain integers"
             )
 
+        # Scope guard (BOLA): a write-capable resource-scoped token may only run
+        # plugins on pictures within its granted resource. None == owner /
+        # unscoped == no filter. This is all-or-nothing (403 if *any* requested
+        # id is out of scope) rather than a silent partial drop, because the
+        # optional positional `captions` array below is aligned 1:1 to
+        # picture_ids — dropping ids here would misalign captions to the wrong
+        # pictures.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None and any(
+            pid not in scope_allowed for pid in picture_ids
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised to access these pictures",
+            )
+
         parameters = payload.get("parameters") or {}
         if not isinstance(parameters, dict):
             raise HTTPException(status_code=400, detail="parameters must be an object")

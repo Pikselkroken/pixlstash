@@ -67,6 +67,58 @@ _LIKENESS_SEARCH_MAX_POOL_M = 2000
 _MAX_REFS_PER_CHARACTER = 10
 
 
+def _enforce_face_mutation_scope(
+    server,
+    request,
+    *,
+    face_ids: list | None,
+    picture_ids: list | None,
+) -> None:
+    """Raise 403 if a scoped token targets faces/pictures outside its scope.
+
+    The character face-assign / face-unassign handlers accept *either* a list
+    of ``face_ids`` *or* a list of ``picture_ids``. This resolves both paths to
+    the full set of affected picture ids and checks every one against the
+    token's scope. Owner / unscoped tokens (``fetch_scope_allowed_picture_ids``
+    returns ``None``) pass straight through. This is all-or-nothing: if *any*
+    targeted picture is out of scope the whole request is denied, so neither the
+    ``face_ids`` branch nor the ``picture_ids`` branch can mutate an
+    out-of-scope picture.
+    """
+    scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+    if scope_allowed is None:
+        return
+
+    affected: set[int] = set()
+    for raw in picture_ids or []:
+        try:
+            affected.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+
+    normalized_face_ids: list[int] = []
+    for raw in face_ids or []:
+        try:
+            normalized_face_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if normalized_face_ids:
+
+        def _resolve(session: Session, ids: list[int]) -> set[int]:
+            rows = session.exec(select(Face.picture_id).where(Face.id.in_(ids))).all()
+            return {int(r) for r in rows if r is not None}
+
+        affected |= server.vault.db.run_immediate_read_task(
+            _resolve, normalized_face_ids
+        )
+
+    if any(pid not in scope_allowed for pid in affected):
+        raise HTTPException(
+            status_code=403,
+            detail="Token is not authorised to access these pictures",
+        )
+
+
 def _fetch_character_candidate_embeddings(
     server, scope_allowed: set[int] | None
 ) -> list[tuple[int, list[np.ndarray]]]:
@@ -1233,6 +1285,12 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="face_ids must be a list")
         if picture_ids is not None and not isinstance(picture_ids, list):
             raise HTTPException(status_code=400, detail="picture_ids must be a list")
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # assign faces on pictures within its granted resource. Covers both the
+        # face_ids and picture_ids branches.
+        _enforce_face_mutation_scope(
+            server, request, face_ids=face_ids, picture_ids=picture_ids
+        )
 
         def assign_faces(
             session: Session,
@@ -1386,13 +1444,12 @@ def create_router(server) -> APIRouter:
         server.vault.notify(
             EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
         )
+        # CHANGED_FACES serializes to the ``characters_changed`` wire type, whose
+        # payload carries no picture_ids/change_kind (the frontend reacts with a
+        # sidebar refresh). Only origin_client_id is read into the envelope.
         server.vault.notify(
             EventType.CHANGED_FACES,
-            {
-                "picture_ids": [face["picture_id"] for face in faces],
-                "origin_client_id": origin_client_id,
-                "change_kind": "updated",
-            },
+            {"origin_client_id": origin_client_id},
         )
         return {
             "status": "success",
@@ -1417,6 +1474,12 @@ def create_router(server) -> APIRouter:
                 status_code=400,
                 detail="Must send a list of picture_ids or face_ids",
             )
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # unassign faces on pictures within its granted resource. Covers both
+        # the face_ids and picture_ids branches.
+        _enforce_face_mutation_scope(
+            server, request, face_ids=face_ids, picture_ids=picture_ids
+        )
 
         def remove_faces_from_character(
             session: Session,
@@ -1455,13 +1518,12 @@ def create_router(server) -> APIRouter:
         server.vault.notify(
             EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
         )
+        # CHANGED_FACES serializes to the ``characters_changed`` wire type, whose
+        # payload carries no picture_ids/change_kind (the frontend reacts with a
+        # sidebar refresh). Only origin_client_id is read into the envelope.
         server.vault.notify(
             EventType.CHANGED_FACES,
-            {
-                "picture_ids": picture_ids,
-                "origin_client_id": origin_client_id,
-                "change_kind": "updated",
-            },
+            {"origin_client_id": origin_client_id},
         )
         return {
             "status": "success",

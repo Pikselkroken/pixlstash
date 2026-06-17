@@ -391,6 +391,18 @@ def register_routes(router, server):
                 detail="At least one valid picture id is required",
             )
 
+        # Scope guard (BOLA): a write-capable resource-scoped token may only set
+        # project membership for pictures within its granted resource. None ==
+        # owner / unscoped == no filter; an empty/disjoint set denies all.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access these pictures",
+                )
+
         project_id_raw = payload.get("project_id", None)
         if project_id_raw is None:
             project_id_value = None
@@ -592,6 +604,23 @@ def register_routes(router, server):
             parsed_scores[picture_id] = score_value
 
         ordered_picture_ids = sorted(parsed_scores.keys())
+
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # score pictures within its granted resource. None == owner / unscoped
+        # == no filter; an empty/disjoint set denies all.
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            parsed_scores = {
+                pid: score
+                for pid, score in parsed_scores.items()
+                if pid in scope_allowed
+            }
+            ordered_picture_ids = sorted(parsed_scores.keys())
+            if not ordered_picture_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access these pictures",
+                )
 
         def _apply_scores_batch(
             session: Session,
@@ -955,6 +984,9 @@ def register_routes(router, server):
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # mutate faces on pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
 
         bbox = payload.get("bbox") if isinstance(payload, dict) else None
         frame_index = payload.get("frame_index", 0) if isinstance(payload, dict) else 0
@@ -1026,6 +1058,9 @@ def register_routes(router, server):
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # mutate faces on pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
 
         def delete_face(session: Session):
             face = session.exec(
@@ -1769,6 +1804,11 @@ def register_routes(router, server):
             raise HTTPException(status_code=404, detail="Picture not found")
 
         picture_id = pic.id
+        # Scope guard (BOLA): a resource-scoped token may only mutate a picture
+        # within its grant. Placed before any field is written, covering every
+        # update path (score/description/tag replacement). Mirrors delete_picture
+        # and the guarded read siblings get_picture / get_picture_field.
+        enforce_picture_scope(server, request, picture_id)
         logger.debug(f"Updating picture id={id}")
         if json_body and isinstance(json_body, dict):
             params.update(json_body)
@@ -1886,6 +1926,11 @@ def register_routes(router, server):
         response_model=ScrapheapRestoreResponse,
     )
     def restore_scrapheap(request: Request, payload: dict | None = Body(None)):
+        # Scope guard (BOLA/F2): scrapheap restore mutates library-wide deleted
+        # state — with no picture_ids it restores *every* deleted picture — so it
+        # is owner-only. require_unscoped_owner rejects READ-scoped tokens and
+        # ALL-scope tokens narrowed to a resource, fail-closed.
+        server.auth.require_unscoped_owner(request)
         origin_client_id = getattr(request.state, "origin_client_id", None)
         picture_ids = None
         if payload:
@@ -1949,6 +1994,11 @@ def register_routes(router, server):
         background_tasks: BackgroundTasks,
         payload: dict | None = Body(None),
     ):
+        # Scope guard (BOLA/F2): permanent scrapheap deletion is an irreversible,
+        # library-wide destructive op (removes DB rows + disk files + writes the
+        # deletion ledger; with no picture_ids it purges *every* deleted picture).
+        # Same risk class as snapshot/restore ops — owner-only. fail-closed.
+        server.auth.require_unscoped_owner(request)
         origin_client_id = getattr(request.state, "origin_client_id", None)
         ids = None
         if payload is not None:
@@ -2128,6 +2178,13 @@ def register_routes(router, server):
     )
     def delete_picture(request: Request, id: str):
         origin_client_id = getattr(request.state, "origin_client_id", None)
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # soft-delete pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
 
         def delete_pic(session, id):
             pic = session.get(Picture, id)
