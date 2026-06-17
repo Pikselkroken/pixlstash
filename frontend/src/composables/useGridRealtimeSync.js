@@ -16,7 +16,14 @@ const TARGETED = "targeted";
 const PILL = "pill";
 const SUPPRESSED = "suppressed";
 const RELOAD = "reload";
+const DEFERRED = "deferred";
 const IGNORED = "ignored";
+
+// Above this many ids, the per-id targeted-update loop (one /metadata +
+// thumbnail fetch each) becomes a fetch storm. A foreign-tab "set project on
+// 400 pictures" or "apply scores" lands here; doing one reload (or deferring it
+// under an open overlay) is cheaper than hundreds of single-card refreshes.
+const MAX_TARGETED_UPDATE = 50;
 
 // Server-computed sort fields whose value the originating tab can only guess
 // optimistically; even an own-origin echo for these needs a single-card
@@ -85,6 +92,22 @@ export function useGridRealtimeSync(deps) {
     return true;
   }
 
+  // A change we can't (or shouldn't) apply with a targeted op: an untargetable
+  // empty-id add/update, or a batch too large for the per-id loop. Reload the
+  // grid, or defer that reload to overlay close so we never reshuffle the grid
+  // under the lightbox. Returns a `{ action, reason }` descriptor.
+  function reloadOrDefer(reason) {
+    if (deferWhileOverlayOpen()) {
+      logger.warn?.(
+        `useGridRealtimeSync: deferring grid reload under open overlay (${reason})`,
+      );
+      return { action: DEFERRED, reason: `${reason}-overlay-deferred` };
+    }
+    logger.warn?.(`useGridRealtimeSync: full grid reload (${reason})`);
+    reload();
+    return { action: RELOAD, reason };
+  }
+
   function isSmartScoreSort() {
     return String(getSelectedSort() || "").includes("SMART_SCORE");
   }
@@ -134,7 +157,11 @@ export function useGridRealtimeSync(deps) {
   function handleOwnOrigin(payload, changeKind, fields, pictureIds) {
     if (changeKind === "updated" && fieldsAreActiveServerSort(fields)) {
       // Optimistic guess for a server-computed sort field can diverge from
-      // server truth — reconcile each card, never reload.
+      // server truth — reconcile each card, never reload. Cap the per-id
+      // fetch loop: a large own-origin batch reconcile becomes a fetch storm.
+      if (pictureIds.length > MAX_TARGETED_UPDATE) {
+        return reloadOrDefer("own-origin-server-sort-reconcile-too-large");
+      }
       for (const id of pictureIds) reconcileServerSortField(id, fields);
       return { action: TARGETED, reason: "own-origin-server-sort-reconcile" };
     }
@@ -146,6 +173,13 @@ export function useGridRealtimeSync(deps) {
     if (changeKind === "removed") {
       grid.removeImagesById?.(pictureIds);
       return { action: TARGETED, reason: "foreign-ui-removed" };
+    }
+    // An empty-id add/update can't be targeted (e.g. restore-all broadcasts
+    // change_kind:"added" with picture_ids:[]). The per-id ops below would be
+    // silent no-ops, so other owner tabs would never reflect the change. Reload
+    // (or defer under an open overlay) rather than no-op.
+    if (!pictureIds.length) {
+      return reloadOrDefer("foreign-ui-untargetable-empty-ids");
     }
     if (changeKind === "added") {
       if (deferWhileOverlayOpen()) {
@@ -163,6 +197,14 @@ export function useGridRealtimeSync(deps) {
     if (!pictureChangeAffectsView(fields)) {
       return { action: IGNORED, reason: "foreign-ui-updated-irrelevant" };
     }
+    // score/project (and any other view-affecting field) always render under the
+    // current sort, so we can't skip these — but each applyTargetedUpdate is a
+    // /metadata + thumbnail fetch. A large foreign batch (apply-scores /
+    // set-project on hundreds of pictures) would be a fetch storm; cap it with a
+    // single reload (or defer under an open overlay) instead of the per-id loop.
+    if (pictureIds.length > MAX_TARGETED_UPDATE) {
+      return reloadOrDefer("foreign-ui-updated-too-large");
+    }
     for (const id of pictureIds) applyTargetedUpdate(id, fields);
     return { action: TARGETED, reason: "foreign-ui-updated" };
   }
@@ -173,6 +215,13 @@ export function useGridRealtimeSync(deps) {
       // Never leave a stale 404-clickable card; remove silently.
       grid.removeImagesById?.(pictureIds);
       return { action: TARGETED, reason: "external-removed" };
+    }
+    // An empty-id add/update can't be targeted (e.g. a restore-all broadcast, or
+    // an unattributed bulk change with no ids). The pill / per-id branches below
+    // would no-op on [], so the change would be lost. Reload (or defer under an
+    // open overlay) rather than silently drop it.
+    if (!pictureIds.length) {
+      return reloadOrDefer("external-untargetable-empty-ids");
     }
     if (changeKind === "added") {
       if (deferWhileOverlayOpen()) {

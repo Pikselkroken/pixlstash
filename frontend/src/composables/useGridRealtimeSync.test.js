@@ -355,3 +355,121 @@ describe("useGridRealtimeSync — pills deferred while the overlay is open", () 
     expect(h.grid.removeImagesById).toHaveBeenCalledWith([40]);
   });
 });
+
+describe("useGridRealtimeSync — empty-id untargetable changes (restore-all)", () => {
+  it("empty-id external add -> reload when the overlay is closed", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      change_kind: "added",
+      picture_ids: [],
+    });
+    expect(res.action).toBe("reload");
+    expect(res.reason).toBe("external-untargetable-empty-ids");
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+  });
+
+  it("empty-id external add -> deferred (no reload) when the overlay is open", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      change_kind: "added",
+      picture_ids: [],
+    });
+    expect(res.action).toBe("deferred");
+    expect(res.reason).toBe("external-untargetable-empty-ids-overlay-deferred");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("empty-id foreign-ui add -> reload (other tabs reflect a restore-all)", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "added",
+      picture_ids: [],
+    });
+    expect(res.action).toBe("reload");
+    expect(res.reason).toBe("foreign-ui-untargetable-empty-ids");
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
+  });
+
+  it("empty-id removal still removes silently (not reloaded)", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      change_kind: "removed",
+      picture_ids: [],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("external-removed");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.removeImagesById).toHaveBeenCalledWith([]);
+  });
+});
+
+describe("useGridRealtimeSync — batch update fetch-storm cap", () => {
+  // Mirrors MAX_TARGETED_UPDATE in useGridRealtimeSync.js.
+  const THRESHOLD = 50;
+  const manyIds = Array.from({ length: THRESHOLD + 1 }, (_, i) => i + 1);
+  const someIds = Array.from({ length: THRESHOLD }, (_, i) => i + 1);
+
+  it("foreign-ui updated with >threshold ids -> single reload (no per-id loop)", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "updated",
+      fields: ["score"],
+      picture_ids: manyIds,
+    });
+    expect(res.action).toBe("reload");
+    expect(res.reason).toBe("foreign-ui-updated-too-large");
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+
+  it("foreign-ui updated with exactly threshold ids -> per-id refresh", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "updated",
+      fields: ["score"],
+      picture_ids: someIds,
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("foreign-ui-updated");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.refreshGridImage).toHaveBeenCalledTimes(THRESHOLD);
+  });
+
+  it("foreign-ui updated with >threshold ids -> deferred when overlay open", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "updated",
+      fields: ["score"],
+      picture_ids: manyIds,
+    });
+    expect(res.action).toBe("deferred");
+    expect(res.reason).toBe("foreign-ui-updated-too-large-overlay-deferred");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+});
