@@ -5,7 +5,7 @@ payload, so PixlStash owns the tagger's stats/trend history. The first brick of 
 PixlStash the system of record for the tagger.
 
 Revision ID: 0059_add_tagger_run
-Revises: 0058_split_caption_sidecars
+Revises: 0058_add_tag_suggestion
 Create Date: 2026-06-17 00:00:00.000000
 
 """
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "0059_add_tagger_run"
-down_revision: Union[str, None] = "0058_split_caption_sidecars"
+down_revision: Union[str, None] = "0058_add_tag_suggestion"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
