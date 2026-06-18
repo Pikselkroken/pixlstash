@@ -31,3 +31,4 @@ test-results
 
 # Desktop runtime build cache (CPython tarball + pip wheels)
 .build-cache/
+.container-home/

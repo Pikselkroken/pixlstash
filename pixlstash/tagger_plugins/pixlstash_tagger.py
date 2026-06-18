@@ -794,8 +794,11 @@ class PixlStashTaggerPlugin(TaggerPlugin):
                 "min": -0.5,
                 "max": 0.5,
                 "step": 0.01,
+                # Stored as a fraction but shown/edited in percentage points.
+                "scale": 100,
+                "unit": "%",
                 "description": (
-                    "Offset added to each label's base threshold. "
+                    "Percentage points added to each label's base threshold. "
                     "Positive values raise the bar; negative values lower it."
                 ),
             },

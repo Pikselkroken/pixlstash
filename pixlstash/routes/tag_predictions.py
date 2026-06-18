@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 
 from pixlstash.event_types import EventType
@@ -272,12 +272,17 @@ def create_router(server) -> APIRouter:
         summary="Get per-label thresholds for the PixlStash tagger",
         description=(
             "Returns each label's base threshold and the effective threshold after "
-            "applying the current user offset. Results are sorted alphabetically."
+            "applying an offset. When the ``offset`` query parameter is omitted the "
+            "saved user offset is used; pass one to preview an unsaved value. "
+            "Results are sorted alphabetically."
         ),
         response_model=list[LabelThresholdResponse],
     )
-    def get_label_thresholds():
-        offset = server.vault.get_pixlstash_tagger_threshold_offset()
+    def get_label_thresholds(
+        offset: Optional[float] = Query(None, ge=-0.5, le=0.5),
+    ):
+        if offset is None:
+            offset = server.vault.get_pixlstash_tagger_threshold_offset()
         meta_path = server.vault.get_pixlstash_tagger_meta_path()
         raw = tag_prediction_service.load_raw_label_thresholds(meta_path)
         sorted_labels = sorted(raw.items())

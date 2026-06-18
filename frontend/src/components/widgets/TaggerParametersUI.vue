@@ -64,6 +64,35 @@ function enumOptions(field) {
     typeof e === "object" ? e : { value: e, label: e },
   );
 }
+
+/**
+ * Scaled numeric fields are stored in one unit (e.g. a 0–1 fraction) but
+ * displayed and edited in another (e.g. percentage points) via `field.scale`.
+ * Rounding strips the floating-point noise that x100 / ÷100 introduces.
+ */
+function roundClean(n) {
+  return Math.round(n * 1e9) / 1e9;
+}
+
+function toDisplay(field, stored) {
+  if (stored === null || stored === undefined || stored === "") return "";
+  return roundClean(Number(stored) * (field.scale ?? 1));
+}
+
+function scaleBound(field, value) {
+  if (value === null || value === undefined) return undefined;
+  return roundClean(Number(value) * (field.scale ?? 1));
+}
+
+function setScaled(field, raw) {
+  if (raw === "" || raw === null) {
+    form[field.name] = null;
+    return;
+  }
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) return;
+  form[field.name] = roundClean(parsed / (field.scale ?? 1));
+}
 </script>
 
 <template>
@@ -91,6 +120,30 @@ function enumOptions(field) {
           {{ opt.label }}
         </option>
       </select>
+
+      <!-- scaled number (stored unit differs from displayed unit) -->
+      <div
+        v-else-if="
+          (field.type === 'number' || field.type === 'integer') && field.scale
+        "
+        class="tagger-params-scaled-row"
+      >
+        <input
+          :value="toDisplay(field, form[field.name])"
+          type="number"
+          class="tagger-params-input"
+          :min="scaleBound(field, field.min)"
+          :max="scaleBound(field, field.max)"
+          :step="
+            scaleBound(field, field.step) ??
+            (field.type === 'integer' ? 1 : undefined)
+          "
+          @input="setScaled(field, $event.target.value)"
+        />
+        <span v-if="field.unit" class="tagger-params-unit">{{
+          field.unit
+        }}</span>
+      </div>
 
       <!-- number / integer -->
       <input
@@ -184,6 +237,17 @@ function enumOptions(field) {
 
 .tagger-params-input:focus {
   border-color: rgb(var(--v-theme-primary));
+}
+
+.tagger-params-scaled-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tagger-params-unit {
+  font-size: 13px;
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .tagger-params-textarea {

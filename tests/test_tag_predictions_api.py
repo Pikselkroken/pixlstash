@@ -152,3 +152,56 @@ def test_confirm_nonexistent_prediction_returns_404():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_label_thresholds_uses_saved_offset_by_default(monkeypatch):
+    temp_dir, client, server = _setup()
+    try:
+        from pixlstash.services import tag_prediction_service
+
+        monkeypatch.setattr(
+            tag_prediction_service,
+            "load_raw_label_thresholds",
+            lambda meta_path: {"cat": 0.4, "dog": 0.2},
+        )
+        server.vault.set_pixlstash_tagger_threshold_offset(0.1)
+
+        resp = client.get("/tagger/label-thresholds")
+        assert resp.status_code == 200
+        rows = {r["label"]: r for r in resp.json()}
+        assert rows["cat"]["base_threshold"] == 0.4
+        assert rows["cat"]["effective_threshold"] == 0.5
+        assert rows["dog"]["effective_threshold"] == 0.3
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_label_thresholds_offset_query_overrides_saved(monkeypatch):
+    temp_dir, client, server = _setup()
+    try:
+        from pixlstash.services import tag_prediction_service
+
+        monkeypatch.setattr(
+            tag_prediction_service,
+            "load_raw_label_thresholds",
+            lambda meta_path: {"cat": 0.4, "dog": 0.2},
+        )
+        # Saved offset is positive, but the preview passes its own (unsaved) value.
+        server.vault.set_pixlstash_tagger_threshold_offset(0.1)
+
+        resp = client.get("/tagger/label-thresholds", params={"offset": -0.5})
+        assert resp.status_code == 200
+        rows = {r["label"]: r for r in resp.json()}
+        # 0.4 - 0.5 and 0.2 - 0.5 both fall below the 0.01 floor.
+        assert rows["cat"]["effective_threshold"] == 0.01
+        assert rows["dog"]["effective_threshold"] == 0.01
+
+        # Out-of-range offsets are rejected by the query bounds.
+        resp = client.get("/tagger/label-thresholds", params={"offset": 5})
+        assert resp.status_code == 422
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()

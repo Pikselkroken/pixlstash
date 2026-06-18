@@ -82,11 +82,14 @@ async function save() {
   }
 }
 
-async function openLabelThresholds() {
-  labelThresholdsOpen.value = true;
+async function fetchLabelThresholds() {
   labelThresholdsLoading.value = true;
   try {
-    const res = await apiClient.get("/tagger/label-thresholds");
+    // Preview the offset currently in the form, even before it is saved.
+    const offset = formParams.value?.threshold_offset;
+    const res = await apiClient.get("/tagger/label-thresholds", {
+      params: offset != null ? { offset } : {},
+    });
     labelThresholdsData.value = res.data;
   } catch {
     labelThresholdsData.value = [];
@@ -94,6 +97,19 @@ async function openLabelThresholds() {
     labelThresholdsLoading.value = false;
   }
 }
+
+function openLabelThresholds() {
+  labelThresholdsOpen.value = true;
+  fetchLabelThresholds();
+}
+
+// Keep the open preview in sync with edits to the offset.
+watch(
+  () => formParams.value?.threshold_offset,
+  () => {
+    if (labelThresholdsOpen.value) fetchLabelThresholds();
+  },
+);
 </script>
 
 <template>
