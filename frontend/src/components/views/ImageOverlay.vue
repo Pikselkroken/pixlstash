@@ -686,6 +686,7 @@ import {
   buildMediaUrl,
   MediaFormat,
   mediaMimeType,
+  safeDownloadName,
 } from "../../utils/media.js";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
@@ -2279,7 +2280,11 @@ function handleMediaDragStart(event) {
     if (url) {
       const absoluteUrl = new URL(url, window.location.href).href;
       const ext = MediaFormat(data);
-      const filename = data.original_file_name || `${id}${ext ? `.${ext}` : ""}`;
+      const fallbackName = `${id}${ext ? `.${ext}` : ""}`;
+      // original_file_name is user-controlled (set at import); sanitise it so a
+      // path separator / colon / newline can't redirect or break the saved file
+      // through the "<mime>:<filename>:<url>" DownloadURL hint.
+      const filename = safeDownloadName(data.original_file_name, fallbackName);
       dt.setData(
         "DownloadURL",
         `${mediaMimeType(data)}:${filename}:${absoluteUrl}`,

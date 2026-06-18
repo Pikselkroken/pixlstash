@@ -904,6 +904,22 @@ class AuthService:
 
         if scope not in ("ALL", "READ"):
             raise HTTPException(status_code=400, detail="scope must be 'ALL' or 'READ'")
+        # A resource-scoped token must be READ. An ALL-scope token carrying a
+        # resource_type is the F1/F3 footgun: the auth middleware only builds
+        # ``request.state.token_scope`` for non-ALL scopes, so such a token would
+        # (a) bypass every object-scope guard (``enforce_picture_scope`` /
+        # ``fetch_scope_allowed_picture_ids`` read ``token_scope``) and (b) pass
+        # the "only the owner may create tokens" check above — i.e. it is a full
+        # owner token wearing a "restricted" label. Forbid minting it at the
+        # source. See docs/reviews/feature-slick-grid-updates.md (F3).
+        if scope == "ALL" and resource_type is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A resource-scoped token must use READ scope; an ALL-scope "
+                    "token cannot be restricted to a resource."
+                ),
+            )
         if resource_type is not None and resource_type not in (
             "picture_set",
             "character",
@@ -1464,6 +1480,25 @@ class AuthService:
                         # non-ALL scopes, so an ALL+resource_type token would
                         # otherwise look indistinguishable from a cookie session.
                         request.state.matched_token = matched_token
+                        # Defensive (F3 residual): create_token now refuses to
+                        # mint an ALL+resource_type token, but a legacy or
+                        # snapshot-restored one would have token_scope is None
+                        # and thus bypass every object-scope guard while looking
+                        # like an owner. Reject it fail-closed — the shape is
+                        # invalid and unreachable through any supported flow.
+                        if (
+                            matched_token.scope == "ALL"
+                            and matched_token.resource_type is not None
+                        ):
+                            return JSONResponse(
+                                status_code=403,
+                                content={
+                                    "detail": (
+                                        "Misconfigured token: an ALL-scope token "
+                                        "cannot be restricted to a resource."
+                                    )
+                                },
+                            )
                         if matched_token.scope != "ALL":
                             request.state.token_scope = TokenScope(
                                 scope=matched_token.scope,

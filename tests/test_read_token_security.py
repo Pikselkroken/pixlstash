@@ -133,6 +133,76 @@ def _assert_pictures_intact(authed_client, original_ids: list, original_scores: 
 
 
 # ---------------------------------------------------------------------------
+# 0. An ALL-scope token cannot be restricted to a resource (F1/F3 footgun)
+# ---------------------------------------------------------------------------
+
+
+class TestAllScopeResourceTokenRejected:
+    """Minting an ``ALL``+``resource_type`` token must be rejected.
+
+    The auth middleware only builds ``request.state.token_scope`` for non-ALL
+    scopes, so such a token would bypass every object-scope guard
+    (``enforce_picture_scope`` / ``fetch_scope_allowed_picture_ids`` read
+    ``token_scope``) *and* pass the owner-only token-creation check — it is a
+    full owner token wearing a "restricted" label. See the F3 finding in
+    docs/reviews/feature-slick-grid-updates.md.
+    """
+
+    def test_all_scope_with_resource_type_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, picture_ids, _ = _setup_server_with_pictures(tmp)
+            try:
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={
+                        "description": "sneaky scoped write token",
+                        "scope": "ALL",
+                        "resource_type": "picture",
+                        "resource_id": picture_ids[0],
+                    },
+                )
+                assert r.status_code == 400, (
+                    "ALL-scope token must not be restrictable to a resource, "
+                    f"got {r.status_code}: {r.text}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_read_scope_with_resource_type_still_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, picture_ids, _ = _setup_server_with_pictures(tmp)
+            try:
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={
+                        "description": "legit resource share",
+                        "scope": "READ",
+                        "resource_type": "picture",
+                        "resource_id": picture_ids[0],
+                    },
+                )
+                assert r.status_code == 200, (
+                    f"READ resource share must still mint, got {r.status_code}: {r.text}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_all_scope_without_resource_still_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, _picture_ids, _ = _setup_server_with_pictures(tmp)
+            try:
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={"description": "owner token", "scope": "ALL"},
+                )
+                assert r.status_code == 200, (
+                    f"ALL owner token must still mint, got {r.status_code}: {r.text}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+
+# ---------------------------------------------------------------------------
 # 1. READ token must not perform write operations
 # ---------------------------------------------------------------------------
 

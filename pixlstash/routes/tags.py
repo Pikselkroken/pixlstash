@@ -91,6 +91,9 @@ def create_router(server) -> APIRouter:
                 pic_id = int(id)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid picture id")
+            # Scope guard (BOLA): a write-capable resource-scoped token may only
+            # mutate tags for pictures within its granted resource.
+            enforce_picture_scope(server, request, pic_id)
             tag = payload.get("tag")
             if not tag:
                 raise HTTPException(status_code=400, detail="Tag is required")
@@ -205,6 +208,9 @@ def create_router(server) -> APIRouter:
                 pic_id = int(id)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid picture id")
+            # Scope guard (BOLA): a write-capable resource-scoped token may only
+            # mutate tags for pictures within its granted resource.
+            enforce_picture_scope(server, request, pic_id)
             if not tag_id.isdigit():
                 raise HTTPException(status_code=400, detail="tag_id must be numeric")
             tag_id_int = int(tag_id)
@@ -267,6 +273,9 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # mutate tags for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
         tag_value = (payload or {}).get("tag")
         if not tag_value:
             raise HTTPException(status_code=400, detail="Tag is required")
@@ -317,6 +326,9 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+        # Scope guard (BOLA): a write-capable resource-scoped token may only
+        # mutate tags for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
 
         def do_clear(session: Session, pic_id: int):
             pic_list = Picture.find(
