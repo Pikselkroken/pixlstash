@@ -4511,6 +4511,14 @@ function isSmartScoreSortActive() {
     : false;
 }
 
+// Single source of truth for grid sort direction. ALL client-side ordering —
+// score/smart-score repositions, the apply-scores re-sort, and incremental
+// inserts — must use the SAME rule, or a card lands in a different spot than the
+// array it is spliced into. Nullish selectedDescending → ascending (the store
+// defaults it to a real `true`). Keep this as one computed: a lone inlined
+// `!== false` previously drifted here and mispositioned inserted cards.
+const gridSortDescending = computed(() => props.selectedDescending === true);
+
 function getGridSmartScoreValue(img) {
   if (!img) return null;
   const raw =
@@ -4579,7 +4587,7 @@ function repositionImageByScore(imageId, newScore) {
   const target = items[currentIndex];
   target.score = newScore;
   const targetScore = newScore ?? 0;
-  const descending = props.selectedDescending === true;
+  const descending = gridSortDescending.value;
   const insertIndex = _spliceAndReinsert(
     items,
     currentIndex,
@@ -4618,7 +4626,7 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
       thumbnail:
         items[currentIndex]?.thumbnail ?? latestInfo?.thumbnail ?? null,
     };
-    const descending = props.selectedDescending === true;
+    const descending = gridSortDescending.value;
     _spliceAndReinsert(
       items,
       currentIndex,
@@ -4729,7 +4737,7 @@ async function insertGridImagesById(ids) {
   }
   if (!fetched.length) return;
 
-  const descending = props.selectedDescending === true;
+  const descending = gridSortDescending.value;
   const base = Array.isArray(lastFetchedGridImages.value)
     ? lastFetchedGridImages.value.slice()
     : [];
@@ -4811,7 +4819,7 @@ async function applyScoresByEntries(entries, options = {}) {
   });
 
   if (updateSort && isScoreSortActive()) {
-    const descending = props.selectedDescending === true;
+    const descending = gridSortDescending.value;
     updatedImages = updatedImages
       .slice()
       .sort((a, b) => {
