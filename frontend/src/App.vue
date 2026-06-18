@@ -464,11 +464,21 @@ function isExternalFileDragEvent(event) {
 
 function handleWindowDragOver(event) {
   if (!isExternalFileDragEvent(event)) return;
+  // The review-fixes overlay is a modal review surface; dropping files into it
+  // must never start an import. Skip preventDefault so the drag is not shown as
+  // droppable here.
+  if (reviewFixesStore.overlayOpen) return;
   event.preventDefault();
 }
 
 function handleWindowDrop(event) {
   if (!isExternalFileDragEvent(event)) return;
+  // While the review-fixes overlay is open, swallow the drop without importing
+  // (still preventDefault so the browser does not navigate to the dropped file).
+  if (reviewFixesStore.overlayOpen) {
+    event.preventDefault();
+    return;
+  }
   event.preventDefault();
   if (isInsideImageGrid(event)) {
     return;
