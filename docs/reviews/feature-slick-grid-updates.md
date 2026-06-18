@@ -348,6 +348,9 @@ falsely closed). Combined `test_picture_mutation_scope` + `test_read_token_secur
    receive no broadcast data and `/ws/comfyui` requires owner), but the two
    entrypoints should agree — add the same `scope == "ALL" and resource_type is
    not None → reject` to `authenticate_websocket`.
-2. **Backstop test.** Hand-insert an ALL+resource `UserToken` and assert the
-   middleware 403s it on a real HTTP request (covers the legacy/restored-token
-   path the `create_token` mint guard cannot reach).
+2. **Backstop test — DONE in this PR.** `tests/test_snapshots_auth.py` now forges
+   an ALL+resource `UserToken` straight into the DB (`_inject_picture_scoped_all_token`,
+   bypassing the `create_token` mint ban) and asserts the middleware 403s it
+   (`"misconfigured"` in the body) on a real HTTP request against every read-shaped
+   snapshot route. This covers exactly the legacy/restored-token path the mint
+   guard cannot reach, so no separate backstop test is outstanding.
