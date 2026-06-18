@@ -1663,6 +1663,20 @@ def register_routes(router, server):
             priority=DBPriority.IMMEDIATE,
         )
 
+        # No reference faces → nothing is scorable regardless of what the
+        # uploaded frames contain, so short-circuit before doing any GPU face
+        # detection (which also means the endpoint works without an inference
+        # engine). Every frame is ineligible with a null score, mirroring the
+        # stored-picture endpoints' empty-likeness_map case.
+        if not reference_faces:
+            return {
+                "reference_character_id": int(reference_character_id),
+                "results": [
+                    {"index": idx, "character_likeness": None, "eligible": False}
+                    for idx in range(len(bgr_images))
+                ],
+            }
+
         # ── Detect faces in-memory on the GPU queue (nothing persisted) ───
         from pixlstash.tasks.face_detection_task import FaceDetectionTask
 
@@ -1697,17 +1711,8 @@ def register_routes(router, server):
             ) from exc
 
         # ── Score each image: max likeness over its detected faces ────────
-        # No reference faces → nothing is scorable (mirrors the stored-picture
-        # endpoints' empty-likeness_map case: eligible=false, score=null).
-        has_reference = bool(reference_faces)
         results: list[dict] = []
         for idx, face_results in enumerate(all_face_results):
-            if not has_reference:
-                results.append(
-                    {"index": idx, "character_likeness": None, "eligible": False}
-                )
-                continue
-
             candidate_faces = [
                 _DetectedFace(face_i, fr.embedding)
                 for face_i, fr in enumerate(face_results)
