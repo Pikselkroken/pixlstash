@@ -1,3 +1,12 @@
+# [1.6.3] [Security:Low]
+- Stop the PixlStash process before installing
+- Let the user choose GPU runtime install location and default to install folder on Windows
+- Fix some UI refresh bugs
+- Show the tagger threshold offset as a percentage and preview per-label thresholds live as you adjust it
+- Harden the scope of tokens to avoid future footguns
+- Allow for sidecar synchronisation with reference folder even if it does not exist before
+- Allow for sidecar synchronisation of both tags and descriptions
+
 # [1.6.2] [Security:High]
 - Desktop app: choose where the GPU runtime (~2.5 GB) installs instead of always using the system drive. On Windows it now defaults to *inside the install folder you picked*; the first-run wizard and Settings → Compute let you change it, and changing it moves an already-installed runtime so the download isn't repeated.
 - Update several NPM packages (hasown, mime-types, form-data) for a [Security:High] alert
