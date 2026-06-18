@@ -70,7 +70,7 @@ class ReviewSuggestionResponse(BaseModel):
 
 
 class BulkAcceptRequest(BaseModel):
-    """Resolve all confident PENDING suggestions for a tag (blended score ≥ threshold)."""
+    """Resolve PENDING suggestions where the neighbour vote and tagger agree (both ≥ threshold)."""
 
     tag: str
     min_combined: float = 0.9
@@ -320,9 +320,10 @@ def create_router(server) -> APIRouter:
         "/tag_suggestions/bulk-accept",
         summary="Resolve all confident suggestions for a tag",
         description=(
-            "Accepts every PENDING suggestion for the tag whose blended (neighbour + "
-            "tagger) score is at least min_combined, applying each one's fix. Pass "
-            "dry_run=true to only count what would be resolved."
+            "Accepts every PENDING suggestion for the tag where the model-independent "
+            "near-neighbour vote and the tagger agree on the fix and both clear "
+            "min_combined, applying each one's fix. Pass dry_run=true to only count "
+            "what would be resolved."
         ),
         response_model=BulkResultResponse,
     )

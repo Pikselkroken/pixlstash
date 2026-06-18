@@ -23,7 +23,7 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
   const loading = ref(false);
   const error = ref(null);
   const undoStack = ref([]); // [{ item, action }] — last resolved first off the end
-  const bulkThreshold = ref(0.9); // min blended score for "resolve the confident ones"
+  const bulkThreshold = ref(0.9); // floor BOTH the near-twin vote and the tagger margin must clear — and they must agree on the fix — to auto-resolve
   const bulkCount = ref(0); // how many PENDING clear the threshold (live preview)
   const bulkBusy = ref(false);
   const lastBulk = ref(null); // { ids, count } of the most recent bulk-accept, for undo

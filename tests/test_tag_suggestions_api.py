@@ -382,68 +382,150 @@ def _seed_prediction(server, pic_id, tag, confidence):
     server.vault.db.run_task(insert)
 
 
-def test_bulk_accept_resolves_by_confidence_and_reopens():
+def _seed_pair(client, server, tag, direction, score=1.0):
+    """Create a suspect+twin near_neighbor suggestion, tagged as the scan would find it:
+    remove → suspect tagged / twin clean; add → twin tagged / suspect clean.
+
+    Returns ``(suspect_id, twin_id, suggestion_id)``.
+    """
+    suspect = _upload_picture(client)  # Bad1.png
+    img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+    with open(img_path, "rb") as f:
+        twin = upload_pictures_and_wait(
+            client, [("file", ("Bad2.png", f, "image/png"))]
+        )["results"][0]["picture_id"]
+    _seed_tag(server, suspect if direction == "remove" else twin, tag)
+
+    def insert(session):
+        s = TagSuggestion(
+            picture_id=suspect,
+            tag=tag,
+            direction=direction,
+            source="near_neighbor",
+            score=score,
+            twin_picture_id=twin,
+        )
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+        return s.id
+
+    return suspect, twin, server.vault.db.run_task(insert)
+
+
+def test_bulk_accept_resolves_when_signals_agree():
+    """remove + tagger agrees NEITHER image has it → the suspect's wrong tag is removed."""
     temp_dir, client, server = _setup()
     try:
-        # A "remove" pair: suspect is tagged, twin is not.
-        suspect = _upload_picture(client)  # Bad1.png
-        _seed_tag(server, suspect, "malformed hand")
-        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
-        with open(img_path, "rb") as f:
-            twin = upload_pictures_and_wait(
-                client, [("file", ("Bad2.png", f, "image/png"))]
-            )["results"][0]["picture_id"]
+        suspect, twin, sid = _seed_pair(client, server, "malformed hand", "remove")
+        # Tagger corroborates the neighbour proposal: neither image has the tag.
+        _seed_prediction(server, suspect, "malformed hand", 0.05)
+        _seed_prediction(server, twin, "malformed hand", 0.03)
 
-        def insert(session):
-            session.add(
-                TagSuggestion(
-                    picture_id=suspect,
-                    tag="malformed hand",
-                    direction="remove",
-                    source="near_neighbor",
-                    score=1.0,
-                    twin_picture_id=twin,
-                )
-            )
-            session.commit()
-
-        server.vault.db.run_task(insert)
-        sid = server.vault.db.run_immediate_read_task(
-            lambda s: (
-                s.exec(select(TagSuggestion).where(TagSuggestion.picture_id == suspect))
-                .first()
-                .id
-            )
-        )
-
-        # The tagger is confident BOTH images have the malformation, so the decision is
-        # "tag both" — regardless of which one currently carries the label.
-        _seed_prediction(server, suspect, "malformed hand", 0.95)
-        _seed_prediction(server, twin, "malformed hand", 0.92)
-
-        # Too strict for 0.92 agreement → nothing resolves.
+        # Margin is 0.95 (= min(0.95, 0.97)); 0.99 is too strict → nothing resolves.
         strict = client.post(
             "/tag_suggestions/bulk-accept",
             json={"tag": "malformed hand", "min_combined": 0.99, "dry_run": True},
         ).json()
         assert strict["count"] == 0
 
-        # At 0.9 it resolves as "tag both" → the untagged twin gets the tag.
         applied = client.post(
             "/tag_suggestions/bulk-accept",
             json={"tag": "malformed hand", "min_combined": 0.9},
         ).json()
         assert applied["count"] == 1
         assert applied["accepted_ids"] == [sid]
-        assert _has_tag(client, twin, "malformed hand")  # tag added to the twin
-        assert _has_tag(client, suspect, "malformed hand")  # suspect kept
+        assert not _has_tag(client, suspect, "malformed hand")  # wrong tag removed
+        assert not _has_tag(client, twin, "malformed hand")  # twin untouched
 
-        # Batch-undo removes the tag from the twin again.
+        # Batch-undo restores the suspect's tag.
         reopened = client.post(
             "/tag_suggestions/bulk-reopen", json={"ids": applied["accepted_ids"]}
         ).json()
         assert reopened["count"] == 1
+        assert _has_tag(client, suspect, "malformed hand")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_bulk_accept_skips_when_tagger_contradicts_neighbour():
+    """remove + tagger says BOTH have it → the two signals disagree, so bulk leaves it.
+
+    This is the case the old confidence-only path got wrong: it placed the pair in the
+    "both" corner and *added* the tag to the twin — for a suggestion that asked to
+    *remove* it. The blend now requires the tagger to land in the neighbour's corner.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        suspect, twin, _sid = _seed_pair(client, server, "malformed hand", "remove")
+        # Tagger is loud the other way: both have it (corner "both" ≠ neighbour "neither").
+        _seed_prediction(server, suspect, "malformed hand", 0.97)
+        _seed_prediction(server, twin, "malformed hand", 0.96)
+
+        # Even at the loosest threshold the corner mismatch keeps it out of bulk.
+        res = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.5},
+        ).json()
+        assert res["count"] == 0
+        # Labels untouched; the pair is left for human review.
+        assert _has_tag(client, suspect, "malformed hand")
         assert not _has_tag(client, twin, "malformed hand")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_bulk_accept_skips_when_neighbour_vote_is_weak():
+    """Tagger agrees, but a weak neighbour vote (low score) fails the blend floor."""
+    temp_dir, client, server = _setup()
+    try:
+        suspect, _twin, _sid = _seed_pair(
+            client, server, "malformed hand", "remove", score=0.6
+        )
+        _seed_prediction(server, suspect, "malformed hand", 0.02)
+        _seed_prediction(server, _twin, "malformed hand", 0.01)
+
+        # Tagger margin clears 0.9 but the neighbour score (0.6) does not → skipped.
+        high = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9},
+        ).json()
+        assert high["count"] == 0
+        assert _has_tag(client, suspect, "malformed hand")  # untouched
+
+        # Drop the bar below the neighbour score and both signals now clear it.
+        low = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.5},
+        ).json()
+        assert low["count"] == 1
+        assert not _has_tag(client, suspect, "malformed hand")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_bulk_accept_adds_tag_when_signals_agree():
+    """add + tagger agrees BOTH have it → the missing tag is added to the suspect."""
+    temp_dir, client, server = _setup()
+    try:
+        suspect, twin, _sid = _seed_pair(client, server, "malformed hand", "add")
+        # Suspect starts clean, twin tagged; tagger says both have it (corner "both").
+        _seed_prediction(server, suspect, "malformed hand", 0.95)
+        _seed_prediction(server, twin, "malformed hand", 0.97)
+
+        applied = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9},
+        ).json()
+        assert applied["count"] == 1
+        assert _has_tag(client, suspect, "malformed hand")  # missing tag added
+        assert _has_tag(client, twin, "malformed hand")  # twin keeps it
     finally:
         server.vault.close()
         temp_dir.cleanup()

@@ -62,10 +62,11 @@
         </div>
       </header>
 
-      <!-- Bulk: clear the confident tail so you only hand-compare the ambiguous middle. -->
+      <!-- Bulk: auto-resolve only pairs where the near-twin vote and the tagger AGREE,
+           so you hand-compare the rest. -->
       <div class="rf-bulkbar">
         <label class="rf-bulk-thresh">
-          Auto-resolve when confidence ≥
+          Auto-resolve when both signals agree ≥
           <select
             :value="store.bulkThreshold"
             @change="store.setBulkThreshold(Number($event.target.value))"
@@ -89,10 +90,10 @@
           class="rf-bulk-btn"
           type="button"
           :disabled="store.bulkCount === 0 || store.bulkBusy"
-          :title="`Apply every suggestion above the threshold for “${store.activeTag}” in one go (undoable).`"
+          :title="`Apply every pair where the near-twin vote and the tagger agree and both clear the threshold for “${store.activeTag}”, in one go (undoable).`"
           @click="store.runBulk()"
         >
-          Resolve {{ store.bulkCount }} clear one{{ store.bulkCount === 1 ? "" : "s" }}
+          Resolve {{ store.bulkCount }} agreed one{{ store.bulkCount === 1 ? "" : "s" }}
         </button>
         <span v-if="store.lastBulk" class="rf-bulk-undo">
           resolved {{ store.lastBulk.count }} ·
@@ -247,10 +248,10 @@
       <div class="rf-preview-card">
         <div class="rf-preview-head">
           <div>
-            Preview — {{ store.bulkCount }} clear one{{ store.bulkCount === 1 ? "" : "s" }}
+            Preview — {{ store.bulkCount }} agreed one{{ store.bulkCount === 1 ? "" : "s" }}
             at ≥{{ Math.round(store.bulkThreshold * 100) }}%
             <span class="rf-preview-sub">
-              showing the {{ store.bulkSample.length }} least-confident (the riskiest)
+              showing the {{ store.bulkSample.length }} least tagger-confident (the riskiest)
             </span>
           </div>
           <button
@@ -263,7 +264,7 @@
         </div>
 
         <div v-if="!store.bulkSample.length" class="rf-preview-empty">
-          Nothing clears the threshold — lower it, or review manually.
+          No pair where both signals agree this strongly — lower the bar, or review manually.
         </div>
         <div v-else class="rf-preview-grid">
           <figure
