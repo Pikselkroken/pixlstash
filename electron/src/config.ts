@@ -1,6 +1,6 @@
 import { app } from 'electron';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, posix as pathPosix, resolve, win32 as pathWin32 } from 'node:path';
 
 /** Compute accelerators a PixlStash runtime can target. */
 export type Accel = 'cpu' | 'cu128' | 'rocm' | 'metal';
@@ -131,11 +131,113 @@ export function readRuntimeInfo(): RuntimeInfo | null {
 }
 
 /**
+ * Compute the per-platform *default* parent directory for GPU overlays. Pure (all
+ * inputs passed in) so the platform rule is unit-testable without electron.
+ *
+ * On Windows the packaged app installs to a user-writable, user-chosen location
+ * (electron-builder NSIS with perMachine:false + allowToChangeInstallationDirectory),
+ * so the heavy GPU wheels go *inside the install folder the user picked* rather
+ * than always landing on the system drive under AppData. `resourcesPath` is
+ * `<installDir>/resources`, so its parent is the install dir.
+ *
+ * Everywhere else the installed image is read-only (a Linux AppImage is a squashfs
+ * mount, a notarized macOS .app must not be modified) or we're running unpacked in
+ * dev — there is no writable "install folder" to use — so overlays stay under the
+ * app-data dir, as before. Users who want them elsewhere can still pick a custom
+ * location (see {@link backendsRoot}).
+ */
+export function computeDefaultBackendsRoot(
+  platform: NodeJS.Platform,
+  isPackaged: boolean,
+  resourcesPath: string,
+  userData: string,
+): string {
+  // Use the target platform's path semantics (so the win32 branch is correct —
+  // and unit-testable — even when this runs on a POSIX host in CI).
+  const p = platform === 'win32' ? pathWin32 : pathPosix;
+  if (platform === 'win32' && isPackaged) {
+    return p.join(p.dirname(resourcesPath), 'backends');
+  }
+  return p.join(userData, 'backends');
+}
+
+/** The per-platform default overlay location for this run (see {@link computeDefaultBackendsRoot}). */
+export function defaultBackendsRoot(): string {
+  return computeDefaultBackendsRoot(
+    process.platform,
+    app.isPackaged,
+    process.resourcesPath,
+    app.getPath('userData'),
+  );
+}
+
+/**
+ * Where a user-chosen overlay location is persisted. Kept under userData (which
+ * always survives app updates/moves) even when the overlays themselves live on a
+ * different drive, so the app can always find them again.
+ */
+export function backendsLocationPath(): string {
+  return join(app.getPath('userData'), 'backends-location.json');
+}
+
+/**
+ * Parent directory for GPU overlays: the user's chosen location if they set one,
+ * otherwise the per-platform {@link defaultBackendsRoot}. The default is computed
+ * (never stored), so when the user hasn't overridden it the overlays keep tracking
+ * the real install dir across updates/moves.
+ */
+export function backendsRoot(): string {
+  try {
+    const saved = JSON.parse(readFileSync(backendsLocationPath(), 'utf8'));
+    if (typeof saved?.dir === 'string' && saved.dir.trim()) return saved.dir;
+  } catch {
+    /* not set / unreadable → fall back to the computed default */
+  }
+  return defaultBackendsRoot();
+}
+
+/**
+ * Decide what to persist for a chosen overlay location: `null` (meaning "use the
+ * computed default") when the choice equals the default, else the resolved path.
+ * Pure (platform passed in) so the custom-vs-default rule is unit-testable.
+ *
+ * Windows paths are case-insensitive, so a choice that differs from the default
+ * only by casing (e.g. a different drive-letter case) must still clear the
+ * override and keep tracking the install dir; POSIX filesystems are
+ * case-sensitive, so there the comparison is exact.
+ */
+export function normalizeBackendsRoot(
+  chosen: string,
+  def: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const resolved = resolve(chosen);
+  const same =
+    platform === 'win32'
+      ? resolved.toLowerCase() === resolve(def).toLowerCase()
+      : resolved === resolve(def);
+  return same ? null : resolved;
+}
+
+/** Persist (`dir`) or clear (`null`/empty) the user's chosen overlay location. */
+export function setBackendsRoot(dir: string | null): void {
+  const path = backendsLocationPath();
+  if (dir === null || dir.trim() === '') {
+    rmSync(path, { force: true });
+    return;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ dir }, null, 2));
+}
+
+/**
  * Writable overlay holding on-demand GPU wheels, one directory per accelerator,
  * injected via PYTHONPATH so its torch/onnxruntime shadow the bundled CPU build.
+ * Lives under {@link backendsRoot} so the multi-GB download can follow the app's
+ * install location (Windows) or a folder the user picked.
  */
 export function overlayDir(accel: Accel): string {
-  return join(app.getPath('userData'), 'backends', accel);
+  return join(backendsRoot(), accel);
 }
 
 /** Marker written into an overlay once its install completed successfully. */

@@ -11,6 +11,7 @@ import {
 } from 'electron';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cp, mkdir, rename, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -23,14 +24,18 @@ import {
   Accel,
   ACCEL_LABELS,
   RuntimeInfo,
+  backendsRoot,
   bundledInterpreter,
+  defaultBackendsRoot,
   defaultLibraryDir,
   isDevBackend,
+  normalizeBackendsRoot,
   overlayDir,
   parseForcedBackend,
   readRuntimeInfo,
   serverConfigPath,
   serverLogPath,
+  setBackendsRoot,
 } from './config';
 
 const execFileP = promisify(execFile);
@@ -521,6 +526,81 @@ function overlayFor(accel: Accel | null): string | null {
   return accel && accel !== bundledAccel() ? overlayDir(accel) : null;
 }
 
+/**
+ * Move a directory tree, falling back to copy-then-delete when `rename` can't
+ * cross filesystems (EXDEV) — the common case here, since the whole point is
+ * letting a user move the multi-GB overlay onto a *different* drive. A missing
+ * source is a no-op; a stale destination is cleared first so the move is clean.
+ */
+async function moveDir(from: string, to: string): Promise<void> {
+  if (!existsSync(from)) return;
+  await mkdir(dirname(to), { recursive: true });
+  await rm(to, { recursive: true, force: true });
+  try {
+    await rename(from, to);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+    // Cross-filesystem move: copy then delete the source. If the copy fails
+    // partway (e.g. the target drive fills up), clear the partial copy so we
+    // don't leave multiple GB of orphaned junk behind, then rethrow — the
+    // source is still intact for a retry.
+    try {
+      await cp(from, to, { recursive: true });
+    } catch (copyErr) {
+      await rm(to, { recursive: true, force: true });
+      throw copyErr;
+    }
+    await rm(from, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Change where GPU overlays are stored, moving any already-installed overlay to
+ * the new location so the multi-GB torch download isn't re-fetched (the `--target`
+ * install has no hard-coded base path, so it survives the move). When an overlay
+ * is *active* the live Python process holds its files open, so we stop the backend
+ * before moving and relaunch it on the new path afterwards; an inactive overlay
+ * (or none) needs no restart. The chosen location is persisted, except when it
+ * equals the per-platform default — then we clear the override so it keeps
+ * tracking the install dir across updates.
+ */
+async function changeBackendsLocation(rawDir: string): Promise<void> {
+  const newDir = (rawDir || '').trim();
+  if (!newDir) throw new Error('Please choose a folder.');
+  const oldRoot = backendsRoot();
+  const targetRoot = resolve(newDir);
+  if (targetRoot === resolve(oldRoot)) return; // unchanged
+
+  const active = await activeOverlayAccel();
+  if (active) {
+    serverProcess?.stop();
+    serverProcess = null;
+  }
+  let moveError: unknown;
+  try {
+    for (const accel of await manager.listInstalled()) {
+      await moveDir(join(oldRoot, accel), join(targetRoot, accel));
+    }
+    setBackendsRoot(normalizeBackendsRoot(targetRoot, defaultBackendsRoot()));
+  } catch (e) {
+    moveError = e;
+  }
+  // Whether the move succeeded or threw, relaunch the backend if we stopped it.
+  // On success it comes up on the new path; on failure backendsRoot() is still
+  // the old root (setBackendsRoot wasn't reached), so it uses the original
+  // overlay — the user gets the error without losing a running app. A relaunch
+  // failure must not mask the original move error, so only surface it when the
+  // move itself succeeded.
+  if (active) {
+    try {
+      await startAndLoad(active);
+    } catch (relaunchErr) {
+      if (!moveError) throw relaunchErr;
+    }
+  }
+  if (moveError) throw moveError;
+}
+
 /** The pixlstash inference device for an accelerator (GPU overlays → cuda). */
 function deviceFor(accel: Accel | null): string | undefined {
   if (isDevBackend()) return undefined; // dev uses the developer's own env/config
@@ -679,6 +759,9 @@ function registerIpc(): void {
       defaults: {
         imageRoot: importedImageRoot || defaultLibraryDir(),
         useGpu: Boolean(gpu),
+        // Where the GPU runtime would install (only relevant when a GPU is
+        // offered). On Windows this is inside the chosen install folder.
+        installLocation: backendsRoot(),
       },
       gpu: gpu
         ? { available: true, accel: gpu, label: ACCEL_LABELS[gpu], name: hardware?.gpuName ?? null }
@@ -695,37 +778,48 @@ function registerIpc(): void {
     return res.canceled || !res.filePaths[0] ? null : res.filePaths[0];
   });
 
-  ipcMain.handle('setup:commit', async (_e, choices: { imageRoot: string; useGpu: boolean }) => {
-    if (!runtime) throw new Error('No bundled runtime available');
-    const imageRoot = (choices?.imageRoot || '').trim();
-    if (!imageRoot) throw new Error('Please choose a library folder.');
+  ipcMain.handle(
+    'setup:commit',
+    async (_e, choices: { imageRoot: string; useGpu: boolean; installLocation?: string }) => {
+      if (!runtime) throw new Error('No bundled runtime available');
+      const imageRoot = (choices?.imageRoot || '').trim();
+      if (!imageRoot) throw new Error('Please choose a library folder.');
 
-    // Write the desktop's own config. Loopback HTTP; the active runtime drives
-    // the device (default_device left as auto). The backend fills the rest of
-    // the defaults on first read.
-    mkdirSync(dirname(serverConfigPath()), { recursive: true });
-    writeFileSync(
-      serverConfigPath(),
-      JSON.stringify(
-        { host: '127.0.0.1', require_ssl: false, image_root: imageRoot, default_device: 'auto' },
-        null,
-        2,
-      ),
-    );
+      // Record where the GPU runtime should install (clearing the override when
+      // it matches the default, so it keeps tracking the install dir). Done
+      // before the overlay install below so the download lands in the right place.
+      const installLocation = (choices?.installLocation || '').trim();
+      if (installLocation) {
+        setBackendsRoot(normalizeBackendsRoot(installLocation, defaultBackendsRoot()));
+      }
 
-    // The GPU choice maps onto the existing on-demand wheel-overlay system.
-    const gpu = gpuUpgrade();
-    if (choices?.useGpu && gpu) {
-      await manager.installOverlay(gpu, runtime, (p) =>
-        mainWindow?.webContents.send('install:progress', p),
+      // Write the desktop's own config. Loopback HTTP; the active runtime drives
+      // the device (default_device left as auto). The backend fills the rest of
+      // the defaults on first read.
+      mkdirSync(dirname(serverConfigPath()), { recursive: true });
+      writeFileSync(
+        serverConfigPath(),
+        JSON.stringify(
+          { host: '127.0.0.1', require_ssl: false, image_root: imageRoot, default_device: 'auto' },
+          null,
+          2,
+        ),
       );
-      await manager.setActiveAccel(gpu);
-    } else {
-      await manager.setActiveAccel(null);
-    }
 
-    await startAndLoad(await activeOverlayAccel());
-  });
+      // The GPU choice maps onto the existing on-demand wheel-overlay system.
+      const gpu = gpuUpgrade();
+      if (choices?.useGpu && gpu) {
+        await manager.installOverlay(gpu, runtime, (p) =>
+          mainWindow?.webContents.send('install:progress', p),
+        );
+        await manager.setActiveAccel(gpu);
+      } else {
+        await manager.setActiveAccel(null);
+      }
+
+      await startAndLoad(await activeOverlayAccel());
+    },
+  );
 
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());
@@ -758,6 +852,27 @@ function registerIpc(): void {
   ipcMain.handle('window:close', () => mainWindow?.close());
 
   ipcMain.handle('accel:list', async () => acceleratorState());
+
+  // Where on-demand GPU overlays are stored. Lets the user keep the multi-GB
+  // download off the system drive (the first-run wizard offers the same choice).
+  ipcMain.handle('backend:getLocation', () => ({
+    dir: backendsRoot(),
+    default: defaultBackendsRoot(),
+  }));
+
+  ipcMain.handle('backend:pickLocation', async (_e, current?: string) => {
+    const res = await dialog.showOpenDialog({
+      title: 'Choose where to install GPU acceleration',
+      defaultPath: current || backendsRoot(),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return res.canceled || !res.filePaths[0] ? null : res.filePaths[0];
+  });
+
+  ipcMain.handle('backend:setLocation', async (_e, dir: string) => {
+    await changeBackendsLocation(dir);
+    return { dir: backendsRoot(), default: defaultBackendsRoot() };
+  });
 
   ipcMain.handle('accel:install', async (_e, accel: Accel) => {
     if (!runtime) throw new Error('No bundled runtime available');

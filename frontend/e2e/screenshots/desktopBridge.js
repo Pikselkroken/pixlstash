@@ -55,6 +55,12 @@ function installDesktopBridge(overrides) {
     installAccelerator: val(undefined),
     useAccelerator: val(undefined),
     removeAccelerator: val(undefined),
+    getBackendLocation: val({
+      dir: 'C:\\Users\\You\\AppData\\Local\\Programs\\PixlStash\\backends',
+      default: 'C:\\Users\\You\\AppData\\Local\\Programs\\PixlStash\\backends',
+    }),
+    pickBackendLocation: val(null),
+    setBackendLocation: val(undefined),
     openLibraryFolder: noop,
     showLogs: noop,
   }

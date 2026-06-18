@@ -373,6 +373,16 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* GPU install-location picker, revealed under the compute options when GPU is
+   chosen. Reuses .field/.sub; just needs a little separation from the radios. */
+.install-location {
+  margin-top: 10px;
+}
+
+.install-location .sub {
+  margin-top: 6px;
+}
+
 .choice {
   display: flex;
   align-items: flex-start;

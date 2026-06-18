@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   installAccelerator: (accel: string) => ipcRenderer.invoke('accel:install', accel),
   useAccelerator: (accel: string | null) => ipcRenderer.invoke('accel:use', accel),
   removeAccelerator: (accel: string) => ipcRenderer.invoke('accel:remove', accel),
+  // Where the on-demand GPU overlay is stored (keep the big download off C:).
+  getBackendLocation: () => ipcRenderer.invoke('backend:getLocation'),
+  pickBackendLocation: (current: string) => ipcRenderer.invoke('backend:pickLocation', current),
+  setBackendLocation: (dir: string) => ipcRenderer.invoke('backend:setLocation', dir),
   // Desktop conveniences re-homed from the (removed) native menu.
   openLibraryFolder: () => ipcRenderer.invoke('desktop:openLibraryFolder'),
   showLogs: () => ipcRenderer.invoke('desktop:showLogs'),
