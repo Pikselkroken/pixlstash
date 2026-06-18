@@ -120,6 +120,8 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
         "pixlstash/services/share_service.py",  # vault-injection pattern
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
+        "pixlstash/services/tag_suggestion_service.py",  # vault-injection pattern; review-queue writeback
+        "pixlstash/services/tagger_run_service.py",  # vault-injection pattern; tagger run history upsert
         "pixlstash/services/tag_scan_service.py",  # vault-injection pattern; sync near-neighbour tag scan
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle

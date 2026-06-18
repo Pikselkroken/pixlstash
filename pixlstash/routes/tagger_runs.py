@@ -9,10 +9,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, ConfigDict
-from sqlmodel import Session, select
 
 from pixlstash.db_models.tagger_run import TaggerRun
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import tagger_run_service
 
 logger = get_logger(__name__)
 
@@ -31,27 +31,6 @@ class TaggerRunResponse(BaseModel):
     anomaly_macro_f1: Optional[float] = None
     created_at: Optional[str] = None
     report: Optional[dict] = None
-
-
-def _extract(report: dict) -> dict:
-    """Pull the indexed fields out of a pushed report (report.json shape)."""
-    payload = report.get("payload", report) if isinstance(report, dict) else {}
-    if not isinstance(payload, dict):
-        payload = {}
-    macro = None
-    deltas = payload.get("deltas")
-    if isinstance(deltas, dict):
-        amf = deltas.get("anomaly_macro_f1")
-        if isinstance(amf, dict):
-            macro = amf.get("candidate")
-    return {
-        "run": payload.get("run"),
-        "verdict": payload.get("verdict"),
-        "recommend": payload.get("recommend"),
-        "accepted": payload.get("accepted"),
-        "anomaly_macro_f1": macro,
-        "model_version": payload.get("model_version") or report.get("model_version"),
-    }
 
 
 def _serialize(r: TaggerRun) -> dict:
@@ -81,31 +60,11 @@ def create_router(server) -> APIRouter:
         response_model=TaggerRunResponse,
     )
     def ingest_tagger_run(report: dict = Body(...)):
-        meta = _extract(report)
-        run = meta["run"]
-        if not run:
-            raise HTTPException(
-                status_code=400, detail="report payload.run is required"
-            )
-
-        def _save(session: Session) -> TaggerRun:
-            existing = session.exec(
-                select(TaggerRun).where(TaggerRun.run == run)
-            ).first()
-            if existing is None:
-                existing = TaggerRun(run=run)
-                session.add(existing)
-            existing.model_version = meta["model_version"]
-            existing.verdict = meta["verdict"]
-            existing.recommend = meta["recommend"]
-            existing.accepted = meta["accepted"]
-            existing.anomaly_macro_f1 = meta["anomaly_macro_f1"]
-            existing.report = report
-            session.commit()
-            session.refresh(existing)
-            return existing
-
-        return _serialize(server.vault.db.run_task(_save))
+        try:
+            saved = tagger_run_service.ingest_run(server.vault, report)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _serialize(saved)
 
     @router.get(
         "/tagger-runs",
@@ -115,17 +74,7 @@ def create_router(server) -> APIRouter:
     )
     def list_tagger_runs(limit: int = 100):
         limit = max(1, min(limit, 1000))
-
-        def _fetch(session: Session) -> list[TaggerRun]:
-            return list(
-                session.exec(
-                    select(TaggerRun)
-                    .order_by(TaggerRun.created_at.desc())
-                    .limit(limit)
-                ).all()
-            )
-
-        rows = server.vault.db.run_immediate_read_task(_fetch)
+        rows = tagger_run_service.list_runs(server.vault, limit)
         return [_serialize(r) for r in rows]
 
     return router
