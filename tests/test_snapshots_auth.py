@@ -1,18 +1,31 @@
 """HTTP-layer auth tests for the snapshot routes.
 
-Every snapshot route is guarded by ``require_unscoped_owner``, which rejects
-both READ-scoped tokens *and* ALL-scope tokens narrowed by ``resource_type``.
-A regression in that helper (e.g. forgetting one of the two checks) would
-otherwise pass every other test in the suite while silently exposing the
-whole vault to share tokens — this file is the dedicated regression guard.
+Snapshot routes are owner-only, and two independent layers must hold:
+
+* ``require_unscoped_owner`` (the route dependency) rejects READ-scoped tokens,
+  which do reach the route.
+* The auth middleware fail-closed-rejects a forged ``ALL``+``resource_type``
+  token *before* the route runs. ``create_token`` refuses to mint that shape,
+  but a malicious / legacy / snapshot-restored row could still carry it, and it
+  would otherwise leave ``token_scope is None`` and read as a full owner — the
+  F1/F3 footgun.
+
+A regression in either layer would pass every other test in the suite while
+silently exposing the whole vault to share tokens — this file is the dedicated
+regression guard.
 """
 
 import json
+import secrets
 import tempfile
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
+from passlib.hash import bcrypt
+from sqlmodel import Session, select
 
+from pixlstash.db_models import User, UserToken
 from pixlstash.server import Server
 
 API = "/api/v1"
@@ -43,19 +56,50 @@ def _make_read_token(client):
     return r.json()["token"]
 
 
-def _make_picture_scoped_all_token(client, picture_id: int):
-    """Make an ALL-scope token narrowed to a single picture (share-style)."""
-    r = client.post(
-        f"{API}/users/me/token",
-        json={
-            "description": "picture-scoped",
-            "scope": "ALL",
-            "resource_type": "picture",
-            "resource_id": picture_id,
-        },
-    )
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
+def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
+    """Forge an ``ALL``+``resource_type`` token by writing it straight to the DB.
+
+    This is the malicious case, deliberately. ``create_token`` now *refuses* to
+    mint this shape (returns 400 — see ``test_read_token_security`` and
+    ``auth.create_token``), so we cannot get one through the API. But the ban at
+    the mint is not the only line of defense we care about: a token row carrying
+    ``scope="ALL"`` + a ``resource_type`` could still arrive via a hand-crafted
+    insert by an attacker with DB access, a token minted before the ban shipped,
+    or a snapshot restore of an old row. Such a token is the F1/F3 footgun — the
+    middleware only builds ``request.state.token_scope`` for non-``ALL`` scopes,
+    so it would leave ``token_scope is None`` and be treated as a *full owner*
+    while wearing a "restricted" label.
+
+    So we bypass the API on purpose and forge the row directly, exactly as an
+    attacker (or a legacy/snapshot path) would have to, then assert the auth
+    middleware rejects it fail-closed before the route ever runs. The row mirrors
+    ``create_token``'s construction (``token_hash`` + ``token_prefix``) so
+    ``_token_from_value`` matches it on the request. Returns the raw token value.
+    """
+    token_value = secrets.token_urlsafe(32)
+
+    def _add(session: Session):
+        # _token_from_value resolves the principal via get_user() == the first
+        # User row, then looks up tokens by that user_id; match it so the forged
+        # token is actually found on the request.
+        owner = session.exec(select(User)).first()
+        assert owner is not None, "owner user must exist for the forge to match"
+        session.add(
+            UserToken(
+                user_id=owner.id,
+                token_hash=bcrypt.hash(token_value),
+                token_prefix=token_value[:8],
+                created_at=datetime.utcnow(),
+                description="forged picture-scoped ALL token (test only)",
+                scope="ALL",
+                resource_type="picture",
+                resource_id=picture_id,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_add)
+    return token_value
 
 
 # ---------------------------------------------------------------------------
@@ -126,21 +170,22 @@ class TestReadTokenRejectedOnSnapshotRoutes:
 
 
 # ---------------------------------------------------------------------------
-# ALL-scope but narrowed-by-resource-type tokens must also be rejected
+# A forged ALL+resource_type token must be rejected fail-closed
 # ---------------------------------------------------------------------------
 
 
 def test_picture_scoped_all_token_rejected_on_snapshot_routes():
-    """``require_unscoped_owner`` must also reject ALL-scope tokens whose
-    ``resource_type`` is non-null — those are share-style tokens narrowed to
-    a single resource and must not see snapshot data."""
+    """A forged ``ALL``+``resource_type`` token must be rejected before any
+    snapshot route runs.
+
+    ``create_token`` refuses to mint this shape, but a malicious / legacy /
+    snapshot-restored row could still carry it (see
+    ``_inject_picture_scoped_all_token``). The auth middleware's fail-closed
+    ``ALL``+``resource_type`` guard rejects it (403) ahead of the route's
+    ``require_unscoped_owner`` — defense in depth against the footgun that would
+    otherwise let it read as a full owner."""
     tmp, server, client = _setup_server_with_owner_session()
     try:
-        # Need a picture to scope the token to.
-        client.post(f"{API}/snapshots", json={"label": "seed-picture-for-scoping"})
-
-        # If POST /snapshots fails because there are no pictures, that's fine —
-        # we only need a token scoped to a (real or synthesized) picture id.
         from pixlstash.db_models import Picture
 
         def _add(session):
@@ -152,14 +197,20 @@ def test_picture_scoped_all_token_rejected_on_snapshot_routes():
 
         pic_id = server.vault.db.run_task(_add)
 
-        scoped_token = _make_picture_scoped_all_token(client, pic_id)
+        forged_token = _inject_picture_scoped_all_token(server, pic_id)
         r = TestClient(server.api).get(
             f"{API}/snapshots",
-            headers={"Authorization": f"Bearer {scoped_token}"},
+            headers={"Authorization": f"Bearer {forged_token}"},
         )
         assert r.status_code == 403, (
-            f"Picture-scoped ALL token must be rejected by snapshot routes; "
+            f"Forged ALL+resource_type token must be rejected by snapshot routes; "
             f"got {r.status_code}: {r.text}"
+        )
+        # Prove it was the middleware's malformed-token guard that fired, not the
+        # local-IP gate or the owner check — otherwise a regression that lets the
+        # footgun through could still pass on an incidental 403.
+        assert "misconfigured" in r.text.lower(), (
+            f"Expected the ALL+resource_type middleware guard to fire; got: {r.text}"
         )
     finally:
         server.__exit__(None, None, None)
@@ -167,8 +218,8 @@ def test_picture_scoped_all_token_rejected_on_snapshot_routes():
 
 
 # ---------------------------------------------------------------------------
-# Parametrized: a picture-scoped ALL token is rejected by EVERY read-shaped
-# snapshot endpoint, not just GET /snapshots (issue #5).
+# Parametrized: a forged ALL+resource_type token is rejected by EVERY
+# read-shaped snapshot endpoint, not just GET /snapshots (issue #5).
 # ---------------------------------------------------------------------------
 
 # (method, path) for the read-shaped snapshot routes the prior review flagged.
@@ -188,8 +239,10 @@ _SCOPED_REJECT_ROUTES = [
     ids=[p for _, p in _SCOPED_REJECT_ROUTES],
 )
 def test_picture_scoped_all_token_rejected_on_every_read_route(method, path):
-    """``require_unscoped_owner`` must reject a picture-scoped ALL token on
-    every read-shaped snapshot route, before any snapshot lookup."""
+    """A forged ``ALL``+``resource_type`` token is rejected on every read-shaped
+    snapshot route by the middleware's fail-closed guard, before any snapshot
+    lookup. See ``_inject_picture_scoped_all_token`` for why it is forged
+    directly rather than minted."""
     tmp, server, client = _setup_server_with_owner_session()
     try:
         from pixlstash.db_models import Picture
@@ -202,15 +255,19 @@ def test_picture_scoped_all_token_rejected_on_every_read_route(method, path):
             return pic.id
 
         pic_id = server.vault.db.run_task(_add)
-        scoped_token = _make_picture_scoped_all_token(client, pic_id)
+        forged_token = _inject_picture_scoped_all_token(server, pic_id)
 
         bare = TestClient(server.api)
         r = getattr(bare, method)(
-            path, headers={"Authorization": f"Bearer {scoped_token}"}
+            path, headers={"Authorization": f"Bearer {forged_token}"}
         )
         assert r.status_code == 403, (
-            f"{method.upper()} {path} must reject a picture-scoped ALL token "
-            f"with 403; got {r.status_code}: {r.text}"
+            f"{method.upper()} {path} must reject a forged ALL+resource_type "
+            f"token with 403; got {r.status_code}: {r.text}"
+        )
+        assert "misconfigured" in r.text.lower(), (
+            f"{method.upper()} {path}: expected the ALL+resource_type middleware "
+            f"guard to fire; got: {r.text}"
         )
     finally:
         server.__exit__(None, None, None)
