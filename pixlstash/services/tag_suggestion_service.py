@@ -384,6 +384,25 @@ def _decision(
     return corner, confidence
 
 
+def _neighbor_corner(direction: str) -> str | None:
+    """The corner the model-independent near-neighbour scan implicitly proposes.
+
+    The scan flags one direction per suspect; in left/right terms (left = the
+    currently-tagged image, right = its untagged twin) that maps to a single corner:
+
+      * ``add``    – the untagged suspect should gain the tag its twin already has → ``both``
+      * ``remove`` – the tagged suspect should lose the tag its twin lacks         → ``neither``
+
+    Bulk auto-resolve only fires when the tagger lands in this same corner, i.e. the two
+    independent signals agree on the fix.
+    """
+    if direction == "add":
+        return "both"
+    if direction == "remove":
+        return "neither"
+    return None
+
+
 def _set_tag(session: Session, picture_id: int, tag_value: str, present: bool) -> None:
     """Force a picture's tag to ``present`` (add, clearing the sentinel, or delete)."""
     existing = session.exec(
@@ -429,14 +448,23 @@ def bulk_accept(
     direction: str | None = None,
     dry_run: bool = False,
 ) -> dict:
-    """Auto-resolve every PENDING pair for ``tag`` the tagger is confident about.
+    """Auto-resolve every PENDING pair for ``tag`` where two *independent* signals agree.
 
-    For each pair, place it in a corner from the two images' tagger confidence (see
-    :func:`_decision`) and, when that confidence ≥ ``min_combined``, apply that corner —
-    so the human only hand-reviews the genuinely uncertain middle. ``dry_run`` applies
-    nothing and instead returns a ``sample`` of the *least-confident* would-be
-    resolutions (the riskiest ones, to spot-check). Returns
-    ``{"count", "sample", "accepted_ids", "picture_ids"}``.
+    A suggestion is applied only when the model-independent near-neighbour vote and the
+    tagger point at the *same* fix and both clear ``min_combined``:
+
+    * the near-neighbour scan proposes one corner per direction
+      (``add`` → tag both, ``remove`` → tag neither) with strength ``score``;
+    * the tagger, from the two images' per-image confidence, must land in that *same*
+      corner (see :func:`_decision`) with margin ≥ ``min_combined``;
+    * the neighbour ``score`` must also be ≥ ``min_combined``.
+
+    Anything the two signals disagree on — the tagger overruling its near-twin, swaps,
+    weakly-agreeing neighbours — is left for the human to hand-review. The queue exists
+    *because* the model is noisy, so a confident tagger alone is never enough to auto-edit
+    a label. ``dry_run`` applies nothing and instead returns a ``sample`` of the *least
+    tagger-confident* would-be resolutions (the riskiest of the agreed set, to
+    spot-check). Returns ``{"count", "sample", "accepted_ids", "picture_ids"}``.
     """
 
     def _bulk(session: Session) -> dict:
@@ -461,15 +489,19 @@ def bulk_accept(
             corner, confidence = _decision(
                 conf_map.get(tagged_id), conf_map.get(untagged_id)
             )
-            if corner is None or confidence < min_combined:
+            # Blend: only auto-resolve when the two independent signals agree. The
+            # near-neighbour scan proposes one corner per direction (add → "both",
+            # remove → "neither"); the tagger must land in that SAME corner, and both
+            # the neighbour vote (``score``) and the tagger margin (``confidence``) must
+            # clear the threshold. Mismatches — the tagger disagreeing with its near-twin,
+            # swaps, weakly-agreeing neighbours, or a twin with no prediction to compare —
+            # fall through to human review. (Constraining the corner this way also means
+            # bulk only ever applies the scan's own proposed change, never its inverse.)
+            if corner is None or corner != _neighbor_corner(r.direction):
                 continue
-            # Corners that touch the twin need a twin to act on.
-            needs_twin = (
-                (corner == "both" and r.direction == "remove")
-                or (corner == "neither" and r.direction == "add")
-                or corner == "rightonly"
-            )
-            if needs_twin and r.twin_picture_id is None:
+            if confidence < min_combined:
+                continue
+            if r.score is None or r.score < min_combined:
                 continue
             chosen.append((r, corner, confidence))
 
