@@ -1,3 +1,6 @@
+# [1.6.4] [Security:High]
+- Just released v1.6.3 to see a serious security issue in the undici NPM package
+
 # [1.6.3] [Security:Low]
 - Stop the PixlStash process before installing
 - Let the user choose GPU runtime install location and default to install folder on Windows
