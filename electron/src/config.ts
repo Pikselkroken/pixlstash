@@ -199,10 +199,24 @@ export function backendsRoot(): string {
 /**
  * Decide what to persist for a chosen overlay location: `null` (meaning "use the
  * computed default") when the choice equals the default, else the resolved path.
- * Pure so the custom-vs-default rule is unit-testable.
+ * Pure (platform passed in) so the custom-vs-default rule is unit-testable.
+ *
+ * Windows paths are case-insensitive, so a choice that differs from the default
+ * only by casing (e.g. a different drive-letter case) must still clear the
+ * override and keep tracking the install dir; POSIX filesystems are
+ * case-sensitive, so there the comparison is exact.
  */
-export function normalizeBackendsRoot(chosen: string, def: string): string | null {
-  return resolve(chosen) === resolve(def) ? null : resolve(chosen);
+export function normalizeBackendsRoot(
+  chosen: string,
+  def: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const resolved = resolve(chosen);
+  const same =
+    platform === 'win32'
+      ? resolved.toLowerCase() === resolve(def).toLowerCase()
+      : resolved === resolve(def);
+  return same ? null : resolved;
 }
 
 /** Persist (`dir`) or clear (`null`/empty) the user's chosen overlay location. */

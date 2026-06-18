@@ -57,4 +57,18 @@ describe('normalizeBackendsRoot — custom vs default persistence rule', () => {
   it('returns the resolved path when the choice differs from the default', () => {
     assert.equal(normalizeBackendsRoot('/mnt/big/backends', def), resolve('/mnt/big/backends'));
   });
+
+  it('on Windows, a choice differing only by case still clears the override', () => {
+    // Windows filesystems are case-insensitive, so /Data/Backends and
+    // /data/backends are the same folder — the override must be cleared so the
+    // default keeps tracking the install dir.
+    assert.equal(normalizeBackendsRoot('/Data/Backends', def, 'win32'), null);
+  });
+
+  it('on POSIX, a choice differing only by case is a genuinely different folder', () => {
+    assert.equal(
+      normalizeBackendsRoot('/Data/Backends', def, 'linux'),
+      resolve('/Data/Backends'),
+    );
+  });
 });

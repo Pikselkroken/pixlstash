@@ -540,7 +540,16 @@ async function moveDir(from: string, to: string): Promise<void> {
     await rename(from, to);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
-    await cp(from, to, { recursive: true });
+    // Cross-filesystem move: copy then delete the source. If the copy fails
+    // partway (e.g. the target drive fills up), clear the partial copy so we
+    // don't leave multiple GB of orphaned junk behind, then rethrow — the
+    // source is still intact for a retry.
+    try {
+      await cp(from, to, { recursive: true });
+    } catch (copyErr) {
+      await rm(to, { recursive: true, force: true });
+      throw copyErr;
+    }
     await rm(from, { recursive: true, force: true });
   }
 }
@@ -567,18 +576,29 @@ async function changeBackendsLocation(rawDir: string): Promise<void> {
     serverProcess?.stop();
     serverProcess = null;
   }
+  let moveError: unknown;
   try {
     for (const accel of await manager.listInstalled()) {
       await moveDir(join(oldRoot, accel), join(targetRoot, accel));
     }
     setBackendsRoot(normalizeBackendsRoot(targetRoot, defaultBackendsRoot()));
-  } finally {
-    // Whether the move succeeded or threw, relaunch the backend if we stopped it.
-    // On success it comes up on the new path; on failure backendsRoot() is still
-    // the old root (setBackendsRoot wasn't reached), so it uses the original
-    // overlay — the user gets the error without losing a running app.
-    if (active) await startAndLoad(active);
+  } catch (e) {
+    moveError = e;
   }
+  // Whether the move succeeded or threw, relaunch the backend if we stopped it.
+  // On success it comes up on the new path; on failure backendsRoot() is still
+  // the old root (setBackendsRoot wasn't reached), so it uses the original
+  // overlay — the user gets the error without losing a running app. A relaunch
+  // failure must not mask the original move error, so only surface it when the
+  // move itself succeeded.
+  if (active) {
+    try {
+      await startAndLoad(active);
+    } catch (relaunchErr) {
+      if (!moveError) throw relaunchErr;
+    }
+  }
+  if (moveError) throw moveError;
 }
 
 /** The pixlstash inference device for an accelerator (GPU overlays → cuda). */
