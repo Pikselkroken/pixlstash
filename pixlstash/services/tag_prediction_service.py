@@ -7,7 +7,7 @@ Provides vault-level functions so route handlers need not call vault.db directly
 import json
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, or_
+from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Tag
@@ -15,6 +15,12 @@ from pixlstash.db_models.tag import make_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import sanitise_tag
+from pixlstash.utils.service.label_ledger import (
+    NEG,
+    POS,
+    not_human_labeled,
+    record_human_label,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -119,7 +125,10 @@ def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
         ).first()
         if prediction is None:
             raise KeyError(f"Prediction not found: picture_id={pic_id} tag={tag!r}")
-        prediction.status = "CONFIRMED"
+
+        # Record the human acceptance, snapshotting the tagger version/confidence the
+        # reviewer agreed with (frozen in label_model_version/label_confidence).
+        record_human_label(session, pic_id, tag, POS)
 
         existing_tag = session.exec(
             select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
@@ -144,26 +153,11 @@ def reject_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
     """
 
     def _reject(session: Session) -> None:
-        prediction = session.exec(
-            select(TagPrediction).where(
-                TagPrediction.picture_id == pic_id,
-                TagPrediction.tag == tag,
-            )
-        ).first()
-        if prediction is None:
-            # Tag was added manually — create a synthetic REJECTED prediction so it
-            # persists through fetches.
-            session.add(
-                TagPrediction(
-                    picture_id=pic_id,
-                    tag=tag,
-                    confidence=1.0,
-                    model_version="manual",
-                    status="REJECTED",
-                )
-            )
-        else:
-            prediction.status = "REJECTED"
+        # Record the human rejection as durable NEG supervision (snapshotting the
+        # tagger version/confidence overruled). Creates a synthetic 'manual' row if
+        # the tag was added manually, so the reject persists through fetches.
+        record_human_label(session, pic_id, tag, NEG)
+        session.flush()
         recompute_anomaly_tag_uncertainty(session, pic_id)
         session.commit()
 
@@ -187,12 +181,7 @@ def delete_tag_predictions(vault: "Vault", pic_id: int) -> int:
         stmt = (
             delete(TagPrediction)
             .where(TagPrediction.picture_id == pic_id)
-            .where(
-                or_(
-                    TagPrediction.model_version != "manual",
-                    TagPrediction.model_version.is_(None),
-                )
-            )
+            .where(not_human_labeled())
         )
         result = session.exec(stmt)
         session.commit()
@@ -218,12 +207,7 @@ def reset_picture_tags(
         session.exec(
             delete(TagPrediction)
             .where(TagPrediction.picture_id == pic_id)
-            .where(
-                or_(
-                    TagPrediction.model_version != "manual",
-                    TagPrediction.model_version.is_(None),
-                )
-            )
+            .where(not_human_labeled())
         )
         session.exec(delete(Tag).where(Tag.picture_id == pic_id))
         session.add(Tag(tag=make_tag_sentinel(engine_name), picture_id=pic_id))
