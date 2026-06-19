@@ -13,6 +13,12 @@ import { apiClient } from "../utils/apiClient";
 
 const PAGE_SIZE = 300;
 
+// One picture can be the RIGHT-side twin of many cards, so the user judges the same
+// picture's tag-status repeatedly and may answer inconsistently. We tally those calls
+// per (tag, pictureId) and warn when a new decision contradicts a CONFIDENT prior.
+// "Confident" means the user has only ever said the opposite, at least this many times.
+const CONFLICT_MIN_OPPOSITE = 2;
+
 export const useReviewFixesStore = defineStore("reviewFixes", () => {
   const overlayOpen = ref(false); // whether the review overlay is showing
   const tags = ref([]); // [{ tag, add, remove, total }], busiest first
@@ -31,6 +37,23 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
   const previewOpen = ref(false);
   const scanning = ref(false); // a near-neighbour scan is running
   const scanError = ref(null);
+
+  // Scope filters: narrow the suggestion queue/summary/bulk to one project / set / character.
+  // characterId may be a number (a real character) or the literal "UNASSIGNED". Null means
+  // "that dimension is not filtered". The overlay seeds this from the app's current selection
+  // when it opens, so it lands pre-filtered to whatever view you came from.
+  const scope = ref({ projectId: null, setId: null, characterId: null });
+  // Option lists for the filter dropdowns, fetched in the background by fetchScopeOptions().
+  const projects = ref([]);
+  const sets = ref([]);
+  const characters = ref([]);
+
+  // Session vote ledger, keyed by (tag, pictureId): how many times this session the user
+  // has asserted the picture HAS the active tag vs does NOT. Shaped:
+  //   { [tag]: { [pid]: { has: number, not: number } } }
+  // Read by component computeds (consistency chips + conflict guard), so every write
+  // reassigns the ref immutably to trigger reactivity (matching the store's ref pattern).
+  const tagVotes = ref({});
 
   // Session tally, for the progress line.
   const removedCount = ref(0);
@@ -80,6 +103,114 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     return { corner, confidence, hasModel: true };
   }
 
+  // --- Session vote ledger ---------------------------------------------------
+  //
+  // Each card is a DEFINITIVE judgement of BOTH pictures' status for the active tag.
+  // LEFT is always the currently-tagged side, RIGHT the untagged side; which picture id
+  // is which depends on the suggestion direction (mirrors taggedSide/untaggedSide in the
+  // overlay). The four corners decide has/not for each side:
+  //   leftonly  → left HAS, right NOT
+  //   both      → left HAS, right HAS
+  //   neither   → left NOT, right NOT
+  //   rightonly → left NOT, right HAS
+  const CORNER_VOTES = {
+    leftonly: { left: "has", right: "not" },
+    both: { left: "has", right: "has" },
+    neither: { left: "not", right: "not" },
+    rightonly: { left: "not", right: "has" },
+  };
+
+  // Translate (item, corner) into the per-picture votes [{ pid, side, vote }], skipping a
+  // null twin (the RIGHT side may be absent). Returns [] for an unknown corner/item.
+  function votesFor(item, corner) {
+    const map = CORNER_VOTES[corner];
+    if (!item || !map) return [];
+    const leftPid =
+      item.direction === "remove" ? item.picture_id : item.twin_picture_id;
+    const rightPid =
+      item.direction === "remove" ? item.twin_picture_id : item.picture_id;
+    const out = [];
+    if (leftPid != null) out.push({ pid: leftPid, side: "left", vote: map.left });
+    if (rightPid != null) out.push({ pid: rightPid, side: "right", vote: map.right });
+    return out;
+  }
+
+  // Increment the tally for both pictures under item.tag. Reassigns tagVotes immutably so
+  // the component computeds that read it re-run.
+  function recordDecisionVotes(item, corner) {
+    const votes = votesFor(item, corner);
+    if (!votes.length || !item?.tag) return;
+    const next = { ...tagVotes.value };
+    const tagBucket = { ...(next[item.tag] || {}) };
+    for (const { pid, vote } of votes) {
+      const prev = tagBucket[pid] || { has: 0, not: 0 };
+      tagBucket[pid] = {
+        has: prev.has + (vote === "has" ? 1 : 0),
+        not: prev.not + (vote === "not" ? 1 : 0),
+      };
+    }
+    next[item.tag] = tagBucket;
+    tagVotes.value = next;
+  }
+
+  // The inverse of recordDecisionVotes, for undo / optimistic-failure rollback. Never lets
+  // a count drop below 0 (a defensive floor — a retract should always have a matching add).
+  function retractDecisionVotes(item, corner) {
+    const votes = votesFor(item, corner);
+    if (!votes.length || !item?.tag || !tagVotes.value[item.tag]) return;
+    const next = { ...tagVotes.value };
+    const tagBucket = { ...next[item.tag] };
+    for (const { pid, vote } of votes) {
+      const prev = tagBucket[pid];
+      if (!prev) continue;
+      tagBucket[pid] = {
+        has: Math.max(0, prev.has - (vote === "has" ? 1 : 0)),
+        not: Math.max(0, prev.not - (vote === "not" ? 1 : 0)),
+      };
+    }
+    next[item.tag] = tagBucket;
+    tagVotes.value = next;
+  }
+
+  // Prior votes recorded for a picture under the ACTIVE tag (0/0 when unseen).
+  function votesForPicture(pid) {
+    const bucket = tagVotes.value[activeTag.value];
+    return bucket?.[pid] ? { ...bucket[pid] } : { has: 0, not: 0 };
+  }
+
+  // For the CURRENT head item, would applying `corner` contradict a confident prior?
+  // A conflict is: for one of the two pictures, the user has ONLY ever asserted the
+  // OPPOSITE of the new vote, at least CONFLICT_MIN_OPPOSITE times. Returns the single
+  // strongest conflict (most opposite votes) when both panes conflict, else null.
+  function decisionConflict(corner) {
+    const item = current.value;
+    const votes = votesFor(item, corner);
+    if (!votes.length) return null;
+    const bucket = tagVotes.value[item.tag] || {};
+    let best = null;
+    let bestOpposite = -1;
+    for (const { pid, side, vote } of votes) {
+      const prior = bucket[pid];
+      if (!prior) continue;
+      const oppositeCount = vote === "has" ? prior.not : prior.has;
+      const sameCount = vote === "has" ? prior.has : prior.not;
+      // Confident contradiction: only ever said the opposite, at least the threshold.
+      if (oppositeCount >= CONFLICT_MIN_OPPOSITE && sameCount === 0) {
+        if (oppositeCount > bestOpposite) {
+          bestOpposite = oppositeCount;
+          best = {
+            pid,
+            side,
+            priorHas: prior.has,
+            priorNot: prior.not,
+            asserting: vote,
+          };
+        }
+      }
+    }
+    return best;
+  }
+
   // True number still pending for the active tag + direction, taken from the
   // summary and decremented as we resolve — NOT just the size of the loaded page
   // (the queue fetches PAGE_SIZE at a time and refills in the background).
@@ -95,11 +226,40 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     return remainingTotal.value;
   }
 
+  // The non-null scope filters, shaped for the API (query params or POST body). Omits any
+  // dimension that is null so an unfiltered call sends nothing and behaves as before.
+  function scopeParams() {
+    const { projectId, setId, characterId } = scope.value;
+    const p = {};
+    if (projectId != null) p.project_id = projectId;
+    if (setId != null) p.set_id = setId;
+    // character_id is typed `str` server-side (it carries either a numeric id or the
+    // literal "UNASSIGNED"). Send it as a string so the bulk-accept POST body — JSON,
+    // where a raw number would fail the `str` validation — matches the query-param path.
+    if (characterId != null && characterId !== "")
+      p.character_id = String(characterId);
+    return p;
+  }
+
+  // If the active tag is no longer in the (re-filtered) summary, fall back to the first tag
+  // so the queue never sticks on an out-of-scope tag with an empty result. Returns nothing.
+  function reconcileActiveTag() {
+    if (!tags.value.some((t) => t.tag === activeTag.value)) {
+      activeTag.value = tags.value.length ? tags.value[0].tag : null;
+    }
+  }
+
   async function fetchSummary() {
-    const res = await apiClient.get("/tag_suggestions/summary");
+    const res = await apiClient.get("/tag_suggestions/summary", {
+      params: scopeParams(),
+    });
     tags.value = res.data || [];
-    if (!activeTag.value && tags.value.length) {
-      activeTag.value = tags.value[0].tag;
+    if (!activeTag.value) {
+      // Nothing chosen yet — pick the busiest tag.
+      if (tags.value.length) activeTag.value = tags.value[0].tag;
+    } else {
+      // A filter may have dropped the current tag from the list — fall back to the first.
+      reconcileActiveTag();
     }
   }
 
@@ -115,6 +275,7 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
         tag: activeTag.value,
         status: "PENDING",
         limit: PAGE_SIZE,
+        ...scopeParams(),
       };
       if (direction.value) params.direction = direction.value;
       const res = await apiClient.get("/tag_suggestions", { params });
@@ -147,13 +308,61 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     }
   }
 
-  async function load() {
+  // Populate the scope-filter dropdowns. Mirrors the sidebar's fetchProjects/fetchPictureSets/
+  // fetchCharacters: each call is independent and degrades to an empty list on error (e.g. a
+  // read-only or wrongly-scoped token can't list one of these), so a failure on one dimension
+  // never blocks the others.
+  async function fetchScopeOptions() {
+    apiClient
+      .get("/projects")
+      .then((res) => {
+        projects.value = Array.isArray(res.data) ? res.data : [];
+      })
+      .catch(() => {
+        projects.value = [];
+      });
+    apiClient
+      .get("/picture_sets")
+      .then((res) => {
+        sets.value = Array.isArray(res.data) ? res.data : [];
+      })
+      .catch(() => {
+        sets.value = [];
+      });
+    apiClient
+      .get("/characters")
+      .then((res) => {
+        characters.value = Array.isArray(res.data) ? res.data : [];
+      })
+      .catch(() => {
+        characters.value = [];
+      });
+  }
+
+  // Open the queue. An optional initialScope seeds the filters (falling back to whatever
+  // scope is already set) BEFORE the first summary/queue/bulk fetch, so the overlay lands
+  // pre-filtered to the view it was opened from. Clears the per-session ledgers as before.
+  async function load(initialScope = null) {
     undoStack.value = [];
     lastBulk.value = null;
+    tagVotes.value = {}; // fresh ledger each time the overlay opens (like undoStack)
+    scope.value = { ...scope.value, ...(initialScope || {}) };
     await fetchSummary();
     await fetchQueue();
     await refreshBulkCount();
     fetchAllTags(); // background; powers the scan-input autocomplete
+    fetchScopeOptions(); // background; powers the project/set/character filter dropdowns
+  }
+
+  // Merge new scope filters and re-run the dependent fetches in order. The summary is
+  // refreshed first so the tag list reflects the new scope, then activeTag is reconciled
+  // (it may have dropped out of the filtered list) before loading its queue and bulk count.
+  async function setScope(next) {
+    scope.value = { ...scope.value, ...(next || {}) };
+    await fetchSummary();
+    reconcileActiveTag();
+    await fetchQueue();
+    await refreshBulkCount();
   }
 
   // Run a near-neighbour scan for a tag (rebuilds its pending queue) and switch to it.
@@ -182,11 +391,15 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
   }
 
   // Resolve the head of the queue: accept applies the fix, dismiss keeps the label.
-  async function resolveCurrent(action) {
+  // `corner` (the four-corner judgement that triggered this) is optional: when given it
+  // is recorded in the session vote ledger and stashed on the undo entry so undo / a
+  // failed write can retract it.
+  async function resolveCurrent(action, corner = null) {
     const item = current.value;
     if (!item) return;
     // Optimistic: drop it from the queue immediately so review never stalls.
     items.value = items.value.slice(1);
+    if (corner) recordDecisionVotes(item, corner);
     try {
       await apiClient.post(`/tag_suggestions/${item.id}/${action}`);
       if (action === "accept") {
@@ -202,32 +415,35 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
         if (item.direction === "add" && entry.add > 0) entry.add -= 1;
         if (entry.total > 0) entry.total -= 1;
       }
-      undoStack.value.push({ item, action });
+      undoStack.value.push({ item, action, corner });
       // Refill when the local page runs dry but the tag still has pending items.
       if (!items.value.length && pendingForActiveTag() > 0) {
         await fetchQueue();
       }
     } catch (e) {
       // Put it back at the head and surface the error so nothing is silently lost.
+      // Retract the optimistic vote so a failed write leaves no phantom tally.
+      if (corner) retractDecisionVotes(item, corner);
       items.value = [item, ...items.value];
       error.value = e?.message || "Failed to save your decision";
     }
   }
 
-  function accept() {
-    return resolveCurrent("accept");
+  function accept(corner = null) {
+    return resolveCurrent("accept", corner);
   }
 
-  function dismiss() {
-    return resolveCurrent("dismiss");
+  function dismiss(corner = null) {
+    return resolveCurrent("dismiss", corner);
   }
 
   // Resolve in the twin's favour: keep the suspect, flip the twin to match it.
   // (remove → tag the untagged twin; add → untag the tagged twin.)
-  async function fixTwin() {
+  async function fixTwin(corner = null) {
     const item = current.value;
     if (!item || !item.twin_picture_id) return;
     items.value = items.value.slice(1);
+    if (corner) recordDecisionVotes(item, corner);
     try {
       await apiClient.post(`/tag_suggestions/${item.id}/fix-twin`);
       // A label changed on the twin: remove-suggestion adds a tag, add removes one.
@@ -239,11 +455,12 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
         if (item.direction === "add" && entry.add > 0) entry.add -= 1;
         if (entry.total > 0) entry.total -= 1;
       }
-      undoStack.value.push({ item, action: "fix_twin" });
+      undoStack.value.push({ item, action: "fix_twin", corner });
       if (!items.value.length && pendingForActiveTag() > 0) {
         await fetchQueue();
       }
     } catch (e) {
+      if (corner) retractDecisionVotes(item, corner);
       items.value = [item, ...items.value];
       error.value = e?.message || "Failed to fix the twin";
     }
@@ -251,10 +468,11 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
 
   // Both labels were wrong, opposite ways: the flagged (left) image is actually clean
   // and the untagged twin (right) has the tag. Clear the left, tag the right.
-  async function swap() {
+  async function swap(corner = null) {
     const item = current.value;
     if (!item || !item.twin_picture_id) return;
     items.value = items.value.slice(1);
+    if (corner) recordDecisionVotes(item, corner);
     try {
       await apiClient.post(`/tag_suggestions/${item.id}/swap`);
       removedCount.value += 1; // the flagged (left) image was cleared
@@ -265,11 +483,12 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
         if (item.direction === "add" && entry.add > 0) entry.add -= 1;
         if (entry.total > 0) entry.total -= 1;
       }
-      undoStack.value.push({ item, action: "swap" });
+      undoStack.value.push({ item, action: "swap", corner });
       if (!items.value.length && pendingForActiveTag() > 0) {
         await fetchQueue();
       }
     } catch (e) {
+      if (corner) retractDecisionVotes(item, corner);
       items.value = [item, ...items.value];
       error.value = e?.message || "Failed to swap";
     }
@@ -287,6 +506,9 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
       return;
     }
     undoStack.value.pop();
+    // Reverse the session vote this decision recorded (entries from before this feature,
+    // or bulk/skip, carry no corner — guard for that).
+    if (last.corner) retractDecisionVotes(last.item, last.corner);
     if (last.action === "accept") {
       if (last.item.direction === "remove")
         removedCount.value = Math.max(0, removedCount.value - 1);
@@ -312,7 +534,12 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
 
   // --- Bulk "resolve the confident ones" -------------------------------------
   function bulkParams(extra) {
-    const p = { tag: activeTag.value, min_combined: bulkThreshold.value, ...extra };
+    const p = {
+      tag: activeTag.value,
+      min_combined: bulkThreshold.value,
+      ...scopeParams(),
+      ...extra,
+    };
     if (direction.value) p.direction = direction.value;
     return p;
   }
@@ -384,6 +611,8 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     error.value = null;
     undoStack.value = [];
     lastBulk.value = null;
+    tagVotes.value = {};
+    scope.value = { projectId: null, setId: null, characterId: null };
     removedCount.value = 0;
     addedCount.value = 0;
     keptCount.value = 0;
@@ -416,6 +645,18 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     scanError,
     scanTag,
     allTags,
+    scope,
+    projects,
+    sets,
+    characters,
+    scopeParams,
+    fetchScopeOptions,
+    setScope,
+    tagVotes,
+    votesForPicture,
+    decisionConflict,
+    recordDecisionVotes,
+    retractDecisionVotes,
     fetchSummary,
     fetchQueue,
     selectTag,

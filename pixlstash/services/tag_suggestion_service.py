@@ -28,6 +28,9 @@ from pixlstash.db_models.tag import is_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.filter_helpers import (
+    fetch_tag_review_scope_picture_ids,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -38,6 +41,40 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def resolve_filter_picture_ids(
+    vault: "Vault",
+    *,
+    project_id: int | None = None,
+    set_id: int | None = None,
+    character_id: str | None = None,
+) -> set[int] | None:
+    """Resolve the review-scope filter params to an intersection of suspect picture ids.
+
+    Thin wrapper around :func:`fetch_tag_review_scope_picture_ids` that runs it on a
+    read session. Keeps the route's DB access in the service layer (the route stays a
+    pure caller). Returns ``None`` when no dimension is provided; otherwise the
+    intersection of the provided dimensions (possibly an empty set).
+
+    Args:
+        vault: Application vault, used for DB task dispatch.
+        project_id: Optional project id filter.
+        set_id: Optional picture-set id filter.
+        character_id: Optional character id (numeric string, or ``"UNASSIGNED"``).
+    """
+    if project_id is None and set_id is None and not character_id:
+        return None
+
+    def _fetch(session: Session) -> set[int] | None:
+        return fetch_tag_review_scope_picture_ids(
+            session,
+            project_id=project_id,
+            set_id=set_id,
+            character_id=character_id,
+        )
+
+    return vault.db.run_immediate_read_task(_fetch)
+
+
 def list_suggestions(
     vault: "Vault",
     tag: str | None = None,
@@ -45,6 +82,7 @@ def list_suggestions(
     status: str = "PENDING",
     limit: int = 100,
     offset: int = 0,
+    picture_ids: set[int] | None = None,
 ) -> list[TagSuggestion]:
     """Return ranked suggestions, highest score first (review-soonest first).
 
@@ -55,6 +93,10 @@ def list_suggestions(
         status: Status filter (default ``PENDING``); pass ``""`` for all statuses.
         limit: Max rows to return.
         offset: Rows to skip (paging).
+        picture_ids: Optional set of in-scope suspect picture ids; when not
+            ``None`` only suggestions whose ``picture_id`` is in the set are
+            returned (the suspect, never the twin). An empty set yields no rows.
+            When ``None`` the picture scope is unrestricted (today's behaviour).
 
     Returns:
         List of TagSuggestion instances ordered by score descending, then twin_sim.
@@ -68,6 +110,8 @@ def list_suggestions(
             q = q.where(TagSuggestion.tag == tag)
         if direction:
             q = q.where(TagSuggestion.direction == direction)
+        if picture_ids is not None:
+            q = q.where(TagSuggestion.picture_id.in_(picture_ids))
         q = (
             q.order_by(
                 TagSuggestion.score.desc(),
@@ -169,19 +213,27 @@ def get_tagger_confidences(
     return vault.db.run_immediate_read_task(_fetch)
 
 
-def summary_by_tag(vault: "Vault", status: str = "PENDING") -> list[dict]:
+def summary_by_tag(
+    vault: "Vault",
+    status: str = "PENDING",
+    picture_ids: set[int] | None = None,
+) -> list[dict]:
     """Return per-tag counts of suggestions, for the queue's tag picker and progress.
 
     Args:
         vault: Application vault, used for DB task dispatch.
         status: Status to count (default ``PENDING``).
+        picture_ids: Optional set of in-scope suspect picture ids; when not
+            ``None`` only suggestions whose ``picture_id`` is in the set are
+            counted (the suspect, never the twin). An empty set yields no counts.
+            When ``None`` the picture scope is unrestricted (today's behaviour).
 
     Returns:
         List of ``{"tag", "add", "remove", "total"}`` dicts, busiest tag first.
     """
 
     def _fetch(session: Session) -> list[dict]:
-        rows = session.exec(
+        q = (
             select(
                 TagSuggestion.tag,
                 TagSuggestion.direction,
@@ -189,7 +241,10 @@ def summary_by_tag(vault: "Vault", status: str = "PENDING") -> list[dict]:
             )
             .where(TagSuggestion.status == status.upper())
             .group_by(TagSuggestion.tag, TagSuggestion.direction)
-        ).all()
+        )
+        if picture_ids is not None:
+            q = q.where(TagSuggestion.picture_id.in_(picture_ids))
+        rows = session.exec(q).all()
         by_tag: dict[str, dict] = {}
         for tag, direction, n in rows:
             entry = by_tag.setdefault(
@@ -447,6 +502,7 @@ def bulk_accept(
     min_combined: float,
     direction: str | None = None,
     dry_run: bool = False,
+    picture_ids: set[int] | None = None,
 ) -> dict:
     """Auto-resolve every PENDING pair for ``tag`` where two *independent* signals agree.
 
@@ -465,6 +521,12 @@ def bulk_accept(
     a label. ``dry_run`` applies nothing and instead returns a ``sample`` of the *least
     tagger-confident* would-be resolutions (the riskiest of the agreed set, to
     spot-check). Returns ``{"count", "sample", "accepted_ids", "picture_ids"}``.
+
+    ``picture_ids`` optionally restricts the set of suspects considered (by
+    ``TagSuggestion.picture_id``, never the twin): when not ``None`` only suspects
+    in the set are counted or resolved, so the dry-run count and the apply both
+    respect the same scope and out-of-scope suggestions are never bulk-resolved.
+    An empty set resolves nothing; ``None`` is today's unrestricted behaviour.
     """
 
     def _bulk(session: Session) -> dict:
@@ -473,6 +535,8 @@ def bulk_accept(
         )
         if direction:
             q = q.where(TagSuggestion.direction == direction)
+        if picture_ids is not None:
+            q = q.where(TagSuggestion.picture_id.in_(picture_ids))
         rows = list(session.exec(q).all())
 
         ids: set[int] = set()

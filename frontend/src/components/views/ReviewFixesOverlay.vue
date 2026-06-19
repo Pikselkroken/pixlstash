@@ -28,6 +28,61 @@
           </select>
         </label>
 
+        <!-- Scope filters: narrow the queue to a project / set / character. Each "Any"
+             option clears that dimension; changes re-run summary/queue/bulk via setScope. -->
+        <label class="rf-field">
+          <span class="rf-field-label">Project</span>
+          <select
+            class="rf-select rf-select--scope"
+            :value="store.scope.projectId ?? ''"
+            @change="onScopeChange('projectId', $event.target.value)"
+          >
+            <option value="">Any</option>
+            <option v-for="p in store.projects" :key="p.id" :value="p.id">
+              {{ p.name || `Project ${p.id}` }}
+            </option>
+          </select>
+        </label>
+
+        <label class="rf-field">
+          <span class="rf-field-label">Set</span>
+          <select
+            class="rf-select rf-select--scope"
+            :value="store.scope.setId ?? ''"
+            @change="onScopeChange('setId', $event.target.value)"
+          >
+            <option value="">Any</option>
+            <option v-for="s in store.sets" :key="s.id" :value="s.id">
+              {{ s.name || `Set ${s.id}` }}
+            </option>
+          </select>
+        </label>
+
+        <label class="rf-field">
+          <span class="rf-field-label">Character</span>
+          <select
+            class="rf-select rf-select--scope"
+            :value="store.scope.characterId ?? ''"
+            @change="onScopeChange('characterId', $event.target.value)"
+          >
+            <option value="">Any</option>
+            <option value="UNASSIGNED">Unassigned</option>
+            <option v-for="c in store.characters" :key="c.id" :value="c.id">
+              {{ c.name || `Character ${c.id}` }}
+            </option>
+          </select>
+        </label>
+
+        <button
+          v-if="hasScopeFilter"
+          class="rf-clear-filters"
+          type="button"
+          title="Clear the project / set / character filters"
+          @click="clearScope"
+        >
+          Clear filters
+        </button>
+
         <div class="rf-scan">
           <input
             v-model="scanInput"
@@ -114,9 +169,22 @@
 
         <div v-else-if="!current" class="rf-state rf-state--done">
           <v-icon size="40">mdi-check-all</v-icon>
-          <p>All caught up on “{{ store.activeTag }}”.</p>
+          <p v-if="!store.activeTag">
+            No suggestions{{ hasScopeFilter ? " match the current filters" : "" }}.
+          </p>
+          <p v-else>
+            All caught up on “{{ store.activeTag }}”{{
+              hasScopeFilter ? " for the current filters" : ""
+            }}.
+          </p>
           <p class="rf-state-sub">
-            Pick another tag above, or close to head back to the grid.
+            <template v-if="hasScopeFilter">
+              Widen the filters or pick another tag above, or close to head back
+              to the grid.
+            </template>
+            <template v-else>
+              Pick another tag above, or close to head back to the grid.
+            </template>
           </p>
         </div>
 
@@ -143,6 +211,9 @@
               <figcaption class="rf-pane-foot">
                 <span>#{{ taggedSide.id }}</span>
                 <span class="rf-pane-conf">{{ confLabel(taggedSide.conf) }}</span>
+                <span v-if="voteHint(taggedSide.id)" class="rf-vote-hint">
+                  {{ voteHint(taggedSide.id) }}
+                </span>
               </figcaption>
             </figure>
 
@@ -162,6 +233,9 @@
               <figcaption class="rf-pane-foot">
                 <span>#{{ untaggedSide.id }}</span>
                 <span class="rf-pane-conf">{{ confLabel(untaggedSide.conf) }}</span>
+                <span v-if="voteHint(untaggedSide.id)" class="rf-vote-hint">
+                  {{ voteHint(untaggedSide.id) }}
+                </span>
               </figcaption>
             </figure>
           </div>
@@ -228,6 +302,30 @@
             >
               <kbd>U</kbd> Undo
             </button>
+          </div>
+
+          <!-- Live consistency guard: shown only when the staged corner contradicts a
+               confident prior call on one of these two pictures this session. -->
+          <div v-if="pendingDecision" class="rf-confirm" role="alertdialog">
+            <span class="rf-confirm-msg">⚠ {{ pendingMessage }}</span>
+            <div class="rf-confirm-actions">
+              <button
+                class="rf-confirm-btn rf-confirm-btn--apply"
+                type="button"
+                title="Apply this decision despite the earlier call (Enter)."
+                @click="confirmPendingDecision"
+              >
+                <kbd>↵</kbd> Apply
+              </button>
+              <button
+                class="rf-confirm-btn"
+                type="button"
+                title="Leave the card unchanged (Esc)."
+                @click="cancelPendingDecision"
+              >
+                <kbd>Esc</kbd> Cancel
+              </button>
+            </div>
           </div>
 
           <p class="rf-hint">
@@ -349,6 +447,14 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useProjectStore } from "../../stores/useProjectStore";
+
+// Sidebar selection sentinels (mirrors useSelectionStore.js / App.vue): these are
+// pseudo-views, not real characters, so they never map to a character_id filter.
+const ALL_PICTURES_ID = "ALL";
+const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
+const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
 const props = defineProps({
   backendUrl: { type: String, default: "" },
@@ -356,7 +462,60 @@ const props = defineProps({
 const emit = defineEmits(["close"]);
 
 const store = useReviewFixesStore();
+const selectionStore = useSelectionStore();
+const projectStore = useProjectStore();
 const current = computed(() => store.current);
+
+// Translate the app's current sidebar/project selection into the review scope, so the
+// overlay opens pre-filtered to whatever view it was launched from. Only dimensions that
+// are actually active are set; the rest stay null (unfiltered). The "ALL"/"SCRAPHEAP"
+// pseudo-views carry no character filter; "UNASSIGNED" maps to the literal the API expects.
+function initialScopeFromSelection() {
+  const scope = { projectId: null, setId: null, characterId: null };
+  if (projectStore.selectedProjectId != null) {
+    scope.projectId = projectStore.selectedProjectId;
+  }
+  if (selectionStore.selectedSet != null) {
+    scope.setId = selectionStore.selectedSet;
+  }
+  const character = selectionStore.selectedCharacter;
+  if (character === UNASSIGNED_PICTURES_ID) {
+    scope.characterId = UNASSIGNED_PICTURES_ID;
+  } else if (
+    character != null &&
+    character !== ALL_PICTURES_ID &&
+    character !== SCRAPHEAP_PICTURES_ID
+  ) {
+    // A real (numeric) character id.
+    scope.characterId = character;
+  }
+  return scope;
+}
+
+// Any active scope filter? Drives the "Clear filters" affordance.
+const hasScopeFilter = computed(() => {
+  const { projectId, setId, characterId } = store.scope;
+  return projectId != null || setId != null || characterId != null;
+});
+
+// Apply a single dropdown change. <select> values are strings: empty = "Any" (null);
+// projectId/setId coerce to numbers; characterId keeps the "UNASSIGNED" literal but
+// coerces a real id to a number. setScope re-runs the summary/queue/bulk-count fetches.
+function onScopeChange(dimension, raw) {
+  let value = null;
+  if (raw !== "" && raw != null) {
+    if (dimension === "characterId") {
+      value = raw === "UNASSIGNED" ? "UNASSIGNED" : Number(raw);
+    } else {
+      value = Number(raw);
+    }
+  }
+  store.setScope({ [dimension]: value });
+}
+
+function clearScope() {
+  store.setScope({ projectId: null, setId: null, characterId: null });
+}
 
 // "Scan a tag" control — prefilled with the active tag (re-scan), editable for a new one.
 const scanInput = ref("");
@@ -459,32 +618,103 @@ function confLabel(conf) {
     : `tagger: ${100 - pct}% sure it's NOT “${tag}”`;
 }
 
+// --- Decision dispatch + live consistency guard ----------------------------
+//
+// Every decision routes through attemptDecision(corner): it asks the store whether the
+// corner contradicts a confident prior call on either pictured id this session, and if so
+// stages it in pendingDecision (an inline confirm bar) instead of dispatching. With no
+// conflict it dispatches immediately, exactly as before.
+const pendingDecision = ref(null); // { corner, conflict } while awaiting confirm, else null
+
+// Map a corner to its store action. Left is always the flagged image; "both"/"neither"
+// flip between accept and fixTwin by direction (keep this mapping in lock-step with the
+// store's vote translation). The corner string is threaded through so the store records
+// the consistency vote and undo can reverse it.
+function dispatchDecision(corner) {
+  const i = current.value;
+  if (!i) return;
+  if (corner === "leftonly") {
+    // Flag is right, twin clean — labels already correct, no change.
+    store.dismiss("leftonly");
+  } else if (corner === "both") {
+    // Both have it → tag the (right) untagged image too.
+    if (i.direction === "remove") store.fixTwin("both");
+    else store.accept("both");
+  } else if (corner === "neither") {
+    // Neither has it → the flag was wrong, clear the (left) flagged image.
+    if (i.direction === "remove") store.accept("neither");
+    else store.fixTwin("neither");
+  } else if (corner === "rightonly") {
+    // Left is actually clean and the right has it → swap both.
+    store.swap("rightonly");
+  }
+  closeZoom();
+}
+
+function attemptDecision(corner) {
+  if (!current.value) return;
+  const conflict = store.decisionConflict(corner);
+  if (conflict) {
+    // Hold: the user is about to contradict a confident prior call on this picture.
+    pendingDecision.value = { corner, conflict };
+    return;
+  }
+  dispatchDecision(corner);
+}
+
+// Inline confirm bar: apply the staged corner, or cancel and leave the card unchanged.
+function confirmPendingDecision() {
+  const pending = pendingDecision.value;
+  pendingDecision.value = null;
+  if (pending) dispatchDecision(pending.corner);
+}
+function cancelPendingDecision() {
+  pendingDecision.value = null;
+}
+
 // The four corners of "which really has the tag". Left is always the flagged image.
 function markBoth() {
-  // Both have it → tag the (right) untagged image too.
-  const i = current.value;
-  if (!i) return;
-  if (i.direction === "remove") store.fixTwin();
-  else store.accept();
-  closeZoom();
+  attemptDecision("both");
 }
 function markNeither() {
-  // Neither has it → the flag was wrong, clear the (left) flagged image.
-  const i = current.value;
-  if (!i) return;
-  if (i.direction === "remove") store.accept();
-  else store.fixTwin();
-  closeZoom();
+  attemptDecision("neither");
 }
 function markLeftOnly() {
-  // Flag is right, twin clean — labels already correct, no change.
-  store.dismiss();
-  closeZoom();
+  attemptDecision("leftonly");
 }
 function markRightOnly() {
-  // Left is actually clean and the right has it → swap both.
-  store.swap();
-  closeZoom();
+  attemptDecision("rightonly");
+}
+
+// Copy for the confirm bar: which way the prior call went and how many times.
+const CORNER_LABELS_FULL = {
+  leftonly: "Left only",
+  both: "Both",
+  neither: "Neither",
+  rightonly: "Right only ⇄",
+};
+const pendingMessage = computed(() => {
+  const pending = pendingDecision.value;
+  if (!pending) return "";
+  const { conflict } = pending;
+  const tag = current.value?.tag ?? "this";
+  // The conflict is on the OPPOSITE of what we're about to assert: if we're now asserting
+  // "has", the prior confident calls were "clean", and vice-versa.
+  const priorClean = conflict.asserting === "has";
+  const count = priorClean ? conflict.priorNot : conflict.priorHas;
+  const priorPhrase = priorClean ? "clean" : `having “${tag}”`;
+  const label = CORNER_LABELS_FULL[pending.corner] || pending.corner;
+  return `You've already marked #${conflict.pid} as ${priorPhrase} ${count}× this session. Apply “${label}” anyway?`;
+});
+
+// Subtle per-pane consistency hint: summarise prior votes for a picture under the active
+// tag. Empty string when there is nothing prior, so the chip only renders when it matters.
+function voteHint(pid) {
+  const { has, not } = store.votesForPicture(pid);
+  if (!has && !not) return "";
+  if (has && not) return `${not}× clean · ${has}× has it`;
+  if (has) return `you've said it has it ${has}×`;
+  return `you've called this clean ${not}×`;
 }
 
 function imgSrc(id, ext) {
@@ -621,6 +851,24 @@ function handleKeyDown(event) {
 
   const key = event.key.toLowerCase();
 
+  // A pending consistency confirm takes priority over everything else: Enter applies the
+  // staged corner, Escape cancels it (and must NOT fall through to zoom/preview/close).
+  // The L/B/N/R decision keys are swallowed until it's resolved.
+  if (pendingDecision.value) {
+    if (key === "enter") {
+      confirmPendingDecision();
+    } else if (key === "escape") {
+      cancelPendingDecision();
+    } else if (["l", "b", "n", "r"].includes(key)) {
+      // swallow — don't let a new decision fire while one is awaiting confirmation
+    } else {
+      return; // leave any other key (it's harmless) untouched
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+
   // Escape unwinds the topmost layer: zoom → preview → overlay.
   if (key === "escape") {
     if (zoom.value) closeZoom();
@@ -664,7 +912,7 @@ function handleKeyDown(event) {
 
 onMounted(() => {
   window.addEventListener("keydown", handleKeyDown, true);
-  store.load();
+  store.load(initialScopeFromSelection());
 });
 
 onUnmounted(() => {
@@ -676,7 +924,9 @@ onUnmounted(() => {
 <style scoped>
 .rf-overlay {
   position: fixed;
-  inset: 0;
+  /* Anchor below the desktop title bar (0px in a browser) so the bar and its
+     window controls stay visible and the shell centres within the area below. */
+  inset: var(--titlebar-h) 0 0 0;
   z-index: 4000;
   background: rgba(0, 0, 0, 0.82);
   display: flex;
@@ -739,6 +989,26 @@ onUnmounted(() => {
   border-radius: 6px;
   padding: 6px 10px;
   max-width: 280px;
+}
+/* Scope filters sit in the same row as the tag picker; keep them compact so the row
+   stays tidy and wraps cleanly when narrow. */
+.rf-select--scope {
+  max-width: 150px;
+  font-size: 0.85rem;
+}
+
+.rf-clear-filters {
+  background: #23252c;
+  color: #cdd0d6;
+  border: 1px solid #34373f;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.rf-clear-filters:hover {
+  background: #2c2f37;
+  color: #e8eaed;
 }
 
 .rf-direction {
@@ -1173,6 +1443,67 @@ onUnmounted(() => {
   flex: 0 0 auto;
 }
 
+/* Inline consistency-confirm bar (not a modal): a compact strip under the action row,
+   only present while a decision contradicts a confident earlier call this session. */
+.rf-confirm {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 760px;
+  padding: 8px 14px;
+  border: 1px solid #9a6b1f;
+  border-radius: 8px;
+  background: rgba(154, 107, 31, 0.14);
+}
+.rf-confirm-msg {
+  color: #f1d9ac;
+  font-size: 0.9rem;
+}
+.rf-confirm-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+.rf-confirm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #23252c;
+  color: #e8eaed;
+  border: 1px solid #34373f;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rf-confirm-btn:hover {
+  background: #2c2f37;
+}
+.rf-confirm-btn--apply {
+  background: #9a6b1f;
+  border-color: #9a6b1f;
+  color: #fff;
+}
+.rf-confirm-btn--apply:hover {
+  background: #b07d27;
+}
+.rf-confirm-btn kbd {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.75rem;
+}
+
+/* Passive per-pane consistency chip: subtle, muted, only rendered when there is a prior
+   vote for that picture, to nudge consistency before a conflict even happens. */
+.rf-vote-hint {
+  color: #c9a45c;
+  font-size: 0.74rem;
+  font-style: italic;
+}
+
 .rf-hint {
   color: #80868b;
   font-size: 0.82rem;
@@ -1187,7 +1518,9 @@ onUnmounted(() => {
 /* Bulk preview modal */
 .rf-preview {
   position: fixed;
-  inset: 0;
+  /* Below the title bar (0px in a browser) so it never covers the window
+     controls; the card centres within the reduced box. */
+  inset: var(--titlebar-h) 0 0 0;
   z-index: 4050;
   background: rgba(0, 0, 0, 0.7);
   display: flex;
@@ -1302,7 +1635,10 @@ onUnmounted(() => {
 /* Full-screen zoom layer */
 .rf-zoom {
   position: fixed;
-  inset: 0;
+  /* Anchor below the title bar (0px in a browser) so the bar / window controls
+     stay usable while zoomed. The reduced-height box is the scroll container, so
+     the zoomed image pans/scrolls within the area below the bar. */
+  inset: var(--titlebar-h) 0 0 0;
   z-index: 4100;
   background: rgba(0, 0, 0, 0.92);
   overflow: auto;

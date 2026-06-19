@@ -9,7 +9,7 @@ See :mod:`pixlstash.services.tag_suggestion_service` for the writeback semantics
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from pixlstash.db_models.tag_suggestion import TagSuggestion
@@ -17,6 +17,7 @@ from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_scan_service, tag_suggestion_service
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
+from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
 
@@ -76,6 +77,11 @@ class BulkAcceptRequest(BaseModel):
     min_combined: float = 0.9
     direction: Optional[str] = None
     dry_run: bool = False
+    # Optional review-scope narrowing — the dry-run count and the apply both honour
+    # the same filter, matched on the suspect picture only. They AND together.
+    project_id: Optional[int] = None
+    set_id: Optional[int] = None
+    character_id: Optional[str] = None
 
 
 class BulkReopenRequest(BaseModel):
@@ -145,6 +151,54 @@ def _serialize(s: TagSuggestion) -> dict:
     }
 
 
+def _resolve_review_picture_ids(
+    server,
+    request: Request,
+    project_id: int | None,
+    set_id: int | None,
+    character_id: str | None,
+) -> set[int] | None:
+    """Resolve the review scope filters into a final in-scope set of suspect picture ids.
+
+    Two independent narrowings are combined, both keyed on the suspect
+    ``TagSuggestion.picture_id``:
+
+    * **Token scope** (``fetch_scope_allowed_picture_ids``): for a scoped/READ
+      share token this is the set of pictures the token may see; for an
+      owner/unscoped token it is ``None`` (no restriction). This is the
+      authorization gate — it must never be widened by the user-supplied filters,
+      so it is always intersected in. These review endpoints are reachable by
+      scoped READ tokens (GET is not in ``READ_BLOCKED_GET_PATHS``), so without
+      this intersection a scoped token would read the whole library's queue.
+    * **User filters** (``fetch_tag_review_scope_picture_ids``): the optional
+      project / set / character narrowing the reviewer asked for, ``None`` when no
+      filter was supplied.
+
+    The result is the intersection of whichever of the two are present:
+
+    * both ``None`` → ``None`` (owner, no filter → unrestricted, as today);
+    * only the filter → the filter set (owner narrowing the queue);
+    * only the scope → the scope set (scoped token, no filter → its pictures only);
+    * both → ``scope & filter`` (a scoped token can only ever narrow further, never
+      escape its scope).
+
+    An empty set is a valid, non-error result meaning "no in-scope suspects".
+    """
+    filter_ids = tag_suggestion_service.resolve_filter_picture_ids(
+        server.vault,
+        project_id=project_id,
+        set_id=set_id,
+        character_id=character_id,
+    )
+    scope_ids = fetch_scope_allowed_picture_ids(server, request)
+
+    if scope_ids is None:
+        return filter_ids
+    if filter_ids is None:
+        return scope_ids
+    return scope_ids & filter_ids
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -154,16 +208,23 @@ def create_router(server) -> APIRouter:
         description=(
             "Returns suspected label fixes (the dataset-refinement queue), highest "
             "score first. Filter by ``tag`` (review one tag at a time), ``direction`` "
-            "(``add`` / ``remove``), and ``status`` (default ``PENDING``)."
+            "(``add`` / ``remove``), and ``status`` (default ``PENDING``). Optionally "
+            "narrow the queue to a ``project_id``, ``set_id``, and/or ``character_id`` "
+            "(numeric id, or the literal ``UNASSIGNED``); these AND together and match "
+            "the suspect picture only."
         ),
         response_model=list[TagSuggestionItemResponse],
     )
     def list_tag_suggestions(
+        request: Request,
         tag: str | None = None,
         direction: str | None = None,
         status: str = "PENDING",
         limit: int = 100,
         offset: int = 0,
+        project_id: int | None = None,
+        set_id: int | None = None,
+        character_id: str | None = None,
     ):
         if direction is not None and direction not in ("add", "remove"):
             raise HTTPException(
@@ -171,6 +232,9 @@ def create_router(server) -> APIRouter:
             )
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
+        picture_ids = _resolve_review_picture_ids(
+            server, request, project_id, set_id, character_id
+        )
         suggestions = tag_suggestion_service.list_suggestions(
             server.vault,
             tag=tag,
@@ -178,6 +242,7 @@ def create_router(server) -> APIRouter:
             status=status,
             limit=limit,
             offset=offset,
+            picture_ids=picture_ids,
         )
         ids: list[int | None] = []
         for s in suggestions:
@@ -205,12 +270,26 @@ def create_router(server) -> APIRouter:
         summary="Per-tag suggestion counts",
         description=(
             "Returns pending-suggestion counts grouped by tag (with add/remove "
-            "breakdown), busiest tag first. Drives the queue's tag picker and progress."
+            "breakdown), busiest tag first. Drives the queue's tag picker and progress. "
+            "Optionally narrow to a ``project_id``, ``set_id``, and/or ``character_id`` "
+            "(numeric id, or the literal ``UNASSIGNED``); these AND together and match "
+            "the suspect picture only."
         ),
         response_model=list[TagSuggestionSummaryItem],
     )
-    def tag_suggestions_summary(status: str = "PENDING"):
-        return tag_suggestion_service.summary_by_tag(server.vault, status=status)
+    def tag_suggestions_summary(
+        request: Request,
+        status: str = "PENDING",
+        project_id: int | None = None,
+        set_id: int | None = None,
+        character_id: str | None = None,
+    ):
+        picture_ids = _resolve_review_picture_ids(
+            server, request, project_id, set_id, character_id
+        )
+        return tag_suggestion_service.summary_by_tag(
+            server.vault, status=status, picture_ids=picture_ids
+        )
 
     @router.post(
         "/tag_suggestions/{suggestion_id}/accept",
@@ -323,22 +402,33 @@ def create_router(server) -> APIRouter:
             "Accepts every PENDING suggestion for the tag where the model-independent "
             "near-neighbour vote and the tagger agree on the fix and both clear "
             "min_combined, applying each one's fix. Pass dry_run=true to only count "
-            "what would be resolved."
+            "what would be resolved. Optionally narrow to a ``project_id``, ``set_id``, "
+            "and/or ``character_id`` (numeric id, or the literal ``UNASSIGNED``); these "
+            "AND together, match the suspect picture only, and bind both the dry-run "
+            "count and the apply so out-of-scope suggestions are never bulk-resolved."
         ),
         response_model=BulkResultResponse,
     )
-    def bulk_accept_tag_suggestions(payload: BulkAcceptRequest):
+    def bulk_accept_tag_suggestions(payload: BulkAcceptRequest, request: Request):
         if payload.direction is not None and payload.direction not in ("add", "remove"):
             raise HTTPException(
                 status_code=400, detail="direction must be 'add' or 'remove'"
             )
         min_combined = max(0.0, min(payload.min_combined, 1.0))
+        picture_ids = _resolve_review_picture_ids(
+            server,
+            request,
+            payload.project_id,
+            payload.set_id,
+            payload.character_id,
+        )
         result = tag_suggestion_service.bulk_accept(
             server.vault,
             payload.tag,
             min_combined,
             payload.direction,
             payload.dry_run,
+            picture_ids=picture_ids,
         )
         if payload.dry_run and result.get("sample"):
             ids: list[int | None] = []

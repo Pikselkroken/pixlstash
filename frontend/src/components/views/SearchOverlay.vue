@@ -157,6 +157,9 @@ onUnmounted(() => {
 </script>
 
 <style>
+/* The full-screen backdrop position / inset for this class lives in App.css
+   (`.search-overlay`), which anchors it below the desktop title bar via
+   --titlebar-h. Here we only add the flex centring for the search card. */
 .search-overlay {
   display: flex;
   justify-content: center;

@@ -170,9 +170,22 @@ const close = () => desktop?.windowClose?.();
 .titlebar {
   display: flex;
   align-items: center;
+  /* MUST stay in sync with --titlebar-h in style.css (the reserved strip every
+     full-screen overlay anchors its top at). If you change this, change that. */
   height: 34px;
   flex-shrink: 0;
   box-sizing: border-box;
+  /* Positioned + a z-index above every overlay in the app so the title bar (and
+     its drag region + window controls) is NEVER covered. The title bar is a
+     child of .app-viewport alongside the in-app overlays, so this wins over all
+     of them. z-index audit (highest overlays in the app): import-progress modal
+     99999, autocomplete dropdowns / ref-preview 9999, rf-zoom 4100, image
+     overlay 1000. 100000 must stay above all of them — bump it if any overlay
+     ever goes higher. (Vuetify dialogs/overlays teleport to <body> at ~2000 and
+     so live outside this stacking context; they are kept off the strip by
+     anchoring their top at var(--titlebar-h) instead, not by this z-index.) */
+  position: relative;
+  z-index: 100000;
   border-bottom: 1px solid rgba(var(--v-theme-on-background), 0.12);
   /* Paint from the `toolbar` token so the title bar and the toolbar strip below it
      read as one continuous piece. Both now track `toolbar`, which the theme can set

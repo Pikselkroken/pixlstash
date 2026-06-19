@@ -322,13 +322,18 @@ button:focus:not(:focus-visible) {
   color: rgb(var(--v-theme-secondary)) !important;
 }
 
-/* Ensure search overlay is visible and styled correctly */
+/* Ensure search overlay is visible and styled correctly. Anchored below the
+   desktop title bar (--titlebar-h is 0px in a plain browser) so the scrim and
+   the centred search card never cover the title-bar strip / window controls.
+   This class lands on Vuetify's teleported `.v-overlay` root, which lives
+   outside .app-viewport's stacking context, so it can't be kept off the strip
+   by the title bar's z-index — the inset is what does it. */
 .search-overlay {
   position: fixed;
-  top: 0;
+  top: var(--titlebar-h);
   left: 0;
   width: 100%;
-  height: 100%;
+  height: calc(100% - var(--titlebar-h));
   background: rgba(var(--v-theme-scrim), 0.9);
   display: flex;
   justify-content: center;

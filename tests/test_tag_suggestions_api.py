@@ -593,3 +593,390 @@ def test_accept_missing_suggestion_returns_404():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Review-scope filters: project_id / set_id / character_id (AND together).
+# These tests use the cookie-session client + unversioned paths (owner — no
+# token scope), so they exercise the user-supplied filter narrowing only.
+# ---------------------------------------------------------------------------
+
+API = "/api/v1"
+
+_distinct_counter = [0]
+
+
+def _upload_named(client, name=None):
+    """Upload a fresh, content-distinct in-memory PNG and return its id.
+
+    A monotonically-sized solid PNG guarantees a unique content hash so the
+    importer never dedupes two of these against each other.
+    """
+    import io
+
+    from PIL import Image
+
+    _distinct_counter[0] += 1
+    n = _distinct_counter[0]
+    img = Image.new("RGB", (16 + n, 16 + n), color=(n * 7 % 256, n * 13 % 256, 40))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    fname = name or f"distinct{n}.png"
+    return upload_pictures_and_wait(
+        client, [("file", (fname, buf.getvalue(), "image/png"))]
+    )["results"][0]["picture_id"]
+
+
+def _add_to_project(server, pic_id, project_id):
+    from pixlstash.db_models import PictureProjectMember
+
+    def ins(session):
+        session.add(PictureProjectMember(picture_id=pic_id, project_id=project_id))
+        session.commit()
+
+    server.vault.db.run_task(ins)
+
+
+def _add_to_set(server, pic_id, set_id):
+    from pixlstash.db_models import PictureSetMember
+
+    def ins(session):
+        session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
+        session.commit()
+
+    server.vault.db.run_task(ins)
+
+
+def _add_face(server, pic_id, character_id, face_index=0):
+    from pixlstash.db_models import Face
+
+    def ins(session):
+        session.add(
+            Face(
+                picture_id=pic_id,
+                character_id=character_id,
+                face_index=face_index,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(ins)
+
+
+def test_filter_by_project_returns_only_in_project_suspects():
+    temp_dir, client, server = _setup()
+    try:
+        in_pic = _upload_picture(client)  # Bad1.png
+        out_pic = _upload_named(client)
+        _seed_suggestion(server, in_pic, "malformed hand", "remove")
+        _seed_suggestion(server, out_pic, "malformed hand", "remove")
+        # Create a project and add only in_pic to it.
+        r = client.post(f"{API}/projects", json={"name": "Proj"})
+        assert r.status_code in (200, 201), r.text
+        project_id = r.json()["id"]
+        _add_to_project(server, in_pic, project_id)
+
+        rows = client.get("/tag_suggestions", params={"project_id": project_id}).json()
+        assert {r["picture_id"] for r in rows} == {in_pic}
+        # No filter still returns both (over-filtering would be a regression).
+        assert {r["picture_id"] for r in client.get("/tag_suggestions").json()} == {
+            in_pic,
+            out_pic,
+        }
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_filter_by_set_returns_only_in_set_suspects():
+    temp_dir, client, server = _setup()
+    try:
+        in_pic = _upload_picture(client)
+        out_pic = _upload_named(client)
+        _seed_suggestion(server, in_pic, "malformed hand", "remove")
+        _seed_suggestion(server, out_pic, "malformed hand", "remove")
+        r = client.post(f"{API}/picture_sets", json={"name": "Set"})
+        assert r.status_code in (200, 201), r.text
+        set_id = r.json()["picture_set"]["id"]
+        _add_to_set(server, in_pic, set_id)
+
+        rows = client.get("/tag_suggestions", params={"set_id": set_id}).json()
+        assert {r["picture_id"] for r in rows} == {in_pic}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_filter_by_character_numeric_and_unassigned():
+    temp_dir, client, server = _setup()
+    try:
+        char_pic = _upload_picture(client)  # has a face with character 7
+        unassigned_pic = _upload_named(client)  # face, no character
+        other_pic = _upload_named(client)  # no face at all
+        for p in (char_pic, unassigned_pic, other_pic):
+            _seed_suggestion(server, p, "malformed hand", "remove")
+        # Create a character row so character_id=<id> resolves.
+        r = client.post(f"{API}/characters", json={"name": "Hero"})
+        assert r.status_code in (200, 201), r.text
+        char_id = r.json()["character"]["id"]
+        _add_face(server, char_pic, char_id)
+        _add_face(server, unassigned_pic, None)
+
+        # Numeric character → only the picture with that character's face.
+        rows = client.get(
+            "/tag_suggestions", params={"character_id": str(char_id)}
+        ).json()
+        assert {r["picture_id"] for r in rows} == {char_pic}
+
+        # UNASSIGNED → only the picture with an unassigned face and no assigned face.
+        rows = client.get(
+            "/tag_suggestions", params={"character_id": "UNASSIGNED"}
+        ).json()
+        assert {r["picture_id"] for r in rows} == {unassigned_pic}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_filters_and_together_intersection():
+    temp_dir, client, server = _setup()
+    try:
+        both = _upload_picture(client)  # in project AND set
+        proj_only = _upload_named(client)
+        set_only = _upload_named(client)
+        for p in (both, proj_only, set_only):
+            _seed_suggestion(server, p, "malformed hand", "remove")
+
+        r = client.post(f"{API}/projects", json={"name": "P"})
+        project_id = r.json()["id"]
+        r = client.post(f"{API}/picture_sets", json={"name": "S"})
+        set_id = r.json()["picture_set"]["id"]
+        _add_to_project(server, both, project_id)
+        _add_to_project(server, proj_only, project_id)
+        _add_to_set(server, both, set_id)
+        _add_to_set(server, set_only, set_id)
+
+        rows = client.get(
+            "/tag_suggestions",
+            params={"project_id": project_id, "set_id": set_id},
+        ).json()
+        # Only the picture in BOTH dimensions survives the intersection.
+        assert {r["picture_id"] for r in rows} == {both}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_empty_scope_yields_no_rows_not_error():
+    temp_dir, client, server = _setup()
+    try:
+        pic = _upload_picture(client)
+        _seed_suggestion(server, pic, "malformed hand", "remove")
+        r = client.post(f"{API}/picture_sets", json={"name": "Empty"})
+        empty_set_id = r.json()["picture_set"]["id"]  # no members
+
+        resp = client.get("/tag_suggestions", params={"set_id": empty_set_id})
+        assert resp.status_code == 200
+        assert resp.json() == []
+        # An unknown id is likewise empty, not an error.
+        assert client.get("/tag_suggestions", params={"set_id": 999999}).json() == []
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_summary_respects_filter():
+    temp_dir, client, server = _setup()
+    try:
+        in_pic = _upload_picture(client)
+        out_pic = _upload_named(client)
+        _seed_suggestion(server, in_pic, "malformed hand", "remove")
+        _seed_suggestion(server, out_pic, "bad anatomy", "add")
+        r = client.post(f"{API}/picture_sets", json={"name": "Set"})
+        set_id = r.json()["picture_set"]["id"]
+        _add_to_set(server, in_pic, set_id)
+
+        summary = client.get(
+            "/tag_suggestions/summary", params={"set_id": set_id}
+        ).json()
+        tags = {row["tag"] for row in summary}
+        assert tags == {"malformed hand"}  # out-of-scope tag excluded
+        # Unfiltered summary sees both.
+        all_tags = {row["tag"] for row in client.get("/tag_suggestions/summary").json()}
+        assert all_tags == {"malformed hand", "bad anatomy"}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_bulk_accept_respects_filter_dry_run_and_apply():
+    temp_dir, client, server = _setup()
+    try:
+        # Two confident remove pairs for the same tag, using content-distinct
+        # pictures (so the importer doesn't dedupe the second pair onto the first).
+        def _distinct_remove_pair():
+            suspect = _upload_named(client)
+            twin = _upload_named(client)
+            _seed_tag(server, suspect, "malformed hand")  # remove → suspect tagged
+
+            def ins(session):
+                s = TagSuggestion(
+                    picture_id=suspect,
+                    tag="malformed hand",
+                    direction="remove",
+                    source="near_neighbor",
+                    score=1.0,
+                    twin_picture_id=twin,
+                )
+                session.add(s)
+                session.commit()
+
+            server.vault.db.run_task(ins)
+            return suspect, twin
+
+        in_suspect, in_twin = _distinct_remove_pair()
+        out_suspect, out_twin = _distinct_remove_pair()
+        for s, t in ((in_suspect, in_twin), (out_suspect, out_twin)):
+            _seed_prediction(server, s, "malformed hand", 0.02)
+            _seed_prediction(server, t, "malformed hand", 0.01)
+
+        r = client.post(f"{API}/picture_sets", json={"name": "Set"})
+        set_id = r.json()["picture_set"]["id"]
+        _add_to_set(server, in_suspect, set_id)  # only the in-scope suspect
+
+        # Unfiltered dry-run counts both confident pairs.
+        unfiltered = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9, "dry_run": True},
+        ).json()
+        assert unfiltered["count"] == 2
+
+        # Filtered dry-run counts only the in-scope suspect.
+        filtered = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={
+                "tag": "malformed hand",
+                "min_combined": 0.9,
+                "dry_run": True,
+                "set_id": set_id,
+            },
+        ).json()
+        assert filtered["count"] == 1
+
+        # Apply with the filter: only the in-scope suspect's tag is removed.
+        applied = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9, "set_id": set_id},
+        ).json()
+        assert applied["count"] == 1
+        assert not _has_tag(client, in_suspect, "malformed hand")
+        assert _has_tag(
+            client, out_suspect, "malformed hand"
+        )  # out of scope, untouched
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Security: a resource-scoped READ token must only see its own pictures' queue,
+# and the user-supplied filter must never widen that scope. These use the
+# versioned /api/v1 paths + a Bearer token so the auth middleware sets
+# request.state.token_scope.
+# ---------------------------------------------------------------------------
+
+
+def _setup_scoped_token_env():
+    """Two picture-sets, one suggestion each; a READ token scoped to Set A only.
+
+    Returns ``(temp_dir, owner_client, server, set_a, set_b, pic_a, pic_b, token_a)``.
+    The owner_client carries the cookie session; ``token_a`` is a Bearer value.
+    """
+    temp_dir = tempfile.TemporaryDirectory()
+    image_root = os.path.join(temp_dir.name, "images")
+    os.makedirs(image_root, exist_ok=True)
+    cfg = os.path.join(temp_dir.name, "server-config.json")
+    with open(cfg, "w") as f:
+        f.write(json.dumps({"port": 8000}))
+    server = Server(cfg)
+    client = TestClient(server.api)
+    # Versioned login so the auth middleware establishes the owner session.
+    assert (
+        client.post(
+            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        ).status_code
+        == 200
+    )
+
+    pic_a = _upload_picture(client)  # Bad1.png
+    pic_b = _upload_named(client)
+    _seed_suggestion(server, pic_a, "malformed hand", "remove")
+    _seed_suggestion(server, pic_b, "bad anatomy", "add")
+
+    r = client.post(f"{API}/picture_sets", json={"name": "Set A"})
+    set_a = r.json()["picture_set"]["id"]
+    r = client.post(f"{API}/picture_sets", json={"name": "Set B"})
+    set_b = r.json()["picture_set"]["id"]
+    _add_to_set(server, pic_a, set_a)
+    _add_to_set(server, pic_b, set_b)
+
+    r = client.post(
+        f"{API}/users/me/token",
+        json={
+            "description": "set A read",
+            "scope": "READ",
+            "resource_type": "picture_set",
+            "resource_id": set_a,
+        },
+    )
+    assert r.status_code == 200, r.text
+    token_a = r.json()["token"]
+    return temp_dir, client, server, set_a, set_b, pic_a, pic_b, token_a
+
+
+def test_scoped_token_list_only_sees_its_own_suspects():
+    temp_dir, _client, server, set_a, set_b, pic_a, pic_b, token_a = (
+        _setup_scoped_token_env()
+    )
+    try:
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token_a}"}
+        # No filter: scoped token still only sees Set A's suspect, NOT pic_b.
+        rows = bearer.get(f"{API}/tag_suggestions", headers=headers).json()
+        assert {r["picture_id"] for r in rows} == {pic_a}
+        # Summary is likewise scoped: only Set A's tag.
+        summary = bearer.get(f"{API}/tag_suggestions/summary", headers=headers).json()
+        assert {row["tag"] for row in summary} == {"malformed hand"}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scoped_token_filter_cannot_widen_to_other_set():
+    temp_dir, _client, server, set_a, set_b, pic_a, pic_b, token_a = (
+        _setup_scoped_token_env()
+    )
+    try:
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token_a}"}
+        # The token holder asks for Set B (which it cannot see): the scope
+        # intersection wins and the out-of-scope suspect is NOT leaked.
+        rows = bearer.get(
+            f"{API}/tag_suggestions",
+            params={"set_id": set_b},
+            headers=headers,
+        ).json()
+        assert rows == []
+        assert all(r["picture_id"] != pic_b for r in rows)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
