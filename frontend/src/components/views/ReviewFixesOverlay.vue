@@ -338,7 +338,7 @@
         draggable="false"
         @load="onZoomLoad"
       />
-      <div class="rf-zoom-hint">
+      <div class="rf-zoom-hint" :class="{ 'rf-zoom-hint--hidden': !hintVisible }">
         {{ Math.round(zoomScale * 100) }}% · scroll to zoom · drag to pan · click or Esc
         to close · <kbd>←</kbd>/<kbd>→</kbd> still apply
       </div>
@@ -507,6 +507,26 @@ const zoom = ref(null); // { src } or null
 const zoomScale = ref(1);
 const zoomNaturalW = ref(0);
 
+// The hint pill sits at bottom-centre and would otherwise permanently cover that
+// part of the image (native scroll can't pan content out from under a fixed pill).
+// So fade it out when idle and bring it back on any zoom/pan/mouse activity — it
+// re-appears showing the live percentage exactly when the user is interacting.
+const hintVisible = ref(true);
+let hintTimer = null;
+function pokeHint() {
+  hintVisible.value = true;
+  if (hintTimer) clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => {
+    hintVisible.value = false;
+  }, 2200);
+}
+function clearHintTimer() {
+  if (hintTimer) {
+    clearTimeout(hintTimer);
+    hintTimer = null;
+  }
+}
+
 const zoomStyle = computed(() =>
   zoomNaturalW.value
     ? { width: `${Math.round(zoomNaturalW.value * zoomScale.value)}px` }
@@ -517,9 +537,11 @@ function openZoom(id, ext) {
   zoom.value = { src: imgSrc(id, ext) };
   zoomScale.value = 1;
   zoomNaturalW.value = 0;
+  pokeHint();
 }
 function closeZoom() {
   zoom.value = null;
+  clearHintTimer();
 }
 function onZoomLoad(event) {
   // Start at "fit the viewport height" so detail is already visible, then let the
@@ -535,6 +557,7 @@ function nudgeZoom(factor) {
 }
 function onZoomWheel(event) {
   nudgeZoom(event.deltaY < 0 ? 1.15 : 1 / 1.15);
+  pokeHint();
 }
 
 // Drag-to-pan vs click-to-close: track how far the pointer moved between
@@ -553,6 +576,7 @@ function onZoomMouseDown(event) {
   event.preventDefault(); // suppress native image drag / text selection
 }
 function onZoomMouseMove(event) {
+  pokeHint();
   if (!panning.value) return;
   const dx = event.clientX - panLastX;
   const dy = event.clientY - panLastY;
@@ -645,6 +669,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeyDown, true);
+  clearHintTimer();
 });
 </script>
 
@@ -1312,6 +1337,10 @@ onUnmounted(() => {
   color: #cdd0d6;
   font-size: 0.82rem;
   white-space: nowrap;
+  transition: opacity 0.3s ease;
+}
+.rf-zoom-hint--hidden {
+  opacity: 0;
 }
 .rf-zoom-hint kbd {
   background: #23252c;
