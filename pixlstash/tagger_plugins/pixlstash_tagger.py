@@ -26,7 +26,7 @@ PIXLSTASH_TAGGER_REV_FILENAME = "pixlstash-anomaly-tagger.revision"
 # Pin a specific HuggingFace git commit SHA so the model is re-downloaded
 # whenever this value is updated, even if the local file already exists.
 # Set to "main" to always use the latest commit on the default branch.
-PIXLSTASH_TAGGER_REVISION = "d456616956954587e1a8c2d31c60c72f89a4ac3d"
+PIXLSTASH_TAGGER_REVISION = "c3aac81d6f60b5401836edbea667d77a3b33cf4d"
 PIXLSTASH_TAGGER_DEFAULT_THRESHOLD = 0.50
 PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 
