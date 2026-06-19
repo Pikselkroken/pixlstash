@@ -31,6 +31,12 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     fetch_tag_review_scope_picture_ids,
 )
+from pixlstash.utils.service.label_ledger import (
+    NEG,
+    POS,
+    clear_human_label,
+    record_human_label,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -262,30 +268,16 @@ def _apply_writeback(session: Session, suggestion: TagSuggestion) -> None:
     """Write a suggestion's label change through to the Tag table (idempotent).
 
     ``remove`` deletes the tag if present; ``add`` creates it if absent (clearing the
-    pending-retag sentinel, as the manual add path does). Recomputes anomaly uncertainty.
+    pending-retag sentinel, as the manual add path does). Routes through :func:`_set_tag`
+    so accepting a suggestion records the human POS/NEG decision in the label ledger.
     """
-    pic_id = suggestion.picture_id
-    tag_value = suggestion.tag
-
-    existing = session.exec(
-        select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag_value)
-    ).first()
-
-    if suggestion.direction == "remove":
-        if existing is not None:
-            session.delete(existing)
-    elif suggestion.direction == "add":
-        if existing is None:
-            sentinel = session.exec(select(Tag).where(Tag.picture_id == pic_id)).all()
-            for t in sentinel:
-                if is_tag_sentinel(t.tag):
-                    session.delete(t)
-            session.add(Tag(picture_id=pic_id, tag=tag_value))
+    if suggestion.direction == "add":
+        present = True
+    elif suggestion.direction == "remove":
+        present = False
     else:
         raise ValueError(f"Unknown suggestion direction: {suggestion.direction!r}")
-
-    session.flush()
-    recompute_anomaly_tag_uncertainty(session, pic_id)
+    _set_tag(session, suggestion.picture_id, suggestion.tag, present)
 
 
 def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
@@ -326,7 +318,9 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     """Undo a reviewed suggestion's label change and set it back to PENDING (no commit).
 
-    ACCEPTED touched the suspect; TWIN_FIXED touched the twin; DISMISSED touched nothing.
+    ACCEPTED touched the suspect; TWIN_FIXED touched the twin; SWAPPED touched both;
+    DISMISSED touched only the ledger. Each path also clears the human ledger entry the
+    forward review wrote, so reopening is fully symmetric (no orphan POS/NEG left behind).
     """
     tag_value = suggestion.tag
     if suggestion.status == "ACCEPTED":
@@ -338,6 +332,7 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
             session.add(Tag(picture_id=pic_id, tag=tag_value))
         elif suggestion.direction == "add" and existing is not None:
             session.delete(existing)
+        clear_human_label(session, pic_id, tag_value)
         session.flush()
         recompute_anomaly_tag_uncertainty(session, pic_id)
     elif suggestion.status == "TWIN_FIXED" and suggestion.twin_picture_id:
@@ -349,10 +344,12 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
             session.delete(existing)
         elif suggestion.direction == "add" and existing is None:
             session.add(Tag(picture_id=twin_id, tag=tag_value))
+        clear_human_label(session, twin_id, tag_value)
         session.flush()
         recompute_anomaly_tag_uncertainty(session, twin_id)
     elif suggestion.status == "SWAPPED" and suggestion.twin_picture_id:
         # Reverse the swap: restore the originally-tagged image and re-clear the other.
+        # record=False so undoing doesn't write inverse labels; clear both ledgers.
         tagged_id = (
             suggestion.picture_id
             if suggestion.direction == "remove"
@@ -363,8 +360,13 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
             if suggestion.direction == "remove"
             else suggestion.picture_id
         )
-        _set_tag(session, tagged_id, tag_value, True)
-        _set_tag(session, untagged_id, tag_value, False)
+        _set_tag(session, tagged_id, tag_value, True, record=False)
+        _set_tag(session, untagged_id, tag_value, False, record=False)
+        clear_human_label(session, tagged_id, tag_value)
+        clear_human_label(session, untagged_id, tag_value)
+    elif suggestion.status == "DISMISSED":
+        # Dismiss recorded a NEG (add) / POS (remove) on the suspect; clear it.
+        clear_human_label(session, suggestion.picture_id, tag_value)
     suggestion.status = "PENDING"
     suggestion.reviewed_at = None
 
@@ -458,8 +460,21 @@ def _neighbor_corner(direction: str) -> str | None:
     return None
 
 
-def _set_tag(session: Session, picture_id: int, tag_value: str, present: bool) -> None:
-    """Force a picture's tag to ``present`` (add, clearing the sentinel, or delete)."""
+def _set_tag(
+    session: Session,
+    picture_id: int,
+    tag_value: str,
+    present: bool,
+    *,
+    record: bool = True,
+) -> None:
+    """Force a picture's tag to ``present`` (add, clearing the sentinel, or delete).
+
+    The single chokepoint for suggestion-driven Tag mutations. When ``record`` (the
+    default for a forward human decision), also writes the human POS/NEG to the label
+    ledger — ``present`` ⇒ POS, absent ⇒ NEG — so accepting/resolving a suggestion is
+    durable supervision. Undo paths pass ``record=False`` and clear the ledger instead.
+    """
     existing = session.exec(
         select(Tag).where(Tag.picture_id == picture_id, Tag.tag == tag_value)
     ).first()
@@ -470,6 +485,8 @@ def _set_tag(session: Session, picture_id: int, tag_value: str, present: bool) -
         session.add(Tag(picture_id=picture_id, tag=tag_value))
     elif not present and existing is not None:
         session.delete(existing)
+    if record:
+        record_human_label(session, picture_id, tag_value, POS if present else NEG)
     session.flush()
     recompute_anomaly_tag_uncertainty(session, picture_id)
 
@@ -661,26 +678,12 @@ def fix_twin_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         twin_id = suggestion.twin_picture_id
         if twin_id is None:
             raise ValueError("suggestion has no twin to fix")
-        tag_value = suggestion.tag
-        existing = session.exec(
-            select(Tag).where(Tag.picture_id == twin_id, Tag.tag == tag_value)
-        ).first()
-        if suggestion.direction == "remove":
-            if existing is None:
-                sentinels = session.exec(
-                    select(Tag).where(Tag.picture_id == twin_id)
-                ).all()
-                for t in sentinels:
-                    if is_tag_sentinel(t.tag):
-                        session.delete(t)
-                session.add(Tag(picture_id=twin_id, tag=tag_value))
-        elif suggestion.direction == "add":
-            if existing is not None:
-                session.delete(existing)
+        # The twin's label is what the human is deciding here: a remove-suggestion means
+        # the untagged twin actually has the tag (POS); an add-suggestion means the
+        # tagged twin actually lacks it (NEG). _set_tag records that on the twin.
+        _set_tag(session, twin_id, suggestion.tag, suggestion.direction == "remove")
         suggestion.status = "TWIN_FIXED"
         suggestion.reviewed_at = datetime.utcnow()
-        session.flush()
-        recompute_anomaly_tag_uncertainty(session, twin_id)
         result = {
             "picture_id": suggestion.picture_id,
             "twin_picture_id": twin_id,
@@ -736,7 +739,14 @@ def swap_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 
 
 def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:
-    """Mark a suggestion DISMISSED without touching the labels.
+    """Mark a suggestion DISMISSED — the human rejected the *suggestion*, which is itself
+    a label decision: it affirms the current label is right.
+
+    Dismissing is not "skip": an ``add`` suggestion says "this tag is missing", so
+    dismissing it asserts the tag is correctly absent → human NEG; dismissing a
+    ``remove`` suggestion asserts the tag correctly belongs → human POS. Recording these
+    captures exactly the reviewed-negatives that an absent Tag row would otherwise lose.
+    The labels (Tag rows) are left untouched; only the ledger is written.
 
     Args:
         vault: Application vault, used for DB task dispatch.
@@ -753,6 +763,12 @@ def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         suggestion = session.get(TagSuggestion, suggestion_id)
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
+        record_human_label(
+            session,
+            suggestion.picture_id,
+            suggestion.tag,
+            NEG if suggestion.direction == "add" else POS,
+        )
         suggestion.status = "DISMISSED"
         suggestion.reviewed_at = datetime.utcnow()
         result = {

@@ -17,6 +17,11 @@ from pixlstash.utils.service.caption_utils import (
     serialize_tag_objects,
     sync_picture_sidecar,
 )
+from pixlstash.utils.service.label_ledger import (
+    NEG,
+    POS,
+    record_human_label_if_relevant,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -131,6 +136,8 @@ def create_router(server) -> APIRouter:
                     if not any(t.tag == tag for t in pic.tags):
                         pic.tags.append(Tag(tag=tag, picture_id=pic_id))
                     session.add(pic)
+                    # Manually applying an anomaly tag is a human POS decision.
+                    record_human_label_if_relevant(session, pic_id, tag, POS)
                     session.flush()
                     recompute_anomaly_tag_uncertainty(session, pic_id)
                     session.commit()
@@ -233,6 +240,9 @@ def create_router(server) -> APIRouter:
                     raise HTTPException(
                         status_code=404, detail="Tag not found on picture"
                     )
+                # Manually removing an anomaly tag is a human NEG decision — record it
+                # before the delete so the reviewed negative survives the lost Tag row.
+                record_human_label_if_relevant(session, pic_id, target.tag, NEG)
                 session.delete(target)
                 session.flush()
                 recompute_anomaly_tag_uncertainty(session, pic_id)
@@ -295,6 +305,8 @@ def create_router(server) -> APIRouter:
                 t.id for t in pic.tags if t.tag == tag_value and t.id is not None
             ]
             if tag_ids:
+                # Explicit single-tag removal is a human NEG decision; record it.
+                record_human_label_if_relevant(session, pic_id, tag_value, NEG)
                 session.exec(delete(Tag).where(Tag.id.in_(tag_ids)))
             session.flush()
             recompute_anomaly_tag_uncertainty(session, pic_id)
