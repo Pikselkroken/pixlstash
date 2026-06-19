@@ -24,12 +24,12 @@ class TaggerRun(SQLModel, table=True):
     # Gate outcome — stored so the trend can show rejected attempts, not just promoted ones.
     verdict: Optional[str] = Field(default=None)  # e.g. "regressed" | "improved"
     recommend: Optional[str] = Field(default=None)  # e.g. "promote" | "hold"
-    accepted: Optional[str] = Field(default=None)  # the baseline run it was compared against
+    accepted: Optional[str] = Field(
+        default=None
+    )  # the baseline run it was compared against
     anomaly_macro_f1: Optional[float] = Field(default=None)
 
     # The full report.json payload (per_tag, deltas, drift, trend, narrative, …).
     report: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
-    created_at: Optional[datetime] = Field(
-        default_factory=datetime.utcnow, index=True
-    )
+    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow, index=True)

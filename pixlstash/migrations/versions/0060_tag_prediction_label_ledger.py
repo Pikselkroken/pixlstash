@@ -36,9 +36,7 @@ _COLUMNS = {
     ),
     "label_source": sa.Column("label_source", sa.String(), nullable=True),
     "labeled_at": sa.Column("labeled_at", sa.DateTime(), nullable=True),
-    "label_model_version": sa.Column(
-        "label_model_version", sa.String(), nullable=True
-    ),
+    "label_model_version": sa.Column("label_model_version", sa.String(), nullable=True),
     "label_confidence": sa.Column("label_confidence", sa.Float(), nullable=True),
 }
 

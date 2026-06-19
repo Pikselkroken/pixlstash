@@ -14,7 +14,6 @@ import tempfile
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
-from pixlstash.db_models import Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
@@ -43,9 +42,7 @@ def _setup():
 def _upload_picture(client, name="Bad1.png"):
     img_path = os.path.join(PICTURES_DIR, name)
     with open(img_path, "rb") as f:
-        result = upload_pictures_and_wait(
-            client, [("file", (name, f, "image/png"))]
-        )
+        result = upload_pictures_and_wait(client, [("file", (name, f, "image/png"))])
     assert result["status"] == "completed"
     return result["results"][0]["picture_id"]
 

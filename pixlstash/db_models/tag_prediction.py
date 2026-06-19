@@ -64,7 +64,9 @@ class TagPrediction(SQLModel, table=True):
 
     # --- Human-label ledger (supervision record; see class docstring) ---
     label_state: str = Field(default="UNKNOWN", index=True)  # UNKNOWN | POS | NEG
-    label_source: Optional[str] = Field(default=None, index=True)  # human|propagated|model
+    label_source: Optional[str] = Field(
+        default=None, index=True
+    )  # human|propagated|model
     labeled_at: Optional[datetime] = Field(default=None)
     # Snapshot of the prediction the human adjudicated, frozen at decision time.
     label_model_version: Optional[str] = Field(default=None)

@@ -9,7 +9,9 @@ Per your rule: in this window, any anomaly tag **added** is a human POS and any 
 is a human NEG. This writes those to the live DB's tag_prediction ledger with the same
 semantics as ``record_human_label`` (upsert, synthetic 'manual' row if missing, snapshot
 the adjudicated model_version/confidence, set status). Anomaly-vocabulary tags only, so
-content tags never pollute the prediction store. Dry-run by default — pass --apply to write.
+content tags never pollute the prediction store. Scoped to the PixlTagger project by
+default (``--project``) — edits to pictures outside your tagging project are ignored;
+pass ``--all-projects`` to diff the whole vault. Dry-run by default — pass --apply to write.
 
 CAVEAT — background tagger churn: the tagger re-tags a picture by deleting and re-inserting
 all its Tag rows, so if it re-ran on a picture *inside the window*, that churn looks like
@@ -90,13 +92,42 @@ def _is_anomaly(tag: str) -> bool:
     return bool(tag) and tag.strip().lower() in ANOMALY_LABELS
 
 
-def _diff(conn: sqlite3.Connection):
+def _resolve_project_id(conn: sqlite3.Connection, name: str) -> int:
+    """Resolve a project NAME to its id in the live DB, or exit with a helpful error.
+
+    We deliberately do NOT silently fall back to the whole vault on a bad name — the
+    caller asked to scope to a specific project, so a typo should stop, not widen.
+    """
+    row = conn.execute("SELECT id FROM project WHERE name = ?", (name,)).fetchone()
+    if row:
+        return int(row[0])
+    available = [r[0] for r in conn.execute("SELECT name FROM project ORDER BY name")]
+    raise SystemExit(
+        f"No project named {name!r}. Available projects: {available}. "
+        "Pass --project <name>, or --all-projects to diff the whole vault."
+    )
+
+
+def _diff(conn: sqlite3.Connection, project_id: int | None = None):
     """Return (added, removed) lists of (picture_id, tag) for live-vs-baseline, anomaly only.
 
     added   = present live, absent in baseline, picture still exists → human POS
     removed = present baseline, absent live, picture still exists    → human NEG
+
+    When *project_id* is given, only pictures that are members of that project (the
+    canonical ``pictureprojectmember`` M-M table in the live DB) count — edits to pictures
+    outside your tagging project are ignored. ``None`` diffs the whole vault.
     """
     cur = conn.cursor()
+    # Optional project scope. {pic} is filled with each query's picture-id column; the ?
+    # binds project_id. Empty string (whole vault) formats to nothing.
+    proj = (
+        " AND EXISTS (SELECT 1 FROM pictureprojectmember m "
+        "WHERE m.picture_id = {pic} AND m.project_id = ?)"
+        if project_id is not None
+        else ""
+    )
+    params = (project_id,) if project_id is not None else ()
     added = [
         (pid, tag)
         for pid, tag in cur.execute(
@@ -105,6 +136,8 @@ def _diff(conn: sqlite3.Connection):
             "WHERE t.tag IS NOT NULL AND NOT EXISTS ("
             "  SELECT 1 FROM base.tag b "
             "  WHERE b.picture_id = t.picture_id AND b.tag = t.tag)"
+            + proj.format(pic="t.picture_id"),
+            params,
         ).fetchall()
         if _is_anomaly(tag)
     ]
@@ -116,6 +149,8 @@ def _diff(conn: sqlite3.Connection):
             "WHERE b.tag IS NOT NULL AND NOT EXISTS ("
             "  SELECT 1 FROM tag t "
             "  WHERE t.picture_id = b.picture_id AND t.tag = b.tag)"
+            + proj.format(pic="b.picture_id"),
+            params,
         ).fetchall()
         if _is_anomaly(tag)
     ]
@@ -193,12 +228,26 @@ def main() -> None:
         help="Window: baseline = newest snapshot at least this many days old (default 2)",
     )
     parser.add_argument(
-        "--snapshot-id", type=int, default=None, help="Force a specific baseline snapshot"
+        "--snapshot-id",
+        type=int,
+        default=None,
+        help="Force a specific baseline snapshot",
     )
     parser.add_argument(
         "--snapshot-path",
         default=None,
         help="Diff against this .sqlite file directly (skips snapshot-table lookup)",
+    )
+    parser.add_argument(
+        "--project",
+        default="PixlTagger",
+        help="Scope the diff to pictures in this project (default: PixlTagger). Only "
+        "changes to its pictures are recovered; everything else is ignored.",
+    )
+    parser.add_argument(
+        "--all-projects",
+        action="store_true",
+        help="Diff the whole vault instead of scoping to --project.",
     )
     parser.add_argument(
         "--exclude-tagger-touched",
@@ -223,6 +272,16 @@ def main() -> None:
 
     conn = sqlite3.connect(args.db_path)
     try:
+        # Resolve the project scope first so a bad name fails before any decompress/attach.
+        project_id = None
+        if args.all_projects:
+            print("Scope: whole vault (--all-projects).")
+        else:
+            project_id = _resolve_project_id(conn, args.project)
+            print(
+                f"Scope: project {args.project!r} (id={project_id}) — pictures outside it "
+                "are ignored."
+            )
         if args.snapshot_path:
             abs_snapshot = args.snapshot_path
             baseline_at = datetime.utcnow() - timedelta(days=args.days)
@@ -243,7 +302,7 @@ def main() -> None:
         )
 
         conn.execute("ATTACH DATABASE ? AS base", (abs_snapshot,))
-        added, removed = _diff(conn)
+        added, removed = _diff(conn, project_id)
 
         if args.exclude_tagger_touched:
             touched = _tagger_touched(conn, baseline_at)
