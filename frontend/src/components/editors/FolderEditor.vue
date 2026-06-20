@@ -285,7 +285,59 @@
             </div>
           </div>
 
-          <!-- Path display (edit mode) -->
+          <!-- Reference path input (edit mode, non-Docker) -->
+          <div
+            v-else-if="isEditMode && !isImport && !props.inDocker"
+            class="editor-path-display editor-path-display--with-action"
+          >
+            <v-icon size="16" class="editor-path-icon"
+              >mdi-folder-network-outline</v-icon
+            >
+            <span class="editor-path-text" :title="activeFolder?.folder">{{
+              activeFolder?.folder
+            }}</span>
+            <v-btn
+              variant="outlined"
+              size="small"
+              icon
+              class="editor-relocate-btn"
+              title="Relocate folder and move files"
+              @click="
+                emit('relocate', activeFolder);
+                emit('close');
+              "
+            >
+              <v-icon size="18">mdi-folder-move-outline</v-icon>
+            </v-btn>
+          </div>
+
+          <!-- Reference path inputs (edit mode, Docker) -->
+          <div
+            v-else-if="isEditMode && !isImport && props.inDocker"
+            class="editor-docker-helper"
+          >
+            <v-text-field
+              ref="pathInputRef"
+              v-model="localHostPath"
+              label="Local folder (host path)"
+              placeholder="/home/you/Pictures"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+            <v-text-field
+              v-model="localPath"
+              label="Container path"
+              placeholder="/data/ref/pictures-001"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+          </div>
+
+          <!-- Path display (edit mode for import folders) -->
           <div v-else class="editor-path-display">
             <v-icon size="16" class="editor-path-icon">{{
               isImport ? "mdi-folder-import" : "mdi-folder-network-outline"
@@ -623,7 +675,7 @@ const props = defineProps({
   imageRoot: { type: String, default: null },
 });
 
-const emit = defineEmits(["close", "saved", "deleted"]);
+const emit = defineEmits(["close", "saved", "deleted", "relocate"]);
 
 // --- Type-derived helpers ---
 
@@ -676,7 +728,16 @@ const activeFolder = computed(() => props.folder ?? frozenEditFolder.value);
 const isEditMode = computed(() => Boolean(activeFolder.value));
 
 const isValid = computed(() => {
-  if (isEditMode.value) return true;
+  if (isEditMode.value) {
+    if (!isImport.value && props.inDocker) {
+      return (
+        localPath.value.trim().length > 0 &&
+        localHostPath.value.trim().length > 0
+      );
+    }
+    if (!isImport.value) return localPath.value.trim().length > 0;
+    return true;
+  }
   if (props.inDocker) return localHostPath.value.trim().length > 0;
   return localPath.value.trim().length > 0;
 });
@@ -958,6 +1019,7 @@ watch(
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       localLabel.value = editingFolder.label || "";
+      localPath.value = editingFolder.folder || "";
       localHostPath.value = String(editingFolder.host_path || "");
       localDeleteAfterImport.value = Boolean(editingFolder.delete_after_import);
       localSyncDescriptions.value = Boolean(editingFolder.sync_descriptions);
@@ -1111,12 +1173,20 @@ async function save() {
   saveLoading.value = true;
   saveError.value = "";
   try {
+    let savedResponse = null;
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       const patchData = { label: localLabel.value.trim() || null };
       if (isImport.value) {
         patchData.delete_after_import = localDeleteAfterImport.value;
       } else {
+        const editedPath = localPath.value.trim();
+        if (editedPath && editedPath !== editingFolder.folder) {
+          patchData.folder = editedPath;
+        }
+        if (props.inDocker) {
+          patchData.host_path = localHostPath.value.trim() || null;
+        }
         patchData.allow_delete_file = localAllowDelete.value;
         patchData.sync_descriptions = localSyncDescriptions.value;
         patchData.sync_tags = localSyncTags.value;
@@ -1128,7 +1198,10 @@ async function save() {
             DEFAULT_DESCRIPTION_SUFFIX,
           ) ?? null;
       }
-      await apiClient.patch(`${apiBase.value}/${editingFolder.id}`, patchData);
+      savedResponse = await apiClient.patch(
+        `${apiBase.value}/${editingFolder.id}`,
+        patchData,
+      );
     } else {
       const pathToSave = props.inDocker
         ? dockerSuggestedPath.value
@@ -1156,9 +1229,9 @@ async function save() {
           DEFAULT_DESCRIPTION_SUFFIX,
         );
       }
-      await apiClient.post(apiBase.value, createData);
+      savedResponse = await apiClient.post(apiBase.value, createData);
     }
-    emit("saved");
+    emit("saved", savedResponse?.data || null);
   } catch (error) {
     saveError.value =
       error?.response?.data?.detail || `Failed to save ${props.type} folder.`;
@@ -1379,16 +1452,25 @@ async function copyToClipboard(value, successMessage) {
   opacity: 0.85;
 }
 
+.editor-path-display--with-action {
+  opacity: 1;
+}
+
 .editor-path-icon {
   flex-shrink: 0;
   opacity: 0.7;
 }
 
 .editor-path-text {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: monospace;
+}
+
+.editor-relocate-btn {
+  flex-shrink: 0;
 }
 
 .editor-toggle-row {

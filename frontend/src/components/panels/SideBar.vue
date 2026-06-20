@@ -15,6 +15,7 @@ import ProjectFiles from "./ProjectFiles.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
+import FolderBrowser from "../editors/FolderBrowser.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -262,6 +263,7 @@ const setCtxIconMenuOpen = ref(false);
 const setCtxColorMenuOpen = ref(false);
 const setCtxAppearanceMenuPos = ref({ top: 0, left: 0, openUp: false });
 const sidebarCtxFolder = ref(null); // reference folder object or null
+const sidebarCtxFolderScopePath = ref(null); // null means the reference folder root
 const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
@@ -363,6 +365,7 @@ const referenceFoldersCollapsed = ref(false);
 const importFoldersCollapsed = ref(false);
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
+const dragOverReferenceTargetKey = ref(null);
 
 // Reference folder editor state
 const referenceFolderEditorOpen = ref(false);
@@ -370,6 +373,13 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 const importFolderEditorOpen = ref(false);
 const importFolderEditorFolder = ref(null); // null = create, object = edit
 const addFolderTypeDialogOpen = ref(false);
+const referenceFolderRelocateOpen = ref(false);
+const referenceFolderRelocateFolder = ref(null);
+const referenceFolderRelocateDestination = ref("");
+const referenceFolderRelocateBrowseOpen = ref(false);
+const referenceFolderRelocateLoading = ref(false);
+const referenceFolderRelocateError = ref("");
+const referenceFolderRelocateResult = ref("");
 
 function openAddFolderTypeDialog() {
   addFolderTypeDialogOpen.value = true;
@@ -394,6 +404,78 @@ function closeReferenceFolderEditor() {
   referenceFolderEditorFolder.value = null;
 }
 
+function pathParent(path) {
+  const raw = String(path || "");
+  if (!raw || raw === "/") return "/";
+  const trimmed = raw.replace(/[\\/]+$/, "");
+  if (/^[A-Za-z]:$/.test(trimmed)) return `${trimmed}\\`;
+  const match = trimmed.match(/^(.*)[\\/][^\\/]+$/);
+  if (!match) return "/";
+  const parent = match[1];
+  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return parent || "/";
+}
+
+function openReferenceFolderRelocateDialog(folder) {
+  if (!folder || inDocker.value) return;
+  referenceFolderRelocateFolder.value = folder;
+  referenceFolderRelocateDestination.value = "";
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+  referenceFolderRelocateOpen.value = true;
+}
+
+function closeReferenceFolderRelocateDialog() {
+  if (referenceFolderRelocateLoading.value) return;
+  referenceFolderRelocateOpen.value = false;
+  referenceFolderRelocateFolder.value = null;
+  referenceFolderRelocateDestination.value = "";
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+}
+
+const referenceFolderRelocateInitialPath = computed(() =>
+  pathParent(referenceFolderRelocateFolder.value?.folder || ""),
+);
+
+const relocationRegisteredPaths = computed(() => {
+  const currentId = Number(referenceFolderRelocateFolder.value?.id);
+  return referenceFolders.value
+    .filter((rf) => Number(rf.id) !== currentId)
+    .map((rf) => rf.folder.replace(/[\\/]+$/, ""));
+});
+
+async function relocateReferenceFolder() {
+  const folder = referenceFolderRelocateFolder.value;
+  const destination = referenceFolderRelocateDestination.value.trim();
+  if (!folder?.id || !destination) return;
+  referenceFolderRelocateLoading.value = true;
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+  try {
+    const { data } = await apiClient.post(
+      `/reference-folders/${folder.id}/relocate`,
+      { destination_folder: destination },
+    );
+    await fetchReferenceFolders();
+    folderBrowseCache.value = {};
+    for (const rf of referenceFolders.value) {
+      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
+    }
+    emit("images-moved", {
+      imageIds: data?.moved_picture_ids || [],
+      kind: "reference-folder",
+      refresh: true,
+    });
+    referenceFolderRelocateResult.value = `Moved ${data?.moved_entry_count ?? 0} item${data?.moved_entry_count === 1 ? "" : "s"} and updated ${data?.rewritten_count ?? 0} picture path${data?.rewritten_count === 1 ? "" : "s"}.`;
+  } catch (error) {
+    referenceFolderRelocateError.value =
+      error?.response?.data?.detail || error?.message || "Relocation failed.";
+  } finally {
+    referenceFolderRelocateLoading.value = false;
+  }
+}
+
 function openImportFolderEditor(folder = null) {
   importFolderEditorFolder.value = folder ?? null;
   importFolderEditorOpen.value = true;
@@ -410,10 +492,22 @@ function showDockerRestartPrompt() {
   );
 }
 
-async function referenceFolderSaved() {
+async function referenceFolderSaved(savedFolder = null) {
   const createdNewFolder = !referenceFolderEditorFolder.value?.id;
   closeReferenceFolderEditor();
   await fetchReferenceFolders();
+  if (savedFolder?.relocation) {
+    const relocation = savedFolder.relocation;
+    const issues =
+      Number(relocation.missing_count || 0) +
+      Number(relocation.unmatched_count || 0);
+    const issueText = issues
+      ? ` ${issues} item${issues === 1 ? "" : "s"} need attention.`
+      : "";
+    window.alert(
+      `Reference folder relocated. Rewritten ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`,
+    );
+  }
   // A newly added folder may be active-but-unscanned, so ensure polling runs.
   _startFolderStatusPoll();
   if (inDocker.value && createdNewFolder) {
@@ -1819,6 +1913,7 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
     sidebarCtxFolder.value = null;
+    sidebarCtxFolderScopePath.value = null;
     sidebarCtxImportFolder.value = null;
     sidebarCtxProject.value = null;
     const numId = Number(item.id);
@@ -1837,6 +1932,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = item;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1844,6 +1940,15 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = item;
+      sidebarCtxFolderScopePath.value = null;
+      sidebarCtxImportFolder.value = null;
+      sidebarCtxProject.value = null;
+      sidebarCtxAllPictures.value = false;
+    } else if (type === "folder-path") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = null;
+      sidebarCtxFolder.value = item?.folder || null;
+      sidebarCtxFolderScopePath.value = item?.path || null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1851,6 +1956,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = item;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1858,6 +1964,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = item;
       sidebarCtxAllPictures.value = false;
@@ -1865,6 +1972,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = true;
@@ -2643,6 +2751,80 @@ function handleDragOverProject(id) {
 
 function handleDragLeaveProject() {
   dragOverProjectId.value = null;
+}
+
+function isInternalImageDrag(event) {
+  return event?.dataTransfer?.types?.includes("application/json");
+}
+
+function readDraggedImageIds(event) {
+  try {
+    const data = JSON.parse(event?.dataTransfer?.getData("application/json") || "{}");
+    return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
+  } catch (e) {
+    console.error("Could not parse drag data:", e);
+    return [];
+  }
+}
+
+function handleReferenceFolderDragOver(folderId, scopePath, event) {
+  if (draggingEntityKind.value || !isInternalImageDrag(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dragOverReferenceTargetKey.value = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
+}
+
+function handleReferenceFolderDragLeave(folderId, scopePath) {
+  const key = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
+  if (dragOverReferenceTargetKey.value === key) {
+    dragOverReferenceTargetKey.value = null;
+  }
+}
+
+async function handleReferenceFolderDrop(folderId, scopePath, event) {
+  dragOverReferenceTargetKey.value = null;
+  if (draggingEntityKind.value) return;
+  const imageIds = readDraggedImageIds(event);
+  if (!imageIds.length) return;
+  try {
+    const body = { picture_ids: imageIds };
+    if (scopePath) body.destination_subpath = scopePath;
+    const { data } = await apiClient.post(
+      `/reference-folders/${folderId}/move-pictures`,
+      body,
+    );
+    await fetchReferenceFolders();
+    folderBrowseCache.value = {};
+    for (const rf of referenceFolders.value) {
+      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
+    }
+    emit("images-moved", {
+      imageIds: data?.moved_picture_ids || imageIds,
+      kind: "reference-folder",
+      refresh: true,
+    });
+  } catch (e) {
+    const detail = e?.response?.data?.detail;
+    const failures = detail?.failures || [];
+    if (failures.length) {
+      const first = failures[0];
+      alert(
+        `Failed to move ${failures.length} image${failures.length === 1 ? "" : "s"}: ${first.reason || "unknown error"}`,
+      );
+      return;
+    }
+    alert("Failed to move images: " + (detail?.message || detail || e.message || e));
+  }
+}
+
+function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
+  const folder = referenceFolders.value.find((rf) => rf.id === rfId);
+  if (!folder) return;
+  openSidebarCtxMenu(
+    "folder-path",
+    { folder, path, label },
+    event,
+  );
 }
 
 async function onProjectDrop(projectId, event) {
@@ -3437,6 +3619,7 @@ defineExpose({
     @close="closeReferenceFolderEditor"
     @saved="referenceFolderSaved"
     @deleted="referenceFolderDeleted"
+    @relocate="openReferenceFolderRelocateDialog"
   />
   <FolderEditor
     type="import"
@@ -3489,6 +3672,83 @@ defineExpose({
       </v-card-actions>
     </v-card>
   </v-dialog>
+
+  <v-dialog v-model="referenceFolderRelocateOpen" max-width="560">
+    <v-card class="relocate-card">
+      <v-card-title class="relocate-title">Relocate Reference Folder</v-card-title>
+      <v-card-text class="relocate-body">
+        <div class="relocate-path-block">
+          <div class="relocate-path-label">Current folder</div>
+          <div
+            class="relocate-path-value"
+            :title="referenceFolderRelocateFolder?.folder"
+          >
+            {{ referenceFolderRelocateFolder?.folder }}
+          </div>
+        </div>
+        <div class="relocate-path-block">
+          <div class="relocate-path-label">Destination folder</div>
+          <div class="relocate-destination-row">
+            <v-text-field
+              v-model="referenceFolderRelocateDestination"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              readonly
+              placeholder="Choose an empty folder"
+            />
+            <v-btn
+              variant="outlined"
+              size="small"
+              icon
+              title="Choose destination folder"
+              @click="referenceFolderRelocateBrowseOpen = true"
+            >
+              <v-icon size="18">mdi-folder-open-outline</v-icon>
+            </v-btn>
+          </div>
+        </div>
+        <div class="relocate-warning">
+          This moves every file and subfolder from the current reference folder
+          into the destination folder, then updates PixlStash to use the new
+          location. The destination must be empty.
+        </div>
+        <div v-if="referenceFolderRelocateError" class="relocate-error">
+          {{ referenceFolderRelocateError }}
+        </div>
+        <div v-if="referenceFolderRelocateResult" class="relocate-result">
+          {{ referenceFolderRelocateResult }}
+        </div>
+      </v-card-text>
+      <v-card-actions class="relocate-actions">
+        <v-spacer />
+        <v-btn variant="text" @click="closeReferenceFolderRelocateDialog">
+          {{ referenceFolderRelocateResult ? "Close" : "Cancel" }}
+        </v-btn>
+        <v-btn
+          v-if="!referenceFolderRelocateResult"
+          color="primary"
+          variant="flat"
+          :loading="referenceFolderRelocateLoading"
+          :disabled="!referenceFolderRelocateDestination"
+          @click="relocateReferenceFolder"
+        >
+          Move Files and Relocate
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <FolderBrowser
+    :open="referenceFolderRelocateBrowseOpen"
+    :initial-path="referenceFolderRelocateInitialPath"
+    :registered-paths="relocationRegisteredPaths"
+    :image-root="referenceFoldersImageRoot"
+    already-registered-label="Already a reference folder"
+    allow-create-folder
+    @select="(path) => (referenceFolderRelocateDestination = path)"
+    @close="referenceFolderRelocateBrowseOpen = false"
+  />
 
   <aside
     ref="sidebarRootRef"
@@ -4451,9 +4711,25 @@ defineExpose({
             >
               <div
                 class="sidebar-folder-row sidebar-folder-root-row"
-                :class="{ active: selectedFolderKey === 'rf-' + rf.id }"
-                :title="rf.folder"
+                :class="{
+                  active: selectedFolderKey === 'rf-' + rf.id,
+                  droppable: dragOverReferenceTargetKey === 'rf-' + rf.id,
+                }"
+                :title="
+                  inDocker
+                    ? rf.folder
+                    : `${rf.folder} - drop dragged reference images here to move them`
+                "
                 @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
+                @dragover="
+                  !inDocker && handleReferenceFolderDragOver(rf.id, null, $event)
+                "
+                @dragleave="
+                  !inDocker && handleReferenceFolderDragLeave(rf.id, null)
+                "
+                @drop.prevent="
+                  !inDocker && handleReferenceFolderDrop(rf.id, null, $event)
+                "
                 @click="
                   if (!inDocker) {
                     if (!expandedFolderIds.has(rf.id))
@@ -4499,6 +4775,24 @@ defineExpose({
                 <span class="sidebar-folder-label">{{
                   rf.label || rf.folder
                 }}</span>
+                <span v-if="!inDocker" class="sidebar-folder-actions" @click.stop>
+                  <button
+                    type="button"
+                    class="sidebar-folder-action-btn"
+                    title="Relocate folder and move files"
+                    @click="openReferenceFolderRelocateDialog(rf)"
+                  >
+                    <v-icon size="13">mdi-folder-move-outline</v-icon>
+                  </button>
+                  <button
+                    type="button"
+                    class="sidebar-folder-action-btn"
+                    title="Edit folder settings"
+                    @click="openReferenceFolderEditor(rf)"
+                  >
+                    <v-icon size="13">mdi-pencil-outline</v-icon>
+                  </button>
+                </span>
                 <span
                   v-if="rf.status === 'mount_error'"
                   class="sidebar-folder-status-badge sidebar-folder-status--mount_error"
@@ -4565,8 +4859,22 @@ defineExpose({
                       :selected-folder-key="selectedFolderKey"
                       :folder-browse-cache="folderBrowseCache"
                       :expanded-folder-ids="expandedFolderIds"
+                      :drop-target-key="dragOverReferenceTargetKey"
                       @select="handleFolderNodeSelect"
                       @toggle="handleFolderNodeToggle"
+                      @drag-over="
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDragOver(rfId, path, event)
+                      "
+                      @drag-leave="
+                        ({ rfId, path }) =>
+                          handleReferenceFolderDragLeave(rfId, path)
+                      "
+                      @drop="
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDrop(rfId, path, event)
+                      "
+                      @context="handleReferenceFolderNodeContext"
                     />
                   </template>
                   <div
@@ -5972,6 +6280,20 @@ defineExpose({
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
         <button
+          v-if="!inDocker && !sidebarCtxFolderScopePath"
+          class="sidebar-ctx-item"
+          @click="
+            openReferenceFolderRelocateDialog(sidebarCtxFolder);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-folder-move-outline</v-icon
+          >
+          Relocate
+        </button>
+        <button
+          v-if="!sidebarCtxFolderScopePath"
           class="sidebar-ctx-item"
           @click="
             openReferenceFolderEditor(sidebarCtxFolder);
@@ -5982,6 +6304,7 @@ defineExpose({
           Edit
         </button>
         <button
+          v-if="!sidebarCtxFolderScopePath"
           class="sidebar-ctx-item sidebar-ctx-item--danger"
           @click="
             deleteReferenceFolderById(sidebarCtxFolder.id);
@@ -8344,6 +8667,12 @@ defineExpose({
   color: rgb(var(--v-theme-on-primary));
 }
 
+.sidebar-folder-row.droppable {
+  filter: brightness(1.2);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
 .sidebar-folder-children {
   padding-left: 4px;
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
@@ -8356,6 +8685,42 @@ defineExpose({
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.sidebar-folder-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.sidebar-folder-row:hover .sidebar-folder-actions,
+.sidebar-folder-row:focus-within .sidebar-folder-actions,
+.sidebar-folder-row.active .sidebar-folder-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-folder-action-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.sidebar-folder-action-btn:hover {
+  background: rgba(var(--v-theme-accent), 0.18);
+  opacity: 1;
 }
 
 .sidebar-folder-chevron,
@@ -8753,6 +9118,81 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .folder-type-actions {
+  padding: 10px 16px 14px;
+}
+
+.relocate-card {
+  border-radius: 14px;
+}
+
+.relocate-title {
+  font-size: 1.04rem;
+  font-weight: 700;
+  padding: 16px 18px 8px;
+}
+
+.relocate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 18px 0;
+}
+
+.relocate-path-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.relocate-path-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  opacity: 0.68;
+  text-transform: uppercase;
+}
+
+.relocate-path-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface-variant), 0.35);
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+
+.relocate-destination-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.relocate-destination-row .v-text-field {
+  flex: 1;
+}
+
+.relocate-warning {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+}
+
+.relocate-error {
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-error), 0.08);
+  border: 1px solid rgba(var(--v-theme-error), 0.22);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.relocate-result {
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-accent));
+}
+
+.relocate-actions {
   padding: 10px 16px 14px;
 }
 </style>

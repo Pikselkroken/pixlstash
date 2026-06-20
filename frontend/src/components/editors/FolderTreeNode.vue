@@ -8,9 +8,17 @@ const props = defineProps({
   selectedFolderKey: { type: String, default: null },
   folderBrowseCache: { type: Object, required: true },
   expandedFolderIds: { type: Object, required: true }, // Set
+  dropTargetKey: { type: String, default: null },
 });
 
-const emit = defineEmits(["select", "toggle"]);
+const emit = defineEmits([
+  "select",
+  "toggle",
+  "drag-over",
+  "drag-leave",
+  "drop",
+  "context",
+]);
 
 function isExpanded() {
   return props.expandedFolderIds.has(props.entry.path);
@@ -42,8 +50,17 @@ function childImageCount() {
   <div>
     <div
       class="sidebar-folder-row sidebar-folder-child-row"
-      :class="{ active: selectedFolderKey === 'path-' + entry.path }"
-      :title="entry.path"
+      :class="{
+        active: selectedFolderKey === 'path-' + entry.path,
+        droppable: dropTargetKey === 'path-' + entry.path,
+      }"
+      :title="`${entry.path} - drop dragged reference images here to move them`"
+      @contextmenu.prevent="
+        emit('context', { rfId, path: entry.path, label: entry.name, event: $event })
+      "
+      @dragover="emit('drag-over', { rfId, path: entry.path, event: $event })"
+      @dragleave="emit('drag-leave', { rfId, path: entry.path, event: $event })"
+      @drop="emit('drop', { rfId, path: entry.path, event: $event })"
       @click="
         emit('select', 'path-' + entry.path, {
           referenceFolderId: rfId,
@@ -88,8 +105,13 @@ function childImageCount() {
           :selected-folder-key="selectedFolderKey"
           :folder-browse-cache="folderBrowseCache"
           :expanded-folder-ids="expandedFolderIds"
+          :drop-target-key="dropTargetKey"
           @select="(key, payload) => emit('select', key, payload)"
           @toggle="(path) => emit('toggle', path)"
+          @drag-over="(payload) => emit('drag-over', payload)"
+          @drag-leave="(payload) => emit('drag-leave', payload)"
+          @drop="(payload) => emit('drop', payload)"
+          @context="(payload) => emit('context', payload)"
         />
         <div
           v-if="folderBrowseCache[entry.path]?.error"
@@ -167,6 +189,12 @@ function childImageCount() {
 
 .sidebar-folder-row.active .sidebar-folder-count-badge {
   color: rgba(var(--v-theme-on-primary), 0.9);
+}
+
+.sidebar-folder-row.droppable {
+  filter: brightness(1.2);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
 }
 
 .sidebar-folder-status--active {
