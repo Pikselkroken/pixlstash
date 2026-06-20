@@ -44,6 +44,9 @@ class WorkPlanner:
             MissingTextEmbeddingFinder,
         )
         from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+        from pixlstash.tasks.missing_tag_prediction_finder import (
+            MissingTagPredictionFinder,
+        )
         from pixlstash.tasks.missing_watch_folder_import_finder import (
             MissingWatchFolderImportFinder,
         )
@@ -77,6 +80,10 @@ class WorkPlanner:
                 database=database,
             ),
             TaskType.TAGGER: MissingTagFinder(
+                database=database,
+                engine_getter=engine_getter,
+            ),
+            TaskType.TAG_PREDICTION_BACKFILL: MissingTagPredictionFinder(
                 database=database,
                 engine_getter=engine_getter,
             ),

@@ -12,7 +12,7 @@ from typing import Optional
 from concurrent.futures import Future
 
 from sqlmodel import Session, select
-from sqlalchemy import func
+from sqlalchemy import func, and_
 
 
 from .database import DBPriority, VaultDatabase
@@ -972,6 +972,12 @@ class Vault:
                     self.db.run_immediate_read_task(self._count_missing_tags) or 0
                 )
                 label = "pictures_tagged"
+            elif worker_type == TaskType.TAG_PREDICTION_BACKFILL:
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_tag_predictions)
+                    or 0
+                )
+                label = "tag_prediction_backfill"
             elif worker_type == TaskType.QUALITY:
                 missing = int(
                     self.db.run_immediate_read_task(self._count_missing_quality) or 0
@@ -1101,6 +1107,27 @@ class Vault:
             select(func.count())
             .select_from(Picture)
             .where(Picture.tags.any(has_sentinel))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_tag_predictions(session: Session) -> int:
+        """Count pictures with real tags but no tag-prediction rows.
+
+        These were tagged before predictions were written inline (or by a
+        different engine then); the MissingTagPredictionFinder back-fills them.
+        """
+        has_sentinel = Tag.tag.like(
+            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+        )
+        has_real_tag = Picture.tags.any(and_(Tag.tag.is_not(None), ~has_sentinel))
+        no_prediction = ~Picture.tag_predictions.any()
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(has_real_tag, no_prediction, Picture.deleted.is_(False))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]

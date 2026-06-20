@@ -551,6 +551,7 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | `FACE_EXTRACTION` | GPU | `MissingFaceExtractionFinder` | InsightFace detection + 512-d embedding |
 | `QUALITY` | CPU | `MissingQualityFinder` | OpenCV quality metrics |
 | `TAGGER` | GPU | `MissingTagFinder` | All enabled tag plugins (union) |
+| `TAG_PREDICTION_BACKFILL` | GPU | `MissingTagPredictionFinder` | Recover `tag_prediction` rows for pictures with tags but no predictions (runs the PixlStash tagger for raw scores only; never re-tags). Gated on the PixlStash tagger being active; depends on `FACE_EXTRACTION` + `TAGGER` so live work runs first. |
 | `DESCRIPTION` | GPU | `MissingDescriptionFinder` | Image caption generation |
 | `TEXT_EMBEDDING` | GPU | `MissingTextEmbeddingFinder` | SentenceTransformer on captions |
 | `IMAGE_EMBEDDING` | GPU | `MissingImageEmbeddingFinder` | CLIP image embedding |
