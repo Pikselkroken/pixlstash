@@ -1414,14 +1414,35 @@ onUnmounted(() => {
    OverlayToolbar widget. The rules below only style the review-specific controls
    slotted into #actions, matched to the toolbar's control language: 32px-tall
    surfaces, 4px radius, the same dark-surface theme tokens as .overlay-icon-btn. */
+
+/* Compact the shared toolbar chrome for THIS overlay only. The review bar packs a tag
+   picker, three scope dropdowns, a penalised toggle and a progress tally into one row, so
+   the default title/close type scale and 12px gaps pushed it to three rows on a narrow
+   window. Scoped under .rf-shell via :deep so ImageOverlay's toolbar keeps its own scale. */
+.rf-shell :deep(.overlay-toolbar) {
+  gap: 8px;
+  min-height: 36px;
+  padding: 3px 10px;
+}
+.rf-shell :deep(.overlay-toolbar-actions) {
+  gap: 6px;
+}
+.rf-shell :deep(.overlay-toolbar-title) {
+  font-size: 0.85rem;
+}
+.rf-shell :deep(.overlay-toolbar-close) {
+  font-size: 0.78rem;
+  padding: 5px 10px;
+}
+
 .rf-field {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .rf-field-label {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  font-size: 0.6375rem;
+  font-size: 0.5875rem;
 }
 .rf-penalised-toggle {
   display: inline-flex;
@@ -1445,8 +1466,8 @@ onUnmounted(() => {
   color: rgb(var(--v-theme-on-dark-surface));
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: 4px;
-  padding: 0 8px;
-  font-size: 0.6375rem;
+  padding: 0 6px;
+  font-size: 0.6rem;
   max-width: 280px;
   cursor: pointer;
 }
@@ -1454,9 +1475,10 @@ onUnmounted(() => {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 /* Scope filters sit in the same row as the tag picker; keep them compact so the row
-   stays tidy and wraps cleanly when narrow. */
+   stays tidy and wraps cleanly when narrow. Native <select> clips the value to this width
+   and still shows the full option text in the open list. */
 .rf-select--scope {
-  max-width: 150px;
+  max-width: 118px;
 }
 
 .rf-scan-error {
@@ -1472,8 +1494,8 @@ onUnmounted(() => {
 }
 .rf-tag-pick {
   position: relative;
-  width: 200px;
-  font-size: 0.6375rem;
+  width: 150px;
+  font-size: 0.6rem;
 }
 .rf-tag-trigger {
   display: flex;
@@ -1488,7 +1510,7 @@ onUnmounted(() => {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.6375rem;
+  font-size: 0.6rem;
 }
 .rf-tag-trigger:hover:not(:disabled) {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
@@ -1601,6 +1623,7 @@ onUnmounted(() => {
 }
 .rf-progress-remaining {
   font-weight: 600;
+  font-size: 0.72rem;
 }
 .rf-progress-tally {
   color: #9aa0a6;
