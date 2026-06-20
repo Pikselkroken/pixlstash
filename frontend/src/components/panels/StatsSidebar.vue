@@ -1,6 +1,7 @@
 <script setup>
-import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, watch, computed, onMounted, onUnmounted } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
@@ -95,11 +96,10 @@ watch(activeTab, (tab) => {
   if (tab === "pictures" && !picStatsLoaded.value && !picStatsLoading.value) {
     fetchPicStats();
   }
-  if (tab === "tasks") {
-    tmStartPolling();
-  } else {
-    tmStopPolling();
-  }
+  // Tell the store whether the Tasks tab is open so it can switch to the fast
+  // poll cadence. The store keeps polling globally either way (that's what
+  // drives the app-wide activity light); this only changes how often.
+  tasksStore.setTasksTabOpen(tab === "tasks");
 });
 
 // Tag confidence filter
@@ -405,24 +405,18 @@ watch(
 );
 onUnmounted(() => {
   clearTimeout(_wsTagUpdateTimer);
-  tmStopPolling();
+  tasksStore.setTasksTabOpen(false);
   for (const { observer } of tmCanvasRefs.values()) observer.disconnect();
   tmCanvasRefs.clear();
 });
 
 // ─── Tasks tab ────────────────────────────────────────────────────────────────
-const tmWorkerSnapshots = ref({});
-const tmSystemUsage = ref(null);
-const tmSeries = ref({});
-const tmLastSnapshot = new Map();
-const tmLastActiveAtByWorker = new Map();
-const tmLastProgressAtByWorker = new Map();
-let tmPollTimer = null;
-let tmFetchInFlight = false;
-const TM_WORKER_REMOVE_GRACE_SECONDS = 10;
-const TM_RATE_AVERAGE_WINDOW_SECONDS = 20;
-const TM_WINDOW_SECONDS = 120;
-const tmNowSeconds = ref(Date.now() / 1000);
+// The data (worker snapshots, rate series, active-state, ComfyUI runs) lives in
+// the shared tasks store, which is the single poller of /workers/progress. This
+// component owns only the Tasks-tab view: canvas sparkline drawing and the
+// label / number formatting.
+const tasksStore = useTasksStore();
+const TM_WINDOW_SECONDS = 120; // sparkline x-axis span, seconds
 const tmCanvasRefs = new Map(); // key → { el, observer }
 
 function tmRegisterCanvas(key, el) {
@@ -433,11 +427,11 @@ function tmRegisterCanvas(key, el) {
   }
   if (!el) return;
   const observer = new ResizeObserver(() => {
-    tmDrawSparkline(el, tmSeries.value[key] || []);
+    tmDrawSparkline(el, tasksStore.series[key] || []);
   });
   observer.observe(el);
   tmCanvasRefs.set(key, { el, observer });
-  requestAnimationFrame(() => tmDrawSparkline(el, tmSeries.value[key] || []));
+  requestAnimationFrame(() => tmDrawSparkline(el, tasksStore.series[key] || []));
 }
 
 function tmGetThemeRgb(name) {
@@ -454,11 +448,6 @@ function tmThemeRgba(name, alpha, fallback = "0,0,0") {
   return `rgba(${v}, ${alpha})`;
 }
 
-function tmGetMaxRate(key) {
-  const samples = tmSeries.value[key] || [];
-  return samples.length ? Math.max(...samples.map((s) => s.rate || 0)) : 0;
-}
-
 function tmFormatRate(value) {
   const rate = Number(value || 0);
   if (rate >= 10) return rate.toFixed(0);
@@ -468,9 +457,17 @@ function tmFormatRate(value) {
 
 function tmDrawAll() {
   for (const [key, { el }] of tmCanvasRefs.entries()) {
-    tmDrawSparkline(el, tmSeries.value[key] || []);
+    tmDrawSparkline(el, tasksStore.series[key] || []);
   }
 }
+
+// The store reassigns its `series` ref on every poll; redraw the sparklines
+// whenever it does. tmDrawAll is a no-op when no canvases are mounted (tab
+// closed), so this is cheap to leave always-on.
+watch(
+  () => tasksStore.series,
+  () => requestAnimationFrame(tmDrawAll),
+);
 
 function tmDrawSparkline(canvas, samples) {
   const ctx = canvas.getContext("2d");
@@ -601,42 +598,11 @@ function tmFormatUsage(used, total, percent) {
 }
 
 function tmGetLatestRate(key) {
-  const samples = tmSeries.value[key] || [];
-  if (!samples.length) return 0;
-  const latest = samples[samples.length - 1];
-  const latestTime = Number(latest?.t || 0);
-  if (!latestTime) return Number(latest?.rate || 0);
-  const cutoff = latestTime - TM_RATE_AVERAGE_WINDOW_SECONDS;
-  const windowSamples = samples.filter((s) => Number(s?.t || 0) >= cutoff);
-  if (!windowSamples.length) return Number(latest?.rate || 0);
-  // Use only non-zero samples for the average to avoid stall artifacts from
-  // batch transitions dragging down the displayed rate. Fall back to the full
-  // window (including zeros) only when all samples in the window are zero.
-  const nonZero = windowSamples.filter((s) => Number(s?.rate || 0) > 0);
-  const activeSamples = nonZero.length ? nonZero : windowSamples;
-  const sum = activeSamples.reduce((acc, s) => acc + Number(s?.rate || 0), 0);
-  return sum / activeSamples.length;
+  return tasksStore.getLatestRate(key);
 }
 
-const tmWorkerEntries = computed(() => {
-  const entries = Object.entries(tmWorkerSnapshots.value || {});
-  return entries
-    .filter(([key, snapshot]) => {
-      if (!snapshot) return false;
-      if (typeof snapshot.active === "boolean") return snapshot.active;
-      const lastActiveAt = Number(tmLastActiveAtByWorker.get(key) || 0);
-      const lastProgressAt = Number(tmLastProgressAtByWorker.get(key) || 0);
-      const latestActivityAt = Math.max(lastActiveAt, lastProgressAt);
-      return (
-        latestActivityAt > 0 &&
-        tmNowSeconds.value - latestActivityAt <= TM_WORKER_REMOVE_GRACE_SECONDS
-      );
-    })
-    .map(([key, snapshot]) => ({ key, snapshot }));
-});
-
 const tmSystemItems = computed(() => {
-  const usage = tmSystemUsage.value || {};
+  const usage = tasksStore.systemUsage || {};
   const items = [];
   const cpuAllCores = Number.isFinite(usage.cpu_percent_all_cores)
     ? usage.cpu_percent_all_cores
@@ -666,64 +632,6 @@ const tmSystemItems = computed(() => {
   });
   return items;
 });
-
-async function tmFetchProgress() {
-  if (tmFetchInFlight) return;
-  tmFetchInFlight = true;
-  try {
-    const res = await apiClient.get("/workers/progress");
-    const workers = res.data?.workers || {};
-    tmSystemUsage.value = res.data?.process || res.data?.system || null;
-    const now = Date.now() / 1000;
-    tmNowSeconds.value = now;
-    const nextSeries = { ...tmSeries.value };
-    tmWorkerSnapshots.value = workers;
-    for (const [key, snapshot] of Object.entries(workers)) {
-      const current = Number(snapshot.current || 0);
-      const prev = tmLastSnapshot.get(key);
-      let rate = 0;
-      if (prev && current > prev.current && now > prev.t) {
-        rate = (current - prev.current) / (now - prev.t);
-      }
-      if (rate > 0) tmLastProgressAtByWorker.set(key, now);
-      const hasExplicitActive = typeof snapshot?.active === "boolean";
-      const isActive = hasExplicitActive
-        ? snapshot.active
-        : Boolean(snapshot?.running) && rate > 0;
-      if (isActive) tmLastActiveAtByWorker.set(key, now);
-      tmLastSnapshot.set(key, { current, t: now });
-      const entry = { t: now, rate, current };
-      const existing = nextSeries[key] ? [...nextSeries[key]] : [];
-      existing.push(entry);
-      nextSeries[key] = existing.filter((e) => e.t >= now - 120);
-    }
-    for (const key of Array.from(tmLastActiveAtByWorker.keys())) {
-      if (!(key in workers)) tmLastActiveAtByWorker.delete(key);
-    }
-    for (const key of Array.from(tmLastProgressAtByWorker.keys())) {
-      if (!(key in workers)) tmLastProgressAtByWorker.delete(key);
-    }
-    tmSeries.value = nextSeries;
-    await nextTick();
-    requestAnimationFrame(tmDrawAll);
-  } catch {
-    // silent
-  } finally {
-    tmFetchInFlight = false;
-  }
-}
-
-function tmStartPolling() {
-  if (tmPollTimer) return;
-  tmFetchProgress();
-  tmPollTimer = setInterval(tmFetchProgress, 2000);
-}
-
-function tmStopPolling() {
-  if (!tmPollTimer) return;
-  clearInterval(tmPollTimer);
-  tmPollTimer = null;
-}
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;
@@ -1000,8 +908,17 @@ function handleResolutionBarClick(label) {
             type="button"
             @click="activeTab = 'tasks'"
           >
-            <v-icon size="12">mdi-timeline-clock-outline</v-icon>
+            <v-icon
+              size="12"
+              :class="{ 'tm-tab-icon--busy': tasksStore.hasActiveTasks }"
+              >mdi-timeline-clock-outline</v-icon
+            >
             Tasks
+            <span
+              v-if="tasksStore.hasActiveTasks"
+              class="tm-tab-pulse"
+              :title="`${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'}`"
+            ></span>
           </button>
         </div>
       </div>
@@ -1778,40 +1695,64 @@ function handleResolutionBarClick(label) {
 
       <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
       <template v-if="activeTab === 'tasks'">
-        <div v-if="tmWorkerEntries.length === 0" class="tm-idle-msg">
-          No active workers
+        <div v-if="tasksStore.activeEntries.length === 0" class="tm-idle-msg">
+          No active tasks
         </div>
         <div v-else class="tm-worker-list">
-          <div
-            v-for="entry in tmWorkerEntries"
-            :key="entry.key"
-            class="tm-worker-row"
-          >
-            <div class="tm-worker-row-top">
-              <span
-                class="tm-status-dot"
-                :class="{
-                  'tm-status-dot--running':
-                    entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
-                }"
-              ></span>
-              <span class="tm-worker-label">{{
-                tmFormatLabel(entry.key, entry.snapshot.label)
-              }}</span>
-              <span class="tm-worker-progress">{{
-                tmFormatProgress(entry.snapshot)
-              }}</span>
+          <template v-for="entry in tasksStore.activeEntries" :key="entry.key">
+            <!-- ComfyUI run: frontend-driven, shows a progress bar + abort -->
+            <div v-if="entry.kind === 'comfyui'" class="tm-worker-row">
+              <div class="tm-worker-row-top">
+                <span class="tm-status-dot tm-status-dot--running"></span>
+                <span class="tm-worker-label">{{ entry.run.label }}</span>
+                <button
+                  v-if="entry.run.status !== 'completed'"
+                  class="tm-comfy-abort"
+                  type="button"
+                  title="Abort ComfyUI run"
+                  @click="tasksStore.abortComfyuiRun(entry.key)"
+                >
+                  ✕
+                </button>
+              </div>
+              <div class="tm-comfy-bar">
+                <div
+                  class="tm-comfy-fill"
+                  :style="{
+                    width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
+                  }"
+                ></div>
+              </div>
+              <div class="tm-comfy-message">{{ entry.run.message }}</div>
             </div>
-            <div class="tm-worker-row-bottom">
-              <canvas
-                :ref="(el) => tmRegisterCanvas(entry.key, el)"
-                class="tm-sparkline"
-              ></canvas>
-              <span class="tm-worker-rate">
-                {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
-              </span>
+            <!-- Backend worker: throughput sparkline + rate -->
+            <div v-else class="tm-worker-row">
+              <div class="tm-worker-row-top">
+                <span
+                  class="tm-status-dot"
+                  :class="{
+                    'tm-status-dot--running':
+                      entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
+                  }"
+                ></span>
+                <span class="tm-worker-label">{{
+                  tmFormatLabel(entry.key, entry.snapshot.label)
+                }}</span>
+                <span class="tm-worker-progress">{{
+                  tmFormatProgress(entry.snapshot)
+                }}</span>
+              </div>
+              <div class="tm-worker-row-bottom">
+                <canvas
+                  :ref="(el) => tmRegisterCanvas(entry.key, el)"
+                  class="tm-sparkline"
+                ></canvas>
+                <span class="tm-worker-rate">
+                  {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
+                </span>
+              </div>
             </div>
-          </div>
+          </template>
         </div>
         <div v-if="tmSystemItems.length" class="tm-system-bar">
           <div
@@ -2509,6 +2450,81 @@ function handleResolutionBarClick(label) {
 .tm-status-dot--running {
   background: rgb(var(--v-theme-primary));
   box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.55);
+  animation: tm-dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* ── ComfyUI run rows ──────────────────────────────────────────────────────── */
+.tm-comfy-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  overflow: hidden;
+}
+
+.tm-comfy-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: rgb(var(--v-theme-primary));
+  transition: width 0.25s ease;
+}
+
+.tm-comfy-message {
+  font-size: 10px;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tm-comfy-abort {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.tm-comfy-abort:hover {
+  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-error), 0.12);
+}
+
+/* ── Tasks tab "busy" indicators ───────────────────────────────────────────── */
+.tm-tab-icon--busy {
+  animation: tm-dot-pulse 1.4s ease-in-out infinite;
+  color: rgb(var(--v-theme-primary));
+}
+
+.tm-tab-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.6);
+  animation: tm-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tm-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.78);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-status-dot--running,
+  .tm-tab-icon--busy,
+  .tm-tab-pulse {
+    animation: none;
+  }
 }
 
 .tm-worker-label {

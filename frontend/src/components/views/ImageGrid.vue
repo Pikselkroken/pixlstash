@@ -345,7 +345,7 @@
           class="pending-imports-pill"
           @click="emit('load-sort-changed')"
         >
-          ⟳ Sort order changed externally — click to refresh
+          ⟳ View changed externally — click to refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
@@ -841,6 +841,7 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
@@ -919,6 +920,7 @@ const emit = defineEmits([
   "update:visible-range-label",
   "load-pending-imports",
   "load-sort-changed",
+  "flag-sort-changed",
   "open-settings",
   "open-import",
   "confirm-export-zip",
@@ -1279,6 +1281,9 @@ function handlePluginRunRequest(payload) {
       ? payload.parameters
       : {};
   if (!pluginName || !pictureIds.length) return;
+  // Stack the derived outputs with their originals unless the caller opted out.
+  // Default true keeps the historical behaviour for any other run-plugin source.
+  const stack = payload?.stack !== false;
   // Build per-image captions from stored descriptions in the grid.
   const idSet = new Set(pictureIds);
   const idToDesc = new Map();
@@ -1287,7 +1292,7 @@ function handlePluginRunRequest(payload) {
     if (idSet.has(id)) idToDesc.set(id, img.description || "");
   }
   const captions = pictureIds.map((id) => idToDesc.get(id) ?? "");
-  runPluginWithParameters(pluginName, pictureIds, parameters, captions);
+  runPluginWithParameters(pluginName, pictureIds, parameters, captions, stack);
 }
 
 async function runPluginWithParameters(
@@ -1295,6 +1300,7 @@ async function runPluginWithParameters(
   pictureIds,
   parameters,
   captions,
+  stack = true,
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
@@ -1304,6 +1310,7 @@ async function runPluginWithParameters(
         picture_ids: pictureIds,
         parameters: parameters || {},
         captions: Array.isArray(captions) ? captions : undefined,
+        stack,
       },
     );
     const createdIds = Array.isArray(res.data?.created_picture_ids)
@@ -1869,6 +1876,14 @@ watch(
       // replaces allGridImages). Defer the reconcile until the overlay closes so
       // prev/next stay stable; closeOverlay() applies the filter removal in place.
       pendingOverlayGridRefresh.value = true;
+      return;
+    }
+    if (payload.external) {
+      // The tag change came from outside this tab (background tagging, or
+      // another owner tab). Don't reshuffle the user's filtered view under them:
+      // raise the click-to-refresh pill, the same contract as external picture
+      // changes. Only this tab's own edits refresh the filtered grid in place.
+      if (pictureIds.length) emit("flag-sort-changed", pictureIds);
       return;
     }
     // Coalesce all task-driven tag updates into an infrequent full refresh to
@@ -2521,6 +2536,10 @@ const visibleRangeLabel = computed(() => {
 });
 
 const userPrefsStore = useUserPrefsStore();
+const reviewFixesStore = useReviewFixesStore();
+// True while the modal review-fixes overlay is up. Grid keyboard shortcuts and
+// drag-and-drop are suppressed so they don't act on the grid behind it.
+const reviewOverlayOpen = computed(() => reviewFixesStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
 // The trail logic lives in useBreadcrumb, shared with the desktop title bar.
@@ -3912,6 +3931,7 @@ const {
     thumbnailRefs,
     dragPreviewRefs,
     prefetchFullImage,
+    reviewOverlayOpen,
   },
   props,
 );
@@ -4134,6 +4154,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     rowHeight,
     visibleStart,
     overlayOpen,
+    reviewOverlayOpen,
     showSelectionBar,
     selectedImageIds,
     lastSelectedImageId,

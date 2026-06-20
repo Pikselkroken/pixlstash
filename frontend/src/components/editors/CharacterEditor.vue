@@ -393,7 +393,9 @@ watch(
 
 .ref-preview-overlay {
   position: fixed;
-  inset: 0;
+  /* Below the desktop title bar (0px in a browser) so the window controls stay
+     usable; the preview image centres within the reduced box. */
+  inset: var(--titlebar-h) 0 0 0;
   z-index: 9999;
   background: rgba(0, 0, 0, 0.82);
   display: flex;

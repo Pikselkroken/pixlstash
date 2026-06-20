@@ -16,6 +16,7 @@ export function useGridKeyboardNav(
     rowHeight,
     visibleStart,
     overlayOpen,
+    reviewOverlayOpen,
     showSelectionBar,
     selectedImageIds,
     lastSelectedImageId,
@@ -94,7 +95,11 @@ export function useGridKeyboardNav(
     ) {
       return;
     }
-    if (overlayOpen.value) return; // Ignore if overlay is open
+    if (overlayOpen.value) return; // Ignore if the lightbox overlay is open
+    // The review-fixes overlay is a modal review surface with its own keyboard
+    // handler; grid shortcuts (T, scoring digits, Delete, select-all, arrows)
+    // must not fire on the grid behind it.
+    if (reviewOverlayOpen?.value) return;
     if (toolbarSelectionMenuOpen?.value) return; // Ignore when selection menu is open
     if (event.key === "Escape") {
       if (showSelectionBar.value) {

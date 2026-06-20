@@ -667,10 +667,13 @@ defineExpose({ startImport });
 <style scoped>
 .import-progress-modal {
   position: fixed;
-  top: 0;
+  /* Anchor below the desktop title bar (0px in a browser) so the bar / window
+     controls stay visible while an import is in progress. Height shrinks to
+     match so the spinner stays centred in the area below the bar. */
+  top: var(--titlebar-h);
   left: 0;
   width: 100vw;
-  height: 100vh;
+  height: calc(100vh - var(--titlebar-h));
   background: rgba(var(--v-theme-scrim), 0.65);
   z-index: 99999;
   display: flex;

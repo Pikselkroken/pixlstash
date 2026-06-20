@@ -49,6 +49,7 @@ async def run_plugin_on_pictures(
     parameters: dict,
     captions: list[str] | None = None,
     origin_client_id: str | None = None,
+    stack: bool = True,
 ) -> dict:
     """Run a named image plugin on a list of pictures with progress tracking.
 
@@ -65,6 +66,9 @@ async def run_plugin_on_pictures(
             at request entry. Plugin output is a UI-initiated import, so it is
             echoed on the PICTURE_IMPORTED event so the originating tab can do a
             targeted grid insert instead of a full reload. Echo-matching only.
+        stack: When ``True`` (default), plugin outputs are placed in the source
+            picture's stack. When ``False``, the physical stacking is skipped but
+            all source associations (set/project/face) are still copied.
 
     Raises:
         ValueError: If the plugin name is not found.
@@ -129,6 +133,7 @@ async def run_plugin_on_pictures(
             captions,
             progress_reporter=_emit_progress,
             error_reporter=_emit_error,
+            stack=stack,
         )
     except ValueError as exc:
         vault.notify(

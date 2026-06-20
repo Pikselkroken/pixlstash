@@ -771,10 +771,14 @@ class TagTask(BaseTask):
         }
 
         # --- Bulk delete stale model-version rows ---
+        # Never delete a human-labeled row: its label_state/label_source is durable
+        # supervision the tagger must not clobber (mirrors not_human_labeled()).
         stale_ids = [
             row.id
             for row in existing_rows
-            if row.model_version != model_version and row.model_version != "manual"
+            if row.model_version != model_version
+            and row.model_version != "manual"
+            and row.label_source != "human"
         ]
         if stale_ids:
             session.exec(delete(TagPrediction).where(TagPrediction.id.in_(stale_ids)))

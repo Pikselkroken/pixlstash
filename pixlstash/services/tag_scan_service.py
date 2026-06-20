@@ -20,6 +20,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.near_neighbor import (
     EMBEDDING_BYTES,
     EMBEDDING_DIM,
+    dedupe_by_pair,
     knn_disagreement,
 )
 
@@ -124,6 +125,10 @@ def scan_tag(
                 "pos_frac": round(float(pos_frac[i]), 4),
             }
         )
+
+    # A mutually-disagreeing pair yields both a remove and an add suspect that are the
+    # same review — keep one per pair so the queue doesn't show it twice.
+    suspects = dedupe_by_pair(suspects)
 
     def _write(session: Session) -> None:
         # Rebuild this tag's PENDING suggestions from this source; reviewed rows are

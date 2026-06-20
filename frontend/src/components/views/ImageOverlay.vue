@@ -101,6 +101,10 @@
                     input-class="overlay-comfy-select"
                     label-class="overlay-comfy-field-label"
                   />
+                  <label class="overlay-comfy-checkbox-row">
+                    <input v-model="stackFilterOutputs" type="checkbox" />
+                    <span>Stack new images with the originals</span>
+                  </label>
                   <div class="overlay-comfy-actions">
                     <button
                       class="overlay-comfy-run"
@@ -195,6 +199,10 @@
                       ></textarea>
                     </div>
                   </template>
+                  <label class="overlay-comfy-checkbox-row">
+                    <input v-model="stackI2IOutputs" type="checkbox" />
+                    <span>Stack new images with the originals</span>
+                  </label>
                   <div class="overlay-comfy-actions">
                     <button
                       class="overlay-comfy-run"
@@ -689,6 +697,7 @@ import {
   safeDownloadName,
 } from "../../utils/media.js";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
+import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { copyText } from "../../utils/clipboard";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
@@ -975,6 +984,26 @@ const comfyuiRunError = ref("");
 const comfyuiRunSuccess = ref("");
 const overlaySelectedPluginName = ref("");
 const overlayPluginParameters = ref({});
+
+// Remembered "stack outputs with originals" prefs (persisted in localStorage).
+const genStackPrefs = useGenStackPrefsStore();
+const stackI2IOutputs = computed({
+  get: () => genStackPrefs.stackI2IOutputs,
+  set: (val) => genStackPrefs.setStackI2IOutputs(val),
+});
+const stackFilterOutputs = computed({
+  get: () => genStackPrefs.stackFilterOutputs,
+  set: (val) => genStackPrefs.setStackFilterOutputs(val),
+});
+
+// Auto-close timer for the I2I menu after a successful queue.
+let comfyuiCloseTimer = null;
+function clearComfyuiCloseTimer() {
+  if (comfyuiCloseTimer !== null) {
+    clearTimeout(comfyuiCloseTimer);
+    comfyuiCloseTimer = null;
+  }
+}
 const overlaySelectionMedia = computed(() => {
   const format = image.value ? getOverlayFormat(image.value) : "";
   const hasVideos = format ? isSupportedVideoFile(format) : false;
@@ -1142,6 +1171,8 @@ watch(comfyuiCaption, () => {
 
 watch(comfyuiMenuOpen, (value) => {
   if (value) {
+    // A freshly-opened menu must never inherit a pending close from a prior run.
+    clearComfyuiCloseTimer();
     comfyuiRunError.value = "";
     comfyuiRunSuccess.value = "";
     comfyuiCaptionFocused.value = false;
@@ -1212,6 +1243,7 @@ async function runComfyWorkflow() {
       workflow_name: comfyuiSelectedWorkflow.value,
       caption: comfyuiCaption.value || "",
       client_id: comfyuiClientId.value || undefined,
+      stack: stackI2IOutputs.value,
     };
     const res = await apiClient.post(
       `${backendUrl.value}/comfyui/run_i2i`,
@@ -1227,6 +1259,12 @@ async function runComfyWorkflow() {
     comfyuiRunSuccess.value = promptCount
       ? `Queued ${promptCount} run(s) in ComfyUI.`
       : "Queued in ComfyUI.";
+    // Show the success message briefly, then close the menu.
+    clearComfyuiCloseTimer();
+    comfyuiCloseTimer = setTimeout(() => {
+      comfyuiCloseTimer = null;
+      comfyuiMenuOpen.value = false;
+    }, 1200);
   } catch (err) {
     comfyuiRunError.value =
       err?.response?.data?.detail || err?.message || String(err);
@@ -1241,6 +1279,7 @@ function runOverlayPlugin() {
     pluginName: overlaySelectedPluginName.value,
     pictureIds: [image.value.id],
     parameters: overlayPluginParameters.value || {},
+    stack: stackFilterOutputs.value,
   });
   pluginMenuOpen.value = false;
 }
@@ -2770,6 +2809,7 @@ onUnmounted(() => {
   window.removeEventListener("resize", updateViewportMetrics);
   window.removeEventListener("keydown", handleKeydown);
   window.removeEventListener("pointerdown", handleOverlayPointerDown, true);
+  clearComfyuiCloseTimer();
   if (overlayResizeObserver) {
     overlayResizeObserver.disconnect();
     overlayResizeObserver = null;
@@ -3777,6 +3817,19 @@ function resetOverlayCopyState() {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+
+.overlay-comfy-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: pointer;
+}
+
+.overlay-comfy-checkbox-row input {
+  cursor: pointer;
 }
 
 .overlay-comfy-select,

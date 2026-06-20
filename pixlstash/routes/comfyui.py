@@ -946,6 +946,7 @@ def _process_comfyui_outputs(
     stack_id: int | None,
     source_picture_id: int | None,
     view_context: dict | None = None,
+    is_i2i: bool = False,
 ) -> None:
     try:
         images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
@@ -993,7 +994,11 @@ def _process_comfyui_outputs(
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)
         if new_ids:
-            if stack_id:
+            # Association strategy is decoupled from physical stack placement:
+            # whether outputs join a stack (stack_id) and whether they are I2I
+            # (is_i2i) are independent. I2I always copies faces directly even
+            # when stacking is disabled; T2I always defers to similarity.
+            if is_i2i:
                 # I2I: copy face records directly (positions are structurally similar)
                 _copy_face_assignments(server, source_picture_id, new_ids)
             else:
@@ -1338,7 +1343,7 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/comfyui/run_i2i",
         summary="Run ComfyUI image-to-image",
-        description="Submits i2i prompts for one or more picture ids and imports generated outputs back into PixlStash.",
+        description="Submits i2i prompts for one or more picture ids and imports generated outputs back into PixlStash. Outputs are placed in each source picture's stack by default; pass stack=false to skip stacking while still copying the source's character/set/project associations.",
         response_model=ComfyUIRunResponse,
     )
     async def run_comfyui_i2i(request: Request, payload: dict = Body(...)):
@@ -1371,6 +1376,10 @@ def create_router(server) -> APIRouter:
         client_id = payload.get("client_id") or payload.get("clientId") or None
         if client_id is not None:
             client_id = str(client_id)
+        # Optional physical stacking of derived outputs. Default true preserves
+        # the historical behaviour; when false, outputs skip the stack entirely
+        # but still inherit the source's character/set/project associations.
+        should_stack = bool(payload.get("stack", True))
 
         workflow_path, workflow_source = _resolve_workflow_path(workflow_name)
         if not workflow_path:
@@ -1415,28 +1424,34 @@ def create_router(server) -> APIRouter:
                 deepcopy(workflow_payload), replacements
             )
             _randomize_seeds(workflow_instance)
-            stack_id = server.vault.db.run_task(
-                get_or_create_stack_for_picture,
-                pic_id,
-            )
-            prefix_seed = ""
-            for node in workflow_instance.values():
-                if not isinstance(node, dict):
-                    continue
-                if node.get("class_type") != "SaveImage":
-                    continue
-                inputs = node.get("inputs") or {}
-                prefix_seed = str(inputs.get("filename_prefix") or "")
-                break
-            if stack_id:
-                prefix_value = build_stack_filename_prefix(
-                    prefix_seed, stack_id, pic_id
+            # Only create/join a stack and tag the SaveImage filename when
+            # stacking is requested. When disabled, stack_id stays None so the
+            # worker places nothing in a stack; associations are still copied
+            # because is_i2i=True drives the face/set/project copy below.
+            stack_id: int | None = None
+            if should_stack:
+                stack_id = server.vault.db.run_task(
+                    get_or_create_stack_for_picture,
+                    pic_id,
                 )
-                if not _apply_filename_prefix(workflow_instance, prefix_value):
-                    logger.warning(
-                        "ComfyUI workflow has no SaveImage node to tag for stack %s",
-                        stack_id,
+                prefix_seed = ""
+                for node in workflow_instance.values():
+                    if not isinstance(node, dict):
+                        continue
+                    if node.get("class_type") != "SaveImage":
+                        continue
+                    inputs = node.get("inputs") or {}
+                    prefix_seed = str(inputs.get("filename_prefix") or "")
+                    break
+                if stack_id:
+                    prefix_value = build_stack_filename_prefix(
+                        prefix_seed, stack_id, pic_id
                     )
+                    if not _apply_filename_prefix(workflow_instance, prefix_value):
+                        logger.warning(
+                            "ComfyUI workflow has no SaveImage node to tag for stack %s",
+                            stack_id,
+                        )
             response_payload = _submit_comfyui_prompt(
                 comfyui_url,
                 workflow_instance,
@@ -1454,6 +1469,7 @@ def create_router(server) -> APIRouter:
                         stack_id,
                         pic_id,
                     ),
+                    kwargs={"is_i2i": True},
                     daemon=True,
                 )
                 worker.start()

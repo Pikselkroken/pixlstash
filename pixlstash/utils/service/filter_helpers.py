@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException
 from sqlalchemy import exists, select
+from sqlalchemy.orm import aliased
 from sqlmodel import Session
 import numpy as np
 
@@ -368,3 +369,105 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
         token_scope.resource_type,
     )
     return set()
+
+
+def _project_scope_picture_ids(session: Session, project_id: int) -> set[int]:
+    """Picture ids that are members of *project_id* (excluding soft-deleted)."""
+    rows = session.exec(
+        select(Picture.id)
+        .where(project_membership_exists_clause(project_id, Picture))
+        .where(Picture.deleted.is_(False))
+    ).all()
+    return {int(r[0]) for r in rows if r[0] is not None}
+
+
+def _set_scope_picture_ids(session: Session, set_id: int) -> set[int]:
+    """Picture ids that are members of *set_id* (excluding soft-deleted)."""
+    rows = session.exec(
+        select(PictureSetMember.picture_id)
+        .join(Picture, Picture.id == PictureSetMember.picture_id)
+        .where(PictureSetMember.set_id == set_id)
+        .where(Picture.deleted.is_(False))
+    ).all()
+    return {int(r[0]) for r in rows if r[0] is not None}
+
+
+def _character_scope_picture_ids(session: Session, character_id: str) -> set[int]:
+    """Picture ids matching a character filter (excluding soft-deleted).
+
+    ``"UNASSIGNED"`` means a picture that has at least one face whose
+    ``character_id`` is NULL and *no* face assigned to any character — the same
+    EXISTS/NOT-EXISTS clause used by the picture-scoring queries (see
+    ``pixlstash.picture_scoring``). A numeric id matches pictures having a Face
+    with that ``character_id``.
+    """
+    base = (
+        select(Face.picture_id)
+        .join(Picture, Picture.id == Face.picture_id)
+        .where(Picture.deleted.is_(False))
+    )
+    if character_id == "UNASSIGNED":
+        other_face = aliased(Face)
+        query = base.where(Face.character_id.is_(None)).where(
+            ~exists(
+                select(other_face.id)
+                .where(
+                    other_face.picture_id == Face.picture_id,
+                    other_face.character_id.is_not(None),
+                )
+                .correlate(Face)
+            )
+        )
+    else:
+        query = base.where(Face.character_id == int(character_id))
+    rows = session.exec(query).all()
+    return {int(r[0]) for r in rows if r[0] is not None}
+
+
+def fetch_tag_review_scope_picture_ids(
+    session: Session,
+    *,
+    project_id: int | None = None,
+    set_id: int | None = None,
+    character_id: str | None = None,
+) -> set[int] | None:
+    """Resolve the tag-review scope filters to an intersection of picture ids.
+
+    Each provided dimension (project / picture-set / character) is resolved to the
+    set of picture ids it matches, and the dimensions are AND-ed together by
+    intersection. This is the central builder for narrowing the tag-suggestion
+    review queue to a project, a set, and/or a character.
+
+    Args:
+        session: Active database session.
+        project_id: Optional project id; pictures that are members of the project.
+        set_id: Optional picture-set id; pictures that are members of the set.
+        character_id: Optional character id as a string, or the literal
+            ``"UNASSIGNED"``. A numeric id matches pictures with a Face for that
+            character; ``"UNASSIGNED"`` matches pictures with an unassigned face
+            and no assigned face.
+
+    Returns:
+        ``None`` when no dimension is provided (no scope — caller should not
+        filter). Otherwise the intersection of the provided dimensions' picture
+        ids; an empty set is a valid result (e.g. an empty set, an unknown id, or
+        dimensions that do not overlap) and means "no in-scope pictures".
+
+    Notes:
+        All dimensions exclude soft-deleted pictures (``Picture.deleted == False``),
+        consistent with the other helpers in this module.
+    """
+    result: set[int] | None = None
+
+    if project_id is not None:
+        result = _project_scope_picture_ids(session, project_id)
+
+    if set_id is not None:
+        set_ids = _set_scope_picture_ids(session, set_id)
+        result = set_ids if result is None else (result & set_ids)
+
+    if character_id is not None and character_id != "":
+        char_ids = _character_scope_picture_ids(session, character_id)
+        result = char_ids if result is None else (result & char_ids)
+
+    return result

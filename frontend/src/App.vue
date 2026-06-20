@@ -27,7 +27,9 @@ import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
+import { useReviewFixesStore } from "./stores/useReviewFixesStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
+import { useTasksStore } from "./stores/useTasksStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -36,6 +38,7 @@ import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import SearchOverlay from "./components/views/SearchOverlay.vue";
+import ReviewFixesOverlay from "./components/views/ReviewFixesOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import { isInternalImageDrag } from "./utils/media.js";
 
@@ -55,7 +58,9 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
+const reviewFixesStore = useReviewFixesStore();
 const snapshotsStore = useSnapshotsStore();
+const tasksStore = useTasksStore();
 
 // --- Router ---
 const route = useRoute();
@@ -228,7 +233,8 @@ function sendUpdatesFilters() {
 // delegates to the ImageGrid template-ref's defineExpose'd methods (Tier-3
 // imperative API), no-oping safely if the grid isn't mounted yet.
 const gridApi = {
-  insertGridImagesById: (ids) => gridContainer.value?.insertGridImagesById?.(ids),
+  insertGridImagesById: (ids) =>
+    gridContainer.value?.insertGridImagesById?.(ids),
   refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
   repositionImageByScore: (id, score) =>
     gridContainer.value?.repositionImageByScore?.(id, score),
@@ -312,8 +318,19 @@ function connectUpdatesSocket() {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
+      // Origin-aware: only this tab's own tag edits may refresh a tag-filtered
+      // grid in place. A tag change from outside (background tagging, another
+      // tab) must not reshuffle the user's filtered view — the grid raises a
+      // click-to-refresh pill instead (see ImageGrid's wsTagUpdate watcher).
+      // The flag rides on wsTagUpdate; the overlay still refreshes its open
+      // card's tags for any origin.
+      const isOwn = !!(
+        payload.origin_client_id &&
+        wsStore.clientId &&
+        payload.origin_client_id === wsStore.clientId
+      );
       const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
-      wsStore.wsTagUpdate = { key: nextKey, pictureIds };
+      wsStore.wsTagUpdate = { key: nextKey, pictureIds, external: !isOwn };
     } else if (payload?.type === "descriptions_changed") {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
@@ -390,6 +407,17 @@ function loadSortChangedExternal() {
   fullGridReload();
 }
 
+// ImageGrid asks to raise the "view changed externally" pill for an external
+// tag change under an active tag filter (instead of reshuffling the filtered
+// grid under the user). Skip ids already queued in the "new pictures" pill so a
+// just-imported batch being tagged doesn't double-pill.
+function onFlagSortChanged(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const pending = new Set(wsStore.pendingExternalImportIds);
+  const fresh = ids.filter((id) => !pending.has(id));
+  if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
+}
+
 function onRestoreConfirmed() {
   gridStore.wsUpdateKey = Date.now();
   gridStore.refreshGridVersion();
@@ -461,11 +489,21 @@ function isExternalFileDragEvent(event) {
 
 function handleWindowDragOver(event) {
   if (!isExternalFileDragEvent(event)) return;
+  // The review-fixes overlay is a modal review surface; dropping files into it
+  // must never start an import. Skip preventDefault so the drag is not shown as
+  // droppable here.
+  if (reviewFixesStore.overlayOpen) return;
   event.preventDefault();
 }
 
 function handleWindowDrop(event) {
   if (!isExternalFileDragEvent(event)) return;
+  // While the review-fixes overlay is open, swallow the drop without importing
+  // (still preventDefault so the browser does not navigate to the dropped file).
+  if (reviewFixesStore.overlayOpen) {
+    event.preventDefault();
+    return;
+  }
   event.preventDefault();
   if (isInsideImageGrid(event)) {
     return;
@@ -1469,6 +1507,9 @@ async function patchConfigUIOptions() {
 }
 
 function handleGlobalKeydown(e) {
+  // The review-fixes overlay is modal and owns its own keyboard handler; don't
+  // run the app/grid shortcuts (scroll, search, help) behind it.
+  if (reviewFixesStore.overlayOpen) return;
   const tag = document.activeElement?.tagName?.toLowerCase();
   const isEditable =
     tag === "input" ||
@@ -1602,6 +1643,10 @@ function openSearchOverlay() {
 function closeSearchOverlay() {
   searchStore.searchOverlayVisible = false;
 }
+
+// --- Review tags overlay ---
+// Visibility lives in the store so the grid toolbar can open it directly,
+// the same way the search button toggles searchStore.searchOverlayVisible.
 
 function handleClearSearch() {
   searchStore.searchQuery = "";
@@ -1849,6 +1894,10 @@ watch(
 
 // --- Lifecycle ---
 onMounted(async () => {
+  // Start the app-wide tasks poll so the activity indicators (Tasks-tab icon,
+  // stats-sidebar light) are live everywhere, not only while the Tasks tab is
+  // open. The store self-throttles when idle and pauses on a hidden tab.
+  tasksStore.startPolling();
   fetch("/version")
     .then((r) => r.json())
     .then((data) => {
@@ -1911,6 +1960,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disconnectUpdatesSocket();
+  tasksStore.stopPolling();
   if (stopOpenSettings) stopOpenSettings();
   window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);
@@ -2228,6 +2278,7 @@ defineExpose({
                 :sortChangedExternalCount="wsStore.sortChangedExternalCount"
                 @load-pending-imports="loadPendingExternalImports"
                 @load-sort-changed="loadSortChangedExternal"
+                @flag-sort-changed="onFlagSortChanged"
                 @update:visible-range-label="
                   gridStore.visibleRangeLabel = $event
                 "
@@ -2347,6 +2398,11 @@ defineExpose({
         @search="handleUpdateSearchQuery"
         @close="closeSearchOverlay"
         @clear-history="clearSearchHistory"
+      />
+      <ReviewFixesOverlay
+        v-if="reviewFixesStore.overlayOpen"
+        :backendUrl="BACKEND_URL"
+        @close="reviewFixesStore.overlayOpen = false"
       />
     </div>
     <button
