@@ -21,7 +21,9 @@ def _make_session() -> Session:
     return Session(engine)
 
 
-def _add_picture(session: Session, path: str, *, real_face: bool, tags: list[str]) -> int:
+def _add_picture(
+    session: Session, path: str, *, real_face: bool, tags: list[str]
+) -> int:
     pic = Picture(file_path=path, pixel_sha=path, format="JPEG")
     session.add(pic)
     session.commit()

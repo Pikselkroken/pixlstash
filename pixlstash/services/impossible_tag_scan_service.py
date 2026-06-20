@@ -20,7 +20,6 @@ rebuilds the PENDING impossible queue and never resurrects a reviewed row.
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from sqlalchemy import exists, func
 from sqlmodel import Session, delete, select
@@ -34,9 +33,6 @@ from pixlstash.utils.service.person_tags import (
     PERSON_TAGS,
     plan_strips,
 )
-
-if TYPE_CHECKING:
-    from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
 
@@ -110,11 +106,11 @@ def _reason(plan: dict, description: str | None, tag: str) -> str:
     return f'no face detected; "{tag}" requires a face'
 
 
-def scan_impossible_tags(vault: "Vault", *, project: str | None = None) -> dict:
+def scan_impossible_tags(session: Session, *, project: str | None = None) -> dict:
     """Scan for impossible person-tags and rebuild the PENDING impossible queue.
 
     Args:
-        vault: Application vault, used for DB task dispatch.
+        session: Open database session supplied by the caller.
         project: Optional project name to scope to; ``None`` (the default) scans the
             whole vault. Person-tags live across the general library, not in the
             ``PixlTagger`` anomaly-training project (which carries no person-tags), so
@@ -124,16 +120,10 @@ def scan_impossible_tags(vault: "Vault", *, project: str | None = None) -> dict:
         ``{"candidates", "no_humans", "object", "no_face", "pictures_flagged",
         "flagged", "scanned"}`` (the three middle keys count pictures per signal).
     """
-
-    def _load(session: Session):
-        pid = None
-        if project:
-            pid = session.exec(
-                select(Project.id).where(Project.name == project)
-            ).first()
-        return load_impossible_candidates(session, project_id=pid)
-
-    candidates = vault.db.run_immediate_read_task(_load)
+    pid = None
+    if project:
+        pid = session.exec(select(Project.id).where(Project.name == project)).first()
+    candidates = load_impossible_candidates(session, project_id=pid)
 
     # Classify each candidate (pure Python, no session). One signal per picture.
     plans: list[tuple[int, str | None, dict]] = []
@@ -144,48 +134,44 @@ def scan_impossible_tags(vault: "Vault", *, project: str | None = None) -> dict:
         if plan["flag"]:
             plans.append((pid, description, plan))
 
-    def _write(session: Session) -> int:
-        # Full rebuild of the PENDING impossible queue across all signals; reviewed rows
-        # are left in place and block re-inserting the same (picture, tag) — so a tag the
-        # user already cleared/kept never resurrects, even if its signal changed.
+    # Full rebuild of the PENDING impossible queue across all signals; reviewed rows
+    # are left in place and block re-inserting the same (picture, tag) — so a tag the
+    # user already cleared/kept never resurrects, even if its signal changed.
+    session.exec(
+        delete(TagSuggestion).where(
+            TagSuggestion.status == "PENDING",
+            TagSuggestion.source.in_(IMPOSSIBLE_SOURCES),
+        )
+    )
+    reviewed = set(
         session.exec(
-            delete(TagSuggestion).where(
-                TagSuggestion.status == "PENDING",
-                TagSuggestion.source.in_(IMPOSSIBLE_SOURCES),
+            select(TagSuggestion.picture_id, TagSuggestion.tag).where(
+                TagSuggestion.source.in_(IMPOSSIBLE_SOURCES)
             )
-        )
-        reviewed = set(
-            session.exec(
-                select(TagSuggestion.picture_id, TagSuggestion.tag).where(
-                    TagSuggestion.source.in_(IMPOSSIBLE_SOURCES)
+        ).all()
+    )
+    now = datetime.utcnow()
+    flagged = 0
+    for pid, description, plan in plans:
+        for tag in sorted(plan["flag"]):
+            if (pid, tag) in reviewed:
+                continue
+            session.add(
+                TagSuggestion(
+                    picture_id=pid,
+                    tag=tag,
+                    direction="remove",
+                    source=plan["source"],
+                    score=plan["score"],
+                    reason=_reason(plan, description, tag),
+                    twin_picture_id=None,
+                    twin_sim=None,
+                    status="PENDING",
+                    created_at=now,
                 )
-            ).all()
-        )
-        now = datetime.utcnow()
-        inserted = 0
-        for pid, description, plan in plans:
-            for tag in sorted(plan["flag"]):
-                if (pid, tag) in reviewed:
-                    continue
-                session.add(
-                    TagSuggestion(
-                        picture_id=pid,
-                        tag=tag,
-                        direction="remove",
-                        source=plan["source"],
-                        score=plan["score"],
-                        reason=_reason(plan, description, tag),
-                        twin_picture_id=None,
-                        twin_sim=None,
-                        status="PENDING",
-                        created_at=now,
-                    )
-                )
-                inserted += 1
-        session.commit()
-        return inserted
-
-    flagged = vault.db.run_task(_write)
+            )
+            flagged += 1
+    session.commit()
 
     result = {
         "candidates": len(candidates),
