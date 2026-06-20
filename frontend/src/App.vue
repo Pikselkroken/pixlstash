@@ -2208,6 +2208,7 @@ defineExpose({
                 :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
                 :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
                 :faceBboxFilter="filterStore.faceBboxFilter"
+                :impossibleSources="filterStore.impossibleSources"
                 :sharedOnlyFilter="filterStore.sharedOnlyFilter"
                 :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
                 :showFaceBboxes="gridStore.showFaceBboxes"

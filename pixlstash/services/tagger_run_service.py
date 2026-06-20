@@ -81,6 +81,48 @@ def ingest_run(vault: "Vault", report: dict) -> TaggerRun:
     return vault.db.run_task(_save)
 
 
+def get_latest_tag_precisions(session: Session) -> dict[str, float]:
+    """Return ``{lowercased tag: precision}`` from the most recent run that reports it.
+
+    Reads per-tag precision out of the latest :class:`TaggerRun` whose report carries it
+    (``report['payload']['per_tag'][i]['precision']``). Scans the few newest runs so a
+    just-pushed run that happens to omit precision falls back to the previous one. Returns
+    an empty map when nothing usable is found; callers then use
+    :data:`pixlstash.utils.quality.anomaly_penalty.DEFAULT_TAG_PRECISION`.
+
+    Takes a live ``session`` (not a vault) so the smart-score fetch paths can call it
+    inside their existing read task without a second dispatch.
+    """
+    runs = session.exec(
+        select(TaggerRun).order_by(TaggerRun.created_at.desc()).limit(10)
+    ).all()
+    for run in runs:
+        report = run.report
+        if not isinstance(report, dict):
+            continue
+        payload = report.get("payload", report)
+        if not isinstance(payload, dict):
+            continue
+        per_tag = payload.get("per_tag")
+        if not isinstance(per_tag, list):
+            continue
+        precisions: dict[str, float] = {}
+        for entry in per_tag:
+            if not isinstance(entry, dict):
+                continue
+            tag = entry.get("tag")
+            precision = entry.get("precision")
+            if tag is None or precision is None:
+                continue
+            try:
+                precisions[str(tag).strip().lower()] = float(precision)
+            except (TypeError, ValueError):
+                continue
+        if precisions:
+            return precisions
+    return {}
+
+
 def list_runs(vault: "Vault", limit: int = 100) -> list[TaggerRun]:
     """Return stored runs for the stats panel, most recent first.
 
