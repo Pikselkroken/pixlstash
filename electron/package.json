@@ -89,7 +89,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "include": "installer.nsh"
     },
     "publish": {
       "provider": "github",
