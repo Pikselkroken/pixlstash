@@ -332,6 +332,19 @@
             <v-icon size="20">mdi-face-recognition</v-icon>
           </button>
           <button
+            class="overlay-icon-btn"
+            type="button"
+            title="Toggle object detection boxes"
+            aria-label="Toggle object detection boxes"
+            @click.stop="toggleDetections"
+            :class="{
+              hidden: chromeHidden,
+              'overlay-icon-btn--active': showDetections,
+            }"
+          >
+            <v-icon size="20">mdi-shape-outline</v-icon>
+          </button>
+          <button
             v-if="!isMobile && !isReadOnly"
             class="overlay-icon-btn"
             type="button"
@@ -489,6 +502,24 @@
                 >
                   <span class="face-bbox-label">
                     {{ face.character_name || `Face ${idx + 1}` }}
+                  </span>
+                </div>
+              </template>
+              <template v-if="showDetections && overlayReady">
+                <div
+                  v-if="detectionBboxes.length === 0"
+                  class="face-bbox-empty"
+                >
+                  No detections found
+                </div>
+                <div
+                  v-for="(det, idx) in detectionBboxes"
+                  :key="`det-${idx}`"
+                  class="face-bbox-overlay"
+                  :style="getOverlayBoxStyle(det.bbox, detectionBoxColor(det))"
+                >
+                  <span class="face-bbox-label">
+                    {{ det.label || `Object ${idx + 1}` }}
                   </span>
                 </div>
               </template>
@@ -2089,6 +2120,7 @@ function handleKeydown(e) {
 }
 
 const showFaceBbox = ref(false);
+const showDetections = ref(false);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
 const FILMSTRIP_VISIBLE_COUNT = 7;
@@ -2532,6 +2564,10 @@ function toggleFaceBbox() {
   showFaceBbox.value = !showFaceBbox.value;
 }
 
+function toggleDetections() {
+  showDetections.value = !showDetections.value;
+}
+
 const drawMode = ref(null);
 const drawState = ref({
   active: false,
@@ -2912,6 +2948,7 @@ function onTouchEnd(event) {
 }
 
 const faceBboxes = ref([]);
+const detectionBboxes = ref([]);
 const characters = ref([]);
 const charactersLoading = ref(false);
 const characterThumbnails = ref({});
@@ -2921,6 +2958,7 @@ const FACE_THUMB_MIN = 28;
 const FACE_THUMB_MAX = 60;
 let metadataRequestId = 0;
 let faceBboxesRequestId = 0;
+let detectionBboxesRequestId = 0;
 let comfyWorkflowRequestId = 0;
 
 function dedupeDetections(items) {
@@ -3068,6 +3106,48 @@ async function fetchFaceBboxes(imageId) {
     console.error("Error in fetchFaceBboxes:", e);
     faceBboxes.value = [];
   }
+}
+
+async function fetchDetections(imageId) {
+  if (!imageId || !backendUrl.value) {
+    detectionBboxes.value = [];
+    return;
+  }
+  const requestId = (detectionBboxesRequestId += 1);
+  const requestedImageId = imageId;
+  try {
+    const res = await apiClient.get(
+      `${backendUrl.value}/pictures/${imageId}/detections`,
+    );
+    if (detectionBboxesRequestId !== requestId) return;
+    if (!image.value || image.value.id !== requestedImageId) return;
+    // The endpoint returns a bare array of detection rows.
+    const detections = Array.isArray(res.data) ? res.data : [];
+    detectionBboxes.value = dedupeDetections(detections).filter(
+      (d) =>
+        d.frame_index === 0 && Array.isArray(d.bbox) && d.bbox.length === 4,
+    );
+  } catch (e) {
+    console.error("Error in fetchDetections:", e);
+    if (detectionBboxesRequestId !== requestId) return;
+    detectionBboxes.value = [];
+  }
+}
+
+// Map each distinct detection label to a stable colour index so boxes sharing a
+// label share a colour (reuses the face-bbox palette).
+const detectionColorIndex = computed(() => {
+  const map = new Map();
+  let next = 0;
+  for (const det of detectionBboxes.value) {
+    const label = det?.label ?? "";
+    if (!map.has(label)) map.set(label, next++);
+  }
+  return map;
+});
+
+function detectionBoxColor(det) {
+  return faceBoxColor(detectionColorIndex.value.get(det?.label ?? "") ?? 0);
 }
 
 async function fetchCharacters() {
@@ -3302,11 +3382,13 @@ watch(
       videoError.value = null;
       scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
+      fetchDetections(newId);
       fetchOverlayMetadata(newId);
       fetchComfyWorkflow(newId);
       preloadAdjacentImages();
     } else {
       faceBboxes.value = [];
+      detectionBboxes.value = [];
       videoError.value = null;
       comfyMetadata.value = null;
     }

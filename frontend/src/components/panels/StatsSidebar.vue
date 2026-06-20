@@ -535,6 +535,7 @@ const tmLabelMap = {
   missing_file_purge: "File cleanup",
   planner_managed: "Planner task",
   text_score: "Text score",
+  object_detection: "Object detection",
 };
 
 const tmWorkerLabelMap = {

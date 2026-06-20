@@ -8,6 +8,7 @@ export const useGridStore = defineStore("grid", () => {
   const compactMode = ref(isReadOnly.value);
   const showStars = ref(!isReadOnly.value);
   const showFaceBboxes = ref(false);
+  const showDetections = ref(false);
   const showProblemIcon = ref(true);
   const showStacks = ref(true);
   const expandedStackCount = ref(0);
@@ -28,6 +29,7 @@ export const useGridStore = defineStore("grid", () => {
     compactMode,
     showStars,
     showFaceBboxes,
+    showDetections,
     showProblemIcon,
     showStacks,
     expandedStackCount,
