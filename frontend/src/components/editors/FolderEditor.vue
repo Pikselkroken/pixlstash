@@ -288,27 +288,26 @@
           <!-- Reference path input (edit mode, non-Docker) -->
           <div
             v-else-if="isEditMode && !isImport && !props.inDocker"
-            class="editor-path-row"
+            class="editor-path-display editor-path-display--with-action"
           >
-            <v-text-field
-              ref="pathInputRef"
-              v-model="localPath"
-              label="Folder path *"
-              placeholder="/path/to/folder"
-              density="comfortable"
-              variant="filled"
-              hide-details
-              @keydown.enter="save"
-            />
+            <v-icon size="16" class="editor-path-icon"
+              >mdi-folder-network-outline</v-icon
+            >
+            <span class="editor-path-text" :title="activeFolder?.folder">{{
+              activeFolder?.folder
+            }}</span>
             <v-btn
               variant="outlined"
               size="small"
               icon
-              class="editor-browse-btn"
-              title="Browse for folder"
-              @click="browseOpen = true"
+              class="editor-relocate-btn"
+              title="Relocate folder and move files"
+              @click="
+                emit('relocate', activeFolder);
+                emit('close');
+              "
             >
-              <v-icon size="18">mdi-folder-open-outline</v-icon>
+              <v-icon size="18">mdi-folder-move-outline</v-icon>
             </v-btn>
           </div>
 
@@ -676,7 +675,7 @@ const props = defineProps({
   imageRoot: { type: String, default: null },
 });
 
-const emit = defineEmits(["close", "saved", "deleted"]);
+const emit = defineEmits(["close", "saved", "deleted", "relocate"]);
 
 // --- Type-derived helpers ---
 
@@ -1453,16 +1452,25 @@ async function copyToClipboard(value, successMessage) {
   opacity: 0.85;
 }
 
+.editor-path-display--with-action {
+  opacity: 1;
+}
+
 .editor-path-icon {
   flex-shrink: 0;
   opacity: 0.7;
 }
 
 .editor-path-text {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: monospace;
+}
+
+.editor-relocate-btn {
+  flex-shrink: 0;
 }
 
 .editor-toggle-row {

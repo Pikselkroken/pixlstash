@@ -18,7 +18,6 @@ const emit = defineEmits([
   "drag-leave",
   "drop",
   "context",
-  "metadata",
 ]);
 
 function isExpanded() {
@@ -80,38 +79,6 @@ function childImageCount() {
       </v-icon>
       <v-icon size="16" class="sidebar-folder-icon">mdi-folder-outline</v-icon>
       <span class="sidebar-folder-label">{{ entry.name }}</span>
-      <span class="sidebar-folder-actions" @click.stop>
-        <button
-          type="button"
-          class="sidebar-folder-action-btn"
-          title="Import TXT metadata"
-          @click="
-            emit('metadata', {
-              action: 'import',
-              rfId,
-              path: entry.path,
-              label: entry.name,
-            })
-          "
-        >
-          <v-icon size="13">mdi-file-import-outline</v-icon>
-        </button>
-        <button
-          type="button"
-          class="sidebar-folder-action-btn"
-          title="Export TXT metadata"
-          @click="
-            emit('metadata', {
-              action: 'export',
-              rfId,
-              path: entry.path,
-              label: entry.name,
-            })
-          "
-        >
-          <v-icon size="13">mdi-file-export-outline</v-icon>
-        </button>
-      </span>
       <span
         v-if="folderBrowseCache[entry.path]?.loading || childImageCount() > 0"
         class="sidebar-folder-count-badge"
@@ -145,7 +112,6 @@ function childImageCount() {
           @drag-leave="(payload) => emit('drag-leave', payload)"
           @drop="(payload) => emit('drop', payload)"
           @context="(payload) => emit('context', payload)"
-          @metadata="(payload) => emit('metadata', payload)"
         />
         <div
           v-if="folderBrowseCache[entry.path]?.error"
@@ -197,42 +163,6 @@ function childImageCount() {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-
-.sidebar-folder-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s;
-}
-
-.sidebar-folder-row:hover .sidebar-folder-actions,
-.sidebar-folder-row:focus-within .sidebar-folder-actions,
-.sidebar-folder-row.active .sidebar-folder-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.sidebar-folder-action-btn {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.72;
-}
-
-.sidebar-folder-action-btn:hover {
-  background: rgba(var(--v-theme-accent), 0.18);
-  opacity: 1;
 }
 
 .sidebar-folder-chevron,
