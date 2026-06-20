@@ -384,6 +384,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                             |
 | POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                      |
 | GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter              |
+| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                            |
 | GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                              |
 | GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                             |
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                 |
@@ -405,6 +406,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                  |
 | DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                             |
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                             |
+| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                  |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                    |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                     |
