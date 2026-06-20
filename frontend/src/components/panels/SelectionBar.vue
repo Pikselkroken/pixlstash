@@ -270,6 +270,24 @@
           </v-menu>
         </div>
         <button
+          v-if="
+            selectedCount > 0 &&
+            !isScrapheapView &&
+            !isReadOnly &&
+            impossibleSources.length > 0
+          "
+          class="stack-btn clear-impossible-btn"
+          type="button"
+          :disabled="clearingImpossible"
+          :title="`Strip the impossible tags from the ${selectedCount} selected picture(s)`"
+          @click="$emit('clear-impossible-tags')"
+        >
+          <v-icon size="18">mdi-tag-off-outline</v-icon>
+          <span class="clear-impossible-label">{{
+            clearingImpossible ? "Clearing…" : "Clear impossible tags"
+          }}</span>
+        </button>
+        <button
           class="clear-btn"
           :disabled="!visible"
           @click="$emit('clear-selection')"
@@ -324,6 +342,8 @@ const props = defineProps({
   allGridImages: { type: Array, default: () => [] },
   selectedCharacter: String,
   selectedSet: String,
+  impossibleSources: { type: Array, default: () => [] },
+  clearingImpossible: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -345,6 +365,7 @@ const emit = defineEmits([
   "generate-description",
   "reverse-image-search",
   "selection-menu-open",
+  "clear-impossible-tags",
 ]);
 
 const isScrapheapView = computed(() => {
@@ -961,6 +982,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 @container selbar (max-width: 660px) {
   .bar-btn-apply-label {
+    display: none;
+  }
+  .clear-impossible-label {
     display: none;
   }
 }
