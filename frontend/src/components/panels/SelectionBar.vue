@@ -607,6 +607,18 @@ function handleComfyuiMenuEsc(event) {
 // ── Bulk tag ──────────────────────────────────────────────────────────────────
 const tagMenuOpen = ref(false);
 const tagBtnRef = ref(null);
+
+// Same guard as the plugin/comfyui menus above. The tag v-menu lives in the
+// selection bar's `v-if="visible"` region. If ESC clears the selection before
+// Vuetify emits update:modelValue, the menu unmounts with tagMenuOpen still
+// true and auto-reopens on the next selection. Reset it when the host hides.
+const showTagControls = computed(
+  () => props.selectedCount > 0 && !isScrapheapView.value && !isReadOnly.value,
+);
+watch(showTagControls, (shown) => {
+  if (!shown) tagMenuOpen.value = false;
+});
+
 function openTagInput() {
   if (tagMenuOpen.value) return;
   // Use a real click so Vuetify's location-strategy="connected" records the
