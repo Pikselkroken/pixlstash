@@ -187,9 +187,13 @@ def write_sidecar(path: str, content: str) -> float | None:
         with open(path, "r", encoding="utf-8") as fh:
             if fh.read() == content:
                 return get_sidecar_mtime(path)
-    except OSError:
-        # Missing or unreadable — fall through and (re)write it.
-        pass
+    except OSError as exc:
+        # Missing or unreadable — fall through and (re)write it. Logged at DEBUG
+        # so it satisfies the no-silent-failure policy without noising up a
+        # normal first-time write (there is nothing to read yet).
+        logger.debug(
+            "Could not read sidecar %s for compare (will rewrite): %s", path, exc
+        )
 
     dir_path = os.path.dirname(path)
     try:
@@ -201,9 +205,14 @@ def write_sidecar(path: str, content: str) -> float | None:
         except Exception:
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                # Best effort to clean up the temp file; ignore errors.
-                pass
+            except OSError as cleanup_exc:
+                # Best effort to clean up the temp file; record at DEBUG and
+                # still re-raise the original write failure below.
+                logger.debug(
+                    "Could not remove temp sidecar %s after write failure: %s",
+                    tmp_path,
+                    cleanup_exc,
+                )
             raise
     except OSError as exc:
         logger.warning("Could not write sidecar %s: %s", path, exc)
