@@ -1045,6 +1045,19 @@ const gbCollapseAllStacksDisabled = computed(
   min-width: 220px;
 }
 
+/* Section headers in the View menu ("Grid View", "Stacks", "Overlays").
+   Declared here as well as in GbFilterPanel because this menu lives in
+   Toolbar's own template, and scoped styles don't cross component boundaries. */
+.gb-filter-section-label {
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-top: 4px;
+  width: 100%;
+}
+
 .gb-view-switch {
   width: 100%;
 }
