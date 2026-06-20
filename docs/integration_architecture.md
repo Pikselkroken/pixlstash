@@ -290,6 +290,33 @@ Two complementary mechanisms; most workflows use both:
 - If it changes vault state that other clients also need to see → WebSocket event.
 - For UX (e.g. plugin progress bar), emit both: polling for the initiator and WS broadcasting for everyone else.
 
+### 11.1 Object detection (Segment) & bbox export
+
+The **Segment** action runs Florence-2 object detection over the selected pictures and stores labelled boxes per picture (see [backend_architecture.md §6/§7](backend_architecture.md)). It follows the WebSocket-event branch of the rule above — it is a backend task, not a downloadable result.
+
+- **Enqueue**: `POST /api/v1/pictures/detect` with body `{ "picture_ids": [int, …], "prompt": "optional phrase" }`. An empty/omitted `prompt` runs dense object detection; a non-empty phrase runs open-vocabulary grounding for that phrase. Scoped tokens have `picture_ids` filtered to their grant (deny-by-default; all-out-of-scope → 403). Returns `{ "status": "queued", "task_id", "picture_ids", "prompt" }`. Progress surfaces in the existing task-manager UI.
+- **Completion**: the task fires a `changed_pictures` event (`{picture_ids, change_kind:"updated"}`) over the WebSocket; the SPA refreshes affected views.
+- **Read**: `GET /api/v1/pictures/{id}/detections` returns a **bare JSON array** (object-scope enforced before any read):
+  ```json
+  [ { "id": 1, "picture_id": 42, "frame_index": 0, "detection_index": 0,
+      "label": "dog", "bbox": [x1, y1, x2, y2], "score": null,
+      "source": "florence2:od" } ]
+  ```
+  `bbox` is pixel `xyxy` in the **original** picture coordinate space (same convention as faces). `score` is `null` for Florence (it emits no per-box confidence). The overlay (`ImageOverlay.vue`) renders these as a toggleable layer next to the face-bbox layer.
+- **Export sidecar** (`GET /api/v1/pictures/export?bbox_mode=…`, FULL exports only): writes a per-image `{stem}.json` into the ZIP. `bbox_mode=none` (default) writes nothing. Two formats:
+  - `bbox_mode=coco-json` — a COCO-subset sidecar (pixel `xyxy`), written *alongside* the `.txt` caption. Boxes and `width`/`height` scale to match the exported image when a reduced `resolution` is selected.
+    ```json
+    {"image":"IMG_0001.jpg","width":1920,"height":1080,
+     "schema":"pixlstash.detections/v1","bbox_format":"xyxy_px",
+     "objects":[{"label":"dog","bbox":[x1,y1,x2,y2],"score":0.0}]}
+    ```
+  - `bbox_mode=ideogram-json` — an **Ideogram-4 structured-JSON caption** ([official schema](https://github.com/ideogram-oss/ideogram4/blob/main/docs/prompting.md)): this `{stem}.json` *is* the caption ai-toolkit consumes (set `caption_ext: json` in the dataset config). Boxes are **normalized `[y_min,x_min,y_max,x_max]` on a 0-1000 grid** (resolution-independent, so the `resolution` setting does not affect them). Each detection is a `type:"obj"` element with its label as `desc`; key order (`type, bbox, desc` / top-level order) is preserved because the model was trained on a fixed key order. The picture's caption becomes `high_level_description`; `style_description` is omitted (optional). The `.txt` caption is still written per `caption_mode`, so the user picks which one ai-toolkit reads via `caption_ext`.
+    ```json
+    {"high_level_description":"a dog on grass",
+     "compositional_deconstruction":{"background":"",
+       "elements":[{"type":"obj","bbox":[y_min,x_min,y_max,x_max],"desc":"dog"}]}}
+    ```
+
 ---
 
 ## 12. Configuration Sync
