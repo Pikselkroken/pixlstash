@@ -268,6 +268,17 @@ const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 
+// Reference folder sidecar import/export dialog
+const referenceMetadataDialogOpen = ref(false);
+const referenceMetadataAction = ref("export");
+const referenceMetadataFolder = ref(null);
+const referenceMetadataScopePath = ref(null);
+const referenceMetadataScopeLabel = ref("");
+const referenceMetadataTypes = ref(["tags", "descriptions"]);
+const referenceMetadataLoading = ref(false);
+const referenceMetadataError = ref("");
+const referenceMetadataResult = ref("");
+
 // Computed style for the main context menu — opens upward when near the bottom.
 const sidebarCtxMenuStyle = computed(() => {
   const MENU_W = 165;
@@ -412,10 +423,22 @@ function showDockerRestartPrompt() {
   );
 }
 
-async function referenceFolderSaved() {
+async function referenceFolderSaved(savedFolder = null) {
   const createdNewFolder = !referenceFolderEditorFolder.value?.id;
   closeReferenceFolderEditor();
   await fetchReferenceFolders();
+  if (savedFolder?.relocation) {
+    const relocation = savedFolder.relocation;
+    const issues =
+      Number(relocation.missing_count || 0) +
+      Number(relocation.unmatched_count || 0);
+    const issueText = issues
+      ? ` ${issues} item${issues === 1 ? "" : "s"} need attention.`
+      : "";
+    window.alert(
+      `Reference folder relocated. Rewritten ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`,
+    );
+  }
   // A newly added folder may be active-but-unscanned, so ensure polling runs.
   _startFolderStatusPoll();
   if (inDocker.value && createdNewFolder) {
@@ -2731,34 +2754,49 @@ function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
   );
 }
 
-function promptReferenceMetadataTypes(action) {
-  const value = window.prompt(
-    `${action} TXT metadata: tags, descriptions, or both`,
-    "both",
-  );
-  if (value === null) return null;
-  const normalized = String(value).trim().toLowerCase();
-  if (normalized === "both" || normalized === "all") {
-    return ["tags", "descriptions"];
-  }
-  if (normalized === "tag" || normalized === "tags") return ["tags"];
-  if (
-    normalized === "description" ||
-    normalized === "descriptions" ||
-    normalized === "desc"
-  ) {
-    return ["descriptions"];
-  }
-  alert("Use tags, descriptions, or both.");
-  return null;
+function openReferenceMetadataDialog(
+  action,
+  folder,
+  scopePath = null,
+  scopeLabel = "",
+) {
+  if (!folder?.id) return;
+  referenceMetadataAction.value = action === "import" ? "import" : "export";
+  referenceMetadataFolder.value = folder;
+  referenceMetadataScopePath.value = scopePath;
+  referenceMetadataScopeLabel.value =
+    scopeLabel || folder.label || folder.folder || "Reference folder";
+  referenceMetadataTypes.value = ["tags", "descriptions"];
+  referenceMetadataError.value = "";
+  referenceMetadataResult.value = "";
+  referenceMetadataDialogOpen.value = true;
 }
 
-async function runReferenceFolderMetadata(action, folder, scopePath = null) {
-  if (!folder?.id) return;
-  const types = promptReferenceMetadataTypes(
-    action === "export" ? "Export" : "Import",
-  );
-  if (!types) return;
+function closeReferenceMetadataDialog() {
+  if (referenceMetadataLoading.value) return;
+  referenceMetadataDialogOpen.value = false;
+  referenceMetadataFolder.value = null;
+  referenceMetadataScopePath.value = null;
+  referenceMetadataScopeLabel.value = "";
+  referenceMetadataError.value = "";
+  referenceMetadataResult.value = "";
+}
+
+function openReferenceMetadataDialogFromNode({ action, rfId, path, label }) {
+  const folder = referenceFolders.value.find((rf) => rf.id === rfId);
+  if (!folder) return;
+  openReferenceMetadataDialog(action, folder, path, label);
+}
+
+async function runReferenceFolderMetadata() {
+  const folder = referenceMetadataFolder.value;
+  const action = referenceMetadataAction.value;
+  const types = referenceMetadataTypes.value;
+  const scopePath = referenceMetadataScopePath.value;
+  if (!folder?.id || !types.length) return;
+  referenceMetadataLoading.value = true;
+  referenceMetadataError.value = "";
+  referenceMetadataResult.value = "";
   try {
     const { data } = await apiClient.post(
       `/reference-folders/${folder.id}/metadata/${action}`,
@@ -2766,13 +2804,14 @@ async function runReferenceFolderMetadata(action, folder, scopePath = null) {
     );
     const changed =
       Number(data?.tags_count || 0) + Number(data?.descriptions_count || 0);
-    alert(
+    referenceMetadataResult.value =
       `${action === "export" ? "Exported" : "Imported"} TXT metadata for ${changed} item${changed === 1 ? "" : "s"}.`,
-    );
     await fetchReferenceFolders();
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || e;
-    alert(`Failed to ${action} TXT metadata: ${detail}`);
+    referenceMetadataError.value = `Failed to ${action} TXT metadata: ${detail}`;
+  } finally {
+    referenceMetadataLoading.value = false;
   }
 }
 
@@ -3617,6 +3656,65 @@ defineExpose({
         <v-btn variant="text" @click="addFolderTypeDialogOpen = false"
           >Cancel</v-btn
         >
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="referenceMetadataDialogOpen" max-width="420">
+    <v-card class="reference-metadata-card">
+      <v-card-title class="reference-metadata-title">
+        {{
+          referenceMetadataAction === "export"
+            ? "Export TXT Metadata"
+            : "Import TXT Metadata"
+        }}
+      </v-card-title>
+      <v-card-text class="reference-metadata-body">
+        <div
+          class="reference-metadata-scope"
+          :title="referenceMetadataScopePath || referenceMetadataFolder?.folder"
+        >
+          <v-icon size="16">mdi-folder-outline</v-icon>
+          <span>{{ referenceMetadataScopeLabel }}</span>
+        </div>
+        <div class="reference-metadata-options">
+          <v-checkbox
+            v-model="referenceMetadataTypes"
+            value="tags"
+            label="Tags"
+            density="compact"
+            hide-details
+          />
+          <v-checkbox
+            v-model="referenceMetadataTypes"
+            value="descriptions"
+            label="Descriptions"
+            density="compact"
+            hide-details
+          />
+        </div>
+        <div v-if="referenceMetadataError" class="reference-metadata-error">
+          {{ referenceMetadataError }}
+        </div>
+        <div v-if="referenceMetadataResult" class="reference-metadata-result">
+          {{ referenceMetadataResult }}
+        </div>
+      </v-card-text>
+      <v-card-actions class="reference-metadata-actions">
+        <v-spacer />
+        <v-btn variant="text" @click="closeReferenceMetadataDialog">
+          {{ referenceMetadataResult ? "Close" : "Cancel" }}
+        </v-btn>
+        <v-btn
+          v-if="!referenceMetadataResult"
+          color="primary"
+          variant="flat"
+          :loading="referenceMetadataLoading"
+          :disabled="referenceMetadataTypes.length === 0"
+          @click="runReferenceFolderMetadata"
+        >
+          {{ referenceMetadataAction === "export" ? "Export" : "Import" }}
+        </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -4586,11 +4684,21 @@ defineExpose({
                   active: selectedFolderKey === 'rf-' + rf.id,
                   droppable: dragOverReferenceTargetKey === 'rf-' + rf.id,
                 }"
-                :title="rf.folder"
+                :title="
+                  inDocker
+                    ? rf.folder
+                    : `${rf.folder} - drop dragged reference images here to move them`
+                "
                 @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
-                @dragover="handleReferenceFolderDragOver(rf.id, null, $event)"
-                @dragleave="handleReferenceFolderDragLeave(rf.id, null)"
-                @drop.prevent="handleReferenceFolderDrop(rf.id, null, $event)"
+                @dragover="
+                  !inDocker && handleReferenceFolderDragOver(rf.id, null, $event)
+                "
+                @dragleave="
+                  !inDocker && handleReferenceFolderDragLeave(rf.id, null)
+                "
+                @drop.prevent="
+                  !inDocker && handleReferenceFolderDrop(rf.id, null, $event)
+                "
                 @click="
                   if (!inDocker) {
                     if (!expandedFolderIds.has(rf.id))
@@ -4636,6 +4744,46 @@ defineExpose({
                 <span class="sidebar-folder-label">{{
                   rf.label || rf.folder
                 }}</span>
+                <span v-if="!inDocker" class="sidebar-folder-actions" @click.stop>
+                  <button
+                    type="button"
+                    class="sidebar-folder-action-btn"
+                    title="Import TXT metadata"
+                    @click="
+                      openReferenceMetadataDialog(
+                        'import',
+                        rf,
+                        null,
+                        rf.label || rf.folder,
+                      )
+                    "
+                  >
+                    <v-icon size="13">mdi-file-import-outline</v-icon>
+                  </button>
+                  <button
+                    type="button"
+                    class="sidebar-folder-action-btn"
+                    title="Export TXT metadata"
+                    @click="
+                      openReferenceMetadataDialog(
+                        'export',
+                        rf,
+                        null,
+                        rf.label || rf.folder,
+                      )
+                    "
+                  >
+                    <v-icon size="13">mdi-file-export-outline</v-icon>
+                  </button>
+                  <button
+                    type="button"
+                    class="sidebar-folder-action-btn"
+                    title="Relocate or edit folder"
+                    @click="openReferenceFolderEditor(rf)"
+                  >
+                    <v-icon size="13">mdi-pencil-outline</v-icon>
+                  </button>
+                </span>
                 <span
                   v-if="rf.status === 'mount_error'"
                   class="sidebar-folder-status-badge sidebar-folder-status--mount_error"
@@ -4718,6 +4866,7 @@ defineExpose({
                           handleReferenceFolderDrop(rfId, path, event)
                       "
                       @context="handleReferenceFolderNodeContext"
+                      @metadata="openReferenceMetadataDialogFromNode"
                     />
                   </template>
                   <div
@@ -6123,12 +6272,14 @@ defineExpose({
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
         <button
+          v-if="!inDocker"
           class="sidebar-ctx-item"
           @click="
-            runReferenceFolderMetadata(
+            openReferenceMetadataDialog(
               'import',
               sidebarCtxFolder,
               sidebarCtxFolderScopePath,
+              sidebarCtxFolderScopePath || sidebarCtxFolder.label || sidebarCtxFolder.folder,
             );
             closeSidebarCtxMenu();
           "
@@ -6139,12 +6290,14 @@ defineExpose({
           Import TXT metadata
         </button>
         <button
+          v-if="!inDocker"
           class="sidebar-ctx-item"
           @click="
-            runReferenceFolderMetadata(
+            openReferenceMetadataDialog(
               'export',
               sidebarCtxFolder,
               sidebarCtxFolderScopePath,
+              sidebarCtxFolderScopePath || sidebarCtxFolder.label || sidebarCtxFolder.folder,
             );
             closeSidebarCtxMenu();
           "
@@ -8549,6 +8702,42 @@ defineExpose({
   min-width: 0;
 }
 
+.sidebar-folder-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.sidebar-folder-row:hover .sidebar-folder-actions,
+.sidebar-folder-row:focus-within .sidebar-folder-actions,
+.sidebar-folder-row.active .sidebar-folder-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-folder-action-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.sidebar-folder-action-btn:hover {
+  background: rgba(var(--v-theme-accent), 0.18);
+  opacity: 1;
+}
+
 .sidebar-folder-chevron,
 .sidebar-folder-icon {
   flex-shrink: 0;
@@ -8945,6 +9134,64 @@ button.sidebar-ctx-item:disabled:hover {
 
 .folder-type-actions {
   padding: var(--space-3) var(--space-5) var(--space-4);
+}
+
+.reference-metadata-card {
+  border-radius: 14px;
+}
+
+.reference-metadata-title {
+  font-size: 1.04rem;
+  font-weight: 700;
+  padding: 16px 18px 8px;
+}
+
+.reference-metadata-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 18px 0;
+}
+
+.reference-metadata-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface-variant), 0.35);
+  font-size: 0.82rem;
+}
+
+.reference-metadata-scope span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-metadata-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reference-metadata-error {
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-error), 0.08);
+  border: 1px solid rgba(var(--v-theme-error), 0.22);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.reference-metadata-result {
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-accent));
+}
+
+.reference-metadata-actions {
+  padding: 10px 16px 14px;
 }
 </style>
 

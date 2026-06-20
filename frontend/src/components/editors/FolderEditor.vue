@@ -1174,6 +1174,7 @@ async function save() {
   saveLoading.value = true;
   saveError.value = "";
   try {
+    let savedResponse = null;
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       const patchData = { label: localLabel.value.trim() || null };
@@ -1198,7 +1199,10 @@ async function save() {
             DEFAULT_DESCRIPTION_SUFFIX,
           ) ?? null;
       }
-      await apiClient.patch(`${apiBase.value}/${editingFolder.id}`, patchData);
+      savedResponse = await apiClient.patch(
+        `${apiBase.value}/${editingFolder.id}`,
+        patchData,
+      );
     } else {
       const pathToSave = props.inDocker
         ? dockerSuggestedPath.value
@@ -1226,9 +1230,9 @@ async function save() {
           DEFAULT_DESCRIPTION_SUFFIX,
         );
       }
-      await apiClient.post(apiBase.value, createData);
+      savedResponse = await apiClient.post(apiBase.value, createData);
     }
-    emit("saved");
+    emit("saved", savedResponse?.data || null);
   } catch (error) {
     saveError.value =
       error?.response?.data?.detail || `Failed to save ${props.type} folder.`;
