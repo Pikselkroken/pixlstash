@@ -1,0 +1,125 @@
+/* =============================================================================
+   PixlStash design tokens — the single source of truth for non-color scales.
+   =============================================================================
+
+   COLOR lives in the Vuetify themes in `frontend/src/main.js`
+   (`pixlStashLight` / `pixlStashDark`) and is consumed as `rgb(var(--v-theme-*))`.
+   This file owns everything color does not: the spacing scale, the radius set,
+   the type ramp, elevation, and motion. Together they are the design system.
+
+   These values are the law. They mirror `docs/design/visual-language.md`. If you
+   need a size, a radius, a shadow, or a duration, it is in here. If it is not in
+   here, you do not need it — you need to pick the nearest token. Adding a new
+   value is a design decision, not an implementation detail: raise it with the
+   lead designer instead of inventing a one-off in a component.
+
+   Adoption note: importing this file does not restyle anything on its own. It
+   defines the vocabulary. Components migrate off hardcoded values onto these
+   tokens incrementally (see `drift-audit-2026-06.md`). Any change that alters
+   on-screen rendering (snapping a radius, resizing text) goes past the UI/UX
+   expert before it ships.
+   ========================================================================== */
+
+:root {
+  /* ---------------------------------------------------------------------------
+     SPACING — 4px base grid. Use these for padding, margin, and gap. Nothing
+     else. The audit found 4 / 8 / 6 / 2px dominating with a long tail of
+     off-grid one-offs (5, 7, 10, 11, 14, 18, 26, 30, 36px); those are drift.
+     `--space-1` (2px) is the only sub-4 step and exists for hairline insets and
+     icon nudges, not general layout.
+     --------------------------------------------------------------------------- */
+  --space-0: 0;
+  --space-1: 2px;   /* hairline inset, optical nudge only */
+  --space-2: 4px;   /* tightest real gap: icon-to-label, chip padding */
+  --space-3: 8px;   /* default control padding, small gap */
+  --space-4: 12px;  /* comfortable gap inside a group */
+  --space-5: 16px;  /* gap between groups, card padding */
+  --space-6: 24px;  /* section spacing */
+  --space-7: 32px;  /* major section / dialog padding */
+  --space-8: 48px;  /* page-level rhythm */
+  --space-9: 64px;  /* hero / empty-state breathing room */
+
+  /* ---------------------------------------------------------------------------
+     RADIUS — four steps and a pill. The audit found 14 distinct radii
+     (2/3/4/5/6/8/9/10/12/14/16/18/999/9999). Collapse to these. 9999 was a typo
+     for the pill; use `--radius-pill`.
+     --------------------------------------------------------------------------- */
+  --radius-sm: 4px;     /* dense controls: chips, small buttons, inputs in tight UI */
+  --radius-md: 8px;     /* default: cards, inputs, menus, image tiles */
+  --radius-lg: 12px;    /* dialogs, panels, popovers */
+  --radius-pill: 999px; /* fully-rounded: toggles, status pills, avatar ring */
+
+  /* ---------------------------------------------------------------------------
+     TYPE RAMP — base 14px (the app is dense; 16px body wastes vertical space in
+     the grid chrome). Sizes in rem off a 16px root so user zoom scales them.
+     RULE: size text from this ramp only, and only in rem. The audit found 30+
+     sizes mixing px, rem, AND em. `em` compounds with its parent and is the main
+     reason nested labels drift; do not size body text in em.
+     --------------------------------------------------------------------------- */
+  --text-2xs: 0.6875rem; /* 11px — uppercase section labels, badge counts */
+  --text-xs:  0.75rem;   /* 12px — captions, metadata, dense secondary text */
+  --text-sm:  0.8125rem; /* 13px — secondary body, toolbar labels */
+  --text-base:0.875rem;  /* 14px — DEFAULT body and controls */
+  --text-md:  1rem;      /* 16px — emphasised body, dialog body */
+  --text-lg:  1.125rem;  /* 18px — card titles, dialog headings */
+  --text-xl:  1.375rem;  /* 22px — view titles */
+  --text-2xl: 1.75rem;   /* 28px — login / startup / empty-state display */
+
+  --leading-tight: 1.2;  /* display and headings */
+  --leading-snug:  1.35; /* UI labels, single-line controls */
+  --leading-body:  1.5;  /* reading text (matches the :root default) */
+
+  /* Weights. Headings are 600, NOT 700 — 700 reads heavy against the warm
+     near-black text ramp. 700 is reserved for the rare true-emphasis case. */
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --weight-bold:    700; /* reserve */
+
+  /* Font stacks. The UI runs on the platform system sans (no webfont load, native
+     feel in a dense tool). Tiny5 is the brand pixel face — wordmark and brand
+     moments ONLY, never body or UI copy. Mono is for hashes, tokens, paths. */
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-pixel: "Tiny5", monospace;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --tracking-label: 0.06em; /* uppercase section labels (see .section-label) */
+
+  /* ---------------------------------------------------------------------------
+     ELEVATION — four levels, all built on the theme `--v-theme-shadow` token so
+     shadows warm/cool with the theme. The audit found 58 distinct box-shadows,
+     most hardcoding `rgba(0,0,0,…)`, which reads cold and flat on the warm light
+     canvas. Never hardcode a shadow color again. Higher level = more lifted.
+     --------------------------------------------------------------------------- */
+  --elevation-1: 0 1px 2px rgba(var(--v-theme-shadow), 0.12);  /* resting cards, hovered tiles */
+  --elevation-2: 0 2px 6px rgba(var(--v-theme-shadow), 0.18);  /* menus, dropdowns, raised controls */
+  --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22); /* popovers, floating panels */
+  --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30); /* dialogs, lightbox chrome */
+
+  /* Focus ring — one definition, used on every focusable element. Accent-tinted,
+     3px, offset by the element's own radius. This is the keyboard-user's lifeline;
+     never remove an outline without replacing it with this. */
+  --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
+
+  /* ---------------------------------------------------------------------------
+     MOTION — three durations, one easing. Motion confirms what happened; it is
+     feedback, not decoration. Anything slower than --dur-3 on a routine
+     interaction feels sluggish in a bulk-work tool.
+     --------------------------------------------------------------------------- */
+  --dur-1: 150ms; /* hover, press, micro-feedback */
+  --dur-2: 200ms; /* panels, expand/collapse, default */
+  --dur-3: 250ms; /* overlays, dialog enter/leave */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1); /* entering elements */
+}
+
+/* Honour the OS "reduce motion" setting everywhere. Non-negotiable. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
