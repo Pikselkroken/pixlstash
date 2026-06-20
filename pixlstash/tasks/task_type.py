@@ -6,6 +6,7 @@ class TaskType(str, Enum):
 
     FACE_EXTRACTION = "FaceExtractionTask"
     FACE_MODEL_REFRESH = "FaceModelRefreshTask"
+    DETECTION = "DetectionTask"
     TAGGER = "TagTask"
     TAG_PREDICTION_BACKFILL = "TagPredictionBackfillTask"
     QUALITY = "QualityTask"

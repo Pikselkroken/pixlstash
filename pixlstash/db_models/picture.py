@@ -35,6 +35,7 @@ from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
     from .character import Character
+    from .detection import Detection
     from .picture_likeness import PictureLikeness
     from .project import Project
     from .reference_folder import ReferenceFolder
@@ -303,6 +304,13 @@ class Picture(SQLModel, table=True):
         back_populates="picture",
         sa_relationship_kwargs={
             "overlaps": "characters",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
+    )
+    detections: List["Detection"] = Relationship(
+        back_populates="picture",
+        sa_relationship_kwargs={
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
         },
