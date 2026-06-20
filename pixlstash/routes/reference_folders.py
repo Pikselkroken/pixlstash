@@ -3,25 +3,38 @@
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError
 
 from pixlstash.database import DBPriority
+from pixlstash.db_models.tag import TAG_PENDING_SENTINEL, Tag, is_tag_sentinel
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.caption_file_utils import detect_folder_suffixes
+from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_DESCRIPTION,
+    SIDECAR_TYPE_TAGS,
+    detect_folder_suffixes,
+    get_sidecar_mtime,
+    read_description_sidecar,
+    read_tags_sidecar,
+    resolve_typed_sidecar,
+    write_sidecar,
+    writeback_path,
+)
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
     validate_reference_folder_accessible,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 logger = get_logger(__name__)
 
@@ -61,6 +74,7 @@ class ReferenceFolderCreateRequest(BaseModel):
 
 
 class ReferenceFolderUpdateRequest(BaseModel):
+    folder: Optional[str] = None
     label: Optional[str] = None
     allow_delete_file: Optional[bool] = None
     sync_descriptions: Optional[bool] = None
@@ -84,6 +98,33 @@ class ReferenceFolderResponse(BaseModel):
     tags_suffix: Optional[str]
     status: str
     last_scanned: Optional[float]
+    relocation: Optional[dict] = None
+
+
+class MoveReferencePicturesRequest(BaseModel):
+    picture_ids: list[int]
+    destination_subpath: Optional[str] = None
+
+
+class MoveReferencePicturesResponse(BaseModel):
+    status: str
+    moved_count: int
+    moved_picture_ids: list[int]
+    failures: list[dict] = Field(default_factory=list)
+
+
+class ReferenceFolderMetadataRequest(BaseModel):
+    scope_path: Optional[str] = None
+    types: list[str]
+
+
+class ReferenceFolderMetadataResponse(BaseModel):
+    status: str
+    scope_path: str
+    types: list[str]
+    tags_count: int = 0
+    descriptions_count: int = 0
+    skipped_count: int = 0
 
 
 class ReferenceFolderDetectResponse(BaseModel):
@@ -181,6 +222,150 @@ def create_router(server) -> APIRouter:
             status=rf.status,
             last_scanned=rf.last_scanned,
         )
+
+    def _is_within_path(path: str, root: str) -> bool:
+        try:
+            path_real = os.path.realpath(os.path.normpath(path))
+            root_real = os.path.realpath(os.path.normpath(root))
+            return os.path.commonpath([path_real, root_real]) == root_real
+        except (OSError, ValueError):
+            return False
+
+    def _resolve_scope_path(root: str, scope_path: Optional[str]) -> str:
+        if not scope_path:
+            return os.path.realpath(os.path.normpath(root))
+        raw_scope = str(scope_path).strip()
+        if not raw_scope:
+            return os.path.realpath(os.path.normpath(root))
+        if os.path.isabs(raw_scope):
+            resolved = os.path.realpath(os.path.normpath(raw_scope))
+        else:
+            resolved = os.path.realpath(os.path.normpath(os.path.join(root, raw_scope)))
+        root_real = os.path.realpath(os.path.normpath(root))
+        if not _is_within_path(resolved, root_real):
+            raise HTTPException(
+                status_code=400,
+                detail="Scope path is outside the reference folder.",
+            )
+        return resolved
+
+    def _validate_destination_dir(root: str, subpath: Optional[str]) -> str:
+        destination = _resolve_scope_path(root, subpath)
+        if not os.path.isdir(destination):
+            raise HTTPException(
+                status_code=404,
+                detail="Destination folder not found on disk.",
+            )
+        return destination
+
+    def _validate_reference_folder_conflicts(
+        session: Session,
+        folder: str,
+        *,
+        exclude_id: int | None = None,
+    ) -> None:
+        image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
+        if image_root:
+            if (
+                folder == image_root
+                or folder.startswith(image_root + os.sep)
+                or image_root.startswith(folder + os.sep)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Path conflicts with the PixlStash data folder.",
+                )
+        all_folders = list(session.exec(select(ReferenceFolder)).all())
+        for other in all_folders:
+            if exclude_id is not None and other.id == exclude_id:
+                continue
+            other_norm = os.path.normpath(other.folder)
+            if folder == other_norm:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A reference folder with this path already exists.",
+                )
+            if folder.startswith(other_norm + os.sep):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Path is inside an existing reference folder: {other.folder}",
+                )
+            if other_norm.startswith(folder + os.sep):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"An existing reference folder is inside this path: {other.folder}",
+                )
+
+    def _sidecar_suffix_for_move(image_path: str, sidecar_path: str) -> str | None:
+        if not sidecar_path:
+            return None
+        if os.path.normpath(os.path.dirname(image_path)) != os.path.normpath(
+            os.path.dirname(sidecar_path)
+        ):
+            return None
+        image_stem = os.path.splitext(image_path)[0]
+        if not sidecar_path.startswith(image_stem):
+            return None
+        suffix = sidecar_path[len(image_stem) :]
+        return suffix or None
+
+    def _unique_destination_file(
+        source_path: str,
+        destination_dir: str,
+        sidecar_suffixes: list[str],
+    ) -> str:
+        base_name = os.path.basename(source_path)
+        stem, ext = os.path.splitext(base_name)
+        counter = 0
+        while True:
+            candidate_name = base_name if counter == 0 else f"{stem}_{counter}{ext}"
+            candidate = os.path.join(destination_dir, candidate_name)
+            candidate_stem = os.path.splitext(candidate)[0]
+            collisions = [candidate]
+            collisions.extend(candidate_stem + suffix for suffix in sidecar_suffixes)
+            if not any(os.path.exists(path) for path in collisions):
+                return candidate
+            counter += 1
+
+    def _rewrite_path_under_root(path: str | None, old_root: str, new_root: str):
+        if not path:
+            return None, False
+        if not _is_within_path(path, old_root):
+            return path, False
+        rel = os.path.relpath(os.path.realpath(os.path.normpath(path)), old_root)
+        return os.path.normpath(os.path.join(new_root, rel)), True
+
+    def _metadata_types(types: list[str]) -> set[str]:
+        allowed = {SIDECAR_TYPE_TAGS, SIDECAR_TYPE_DESCRIPTION, "descriptions"}
+        requested = {str(t).strip().lower() for t in types or []}
+        if not requested or not requested.issubset(allowed):
+            raise HTTPException(
+                status_code=400,
+                detail="types must include tags and/or descriptions.",
+            )
+        if "descriptions" in requested:
+            requested.remove("descriptions")
+            requested.add(SIDECAR_TYPE_DESCRIPTION)
+        return requested
+
+    def _pictures_for_metadata_scope(
+        session: Session,
+        folder_id: int,
+        root: str,
+        scope_path: str,
+    ) -> list[Picture]:
+        pictures = session.exec(
+            select(Picture).where(Picture.reference_folder_id == folder_id)
+        ).all()
+        scoped = []
+        for pic in pictures:
+            if not pic.file_path:
+                continue
+            if not _is_within_path(pic.file_path, root):
+                continue
+            if _is_within_path(pic.file_path, scope_path):
+                scoped.append(pic)
+        return scoped
 
     # -------------------------------------------------------------------------
     # CRUD
@@ -302,30 +487,7 @@ def create_router(server) -> APIRouter:
                     status_code=409,
                     detail="A reference folder with this path already exists.",
                 )
-            image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
-            if image_root:
-                if (
-                    folder == image_root
-                    or folder.startswith(image_root + os.sep)
-                    or image_root.startswith(folder + os.sep)
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Path conflicts with the PixlStash data folder.",
-                    )
-            all_folders = list(session.exec(select(ReferenceFolder)).all())
-            for other in all_folders:
-                other_norm = os.path.normpath(other.folder)
-                if folder.startswith(other_norm + os.sep):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Path is inside an existing reference folder: {other.folder}",
-                    )
-                if other_norm.startswith(folder + os.sep):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"An existing reference folder is inside this path: {other.folder}",
-                    )
+            _validate_reference_folder_conflicts(session, folder)
             rf = ReferenceFolder(
                 folder=folder,
                 host_path=host_path,
@@ -378,6 +540,107 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(
                     status_code=404, detail="Reference folder not found."
                 )
+            relocation_report = None
+            old_folder = os.path.normpath(rf.folder)
+            new_folder = old_folder
+            if "folder" in payload.model_fields_set and payload.folder is not None:
+                new_folder = os.path.normpath(payload.folder)
+                error = validate_reference_folder_path(new_folder)
+                if error:
+                    raise HTTPException(status_code=400, detail=error)
+                _validate_reference_folder_conflicts(
+                    session, new_folder, exclude_id=folder_id
+                )
+                if new_folder != old_folder:
+                    missing: list[dict] = []
+                    unmatched: list[dict] = []
+                    rewritten = 0
+                    pictures = session.exec(
+                        select(Picture).where(Picture.reference_folder_id == folder_id)
+                    ).all()
+                    for pic in pictures:
+                        new_path, path_rewritten = _rewrite_path_under_root(
+                            pic.file_path, old_folder, new_folder
+                        )
+                        new_tags, tags_rewritten = _rewrite_path_under_root(
+                            pic.tags_file, old_folder, new_folder
+                        )
+                        new_description, description_rewritten = (
+                            _rewrite_path_under_root(
+                                pic.description_file, old_folder, new_folder
+                            )
+                        )
+                        if path_rewritten:
+                            pic.file_path = new_path
+                            pic.original_file_name = os.path.basename(new_path)
+                            rewritten += 1
+                            if os.path.isfile(new_path):
+                                try:
+                                    new_sha = ImageUtils.calculate_hash_from_file_path(
+                                        new_path
+                                    )
+                                    if pic.pixel_sha and new_sha != pic.pixel_sha:
+                                        unmatched.append(
+                                            {
+                                                "picture_id": pic.id,
+                                                "path": new_path,
+                                                "expected_pixel_sha": pic.pixel_sha,
+                                                "actual_pixel_sha": new_sha,
+                                            }
+                                        )
+                                    elif not pic.pixel_sha:
+                                        pic.pixel_sha = new_sha
+                                except Exception as exc:
+                                    unmatched.append(
+                                        {
+                                            "picture_id": pic.id,
+                                            "path": new_path,
+                                            "error": str(exc),
+                                        }
+                                    )
+                            else:
+                                missing.append(
+                                    {
+                                        "picture_id": pic.id,
+                                        "path": new_path,
+                                    }
+                                )
+                        if tags_rewritten:
+                            pic.tags_file = new_tags
+                            pic.tags_file_mtime = get_sidecar_mtime(new_tags)
+                        if description_rewritten:
+                            pic.description_file = new_description
+                            pic.description_file_mtime = get_sidecar_mtime(
+                                new_description
+                            )
+                        if path_rewritten or tags_rewritten or description_rewritten:
+                            session.add(pic)
+
+                    rf.folder = new_folder
+                    access_error = (
+                        None
+                        if server.running_in_docker()
+                        else validate_reference_folder_accessible(new_folder)
+                    )
+                    rf.status = (
+                        ReferenceFolderStatus.PENDING_MOUNT
+                        if server.running_in_docker()
+                        else (
+                            ReferenceFolderStatus.ACTIVE
+                            if access_error is None
+                            else ReferenceFolderStatus.MOUNT_ERROR
+                        )
+                    )
+                    rf.last_scanned = None
+                    relocation_report = {
+                        "old_folder": old_folder,
+                        "new_folder": new_folder,
+                        "rewritten_count": rewritten,
+                        "missing_count": len(missing),
+                        "unmatched_count": len(unmatched),
+                        "missing": missing[:100],
+                        "unmatched": unmatched[:100],
+                    }
             if payload.label is not None:
                 rf.label = payload.label
             if payload.allow_delete_file is not None:
@@ -410,10 +673,456 @@ def create_router(server) -> APIRouter:
             session.add(rf)
             session.commit()
             session.refresh(rf)
-            return rf
+            return rf, relocation_report
 
-        rf = server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
+        rf, relocation_report = server.vault.db.run_task(
+            update, priority=DBPriority.IMMEDIATE
+        )
+        if relocation_report is not None:
+            server.vault.unwatch_reference_folder(folder_id)
+            server.vault.watch_reference_folder(folder_id, rf.folder)
+            from pixlstash.event_types import EventType
+
+            server.vault.notify(EventType.CHANGED_PICTURES)
+            response = _to_response(rf)
+            response.relocation = relocation_report
+            return response
         return _to_response(rf)
+
+    @router.post(
+        "/reference-folders/{folder_id}/move-pictures",
+        summary="Move reference-folder pictures",
+        description=(
+            "Moves existing reference-folder image files into this reference "
+            "folder (or one of its subfolders) and updates the existing Picture "
+            "rows in place."
+        ),
+        response_model=MoveReferencePicturesResponse,
+        tags=["folders"],
+    )
+    def move_reference_folder_pictures(
+        folder_id: int,
+        request: Request,
+        payload: MoveReferencePicturesRequest = Body(...),
+    ):
+        server.auth.require_user_id(request)
+        if not payload.picture_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list."
+            )
+
+        def fetch_destination(session: Session):
+            rf = session.get(ReferenceFolder, folder_id)
+            if rf is None:
+                raise HTTPException(
+                    status_code=404, detail="Reference folder not found."
+                )
+            if rf.status != ReferenceFolderStatus.ACTIVE:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Destination reference folder is not active.",
+                )
+            return rf.folder
+
+        destination_root = server.vault.db.run_task(
+            fetch_destination, priority=DBPriority.IMMEDIATE
+        )
+        destination_dir = _validate_destination_dir(
+            destination_root, payload.destination_subpath
+        )
+
+        def fetch_picture_records(session: Session):
+            ids = [int(pid) for pid in payload.picture_ids]
+            pictures = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
+            by_id = {pic.id: pic for pic in pictures}
+            folders = {
+                rf.id: rf
+                for rf in session.exec(select(ReferenceFolder)).all()
+                if rf.id is not None
+            }
+            failures = []
+            records = []
+            for pic_id in ids:
+                pic = by_id.get(pic_id)
+                if pic is None:
+                    failures.append(
+                        {"picture_id": pic_id, "reason": "picture_not_found"}
+                    )
+                    continue
+                if not pic.reference_folder_id:
+                    failures.append(
+                        {"picture_id": pic_id, "reason": "not_reference_picture"}
+                    )
+                    continue
+                source_folder = folders.get(pic.reference_folder_id)
+                if source_folder is None:
+                    failures.append(
+                        {
+                            "picture_id": pic_id,
+                            "reason": "source_reference_folder_not_found",
+                        }
+                    )
+                    continue
+                if not pic.file_path or not os.path.isfile(pic.file_path):
+                    failures.append(
+                        {"picture_id": pic_id, "reason": "source_file_missing"}
+                    )
+                    continue
+                if not _is_within_path(pic.file_path, source_folder.folder):
+                    failures.append(
+                        {"picture_id": pic_id, "reason": "source_path_outside_root"}
+                    )
+                    continue
+                records.append(
+                    {
+                        "picture_id": pic.id,
+                        "source_path": pic.file_path,
+                        "source_folder": source_folder.folder,
+                        "tags_file": pic.tags_file,
+                        "description_file": pic.description_file,
+                    }
+                )
+            return records, failures
+
+        records, failures = server.vault.db.run_task(
+            fetch_picture_records, priority=DBPriority.IMMEDIATE
+        )
+        if failures:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Some pictures cannot be moved.",
+                    "failures": failures,
+                },
+            )
+
+        moved: list[dict] = []
+        rollback_moves: list[tuple[str, str]] = []
+        try:
+            for record in records:
+                source_path = record["source_path"]
+                source_sidecars = []
+                sidecar_suffixes = []
+                for key in ("tags_file", "description_file"):
+                    sidecar = record.get(key)
+                    if not sidecar or not os.path.isfile(sidecar):
+                        continue
+                    if not _is_within_path(sidecar, record["source_folder"]):
+                        continue
+                    suffix = _sidecar_suffix_for_move(source_path, sidecar)
+                    if not suffix:
+                        continue
+                    source_sidecars.append((key, sidecar, suffix))
+                    sidecar_suffixes.append(suffix)
+
+                destination_path = _unique_destination_file(
+                    source_path, destination_dir, sidecar_suffixes
+                )
+                os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+                shutil.move(source_path, destination_path)
+                rollback_moves.append((destination_path, source_path))
+
+                moved_sidecars = {}
+                destination_stem = os.path.splitext(destination_path)[0]
+                for key, sidecar, suffix in source_sidecars:
+                    destination_sidecar = destination_stem + suffix
+                    if os.path.exists(destination_sidecar):
+                        destination_sidecar = _unique_destination_file(
+                            sidecar,
+                            os.path.dirname(destination_path),
+                            [],
+                        )
+                    shutil.move(sidecar, destination_sidecar)
+                    rollback_moves.append((destination_sidecar, sidecar))
+                    moved_sidecars[key] = destination_sidecar
+
+                try:
+                    pixel_sha = ImageUtils.calculate_hash_from_file_path(
+                        destination_path
+                    )
+                except Exception:
+                    pixel_sha = None
+                moved.append(
+                    {
+                        "picture_id": record["picture_id"],
+                        "file_path": destination_path,
+                        "pixel_sha": pixel_sha,
+                        "tags_file": moved_sidecars.get("tags_file"),
+                        "description_file": moved_sidecars.get("description_file"),
+                    }
+                )
+
+            def apply_moves(session: Session, move_records: list[dict]):
+                destination_rf = session.get(ReferenceFolder, folder_id)
+                if destination_rf is None:
+                    raise HTTPException(
+                        status_code=404, detail="Reference folder not found."
+                    )
+                source_folder_ids = set()
+                moved_ids = []
+                for move in move_records:
+                    pic = session.get(Picture, move["picture_id"])
+                    if pic is None:
+                        continue
+                    if pic.reference_folder_id is not None:
+                        source_folder_ids.add(pic.reference_folder_id)
+                    if pic.pixel_sha and move.get("pixel_sha"):
+                        if pic.pixel_sha != move["pixel_sha"]:
+                            raise HTTPException(
+                                status_code=409,
+                                detail={
+                                    "message": "Moved file hash did not match the picture identity.",
+                                    "picture_id": pic.id,
+                                },
+                            )
+                    elif move.get("pixel_sha"):
+                        pic.pixel_sha = move["pixel_sha"]
+                    pic.file_path = move["file_path"]
+                    pic.reference_folder_id = folder_id
+                    pic.original_file_name = os.path.basename(move["file_path"])
+                    pic.tags_file = move.get("tags_file")
+                    pic.tags_file_mtime = (
+                        get_sidecar_mtime(pic.tags_file) if pic.tags_file else None
+                    )
+                    pic.description_file = move.get("description_file")
+                    pic.description_file_mtime = (
+                        get_sidecar_mtime(pic.description_file)
+                        if pic.description_file
+                        else None
+                    )
+                    session.add(pic)
+                    moved_ids.append(pic.id)
+                destination_rf.last_scanned = None
+                session.add(destination_rf)
+                for source_folder_id in source_folder_ids:
+                    if source_folder_id == folder_id:
+                        continue
+                    source_rf = session.get(ReferenceFolder, source_folder_id)
+                    if source_rf is not None:
+                        source_rf.last_scanned = None
+                        session.add(source_rf)
+                session.commit()
+                return moved_ids
+
+            moved_ids = server.vault.db.run_task(
+                apply_moves, moved, priority=DBPriority.IMMEDIATE
+            )
+        except HTTPException:
+            for destination, source in reversed(rollback_moves):
+                if os.path.exists(destination):
+                    try:
+                        shutil.move(destination, source)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to roll back move %s: %s",
+                            destination,
+                            exc,
+                        )
+            raise
+        except Exception as exc:
+            for destination, source in reversed(rollback_moves):
+                if os.path.exists(destination):
+                    try:
+                        shutil.move(destination, source)
+                    except Exception as rollback_exc:
+                        logger.warning(
+                            "Failed to roll back move %s: %s",
+                            destination,
+                            rollback_exc,
+                        )
+            raise HTTPException(status_code=500, detail=f"Move failed: {exc}")
+
+        from pixlstash.event_types import EventType
+
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {"picture_ids": moved_ids, "change_kind": "updated"},
+        )
+        return MoveReferencePicturesResponse(
+            status="success",
+            moved_count=len(moved_ids),
+            moved_picture_ids=moved_ids,
+            failures=[],
+        )
+
+    @router.post(
+        "/reference-folders/{folder_id}/metadata/export",
+        summary="Export reference folder TXT metadata",
+        description="Writes tags and/or descriptions for indexed pictures to TXT sidecars.",
+        response_model=ReferenceFolderMetadataResponse,
+        tags=["folders"],
+    )
+    def export_reference_folder_metadata(
+        folder_id: int,
+        request: Request,
+        payload: ReferenceFolderMetadataRequest = Body(...),
+    ):
+        server.auth.require_user_id(request)
+        requested_types = _metadata_types(payload.types)
+
+        def export_metadata(session: Session):
+            rf = session.get(ReferenceFolder, folder_id)
+            if rf is None:
+                raise HTTPException(
+                    status_code=404, detail="Reference folder not found."
+                )
+            scope = _resolve_scope_path(rf.folder, payload.scope_path)
+            pictures = _pictures_for_metadata_scope(session, folder_id, rf.folder, scope)
+            tag_rows = session.exec(
+                select(Tag.picture_id, Tag.tag).where(
+                    Tag.picture_id.in_([p.id for p in pictures if p.id is not None])
+                )
+            ).all()
+            tags_by_picture: dict[int, list[str]] = {}
+            for picture_id, tag in tag_rows:
+                if tag and not is_tag_sentinel(tag):
+                    tags_by_picture.setdefault(picture_id, []).append(tag)
+
+            tags_count = 0
+            descriptions_count = 0
+            skipped_count = 0
+            for pic in pictures:
+                if not pic.file_path or not os.path.isfile(pic.file_path):
+                    skipped_count += 1
+                    continue
+                dirty = False
+                if SIDECAR_TYPE_TAGS in requested_types:
+                    tags = tags_by_picture.get(pic.id, [])
+                    if tags or pic.tags_file:
+                        target = writeback_path(
+                            pic.file_path,
+                            SIDECAR_TYPE_TAGS,
+                            rf.tags_suffix,
+                            pic.tags_file,
+                        )
+                        mtime = write_sidecar(target, ", ".join(tags))
+                        if mtime is not None:
+                            pic.tags_file = target
+                            pic.tags_file_mtime = mtime
+                            tags_count += 1
+                            dirty = True
+                if SIDECAR_TYPE_DESCRIPTION in requested_types:
+                    description = (pic.description or "").strip()
+                    if description or pic.description_file:
+                        target = writeback_path(
+                            pic.file_path,
+                            SIDECAR_TYPE_DESCRIPTION,
+                            rf.description_suffix,
+                            pic.description_file,
+                        )
+                        mtime = write_sidecar(target, description)
+                        if mtime is not None:
+                            pic.description_file = target
+                            pic.description_file_mtime = mtime
+                            descriptions_count += 1
+                            dirty = True
+                if dirty:
+                    session.add(pic)
+            session.commit()
+            return scope, tags_count, descriptions_count, skipped_count
+
+        scope, tags_count, descriptions_count, skipped_count = server.vault.db.run_task(
+            export_metadata, priority=DBPriority.IMMEDIATE
+        )
+        return ReferenceFolderMetadataResponse(
+            status="success",
+            scope_path=scope,
+            types=sorted(requested_types),
+            tags_count=tags_count,
+            descriptions_count=descriptions_count,
+            skipped_count=skipped_count,
+        )
+
+    @router.post(
+        "/reference-folders/{folder_id}/metadata/import",
+        summary="Import reference folder TXT metadata",
+        description="Reads tags and/or descriptions from TXT sidecars for indexed pictures.",
+        response_model=ReferenceFolderMetadataResponse,
+        tags=["folders"],
+    )
+    def import_reference_folder_metadata(
+        folder_id: int,
+        request: Request,
+        payload: ReferenceFolderMetadataRequest = Body(...),
+    ):
+        server.auth.require_user_id(request)
+        requested_types = _metadata_types(payload.types)
+
+        def import_metadata(session: Session):
+            rf = session.get(ReferenceFolder, folder_id)
+            if rf is None:
+                raise HTTPException(
+                    status_code=404, detail="Reference folder not found."
+                )
+            scope = _resolve_scope_path(rf.folder, payload.scope_path)
+            pictures = _pictures_for_metadata_scope(session, folder_id, rf.folder, scope)
+            tags_count = 0
+            descriptions_count = 0
+            skipped_count = 0
+            for pic in pictures:
+                if not pic.file_path or not os.path.isfile(pic.file_path):
+                    skipped_count += 1
+                    continue
+                dirty = False
+                if SIDECAR_TYPE_TAGS in requested_types:
+                    tags_path = resolve_typed_sidecar(
+                        pic.file_path, SIDECAR_TYPE_TAGS, rf.tags_suffix
+                    )
+                    if tags_path:
+                        tags = read_tags_sidecar(tags_path)
+                        session.exec(delete(Tag).where(Tag.picture_id == pic.id))
+                        if tags:
+                            session.add_all(
+                                [Tag(picture_id=pic.id, tag=tag) for tag in tags]
+                            )
+                        else:
+                            session.add(
+                                Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL)
+                            )
+                        pic.tags_file = tags_path
+                        pic.tags_file_mtime = get_sidecar_mtime(tags_path)
+                        tags_count += 1
+                        dirty = True
+                if SIDECAR_TYPE_DESCRIPTION in requested_types:
+                    description_path = resolve_typed_sidecar(
+                        pic.file_path,
+                        SIDECAR_TYPE_DESCRIPTION,
+                        rf.description_suffix,
+                    )
+                    if description_path:
+                        pic.description = read_description_sidecar(description_path)
+                        pic.description_file = description_path
+                        pic.description_file_mtime = get_sidecar_mtime(
+                            description_path
+                        )
+                        descriptions_count += 1
+                        dirty = True
+                if dirty:
+                    session.add(pic)
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Could not import metadata: {exc}",
+                )
+            return scope, tags_count, descriptions_count, skipped_count
+
+        scope, tags_count, descriptions_count, skipped_count = server.vault.db.run_task(
+            import_metadata, priority=DBPriority.IMMEDIATE
+        )
+        from pixlstash.event_types import EventType
+
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return ReferenceFolderMetadataResponse(
+            status="success",
+            scope_path=scope,
+            types=sorted(requested_types),
+            tags_count=tags_count,
+            descriptions_count=descriptions_count,
+            skipped_count=skipped_count,
+        )
 
     @router.delete(
         "/reference-folders/{folder_id}",

@@ -262,6 +262,7 @@ const setCtxIconMenuOpen = ref(false);
 const setCtxColorMenuOpen = ref(false);
 const setCtxAppearanceMenuPos = ref({ top: 0, left: 0, openUp: false });
 const sidebarCtxFolder = ref(null); // reference folder object or null
+const sidebarCtxFolderScopePath = ref(null); // null means the reference folder root
 const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
@@ -363,6 +364,7 @@ const referenceFoldersCollapsed = ref(false);
 const importFoldersCollapsed = ref(false);
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
+const dragOverReferenceTargetKey = ref(null);
 
 // Reference folder editor state
 const referenceFolderEditorOpen = ref(false);
@@ -1819,6 +1821,7 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
     sidebarCtxFolder.value = null;
+    sidebarCtxFolderScopePath.value = null;
     sidebarCtxImportFolder.value = null;
     sidebarCtxProject.value = null;
     const numId = Number(item.id);
@@ -1837,6 +1840,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = item;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1844,6 +1848,15 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = item;
+      sidebarCtxFolderScopePath.value = null;
+      sidebarCtxImportFolder.value = null;
+      sidebarCtxProject.value = null;
+      sidebarCtxAllPictures.value = false;
+    } else if (type === "folder-path") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = null;
+      sidebarCtxFolder.value = item?.folder || null;
+      sidebarCtxFolderScopePath.value = item?.path || null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1851,6 +1864,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = item;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1858,6 +1872,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = item;
       sidebarCtxAllPictures.value = false;
@@ -1865,6 +1880,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = true;
@@ -2643,6 +2659,121 @@ function handleDragOverProject(id) {
 
 function handleDragLeaveProject() {
   dragOverProjectId.value = null;
+}
+
+function isInternalImageDrag(event) {
+  return event?.dataTransfer?.types?.includes("application/json");
+}
+
+function readDraggedImageIds(event) {
+  try {
+    const data = JSON.parse(event?.dataTransfer?.getData("application/json") || "{}");
+    return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
+  } catch (e) {
+    console.error("Could not parse drag data:", e);
+    return [];
+  }
+}
+
+function handleReferenceFolderDragOver(folderId, scopePath, event) {
+  if (draggingEntityKind.value || !isInternalImageDrag(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dragOverReferenceTargetKey.value = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
+}
+
+function handleReferenceFolderDragLeave(folderId, scopePath) {
+  const key = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
+  if (dragOverReferenceTargetKey.value === key) {
+    dragOverReferenceTargetKey.value = null;
+  }
+}
+
+async function handleReferenceFolderDrop(folderId, scopePath, event) {
+  dragOverReferenceTargetKey.value = null;
+  if (draggingEntityKind.value) return;
+  const imageIds = readDraggedImageIds(event);
+  if (!imageIds.length) return;
+  try {
+    const body = { picture_ids: imageIds };
+    if (scopePath) body.destination_subpath = scopePath;
+    const { data } = await apiClient.post(
+      `/reference-folders/${folderId}/move-pictures`,
+      body,
+    );
+    await fetchReferenceFolders();
+    folderBrowseCache.value = {};
+    for (const rf of referenceFolders.value) {
+      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
+    }
+    emit("images-moved", { imageIds: data?.moved_picture_ids || imageIds });
+  } catch (e) {
+    const detail = e?.response?.data?.detail;
+    const failures = detail?.failures || [];
+    if (failures.length) {
+      const first = failures[0];
+      alert(
+        `Failed to move ${failures.length} image${failures.length === 1 ? "" : "s"}: ${first.reason || "unknown error"}`,
+      );
+      return;
+    }
+    alert("Failed to move images: " + (detail?.message || detail || e.message || e));
+  }
+}
+
+function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
+  const folder = referenceFolders.value.find((rf) => rf.id === rfId);
+  if (!folder) return;
+  openSidebarCtxMenu(
+    "folder-path",
+    { folder, path, label },
+    event,
+  );
+}
+
+function promptReferenceMetadataTypes(action) {
+  const value = window.prompt(
+    `${action} TXT metadata: tags, descriptions, or both`,
+    "both",
+  );
+  if (value === null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "both" || normalized === "all") {
+    return ["tags", "descriptions"];
+  }
+  if (normalized === "tag" || normalized === "tags") return ["tags"];
+  if (
+    normalized === "description" ||
+    normalized === "descriptions" ||
+    normalized === "desc"
+  ) {
+    return ["descriptions"];
+  }
+  alert("Use tags, descriptions, or both.");
+  return null;
+}
+
+async function runReferenceFolderMetadata(action, folder, scopePath = null) {
+  if (!folder?.id) return;
+  const types = promptReferenceMetadataTypes(
+    action === "export" ? "Export" : "Import",
+  );
+  if (!types) return;
+  try {
+    const { data } = await apiClient.post(
+      `/reference-folders/${folder.id}/metadata/${action}`,
+      { scope_path: scopePath, types },
+    );
+    const changed =
+      Number(data?.tags_count || 0) + Number(data?.descriptions_count || 0);
+    alert(
+      `${action === "export" ? "Exported" : "Imported"} TXT metadata for ${changed} item${changed === 1 ? "" : "s"}.`,
+    );
+    await fetchReferenceFolders();
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || e;
+    alert(`Failed to ${action} TXT metadata: ${detail}`);
+  }
 }
 
 async function onProjectDrop(projectId, event) {
@@ -4451,9 +4582,15 @@ defineExpose({
             >
               <div
                 class="sidebar-folder-row sidebar-folder-root-row"
-                :class="{ active: selectedFolderKey === 'rf-' + rf.id }"
+                :class="{
+                  active: selectedFolderKey === 'rf-' + rf.id,
+                  droppable: dragOverReferenceTargetKey === 'rf-' + rf.id,
+                }"
                 :title="rf.folder"
                 @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
+                @dragover="handleReferenceFolderDragOver(rf.id, null, $event)"
+                @dragleave="handleReferenceFolderDragLeave(rf.id, null)"
+                @drop.prevent="handleReferenceFolderDrop(rf.id, null, $event)"
                 @click="
                   if (!inDocker) {
                     if (!expandedFolderIds.has(rf.id))
@@ -4565,8 +4702,22 @@ defineExpose({
                       :selected-folder-key="selectedFolderKey"
                       :folder-browse-cache="folderBrowseCache"
                       :expanded-folder-ids="expandedFolderIds"
+                      :drop-target-key="dragOverReferenceTargetKey"
                       @select="handleFolderNodeSelect"
                       @toggle="handleFolderNodeToggle"
+                      @drag-over="
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDragOver(rfId, path, event)
+                      "
+                      @drag-leave="
+                        ({ rfId, path }) =>
+                          handleReferenceFolderDragLeave(rfId, path)
+                      "
+                      @drop="
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDrop(rfId, path, event)
+                      "
+                      @context="handleReferenceFolderNodeContext"
                     />
                   </template>
                   <div
@@ -5974,6 +6125,39 @@ defineExpose({
         <button
           class="sidebar-ctx-item"
           @click="
+            runReferenceFolderMetadata(
+              'import',
+              sidebarCtxFolder,
+              sidebarCtxFolderScopePath,
+            );
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-file-import-outline</v-icon
+          >
+          Import TXT metadata
+        </button>
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            runReferenceFolderMetadata(
+              'export',
+              sidebarCtxFolder,
+              sidebarCtxFolderScopePath,
+            );
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-file-export-outline</v-icon
+          >
+          Export TXT metadata
+        </button>
+        <button
+          v-if="!sidebarCtxFolderScopePath"
+          class="sidebar-ctx-item"
+          @click="
             openReferenceFolderEditor(sidebarCtxFolder);
             closeSidebarCtxMenu();
           "
@@ -5982,6 +6166,7 @@ defineExpose({
           Edit
         </button>
         <button
+          v-if="!sidebarCtxFolderScopePath"
           class="sidebar-ctx-item sidebar-ctx-item--danger"
           @click="
             deleteReferenceFolderById(sidebarCtxFolder.id);
@@ -8341,6 +8526,12 @@ defineExpose({
       rgba(var(--v-theme-accent), 0.08)
     ),
     rgba(var(--v-theme-primary), 0.18);
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.sidebar-folder-row.droppable {
+  filter: brightness(1.2);
+  background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }
 
