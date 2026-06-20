@@ -388,6 +388,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                               |
 | POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                    |
 | GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                 |
+| POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                            |
+| POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                     |
 | POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                              |
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                              |
 | POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness           |
