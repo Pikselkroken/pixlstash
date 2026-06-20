@@ -29,6 +29,7 @@ import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
 import { useReviewFixesStore } from "./stores/useReviewFixesStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
+import { useTasksStore } from "./stores/useTasksStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -59,6 +60,7 @@ const wsStore = useWsStore();
 const searchStore = useSearchStore();
 const reviewFixesStore = useReviewFixesStore();
 const snapshotsStore = useSnapshotsStore();
+const tasksStore = useTasksStore();
 
 // --- Router ---
 const route = useRoute();
@@ -1888,6 +1890,10 @@ watch(
 
 // --- Lifecycle ---
 onMounted(async () => {
+  // Start the app-wide tasks poll so the activity indicators (Tasks-tab icon,
+  // stats-sidebar light) are live everywhere, not only while the Tasks tab is
+  // open. The store self-throttles when idle and pauses on a hidden tab.
+  tasksStore.startPolling();
   fetch("/version")
     .then((r) => r.json())
     .then((data) => {
@@ -1950,6 +1956,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disconnectUpdatesSocket();
+  tasksStore.stopPolling();
   if (stopOpenSettings) stopOpenSettings();
   window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);

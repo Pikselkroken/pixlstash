@@ -413,15 +413,23 @@
         </button>
         <!-- ── Toolbar: Stats toggle ──── -->
         <button
-          class="bar-btn bar-btn--icon"
+          class="bar-btn bar-btn--icon tb-stats-btn"
           :class="{ 'bar-btn--active': sidebarStore.statsOpen }"
           type="button"
           :title="
-            sidebarStore.statsOpen ? 'Hide stats sidebar' : 'Show stats sidebar'
+            tasksStore.hasActiveTasks
+              ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'} running`
+              : sidebarStore.statsOpen
+                ? 'Hide stats sidebar'
+                : 'Show stats sidebar'
           "
           @click="sidebarStore.toggleStats()"
         >
           <v-icon size="20">mdi-chart-bar</v-icon>
+          <!-- App-wide activity light: pulses whenever the task manager has any
+               active work, so background tasks are visible without opening the
+               stats sidebar. -->
+          <span v-if="tasksStore.hasActiveTasks" class="tb-stats-activity"></span>
         </button>
       </div>
     </div>
@@ -439,6 +447,7 @@ import { useExportStore } from "../../stores/useExportStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import GbFilterPanel from "./GbFilterPanel.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
@@ -483,6 +492,7 @@ const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
 const reviewFixesStore = useReviewFixesStore();
+const tasksStore = useTasksStore();
 
 const tbComfyuiMenuOpen = ref(false);
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
@@ -858,6 +868,42 @@ const gbCollapseAllStacksDisabled = computed(
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+/* App-wide task-activity light on the stats toggle. */
+.tb-stats-btn {
+  position: relative;
+}
+
+.tb-stats-activity {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
+  animation: tb-stats-pulse 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes tb-stats-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tb-stats-activity {
+    animation: none;
+  }
 }
 
 .bar-btn-label {
