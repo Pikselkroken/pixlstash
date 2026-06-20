@@ -912,39 +912,39 @@ watch(
 
 <style scoped>
 .settings-section-divider {
-  margin: 4px 0 8px;
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .settings-section {
   display: flex;
   line-height: 1;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .settings-section-title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .settings-section-desc {
-  font-size: 0.92em;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .settings-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .settings-error {
   color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
 }
 
 .settings-success {
   color: rgb(var(--v-theme-accent));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
 }
 
 .settings-action-btn {
@@ -962,40 +962,40 @@ watch(
 .settings-comfyui-display {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 8px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .settings-comfyui-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.93em;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
 }
 
 .settings-comfyui-label {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   color: rgba(var(--v-theme-on-surface), 0.7);
   min-width: 36px;
 }
 
 .settings-comfyui-value {
   color: rgb(var(--v-theme-on-surface));
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .settings-tag-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-4);
 }
 
 .settings-tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 6px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: rgba(var(--v-theme-on-surface), 0.9);
 }
@@ -1003,11 +1003,11 @@ watch(
 .settings-tag-chip--row {
   width: 100%;
   justify-content: space-between;
-  padding-right: 4px;
+  padding-right: var(--space-2);
 }
 
 .settings-tag-label {
-  font-size: 1em;
+  font-size: var(--text-base);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1021,33 +1021,33 @@ watch(
   min-width: 0;
   height: 12px;
   width: 12px;
-  padding: 2;
+  padding: var(--space-1);
 }
 
 .settings-tag-delete:hover {
   color: rgba(var(--v-theme-error), 0.9);
   min-width: 0;
-  padding: 2;
+  padding: var(--space-1);
 }
 
 .settings-token-dialog {
-  padding-bottom: 8px;
+  padding-bottom: var(--space-3);
 }
 
 .settings-dialog-title {
-  font-weight: 700;
-  font-size: 1.2rem;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-lg);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   flex-shrink: 0;
 }
 
 .settings-dialog-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 8px;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
 }
 
 .settings-dialog-actions {
@@ -1055,8 +1055,8 @@ watch(
 }
 
 .settings-token-warning {
-  font-size: 0.9em;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
 }
 </style>

@@ -113,8 +113,8 @@ async function handleLogin() {
 .login-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 1.75rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-7);
 }
 
 .login-logo {
@@ -125,7 +125,7 @@ async function handleLogin() {
 
 .login-wordmark {
   /* Tiny5 brand wordmark (WordmarkLogo.vue). */
-  font-size: 2.1rem;
+  font-size: var(--text-2xl);
   color: rgb(var(--v-theme-on-dark-surface));
   --wordmark-accent: rgb(var(--v-theme-accent));
 }
@@ -133,14 +133,14 @@ async function handleLogin() {
 .token-error-banner {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 1.5rem;
-  padding: 0.75rem 1.25rem;
-  border-radius: 8px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+  padding: var(--space-4) var(--space-6);
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-error), 0.15);
   border: 1px solid rgba(var(--v-theme-error), 0.5);
   color: rgb(var(--v-theme-error));
-  font-size: 0.95rem;
+  font-size: var(--text-md);
   max-width: 360px;
   text-align: center;
 }
@@ -166,21 +166,21 @@ async function handleLogin() {
 
 .subtitle {
   text-align: center;
-  font-size: 1.1rem;
+  font-size: var(--text-lg);
   color: rgba(var(--v-theme-on-dark-surface), 0.9);
 }
 .subtext {
-  margin-top: 1rem;
-  font-size: 0.9rem;
+  margin-top: var(--space-5);
+  font-size: var(--text-base);
   color: rgba(var(--v-theme-on-dark-surface), 0.9);
   text-align: center;
 }
 .text-input,
 .password-input {
-  padding: 0.5rem 0.5rem 0.5rem 0.5rem;
-  font-size: 1rem;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
+  font-size: var(--text-md);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background-color: rgb(var(--v-theme-dark-surface));
   color: rgba(var(--v-theme-on-dark-surface), 0.9);
   width: 100%;
@@ -202,37 +202,38 @@ async function handleLogin() {
   right: 0.5rem;
   border: none;
   background: transparent;
-  color: #ccc;
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
   cursor: pointer;
-  font-size: 1.1rem;
+  font-size: var(--text-lg);
   line-height: 1;
-  padding: 0.25rem;
+  padding: var(--space-2);
 }
 
 .password-toggle:focus-visible {
-  outline: 2px solid #888;
-  border-radius: 4px;
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
 }
 
 form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  color: #ccc;
-  padding: 2rem;
+  gap: var(--space-5);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  padding: var(--space-7);
 }
 
 .login-button {
-  padding: 0.5rem;
-  font-size: 1rem;
+  padding: var(--space-3);
+  font-size: var(--text-md);
   border: none;
-  border-radius: 4px;
-  background-color: orange;
-  color: #000;
+  border-radius: var(--radius-sm);
+  background-color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   cursor: pointer;
 }
 
 .error {
-  color: red;
+  color: rgb(var(--v-theme-error));
 }
 </style>

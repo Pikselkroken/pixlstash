@@ -987,60 +987,60 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   background: rgba(var(--v-theme-surface), 0.96);
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgba(var(--v-theme-primary), 0.3);
-  border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-4);
 }
 
 .plugin-menu-header {
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: rgb(var(--v-theme-on-surface));
-  padding: 10px 12px;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .plugin-menu-body {
-  padding: 10px 12px;
+  padding: var(--space-3) var(--space-4);
 }
 
 .plugin-menu-actions {
-  margin-top: 12px;
+  margin-top: var(--space-4);
   display: flex;
   justify-content: flex-end;
 }
 
 .tag-autogen-row {
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .stack-btn--icon-only {
-  padding: 0 8px;
+  padding: 0 var(--space-3);
   min-width: unset;
   flex-shrink: 0;
 }
 
 .plugin-menu-error {
-  margin-top: 8px;
+  margin-top: var(--space-3);
   color: rgb(var(--v-theme-error));
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .plugin-menu-success {
-  margin-top: 8px;
+  margin-top: var(--space-3);
   color: rgb(var(--v-theme-success));
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 /* ── Tag-specific styles ── */
 .tag-menu-input {
   width: 100%;
   height: 32px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
   background: rgba(var(--v-theme-background), 0.7);
   color: rgb(var(--v-theme-on-background));
-  padding: 0 8px;
-  font-size: 0.85rem;
+  padding: 0 var(--space-3);
+  font-size: var(--text-base);
   outline: none;
 }
 
@@ -1049,13 +1049,13 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-data-loading {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   opacity: 0.6;
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
 }
 
 .tag-data-capped {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   opacity: 0.7;
   font-weight: normal;
   text-transform: none;
@@ -1063,22 +1063,22 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-current-section {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
   display: flex;
   flex-direction: column;
 }
 
 .tag-current-label {
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   opacity: 0.55;
-  margin-bottom: 5px;
+  margin-bottom: var(--space-2);
   flex-shrink: 0;
 }
 
 .tag-current-label--clickable {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 
 .tag-current-toggle {
@@ -1093,11 +1093,11 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .rejected-threshold-label {
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   opacity: 0.85;
   font-weight: 400;
   text-transform: none;
@@ -1105,21 +1105,21 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-new-label {
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   opacity: 0.55;
-  margin-top: 10px;
-  margin-bottom: 5px;
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .tag-chips-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: var(--space-2);
   height: 200px;
   overflow-y: auto;
-  padding-right: 2px;
+  padding-right: var(--space-1);
   align-content: flex-start;
 }
 
@@ -1127,29 +1127,29 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   outline: 2px dashed rgba(var(--v-theme-primary), 0.55);
   outline-offset: 3px;
   background: rgba(var(--v-theme-primary), 0.06);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .tag-drop-collapsed-zone {
   height: 36px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 2px dashed rgba(var(--v-theme-primary), 0.55);
   background: rgba(var(--v-theme-primary), 0.06);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   opacity: 0.7;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
 }
 
 .tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  border-radius: 12px;
-  padding: 2px 7px;
-  font-size: 0.78rem;
+  gap: var(--space-2);
+  border-radius: var(--radius-lg);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
   cursor: pointer;
   transition:
     background 0.15s,
@@ -1227,7 +1227,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   );
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-2);
   filter: saturate(0.86) brightness(0.92);
   border-width: 1px;
 }
@@ -1240,7 +1240,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-chip-count {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   opacity: 0.65;
   font-variant-numeric: tabular-nums;
 }
@@ -1253,15 +1253,15 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 6px;
-  gap: 8px;
+  margin-top: var(--space-3);
+  gap: var(--space-3);
 }
 
 .tag-coverage-label {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 0.72rem;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
   opacity: 0.65;
   white-space: nowrap;
 }
@@ -1273,7 +1273,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-coverage-hidden {
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   opacity: 0.5;
   white-space: nowrap;
 }
@@ -1284,8 +1284,8 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   background: color-mix(in srgb, rgb(var(--v-theme-surface)) 92%, transparent);
   backdrop-filter: blur(6px);
   border: 1px solid rgba(var(--v-theme-primary), 0.3);
-  border-radius: 6px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1295,8 +1295,8 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   display: block;
   width: 100%;
   text-align: left;
-  padding: 5px 10px;
-  font-size: 0.8rem;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
   background: transparent;
   border: none;
   color: rgb(var(--v-theme-on-surface));
@@ -1313,12 +1313,12 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 
 .sb-tag-autocomplete-tab-hint {
   display: inline-block;
-  margin-left: 8px;
-  padding: 0 4px;
-  font-size: 0.55rem;
+  margin-left: var(--space-3);
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
   font-weight: 600;
   letter-spacing: 0.04em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.12);
   color: rgba(var(--v-theme-on-surface), 0.45);
   vertical-align: middle;
@@ -1362,18 +1362,18 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-preview-header {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   opacity: 0.45;
-  padding: 4px 6px 3px;
+  padding: var(--space-2) var(--space-3) var(--space-2);
   flex-shrink: 0;
   background: rgba(var(--v-theme-surface), 0.7);
 }
 
 .tag-preview-grid {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -1428,14 +1428,14 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 .stack-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   background: transparent;
   color: rgb(var(--v-theme-on-background));
   border: none;
-  padding: 0 10px;
-  border-radius: 5px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 0.88em;
+  font-size: var(--text-base);
   font-family: inherit;
   height: 40px;
   white-space: nowrap;
@@ -1460,9 +1460,9 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-autogen-section {
-  margin-top: 12px;
+  margin-top: var(--space-4);
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  padding-top: 10px;
+  padding-top: var(--space-3);
 }
 
 @keyframes spin {

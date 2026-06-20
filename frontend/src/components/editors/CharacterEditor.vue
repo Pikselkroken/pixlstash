@@ -329,33 +329,33 @@ watch(
 .editor-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-5);
 }
 
 .ref-pictures-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
   border-top: 1px solid rgba(var(--v-theme-border, 127 127 127), 0.25);
 }
 
 .ref-pictures-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .ref-pictures-title {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .ref-pictures-help {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.5);
   margin: 0;
   font-style: italic;
@@ -363,7 +363,7 @@ watch(
 }
 
 .ref-pictures-empty {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.4);
   font-style: italic;
   margin: 0;
@@ -372,21 +372,21 @@ watch(
 .ref-pictures-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .ref-picture-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .ref-picture-thumb {
   width: 80px;
   height: 80px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-surface-variant, 127 127 127), 0.15);
   cursor: pointer;
 }
@@ -397,7 +397,7 @@ watch(
      usable; the preview image centres within the reduced box. */
   inset: var(--titlebar-h) 0 0 0;
   z-index: 9999;
-  background: rgba(0, 0, 0, 0.82);
+  background: rgba(var(--v-theme-scrim), 0.82);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -408,26 +408,26 @@ watch(
   max-width: 90vw;
   max-height: 90vh;
   object-fit: contain;
-  border-radius: 6px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-4);
   cursor: default;
 }
 
 .editor-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 8px 16px 16px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5) var(--space-5);
 }
 
 .btn {
-  padding: 10px 24px;
+  padding: var(--space-3) var(--space-6);
   border: none;
-  border-radius: 4px;
-  font-size: 1rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
   cursor: pointer;
   transition: all 0.2s;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 .btn:hover {
   filter: brightness(1.2);
@@ -454,7 +454,7 @@ watch(
 }
 
 .btn-save:disabled {
-  background: rgb(var(--v-theme-disabled));
+  background: rgba(var(--v-theme-on-surface), 0.38);
   cursor: not-allowed;
 }
 </style>

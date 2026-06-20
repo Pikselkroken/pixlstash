@@ -313,7 +313,7 @@ watch(
 .editor-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
   /* The only scrollable region; min-height:0 lets it shrink inside the
      flex column so overflow-y actually engages. */
   flex: 1 1 auto;
@@ -324,29 +324,29 @@ watch(
 .editor-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 4px;
-  padding: 8px 16px 16px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5) var(--space-5);
 }
 
 /* Appearance pickers */
 .appearance-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .appearance-joint-header {
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: var(--tracking-label);
   opacity: 0.55;
   line-height: 1;
 }
 
 .appearance-sections {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
   align-items: stretch;
   /* Fallback for very narrow windows: let the colour box drop below the icon
      box rather than overflow and get clipped. */
@@ -355,29 +355,29 @@ watch(
 
 .icon-thumb-box {
   display: flex;
-  gap: 12px;
+  gap: var(--space-4);
   align-items: flex-start;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 4px 8px 8px;
-  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .color-aside {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 4px 8px 8px;
-  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .appearance-label {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   opacity: 0.7;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
 }
 
 .icon-or-divider {
@@ -385,27 +385,27 @@ watch(
   flex-direction: column;
   align-items: center;
   align-self: stretch;
-  padding: 30px 2px;
-  gap: 4px;
+  padding: var(--space-7) var(--space-1);
+  gap: var(--space-2);
 }
 
 .icon-or-line {
   flex: 1;
   width: 1px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .icon-or-text {
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
   opacity: 0.35;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-label);
   line-height: 1;
 }
 
 .icon-section-wrap {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: flex-start;
 }
 
@@ -417,7 +417,7 @@ watch(
 .icon-btn--cards-large {
   width: 48px;
   height: 48px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 2px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -429,36 +429,36 @@ watch(
 }
 
 .icon-btn--cards-large:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .icon-btn--cards-large.selected {
-  border-color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(var(--v-theme-on-surface), 0.7);
+  background: rgba(var(--v-theme-on-surface), 0.1);
 }
 
 .icon-grid {
   display: grid;
   grid-template-columns: repeat(8, 32px);
-  column-gap: 1px;
-  row-gap: 2px;
+  column-gap: var(--space-1);
+  row-gap: var(--space-1);
 }
 
 .icon-cat-header {
   grid-column: 1 / -1;
-  font-size: 0.58rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: var(--tracking-label);
   opacity: 0.45;
-  padding: 5px 0 2px;
+  padding: var(--space-2) 0 var(--space-1);
   line-height: 1;
 }
 
 .icon-btn {
   width: 32px;
   height: 32px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -473,17 +473,17 @@ watch(
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   display: block;
 }
 
 .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .icon-btn.selected {
-  border-color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(var(--v-theme-on-surface), 0.7);
+  background: rgba(var(--v-theme-on-surface), 0.1);
 }
 
 .color-section-header {
@@ -495,15 +495,15 @@ watch(
   /* Fewer columns → narrower (fits the dialog) and taller, so the colours use
      the vertical space alongside the tall icon grid instead of leaving a gap. */
   grid-template-columns: repeat(4, 36px);
-  gap: 8px;
+  gap: var(--space-3);
   align-items: start;
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .color-swatch {
   width: 36px;
   height: 36px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   cursor: pointer;
   outline: none;
@@ -522,19 +522,19 @@ watch(
 }
 
 .color-swatch.selected {
-  border-color: #fff;
+  border-color: rgb(var(--v-theme-on-surface));
   transform: scale(1.1);
   z-index: 1;
 }
 
 .btn {
-  padding: 10px 24px;
+  padding: var(--space-3) var(--space-6);
   border: none;
-  border-radius: 4px;
-  font-size: 1rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
   cursor: pointer;
   transition: all 0.2s;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .btn:hover {
@@ -562,7 +562,7 @@ watch(
 }
 
 .btn-save:disabled {
-  background: rgb(var(--v-theme-disabled));
+  background: rgba(var(--v-theme-on-surface), 0.38);
   cursor: not-allowed;
 }
 </style>

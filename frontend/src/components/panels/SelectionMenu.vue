@@ -644,8 +644,8 @@ defineExpose({ focusFirst, containsFocus });
   background: rgba(var(--v-theme-surface), 0.98);
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  padding: 4px 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-2) 0;
 }
 </style>

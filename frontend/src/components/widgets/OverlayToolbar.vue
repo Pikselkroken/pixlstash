@@ -49,12 +49,12 @@ const emit = defineEmits(["close"]);
 .overlay-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 10px;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
   min-height: 40px;
   background: rgba(var(--v-theme-dark-surface), 0.9);
   color: rgb(var(--v-theme-on-dark-surface));
-  transition: opacity 0.2s ease;
+  transition: opacity var(--dur-2) var(--ease-standard);
   flex-wrap: wrap;
 }
 
@@ -68,15 +68,15 @@ const emit = defineEmits(["close"]);
   border: none;
   background: rgba(var(--v-theme-primary), 0.7);
   color: rgb(var(--v-theme-on-primary));
-  padding: 6px 14px;
-  border-radius: 4px;
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-2);
   cursor: pointer;
-  font-size: 1em;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
 }
 .overlay-toolbar-close:hover {
   background: rgba(var(--v-theme-accent), 0.85);
@@ -86,7 +86,7 @@ const emit = defineEmits(["close"]);
 .overlay-toolbar-title {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
   min-width: 0;
   flex: 1;
 }
@@ -95,7 +95,7 @@ const emit = defineEmits(["close"]);
 .overlay-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -107,14 +107,14 @@ const emit = defineEmits(["close"]);
   background: none;
   color: rgb(var(--v-theme-on-dark-surface));
   height: 32px;
-  padding: 6px 14px;
+  padding: var(--space-2) var(--space-5);
   min-width: 32px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 1em;
+  font-size: var(--text-base);
 }
 .overlay-toolbar-actions :deep(.overlay-icon-btn:hover:not(:disabled)) {
   background: rgba(var(--v-theme-primary), 0.6);
