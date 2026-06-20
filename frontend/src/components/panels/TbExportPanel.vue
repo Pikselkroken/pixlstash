@@ -112,14 +112,14 @@ function onExport() {
 
 <style scoped>
 .tb-export-panel {
-  padding: 12px 14px;
+  padding: var(--space-4) var(--space-4);
   min-width: 260px;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .tb-export-title {
-  font-size: 1em;
+  font-size: var(--text-md);
   font-weight: 500;
-  padding-bottom: 4px;
+  padding-bottom: var(--space-2);
 }
 </style>

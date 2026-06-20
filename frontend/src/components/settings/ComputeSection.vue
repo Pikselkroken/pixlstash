@@ -622,21 +622,21 @@ watch(
 
 <style scoped>
 .settings-section-divider {
-  margin: 4px 0 8px;
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .settings-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .settings-section-title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .settings-section-desc {
-  font-size: 0.92em;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
@@ -644,10 +644,10 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .compute-meta {
@@ -655,19 +655,19 @@ watch(
 }
 
 .compute-label {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .compute-sub {
-  font-size: 0.85em;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .compute-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   flex-shrink: 0;
 }
 
@@ -678,7 +678,7 @@ watch(
 .compute-progress {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 /* Reserve two lines so the layout doesn't jump as the message length changes. */
@@ -688,7 +688,7 @@ watch(
 
 .compute-links {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -699,7 +699,7 @@ watch(
 .server-port-field {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   flex-shrink: 0;
 }
 
@@ -716,9 +716,9 @@ watch(
   flex-shrink: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  padding: 4px 8px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: inherit;
   outline: none;
@@ -739,11 +739,11 @@ watch(
 .server-urls {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .server-url {
-  font-family: monospace;
+  font-family: var(--font-mono);
   color: rgb(var(--v-theme-on-surface));
 }
 
@@ -754,21 +754,21 @@ watch(
 .owner-setup {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  gap: var(--space-3);
+  padding: var(--space-4);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .owner-setup-desc {
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
 }
 
 .owner-input {
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--space-3) var(--space-3);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: inherit;
   outline: none;
@@ -797,17 +797,17 @@ watch(
   background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
   cursor: pointer;
-  padding: 4px;
+  padding: var(--space-2);
 }
 
 .settings-token-empty {
-  font-size: 0.9em;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .settings-error {
   color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
   white-space: pre-wrap;
 }
 

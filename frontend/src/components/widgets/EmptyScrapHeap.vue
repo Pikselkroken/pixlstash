@@ -39,7 +39,7 @@ const props = defineProps({
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 0 8px 4px;
+  padding: 0 var(--space-3) var(--space-2);
   margin: 0;
   height: 30px;
   box-sizing: border-box;
@@ -55,13 +55,13 @@ const props = defineProps({
 .selection-bar-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-4);
   min-width: 0;
 }
 .selection-bar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   margin-left: auto;
   flex-wrap: nowrap;
 }
@@ -69,11 +69,11 @@ const props = defineProps({
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   border: none;
-  padding: 2px 10px;
-  border-radius: 3px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -86,13 +86,13 @@ const props = defineProps({
 }
 .delete-btn {
   background: rgb(var(--v-theme-error));
-  color: #fff;
+  color: rgb(var(--v-theme-on-error));
   border: none;
-  padding: 2px 12px;
-  border-radius: 3px;
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   line-height: 1.4;
   white-space: nowrap;
 }

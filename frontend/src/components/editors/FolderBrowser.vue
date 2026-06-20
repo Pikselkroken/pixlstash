@@ -279,18 +279,18 @@ async function createFolder() {
 }
 
 .browser-header {
-  font-size: 1.1rem;
-  font-weight: 600;
-  padding: 20px 20px 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-6) var(--space-6) var(--space-3);
 }
 
 .browse-path-bar {
   display: flex;
   align-items: center;
-  padding: 8px 16px;
+  padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
-  gap: 4px;
-  font-size: 0.82rem;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
 }
 
 .browse-path-text {
@@ -298,13 +298,13 @@ async function createFolder() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: monospace;
+  font-family: var(--font-mono);
   opacity: 0.9;
 }
 
 .browse-hidden-toggle {
   flex-shrink: 0;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
 }
 
 .browse-create-bar {
@@ -328,28 +328,28 @@ async function createFolder() {
 .browse-entries {
   max-height: 360px;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: var(--space-2) 0;
 }
 
 .browse-loading {
   display: flex;
   justify-content: center;
-  padding: 24px;
+  padding: var(--space-6);
 }
 
 .browse-error {
   color: rgb(var(--v-theme-error));
-  padding: 12px 16px;
-  font-size: 0.85rem;
+  padding: var(--space-4) var(--space-5);
+  font-size: var(--text-sm);
 }
 
 .browse-entry {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
   cursor: pointer;
-  font-size: 0.88rem;
+  font-size: var(--text-base);
   transition: background 0.15s;
 }
 
@@ -375,13 +375,13 @@ async function createFolder() {
 }
 
 .browse-entry-reason {
-  font-size: 0.74rem;
+  font-size: var(--text-2xs);
   opacity: 0.6;
   font-style: italic;
   flex-shrink: 0;
 }
 
 .browse-footer {
-  padding: 12px 20px 18px;
+  padding: var(--space-4) var(--space-6) var(--space-5);
 }
 </style>

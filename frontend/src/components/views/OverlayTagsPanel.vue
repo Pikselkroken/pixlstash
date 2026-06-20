@@ -944,26 +944,26 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  margin-bottom: 4px;
-  padding: 2px 0;
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) 0;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .section-meta-group {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .section-meta-btn {
   border: none;
   background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  padding: 2px;
+  padding: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -982,8 +982,8 @@ defineExpose({
 .tag-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-right: 4px;
+  gap: var(--space-2);
+  padding-right: var(--space-2);
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -992,16 +992,16 @@ defineExpose({
 .tag-refresh-indicator {
   display: inline-flex;
   align-items: center;
-  padding: 2px 4px;
-  margin-right: 4px;
+  padding: var(--space-1) var(--space-2);
+  margin-right: var(--space-2);
 }
 
 .overlay-tag {
   background: rgba(var(--v-theme-on-dark-surface), 0.1);
   color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: 6px;
-  padding: 1px 2px 1px 6px;
-  font-size: 0.72rem;
+  border-radius: 6px; /* no clean token: 6px is equidistant between --radius-sm(4px) and --radius-md(8px) */
+  padding: 1px 2px 1px 6px; /* no clean token: 1px and 6px are optical nudges */
+  font-size: var(--text-2xs);
   line-height: 1.2;
   justify-content: center;
   vertical-align: middle;
@@ -1010,14 +1010,14 @@ defineExpose({
 
 .overlay-tag--penalised {
   color: rgb(var(--v-theme-error));
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   line-height: 1.2;
   border: 1px solid rgba(var(--v-theme-error), 0.6);
   background: rgba(var(--v-theme-error), 0.15);
 }
 
 .overlay-tag--sentinel {
-  font-weight: bold;
+  font-weight: var(--weight-bold);
   opacity: 0.85;
   pointer-events: none;
   background-color: rgb(var(--v-theme-tertiary));
@@ -1026,7 +1026,7 @@ defineExpose({
 
 .overlay-tag--predicted-anomaly {
   --ac: clamp(0.35, var(--pred-confidence, 0.6), 1);
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   color: color-mix(
     in srgb,
     rgb(var(--v-theme-on-dark-surface)) calc((1 - var(--ac)) * 100%),
@@ -1072,9 +1072,9 @@ defineExpose({
 }
 
 .tag-pred-confidence {
-  font-size: 0.65rem;
+  font-size: 0.65rem; /* no token: ~9.1px, below --text-2xs=11px */
   opacity: 0.7;
-  margin-left: 2px;
+  margin-left: var(--space-1);
 }
 
 .tag-pred-btn {
@@ -1104,37 +1104,37 @@ defineExpose({
 .tag-drop-zone {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.2);
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(var(--v-theme-on-dark-surface), 0.2);
   min-height: 26px;
   max-height: none;
   overflow: visible;
 }
 
 .tag-drop-zone--active {
-  border-color: rgba(255, 255, 255, 0.6);
-  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
 }
 
 .tag-drop-zone--predictions {
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .tag-drop-placeholder {
-  font-size: 0.68rem;
-  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.68rem; /* no token: ~9.5px, below --text-2xs=11px */
+  color: rgba(var(--v-theme-on-dark-surface), 0.45);
 }
 
 .tag-delete-btn {
   margin: 0;
-  padding: 2px;
+  padding: var(--space-1);
   background: transparent;
   border: none;
   color: rgb(var(--v-theme-primary));
   cursor: pointer;
-  font-size: 0.8em;
+  font-size: 0.8em; /* relative em scale, not absolute px; no token */
   line-height: 1;
   vertical-align: middle;
 }
@@ -1147,9 +1147,9 @@ defineExpose({
   background: rgba(var(--v-theme-shadow), 0.4);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
   color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: 999px;
-  padding: 1px 6px;
-  font-size: 0.7rem;
+  border-radius: var(--radius-pill);
+  padding: 1px 6px; /* no clean token: 1px and 6px are optical nudges */
+  font-size: 0.7rem; /* no token: ~9.8px, below --text-2xs=11px */
 }
 
 .tag-autocomplete-dropdown {
@@ -1158,8 +1158,8 @@ defineExpose({
   background: color-mix(in srgb, rgb(var(--v-theme-shadow)) 85%, transparent);
   backdrop-filter: blur(6px);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  border-radius: 6px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  border-radius: 6px; /* no clean token: 6px equidistant between --radius-sm(4px) and --radius-md(8px) */
+  box-shadow: var(--elevation-3);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1169,8 +1169,8 @@ defineExpose({
   display: block;
   width: 100%;
   text-align: left;
-  padding: 5px 10px;
-  font-size: 0.75rem;
+  padding: 5px 10px; /* no clean token: 5px is between --space-2(4px) and --space-3(8px); 10px between --space-3(8px) and --space-4(12px) */
+  font-size: var(--text-2xs);
   background: transparent;
   border: none;
   color: rgb(var(--v-theme-on-dark-surface));
@@ -1188,12 +1188,12 @@ defineExpose({
 
 .tag-autocomplete-tab-hint {
   display: inline-block;
-  margin-left: 8px;
-  padding: 0 4px;
-  font-size: 0.55rem;
-  font-weight: 600;
+  margin-left: var(--space-3);
+  padding: 0 var(--space-2);
+  font-size: 0.55rem; /* no token: ~7.7px, well below --text-2xs=11px */
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
   vertical-align: middle;

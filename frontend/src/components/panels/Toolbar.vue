@@ -789,7 +789,7 @@ const gbCollapseAllStacksDisabled = computed(
      tuned independently of the grid canvas. Set `toolbar` == `background` in the
      theme to keep them identical. */
   background: rgba(var(--v-theme-toolbar), 0.95);
-  padding: 0 10px;
+  padding: 0 var(--space-3);
   margin: 0;
   height: 48px;
   box-sizing: border-box;
@@ -808,13 +808,13 @@ const gbCollapseAllStacksDisabled = computed(
 .selection-bar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   flex-shrink: 0;
 }
 .selection-bar-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   margin-left: auto;
   flex-shrink: 0;
 }
@@ -834,10 +834,10 @@ const gbCollapseAllStacksDisabled = computed(
 .bar-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 9px;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
   cursor: pointer;
-  font-size: 0.88em;
+  font-size: var(--text-base);
   font-family: inherit;
   color: rgb(var(--v-theme-on-background));
   background: transparent;
@@ -856,7 +856,7 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 .bar-btn--boxed {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* Icon-only bar button */
@@ -911,35 +911,35 @@ const gbCollapseAllStacksDisabled = computed(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.92em;
+  font-size: var(--text-base);
 }
 
 .bar-btn-prefix {
-  font-size: 0.82em;
+  font-size: var(--text-sm);
   opacity: 0.55;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .bar-split-toggle {
-  border-radius: 5px 0 0 5px;
-  padding-right: 5px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  padding-right: var(--space-2);
   border: none;
 }
 
 .bar-split-menu {
-  border-radius: 0 5px 5px 0;
-  padding-left: 6px;
-  padding-right: 6px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
 }
 
 .bar-filter-badge {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
-  border-radius: 8px;
-  font-size: 0.65em;
-  font-weight: 700;
-  padding: 0 4px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  padding: 0 var(--space-2);
   min-width: 14px;
   text-align: center;
   line-height: 14px;
@@ -950,7 +950,7 @@ const gbCollapseAllStacksDisabled = computed(
   width: 1px;
   height: 24px;
   background: rgba(var(--v-theme-on-background), 0.2);
-  margin: 0 4px;
+  margin: 0 var(--space-2);
   align-self: center;
   flex-shrink: 0;
 }
@@ -971,45 +971,45 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-sort-panel {
   min-width: 340px;
   max-width: 400px;
-  padding: 8px 8px 10px;
+  padding: var(--space-3) var(--space-3) var(--space-3);
 }
 .gb-sort-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
 }
 
 .gb-sort-panel-title {
-  font-size: 1em;
+  font-size: var(--text-md);
   font-weight: 500;
   letter-spacing: 0.02em;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .gb-sort-panel-title span {
-  font-size: 0.78em;
+  font-size: var(--text-xs);
   font-weight: 400;
   opacity: 0.6;
 }
 
 .gb-sort-direction {
-  font-size: 0.82em;
+  font-size: var(--text-sm);
   min-width: 0;
 }
 
 .gb-sort-search-note {
-  font-size: 0.8em;
+  font-size: var(--text-sm);
   opacity: 0.7;
-  padding: 4px 4px 8px;
+  padding: var(--space-2) var(--space-2) var(--space-3);
 }
 
 .gb-sort-grid {
   display: flex !important;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: var(--space-1);
   width: 100%;
   height: auto !important;
   background: transparent !important;
@@ -1025,8 +1025,8 @@ const gbCollapseAllStacksDisabled = computed(
   max-width: none;
   height: 32px !important;
   justify-content: flex-start !important;
-  padding: 0 8px !important;
-  font-size: 0.82em;
+  padding: 0 var(--space-3) !important;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-background)) !important;
   opacity: 1 !important;
 }
@@ -1039,8 +1039,8 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-sort-grid-label {
   flex: 1;
   text-align: left;
-  font-size: 0.9em;
-  margin-left: 4px;
+  font-size: var(--text-base);
+  margin-left: var(--space-2);
 }
 
 .gb-sort-grid-selected {
@@ -1053,16 +1053,16 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 .gb-sort-similarity-row {
-  margin-top: 8px;
+  margin-top: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 2px;
+  gap: var(--space-3);
+  padding: 0 var(--space-1);
 }
 
 .gb-sort-similarity-row > span {
-  font-size: 0.85em;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   opacity: 0.75;
 }
 
@@ -1086,8 +1086,8 @@ const gbCollapseAllStacksDisabled = computed(
 /* ── View panel ───────────────────────────────────────────────────────────── */
 .gb-view-panel {
   align-items: flex-start;
-  gap: 6px;
-  padding: 8px 12px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
   min-width: 220px;
 }
 
@@ -1095,12 +1095,12 @@ const gbCollapseAllStacksDisabled = computed(
    Declared here as well as in GbFilterPanel because this menu lives in
    Toolbar's own template, and scoped styles don't cross component boundaries. */
 .gb-filter-section-label {
-  font-size: 0.8em;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   opacity: 0.6;
-  margin-top: 4px;
+  margin-top: var(--space-2);
   width: 100%;
 }
 
@@ -1111,12 +1111,12 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-columns-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
 }
 
 .gb-columns-label {
-  font-size: 0.82em;
+  font-size: var(--text-sm);
   white-space: nowrap;
   flex-shrink: 0;
   min-width: 76px;
@@ -1134,7 +1134,7 @@ const gbCollapseAllStacksDisabled = computed(
 
 .gb-stacks-buttons {
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .gb-stack-toggle-btn {
@@ -1144,7 +1144,7 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-overlay-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
+  gap: var(--space-2);
   width: 100%;
 }
 
@@ -1152,9 +1152,9 @@ const gbCollapseAllStacksDisabled = computed(
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 5px 4px;
-  border-radius: 5px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-background), 0.14);
   background: rgba(var(--v-theme-on-background), 0.04);
   color: rgb(var(--v-theme-on-background));
@@ -1179,7 +1179,7 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 .gb-overlay-btn-label {
-  font-size: 0.72em;
+  font-size: var(--text-xs);
   white-space: nowrap;
   line-height: 1.2;
   color: inherit;
@@ -1188,7 +1188,7 @@ const gbCollapseAllStacksDisabled = computed(
 @media (hover: none) and (pointer: coarse) {
   .selection-bar-overlay {
     height: 56px;
-    padding: 0 4px;
+    padding: 0 var(--space-2);
   }
 
   .bar-btn,
@@ -1213,7 +1213,7 @@ const gbCollapseAllStacksDisabled = computed(
 
   .bar-split-menu {
     border-left: none;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
   }
 }
 
@@ -1222,7 +1222,7 @@ const gbCollapseAllStacksDisabled = computed(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.92em;
+  font-size: var(--text-base);
   flex-shrink: 1;
 }
 
@@ -1231,7 +1231,7 @@ const gbCollapseAllStacksDisabled = computed(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.92em;
+  font-size: var(--text-base);
   flex-shrink: 1;
 }
 

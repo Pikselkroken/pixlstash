@@ -165,27 +165,27 @@ function tbRunComfyuiOnGrid() {
 
 <style scoped>
 .tb-comfyui-panel {
-  padding: 12px 14px;
+  padding: var(--space-4) var(--space-4);
   min-width: 260px;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .tb-comfyui-header {
-  font-size: 1em;
+  font-size: var(--text-md);
   font-weight: 500;
 }
 
 .tb-comfyui-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .tb-comfyui-label {
-  font-size: 0.82em;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: rgba(var(--v-theme-on-background), 0.65);
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
   display: block;
 }
 
@@ -195,31 +195,31 @@ function tbRunComfyuiOnGrid() {
   width: 100%;
   background: rgba(var(--v-theme-surface), 0.5);
   border: 1px solid rgba(var(--v-theme-on-background), 0.2);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-background));
   font-family: inherit;
-  font-size: 0.88em;
-  padding: 4px 8px;
+  font-size: var(--text-base);
+  padding: var(--space-2) var(--space-3);
   box-sizing: border-box;
 }
 
 .tb-comfyui-seed-row {
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .tb-comfyui-seed-btn {
   background: rgba(var(--v-theme-surface), 0.3);
   border: 1px solid rgba(var(--v-theme-on-background), 0.2);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-background));
   cursor: pointer;
-  padding: 3px 9px;
+  padding: var(--space-2) var(--space-3);
   font-family: inherit;
-  font-size: 0.82em;
+  font-size: var(--text-sm);
   transition: background 0.15s;
 }
 
@@ -236,15 +236,15 @@ function tbRunComfyuiOnGrid() {
 .tb-comfyui-run-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 4px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-primary), 0.25);
   border: 1px solid rgba(var(--v-theme-primary), 0.5);
   color: rgb(var(--v-theme-primary));
   cursor: pointer;
   font-family: inherit;
-  font-size: 0.85em;
+  font-size: var(--text-base);
   font-weight: 500;
   transition: background 0.15s;
 }
@@ -255,14 +255,14 @@ function tbRunComfyuiOnGrid() {
 }
 
 .tb-comfyui-note {
-  font-size: 0.85em;
+  font-size: var(--text-base);
   opacity: 0.65;
-  padding: 2px 0;
+  padding: var(--space-1) 0;
 }
 
 .tb-comfyui-error {
-  font-size: 0.82em;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-error));
-  padding: 2px 0;
+  padding: var(--space-1) 0;
 }
 </style>

@@ -1297,22 +1297,22 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-header {
-  font-size: 1.1rem;
-  font-weight: 600;
-  padding: 20px 20px 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-6) var(--space-6) var(--space-3);
 }
 
 .editor-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px 20px 8px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6) var(--space-3);
 }
 
 .editor-path-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .editor-path-row .v-text-field {
@@ -1320,28 +1320,28 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-browse-btn {
-  margin-top: 4px;
+  margin-top: var(--space-2);
   flex-shrink: 0;
 }
 
 .editor-docker-helper {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 2px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
 }
 
 .editor-docker-path-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-surface-variant), 0.35);
 }
 
 .editor-docker-path-label {
-  font-size: 0.74rem;
+  font-size: var(--text-2xs);
   opacity: 0.7;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1353,39 +1353,39 @@ async function copyToClipboard(value, successMessage) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: monospace;
-  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
 }
 
 .editor-docker-instructions {
   border: 1px solid rgba(var(--v-theme-primary), 0.22);
   background: rgba(var(--v-theme-primary), 0.06);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 0.8rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
   line-height: 1.35;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .editor-docker-instructions ol {
   margin: 0;
-  padding-left: 16px;
+  padding-left: var(--space-5);
 }
 
 .editor-docker-title {
-  font-size: 0.82rem;
-  font-weight: 600;
-  margin-bottom: 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--space-2);
 }
 
 .editor-docker-format-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .editor-docker-format-row .editor-docker-title {
@@ -1397,7 +1397,7 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-docker-note {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   opacity: 0.75;
   line-height: 1.32;
 }
@@ -1409,17 +1409,17 @@ async function copyToClipboard(value, successMessage) {
 .editor-docker-snippet-wrap {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .editor-docker-snippet {
   flex: 1;
   display: block;
-  padding: 6px 8px;
-  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-dark-surface), 0.55);
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   white-space: nowrap;
   overflow: auto hidden;
 }
@@ -1432,23 +1432,23 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-copy-btn {
   flex-shrink: 0;
-  margin-top: 1px;
+  margin-top: var(--space-1);
 }
 
 .editor-copy-status {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-accent));
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .editor-path-display {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: rgba(var(--v-theme-surface-variant), 0.4);
-  border-radius: 6px;
-  font-size: 0.82rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
   opacity: 0.85;
 }
 
@@ -1466,7 +1466,7 @@ async function copyToClipboard(value, successMessage) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .editor-relocate-btn {
@@ -1476,13 +1476,13 @@ async function copyToClipboard(value, successMessage) {
 .editor-toggle-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .editor-toggle-desc {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   opacity: 0.65;
-  padding-left: 36px;
+  padding-left: var(--space-7);
 }
 
 .editor-toggle-desc--warning {
@@ -1492,19 +1492,19 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-sync-section {
   border: 1px solid rgba(var(--v-theme-primary), 0.18);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
 .editor-sync-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--space-3) var(--space-4);
   background: rgba(var(--v-theme-primary), 0.06);
-  font-size: 0.86rem;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   text-align: left;
   cursor: pointer;
   border: none;
@@ -1517,54 +1517,54 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-sync-summary {
   margin-left: auto;
-  font-size: 0.76rem;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   opacity: 0.7;
 }
 
 .editor-sync-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--space-4);
+  padding: var(--space-4);
 }
 
 .editor-sync-intro {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   opacity: 0.75;
   line-height: 1.4;
 }
 
 .editor-sync-suffix {
-  padding-left: 36px;
+  padding-left: var(--space-7);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .editor-sync-detected {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-accent));
 }
 
 .editor-error {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-error));
   background: rgba(var(--v-theme-error), 0.08);
   border: 1px solid rgba(var(--v-theme-error), 0.22);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-3);
 }
 
 .editor-delete-confirm {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: rgba(var(--v-theme-error), 0.08);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-error), 0.25);
-  font-size: 0.86rem;
+  font-size: var(--text-sm);
 }
 
 .editor-delete-confirm-text {
@@ -1574,8 +1574,8 @@ async function copyToClipboard(value, successMessage) {
 .editor-footer {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px 16px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) var(--space-5);
 }
 
 .editor-delete-btn {

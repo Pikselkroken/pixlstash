@@ -741,9 +741,9 @@ onBeforeUnmount(() => {
   z-index: 2000;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
-  padding: 4px 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-2) 0;
   min-width: 185px;
   max-width: 260px;
   user-select: none;
@@ -755,14 +755,14 @@ onBeforeUnmount(() => {
 }
 
 .ctx-face-item {
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
 }
 
 .ctx-face-thumb {
   flex-shrink: 0;
   border: 2px solid;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background-color: rgba(var(--v-theme-on-surface), 0.08);
   background-repeat: no-repeat;
 }

@@ -178,22 +178,22 @@ function onParamsSaved({ name, params }) {
 .tpt-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .tpt-table th {
   text-align: left;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-on-surface), 0.55);
-  padding: 4px 8px 6px;
+  padding: var(--space-2) var(--space-3) var(--space-2);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .tpt-table td {
-  padding: 4px 8px;
+  padding: var(--space-2) var(--space-3);
   vertical-align: middle;
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
 }
@@ -219,7 +219,7 @@ function onParamsSaved({ name, params }) {
 .tpt-plugin-name {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   cursor: default;
 }
 
@@ -235,20 +235,20 @@ function onParamsSaved({ name, params }) {
 }
 
 .tpt-unavailable-label {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.45);
-  margin-left: 4px;
+  margin-left: var(--space-2);
 }
 
 .tpt-error {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgb(var(--v-theme-error));
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .tpt-empty {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.45);
-  padding: 10px 8px;
+  padding: var(--space-3) var(--space-3);
 }
 </style>

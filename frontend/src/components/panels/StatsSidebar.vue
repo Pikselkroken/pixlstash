@@ -1837,7 +1837,7 @@ function handleResolutionBarClick(label) {
   background: rgba(var(--v-theme-surface), 1);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   border-right: none;
-  border-radius: 6px 0 0 6px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.6);
   z-index: 1;
@@ -1854,7 +1854,7 @@ function handleResolutionBarClick(label) {
   justify-content: center;
   background: none;
   border: none;
-  padding: 0 8px;
+  padding: 0 var(--space-3);
   height: 100%;
   cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.4);
@@ -1869,18 +1869,18 @@ function handleResolutionBarClick(label) {
 .stats-sidebar-content {
   flex: 1;
   min-width: 0;
-  padding: 0 10px 12px 10px;
+  padding: 0 var(--space-3) var(--space-4) var(--space-3);
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .stats-sidebar-header {
   display: flex;
   flex-direction: column;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
   height: 48px;
   flex-shrink: 0;
 }
@@ -1898,7 +1898,7 @@ function handleResolutionBarClick(label) {
   align-items: center;
   justify-content: space-between;
   flex: 1;
-  padding: 0 4px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-3);
 }
 
 @media (max-width: 1339px) {
@@ -1909,8 +1909,8 @@ function handleResolutionBarClick(label) {
 
 .stats-sidebar-title,
 .stats-sidebar-title-text {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.5);
@@ -1919,7 +1919,7 @@ function handleResolutionBarClick(label) {
 .stats-sidebar-title-text {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-2);
 }
 
 .stats-sidebar-title-icon {
@@ -1940,20 +1940,20 @@ function handleResolutionBarClick(label) {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 0;
+  padding: var(--space-6) 0;
 }
 
 .stats-error {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-error), 1);
-  padding: 8px 0;
+  padding: var(--space-3) 0;
 }
 
 .stats-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-bottom: 8px;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
 }
 
@@ -1962,8 +1962,8 @@ function handleResolutionBarClick(label) {
 }
 
 .stats-section-title {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.45);
@@ -1972,7 +1972,7 @@ function handleResolutionBarClick(label) {
 .stats-section-toggle {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   background: none;
   border: none;
   cursor: pointer;
@@ -1982,7 +1982,7 @@ function handleResolutionBarClick(label) {
 
 .stats-tiles {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .stats-tile {
@@ -1991,30 +1991,30 @@ function handleResolutionBarClick(label) {
   flex-direction: column;
   align-items: center;
   background: rgba(var(--v-theme-on-surface), 0.05);
-  border-radius: 6px;
-  padding: 6px 4px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-2);
 }
 
 .stats-tile-value {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
   line-height: 1.1;
   color: rgba(var(--v-theme-on-surface), 0.9);
 }
 
 .stats-tile-label {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.45);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .stats-donut-wrap {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .stats-donut {
@@ -2037,8 +2037,8 @@ function handleResolutionBarClick(label) {
 }
 
 .donut-label {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   fill: rgba(var(--v-theme-on-surface), 0.85);
 }
 
@@ -2046,7 +2046,7 @@ function handleResolutionBarClick(label) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  gap: var(--space-2) var(--space-3);
   justify-content: center;
 }
 
@@ -2067,7 +2067,7 @@ function handleResolutionBarClick(label) {
 }
 
 .legend-text {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
 }
 
@@ -2075,16 +2075,16 @@ function handleResolutionBarClick(label) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .penalised-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 10px;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
   border: 1px solid rgba(var(--v-theme-warning), 0.4);
   background: none;
   cursor: pointer;
@@ -2140,7 +2140,7 @@ function handleResolutionBarClick(label) {
 }
 
 .bar-label-fo {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.75);
   white-space: nowrap;
   overflow: hidden;
@@ -2152,16 +2152,16 @@ function handleResolutionBarClick(label) {
 }
 
 .bar-count-inner {
-  font-size: 9px;
-  font-weight: 600;
-  fill: rgba(255, 255, 255, 0.85);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  fill: rgba(var(--v-theme-on-primary), 0.85);
   dominant-baseline: central;
   pointer-events: none;
 }
 
 .bar-count-outer {
-  font-size: 9px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   fill: rgba(var(--v-theme-on-surface), 0.65);
   dominant-baseline: central;
   pointer-events: none;
@@ -2170,19 +2170,19 @@ function handleResolutionBarClick(label) {
 .stats-cooc-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  margin-top: 2px;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .cooc-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.7);
   cursor: pointer;
-  border-radius: 3px;
-  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-1);
   outline: none;
 }
 .cooc-item:hover {
@@ -2207,7 +2207,7 @@ function handleResolutionBarClick(label) {
 }
 
 .cooc-empty {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.35);
   font-style: italic;
 }
@@ -2218,13 +2218,13 @@ function handleResolutionBarClick(label) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-right: 6px;
+  padding-right: var(--space-3);
 }
 
 .cooc-count {
   color: rgba(var(--v-theme-on-surface), 0.4);
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--text-2xs);
 }
 
 .stats-hist {
@@ -2232,7 +2232,7 @@ function handleResolutionBarClick(label) {
 }
 
 .hist-label {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   fill: rgba(var(--v-theme-on-surface), 0.6);
   dominant-baseline: central;
 }
@@ -2268,7 +2268,7 @@ function handleResolutionBarClick(label) {
   background: none;
   border: none;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: rgba(var(--v-theme-on-surface), 0.45);
   flex-shrink: 0;
 }
@@ -2280,7 +2280,7 @@ function handleResolutionBarClick(label) {
 .conf-tag-selector {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   flex-shrink: 0;
 }
 
@@ -2289,12 +2289,12 @@ function handleResolutionBarClick(label) {
 }
 
 .conf-tag-select {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
   background: rgba(var(--v-theme-on-surface), 0.06);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.15);
-  border-radius: 4px;
-  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
   cursor: pointer;
   max-width: 108px;
   outline: none;
@@ -2312,10 +2312,10 @@ function handleResolutionBarClick(label) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
   font-weight: 500;
-  padding: 0 6px;
+  padding: 0 var(--space-3);
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -2383,25 +2383,25 @@ function handleResolutionBarClick(label) {
 
 /* ── Tasks tab ─────────────────────────────────────────────────────────────── */
 .tm-idle-msg {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.4);
   font-style: italic;
-  padding: 12px 0 4px;
+  padding: var(--space-4) 0 var(--space-2);
 }
 
 .tm-worker-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   width: 100%;
 }
 
 .tm-worker-row {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-surface), 0.04);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
   min-width: 0;
@@ -2410,14 +2410,14 @@ function handleResolutionBarClick(label) {
 .tm-worker-row-top {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .tm-worker-row-bottom {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -2426,11 +2426,11 @@ function handleResolutionBarClick(label) {
   height: 28px;
   min-width: 0;
   display: block;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .tm-worker-rate {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.45);
   white-space: nowrap;
   flex-shrink: 0;
@@ -2456,20 +2456,20 @@ function handleResolutionBarClick(label) {
 /* ── ComfyUI run rows ──────────────────────────────────────────────────────── */
 .tm-comfy-bar {
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.12);
   overflow: hidden;
 }
 
 .tm-comfy-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-primary));
   transition: width 0.25s ease;
 }
 
 .tm-comfy-message {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
   white-space: nowrap;
   overflow: hidden;
@@ -2482,10 +2482,10 @@ function handleResolutionBarClick(label) {
   background: none;
   color: rgba(var(--v-theme-on-surface), 0.45);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
 }
 .tm-comfy-abort:hover {
   color: rgb(var(--v-theme-error));
@@ -2529,7 +2529,7 @@ function handleResolutionBarClick(label) {
 
 .tm-worker-label {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -2538,7 +2538,7 @@ function handleResolutionBarClick(label) {
 }
 
 .tm-worker-progress {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
   white-space: nowrap;
   flex-shrink: 0;
@@ -2546,11 +2546,11 @@ function handleResolutionBarClick(label) {
 
 .tm-system-bar {
   margin-top: auto;
-  padding-top: 10px;
+  padding-top: var(--space-3);
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
   width: 100%;
 }
 
@@ -2558,16 +2558,16 @@ function handleResolutionBarClick(label) {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 6px;
-  font-size: 11px;
+  gap: var(--space-3);
+  font-size: var(--text-2xs);
 }
 
 .tm-system-label {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-on-surface), 0.5);
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   flex-shrink: 0;
 }
 
