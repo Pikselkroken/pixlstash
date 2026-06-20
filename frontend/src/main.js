@@ -1,6 +1,7 @@
 // Vuetify styles
 import 'vuetify/styles'
 import '@mdi/font/css/materialdesignicons.css'
+import './styles/design-tokens.css'
 import './style.css'
 import './styles/context-menu.css'
 

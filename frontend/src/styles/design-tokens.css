@@ -1,0 +1,101 @@
+/* =============================================================================
+   PixlStash design tokens — build copy.
+   =============================================================================
+
+   This is the SHIPPED copy of the design tokens. The SPEC and the reasoning live
+   in `docs/design/design-tokens.css` + `docs/design/visual-language.md`; this file
+   must stay byte-for-byte in sync with the values there. The lead designer owns
+   both. Do not edit values here without updating the doc (and vice versa).
+
+   COLOR is not here — it lives in the Vuetify themes in `main.js`
+   (`pixlStashLight` / `pixlStashDark`), consumed as `rgb(var(--v-theme-*))`.
+   This file owns the spacing scale, radius set, type ramp, elevation, and motion.
+
+   Components reference these tokens; they never hardcode the raw values. See the
+   migration plan in `docs/design/drift-audit-2026-06.md`.
+   ========================================================================== */
+
+:root {
+  /* ---------------------------------------------------------------------------
+     SPACING — 4px base grid. padding / margin / gap only. `--space-1` (2px) is
+     the only sub-4 step: hairline insets and optical nudges, not layout.
+     --------------------------------------------------------------------------- */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+  --space-9: 64px;
+
+  /* ---------------------------------------------------------------------------
+     RADIUS — four steps and a pill.
+     --------------------------------------------------------------------------- */
+  --radius-sm: 4px;     /* dense controls: chips, small buttons, tight inputs */
+  --radius-md: 8px;     /* default: cards, inputs, menus, image tiles */
+  --radius-lg: 12px;    /* dialogs, panels, popovers */
+  --radius-pill: 999px; /* toggles, status pills, avatar ring */
+
+  /* ---------------------------------------------------------------------------
+     TYPE RAMP — base 14px, in rem off a 16px root. Size text from this ramp only,
+     and only in rem. Never `em` for body text (it compounds with the parent).
+     --------------------------------------------------------------------------- */
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-xs:  0.75rem;   /* 12px */
+  --text-sm:  0.8125rem; /* 13px */
+  --text-base:0.875rem;  /* 14px — DEFAULT */
+  --text-md:  1rem;      /* 16px */
+  --text-lg:  1.125rem;  /* 18px */
+  --text-xl:  1.375rem;  /* 22px */
+  --text-2xl: 1.75rem;   /* 28px */
+
+  --leading-tight: 1.2;
+  --leading-snug:  1.35;
+  --leading-body:  1.5;
+
+  /* Headings are 600, not 700. 700 is reserved. */
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --weight-bold:    700;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-pixel: "Tiny5", monospace;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --tracking-label: 0.06em;
+
+  /* ---------------------------------------------------------------------------
+     ELEVATION — four levels, all on the theme `--v-theme-shadow` token so shadows
+     warm/cool with the theme. Never hardcode a shadow color.
+     --------------------------------------------------------------------------- */
+  --elevation-1: 0 1px 2px rgba(var(--v-theme-shadow), 0.12);
+  --elevation-2: 0 2px 6px rgba(var(--v-theme-shadow), 0.18);
+  --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22);
+  --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30);
+
+  --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
+
+  /* ---------------------------------------------------------------------------
+     MOTION — three durations, one easing. Motion is feedback, not decoration.
+     --------------------------------------------------------------------------- */
+  --dur-1: 150ms;
+  --dur-2: 200ms;
+  --dur-3: 250ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* Honour the OS "reduce motion" setting everywhere. Non-negotiable. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
