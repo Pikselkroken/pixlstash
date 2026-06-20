@@ -315,8 +315,19 @@ function connectUpdatesSocket() {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
+      // Origin-aware: only this tab's own tag edits may refresh a tag-filtered
+      // grid in place. A tag change from outside (background tagging, another
+      // tab) must not reshuffle the user's filtered view — the grid raises a
+      // click-to-refresh pill instead (see ImageGrid's wsTagUpdate watcher).
+      // The flag rides on wsTagUpdate; the overlay still refreshes its open
+      // card's tags for any origin.
+      const isOwn = !!(
+        payload.origin_client_id &&
+        wsStore.clientId &&
+        payload.origin_client_id === wsStore.clientId
+      );
       const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
-      wsStore.wsTagUpdate = { key: nextKey, pictureIds };
+      wsStore.wsTagUpdate = { key: nextKey, pictureIds, external: !isOwn };
     } else if (payload?.type === "descriptions_changed") {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
@@ -391,6 +402,17 @@ function loadSortChangedExternal() {
   // The user opted in to the reshuffle — reconcile by refetching + re-sorting.
   wsStore.clearSortChangedExternalIds();
   fullGridReload();
+}
+
+// ImageGrid asks to raise the "view changed externally" pill for an external
+// tag change under an active tag filter (instead of reshuffling the filtered
+// grid under the user). Skip ids already queued in the "new pictures" pill so a
+// just-imported batch being tagged doesn't double-pill.
+function onFlagSortChanged(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const pending = new Set(wsStore.pendingExternalImportIds);
+  const fresh = ids.filter((id) => !pending.has(id));
+  if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
 }
 
 function onRestoreConfirmed() {
@@ -2245,6 +2267,7 @@ defineExpose({
                 :sortChangedExternalCount="wsStore.sortChangedExternalCount"
                 @load-pending-imports="loadPendingExternalImports"
                 @load-sort-changed="loadSortChangedExternal"
+                @flag-sort-changed="onFlagSortChanged"
                 @update:visible-range-label="
                   gridStore.visibleRangeLabel = $event
                 "

@@ -345,7 +345,7 @@
           class="pending-imports-pill"
           @click="emit('load-sort-changed')"
         >
-          ⟳ Sort order changed externally — click to refresh
+          ⟳ View changed externally — click to refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
@@ -919,6 +919,7 @@ const emit = defineEmits([
   "update:visible-range-label",
   "load-pending-imports",
   "load-sort-changed",
+  "flag-sort-changed",
   "open-settings",
   "open-import",
   "confirm-export-zip",
@@ -1869,6 +1870,14 @@ watch(
       // replaces allGridImages). Defer the reconcile until the overlay closes so
       // prev/next stay stable; closeOverlay() applies the filter removal in place.
       pendingOverlayGridRefresh.value = true;
+      return;
+    }
+    if (payload.external) {
+      // The tag change came from outside this tab (background tagging, or
+      // another owner tab). Don't reshuffle the user's filtered view under them:
+      // raise the click-to-refresh pill, the same contract as external picture
+      // changes. Only this tab's own edits refresh the filtered grid in place.
+      if (pictureIds.length) emit("flag-sort-changed", pictureIds);
       return;
     }
     // Coalesce all task-driven tag updates into an infrequent full refresh to

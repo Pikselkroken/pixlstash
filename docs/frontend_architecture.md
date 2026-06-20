@@ -649,7 +649,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `pictures_changed` | Routed to `useGridRealtimeSync` (see below). If LIKENESS_GROUPS sort is active, emits `wsTagUpdate` instead. |
 | `picture_imported` | Routed to `useGridRealtimeSync` → slick insert, foreign-tab insert, or the "New pictures" pill. |
 | `characters_changed` | Immediate `refreshSidebar()`. |
-| `tags_changed` | Emits `wsTagUpdate` with the affected picture IDs so `ImageOverlay` can refresh tags without a full grid reload. |
+| `tags_changed` | Emits `wsTagUpdate` with the affected picture IDs **and an `external` flag** (`origin_client_id !== this tab`) so `ImageOverlay` can refresh tags for any origin, while `ImageGrid` only refreshes a tag-filtered grid in place for this tab's **own** edits; an external tag change (background tagging, another tab) raises the "View changed externally" pill instead of reshuffling the filtered view. |
 | `plugin_progress` | Sets `wsPluginProgress` payload forwarded to `ImageGrid` → `ComfyUiRunner`. |
 
 After connecting, and after any filter change, `App.vue` sends a `set_filters` message (carrying the tab's `client_id`) so the backend can scope `pictures_changed` events to the current view.
@@ -665,7 +665,7 @@ The WebSocket → grid update policy lives in [`composables/useGridRealtimeSync.
 Both reuse the primary-coloured `pending-imports-pill` styling and never reshuffle the grid under the user without a click:
 
 - **"New pictures"** — raised for `source: "external", change_kind: "added"` (or foreign-UI adds that arrive mid-streaming-fetch). Backed by `useWsStore.pendingExternalImportIds`; click splices the new ids in. Replaces the old import-only "pending imports" pill.
-- **"Sort order changed externally — click to refresh"** — a sibling pill raised when an external `updated` event has `pictureChangeAffectsView(fields) === true`. Backed by `useWsStore.sortChangedExternalIds`; click reconciles/re-sorts.
+- **"View changed externally — click to refresh"** — a sibling pill raised when an external `updated` event has `pictureChangeAffectsView(fields) === true`, **or** when an external `tags_changed` arrives while a tag filter is active (`ImageGrid`'s `wsTagUpdate` watcher emits `flag-sort-changed`; `App.vue` skips ids already queued in the "New pictures" pill so a just-imported batch being tagged doesn't double-pill). Backed by `useWsStore.sortChangedExternalIds`; click reconciles/re-sorts.
 
 ### 9.1 Overlay-open deferral contract
 
