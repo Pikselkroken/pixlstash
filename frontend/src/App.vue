@@ -233,7 +233,8 @@ function sendUpdatesFilters() {
 // delegates to the ImageGrid template-ref's defineExpose'd methods (Tier-3
 // imperative API), no-oping safely if the grid isn't mounted yet.
 const gridApi = {
-  insertGridImagesById: (ids) => gridContainer.value?.insertGridImagesById?.(ids),
+  insertGridImagesById: (ids) =>
+    gridContainer.value?.insertGridImagesById?.(ids),
   refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
   repositionImageByScore: (id, score) =>
     gridContainer.value?.repositionImageByScore?.(id, score),
@@ -1506,6 +1507,9 @@ async function patchConfigUIOptions() {
 }
 
 function handleGlobalKeydown(e) {
+  // The review-fixes overlay is modal and owns its own keyboard handler; don't
+  // run the app/grid shortcuts (scroll, search, help) behind it.
+  if (reviewFixesStore.overlayOpen) return;
   const tag = document.activeElement?.tagName?.toLowerCase();
   const isEditable =
     tag === "input" ||
@@ -1640,7 +1644,7 @@ function closeSearchOverlay() {
   searchStore.searchOverlayVisible = false;
 }
 
-// --- Review Suggested Fixes overlay ---
+// --- Review tags overlay ---
 // Visibility lives in the store so the grid toolbar can open it directly,
 // the same way the search button toggles searchStore.searchOverlayVisible.
 

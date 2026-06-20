@@ -1,4 +1,4 @@
-// useReviewFixesStore.js — state for the "Review suggested fixes" queue.
+// useReviewFixesStore.js — state for the "Review tags" queue.
 //
 // Backs the ReviewFixesOverlay: it loads the per-tag suggestion counts, loads the
 // ranked queue for one tag/direction, and applies accept/dismiss decisions through the
@@ -104,6 +104,18 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
       Math.max(rightConf, 1 - rightConf),
     );
     return { corner, confidence, hasModel: true };
+  }
+
+  // Review-queue grouping order. The two buckets where the near-twins AGREE come
+  // first (the tagger is self-consistent, so they're the fastest, most
+  // batchable, highest-trust calls); the two where the twins DISAGREE come last
+  // (genuinely harder cases that deserve a closer look). Within "agree" we clear
+  // wrong flags before adding missing ones; within "disagree", confirm before
+  // swap. Unscored pairs (no verdict) sort to the very end.
+  const BUCKET_ORDER = { neither: 0, both: 1, leftonly: 2, rightonly: 3 };
+  function bucketRank(item) {
+    const corner = decision(item).corner;
+    return corner in BUCKET_ORDER ? BUCKET_ORDER[corner] : 99;
   }
 
   // --- Session vote ledger ---------------------------------------------------
@@ -274,10 +286,14 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
       };
       if (direction.value) params.direction = direction.value;
       const res = await apiClient.get("/tag_suggestions", { params });
-      // Most decisive (highest agreement either way) first.
-      items.value = (res.data || []).sort(
-        (a, b) => decision(b).confidence - decision(a).confidence,
-      );
+      // Group by the tagger's verdict so the reviewer handles one kind of
+      // decision at a time (see BUCKET_ORDER), most-decisive first within each
+      // group. Unscored pairs (no model verdict) sort to the end.
+      items.value = (res.data || []).sort((a, b) => {
+        const rank = bucketRank(a) - bucketRank(b);
+        if (rank !== 0) return rank;
+        return decision(b).confidence - decision(a).confidence;
+      });
     } catch (e) {
       error.value = e?.message || "Failed to load suggestions";
       items.value = [];

@@ -5,7 +5,7 @@
            the review-specific controls. Close + title live in the shell; the tag
            picker, rescan, scope filters, clear-filters and progress go in #actions. -->
       <OverlayToolbar @close="emit('close')">
-        <template #title>Review suggested fixes</template>
+        <template #title>Review tags</template>
 
         <template #actions>
           <!-- Custom tag picker over the whole vault tag list, modelled on AddToEntityControl:
@@ -17,6 +17,15 @@
                the topbar's clip and sits above the overlay. The icon-button re-scans the active tag. -->
           <div class="rf-field rf-field--tag">
             <span class="rf-field-label">Tag</span>
+            <label
+              class="rf-penalised-toggle"
+              :class="{ 'rf-penalised-toggle--on': penalisedOnly }"
+              title="Only list smart-score penalised tags in the picker"
+            >
+              <input type="checkbox" v-model="penalisedOnly" />
+              <v-icon size="13">mdi-alert-octagon-outline</v-icon>
+              Penalised only
+            </label>
             <div ref="tagPickRef" class="rf-tag-pick">
               <button
                 class="rf-tag-trigger"
@@ -27,62 +36,65 @@
                 aria-label="Pick a tag"
                 @click.stop="toggleTagMenu"
               >
-              <span
-                class="rf-tag-trigger-label"
-                :class="{
-                  'rf-tag-anomaly': store.activeTag && store.isAnomalyTag(store.activeTag),
-                  'rf-tag-trigger-label--placeholder': !store.activeTag,
-                }"
-              >
-                {{ store.activeTag || "Pick a tag" }}
-              </span>
-              <v-icon size="14" class="rf-tag-chevron">mdi-chevron-down</v-icon>
-            </button>
-
-            <div
-              v-if="tagMenuOpen"
-              ref="tagMenuRef"
-              class="rf-tag-menu"
-              role="listbox"
-              :style="tagMenuStyle"
-            >
-              <div class="rf-tag-search">
-                <v-icon size="14">mdi-magnify</v-icon>
-                <input
-                  ref="tagSearchRef"
-                  v-model="tagQuery"
-                  type="text"
-                  placeholder="search tags…"
-                  @keydown.escape.stop.prevent="closeTagMenu"
-                  @keydown.down.stop.prevent="moveTagHighlight(1)"
-                  @keydown.up.stop.prevent="moveTagHighlight(-1)"
-                  @keydown.enter.stop.prevent="pickHighlightedTag"
-                />
-              </div>
-              <div class="rf-tag-list">
-                <div v-if="!filteredTags.length" class="rf-tag-empty">
-                  No tags found
-                </div>
-                <button
-                  v-for="(opt, idx) in filteredTags"
-                  :key="opt.tag"
-                  class="rf-tag-item"
-                  :class="{ 'rf-tag-item--active': idx === tagHighlight }"
-                  type="button"
-                  role="option"
-                  @mouseenter="tagHighlight = idx"
-                  @click.stop="onPickTag(opt.tag)"
+                <span
+                  class="rf-tag-trigger-label"
+                  :class="{
+                    'rf-tag-anomaly':
+                      store.activeTag && store.isAnomalyTag(store.activeTag),
+                    'rf-tag-trigger-label--placeholder': !store.activeTag,
+                  }"
                 >
-                  <span :class="{ 'rf-tag-anomaly': opt.anomaly }">
-                    {{ opt.tag }}
-                  </span>
-                  <span v-if="opt.pending" class="rf-tag-count">
-                    · {{ opt.pending }}
-                  </span>
-                </button>
+                  {{ store.activeTag || "Pick a tag" }}
+                </span>
+                <v-icon size="14" class="rf-tag-chevron"
+                  >mdi-chevron-down</v-icon
+                >
+              </button>
+
+              <div
+                v-if="tagMenuOpen"
+                ref="tagMenuRef"
+                class="rf-tag-menu"
+                role="listbox"
+                :style="tagMenuStyle"
+              >
+                <div class="rf-tag-search">
+                  <v-icon size="14">mdi-magnify</v-icon>
+                  <input
+                    ref="tagSearchRef"
+                    v-model="tagQuery"
+                    type="text"
+                    placeholder="search tags…"
+                    @keydown.escape.stop.prevent="closeTagMenu"
+                    @keydown.down.stop.prevent="moveTagHighlight(1)"
+                    @keydown.up.stop.prevent="moveTagHighlight(-1)"
+                    @keydown.enter.stop.prevent="pickHighlightedTag"
+                  />
+                </div>
+                <div class="rf-tag-list">
+                  <div v-if="!filteredTags.length" class="rf-tag-empty">
+                    No tags found
+                  </div>
+                  <button
+                    v-for="(opt, idx) in filteredTags"
+                    :key="opt.tag"
+                    class="rf-tag-item"
+                    :class="{ 'rf-tag-item--active': idx === tagHighlight }"
+                    type="button"
+                    role="option"
+                    @mouseenter="tagHighlight = idx"
+                    @click.stop="onPickTag(opt.tag)"
+                  >
+                    <span :class="{ 'rf-tag-anomaly': opt.anomaly }">
+                      {{ opt.tag }}
+                    </span>
+                    <span v-if="opt.pending" class="rf-tag-count">
+                      · {{ opt.pending }}
+                    </span>
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
             <button
               class="overlay-icon-btn rf-rescan"
               type="button"
@@ -138,7 +150,9 @@
             <select
               class="rf-select rf-select--scope"
               :value="store.scope.characterId ?? ''"
-              @change="onScopeChange('characterId', $event.target.value, $event)"
+              @change="
+                onScopeChange('characterId', $event.target.value, $event)
+              "
             >
               <option value="">Any</option>
               <option value="UNASSIGNED">Unassigned</option>
@@ -148,18 +162,10 @@
             </select>
           </label>
 
-          <button
-            v-if="hasScopeFilter"
-            class="rf-clear-filters"
-            type="button"
-            title="Clear the project / set / character filters"
-            @click="clearScope"
-          >
-            Clear filters
-          </button>
-
           <div class="rf-progress">
-            <span class="rf-progress-remaining">{{ store.remainingTotal }} left</span>
+            <span class="rf-progress-remaining"
+              >{{ store.remainingTotal }} left</span
+            >
             <span class="rf-progress-tally">
               ✗ {{ store.removedCount }} · + {{ store.addedCount }} · ✓
               {{ store.keptCount }}
@@ -199,11 +205,17 @@
           :title="`Apply every pair where the near-twin vote and the tagger agree and both clear the threshold for “${store.activeTag}”, in one go (undoable).`"
           @click="store.runBulk()"
         >
-          Resolve {{ store.bulkCount }} agreed one{{ store.bulkCount === 1 ? "" : "s" }}
+          Resolve {{ store.bulkCount }} agreed one{{
+            store.bulkCount === 1 ? "" : "s"
+          }}
         </button>
         <span v-if="store.lastBulk" class="rf-bulk-undo">
           resolved {{ store.lastBulk.count }} ·
-          <button type="button" :disabled="store.bulkBusy" @click="store.undoBulk()">
+          <button
+            type="button"
+            :disabled="store.bulkBusy"
+            @click="store.undoBulk()"
+          >
             Undo all
           </button>
         </span>
@@ -221,7 +233,9 @@
         <div v-else-if="!current" class="rf-state rf-state--done">
           <v-icon size="40">mdi-check-all</v-icon>
           <p v-if="!store.activeTag">
-            No suggestions{{ hasScopeFilter ? " match the current filters" : "" }}.
+            No suggestions{{
+              hasScopeFilter ? " match the current filters" : ""
+            }}.
           </p>
           <p v-else>
             All caught up on “{{ store.activeTag }}”{{
@@ -240,50 +254,107 @@
         </div>
 
         <div v-else class="rf-review">
+          <div
+            v-if="currentBucket"
+            class="rf-bucket"
+            :class="`rf-bucket--${currentBucket.key}`"
+          >
+            <v-icon :size="24" class="rf-bucket-icon">{{
+              currentBucket.icon
+            }}</v-icon>
+            <div class="rf-bucket-text">
+              <span class="rf-bucket-title">{{ currentBucket.title }}</span>
+              <span class="rf-bucket-meaning">{{ currentBucket.meaning }}</span>
+            </div>
+            <span class="rf-bucket-count"
+              >{{ bucketRemaining }} left in this group</span
+            >
+          </div>
+
           <div class="rf-question">
             The left is flagged “{{ current.tag }}” — but is it?
             <span class="rf-question-sub">{{ verdict.sub }}</span>
           </div>
 
           <div class="rf-pair">
-            <figure class="rf-pane rf-pane--flagged">
+            <figure
+              class="rf-pane rf-pane--flagged"
+              :class="{ 'rf-pane--selected': isPaneSelected(taggedSide.id) }"
+            >
               <div class="rf-pane-head">
                 <span class="rf-pane-title">Left · the flagged one</span>
-                <span class="rf-chip rf-chip--has">⚑ predicted “{{ current.tag }}”</span>
+                <span class="rf-chip rf-chip--has"
+                  >⚑ predicted “{{ current.tag }}”</span
+                >
               </div>
-              <img
-                class="rf-img"
-                :src="imgSrc(taggedSide.id, taggedSide.ext)"
-                :alt="`picture ${taggedSide.id}`"
-                title="Click to zoom"
-                @click="openZoom(taggedSide.id, taggedSide.ext)"
-                @error="onImgError($event, taggedSide.id)"
-              />
+              <div class="rf-img-wrap">
+                <img
+                  class="rf-img"
+                  :src="imgSrc(taggedSide.id, taggedSide.ext)"
+                  :alt="`picture ${taggedSide.id}`"
+                  title="Click to select · scroll to zoom"
+                  @click="togglePaneSelection(taggedSide.id)"
+                  @wheel.prevent="openZoom(taggedSide.id, taggedSide.ext)"
+                  @error="onImgError($event, taggedSide.id)"
+                />
+                <button
+                  type="button"
+                  class="rf-zoom-btn"
+                  title="Zoom"
+                  @click.stop="openZoom(taggedSide.id, taggedSide.ext)"
+                >
+                  <v-icon size="16">mdi-magnify-plus-outline</v-icon>
+                </button>
+                <span class="rf-pane-check" aria-hidden="true">
+                  <v-icon size="16">mdi-check-bold</v-icon>
+                </span>
+              </div>
               <figcaption class="rf-pane-foot">
                 <span>#{{ taggedSide.id }}</span>
-                <span class="rf-pane-conf">{{ confLabel(taggedSide.conf) }}</span>
+                <span class="rf-pane-conf">{{
+                  confLabel(taggedSide.conf)
+                }}</span>
                 <span v-if="voteHint(taggedSide.id)" class="rf-vote-hint">
                   {{ voteHint(taggedSide.id) }}
                 </span>
               </figcaption>
             </figure>
 
-            <figure class="rf-pane">
+            <figure
+              class="rf-pane"
+              :class="{ 'rf-pane--selected': isPaneSelected(untaggedSide.id) }"
+            >
               <div class="rf-pane-head">
                 <span class="rf-pane-title">Right · its near-twin</span>
                 <span class="rf-chip rf-chip--missing">not flagged</span>
               </div>
-              <img
-                class="rf-img"
-                :src="imgSrc(untaggedSide.id, untaggedSide.ext)"
-                :alt="`picture ${untaggedSide.id}`"
-                title="Click to zoom"
-                @click="openZoom(untaggedSide.id, untaggedSide.ext)"
-                @error="onImgError($event, untaggedSide.id)"
-              />
+              <div class="rf-img-wrap">
+                <img
+                  class="rf-img"
+                  :src="imgSrc(untaggedSide.id, untaggedSide.ext)"
+                  :alt="`picture ${untaggedSide.id}`"
+                  title="Click to select · scroll to zoom"
+                  @click="togglePaneSelection(untaggedSide.id)"
+                  @wheel.prevent="openZoom(untaggedSide.id, untaggedSide.ext)"
+                  @error="onImgError($event, untaggedSide.id)"
+                />
+                <button
+                  type="button"
+                  class="rf-zoom-btn"
+                  title="Zoom"
+                  @click.stop="openZoom(untaggedSide.id, untaggedSide.ext)"
+                >
+                  <v-icon size="16">mdi-magnify-plus-outline</v-icon>
+                </button>
+                <span class="rf-pane-check" aria-hidden="true">
+                  <v-icon size="16">mdi-check-bold</v-icon>
+                </span>
+              </div>
               <figcaption class="rf-pane-foot">
                 <span>#{{ untaggedSide.id }}</span>
-                <span class="rf-pane-conf">{{ confLabel(untaggedSide.conf) }}</span>
+                <span class="rf-pane-conf">{{
+                  confLabel(untaggedSide.conf)
+                }}</span>
                 <span v-if="voteHint(untaggedSide.id)" class="rf-vote-hint">
                   {{ voteHint(untaggedSide.id) }}
                 </span>
@@ -292,46 +363,75 @@
           </div>
 
           <div class="rf-actions">
-            <span class="rf-actions-label">Which really has “{{ current.tag }}”?</span>
+            <span class="rf-actions-label"
+              >Which really has “{{ current.tag }}”?</span
+            >
             <button
               class="rf-action rf-action--leftonly"
-              :class="{ 'rf-action--rec': verdict.strong && verdict.corner === 'leftonly' }"
+              :class="{
+                'rf-action--rec':
+                  verdict.strong && verdict.corner === 'leftonly',
+              }"
               type="button"
               title="The flag is right and the twin is clean — only the left has it. No change."
               @click="markLeftOnly"
             >
               <kbd>L</kbd> Left only
-              <span v-if="verdict.strong && verdict.corner === 'leftonly'" class="rf-rec-pip">likely</span>
+              <span
+                v-if="verdict.strong && verdict.corner === 'leftonly'"
+                class="rf-rec-pip"
+                >likely</span
+              >
             </button>
             <button
               class="rf-action rf-action--both"
-              :class="{ 'rf-action--rec': verdict.strong && verdict.corner === 'both' }"
+              :class="{
+                'rf-action--rec': verdict.strong && verdict.corner === 'both',
+              }"
               type="button"
               title="Both have it — tag the right one too."
               @click="markBoth"
             >
               <kbd>B</kbd> Both
-              <span v-if="verdict.strong && verdict.corner === 'both'" class="rf-rec-pip">likely</span>
+              <span
+                v-if="verdict.strong && verdict.corner === 'both'"
+                class="rf-rec-pip"
+                >likely</span
+              >
             </button>
             <button
               class="rf-action rf-action--neither"
-              :class="{ 'rf-action--rec': verdict.strong && verdict.corner === 'neither' }"
+              :class="{
+                'rf-action--rec':
+                  verdict.strong && verdict.corner === 'neither',
+              }"
               type="button"
               title="Neither has it — the flag was wrong, clear the left."
               @click="markNeither"
             >
               <kbd>N</kbd> Neither
-              <span v-if="verdict.strong && verdict.corner === 'neither'" class="rf-rec-pip">likely</span>
+              <span
+                v-if="verdict.strong && verdict.corner === 'neither'"
+                class="rf-rec-pip"
+                >likely</span
+              >
             </button>
             <button
               class="rf-action rf-action--swap"
-              :class="{ 'rf-action--rec': verdict.strong && verdict.corner === 'rightonly' }"
+              :class="{
+                'rf-action--rec':
+                  verdict.strong && verdict.corner === 'rightonly',
+              }"
               type="button"
               title="The left is actually clean and the RIGHT has it — swap: clear the left, tag the right."
               @click="markRightOnly"
             >
               <kbd>R</kbd> Right only ⇄
-              <span v-if="verdict.strong && verdict.corner === 'rightonly'" class="rf-rec-pip">likely</span>
+              <span
+                v-if="verdict.strong && verdict.corner === 'rightonly'"
+                class="rf-rec-pip"
+                >likely</span
+              >
             </button>
 
             <span class="rf-actions-gap"></span>
@@ -381,9 +481,38 @@
 
           <p class="rf-hint">
             <kbd>L</kbd> left only · <kbd>B</kbd> both · <kbd>N</kbd> neither ·
-            <kbd>R</kbd> right only (swap) · <kbd>S</kbd> skip · <kbd>U</kbd> undo ·
-            <kbd>Esc</kbd> close
+            <kbd>R</kbd> right only (swap) · <kbd>S</kbd> skip ·
+            <kbd>U</kbd> undo · <kbd>T</kbd> tag selected · <kbd>Esc</kbd> close
           </p>
+
+          <!-- Direct tagging of the selected pane(s), independent of the queue
+               decision. Anchored bottom-right; the menu opens above the button. -->
+          <div ref="tagApplyRef" class="rf-tag-apply">
+            <TbTagPanel
+              v-if="tagApplyOpen"
+              class="rf-tag-apply-panel"
+              :backend-url="props.backendUrl"
+              :selected-count="selectedPaneIds.length"
+              :selected-image-ids="selectedPaneIds"
+              :all-grid-images="selectedSideImages"
+              :open="tagApplyOpen"
+              @tags-applied="onTagsApplied"
+              @close="closeTagApply"
+            />
+            <button
+              type="button"
+              class="rf-tag-apply-btn"
+              :class="{ 'rf-tag-apply-btn--open': tagApplyOpen }"
+              title="Apply tags to the selected image(s) (T)"
+              @click="tagApplyOpen ? closeTagApply() : openTagApply()"
+            >
+              <v-icon size="16">mdi-tag-plus-outline</v-icon>
+              Apply tags
+              <span v-if="selectedPaneIds.length" class="rf-tag-apply-count">{{
+                selectedPaneIds.length
+              }}</span>
+            </button>
+          </div>
         </div>
       </section>
     </div>
@@ -397,10 +526,13 @@
       <div class="rf-preview-card">
         <div class="rf-preview-head">
           <div>
-            Preview — {{ store.bulkCount }} agreed one{{ store.bulkCount === 1 ? "" : "s" }}
+            Preview — {{ store.bulkCount }} agreed one{{
+              store.bulkCount === 1 ? "" : "s"
+            }}
             at ≥{{ Math.round(store.bulkThreshold * 100) }}%
             <span class="rf-preview-sub">
-              showing the {{ store.bulkSample.length }} least tagger-confident (the riskiest)
+              showing the {{ store.bulkSample.length }} least tagger-confident
+              (the riskiest)
             </span>
           </div>
           <button
@@ -413,7 +545,8 @@
         </div>
 
         <div v-if="!store.bulkSample.length" class="rf-preview-empty">
-          No pair where both signals agree this strongly — lower the bar, or review manually.
+          No pair where both signals agree this strongly — lower the bar, or
+          review manually.
         </div>
         <div v-else class="rf-preview-grid">
           <figure
@@ -440,7 +573,8 @@
               />
             </div>
             <figcaption class="rf-preview-verdict">
-              → {{ cornerLabel(s.corner) }} · {{ Math.round(s.confidence * 100) }}%
+              → {{ cornerLabel(s.corner) }} ·
+              {{ Math.round(s.confidence * 100) }}%
             </figcaption>
           </figure>
         </div>
@@ -477,6 +611,7 @@
       @mousedown="onZoomMouseDown"
       @mousemove="onZoomMouseMove"
       @mouseup="onZoomMouseUp"
+      @mouseleave="onZoomMouseUp"
       @click="onZoomClick"
     >
       <img
@@ -487,17 +622,21 @@
         draggable="false"
         @load="onZoomLoad"
       />
-      <div class="rf-zoom-hint" :class="{ 'rf-zoom-hint--hidden': !hintVisible }">
-        {{ Math.round(zoomScale * 100) }}% · scroll to zoom · drag to pan · click or Esc
-        to close · <kbd>←</kbd>/<kbd>→</kbd> still apply
+      <div
+        class="rf-zoom-hint"
+        :class="{ 'rf-zoom-hint--hidden': !hintVisible }"
+      >
+        {{ Math.round(zoomScale * 100) }}% · scroll to zoom · drag to pan ·
+        click or Esc to close · <kbd>←</kbd>/<kbd>→</kbd> still apply
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import OverlayToolbar from "../widgets/OverlayToolbar.vue";
+import TbTagPanel from "../panels/TbTagPanel.vue";
 import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -511,7 +650,7 @@ const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 const props = defineProps({
   backendUrl: { type: String, default: "" },
 });
-const emit = defineEmits(["close"]);
+const emit = defineEmits(["close", "tags-applied"]);
 
 const store = useReviewFixesStore();
 const selectionStore = useSelectionStore();
@@ -571,10 +710,6 @@ function onScopeChange(dimension, raw, event) {
   store.setScope({ [dimension]: value });
 }
 
-function clearScope() {
-  store.setScope({ projectId: null, setId: null, characterId: null });
-}
-
 // --- Tag picker -------------------------------------------------------------
 //
 // A custom dropdown over the whole vault (store.allTags), modelled on AddToEntityControl:
@@ -589,6 +724,9 @@ const tagSearchRef = ref(null);
 const tagMenuOpen = ref(false);
 const tagQuery = ref("");
 const tagHighlight = ref(0);
+// When on, the tag picker lists only smart-score penalised (anomaly) tags —
+// the ones most worth reviewing.
+const penalisedOnly = ref(false);
 const tagMenuStyle = ref({});
 
 // Full vault tag list, alphabetised, each carrying its anomaly flag and pending count.
@@ -600,7 +738,9 @@ const allTagOptions = computed(() => {
     ? store.allTags
     : store.tags.map((t) => t.tag);
   return [...source]
-    .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: "base" }))
+    .sort((a, b) =>
+      String(a).localeCompare(String(b), undefined, { sensitivity: "base" }),
+    )
     .map((tag) => ({
       tag,
       pending: pendingByTag.get(tag) || 0,
@@ -611,10 +751,10 @@ const allTagOptions = computed(() => {
 // Substring filter (case-insensitive), preserving the alphabetical order above.
 const filteredTags = computed(() => {
   const needle = tagQuery.value.trim().toLowerCase();
-  if (!needle) return allTagOptions.value;
-  return allTagOptions.value.filter((opt) =>
-    opt.tag.toLowerCase().includes(needle),
-  );
+  let opts = allTagOptions.value;
+  if (penalisedOnly.value) opts = opts.filter((opt) => opt.anomaly);
+  if (!needle) return opts;
+  return opts.filter((opt) => opt.tag.toLowerCase().includes(needle));
 });
 
 // Position the panel under the trigger using viewport coordinates (position: fixed), so it
@@ -665,7 +805,8 @@ function closeTagMenu() {
   // Return focus to the body so the L/B/N/R/S/U decision keys work again (the search input
   // is an <input>, which handleKeyDown treats as editable and bails on).
   tagSearchRef.value?.blur();
-  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  if (document.activeElement instanceof HTMLElement)
+    document.activeElement.blur();
 }
 
 // Click-outside closes the panel (mirrors AddToEntityControl.handleOutsideClick): ignore
@@ -673,9 +814,12 @@ function closeTagMenu() {
 function handleTagOutsideClick(event) {
   const target = event?.target;
   if (!target || !(target instanceof HTMLElement)) return;
-  if (tagPickRef.value?.contains(target)) return;
-  if (tagMenuRef.value?.contains(target)) return;
-  closeTagMenu();
+  const inPicker =
+    tagPickRef.value?.contains(target) || tagMenuRef.value?.contains(target);
+  if (!inPicker) closeTagMenu();
+  if (tagApplyOpen.value && !tagApplyRef.value?.contains(target)) {
+    closeTagApply();
+  }
 }
 
 function moveTagHighlight(delta) {
@@ -707,7 +851,11 @@ function sideSuspect() {
 }
 function sideTwin() {
   const i = current.value;
-  return { id: i.twin_picture_id, ext: i.twin_ext, conf: i.twin_tagger_confidence };
+  return {
+    id: i.twin_picture_id,
+    ext: i.twin_ext,
+    conf: i.twin_tagger_confidence,
+  };
 }
 const taggedSide = computed(() =>
   current.value
@@ -723,6 +871,76 @@ const untaggedSide = computed(() =>
       : sideSuspect()
     : null,
 );
+
+// ── Pane selection + direct tagging ────────────────────────────────────────────
+// The reviewer can select one or both panes (click a pane to toggle) and apply
+// tags to them directly via the bulk tag menu — independent of the L/B/N/R
+// queue decision. Selection resets whenever the pair advances.
+const selectedPaneIds = ref([]);
+
+function isPaneSelected(id) {
+  return selectedPaneIds.value.includes(id);
+}
+
+function togglePaneSelection(id) {
+  if (id == null) return;
+  selectedPaneIds.value = isPaneSelected(id)
+    ? selectedPaneIds.value.filter((x) => x !== id)
+    : [...selectedPaneIds.value, id];
+}
+
+// Arrow-key selection: ← / → set the selection to that pane; with Shift/Ctrl
+// they add the pane to the current selection (so you can grab both).
+function selectPaneByArrow(side, additive) {
+  const pane = side === "left" ? taggedSide.value : untaggedSide.value;
+  if (!pane) return;
+  if (additive) {
+    if (!isPaneSelected(pane.id)) {
+      selectedPaneIds.value = [...selectedPaneIds.value, pane.id];
+    }
+  } else {
+    selectedPaneIds.value = [pane.id];
+  }
+}
+
+// Reset selection (and close the tag menu) when a new pair loads.
+watch(
+  () => current.value && current.value.picture_id,
+  () => {
+    selectedPaneIds.value = [];
+    tagApplyOpen.value = false;
+  },
+);
+
+// Minimal image objects so TbTagPanel can show a thumbnail preview of the panes.
+const selectedSideImages = computed(() => {
+  const sides = [taggedSide.value, untaggedSide.value].filter(Boolean);
+  return sides
+    .filter((s) => selectedPaneIds.value.includes(s.id))
+    .map((s) => ({ id: s.id, format: s.ext }));
+});
+
+const tagApplyOpen = ref(false);
+const tagApplyRef = ref(null);
+
+function openTagApply() {
+  if (!current.value) return;
+  // T with nothing selected is a one-press "tag these": default to both panes.
+  if (!selectedPaneIds.value.length) {
+    selectedPaneIds.value = [taggedSide.value, untaggedSide.value]
+      .filter(Boolean)
+      .map((s) => s.id);
+  }
+  tagApplyOpen.value = true;
+}
+
+function closeTagApply() {
+  tagApplyOpen.value = false;
+}
+
+function onTagsApplied(payload) {
+  emit("tags-applied", payload);
+}
 
 // The decision is the tagger's per-image confidence (the near-neighbour link only chose
 // which pair to compare). See store.decision: it places the pair in one of four corners
@@ -751,6 +969,51 @@ const verdict = computed(() => {
     ? `Tagger thinks ${phrase} (${pct}%).`
     : `Tagger is unsure here (${pct}%) — your call.`;
   return { corner: d.corner, strong, pct, sub };
+});
+
+// Group banner: the queue is sorted into verdict buckets (see the store's
+// BUCKET_ORDER); this announces which group the reviewer is in and what to do.
+const BUCKETS = {
+  neither: {
+    key: "neither",
+    icon: "mdi-close-circle-multiple-outline",
+    title: "Neither has it",
+    meaning:
+      "The tagger thinks the flag is wrong on both near-twins — clear it from the left (N).",
+  },
+  both: {
+    key: "both",
+    icon: "mdi-check-circle-multiple-outline",
+    title: "Both have it",
+    meaning:
+      "The tagger is confident both images show this tag — add it to the twin (B).",
+  },
+  leftonly: {
+    key: "leftonly",
+    icon: "mdi-arrow-left-bold-box-outline",
+    title: "Only the left has it",
+    meaning:
+      "The flag is right and the near-twin is genuinely clean — no change (L).",
+  },
+  rightonly: {
+    key: "rightonly",
+    icon: "mdi-swap-horizontal-bold",
+    title: "It's the right one, not the left",
+    meaning: "The label is on the wrong image — swap it (R).",
+  },
+};
+
+const currentBucket = computed(() => {
+  const corner = store.decision(current.value)?.corner;
+  return corner ? BUCKETS[corner] || null : null;
+});
+
+// How many pairs of the current group are still in the loaded queue (this one
+// included), so the banner can show "N left in this group".
+const bucketRemaining = computed(() => {
+  const corner = store.decision(current.value)?.corner;
+  if (!corner) return 0;
+  return store.items.filter((it) => store.decision(it).corner === corner).length;
 });
 
 const CORNER_LABELS = {
@@ -1022,6 +1285,25 @@ function isEditable(el) {
 function handleKeyDown(event) {
   // Let typing in the tag picker / any input through untouched.
   if (isEditable(event.target) || isEditable(document.activeElement)) return;
+
+  // Left/Right select a pane (Shift/Ctrl add the other). Handled before the
+  // modifier guard below so Shift/Ctrl-arrow can extend the selection.
+  if (
+    current.value &&
+    !pendingDecision.value &&
+    !store.previewOpen &&
+    !zoom.value &&
+    (event.key === "ArrowLeft" || event.key === "ArrowRight")
+  ) {
+    selectPaneByArrow(
+      event.key === "ArrowLeft" ? "left" : "right",
+      event.shiftKey || event.ctrlKey || event.metaKey,
+    );
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+
   if (event.metaKey || event.ctrlKey || event.altKey) return;
 
   const key = event.key.toLowerCase();
@@ -1044,10 +1326,14 @@ function handleKeyDown(event) {
     return;
   }
 
-  // Escape unwinds the topmost layer: zoom → preview → overlay.
+  // Escape unwinds the topmost layer: tag menu → zoom → preview → pane
+  // selection → overlay. A pane selection is cleared before the overlay closes,
+  // so the first Esc drops the selection and the second leaves.
   if (key === "escape") {
-    if (zoom.value) closeZoom();
+    if (tagApplyOpen.value) closeTagApply();
+    else if (zoom.value) closeZoom();
     else if (store.previewOpen) store.previewOpen = false;
+    else if (selectedPaneIds.value.length) selectedPaneIds.value = [];
     else emit("close");
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -1074,6 +1360,8 @@ function handleKeyDown(event) {
   } else if (key === "u") {
     store.undo();
     closeZoom();
+  } else if (key === "t") {
+    openTagApply();
   } else {
     handled = false;
   }
@@ -1133,7 +1421,23 @@ onUnmounted(() => {
 }
 .rf-field-label {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
+}
+.rf-penalised-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.585rem;
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rf-penalised-toggle input {
+  cursor: pointer;
+  accent-color: rgb(var(--v-theme-error));
+}
+.rf-penalised-toggle--on {
+  color: rgb(var(--v-theme-error));
 }
 .rf-select {
   height: 32px;
@@ -1142,7 +1446,7 @@ onUnmounted(() => {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: 4px;
   padding: 0 8px;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
   max-width: 280px;
   cursor: pointer;
 }
@@ -1155,23 +1459,9 @@ onUnmounted(() => {
   max-width: 150px;
 }
 
-.rf-clear-filters {
-  height: 32px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 4px;
-  padding: 0 12px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.rf-clear-filters:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
-}
-
 .rf-scan-error {
   color: #f28b82;
-  font-size: 0.8rem;
+  font-size: 0.6rem;
 }
 
 /* Custom tag picker, matched to the toolbar control language: the trigger is the same
@@ -1183,7 +1473,7 @@ onUnmounted(() => {
 .rf-tag-pick {
   position: relative;
   width: 200px;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
 }
 .rf-tag-trigger {
   display: flex;
@@ -1198,7 +1488,7 @@ onUnmounted(() => {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
 }
 .rf-tag-trigger:hover:not(:disabled) {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
@@ -1249,7 +1539,7 @@ onUnmounted(() => {
   border: none;
   outline: none;
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
 }
 .rf-tag-search input::placeholder {
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
@@ -1261,7 +1551,7 @@ onUnmounted(() => {
 .rf-tag-empty {
   padding: 8px 12px;
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
 }
 .rf-tag-item {
   display: flex;
@@ -1273,7 +1563,7 @@ onUnmounted(() => {
   background: none;
   border: none;
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
   text-align: left;
   cursor: pointer;
 }
@@ -1295,11 +1585,11 @@ onUnmounted(() => {
 }
 .rf-tag-count {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: 0.78rem;
+  font-size: 0.585rem;
   margin-left: 4px;
 }
 .rf-tag-option {
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
 }
 
 .rf-progress {
@@ -1314,7 +1604,7 @@ onUnmounted(() => {
 }
 .rf-progress-tally {
   color: #9aa0a6;
-  font-size: 0.8rem;
+  font-size: 0.6rem;
 }
 
 .rf-bulkbar {
@@ -1324,7 +1614,7 @@ onUnmounted(() => {
   padding: 8px 16px;
   border-bottom: 1px solid #2a2c33;
   background: #17181d;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
   color: #cdd0d6;
 }
 .rf-bulk-thresh select {
@@ -1394,7 +1684,7 @@ onUnmounted(() => {
 }
 .rf-state-sub {
   color: #9aa0a6;
-  font-size: 0.9rem;
+  font-size: 0.675rem;
 }
 .rf-retry {
   background: #23252c;
@@ -1406,6 +1696,7 @@ onUnmounted(() => {
 }
 
 .rf-review {
+  position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -1414,17 +1705,65 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
 }
+
+/* Direct-tag affordance, pinned bottom-right of the review view. */
+.rf-tag-apply {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+}
+.rf-tag-apply-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid rgba(var(--v-theme-primary), 0.55);
+  border-radius: 999px;
+  background: rgba(var(--v-theme-primary), 0.16);
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.6375rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.rf-tag-apply-btn:hover,
+.rf-tag-apply-btn--open {
+  background: rgba(var(--v-theme-primary), 0.28);
+  border-color: rgba(var(--v-theme-primary), 0.8);
+}
+.rf-tag-apply-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-size: 0.54rem;
+  font-variant-numeric: tabular-nums;
+}
+/* The tag menu opens above the button. */
+.rf-tag-apply-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: 320px;
+  max-width: 80vw;
+}
 .rf-verdict {
   display: flex;
   align-items: baseline;
   justify-content: center;
   gap: 12px;
-  font-size: 1.6rem;
+  font-size: 1.2rem;
   font-weight: 700;
   text-align: center;
 }
 .rf-verdict-pct {
-  font-size: 2rem;
+  font-size: 1.5rem;
   font-weight: 800;
   padding: 2px 12px;
   border-radius: 10px;
@@ -1447,7 +1786,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 .rf-signal-chip {
-  font-size: 0.8rem;
+  font-size: 0.6rem;
   font-weight: 600;
   color: #cdd0d6;
   background: #23252c;
@@ -1461,21 +1800,80 @@ onUnmounted(() => {
 }
 .rf-verdict-sub {
   color: #9aa0a6;
-  font-size: 0.9rem;
+  font-size: 0.675rem;
   text-align: center;
   margin: 0;
 }
+/* Group banner: announces the current verdict bucket and what to do. The
+   left accent + icon are tinted per bucket. */
+.rf-bucket {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 760px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--rf-bucket-accent, rgba(255, 255, 255, 0.14));
+  border-left-width: 4px;
+  background: color-mix(
+    in srgb,
+    var(--rf-bucket-accent, #888) 14%,
+    rgba(var(--v-theme-dark-surface), 0.6)
+  );
+}
+.rf-bucket-icon {
+  color: var(--rf-bucket-accent, currentColor);
+  flex-shrink: 0;
+}
+.rf-bucket-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.rf-bucket-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+.rf-bucket-meaning {
+  font-size: 0.615rem;
+  color: rgba(var(--v-theme-on-dark-surface), 0.72);
+}
+.rf-bucket-count {
+  flex-shrink: 0;
+  font-size: 0.555rem;
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.rf-bucket--neither {
+  --rf-bucket-accent: rgb(var(--v-theme-error));
+}
+.rf-bucket--both {
+  --rf-bucket-accent: rgb(var(--v-theme-success));
+}
+.rf-bucket--leftonly {
+  --rf-bucket-accent: rgb(var(--v-theme-tertiary));
+}
+.rf-bucket--rightonly {
+  --rf-bucket-accent: rgb(var(--v-theme-warning));
+}
+
 .rf-question {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  font-size: 1.5rem;
+  font-size: 1.125rem;
   font-weight: 700;
   text-align: center;
 }
 .rf-question-sub {
-  font-size: 0.9rem;
+  font-size: 0.675rem;
   font-weight: 400;
   color: #9aa0a6;
 }
@@ -1508,7 +1906,7 @@ onUnmounted(() => {
   font-weight: 600;
 }
 .rf-chip {
-  font-size: 0.78rem;
+  font-size: 0.585rem;
   padding: 2px 8px;
   border-radius: 999px;
   white-space: nowrap;
@@ -1521,15 +1919,70 @@ onUnmounted(() => {
   background: rgba(129, 201, 149, 0.16);
   color: #9ad6ab;
 }
+/* Image area wraps the <img> so the magnifier button and selection check can
+   be positioned over it. Takes the flex space the <img> used to. */
+.rf-img-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
 .rf-img {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   max-width: 100%;
   object-fit: contain;
   object-position: center;
   border-radius: 8px;
   background: #0c0d10;
+  /* Click selects now; the magnifier button / scroll wheel zoom. */
+  cursor: pointer;
+}
+.rf-zoom-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: rgba(12, 13, 16, 0.66);
+  color: #e6e8ee;
   cursor: zoom-in;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.rf-img-wrap:hover .rf-zoom-btn {
+  opacity: 1;
+}
+.rf-zoom-btn:hover {
+  background: rgba(12, 13, 16, 0.9);
+}
+/* Selection check, shown only when the pane is selected. */
+.rf-pane-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 24px;
+  height: 24px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+.rf-pane--selected .rf-pane-check {
+  display: inline-flex;
+}
+.rf-pane--selected .rf-img {
+  outline: 3px solid rgb(var(--v-theme-primary));
+  outline-offset: -3px;
 }
 .rf-pane-foot {
   display: flex;
@@ -1537,7 +1990,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 10px;
   color: #80868b;
-  font-size: 0.78rem;
+  font-size: 0.585rem;
 }
 .rf-pane-conf {
   color: #9aa0a6;
@@ -1552,7 +2005,7 @@ onUnmounted(() => {
   border-radius: 6px;
   padding: 3px 10px;
   cursor: pointer;
-  font-size: 0.78rem;
+  font-size: 0.585rem;
 }
 .rf-twin-fix:hover {
   background: #2c2f37;
@@ -1577,7 +2030,7 @@ onUnmounted(() => {
   border: 1px solid #34373f;
   border-radius: 8px;
   padding: 10px 18px;
-  font-size: 0.95rem;
+  font-size: 0.7125rem;
   font-weight: 600;
   cursor: pointer;
   background: #23252c;
@@ -1587,7 +2040,7 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.12);
   border-radius: 4px;
   padding: 1px 6px;
-  font-size: 0.8rem;
+  font-size: 0.6rem;
 }
 .rf-action--remove {
   background: #b3261e;
@@ -1657,7 +2110,7 @@ onUnmounted(() => {
 .rf-actions-label {
   align-self: center;
   color: #9aa0a6;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
   margin-right: 2px;
 }
 .rf-pane--flagged .rf-img {
@@ -1667,7 +2120,7 @@ onUnmounted(() => {
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.55);
 }
 .rf-rec-pip {
-  font-size: 0.68rem;
+  font-size: 0.51rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1696,7 +2149,7 @@ onUnmounted(() => {
 }
 .rf-confirm-msg {
   color: #f1d9ac;
-  font-size: 0.9rem;
+  font-size: 0.675rem;
 }
 .rf-confirm-actions {
   display: inline-flex;
@@ -1711,7 +2164,7 @@ onUnmounted(() => {
   border: 1px solid #34373f;
   border-radius: 6px;
   padding: 5px 12px;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -1730,20 +2183,20 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.14);
   border-radius: 4px;
   padding: 1px 5px;
-  font-size: 0.75rem;
+  font-size: 0.5625rem;
 }
 
 /* Passive per-pane consistency chip: subtle, muted, only rendered when there is a prior
    vote for that picture, to nudge consistency before a conflict even happens. */
 .rf-vote-hint {
   color: #c9a45c;
-  font-size: 0.74rem;
+  font-size: 0.555rem;
   font-style: italic;
 }
 
 .rf-hint {
   color: #80868b;
-  font-size: 0.82rem;
+  font-size: 0.615rem;
 }
 .rf-hint kbd {
   background: #23252c;
@@ -1787,7 +2240,7 @@ onUnmounted(() => {
 .rf-preview-sub {
   display: block;
   font-weight: 400;
-  font-size: 0.82rem;
+  font-size: 0.615rem;
   color: #9aa0a6;
 }
 .rf-preview-x {
@@ -1838,7 +2291,7 @@ onUnmounted(() => {
   margin-top: 6px;
   text-align: center;
   font-weight: 600;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
   color: #cdd0d6;
 }
 .rf-preview-foot {
@@ -1851,7 +2304,7 @@ onUnmounted(() => {
 .rf-preview-note {
   margin-right: auto;
   color: #9aa0a6;
-  font-size: 0.85rem;
+  font-size: 0.6375rem;
 }
 .rf-bulk-preview {
   background: #23252c;
@@ -1908,7 +2361,7 @@ onUnmounted(() => {
   border-radius: 999px;
   padding: 4px 14px;
   color: #cdd0d6;
-  font-size: 0.82rem;
+  font-size: 0.615rem;
   white-space: nowrap;
   transition: opacity 0.3s ease;
 }

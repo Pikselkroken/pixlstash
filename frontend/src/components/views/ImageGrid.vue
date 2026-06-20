@@ -841,6 +841,7 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
@@ -2530,6 +2531,10 @@ const visibleRangeLabel = computed(() => {
 });
 
 const userPrefsStore = useUserPrefsStore();
+const reviewFixesStore = useReviewFixesStore();
+// True while the modal review-fixes overlay is up. Grid keyboard shortcuts and
+// drag-and-drop are suppressed so they don't act on the grid behind it.
+const reviewOverlayOpen = computed(() => reviewFixesStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
 // The trail logic lives in useBreadcrumb, shared with the desktop title bar.
@@ -3921,6 +3926,7 @@ const {
     thumbnailRefs,
     dragPreviewRefs,
     prefetchFullImage,
+    reviewOverlayOpen,
   },
   props,
 );
@@ -4143,6 +4149,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     rowHeight,
     visibleStart,
     overlayOpen,
+    reviewOverlayOpen,
     showSelectionBar,
     selectedImageIds,
     lastSelectedImageId,
