@@ -89,6 +89,7 @@ def list_suggestions(
     limit: int = 100,
     offset: int = 0,
     picture_ids: set[int] | None = None,
+    source: str | None = None,
 ) -> list[TagSuggestion]:
     """Return ranked suggestions, highest score first (review-soonest first).
 
@@ -103,6 +104,8 @@ def list_suggestions(
             ``None`` only suggestions whose ``picture_id`` is in the set are
             returned (the suspect, never the twin). An empty set yields no rows.
             When ``None`` the picture scope is unrestricted (today's behaviour).
+        source: Optional exact ``source`` filter (e.g. ``"near_neighbor"`` or
+            ``"impossible_tag"``), so the two review tabs stay isolated.
 
     Returns:
         List of TagSuggestion instances ordered by score descending, then twin_sim.
@@ -116,6 +119,8 @@ def list_suggestions(
             q = q.where(TagSuggestion.tag == tag)
         if direction:
             q = q.where(TagSuggestion.direction == direction)
+        if source:
+            q = q.where(TagSuggestion.source == source)
         if picture_ids is not None:
             q = q.where(TagSuggestion.picture_id.in_(picture_ids))
         q = (
@@ -223,6 +228,7 @@ def summary_by_tag(
     vault: "Vault",
     status: str = "PENDING",
     picture_ids: set[int] | None = None,
+    source: str | None = None,
 ) -> list[dict]:
     """Return per-tag counts of suggestions, for the queue's tag picker and progress.
 
@@ -233,6 +239,8 @@ def summary_by_tag(
             ``None`` only suggestions whose ``picture_id`` is in the set are
             counted (the suspect, never the twin). An empty set yields no counts.
             When ``None`` the picture scope is unrestricted (today's behaviour).
+        source: Optional exact ``source`` filter (e.g. ``"near_neighbor"`` or
+            ``"impossible_tag"``), so the two review tabs stay isolated.
 
     Returns:
         List of ``{"tag", "add", "remove", "total"}`` dicts, busiest tag first.
@@ -248,6 +256,8 @@ def summary_by_tag(
             .where(TagSuggestion.status == status.upper())
             .group_by(TagSuggestion.tag, TagSuggestion.direction)
         )
+        if source:
+            q = q.where(TagSuggestion.source == source)
         if picture_ids is not None:
             q = q.where(TagSuggestion.picture_id.in_(picture_ids))
         rows = session.exec(q).all()
