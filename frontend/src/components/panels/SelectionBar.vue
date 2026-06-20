@@ -55,6 +55,11 @@
                 label-class="plugin-menu-label"
               />
 
+              <label class="plugin-menu-checkbox-row">
+                <input v-model="stackFilterOutputs" type="checkbox" />
+                <span>Stack new images with the originals</span>
+              </label>
+
               <div class="plugin-menu-actions">
                 <button
                   class="stack-btn"
@@ -128,6 +133,11 @@
                       @keydown.stop
                     ></textarea>
                   </template>
+
+                  <label class="plugin-menu-checkbox-row">
+                    <input v-model="stackI2IOutputs" type="checkbox" />
+                    <span>Stack new images with the originals</span>
+                  </label>
 
                   <div class="plugin-menu-actions">
                     <button
@@ -284,6 +294,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
@@ -390,9 +401,10 @@ function handleSelectionMenuHotkey(event) {
 }
 
 onMounted(() => window.addEventListener("keydown", handleSelectionMenuHotkey));
-onUnmounted(() =>
-  window.removeEventListener("keydown", handleSelectionMenuHotkey),
-);
+onUnmounted(() => {
+  window.removeEventListener("keydown", handleSelectionMenuHotkey);
+  clearComfyuiCloseTimer();
+});
 
 watch(selectionMenuOpen, (open) => emit("selection-menu-open", open));
 
@@ -406,6 +418,26 @@ const comfyuiCaption = ref("");
 const comfyuiRunLoading = ref(false);
 const comfyuiRunError = ref("");
 const comfyuiRunSuccess = ref("");
+
+// Remembered "stack outputs with originals" prefs (persisted in localStorage).
+const genStackPrefs = useGenStackPrefsStore();
+const stackI2IOutputs = computed({
+  get: () => genStackPrefs.stackI2IOutputs,
+  set: (val) => genStackPrefs.setStackI2IOutputs(val),
+});
+const stackFilterOutputs = computed({
+  get: () => genStackPrefs.stackFilterOutputs,
+  set: (val) => genStackPrefs.setStackFilterOutputs(val),
+});
+
+// Auto-close timer for the I2I menu after a successful queue.
+let comfyuiCloseTimer = null;
+function clearComfyuiCloseTimer() {
+  if (comfyuiCloseTimer !== null) {
+    clearTimeout(comfyuiCloseTimer);
+    comfyuiCloseTimer = null;
+  }
+}
 
 const activePluginSchema = computed(() => {
   if (!selectedPluginName.value) return null;
@@ -509,6 +541,8 @@ const canRunComfyWorkflow = computed(() => {
 
 watch(comfyuiMenuOpen, async (isOpen) => {
   if (!isOpen) return;
+  // A freshly-opened menu must never inherit a pending close from a prior run.
+  clearComfyuiCloseTimer();
   comfyuiRunError.value = "";
   comfyuiRunSuccess.value = "";
   await fetchComfyWorkflows();
@@ -552,6 +586,7 @@ async function runSelectedComfyWorkflow() {
       workflow_name: comfyuiSelectedWorkflow.value,
       caption: comfyuiCaption.value || "",
       client_id: props.comfyuiClientId || undefined,
+      stack: stackI2IOutputs.value,
     };
     const res = await apiClient.post(
       `${props.backendUrl}/comfyui/run_i2i`,
@@ -566,6 +601,12 @@ async function runSelectedComfyWorkflow() {
     comfyuiRunSuccess.value = prompts.length
       ? `Queued ${prompts.length} run(s) in ComfyUI.`
       : "Queued in ComfyUI.";
+    // Show the success message briefly, then close the menu.
+    clearComfyuiCloseTimer();
+    comfyuiCloseTimer = setTimeout(() => {
+      comfyuiCloseTimer = null;
+      comfyuiMenuOpen.value = false;
+    }, 1200);
   } catch (err) {
     comfyuiRunError.value =
       err?.response?.data?.detail || err?.message || String(err);
@@ -580,6 +621,7 @@ function runSelectedPlugin() {
     pluginName: selectedPluginName.value,
     pictureIds: props.selectedImageIds,
     parameters: pluginParameters.value || {},
+    stack: stackFilterOutputs.value,
   });
   pluginMenuOpen.value = false;
 }
@@ -848,6 +890,19 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   letter-spacing: 0.04em;
   margin-bottom: 4px;
   opacity: 0.9;
+}
+
+.plugin-menu-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.plugin-menu-checkbox-row input {
+  cursor: pointer;
 }
 
 .plugin-menu-actions {

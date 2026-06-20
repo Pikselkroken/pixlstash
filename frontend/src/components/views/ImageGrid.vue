@@ -1281,6 +1281,9 @@ function handlePluginRunRequest(payload) {
       ? payload.parameters
       : {};
   if (!pluginName || !pictureIds.length) return;
+  // Stack the derived outputs with their originals unless the caller opted out.
+  // Default true keeps the historical behaviour for any other run-plugin source.
+  const stack = payload?.stack !== false;
   // Build per-image captions from stored descriptions in the grid.
   const idSet = new Set(pictureIds);
   const idToDesc = new Map();
@@ -1289,7 +1292,7 @@ function handlePluginRunRequest(payload) {
     if (idSet.has(id)) idToDesc.set(id, img.description || "");
   }
   const captions = pictureIds.map((id) => idToDesc.get(id) ?? "");
-  runPluginWithParameters(pluginName, pictureIds, parameters, captions);
+  runPluginWithParameters(pluginName, pictureIds, parameters, captions, stack);
 }
 
 async function runPluginWithParameters(
@@ -1297,6 +1300,7 @@ async function runPluginWithParameters(
   pictureIds,
   parameters,
   captions,
+  stack = true,
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
@@ -1306,6 +1310,7 @@ async function runPluginWithParameters(
         picture_ids: pictureIds,
         parameters: parameters || {},
         captions: Array.isArray(captions) ? captions : undefined,
+        stack,
       },
     );
     const createdIds = Array.isArray(res.data?.created_picture_ids)
