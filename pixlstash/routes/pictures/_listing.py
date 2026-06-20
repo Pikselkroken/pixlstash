@@ -372,6 +372,11 @@ def select_pictures_for_listing(
             face_filter_param = request.query_params.get("face_filter")
             if face_filter_param in ("with_face", "without_face"):
                 query_params["face_filter"] = face_filter_param
+            impossible_sources_param = request.query_params.getlist(
+                "impossible_tag_source"
+            )
+            if impossible_sources_param:
+                query_params["impossible_sources"] = impossible_sources_param
             shared_only_param = request.query_params.get("shared_only")
             if shared_only_param == "true":
                 query_params["shared_only"] = True
@@ -431,6 +436,7 @@ def select_pictures_for_listing(
     project_id_raw = query_params.pop("project_id", None)
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
     face_filter = query_params.pop("face_filter", None)
+    impossible_sources = query_params.pop("impossible_sources", None)
     shared_only = bool(query_params.pop("shared_only", False))
     query_params.pop(
         "guest_session_id", None
@@ -582,6 +588,7 @@ def select_pictures_for_listing(
         comfyui_models_filter_value: list[str] | None = None,
         comfyui_loras_filter_value: list[str] | None = None,
         face_filter_value: str | None = None,
+        impossible_sources_value: list[str] | None = None,
     ):
         if deleted_only:
             query = select(Picture.id).where(
@@ -625,6 +632,7 @@ def select_pictures_for_listing(
                 and not comfyui_models_filter_value
                 and not comfyui_loras_filter_value
                 and not face_filter_value
+                and not impossible_sources_value
             ):
                 return None
             query = select(Picture.id).where(
@@ -672,6 +680,7 @@ def select_pictures_for_listing(
             comfyui_models_filter=comfyui_models_filter_value,
             comfyui_loras_filter=comfyui_loras_filter_value,
             face_filter=face_filter_value,
+            impossible_sources=impossible_sources_value,
             apply_deleted_filter=False,
         ).apply(query)
 
@@ -707,6 +716,7 @@ def select_pictures_for_listing(
             comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
             face_filter_value=face_filter,
+            impossible_sources_value=impossible_sources,
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
@@ -790,6 +800,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                impossible_sources=impossible_sources,
                 tags_filter=query_params.get("tags_filter") or None,
                 tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
                 tags_confidence_above_filter=query_params.get(
@@ -833,6 +844,7 @@ def select_pictures_for_listing(
             or None,
             hidden_tags_filter=hidden_tags,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
                 if query_params.get("id")
@@ -856,6 +868,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 guest_session_id=guest_session_id,
                 guest_token_id=guest_token_id,
@@ -876,6 +889,7 @@ def select_pictures_for_listing(
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,
@@ -1093,6 +1107,7 @@ def select_pictures_for_listing(
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
                 face_filter=face_filter,
+                impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 **query_params,
             )
@@ -1111,6 +1126,7 @@ def select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,
