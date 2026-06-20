@@ -285,7 +285,60 @@
             </div>
           </div>
 
-          <!-- Path display (edit mode) -->
+          <!-- Reference path input (edit mode, non-Docker) -->
+          <div
+            v-else-if="isEditMode && !isImport && !props.inDocker"
+            class="editor-path-row"
+          >
+            <v-text-field
+              ref="pathInputRef"
+              v-model="localPath"
+              label="Folder path *"
+              placeholder="/path/to/folder"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+            <v-btn
+              variant="outlined"
+              size="small"
+              icon
+              class="editor-browse-btn"
+              title="Browse for folder"
+              @click="browseOpen = true"
+            >
+              <v-icon size="18">mdi-folder-open-outline</v-icon>
+            </v-btn>
+          </div>
+
+          <!-- Reference path inputs (edit mode, Docker) -->
+          <div
+            v-else-if="isEditMode && !isImport && props.inDocker"
+            class="editor-docker-helper"
+          >
+            <v-text-field
+              ref="pathInputRef"
+              v-model="localHostPath"
+              label="Local folder (host path)"
+              placeholder="/home/you/Pictures"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+            <v-text-field
+              v-model="localPath"
+              label="Container path"
+              placeholder="/data/ref/pictures-001"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+          </div>
+
+          <!-- Path display (edit mode for import folders) -->
           <div v-else class="editor-path-display">
             <v-icon size="16" class="editor-path-icon">{{
               isImport ? "mdi-folder-import" : "mdi-folder-network-outline"
@@ -676,7 +729,16 @@ const activeFolder = computed(() => props.folder ?? frozenEditFolder.value);
 const isEditMode = computed(() => Boolean(activeFolder.value));
 
 const isValid = computed(() => {
-  if (isEditMode.value) return true;
+  if (isEditMode.value) {
+    if (!isImport.value && props.inDocker) {
+      return (
+        localPath.value.trim().length > 0 &&
+        localHostPath.value.trim().length > 0
+      );
+    }
+    if (!isImport.value) return localPath.value.trim().length > 0;
+    return true;
+  }
   if (props.inDocker) return localHostPath.value.trim().length > 0;
   return localPath.value.trim().length > 0;
 });
@@ -958,6 +1020,7 @@ watch(
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       localLabel.value = editingFolder.label || "";
+      localPath.value = editingFolder.folder || "";
       localHostPath.value = String(editingFolder.host_path || "");
       localDeleteAfterImport.value = Boolean(editingFolder.delete_after_import);
       localSyncDescriptions.value = Boolean(editingFolder.sync_descriptions);
@@ -1117,6 +1180,13 @@ async function save() {
       if (isImport.value) {
         patchData.delete_after_import = localDeleteAfterImport.value;
       } else {
+        const editedPath = localPath.value.trim();
+        if (editedPath && editedPath !== editingFolder.folder) {
+          patchData.folder = editedPath;
+        }
+        if (props.inDocker) {
+          patchData.host_path = localHostPath.value.trim() || null;
+        }
         patchData.allow_delete_file = localAllowDelete.value;
         patchData.sync_descriptions = localSyncDescriptions.value;
         patchData.sync_tags = localSyncTags.value;
