@@ -14,6 +14,47 @@
             class="browse-hidden-toggle"
           />
         </div>
+        <div v-if="allowCreateFolder" class="browse-create-bar">
+          <template v-if="creatingFolder">
+            <v-text-field
+              ref="createFolderInputRef"
+              v-model="newFolderName"
+              label="New folder name"
+              density="compact"
+              variant="filled"
+              hide-details
+              :error="Boolean(createFolderError)"
+              @keydown.enter="createFolder"
+              @keydown.esc="cancelCreateFolder"
+            />
+            <v-btn
+              size="small"
+              variant="flat"
+              color="primary"
+              :loading="createFolderLoading"
+              :disabled="!newFolderName.trim()"
+              @click="createFolder"
+            >
+              Create
+            </v-btn>
+            <v-btn size="small" variant="text" @click="cancelCreateFolder">
+              Cancel
+            </v-btn>
+          </template>
+          <v-btn
+            v-else
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-folder-plus-outline"
+            :disabled="!browsePath"
+            @click="startCreateFolder"
+          >
+            New folder
+          </v-btn>
+        </div>
+        <div v-if="createFolderError" class="browse-create-error">
+          {{ createFolderError }}
+        </div>
         <div class="browse-entries">
           <div v-if="browseLoading" class="browse-loading">
             <v-progress-circular indeterminate size="24" />
@@ -77,6 +118,8 @@ const props = defineProps({
   registeredPaths: { type: Array, default: () => [] },
   imageRoot: { type: String, default: null },
   alreadyRegisteredLabel: { type: String, default: "Already registered" },
+  initialPath: { type: String, default: null },
+  allowCreateFolder: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["select", "close"]);
@@ -86,21 +129,51 @@ const browseEntries = ref([]);
 const browseLoading = ref(false);
 const browseError = ref("");
 const browseShowHidden = ref(false);
+const creatingFolder = ref(false);
+const newFolderName = ref("");
+const createFolderLoading = ref(false);
+const createFolderError = ref("");
+const createFolderInputRef = ref(null);
 
 const selectedName = computed(() => {
   if (!browsePath.value) return "";
-  const parts = browsePath.value.replace(/\/$/, "").split("/");
+  const parts = browsePath.value.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || "/";
 });
 
+function pathSeparator(path) {
+  return String(path || "").includes("\\") ? "\\" : "/";
+}
+
+function parentPath(path) {
+  const raw = String(path || "");
+  if (!raw || raw === "/") return "/";
+  const trimmed = raw.replace(/[\\/]+$/, "");
+  if (/^[A-Za-z]:$/.test(trimmed)) return `${trimmed}\\`;
+  const match = trimmed.match(/^(.*)[\\/][^\\/]+$/);
+  if (!match) return "/";
+  const parent = match[1];
+  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return parent || "/";
+}
+
+function joinChildPath(parent, child) {
+  const sep = pathSeparator(parent);
+  const base = String(parent || "").replace(/[\\/]+$/, "");
+  if (!base) return `${sep}${child}`;
+  if (/^[A-Za-z]:$/.test(base)) return `${base}\\${child}`;
+  return `${base}${sep}${child}`;
+}
+
 function entryDisabledReason(entryPath) {
-  const norm = entryPath.replace(/\/$/, "");
+  const norm = entryPath.replace(/[\\/]+$/, "");
   if (props.imageRoot) {
-    const root = props.imageRoot.replace(/\/$/, "");
+    const root = props.imageRoot.replace(/[\\/]+$/, "");
     if (norm === root) return "PixlStash data folder";
   }
   for (const registered of props.registeredPaths) {
-    if (norm === registered.replace(/\/$/, "")) return props.alreadyRegisteredLabel;
+    if (norm === registered.replace(/[\\/]+$/, ""))
+      return props.alreadyRegisteredLabel;
   }
   return null;
 }
@@ -135,7 +208,10 @@ watch(
     browseEntries.value = [];
     browsePath.value = "";
     browseShowHidden.value = false;
-    browseDir(null);
+    creatingFolder.value = false;
+    newFolderName.value = "";
+    createFolderError.value = "";
+    browseDir(props.initialPath || null);
   },
 );
 
@@ -147,15 +223,53 @@ function entryClick(entry) {
 
 function browseUp() {
   if (!browsePath.value || browsePath.value === "/") return;
-  const parent =
-    browsePath.value.replace(/\/$/, "").split("/").slice(0, -1).join("/") || "/";
-  browseDir(parent);
+  browseDir(parentPath(browsePath.value));
 }
 
 function selectPath() {
   if (!browsePath.value) return;
   emit("select", browsePath.value);
   emit("close");
+}
+
+function startCreateFolder() {
+  creatingFolder.value = true;
+  newFolderName.value = "";
+  createFolderError.value = "";
+  requestAnimationFrame(() => {
+    createFolderInputRef.value?.$el?.querySelector("input")?.focus();
+  });
+}
+
+function cancelCreateFolder() {
+  creatingFolder.value = false;
+  newFolderName.value = "";
+  createFolderError.value = "";
+}
+
+async function createFolder() {
+  const name = newFolderName.value.trim();
+  if (!name) return;
+  if (name === "." || name === ".." || /[\\/]/.test(name)) {
+    createFolderError.value = "Use a plain folder name.";
+    return;
+  }
+  createFolderLoading.value = true;
+  createFolderError.value = "";
+  try {
+    const target = joinChildPath(browsePath.value, name);
+    const { data } = await apiClient.post("/filesystem/folders", {
+      path: target,
+    });
+    creatingFolder.value = false;
+    newFolderName.value = "";
+    await browseDir(data?.path || target);
+  } catch (error) {
+    createFolderError.value =
+      error?.response?.data?.detail || "Could not create folder.";
+  } finally {
+    createFolderLoading.value = false;
+  }
 }
 </script>
 
@@ -191,6 +305,24 @@ function selectPath() {
 .browse-hidden-toggle {
   flex-shrink: 0;
   font-size: var(--text-xs);
+}
+
+.browse-create-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.16);
+}
+
+.browse-create-bar .v-text-field {
+  flex: 1;
+}
+
+.browse-create-error {
+  color: rgb(var(--v-theme-error));
+  padding: 6px 16px 0;
+  font-size: 0.8rem;
 }
 
 .browse-entries {

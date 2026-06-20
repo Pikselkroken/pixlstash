@@ -1591,7 +1591,13 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   }
 }
 
-function handleImagesMovedToSet({ imageIds }) {
+function handleImagesMoved({ imageIds, kind, refresh }) {
+  if (kind === "reference-folder" || refresh) {
+    wsStore.clearSortChangedExternalIds();
+    gridStore.refreshGridVersion();
+    refreshSidebar();
+    return;
+  }
   if (
     selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID ||
     selectionStore.selectedSet
@@ -2079,7 +2085,7 @@ defineExpose({
             @select-folder="handleSelectFolder"
             @update:folder-scanning="folderScanning = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
-            @images-moved="handleImagesMovedToSet"
+            @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"

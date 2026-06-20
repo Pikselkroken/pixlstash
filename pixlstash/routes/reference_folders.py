@@ -34,6 +34,7 @@ from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_accessible,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.service.path_utils import resolve_path_within
 from sqlmodel import Session, delete, select
 
 logger = get_logger(__name__)
@@ -113,6 +114,20 @@ class MoveReferencePicturesResponse(BaseModel):
     failures: list[dict] = Field(default_factory=list)
 
 
+class RelocateReferenceFolderRequest(BaseModel):
+    destination_folder: str
+
+
+class RelocateReferenceFolderResponse(BaseModel):
+    status: str
+    id: int
+    old_folder: str
+    new_folder: str
+    moved_entry_count: int
+    rewritten_count: int
+    moved_picture_ids: list[int]
+
+
 class ReferenceFolderMetadataRequest(BaseModel):
     scope_path: Optional[str] = None
     types: list[str]
@@ -177,6 +192,14 @@ def create_router(server) -> APIRouter:
     # -------------------------------------------------------------------------
     # Helper
     # -------------------------------------------------------------------------
+
+    def _require_owner_request(request: Request) -> None:
+        server.auth.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="This folder operation is only available to the owner.",
+            )
 
     def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -319,7 +342,13 @@ def create_router(server) -> APIRouter:
         counter = 0
         while True:
             candidate_name = base_name if counter == 0 else f"{stem}_{counter}{ext}"
-            candidate = os.path.join(destination_dir, candidate_name)
+            try:
+                candidate = resolve_path_within(destination_dir, candidate_name)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Destination path would escape the reference folder.",
+                )
             candidate_stem = os.path.splitext(candidate)[0]
             collisions = [candidate]
             collisions.extend(candidate_stem + suffix for suffix in sidecar_suffixes)
@@ -333,7 +362,79 @@ def create_router(server) -> APIRouter:
         if not _is_within_path(path, old_root):
             return path, False
         rel = os.path.relpath(os.path.realpath(os.path.normpath(path)), old_root)
-        return os.path.normpath(os.path.join(new_root, rel)), True
+        try:
+            return resolve_path_within(new_root, rel), True
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Rewritten path would escape the reference folder.",
+            )
+
+    def _validate_relocation_destination(
+        session: Session,
+        folder_id: int,
+        old_root: str,
+        destination_folder: str,
+    ) -> str:
+        if server.running_in_docker():
+            raise HTTPException(
+                status_code=400,
+                detail="Reference folder relocation is not available in Docker mode.",
+            )
+        new_root = os.path.realpath(os.path.normpath(destination_folder))
+        error = validate_reference_folder_path(new_root)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        if new_root == old_root:
+            raise HTTPException(
+                status_code=400,
+                detail="Choose a different destination folder.",
+            )
+        if _is_within_path(new_root, old_root) or _is_within_path(old_root, new_root):
+            raise HTTPException(
+                status_code=409,
+                detail="Destination folder must not be inside or contain the current reference folder.",
+            )
+        _validate_reference_folder_conflicts(session, new_root, exclude_id=folder_id)
+        return new_root
+
+    def _rewrite_reference_folder_picture_paths(
+        session: Session,
+        folder_id: int,
+        old_root: str,
+        new_root: str,
+    ) -> tuple[int, list[int]]:
+        pictures = session.exec(
+            select(Picture).where(Picture.reference_folder_id == folder_id)
+        ).all()
+        rewritten = 0
+        moved_picture_ids: list[int] = []
+        for pic in pictures:
+            path_rewritten = False
+            new_path, path_rewritten = _rewrite_path_under_root(
+                pic.file_path, old_root, new_root
+            )
+            new_tags, tags_rewritten = _rewrite_path_under_root(
+                pic.tags_file, old_root, new_root
+            )
+            new_description, description_rewritten = _rewrite_path_under_root(
+                pic.description_file, old_root, new_root
+            )
+            if path_rewritten:
+                pic.file_path = new_path
+                pic.original_file_name = os.path.basename(new_path)
+                rewritten += 1
+                if pic.id is not None:
+                    moved_picture_ids.append(pic.id)
+            if tags_rewritten:
+                pic.tags_file = new_tags
+                pic.tags_file_mtime = get_sidecar_mtime(new_tags)
+            if description_rewritten:
+                pic.description_file = new_description
+                pic.description_file_mtime = get_sidecar_mtime(new_description)
+            if path_rewritten or tags_rewritten or description_rewritten:
+                session.add(pic)
+        return rewritten, moved_picture_ids
 
     def _metadata_types(types: list[str]) -> set[str]:
         allowed = {SIDECAR_TYPE_TAGS, SIDECAR_TYPE_DESCRIPTION, "descriptions"}
@@ -418,7 +519,7 @@ def create_router(server) -> APIRouter:
         tags=["folders"],
     )
     def detect_reference_folder_sidecars(request: Request, path: str):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
         folder = os.path.normpath(path)
         error = validate_reference_folder_path(folder)
         if error:
@@ -450,7 +551,7 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderCreateRequest = Body(...),
     ):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
 
         folder = os.path.normpath(payload.folder)
         host_path = _normalize_optional_host_path(payload.host_path)
@@ -532,7 +633,7 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderUpdateRequest = Body(...),
     ):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
 
         def update(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -690,6 +791,184 @@ def create_router(server) -> APIRouter:
         return _to_response(rf)
 
     @router.post(
+        "/reference-folders/{folder_id}/relocate",
+        summary="Relocate a reference folder",
+        description=(
+            "Moves the contents of a reference folder to a different empty "
+            "folder and rewrites the existing Picture paths in place. Native "
+            "installs only."
+        ),
+        response_model=RelocateReferenceFolderResponse,
+        tags=["folders"],
+    )
+    def relocate_reference_folder(
+        folder_id: int,
+        request: Request,
+        payload: RelocateReferenceFolderRequest = Body(...),
+    ):
+        _require_owner_request(request)
+
+        def fetch_and_validate(session: Session):
+            rf = session.get(ReferenceFolder, folder_id)
+            if rf is None:
+                raise HTTPException(
+                    status_code=404, detail="Reference folder not found."
+                )
+            old_root = os.path.realpath(os.path.normpath(rf.folder))
+            new_root = _validate_relocation_destination(
+                session,
+                folder_id,
+                old_root,
+                payload.destination_folder,
+            )
+            picture_ids = [
+                pic_id
+                for pic_id in session.exec(
+                    select(Picture.id).where(Picture.reference_folder_id == folder_id)
+                ).all()
+                if pic_id is not None
+            ]
+            return old_root, new_root, picture_ids
+
+        old_root, new_root, picture_ids = server.vault.db.run_task(
+            fetch_and_validate, priority=DBPriority.IMMEDIATE
+        )
+
+        if not os.path.isdir(old_root):
+            raise HTTPException(
+                status_code=404,
+                detail="Current reference folder was not found on disk.",
+            )
+
+        destination_existed = os.path.exists(new_root)
+        if destination_existed:
+            if not os.path.isdir(new_root):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Destination exists but is not a folder.",
+                )
+            if os.listdir(new_root):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Destination folder must be empty.",
+                )
+        else:
+            try:
+                os.makedirs(new_root, exist_ok=False)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Could not create destination folder: {exc}",
+                )
+
+        rollback_moves: list[tuple[str, str]] = []
+        moved_entry_count = 0
+        try:
+            for name in os.listdir(old_root):
+                try:
+                    source = resolve_path_within(old_root, name)
+                    destination = resolve_path_within(new_root, name)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Relocation path would escape the reference folder.",
+                    )
+                if os.path.exists(destination):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Destination already contains: {name}",
+                    )
+                shutil.move(source, destination)
+                rollback_moves.append((destination, source))
+                moved_entry_count += 1
+
+            def apply_relocation(session: Session):
+                rf = session.get(ReferenceFolder, folder_id)
+                if rf is None:
+                    raise HTTPException(
+                        status_code=404, detail="Reference folder not found."
+                    )
+                rewritten, moved_ids = _rewrite_reference_folder_picture_paths(
+                    session,
+                    folder_id,
+                    old_root,
+                    new_root,
+                )
+                rf.folder = new_root
+                rf.status = ReferenceFolderStatus.ACTIVE
+                rf.last_scanned = None
+                session.add(rf)
+                session.commit()
+                return rewritten, moved_ids
+
+            rewritten_count, moved_picture_ids = server.vault.db.run_task(
+                apply_relocation, priority=DBPriority.IMMEDIATE
+            )
+        except HTTPException:
+            for destination, source in reversed(rollback_moves):
+                if os.path.exists(destination):
+                    try:
+                        shutil.move(destination, source)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to roll back relocation move %s: %s",
+                            destination,
+                            exc,
+                        )
+            if not destination_existed and os.path.isdir(new_root):
+                try:
+                    os.rmdir(new_root)
+                except OSError:
+                    pass
+            raise
+        except Exception as exc:
+            for destination, source in reversed(rollback_moves):
+                if os.path.exists(destination):
+                    try:
+                        shutil.move(destination, source)
+                    except Exception as rollback_exc:
+                        logger.warning(
+                            "Failed to roll back relocation move %s: %s",
+                            destination,
+                            rollback_exc,
+                        )
+            if not destination_existed and os.path.isdir(new_root):
+                try:
+                    os.rmdir(new_root)
+                except OSError:
+                    pass
+            raise HTTPException(status_code=500, detail=f"Relocation failed: {exc}")
+
+        try:
+            os.rmdir(old_root)
+        except OSError:
+            pass
+
+        server.vault.unwatch_reference_folder(folder_id)
+        server.vault.watch_reference_folder(folder_id, new_root)
+        from pixlstash.event_types import EventType
+
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": moved_picture_ids or picture_ids,
+                "change_kind": "updated",
+                "fields": ["file_path", "reference_folder_id"],
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+            },
+        )
+        return RelocateReferenceFolderResponse(
+            status="success",
+            id=folder_id,
+            old_folder=old_root,
+            new_folder=new_root,
+            moved_entry_count=moved_entry_count,
+            rewritten_count=rewritten_count,
+            moved_picture_ids=moved_picture_ids,
+        )
+
+    @router.post(
         "/reference-folders/{folder_id}/move-pictures",
         summary="Move reference-folder pictures",
         description=(
@@ -705,7 +984,7 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: MoveReferencePicturesRequest = Body(...),
     ):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
         if not payload.picture_ids:
             raise HTTPException(
                 status_code=400, detail="picture_ids must be a non-empty list."
@@ -936,7 +1215,13 @@ def create_router(server) -> APIRouter:
 
         server.vault.notify(
             EventType.CHANGED_PICTURES,
-            {"picture_ids": moved_ids, "change_kind": "updated"},
+            {
+                "picture_ids": moved_ids,
+                "change_kind": "updated",
+                "fields": ["file_path", "reference_folder_id"],
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+            },
         )
         return MoveReferencePicturesResponse(
             status="success",
@@ -957,7 +1242,7 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderMetadataRequest = Body(...),
     ):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
         requested_types = _metadata_types(payload.types)
 
         def export_metadata(session: Session):
@@ -1045,7 +1330,7 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderMetadataRequest = Body(...),
     ):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
         requested_types = _metadata_types(payload.types)
 
         def import_metadata(session: Session):
@@ -1135,7 +1420,7 @@ def create_router(server) -> APIRouter:
         response_model=ReferenceFolderDeleteResponse,
     )
     def delete_reference_folder(folder_id: int, request: Request):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
 
         def remove(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -1205,7 +1490,7 @@ def create_router(server) -> APIRouter:
         response_model=ServerRestartResponse,
     )
     def restart_server(request: Request):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
         logger.info("Server restart requested via API.")
         # Re-exec this process with the same arguments.
         # Use os.execve to carry forward PYTHONPATH so the pixlstash package
@@ -1234,7 +1519,7 @@ def create_router(server) -> APIRouter:
         request: Request,
         subpath: Optional[str] = None,
     ):
-        server.auth.require_user_id(request)
+        _require_owner_request(request)
 
         def get_folder(session: Session):
             rf = session.get(ReferenceFolder, folder_id)

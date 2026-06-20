@@ -278,6 +278,19 @@ def _login_client(server):
     return client
 
 
+def _make_read_token(client, *, resource_type=None, resource_id=None):
+    payload = {"description": "read-only", "scope": "READ"}
+    if resource_type is not None:
+        payload["resource_type"] = resource_type
+        payload["resource_id"] = resource_id
+    resp = client.post(
+        "/users/me/token",
+        json=payload,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["token"]
+
+
 def test_scan_reads_separate_tags_and_description_sidecars(server, tmp_path):
     folder_dir = str(tmp_path / "refs")
     folder_id = _make_folder(server, folder_dir)
@@ -450,6 +463,104 @@ def test_move_reference_picture_rejects_non_reference_picture(server, tmp_path):
     )
     assert resp.status_code == 400
     assert resp.json()["detail"]["failures"][0]["reason"] == "not_reference_picture"
+
+
+def test_relocate_reference_folder_moves_contents_and_updates_rows(
+    server, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server, "running_in_docker", lambda: False)
+    client = _login_client(server)
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    sub = old_root / "sub"
+    sub.mkdir(parents=True)
+    folder_id = _make_folder(server, str(old_root))
+    img = _make_image(str(sub), "bird.png")
+    tags_path = sub / "bird_tags.txt"
+    _write(str(tags_path), "bird, blue")
+    (old_root / "notes.md").write_text("keep me", encoding="utf-8")
+    pic_id = _index_picture(server, folder_id, img, tags=["bird", "blue"])
+    _set_picture_sidecars(server, pic_id, tags_file=str(tags_path))
+
+    resp = client.post(
+        f"/reference-folders/{folder_id}/relocate",
+        json={"destination_folder": str(new_root)},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["old_folder"] == str(old_root)
+    assert body["new_folder"] == str(new_root)
+    assert body["rewritten_count"] == 1
+    assert body["moved_picture_ids"] == [pic_id]
+
+    assert not os.path.exists(img)
+    assert (new_root / "sub" / "bird.png").is_file()
+    assert (new_root / "sub" / "bird_tags.txt").is_file()
+    assert (new_root / "notes.md").read_text(encoding="utf-8") == "keep me"
+
+    pic = _picture(server, pic_id)
+    assert pic.file_path == str(new_root / "sub" / "bird.png")
+    assert pic.tags_file == str(new_root / "sub" / "bird_tags.txt")
+    folder = server.vault.db.run_task(lambda s: s.get(ReferenceFolder, folder_id))
+    assert folder.folder == str(new_root)
+
+
+def test_relocate_reference_folder_rejects_non_empty_destination(
+    server, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server, "running_in_docker", lambda: False)
+    client = _login_client(server)
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    folder_id = _make_folder(server, str(old_root))
+    _make_image(str(old_root), "cat.png")
+    new_root.mkdir()
+    (new_root / "existing.txt").write_text("occupied", encoding="utf-8")
+
+    resp = client.post(
+        f"/reference-folders/{folder_id}/relocate",
+        json={"destination_folder": str(new_root)},
+    )
+    assert resp.status_code == 409
+    assert os.path.isfile(old_root / "cat.png")
+
+
+def test_reference_folder_file_operations_reject_read_tokens(server, tmp_path):
+    owner_client = _login_client(server)
+    token_client = TestClient(server.api)
+    source_dir = str(tmp_path / "source")
+    dest_dir = str(tmp_path / "dest")
+    folder_id = _make_folder(server, source_dir)
+    dest_id = _make_folder(server, dest_dir)
+    img = _make_image(source_dir, "cat.png")
+    pic_id = _index_picture(server, folder_id, img)
+    read_token = _make_read_token(
+        owner_client,
+        resource_type="picture",
+        resource_id=pic_id,
+    )
+    headers = {"Authorization": f"Bearer {read_token}"}
+
+    move_resp = token_client.post(
+        f"/reference-folders/{dest_id}/move-pictures",
+        json={"picture_ids": [pic_id]},
+        headers=headers,
+    )
+    assert move_resp.status_code == 403
+
+    relocate_resp = token_client.post(
+        f"/reference-folders/{folder_id}/relocate",
+        json={"destination_folder": str(tmp_path / "new-root")},
+        headers=headers,
+    )
+    assert relocate_resp.status_code == 403
+
+    mkdir_resp = token_client.post(
+        "/filesystem/folders",
+        json={"path": str(tmp_path / "new-folder")},
+        headers=headers,
+    )
+    assert mkdir_resp.status_code == 403
 
 
 def test_relocate_reference_folder_preserves_relative_paths_and_hash(server, tmp_path):

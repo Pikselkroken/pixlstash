@@ -15,6 +15,7 @@ import ProjectFiles from "./ProjectFiles.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
+import FolderBrowser from "../editors/FolderBrowser.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -268,17 +269,6 @@ const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 
-// Reference folder sidecar import/export dialog
-const referenceMetadataDialogOpen = ref(false);
-const referenceMetadataAction = ref("export");
-const referenceMetadataFolder = ref(null);
-const referenceMetadataScopePath = ref(null);
-const referenceMetadataScopeLabel = ref("");
-const referenceMetadataTypes = ref(["tags", "descriptions"]);
-const referenceMetadataLoading = ref(false);
-const referenceMetadataError = ref("");
-const referenceMetadataResult = ref("");
-
 // Computed style for the main context menu — opens upward when near the bottom.
 const sidebarCtxMenuStyle = computed(() => {
   const MENU_W = 165;
@@ -383,6 +373,13 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 const importFolderEditorOpen = ref(false);
 const importFolderEditorFolder = ref(null); // null = create, object = edit
 const addFolderTypeDialogOpen = ref(false);
+const referenceFolderRelocateOpen = ref(false);
+const referenceFolderRelocateFolder = ref(null);
+const referenceFolderRelocateDestination = ref("");
+const referenceFolderRelocateBrowseOpen = ref(false);
+const referenceFolderRelocateLoading = ref(false);
+const referenceFolderRelocateError = ref("");
+const referenceFolderRelocateResult = ref("");
 
 function openAddFolderTypeDialog() {
   addFolderTypeDialogOpen.value = true;
@@ -405,6 +402,78 @@ function openReferenceFolderEditor(rf = null) {
 function closeReferenceFolderEditor() {
   referenceFolderEditorOpen.value = false;
   referenceFolderEditorFolder.value = null;
+}
+
+function pathParent(path) {
+  const raw = String(path || "");
+  if (!raw || raw === "/") return "/";
+  const trimmed = raw.replace(/[\\/]+$/, "");
+  if (/^[A-Za-z]:$/.test(trimmed)) return `${trimmed}\\`;
+  const match = trimmed.match(/^(.*)[\\/][^\\/]+$/);
+  if (!match) return "/";
+  const parent = match[1];
+  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return parent || "/";
+}
+
+function openReferenceFolderRelocateDialog(folder) {
+  if (!folder || inDocker.value) return;
+  referenceFolderRelocateFolder.value = folder;
+  referenceFolderRelocateDestination.value = "";
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+  referenceFolderRelocateOpen.value = true;
+}
+
+function closeReferenceFolderRelocateDialog() {
+  if (referenceFolderRelocateLoading.value) return;
+  referenceFolderRelocateOpen.value = false;
+  referenceFolderRelocateFolder.value = null;
+  referenceFolderRelocateDestination.value = "";
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+}
+
+const referenceFolderRelocateInitialPath = computed(() =>
+  pathParent(referenceFolderRelocateFolder.value?.folder || ""),
+);
+
+const relocationRegisteredPaths = computed(() => {
+  const currentId = Number(referenceFolderRelocateFolder.value?.id);
+  return referenceFolders.value
+    .filter((rf) => Number(rf.id) !== currentId)
+    .map((rf) => rf.folder.replace(/[\\/]+$/, ""));
+});
+
+async function relocateReferenceFolder() {
+  const folder = referenceFolderRelocateFolder.value;
+  const destination = referenceFolderRelocateDestination.value.trim();
+  if (!folder?.id || !destination) return;
+  referenceFolderRelocateLoading.value = true;
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+  try {
+    const { data } = await apiClient.post(
+      `/reference-folders/${folder.id}/relocate`,
+      { destination_folder: destination },
+    );
+    await fetchReferenceFolders();
+    folderBrowseCache.value = {};
+    for (const rf of referenceFolders.value) {
+      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
+    }
+    emit("images-moved", {
+      imageIds: data?.moved_picture_ids || [],
+      kind: "reference-folder",
+      refresh: true,
+    });
+    referenceFolderRelocateResult.value = `Moved ${data?.moved_entry_count ?? 0} item${data?.moved_entry_count === 1 ? "" : "s"} and updated ${data?.rewritten_count ?? 0} picture path${data?.rewritten_count === 1 ? "" : "s"}.`;
+  } catch (error) {
+    referenceFolderRelocateError.value =
+      error?.response?.data?.detail || error?.message || "Relocation failed.";
+  } finally {
+    referenceFolderRelocateLoading.value = false;
+  }
 }
 
 function openImportFolderEditor(folder = null) {
@@ -2729,7 +2798,11 @@ async function handleReferenceFolderDrop(folderId, scopePath, event) {
     for (const rf of referenceFolders.value) {
       if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
     }
-    emit("images-moved", { imageIds: data?.moved_picture_ids || imageIds });
+    emit("images-moved", {
+      imageIds: data?.moved_picture_ids || imageIds,
+      kind: "reference-folder",
+      refresh: true,
+    });
   } catch (e) {
     const detail = e?.response?.data?.detail;
     const failures = detail?.failures || [];
@@ -2752,67 +2825,6 @@ function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
     { folder, path, label },
     event,
   );
-}
-
-function openReferenceMetadataDialog(
-  action,
-  folder,
-  scopePath = null,
-  scopeLabel = "",
-) {
-  if (!folder?.id) return;
-  referenceMetadataAction.value = action === "import" ? "import" : "export";
-  referenceMetadataFolder.value = folder;
-  referenceMetadataScopePath.value = scopePath;
-  referenceMetadataScopeLabel.value =
-    scopeLabel || folder.label || folder.folder || "Reference folder";
-  referenceMetadataTypes.value = ["tags", "descriptions"];
-  referenceMetadataError.value = "";
-  referenceMetadataResult.value = "";
-  referenceMetadataDialogOpen.value = true;
-}
-
-function closeReferenceMetadataDialog() {
-  if (referenceMetadataLoading.value) return;
-  referenceMetadataDialogOpen.value = false;
-  referenceMetadataFolder.value = null;
-  referenceMetadataScopePath.value = null;
-  referenceMetadataScopeLabel.value = "";
-  referenceMetadataError.value = "";
-  referenceMetadataResult.value = "";
-}
-
-function openReferenceMetadataDialogFromNode({ action, rfId, path, label }) {
-  const folder = referenceFolders.value.find((rf) => rf.id === rfId);
-  if (!folder) return;
-  openReferenceMetadataDialog(action, folder, path, label);
-}
-
-async function runReferenceFolderMetadata() {
-  const folder = referenceMetadataFolder.value;
-  const action = referenceMetadataAction.value;
-  const types = referenceMetadataTypes.value;
-  const scopePath = referenceMetadataScopePath.value;
-  if (!folder?.id || !types.length) return;
-  referenceMetadataLoading.value = true;
-  referenceMetadataError.value = "";
-  referenceMetadataResult.value = "";
-  try {
-    const { data } = await apiClient.post(
-      `/reference-folders/${folder.id}/metadata/${action}`,
-      { scope_path: scopePath, types },
-    );
-    const changed =
-      Number(data?.tags_count || 0) + Number(data?.descriptions_count || 0);
-    referenceMetadataResult.value =
-      `${action === "export" ? "Exported" : "Imported"} TXT metadata for ${changed} item${changed === 1 ? "" : "s"}.`,
-    await fetchReferenceFolders();
-  } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || e;
-    referenceMetadataError.value = `Failed to ${action} TXT metadata: ${detail}`;
-  } finally {
-    referenceMetadataLoading.value = false;
-  }
 }
 
 async function onProjectDrop(projectId, event) {
@@ -3607,6 +3619,7 @@ defineExpose({
     @close="closeReferenceFolderEditor"
     @saved="referenceFolderSaved"
     @deleted="referenceFolderDeleted"
+    @relocate="openReferenceFolderRelocateDialog"
   />
   <FolderEditor
     type="import"
@@ -3660,64 +3673,82 @@ defineExpose({
     </v-card>
   </v-dialog>
 
-  <v-dialog v-model="referenceMetadataDialogOpen" max-width="420">
-    <v-card class="reference-metadata-card">
-      <v-card-title class="reference-metadata-title">
-        {{
-          referenceMetadataAction === "export"
-            ? "Export TXT Metadata"
-            : "Import TXT Metadata"
-        }}
-      </v-card-title>
-      <v-card-text class="reference-metadata-body">
-        <div
-          class="reference-metadata-scope"
-          :title="referenceMetadataScopePath || referenceMetadataFolder?.folder"
-        >
-          <v-icon size="16">mdi-folder-outline</v-icon>
-          <span>{{ referenceMetadataScopeLabel }}</span>
+  <v-dialog v-model="referenceFolderRelocateOpen" max-width="560">
+    <v-card class="relocate-card">
+      <v-card-title class="relocate-title">Relocate Reference Folder</v-card-title>
+      <v-card-text class="relocate-body">
+        <div class="relocate-path-block">
+          <div class="relocate-path-label">Current folder</div>
+          <div
+            class="relocate-path-value"
+            :title="referenceFolderRelocateFolder?.folder"
+          >
+            {{ referenceFolderRelocateFolder?.folder }}
+          </div>
         </div>
-        <div class="reference-metadata-options">
-          <v-checkbox
-            v-model="referenceMetadataTypes"
-            value="tags"
-            label="Tags"
-            density="compact"
-            hide-details
-          />
-          <v-checkbox
-            v-model="referenceMetadataTypes"
-            value="descriptions"
-            label="Descriptions"
-            density="compact"
-            hide-details
-          />
+        <div class="relocate-path-block">
+          <div class="relocate-path-label">Destination folder</div>
+          <div class="relocate-destination-row">
+            <v-text-field
+              v-model="referenceFolderRelocateDestination"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              readonly
+              placeholder="Choose an empty folder"
+            />
+            <v-btn
+              variant="outlined"
+              size="small"
+              icon
+              title="Choose destination folder"
+              @click="referenceFolderRelocateBrowseOpen = true"
+            >
+              <v-icon size="18">mdi-folder-open-outline</v-icon>
+            </v-btn>
+          </div>
         </div>
-        <div v-if="referenceMetadataError" class="reference-metadata-error">
-          {{ referenceMetadataError }}
+        <div class="relocate-warning">
+          This moves every file and subfolder from the current reference folder
+          into the destination folder, then updates PixlStash to use the new
+          location. The destination must be empty.
         </div>
-        <div v-if="referenceMetadataResult" class="reference-metadata-result">
-          {{ referenceMetadataResult }}
+        <div v-if="referenceFolderRelocateError" class="relocate-error">
+          {{ referenceFolderRelocateError }}
+        </div>
+        <div v-if="referenceFolderRelocateResult" class="relocate-result">
+          {{ referenceFolderRelocateResult }}
         </div>
       </v-card-text>
-      <v-card-actions class="reference-metadata-actions">
+      <v-card-actions class="relocate-actions">
         <v-spacer />
-        <v-btn variant="text" @click="closeReferenceMetadataDialog">
-          {{ referenceMetadataResult ? "Close" : "Cancel" }}
+        <v-btn variant="text" @click="closeReferenceFolderRelocateDialog">
+          {{ referenceFolderRelocateResult ? "Close" : "Cancel" }}
         </v-btn>
         <v-btn
-          v-if="!referenceMetadataResult"
+          v-if="!referenceFolderRelocateResult"
           color="primary"
           variant="flat"
-          :loading="referenceMetadataLoading"
-          :disabled="referenceMetadataTypes.length === 0"
-          @click="runReferenceFolderMetadata"
+          :loading="referenceFolderRelocateLoading"
+          :disabled="!referenceFolderRelocateDestination"
+          @click="relocateReferenceFolder"
         >
-          {{ referenceMetadataAction === "export" ? "Export" : "Import" }}
+          Move Files and Relocate
         </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
+
+  <FolderBrowser
+    :open="referenceFolderRelocateBrowseOpen"
+    :initial-path="referenceFolderRelocateInitialPath"
+    :registered-paths="relocationRegisteredPaths"
+    :image-root="referenceFoldersImageRoot"
+    already-registered-label="Already a reference folder"
+    allow-create-folder
+    @select="(path) => (referenceFolderRelocateDestination = path)"
+    @close="referenceFolderRelocateBrowseOpen = false"
+  />
 
   <aside
     ref="sidebarRootRef"
@@ -4748,37 +4779,15 @@ defineExpose({
                   <button
                     type="button"
                     class="sidebar-folder-action-btn"
-                    title="Import TXT metadata"
-                    @click="
-                      openReferenceMetadataDialog(
-                        'import',
-                        rf,
-                        null,
-                        rf.label || rf.folder,
-                      )
-                    "
+                    title="Relocate folder and move files"
+                    @click="openReferenceFolderRelocateDialog(rf)"
                   >
-                    <v-icon size="13">mdi-file-import-outline</v-icon>
+                    <v-icon size="13">mdi-folder-move-outline</v-icon>
                   </button>
                   <button
                     type="button"
                     class="sidebar-folder-action-btn"
-                    title="Export TXT metadata"
-                    @click="
-                      openReferenceMetadataDialog(
-                        'export',
-                        rf,
-                        null,
-                        rf.label || rf.folder,
-                      )
-                    "
-                  >
-                    <v-icon size="13">mdi-file-export-outline</v-icon>
-                  </button>
-                  <button
-                    type="button"
-                    class="sidebar-folder-action-btn"
-                    title="Relocate or edit folder"
+                    title="Edit folder settings"
                     @click="openReferenceFolderEditor(rf)"
                   >
                     <v-icon size="13">mdi-pencil-outline</v-icon>
@@ -4866,7 +4875,6 @@ defineExpose({
                           handleReferenceFolderDrop(rfId, path, event)
                       "
                       @context="handleReferenceFolderNodeContext"
-                      @metadata="openReferenceMetadataDialogFromNode"
                     />
                   </template>
                   <div
@@ -6272,40 +6280,17 @@ defineExpose({
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
         <button
-          v-if="!inDocker"
+          v-if="!inDocker && !sidebarCtxFolderScopePath"
           class="sidebar-ctx-item"
           @click="
-            openReferenceMetadataDialog(
-              'import',
-              sidebarCtxFolder,
-              sidebarCtxFolderScopePath,
-              sidebarCtxFolderScopePath || sidebarCtxFolder.label || sidebarCtxFolder.folder,
-            );
+            openReferenceFolderRelocateDialog(sidebarCtxFolder);
             closeSidebarCtxMenu();
           "
         >
           <v-icon size="15" class="sidebar-ctx-icon"
-            >mdi-file-import-outline</v-icon
+            >mdi-folder-move-outline</v-icon
           >
-          Import TXT metadata
-        </button>
-        <button
-          v-if="!inDocker"
-          class="sidebar-ctx-item"
-          @click="
-            openReferenceMetadataDialog(
-              'export',
-              sidebarCtxFolder,
-              sidebarCtxFolderScopePath,
-              sidebarCtxFolderScopePath || sidebarCtxFolder.label || sidebarCtxFolder.folder,
-            );
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon size="15" class="sidebar-ctx-icon"
-            >mdi-file-export-outline</v-icon
-          >
-          Export TXT metadata
+          Relocate
         </button>
         <button
           v-if="!sidebarCtxFolderScopePath"
@@ -9136,47 +9121,64 @@ button.sidebar-ctx-item:disabled:hover {
   padding: var(--space-3) var(--space-5) var(--space-4);
 }
 
-.reference-metadata-card {
+.relocate-card {
   border-radius: 14px;
 }
 
-.reference-metadata-title {
+.relocate-title {
   font-size: 1.04rem;
   font-weight: 700;
   padding: 16px 18px 8px;
 }
 
-.reference-metadata-body {
+.relocate-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   padding: 8px 18px 0;
 }
 
-.reference-metadata-scope {
+.relocate-path-block {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(var(--v-theme-surface-variant), 0.35);
-  font-size: 0.82rem;
+  flex-direction: column;
+  gap: 5px;
 }
 
-.reference-metadata-scope span {
+.relocate-path-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  opacity: 0.68;
+  text-transform: uppercase;
+}
+
+.relocate-path-value {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface-variant), 0.35);
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 0.82rem;
 }
 
-.reference-metadata-options {
+.relocate-destination-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  gap: 8px;
 }
 
-.reference-metadata-error {
+.relocate-destination-row .v-text-field {
+  flex: 1;
+}
+
+.relocate-warning {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+}
+
+.relocate-error {
   font-size: 0.8rem;
   color: rgb(var(--v-theme-error));
   background: rgba(var(--v-theme-error), 0.08);
@@ -9185,12 +9187,12 @@ button.sidebar-ctx-item:disabled:hover {
   padding: 8px 10px;
 }
 
-.reference-metadata-result {
+.relocate-result {
   font-size: 0.8rem;
   color: rgb(var(--v-theme-accent));
 }
 
-.reference-metadata-actions {
+.relocate-actions {
   padding: 10px 16px 14px;
 }
 </style>
