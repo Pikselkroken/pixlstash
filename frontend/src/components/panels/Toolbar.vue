@@ -326,12 +326,12 @@
         >
           <v-icon size="20">mdi-magnify</v-icon>
         </button>
-        <!-- ── Toolbar: Review suggested tag fixes ───────────────────── -->
+        <!-- ── Toolbar: Review and fix tags ──────────────────────────── -->
         <button
           class="bar-btn bar-btn--icon"
           type="button"
           :disabled="isReadOnly"
-          title="Review suggested tag fixes"
+          title="Review and fix tags"
           @click="reviewFixesStore.overlayOpen = true"
         >
           <v-icon size="20">mdi-tag-check-outline</v-icon>

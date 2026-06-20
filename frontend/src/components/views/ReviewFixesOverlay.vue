@@ -1,121 +1,172 @@
 <template>
   <div class="rf-overlay" @click.self="emit('close')">
     <div class="rf-shell">
-      <!-- Topbar: close, title, tag picker, direction filter, progress -->
-      <header class="rf-topbar">
-        <button
-          class="rf-close"
-          @click="emit('close')"
-          aria-label="Close (ESC)"
-          title="Close (ESC)"
-        >
-          <v-icon size="18">mdi-close</v-icon>
-          <span>Close</span>
-        </button>
+      <!-- Toolbar: shared OverlayToolbar shell (same chrome as ImageOverlay) hosting
+           the review-specific controls. Close + title live in the shell; the tag
+           picker, rescan, scope filters, clear-filters and progress go in #actions. -->
+      <OverlayToolbar @close="emit('close')">
+        <template #title>Review suggested fixes</template>
 
-        <div class="rf-title">Review suggested fixes</div>
+        <template #actions>
+          <!-- Custom tag picker over the whole vault tag list, modelled on AddToEntityControl:
+               a compact trigger button (current tag + chevron) opens a dropdown panel with an
+               autofocused search input above a scrollable, alphabetised list. Typing filters by
+               substring; anomaly (smart-score-penalised) tags render red; tags with pending
+               suggestions show their count. Picking one runs select-or-scan so the queue always
+               switches to it. The panel is position:fixed from the trigger's rect so it escapes
+               the topbar's clip and sits above the overlay. The icon-button re-scans the active tag. -->
+          <div class="rf-field rf-field--tag">
+            <span class="rf-field-label">Tag</span>
+            <div ref="tagPickRef" class="rf-tag-pick">
+              <button
+                class="rf-tag-trigger"
+                type="button"
+                :disabled="store.scanning"
+                :aria-expanded="tagMenuOpen"
+                aria-haspopup="listbox"
+                aria-label="Pick a tag"
+                @click.stop="toggleTagMenu"
+              >
+              <span
+                class="rf-tag-trigger-label"
+                :class="{
+                  'rf-tag-anomaly': store.activeTag && store.isAnomalyTag(store.activeTag),
+                  'rf-tag-trigger-label--placeholder': !store.activeTag,
+                }"
+              >
+                {{ store.activeTag || "Pick a tag" }}
+              </span>
+              <v-icon size="14" class="rf-tag-chevron">mdi-chevron-down</v-icon>
+            </button>
 
-        <label class="rf-field">
-          <span class="rf-field-label">Tag</span>
-          <select
-            class="rf-select"
-            :value="store.activeTag || ''"
-            @change="store.selectTag($event.target.value)"
-          >
-            <option v-for="t in store.tags" :key="t.tag" :value="t.tag">
-              {{ t.tag }} ({{ t.total }})
-            </option>
-          </select>
-        </label>
+            <div
+              v-if="tagMenuOpen"
+              ref="tagMenuRef"
+              class="rf-tag-menu"
+              role="listbox"
+              :style="tagMenuStyle"
+            >
+              <div class="rf-tag-search">
+                <v-icon size="14">mdi-magnify</v-icon>
+                <input
+                  ref="tagSearchRef"
+                  v-model="tagQuery"
+                  type="text"
+                  placeholder="search tags…"
+                  @keydown.escape.stop.prevent="closeTagMenu"
+                  @keydown.down.stop.prevent="moveTagHighlight(1)"
+                  @keydown.up.stop.prevent="moveTagHighlight(-1)"
+                  @keydown.enter.stop.prevent="pickHighlightedTag"
+                />
+              </div>
+              <div class="rf-tag-list">
+                <div v-if="!filteredTags.length" class="rf-tag-empty">
+                  No tags found
+                </div>
+                <button
+                  v-for="(opt, idx) in filteredTags"
+                  :key="opt.tag"
+                  class="rf-tag-item"
+                  :class="{ 'rf-tag-item--active': idx === tagHighlight }"
+                  type="button"
+                  role="option"
+                  @mouseenter="tagHighlight = idx"
+                  @click.stop="onPickTag(opt.tag)"
+                >
+                  <span :class="{ 'rf-tag-anomaly': opt.anomaly }">
+                    {{ opt.tag }}
+                  </span>
+                  <span v-if="opt.pending" class="rf-tag-count">
+                    · {{ opt.pending }}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+            <button
+              class="overlay-icon-btn rf-rescan"
+              type="button"
+              :disabled="!store.activeTag || store.scanning"
+              :title="
+                store.activeTag
+                  ? `Re-scan “${store.activeTag}” for near-neighbour disagreements`
+                  : 'Pick a tag to scan'
+              "
+              @click="store.rescanActiveTag()"
+            >
+              <v-icon size="16" :class="{ 'mdi-spin': store.scanning }">
+                {{ store.scanning ? "mdi-loading" : "mdi-refresh" }}
+              </v-icon>
+            </button>
+          </div>
+          <span v-if="store.scanError" class="rf-scan-error">{{
+            store.scanError
+          }}</span>
 
-        <!-- Scope filters: narrow the queue to a project / set / character. Each "Any"
-             option clears that dimension; changes re-run summary/queue/bulk via setScope. -->
-        <label class="rf-field">
-          <span class="rf-field-label">Project</span>
-          <select
-            class="rf-select rf-select--scope"
-            :value="store.scope.projectId ?? ''"
-            @change="onScopeChange('projectId', $event.target.value)"
-          >
-            <option value="">Any</option>
-            <option v-for="p in store.projects" :key="p.id" :value="p.id">
-              {{ p.name || `Project ${p.id}` }}
-            </option>
-          </select>
-        </label>
+          <!-- Scope filters: narrow the queue to a project / set / character. Each "Any"
+               option clears that dimension; changes re-run summary/queue/bulk via setScope. -->
+          <label class="rf-field">
+            <span class="rf-field-label">Project</span>
+            <select
+              class="rf-select rf-select--scope"
+              :value="store.scope.projectId ?? ''"
+              @change="onScopeChange('projectId', $event.target.value, $event)"
+            >
+              <option value="">Any</option>
+              <option v-for="p in store.projects" :key="p.id" :value="p.id">
+                {{ p.name || `Project ${p.id}` }}
+              </option>
+            </select>
+          </label>
 
-        <label class="rf-field">
-          <span class="rf-field-label">Set</span>
-          <select
-            class="rf-select rf-select--scope"
-            :value="store.scope.setId ?? ''"
-            @change="onScopeChange('setId', $event.target.value)"
-          >
-            <option value="">Any</option>
-            <option v-for="s in store.sets" :key="s.id" :value="s.id">
-              {{ s.name || `Set ${s.id}` }}
-            </option>
-          </select>
-        </label>
+          <label class="rf-field">
+            <span class="rf-field-label">Set</span>
+            <select
+              class="rf-select rf-select--scope"
+              :value="store.scope.setId ?? ''"
+              @change="onScopeChange('setId', $event.target.value, $event)"
+            >
+              <option value="">Any</option>
+              <option v-for="s in store.sets" :key="s.id" :value="s.id">
+                {{ s.name || `Set ${s.id}` }}
+              </option>
+            </select>
+          </label>
 
-        <label class="rf-field">
-          <span class="rf-field-label">Character</span>
-          <select
-            class="rf-select rf-select--scope"
-            :value="store.scope.characterId ?? ''"
-            @change="onScopeChange('characterId', $event.target.value)"
-          >
-            <option value="">Any</option>
-            <option value="UNASSIGNED">Unassigned</option>
-            <option v-for="c in store.characters" :key="c.id" :value="c.id">
-              {{ c.name || `Character ${c.id}` }}
-            </option>
-          </select>
-        </label>
+          <label class="rf-field">
+            <span class="rf-field-label">Character</span>
+            <select
+              class="rf-select rf-select--scope"
+              :value="store.scope.characterId ?? ''"
+              @change="onScopeChange('characterId', $event.target.value, $event)"
+            >
+              <option value="">Any</option>
+              <option value="UNASSIGNED">Unassigned</option>
+              <option v-for="c in store.characters" :key="c.id" :value="c.id">
+                {{ c.name || `Character ${c.id}` }}
+              </option>
+            </select>
+          </label>
 
-        <button
-          v-if="hasScopeFilter"
-          class="rf-clear-filters"
-          type="button"
-          title="Clear the project / set / character filters"
-          @click="clearScope"
-        >
-          Clear filters
-        </button>
-
-        <div class="rf-scan">
-          <input
-            v-model="scanInput"
-            class="rf-scan-input"
-            type="text"
-            list="rf-tag-list"
-            placeholder="tag to scan…"
-            :disabled="store.scanning"
-            @keydown.enter="doScan"
-          />
-          <datalist id="rf-tag-list">
-            <option v-for="t in store.allTags" :key="t" :value="t" />
-          </datalist>
           <button
-            class="rf-scan-btn"
+            v-if="hasScopeFilter"
+            class="rf-clear-filters"
             type="button"
-            :disabled="store.scanning || !scanInput.trim()"
-            :title="`Re-scan “${scanInput.trim()}” for near-neighbour disagreements`"
-            @click="doScan"
+            title="Clear the project / set / character filters"
+            @click="clearScope"
           >
-            {{ store.scanning ? "Scanning…" : "Scan" }}
+            Clear filters
           </button>
-          <span v-if="store.scanError" class="rf-scan-error">{{ store.scanError }}</span>
-        </div>
 
-        <div class="rf-progress">
-          <span class="rf-progress-remaining">{{ store.remainingTotal }} left</span>
-          <span class="rf-progress-tally">
-            ✗ {{ store.removedCount }} · + {{ store.addedCount }} · ✓
-            {{ store.keptCount }}
-          </span>
-        </div>
-      </header>
+          <div class="rf-progress">
+            <span class="rf-progress-remaining">{{ store.remainingTotal }} left</span>
+            <span class="rf-progress-tally">
+              ✗ {{ store.removedCount }} · + {{ store.addedCount }} · ✓
+              {{ store.keptCount }}
+            </span>
+          </div>
+        </template>
+      </OverlayToolbar>
 
       <!-- Bulk: auto-resolve only pairs where the near-twin vote and the tagger AGREE,
            so you hand-compare the rest. -->
@@ -445,7 +496,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import OverlayToolbar from "../widgets/OverlayToolbar.vue";
 import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -501,7 +553,12 @@ const hasScopeFilter = computed(() => {
 // Apply a single dropdown change. <select> values are strings: empty = "Any" (null);
 // projectId/setId coerce to numbers; characterId keeps the "UNASSIGNED" literal but
 // coerces a real id to a number. setScope re-runs the summary/queue/bulk-count fetches.
-function onScopeChange(dimension, raw) {
+//
+// We blur the <select> after the change so focus doesn't linger on it: a focused native
+// <select> swallows the decision keys (L/B/N/R/…) into its own type-ahead, jumping to a set
+// whose name starts with that letter. Blurring is the first half of the keyboard-leak fix;
+// handleKeyDown no longer bailing on a focused <select> is the second.
+function onScopeChange(dimension, raw, event) {
   let value = null;
   if (raw !== "" && raw != null) {
     if (dimension === "characterId") {
@@ -510,6 +567,7 @@ function onScopeChange(dimension, raw) {
       value = Number(raw);
     }
   }
+  event?.target?.blur();
   store.setScope({ [dimension]: value });
 }
 
@@ -517,17 +575,126 @@ function clearScope() {
   store.setScope({ projectId: null, setId: null, characterId: null });
 }
 
-// "Scan a tag" control — prefilled with the active tag (re-scan), editable for a new one.
-const scanInput = ref("");
-watch(
-  () => store.activeTag,
-  (t) => {
-    if (t && !scanInput.value) scanInput.value = t;
-  },
-  { immediate: true },
-);
-function doScan() {
-  store.scanTag(scanInput.value);
+// --- Tag picker -------------------------------------------------------------
+//
+// A custom dropdown over the whole vault (store.allTags), modelled on AddToEntityControl:
+// a trigger button opens a panel with an autofocused search box above a scrollable list.
+// The list is ALPHABETISED (case-insensitive) and substring-filtered by the search box;
+// anomaly (smart-score-penalised) tags render red; tags with pending suggestions show their
+// count. The panel is positioned fixed from the trigger's rect (the doc's established
+// pattern for popovers inside fixed overlays) so it escapes the topbar clip.
+const tagPickRef = ref(null);
+const tagMenuRef = ref(null);
+const tagSearchRef = ref(null);
+const tagMenuOpen = ref(false);
+const tagQuery = ref("");
+const tagHighlight = ref(0);
+const tagMenuStyle = ref({});
+
+// Full vault tag list, alphabetised, each carrying its anomaly flag and pending count.
+// Falls back to the summary tags until the background fetchAllTags resolves, so the picker
+// is never empty between open and that fetch landing.
+const allTagOptions = computed(() => {
+  const pendingByTag = new Map(store.tags.map((t) => [t.tag, t.total]));
+  const source = store.allTags.length
+    ? store.allTags
+    : store.tags.map((t) => t.tag);
+  return [...source]
+    .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: "base" }))
+    .map((tag) => ({
+      tag,
+      pending: pendingByTag.get(tag) || 0,
+      anomaly: store.isAnomalyTag(tag),
+    }));
+});
+
+// Substring filter (case-insensitive), preserving the alphabetical order above.
+const filteredTags = computed(() => {
+  const needle = tagQuery.value.trim().toLowerCase();
+  if (!needle) return allTagOptions.value;
+  return allTagOptions.value.filter((opt) =>
+    opt.tag.toLowerCase().includes(needle),
+  );
+});
+
+// Position the panel under the trigger using viewport coordinates (position: fixed), so it
+// is not clipped by the topbar and sits above the .rf-overlay (z-index 4000). Mirrors the
+// AddToEntityControl flyout's getBoundingClientRect approach; the panel's own z-index (set
+// in CSS, 4200) puts it above the overlay and the zoom layer.
+function positionTagMenu() {
+  const trigger = tagPickRef.value;
+  if (!trigger) return;
+  const rect = trigger.getBoundingClientRect();
+  const menuW = 240;
+  const vw = window.innerWidth;
+  // Keep the panel on-screen if the trigger sits near the right edge.
+  const left = Math.min(rect.left, vw - menuW - 8);
+  tagMenuStyle.value = {
+    position: "fixed",
+    top: `${rect.bottom + 6}px`,
+    left: `${Math.max(8, left)}px`,
+    width: `${menuW}px`,
+  };
+}
+
+function toggleTagMenu() {
+  if (store.scanning) return;
+  if (tagMenuOpen.value) closeTagMenu();
+  else openTagMenu();
+}
+
+function openTagMenu() {
+  tagMenuOpen.value = true;
+  tagQuery.value = "";
+  tagHighlight.value = 0;
+  positionTagMenu();
+  // Autofocus the search input on open so typing filters immediately; while it holds focus
+  // the overlay's handleKeyDown correctly bails (it's an <input>), so the decision keys
+  // don't fire and typing falls through to the filter.
+  nextTick(() => tagSearchRef.value?.focus());
+  document.addEventListener("pointerdown", handleTagOutsideClick, true);
+  window.addEventListener("resize", positionTagMenu);
+}
+
+function closeTagMenu() {
+  if (!tagMenuOpen.value) return;
+  tagMenuOpen.value = false;
+  tagQuery.value = "";
+  document.removeEventListener("pointerdown", handleTagOutsideClick, true);
+  window.removeEventListener("resize", positionTagMenu);
+  // Return focus to the body so the L/B/N/R/S/U decision keys work again (the search input
+  // is an <input>, which handleKeyDown treats as editable and bails on).
+  tagSearchRef.value?.blur();
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+}
+
+// Click-outside closes the panel (mirrors AddToEntityControl.handleOutsideClick): ignore
+// clicks inside the trigger wrapper or the (fixed) panel, close on anything else.
+function handleTagOutsideClick(event) {
+  const target = event?.target;
+  if (!target || !(target instanceof HTMLElement)) return;
+  if (tagPickRef.value?.contains(target)) return;
+  if (tagMenuRef.value?.contains(target)) return;
+  closeTagMenu();
+}
+
+function moveTagHighlight(delta) {
+  const n = filteredTags.value.length;
+  if (!n) return;
+  tagHighlight.value = (tagHighlight.value + delta + n) % n;
+}
+
+function pickHighlightedTag() {
+  const opt = filteredTags.value[tagHighlight.value];
+  if (opt) onPickTag(opt.tag);
+}
+
+// Pick a tag → always load that tag's queue (select if it has pending suggestions, otherwise
+// scan to populate), then close the panel and restore body focus.
+function onPickTag(tag) {
+  if (!tag) return;
+  store.selectOrScan(tag);
+  closeTagMenu();
 }
 
 // The disagreeing pair always has one tagged and one untagged image. We put the
@@ -837,11 +1004,19 @@ function skip() {
   }
 }
 
+// Is the user actively typing into a genuine text-entry field? Only then should the overlay
+// hand the keystroke through and skip its decision shortcuts. Crucially this NO LONGER
+// includes <select>: a native <select> retains focus after a scope change, and treating it
+// as editable made handleKeyDown bail, so a decision key (L/B/N/R) fell through to the
+// <select>'s native type-ahead and jumped to a set/character starting with that letter.
+// A <select> is a fixed-choice control, not text entry — the decision keys must win over it.
+// Text entry that DOES bail: <input> (the tag-search autocomplete is an <input>; typing
+// there filters and must pass through), <textarea>, and contenteditable.
 function isEditable(el) {
   if (!(el instanceof HTMLElement)) return false;
   if (el.isContentEditable) return true;
   const tag = el.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  return tag === "INPUT" || tag === "TEXTAREA";
 }
 
 function handleKeyDown(event) {
@@ -917,6 +1092,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeyDown, true);
+  // Belt-and-braces: drop the tag-menu's global listeners if the overlay unmounts while open.
+  document.removeEventListener("pointerdown", handleTagOutsideClick, true);
+  window.removeEventListener("resize", positionTagMenu);
   clearHintTimer();
 });
 </script>
@@ -944,125 +1122,184 @@ onUnmounted(() => {
   color: #e8eaed;
 }
 
-.rf-topbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid #2a2c33;
-  flex-wrap: wrap;
-}
-
-.rf-close {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: #23252c;
-  color: #e8eaed;
-  border: 1px solid #34373f;
-  border-radius: 6px;
-  padding: 6px 12px;
-  cursor: pointer;
-}
-.rf-close:hover {
-  background: #2c2f37;
-}
-
-.rf-title {
-  font-weight: 600;
-  font-size: 1.05rem;
-}
-
+/* The topbar chrome (bar surface, Close button, title) now lives in the shared
+   OverlayToolbar widget. The rules below only style the review-specific controls
+   slotted into #actions, matched to the toolbar's control language: 32px-tall
+   surfaces, 4px radius, the same dark-surface theme tokens as .overlay-icon-btn. */
 .rf-field {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 .rf-field-label {
-  color: #9aa0a6;
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
   font-size: 0.85rem;
 }
 .rf-select {
-  background: #23252c;
-  color: #e8eaed;
-  border: 1px solid #34373f;
-  border-radius: 6px;
-  padding: 6px 10px;
+  height: 32px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgb(var(--v-theme-on-dark-surface));
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: 4px;
+  padding: 0 8px;
+  font-size: 0.85rem;
   max-width: 280px;
+  cursor: pointer;
+}
+.rf-select:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 /* Scope filters sit in the same row as the tag picker; keep them compact so the row
    stays tidy and wraps cleanly when narrow. */
 .rf-select--scope {
   max-width: 150px;
-  font-size: 0.85rem;
 }
 
 .rf-clear-filters {
-  background: #23252c;
-  color: #cdd0d6;
-  border: 1px solid #34373f;
-  border-radius: 6px;
-  padding: 6px 12px;
+  height: 32px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgb(var(--v-theme-on-dark-surface));
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: 4px;
+  padding: 0 12px;
   cursor: pointer;
   font-size: 0.85rem;
 }
 .rf-clear-filters:hover {
-  background: #2c2f37;
-  color: #e8eaed;
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 
-.rf-direction {
-  display: inline-flex;
-  border: 1px solid #34373f;
-  border-radius: 6px;
-  overflow: hidden;
-}
-.rf-dir-btn {
-  background: #23252c;
-  color: #cdd0d6;
-  border: none;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.rf-dir-btn--active {
-  background: #3b82f6;
-  color: #fff;
-}
-
-.rf-scan {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.rf-scan-input {
-  background: #23252c;
-  color: #e8eaed;
-  border: 1px solid #34373f;
-  border-radius: 6px;
-  padding: 6px 10px;
-  width: 150px;
-  font-size: 0.85rem;
-}
-.rf-scan-btn {
-  background: #23252c;
-  color: #e8eaed;
-  border: 1px solid #34373f;
-  border-radius: 6px;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.rf-scan-btn:hover:not(:disabled) {
-  background: #2c2f37;
-}
-.rf-scan-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 .rf-scan-error {
   color: #f28b82;
   font-size: 0.8rem;
+}
+
+/* Custom tag picker, matched to the toolbar control language: the trigger is the same
+   surface/height/radius as .rf-select, and the floating panel (position:fixed from the
+   trigger's rect — see tagMenuStyle) reads as the same dark family. */
+.rf-field--tag {
+  gap: 6px;
+}
+.rf-tag-pick {
+  position: relative;
+  width: 200px;
+  font-size: 0.85rem;
+}
+.rf-tag-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgb(var(--v-theme-on-dark-surface));
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.rf-tag-trigger:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+.rf-tag-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rf-tag-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rf-tag-trigger-label--placeholder {
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+}
+.rf-tag-chevron {
+  flex: none;
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+}
+
+/* Floating picker panel (position:fixed via tagMenuStyle so it escapes the bar clip). */
+.rf-tag-menu {
+  position: fixed;
+  z-index: 4100;
+  width: 240px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  background: rgb(var(--v-theme-dark-surface));
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.rf-tag-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+}
+.rf-tag-search input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: 0.85rem;
+}
+.rf-tag-search input::placeholder {
+  color: rgba(var(--v-theme-on-dark-surface), 0.5);
+}
+.rf-tag-list {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.rf-tag-empty {
+  padding: 8px 12px;
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  font-size: 0.85rem;
+}
+.rf-tag-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.rf-tag-item--active {
+  background: rgba(var(--v-theme-primary), 0.25);
+}
+
+/* "Rescan current tag" icon-button. It carries .overlay-icon-btn (the shared toolbar
+   look) and this only constrains it to a 32px square so it sits flush beside the picker. */
+.rf-rescan {
+  width: 32px;
+  padding: 0;
+}
+
+/* Anomaly (smart-score-penalised) tags stand out red in both the list and the selection. */
+.rf-tag-anomaly {
+  color: #f28b82;
+  font-weight: 600;
+}
+.rf-tag-count {
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  font-size: 0.78rem;
+  margin-left: 4px;
+}
+.rf-tag-option {
+  font-size: 0.85rem;
 }
 
 .rf-progress {

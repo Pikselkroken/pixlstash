@@ -24,7 +24,10 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
   const tags = ref([]); // [{ tag, add, remove, total }], busiest first
   const activeTag = ref(null);
   const direction = ref(""); // kept for the API; the UI no longer filters by it
-  const allTags = ref([]); // all vault tag values, for the scan-input autocomplete
+  const allTags = ref([]); // all vault tag values, for the tag-picker autocomplete
+  // Lowercased anomaly tags (the user's smart-score "penalised" tags). Rendered red in the
+  // tag picker so a reviewer can spot a flagged tag at a glance. A Set for O(1) membership.
+  const anomalyTags = ref(new Set());
   const items = ref([]); // ranked pending suggestions for activeTag/direction
   const loading = ref(false);
   const error = ref(null);
@@ -241,25 +244,17 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     return p;
   }
 
-  // If the active tag is no longer in the (re-filtered) summary, fall back to the first tag
-  // so the queue never sticks on an out-of-scope tag with an empty result. Returns nothing.
-  function reconcileActiveTag() {
-    if (!tags.value.some((t) => t.tag === activeTag.value)) {
-      activeTag.value = tags.value.length ? tags.value[0].tag : null;
-    }
-  }
-
   async function fetchSummary() {
     const res = await apiClient.get("/tag_suggestions/summary", {
       params: scopeParams(),
     });
     tags.value = res.data || [];
-    if (!activeTag.value) {
-      // Nothing chosen yet — pick the busiest tag.
-      if (tags.value.length) activeTag.value = tags.value[0].tag;
-    } else {
-      // A filter may have dropped the current tag from the list — fall back to the first.
-      reconcileActiveTag();
+    // Only seed a default when nothing is chosen yet. Never override an explicit pick here:
+    // a deliberately selected/scanned tag with no in-scope suggestions must stay selected
+    // (its empty "all caught up for the current filters" state is fine). setScope is the
+    // sole caller that reconciles, because a scope change can legitimately drop the tag.
+    if (!activeTag.value && tags.value.length) {
+      activeTag.value = tags.value[0].tag;
     }
   }
 
@@ -308,6 +303,41 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     }
   }
 
+  // Load the user's smart-score "penalised" tags (the anomaly set) so the tag picker can
+  // flag them in red. The config field can be an array of strings, an array of {tag,weight}
+  // objects, or a {tag: weight} map (mirrors SmartScoreSection.vue) — normalise each shape
+  // to lowercased tag strings. Degrades to an empty Set on error so the picker still works.
+  async function fetchAnomalyTags() {
+    try {
+      const res = await apiClient.get("/users/me/config");
+      const raw = res.data?.smart_score_penalised_tags;
+      const next = new Set();
+      if (Array.isArray(raw)) {
+        for (const item of raw) {
+          if (item == null) continue;
+          const tag =
+            typeof item === "object"
+              ? String(item.tag || "").trim().toLowerCase()
+              : String(item).trim().toLowerCase();
+          if (tag) next.add(tag);
+        }
+      } else if (raw && typeof raw === "object") {
+        for (const key of Object.keys(raw)) {
+          const tag = String(key).trim().toLowerCase();
+          if (tag) next.add(tag);
+        }
+      }
+      anomalyTags.value = next;
+    } catch {
+      anomalyTags.value = new Set();
+    }
+  }
+
+  // Is this tag a flagged anomaly (smart-score penalised)? Compared lowercased.
+  function isAnomalyTag(tag) {
+    return anomalyTags.value.has(String(tag || "").trim().toLowerCase());
+  }
+
   // Populate the scope-filter dropdowns. Mirrors the sidebar's fetchProjects/fetchPictureSets/
   // fetchCharacters: each call is independent and degrades to an empty list on error (e.g. a
   // read-only or wrongly-scoped token can't list one of these), so a failure on one dimension
@@ -324,7 +354,11 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     apiClient
       .get("/picture_sets")
       .then((res) => {
-        sets.value = Array.isArray(res.data) ? res.data : [];
+        // Drop the auto-created per-character `reference_pictures` system sets — they aren't
+        // user-facing review scopes and only clutter the Set filter.
+        sets.value = Array.isArray(res.data)
+          ? res.data.filter((s) => s?.name !== "reference_pictures")
+          : [];
       })
       .catch(() => {
         sets.value = [];
@@ -350,17 +384,18 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     await fetchSummary();
     await fetchQueue();
     await refreshBulkCount();
-    fetchAllTags(); // background; powers the scan-input autocomplete
+    fetchAllTags(); // background; powers the tag-picker autocomplete
+    fetchAnomalyTags(); // background; flags smart-score-penalised tags red in the picker
     fetchScopeOptions(); // background; powers the project/set/character filter dropdowns
   }
 
-  // Merge new scope filters and re-run the dependent fetches in order. The summary is
-  // refreshed first so the tag list reflects the new scope, then activeTag is reconciled
-  // (it may have dropped out of the filtered list) before loading its queue and bulk count.
+  // Merge new scope filters and re-run the dependent fetches. The active tag is NEVER
+  // changed here: a scope filter only narrows the queue for the tag you already picked — it
+  // must not swap your tag (even to empty). The summary refreshes so the picker's pending
+  // counts reflect the new scope, then the queue + bulk count reload for the same tag.
   async function setScope(next) {
     scope.value = { ...scope.value, ...(next || {}) };
     await fetchSummary();
-    reconcileActiveTag();
     await fetchQueue();
     await refreshBulkCount();
   }
@@ -388,6 +423,29 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     } finally {
       scanning.value = false;
     }
+  }
+
+  // The tag picker's single entry point: pick a tag from the autocomplete and reliably load
+  // its queue, every time (the "scan doesn't always replace" fix). If the tag already has
+  // pending suggestions in the summary, just switch to it and load its queue; otherwise run
+  // the near-neighbour scan to populate it. Either way the queue ends up on the picked tag —
+  // fetchSummary no longer reverts an explicit pick, so even an empty scoped result sticks.
+  async function selectOrScan(tag) {
+    const t = (tag || "").trim();
+    if (!t) return;
+    const known = tags.value.some((entry) => entry.tag === t);
+    if (known) {
+      await selectTag(t);
+    } else {
+      await scanTag(t);
+    }
+  }
+
+  // Re-run the near-neighbour scan for the already-selected tag (rebuild its queue after the
+  // underlying data changed). A thin wrapper so the overlay's "rescan" button has a verb.
+  async function rescanActiveTag() {
+    if (!activeTag.value) return;
+    await scanTag(activeTag.value);
   }
 
   // Resolve the head of the queue: accept applies the fix, dismiss keeps the label.
@@ -644,7 +702,12 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     scanning,
     scanError,
     scanTag,
+    selectOrScan,
+    rescanActiveTag,
     allTags,
+    anomalyTags,
+    fetchAnomalyTags,
+    isAnomalyTag,
     scope,
     projects,
     sets,
