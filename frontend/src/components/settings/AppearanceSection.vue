@@ -240,42 +240,42 @@ async function clearGuestSession() {
 
 <style scoped>
 .settings-section-divider {
-  margin: 4px 0 8px;
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .settings-section {
   display: flex;
   line-height: 1;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .settings-section-title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .settings-section-desc {
-  font-size: 0.92em;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .settings-slider-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
-  padding-right: 8px;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  padding-right: var(--space-3);
 }
 
 .settings-slider-value {
   min-width: 64px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-on-surface));
 }
 
 .settings-slider {
   flex: 1 1 auto;
-  margin-right: 6px;
+  margin-right: var(--space-3);
   overflow: visible;
 }
 
@@ -285,23 +285,23 @@ async function clearGuestSession() {
 
 .sidebar-width-toggle {
   display: flex;
-  gap: 10px;
-  margin-top: 4px;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
 }
 .sidebar-width-opt {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 12px 8px;
-  border-radius: 10px;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-3);
+  border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   background: rgba(var(--v-theme-on-surface), 0.04);
   color: rgb(var(--v-theme-on-surface));
   font-family: inherit;
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   cursor: pointer;
   transition:
     border-color 0.12s,
@@ -323,7 +323,7 @@ async function clearGuestSession() {
   display: flex;
   width: 78px;
   height: 50px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1.5px solid currentColor;
   overflow: hidden;
   opacity: 0.85;
@@ -345,6 +345,6 @@ async function clearGuestSession() {
   opacity: 0.35;
 }
 .sidebar-width-label {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 </style>

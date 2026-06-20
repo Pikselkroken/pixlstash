@@ -339,26 +339,26 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  margin-bottom: 4px;
-  padding: 2px 0;
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) 0;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .section-meta-group {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .section-meta-btn {
   border: none;
   background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  padding: 2px;
+  padding: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -389,8 +389,8 @@ defineExpose({
   flex: 1;
   width: 100%;
   min-height: 56px;
-  border-radius: 8px;
-  font-size: 0.85rem;
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
   background: rgba(var(--v-theme-shadow), 0.35);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -401,7 +401,7 @@ defineExpose({
 .description-actions {
   margin-top: 6px;
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .overlay-icon-btn {
@@ -411,7 +411,7 @@ defineExpose({
   height: 32px;
   padding: 6px 14px;
   min-width: 32px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;

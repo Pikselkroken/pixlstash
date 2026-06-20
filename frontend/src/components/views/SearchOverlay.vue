@@ -168,13 +168,13 @@ onUnmounted(() => {
 .search-card {
   width: 600px;
   max-width: calc(100vw - 32px);
-  padding-left: 16px;
-  padding-top: 8px;
+  padding-left: var(--space-5);
+  padding-top: var(--space-3);
   position: relative;
   color: rgb(var(--v-theme-on-surface));
   background-color: rgb(var(--v-theme-surface));
   overflow: visible;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .close-icon {
   position: absolute;
@@ -192,7 +192,7 @@ onUnmounted(() => {
 
 /* Darker overlay for dialogs/overlays */
 .v-overlay__scrim {
-  background: rgba(0, 0, 0, 0.8) !important;
+  background: rgba(var(--v-theme-scrim), 0.8) !important;
   opacity: 0.9 !important;
 }
 
@@ -201,11 +201,11 @@ onUnmounted(() => {
 }
 
 .search-tab-hint {
-  font-size: 0.8em;
+  font-size: var(--text-2xs);
   opacity: 0.55;
   margin-top: -12px;
-  margin-bottom: 4px;
-  padding-left: 2px;
+  margin-bottom: var(--space-2);
+  padding-left: var(--space-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -213,10 +213,10 @@ onUnmounted(() => {
 
 .search-tab-hint kbd {
   font-family: inherit;
-  font-size: 0.85em;
+  font-size: var(--text-xs);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.3);
-  border-radius: 3px;
-  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
   opacity: 0.8;
 }
 
@@ -224,20 +224,20 @@ onUnmounted(() => {
   display: flex;
   justify-content: flex-start;
   align-items: center;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 
 .search-history-label {
-  font-size: 0.78em;
+  font-size: var(--text-2xs);
   opacity: 0.6;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
 }
 
 .search-history-clear {
-  font-size: 0.78em;
+  font-size: var(--text-2xs);
   opacity: 0.55;
   background: none;
   border: none;
@@ -253,7 +253,7 @@ onUnmounted(() => {
 .search-history-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .search-history-chip {
@@ -261,9 +261,9 @@ onUnmounted(() => {
   align-items: center;
   background: rgba(var(--v-theme-on-surface), 0.08);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 999px;
-  padding: 3px 12px 3px 8px;
-  font-size: 0.85em;
+  border-radius: var(--radius-pill);
+  padding: 3px var(--space-4) 3px var(--space-3);
+  font-size: var(--text-xs);
   cursor: pointer;
   color: inherit;
   transition: background 0.15s;

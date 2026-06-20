@@ -210,7 +210,7 @@ function emitValue() {
 <style scoped>
 .plugin-ui-root {
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .plugin-ui--auto {
@@ -222,7 +222,7 @@ function emitValue() {
 }
 
 .plugin-ui-description {
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   opacity: 0.75;
 }
 
@@ -232,17 +232,17 @@ function emitValue() {
 
 .plugin-ui-field {
   display: grid;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .plugin-ui-field--after-description {
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 
 .plugin-ui-label {
   display: block;
-  font-size: 0.82rem;
-  margin-bottom: 4px;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: inherit;
@@ -250,15 +250,15 @@ function emitValue() {
 
 .plugin-menu-label {
   display: block;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
   opacity: 0.9;
 }
 
 .overlay-comfy-field-label {
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
@@ -267,18 +267,18 @@ function emitValue() {
 .plugin-ui-input {
   width: 100%;
   min-height: 32px;
-  padding: 0 8px;
-  border-radius: 4px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
 }
 
 .plugin-run-select {
   width: 100%;
   height: 32px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
   background: rgba(var(--v-theme-background), 0.7);
   color: rgb(var(--v-theme-on-background));
-  padding: 0 8px;
+  padding: 0 var(--space-3);
 }
 
 .overlay-comfy-select {
@@ -286,9 +286,9 @@ function emitValue() {
   background: rgba(var(--v-theme-shadow), 0.45);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: 8px;
-  padding: 6px 8px;
-  font-size: 0.8rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
 }
 
 .plugin-ui--auto .plugin-ui-input {
@@ -306,7 +306,7 @@ function emitValue() {
 .plugin-ui-checkbox-row {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .plugin-ui--auto .plugin-ui-checkbox-row {
@@ -318,7 +318,7 @@ function emitValue() {
 }
 
 .plugin-ui-help {
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   opacity: 0.75;
 }
 

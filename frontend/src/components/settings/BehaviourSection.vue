@@ -574,26 +574,26 @@ watch(maxVramGbValue, () => {
   display: flex;
   line-height: 1;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .settings-section-title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .settings-section-desc {
-  font-size: 0.92em;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .settings-section-divider {
-  margin: 4px 0 8px;
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .settings-tagger-loading {
-  font-size: 0.9em;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.55);
-  padding: 6px 0;
+  padding: var(--space-3) 0;
 }
 
 .settings-tag-filter-toggle {
@@ -603,32 +603,32 @@ watch(maxVramGbValue, () => {
 .settings-slider-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
-  padding-right: 8px;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  padding-right: var(--space-3);
 }
 
 .settings-slider-value {
   min-width: 64px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-on-surface));
 }
 
 .settings-slider {
   flex: 1 1 auto;
-  margin-right: 6px;
+  margin-right: var(--space-3);
   overflow: visible;
 }
 
 .settings-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .settings-add-tag-row {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: flex-end;
 }
 
@@ -639,7 +639,7 @@ watch(maxVramGbValue, () => {
 .settings-tag-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-4);
 }
 
 .settings-tag-list .settings-token-empty {
@@ -649,9 +649,9 @@ watch(maxVramGbValue, () => {
 .settings-tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 6px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: rgba(var(--v-theme-on-surface), 0.9);
 }
@@ -659,11 +659,11 @@ watch(maxVramGbValue, () => {
 .settings-tag-chip--row {
   width: 100%;
   justify-content: space-between;
-  padding-right: 4px;
+  padding-right: var(--space-2);
 }
 
 .settings-tag-label {
-  font-size: 1em;
+  font-size: var(--text-base);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -677,28 +677,28 @@ watch(maxVramGbValue, () => {
   min-width: 0;
   height: 12px;
   width: 12px;
-  padding: 2;
+  padding: var(--space-1);
 }
 
 .settings-tag-delete:hover {
   color: rgba(var(--v-theme-error), 0.9);
   min-width: 0;
-  padding: 2;
+  padding: var(--space-1);
 }
 
 .settings-token-empty {
-  font-size: 0.9em;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .settings-error {
   color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
 }
 
 .settings-success {
   color: rgb(var(--v-theme-accent));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
 }
 
 .settings-action-btn {

@@ -388,14 +388,14 @@ onMounted(() => {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 12px;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-4);
   min-height: 38px;
   cursor: pointer;
   user-select: none;
   color: rgba(var(--v-theme-sidebar-text), 0.58);
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
 
@@ -409,7 +409,7 @@ onMounted(() => {
 
 .pf-header-icon {
   color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
-  margin-right: 4px;
+  margin-right: var(--space-2);
 }
 
 .pf-title {
@@ -419,10 +419,10 @@ onMounted(() => {
 .pf-count {
   background: rgba(var(--v-theme-accent), 0.25);
   color: rgb(var(--v-theme-accent));
-  font-size: 0.72rem;
-  font-weight: 700;
-  padding: 0 5px;
-  border-radius: 8px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
   min-width: 18px;
   text-align: center;
 }
@@ -441,10 +441,10 @@ onMounted(() => {
 .pf-panel {
   position: relative;
   border-top: 1px solid rgba(var(--v-theme-border), 0.3);
-  padding: 8px;
+  padding: var(--space-3);
   min-height: 72px;
   background: rgb(var(--v-theme-surface));
-  border-radius: 0 0 5px 5px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
   box-shadow: inset 1px 1px 3px rgba(var(--v-theme-shadow), 0.12);
 }
 
@@ -460,12 +460,12 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-3);
   background: rgba(var(--v-theme-accent), 0.15);
-  border-radius: 0 0 6px 6px;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
   color: rgb(var(--v-theme-accent));
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   border: 2px dashed rgb(var(--v-theme-accent));
   pointer-events: none;
 }
@@ -475,10 +475,10 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-height: 72px;
   color: rgba(var(--v-theme-on-surface), 0.4);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .pf-empty-icon {
@@ -489,17 +489,17 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-3);
   min-height: 72px;
   color: rgba(var(--v-theme-on-surface), 0.6);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 /* ---- File grid ---- */
 .pf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .pf-file-card {
@@ -507,8 +507,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 4px 6px;
-  border-radius: 2px;
+  padding: var(--space-3) var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
@@ -550,18 +550,18 @@ onMounted(() => {
 }
 
 .pf-file-delete:hover {
-  background: rgba(220, 80, 60, 0.8);
-  color: #fff;
+  background: rgba(var(--v-theme-error), 0.8);
+  color: rgb(var(--v-theme-on-error));
   opacity: 1 !important;
 }
 
 .pf-file-icon {
   color: rgba(var(--v-theme-on-surface), 0.65) !important;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 
 .pf-file-name {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   line-height: 1.2;
   word-break: break-all;
   max-width: 100%;
@@ -573,9 +573,9 @@ onMounted(() => {
 }
 
 .pf-file-meta {
-  font-size: 0.65rem;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.4);
-  margin-top: 3px;
+  margin-top: var(--space-2);
   line-height: 1.3;
 }
 
@@ -584,20 +584,20 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  font-size: 0.72rem;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.3);
-  margin-top: 6px;
+  margin-top: var(--space-3);
 }
 
 .pf-error {
-  font-size: 0.78rem;
-  color: rgb(200, 50, 40);
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-error));
   text-align: center;
-  margin-top: 6px;
-  padding: 4px 8px;
-  background: rgba(200, 50, 40, 0.08);
-  border-radius: 4px;
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: rgba(var(--v-theme-error), 0.08);
+  border-radius: var(--radius-sm);
 }
 
 /* ---- URL cards ---- */
@@ -606,9 +606,9 @@ onMounted(() => {
 }
 
 .pf-url-meta {
-  font-size: 0.65rem;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-accent), 0.6);
-  margin-top: 3px;
+  margin-top: var(--space-2);
   line-height: 1.3;
   word-break: break-all;
   max-width: 100%;
@@ -625,12 +625,12 @@ onMounted(() => {
 .pf-add-url-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-2);
   background: none;
   border: none;
   cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.45);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   padding: 0;
   transition: color 0.15s;
 }
@@ -640,26 +640,26 @@ onMounted(() => {
 }
 
 .pf-add-url-btn--empty {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.35);
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 /* ---- URL form ---- */
 .pf-url-form {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 6px 4px 2px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2) var(--space-1);
 }
 
 .pf-url-input {
   width: 100%;
   background: rgba(var(--v-theme-on-surface), 0.06);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.15);
-  border-radius: 4px;
-  padding: 4px 7px;
-  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-surface));
   outline: none;
   box-sizing: border-box;
@@ -672,15 +672,15 @@ onMounted(() => {
 
 .pf-url-form-actions {
   display: flex;
-  gap: 5px;
+  gap: var(--space-2);
   justify-content: flex-end;
 }
 
 .pf-url-save,
 .pf-url-cancel {
-  font-size: 0.75rem;
-  padding: 3px 10px;
-  border-radius: 4px;
+  font-size: var(--text-xs);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   border: none;
   cursor: pointer;
   transition:
@@ -690,7 +690,7 @@ onMounted(() => {
 
 .pf-url-save {
   background: rgba(var(--v-theme-accent), 0.85);
-  color: #fff;
+  color: rgb(var(--v-theme-on-accent));
 }
 
 .pf-url-save:hover:not(:disabled) {

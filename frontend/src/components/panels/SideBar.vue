@@ -6387,27 +6387,27 @@ defineExpose({
 
 <style scoped>
 .sidebar-project-header {
-  padding-top: 4px;
-  padding-bottom: 4px;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
   justify-content: center;
 }
 
 .sidebar-section-divider {
   height: 1px;
   background: rgba(var(--v-theme-border), 0.2);
-  margin: 2px 0;
+  margin: var(--space-1) 0;
 }
 
 .sidebar-collections-help-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 0 4px 4px;
+  gap: var(--space-3);
+  padding: 0 var(--space-2) var(--space-2);
 }
 
 .sidebar-collections-help {
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   font-style: italic;
   color: rgba(var(--v-theme-sidebar-text), 0.5);
 }
@@ -6423,7 +6423,7 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   flex: 1;
-  padding: 0 4px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-3);
 }
 
 .sidebar-pin-toggle {
@@ -6433,7 +6433,7 @@ defineExpose({
   width: 22px;
   height: 22px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: rgba(var(--v-theme-sidebar-text), 0.5);
   cursor: pointer;
@@ -6491,9 +6491,9 @@ defineExpose({
 .sidebar-view-title-text {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-sidebar-text), 0.5);
@@ -6506,7 +6506,7 @@ defineExpose({
 .sidebar-view-tabs-row {
   display: flex;
   align-items: center;
-  padding: 0px 4px 2px 4px;
+  padding: 0 var(--space-2) var(--space-1) var(--space-2);
   position: relative;
   z-index: 1;
   margin-top: 0;
@@ -6523,7 +6523,7 @@ defineExpose({
 
 .sidebar-view-tabs-label {
   flex-shrink: 0;
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   font-weight: 500;
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-sidebar-text), 0.35);
@@ -6531,7 +6531,7 @@ defineExpose({
 }
 
 .sidebar-view-tabs-arrow {
-  font-size: 0.8em;
+  font-size: var(--text-sm);
   opacity: 0.7;
 }
 
@@ -6546,18 +6546,18 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: var(--space-2);
   /* Trimmed vertical padding so the header (title row + this tab row) stays at the
      48px toolbar height when the tabs sit on one line; min-height pads any slack. */
-  padding: 3px 8px 2px;
+  padding: var(--space-2) var(--space-3) var(--space-1);
   /* Grow to fill the row, but don't shrink below the icon+label — so when the
      sidebar is narrowed the tabs wrap onto new lines instead of clipping. */
   flex: 1 0 auto;
   border-radius: 0;
   border: none;
   border-bottom: 2px solid transparent;
-  font-size: 0.74rem;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
   cursor: pointer;
   background: transparent;
@@ -6587,7 +6587,7 @@ defineExpose({
 @media (hover: none) and (pointer: coarse) {
   .sidebar-view-tab {
     min-height: 44px;
-    padding: 8px 8px;
+    padding: var(--space-3) var(--space-3);
   }
 }
 
@@ -6623,7 +6623,7 @@ defineExpose({
 
 .sidebar-section-scroll::-webkit-scrollbar-thumb {
   background: rgb(var(--v-theme-accent));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .sidebar-section-scroll::-webkit-scrollbar-track {
@@ -6635,8 +6635,8 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  padding: 40px 24px;
+  gap: var(--space-5);
+  padding: var(--space-8) var(--space-6);
   text-align: center;
 }
 
@@ -6646,15 +6646,15 @@ defineExpose({
 }
 
 .sidebar-no-projects-text {
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   color: rgba(var(--v-theme-sidebar-text), 0.6);
   margin: 0;
   line-height: 1.5;
 }
 
 .sidebar-no-projects-btn :deep(.v-btn__content) {
-  font-size: 0.82rem;
-  padding: 2px 4px 2px 4px;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2);
 }
 
 .sidebar-no-projects-btn--folders {
@@ -6665,10 +6665,10 @@ defineExpose({
 .sidebar-project-tree-add {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 8px;
-  font-size: 0.8rem;
-  font-weight: 700;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
   color: rgba(var(--v-theme-sidebar-text), 0.7);
   cursor: pointer;
@@ -6687,7 +6687,7 @@ defineExpose({
 .sidebar-project-tree-node {
   display: flex;
   flex-direction: column;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
 }
 
@@ -6698,8 +6698,8 @@ defineExpose({
 .sidebar-project-tree-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 var(--sidebar-right-edge, 8px) 0 8px;
+  gap: var(--space-2);
+  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-3);
   min-height: 28px;
   cursor: pointer;
   border-left: 3px solid transparent;
@@ -6749,7 +6749,7 @@ defineExpose({
   background: rgba(var(--v-theme-primary), 0.22);
   outline: 2px dashed rgb(var(--v-theme-primary));
   outline-offset: -2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .sidebar-project-tree-expand-indicator {
@@ -6781,7 +6781,7 @@ defineExpose({
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   overflow: hidden;
 }
 
@@ -6790,8 +6790,8 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.7rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -6799,7 +6799,7 @@ defineExpose({
 .sidebar-project-tree-actions {
   display: none;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-shrink: 0;
 }
 
@@ -6831,8 +6831,8 @@ defineExpose({
 .sidebar-project-tree-subheader {
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 2px 0 2px 10px;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   min-height: 24px;
   cursor: pointer;
@@ -6865,8 +6865,8 @@ defineExpose({
 }
 
 .sidebar-project-tree-subheader-label {
-  font-size: 0.68rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: inherit;
@@ -6875,12 +6875,12 @@ defineExpose({
 
 /* Child items indented under a project sub-section */
 .sidebar-project-tree-child {
-  padding-left: 16px !important;
+  padding-left: var(--space-5) !important;
 }
 
 .sidebar-project-tree-empty {
-  padding: 2px 8px 2px 20px;
-  font-size: 0.72rem;
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-5);
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-sidebar-text), 0.35);
   font-style: italic;
 }
@@ -6891,7 +6891,7 @@ defineExpose({
 
 .sidebar-no-projects-btn--folders :deep(.v-btn__content) {
   white-space: nowrap;
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .sidebar-collapsed-project-wrap {
@@ -6907,7 +6907,7 @@ defineExpose({
   z-index: 300;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: none;
   overflow: hidden;
   min-width: 180px;
@@ -6927,7 +6927,7 @@ defineExpose({
   color: rgb(var(--v-theme-on-primary));
   font-weight: 600;
   border-left: 3px solid rgb(var(--v-theme-primary));
-  padding-left: 7px; /* compensate for the 3px border so text stays aligned */
+  padding-left: var(--space-3); /* compensate for the 3px border so text stays aligned */
 }
 
 .sidebar-collapsed-project-submenu {
@@ -6935,7 +6935,7 @@ defineExpose({
   z-index: 301;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   min-width: 180px;
   max-height: 60vh;
@@ -6946,7 +6946,7 @@ defineExpose({
 .sidebar-project-menu-separator {
   height: 1px;
   background: rgba(var(--v-theme-border), 0.3);
-  margin: 2px 0;
+  margin: var(--space-1) 0;
 }
 
 .sidebar-project-menu-has-sub {
@@ -6984,7 +6984,7 @@ defineExpose({
   z-index: 300;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -6999,9 +6999,9 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  padding: 6px 12px;
-  font-size: 0.72rem;
-  font-weight: 600;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: rgba(var(--v-theme-sidebar-text), 0.55);
@@ -7028,8 +7028,8 @@ defineExpose({
 .sidebar-collapsed-flyout-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   cursor: pointer;
   color: rgb(var(--v-theme-on-surface));
   transition: background 0.12s;
@@ -7047,13 +7047,13 @@ defineExpose({
 .sidebar-collapsed-flyout-thumb {
   width: 32px;
   height: 32px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   object-fit: cover;
   flex-shrink: 0;
 }
 
 .sidebar-collapsed-flyout-label {
-  font-size: 0.88rem;
+  font-size: var(--text-base);
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
@@ -7062,7 +7062,7 @@ defineExpose({
 .sidebar-collapsed-flyout-item-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-shrink: 0;
   margin-left: auto;
   visibility: hidden;
@@ -7075,8 +7075,8 @@ defineExpose({
 .sidebar-collapsed-flyout-item-actions .v-icon {
   opacity: 0.55;
   cursor: pointer;
-  padding: 2px;
-  border-radius: 3px;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
   transition:
     opacity 0.1s,
     background 0.1s;
@@ -7088,9 +7088,9 @@ defineExpose({
 }
 
 .sidebar-project-menu-section-label {
-  padding: 6px 10px 2px;
-  font-size: 0.7rem;
-  font-weight: 600;
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: rgba(var(--v-theme-sidebar-text), 0.45);
@@ -7106,12 +7106,12 @@ defineExpose({
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
   background: transparent;
   color: rgba(var(--v-theme-sidebar-text), 0.65);
-  font-size: 0.81rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   min-height: 26px;
 }
@@ -7121,14 +7121,14 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
-  padding: 3px 10px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-radius: 0;
   border: none;
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
   background: transparent;
   color: rgba(var(--v-theme-sidebar-text), 0.65);
-  font-size: 0.81rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   min-height: 26px;
   cursor: pointer;
@@ -7177,14 +7177,14 @@ defineExpose({
 .sidebar-project-menu-item {
   display: flex;
   align-items: center;
-  padding: 4px 10px;
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
-  font-size: 0.81rem;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-tertiary));
   transition:
     background 0.1s,
     color 0.1s;
-  gap: 6px;
+  gap: var(--space-3);
   min-height: 26px;
 }
 
@@ -7224,10 +7224,10 @@ defineExpose({
 .sidebar-project-menu-add {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 0.81rem;
-  font-weight: 600;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
   color: rgba(var(--v-theme-on-tertiary), 0.65);
   border-top: 1px solid rgba(var(--v-theme-border), 0.25);
@@ -7251,15 +7251,15 @@ defineExpose({
 .sidebar-native-select {
   background: rgba(var(--v-theme-surface), 0.3);
   color: rgb(var(--v-theme-on-surface));
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   min-height: 32px;
   height: 32px;
-  font-size: 1em;
+  font-size: var(--text-md);
   box-shadow: 2px 2px 6px rgba(var(--v-theme-shadow), 0.2);
-  margin-left: 6px;
+  margin-left: var(--space-3);
   box-sizing: border-box;
-  padding-left: 8px;
-  padding-right: 8px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
   border: 1px solid rgba(var(--v-theme-border), 0.5);
   width: 230px;
   transition: border 0.15s;
@@ -7284,13 +7284,13 @@ defineExpose({
   display: flex;
   align-items: center;
   min-height: 32px;
-  padding: 0 12px;
-  margin-left: 6px;
-  border-radius: 4px;
+  padding: 0 var(--space-4);
+  margin-left: var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-surface), 0.2);
   color: rgba(var(--v-theme-on-surface), 0.7);
   border: 1px dashed rgba(var(--v-theme-border), 0.5);
-  font-size: 0.95em;
+  font-size: var(--text-md);
 }
 /* Sidebar right edge for counts */
 .sidebar {
@@ -7347,8 +7347,8 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 4px 0 2px;
-  gap: 1px;
+  padding: var(--space-2) 0 var(--space-1);
+  gap: var(--space-1);
   position: static;
 }
 
@@ -7368,7 +7368,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 4px 4px 2px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-1);
   background: transparent;
 }
 
@@ -7377,7 +7377,7 @@ defineExpose({
 .sidebar-brand-pin {
   align-self: flex-start;
   flex-shrink: 0;
-  margin: 2px 4px 0 0;
+  margin: var(--space-1) var(--space-2) 0 0;
 }
 .sidebar-brand-pin.pinned {
   color: rgb(var(--v-theme-accent));
@@ -7386,8 +7386,8 @@ defineExpose({
 .sidebar-brand-left {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 2px 2px 2px 10px;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
 }
 
 .sidebar-brand-logo {
@@ -7402,7 +7402,7 @@ defineExpose({
 .sidebar-brand-logo-link {
   display: flex;
   align-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   outline: none;
 }
 
@@ -7415,7 +7415,7 @@ defineExpose({
 .sidebar-brand-title {
   /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. "Pixl" uses the
      sidebar text colour, "Stash" the accent — matching the desktop title bar. */
-  font-size: 24px;
+  font-size: var(--text-xl);
   color: rgb(var(--v-theme-sidebar-text));
   --wordmark-accent: rgb(var(--v-theme-accent));
 }
@@ -7432,13 +7432,13 @@ defineExpose({
      row and looked "gone"). */
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-2);
   white-space: nowrap;
-  margin-top: 3px;
+  margin-top: var(--space-2);
 }
 
 .sidebar-update-available {
-  font-size: 0.65rem;
+  font-size: var(--text-2xs);
   line-height: 1;
   color: rgba(var(--v-theme-accent), 0.8);
   text-decoration: none;
@@ -7456,7 +7456,7 @@ defineExpose({
   padding: 0;
   width: 10px;
   height: 10px;
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
   line-height: 1;
   background: transparent;
   border: none;
@@ -7471,7 +7471,7 @@ defineExpose({
 }
 
 .sidebar-update-security {
-  color: #e57c00;
+  color: rgb(var(--v-theme-warning));
 }
 
 .sidebar-update-security:hover {
@@ -7479,7 +7479,7 @@ defineExpose({
 }
 
 .sidebar-update-security--high {
-  color: #e53935;
+  color: rgb(var(--v-theme-error));
 }
 
 .sidebar-update-security--high:hover {
@@ -7492,7 +7492,7 @@ defineExpose({
   width: 30px;
   height: 30px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   border: none;
   box-shadow: none;
@@ -7509,7 +7509,7 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   gap: var(--sidebar-space-y);
-  padding: 4px 0 8px;
+  padding: var(--space-2) 0 var(--space-3);
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
@@ -7532,7 +7532,7 @@ defineExpose({
   transform: translateY(-50%) scaleY(0);
   width: 3px;
   height: 60%;
-  border-radius: 0 2px 2px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: rgb(var(--v-theme-primary));
   transition: transform 0.18s ease;
   pointer-events: none;
@@ -7684,7 +7684,7 @@ defineExpose({
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   pointer-events: none;
   opacity: 0;
   z-index: 2;
@@ -7740,7 +7740,7 @@ defineExpose({
 .sidebar-collapsed-divider {
   width: 70%;
   height: 1px;
-  margin: 2px auto;
+  margin: var(--space-1) auto;
   background: rgba(var(--v-theme-sidebar-text), 0.15);
 }
 
@@ -7752,12 +7752,12 @@ defineExpose({
 
 .sidebar-section-header {
   position: relative;
-  font-size: 0.68rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
   min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
-  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) 10px 2px 10px;
+  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) var(--space-3) var(--space-1) var(--space-3);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
   align-items: center;
@@ -7775,7 +7775,7 @@ defineExpose({
 }
 
 .sidebar-section-chevron {
-  margin-right: 3px;
+  margin-right: var(--space-2);
   flex-shrink: 0;
   color: rgba(var(--v-theme-sidebar-text), 0.4);
   transition: transform 0.15s;
@@ -7800,12 +7800,12 @@ defineExpose({
   display: flex;
   align-items: center;
   min-height: calc(var(--sidebar-thumb-size) + 6px);
-  padding: 3px 8px;
+  padding: var(--space-2) var(--space-3);
   padding-right: var(--sidebar-right-edge) !important;
   cursor: pointer;
   border-radius: 0;
   margin-bottom: 0;
-  font-size: 0.81rem;
+  font-size: var(--text-sm);
   font-weight: 400;
   background: transparent;
   color: rgba(var(--v-theme-sidebar-text), 0.76);
@@ -7847,7 +7847,7 @@ defineExpose({
   background: rgba(var(--v-theme-on-surface), 0.05);
   background-clip: padding-box;
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   transition: background 0.15s ease;
 }
 
@@ -7868,12 +7868,12 @@ defineExpose({
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 6px 10px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3);
   border-top: 1px solid rgba(var(--v-theme-border), 0.2);
   background: rgb(var(--v-theme-sidebar));
   flex-shrink: 0;
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   font-weight: 500;
   color: rgba(var(--v-theme-sidebar-text), 0.38);
 }
@@ -7889,13 +7889,13 @@ defineExpose({
 .sidebar-readonly-notice-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 7px;
-  border-radius: 5px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-accent), 0.15);
   color: rgb(var(--v-theme-accent));
-  font-size: 0.68rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-decoration: none;
   transition:
     background 0.15s,
@@ -7918,7 +7918,7 @@ defineExpose({
 }
 
 .sidebar-footer {
-  padding: 4px 0 0 0;
+  padding: var(--space-2) 0 0 0;
 }
 
 .sidebar-footer-item {
@@ -7962,7 +7962,7 @@ defineExpose({
 .sidebar-header-actions {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: var(--space-1);
   min-width: 40px;
   justify-content: flex-end;
   margin-left: auto;
@@ -7992,24 +7992,24 @@ defineExpose({
     rgb(var(--v-theme-sidebar))
   );
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   min-width: 180px;
   max-width: 300px;
   max-height: 420px; /* keep in sync with MOVE_MENU_MAX_H in the script */
   overflow-y: auto;
-  padding: 4px 0;
+  padding: var(--space-2) 0;
   box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.3);
   white-space: nowrap;
 }
 
 .sidebar-move-menu-group-header {
-  padding: 6px 10px 3px;
-  font-size: 0.72rem;
-  font-weight: 600;
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-tertiary), 0.45);
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .sidebar-move-menu-group-header:first-child {
@@ -8023,9 +8023,9 @@ defineExpose({
 .sidebar-move-menu-item {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
-  font-size: 0.85rem;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-base);
   cursor: pointer;
   color: rgb(var(--v-theme-on-tertiary));
   overflow: hidden;
@@ -8040,7 +8040,7 @@ defineExpose({
 
 .sidebar-move-menu-item--create {
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
   font-style: italic;
   opacity: 0.85;
 }
@@ -8056,7 +8056,7 @@ defineExpose({
 .sidebar-list-icon {
   display: flex;
   align-items: center;
-  margin-right: 6px;
+  margin-right: var(--space-3);
   justify-content: center;
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
@@ -8181,9 +8181,9 @@ defineExpose({
   z-index: 1200;
   color: rgb(var(--v-theme-on-error));
   background: rgba(var(--v-theme-error), 0.8);
-  padding: 10px 16px;
-  border-radius: 14px;
-  font-size: 0.9em;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-base);
   line-height: 1.3;
   box-shadow: 0 8px 20px rgba(var(--v-theme-shadow), 0.25);
   pointer-events: none;
@@ -8193,7 +8193,7 @@ defineExpose({
 }
 
 .sidebar-list-count {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-sidebar-text), 0.55);
   min-width: 2.4em;
   text-align: right;
@@ -8209,13 +8209,13 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.65em;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding: 2px 2px;
-  margin-right: 4px;
-  border-radius: 4px;
+  padding: var(--space-1) var(--space-1);
+  margin-right: var(--space-2);
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-primary));
   background: rgba(var(--v-theme-primary), 0.7);
   position: relative;
@@ -8225,7 +8225,7 @@ defineExpose({
 .sidebar-character-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   margin-left: auto;
   justify-content: flex-end;
 }
@@ -8247,14 +8247,14 @@ defineExpose({
   color: rgb(var(--v-theme-primary));
   flex-shrink: 0;
   pointer-events: none;
-  margin-right: 2px;
+  margin-right: var(--space-1);
 }
 
 .sidebar-character-toggle {
   cursor: pointer;
   color: rgb(var(--v-theme-sidebar-text));
   opacity: 0.8;
-  margin-right: 4px;
+  margin-right: var(--space-2);
 }
 
 .sidebar-character-toggle:hover {
@@ -8264,10 +8264,10 @@ defineExpose({
 
 .add-character-inline {
   color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
-  font-size: 1rem;
+  font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -8285,12 +8285,12 @@ defineExpose({
 
 .clear-selection-inline {
   color: rgb(var(--v-theme-primary)) !important;
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   cursor: pointer;
   background: transparent;
   border: none;
   padding: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -8307,10 +8307,10 @@ defineExpose({
 .edit-character-inline,
 .edit-set-inline {
   color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
-  font-size: 1rem;
+  font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -8375,10 +8375,10 @@ defineExpose({
 
 .delete-character-inline {
   color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
-  font-size: 1rem;
+  font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -8403,16 +8403,16 @@ defineExpose({
 .sidebar-sort-select {
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
-  border-radius: 6px !important;
+  border-radius: var(--radius-md) !important;
   min-height: 36px !important;
   height: 36px !important;
-  font-size: 0.97em;
+  font-size: var(--text-md);
   box-shadow: none;
   margin-top: 0px;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
   align-items: center;
-  padding-left: 6px;
-  padding-right: 6px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
 }
 
 /* Remove extra height from v-input root for select */
@@ -8420,25 +8420,25 @@ defineExpose({
 .sidebar-sort-select .v-field {
   min-height: 32px !important;
   height: 32px !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
   box-shadow: none !important;
 }
 
 .sidebar-sort-select .v-field__input {
   min-height: 28px !important;
   height: 28px !important;
-  padding-top: 2px !important;
-  padding-bottom: 2px !important;
+  padding-top: var(--space-1) !important;
+  padding-bottom: var(--space-1) !important;
   align-items: center;
 }
 
 /* Items within People/Sets sections get a tree indent */
 .sidebar-section-scroll .sidebar-list-item {
-  padding-left: 16px;
+  padding-left: var(--space-5);
 }
 
 .sidebar-section-block .sidebar-section-header {
-  padding-bottom: 1px;
+  padding-bottom: var(--space-1);
 }
 
 /* All-pictures row: same compact height as regular items */
@@ -8453,10 +8453,10 @@ defineExpose({
 /* Keep All Pictures / Scrapheap rows compact but slightly prominent */
 .sidebar-all-pictures-row .sidebar-list-item {
   min-height: calc(min(var(--sidebar-thumb-size), 22px) + 6px) !important;
-  padding-top: 3px !important;
-  padding-bottom: 3px !important;
-  font-size: 0.8rem;
-  font-weight: 700;
+  padding-top: var(--space-2) !important;
+  padding-bottom: var(--space-2) !important;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
   color: rgba(var(--v-theme-sidebar-text), 0.7);
 }
@@ -8479,9 +8479,9 @@ defineExpose({
   transform: translateY(-50%);
   background: rgba(var(--v-theme-secondary), 0.75);
   color: rgb(var(--v-theme-on-secondary));
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-size: 0.9em;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-base);
   white-space: nowrap;
   pointer-events: none;
   z-index: 1000 !important;
@@ -8491,7 +8491,7 @@ defineExpose({
   .sidebar-list-item,
   .sidebar-list-item.active {
     min-height: 56px;
-    padding: 6px 10px;
+    padding: var(--space-3) var(--space-3);
   }
 
   .sidebar-section-header {
@@ -8501,7 +8501,7 @@ defineExpose({
   .sidebar-all-pictures-row .sidebar-list-item,
   .sidebar-all-pictures-row .sidebar-list-item.active {
     min-height: 48px;
-    padding: 6px 10px;
+    padding: var(--space-3) var(--space-3);
   }
 
   .sidebar-list-icon {
@@ -8533,14 +8533,14 @@ defineExpose({
 .sidebar-folders-loading {
   display: flex;
   justify-content: center;
-  padding: 32px;
+  padding: var(--space-7);
 }
 
 .sidebar-folders-list {
   flex: 0 0 auto;
   overflow-y: visible;
   overflow-x: hidden;
-  padding: 2px 0;
+  padding: var(--space-1) 0;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
 }
 
@@ -8552,8 +8552,8 @@ defineExpose({
 .sidebar-folder-section-header {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 var(--sidebar-right-edge, 8px) 0 8px;
+  gap: var(--space-2);
+  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-3);
   min-height: 28px;
   cursor: pointer;
   color: rgba(var(--v-theme-sidebar-text), 0.7);
@@ -8595,8 +8595,8 @@ defineExpose({
 
 .sidebar-folder-section-title {
   flex: 1 1 auto;
-  font-size: 0.7rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   overflow: hidden;
@@ -8630,8 +8630,8 @@ defineExpose({
 .sidebar-folder-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px 3px 10px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-3);
   cursor: pointer;
   color: rgba(var(--v-theme-sidebar-text), 0.8);
   user-select: none;
@@ -8643,7 +8643,7 @@ defineExpose({
 }
 
 .sidebar-folder-root-row {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 
 .sidebar-folder-row:hover {
@@ -8674,9 +8674,9 @@ defineExpose({
 }
 
 .sidebar-folder-children {
-  padding-left: 4px;
+  padding-left: var(--space-2);
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: 18px;
+  margin-left: var(--space-5);
 }
 
 .sidebar-folder-label {
@@ -8731,28 +8731,28 @@ defineExpose({
 
 /* All folder icons fixed at 16px regardless of thumbnail size */
 .sidebar-folders-list :deep(.sidebar-folder-icon) {
-  font-size: 16px !important;
+  font-size: var(--text-md) !important;
   width: 16px !important;
   height: 16px !important;
 }
 .sidebar-folders-list :deep(.sidebar-folder-chevron) {
-  font-size: 16px !important;
+  font-size: var(--text-md) !important;
   width: 16px !important;
   height: 16px !important;
 }
 
 .sidebar-folder-status-badge {
   flex-shrink: 0;
-  margin-left: 2px;
+  margin-left: var(--space-1);
   opacity: 0.75;
 }
 
 .sidebar-folder-count-badge {
   flex-shrink: 0;
-  margin-left: 4px;
+  margin-left: var(--space-2);
   min-width: 22px;
   text-align: right;
-  font-size: 0.74rem;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   color: rgba(var(--v-theme-sidebar-text), 0.6);
 }
@@ -8764,7 +8764,7 @@ defineExpose({
 .sidebar-folder-status--active {
   color: rgba(var(--v-theme-sidebar-text), 0.4);
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   transition:
     color 0.15s,
     opacity 0.15s;
@@ -8792,12 +8792,12 @@ defineExpose({
 .sidebar-folder-loading-row {
   display: flex;
   justify-content: center;
-  padding: 8px;
+  padding: var(--space-3);
 }
 
 .sidebar-folder-empty-row {
-  padding: 4px 8px;
-  font-size: 0.78rem;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-sidebar-text), 0.45);
   font-style: italic;
 }
@@ -8812,9 +8812,9 @@ defineExpose({
   z-index: 2000;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
-  padding: 4px 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-2) 0;
   min-width: 140px;
   user-select: none;
 }
@@ -8822,10 +8822,10 @@ defineExpose({
 .sidebar-ctx-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 7px 14px;
-  font-size: 13px;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-surface));
   background: transparent;
   border: none;
@@ -8866,7 +8866,7 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-ctx-arrow {
   margin-left: auto;
   opacity: 0.5;
-  font-size: 1rem;
+  font-size: var(--text-md);
   line-height: 1;
 }
 
@@ -8883,25 +8883,25 @@ button.sidebar-ctx-item:disabled:hover {
   z-index: 2100;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.28);
-  padding: 6px 8px 8px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-3) var(--space-3) var(--space-3);
   user-select: none;
   max-height: calc(100vh - 16px);
   overflow-y: auto;
 }
 
 .sidebar-ctx-appearance-label {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   opacity: 0.55;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  margin-bottom: 7px;
+  margin-bottom: var(--space-3);
 }
 
 .sidebar-ctx-icon-section-wrap {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
   align-items: flex-start;
 }
 
@@ -8910,8 +8910,8 @@ button.sidebar-ctx-item:disabled:hover {
   flex-direction: column;
   align-items: center;
   align-self: stretch;
-  padding: 24px 2px;
-  gap: 3px;
+  padding: var(--space-6) var(--space-1);
+  gap: var(--space-2);
 }
 
 .sidebar-ctx-icon-or-line {
@@ -8921,7 +8921,7 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-ctx-icon-or-text {
-  font-size: 0.55rem;
+  font-size: var(--text-2xs);
   opacity: 0.35;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -8936,7 +8936,7 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-ctx-icon-btn--cards-large {
   width: 48px;
   height: 48px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 2px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -8960,25 +8960,25 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-ctx-icon-grid {
   display: grid;
   grid-template-columns: repeat(8, 28px);
-  column-gap: 1px;
-  row-gap: 2px;
+  column-gap: var(--space-1);
+  row-gap: var(--space-1);
 }
 
 .sidebar-ctx-cat-header {
   grid-column: 1 / -1;
-  font-size: 0.58rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   opacity: 0.45;
-  padding: 5px 0 2px;
+  padding: var(--space-2) 0 var(--space-1);
   line-height: 1;
 }
 
 .sidebar-ctx-icon-btn {
   width: 28px;
   height: 28px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -8993,7 +8993,7 @@ button.sidebar-ctx-item:disabled:hover {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   display: block;
 }
 
@@ -9007,12 +9007,12 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-ctx-color-section-header {
-  font-size: 0.58rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   opacity: 0.45;
-  padding: 0 0 5px;
+  padding: 0 0 var(--space-2);
   line-height: 1;
 }
 
@@ -9020,14 +9020,14 @@ button.sidebar-ctx-item:disabled:hover {
   display: grid;
   grid-template-columns: repeat(6, 26px);
   grid-auto-rows: 26px;
-  gap: 5px;
+  gap: var(--space-2);
   align-items: center;
 }
 
 .sidebar-ctx-color-swatch {
   width: 26px;
   height: 26px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 2px solid transparent;
   cursor: pointer;
   outline: none;
@@ -9057,40 +9057,40 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .folder-type-card {
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
 }
 
 .folder-type-title {
-  font-size: 1.04rem;
-  font-weight: 700;
-  padding: 16px 18px 8px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-5) var(--space-5) var(--space-3);
 }
 
 .folder-type-body {
-  padding: 8px 18px 0;
+  padding: var(--space-3) var(--space-5) 0;
 }
 
 .folder-type-subtitle {
-  margin: 0 0 10px;
-  font-size: 0.83rem;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.62);
 }
 
 .folder-type-options {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .folder-type-option {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-3);
   width: 100%;
   border: 1px solid rgba(var(--v-theme-border), 0.35);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-surface), 0.4);
-  padding: 10px 12px;
+  padding: var(--space-3) var(--space-4);
   text-align: left;
   cursor: pointer;
   color: rgb(var(--v-theme-on-surface));
@@ -9104,21 +9104,21 @@ button.sidebar-ctx-item:disabled:hover {
 .folder-type-option-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .folder-type-option-text strong {
-  font-size: 0.88rem;
-  font-weight: 700;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
 }
 
 .folder-type-option-text small {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.62);
 }
 
 .folder-type-actions {
-  padding: 10px 16px 14px;
+  padding: var(--space-3) var(--space-5) var(--space-4);
 }
 
 .relocate-card {
@@ -9207,7 +9207,7 @@ button.sidebar-ctx-item:disabled:hover {
   background: rgba(var(--v-theme-on-surface), 0.05) !important;
   background-clip: padding-box !important;
   border: 2px solid transparent !important;
-  border-radius: 8px !important;
+  border-radius: var(--radius-md) !important;
   transition: background 0.15s ease !important;
 }
 .sidebar-scroll:hover::-webkit-scrollbar-thumb {
@@ -9223,12 +9223,12 @@ button.sidebar-ctx-item:disabled:hover {
 /* Override ProjectFiles header inside the project tree to match subheader style */
 .sidebar-project-tree-files .pf-header {
   min-height: 24px !important;
-  padding: 2px 0 2px 10px !important;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3) !important;
   padding-right: var(--sidebar-header-action-right-edge) !important;
-  font-size: 0.68rem !important;
-  font-weight: 700 !important;
+  font-size: var(--text-2xs) !important;
+  font-weight: var(--weight-semibold) !important;
   letter-spacing: 0.07em !important;
-  gap: 3px !important;
+  gap: var(--space-2) !important;
   color: rgba(var(--v-theme-sidebar-text), 0.4) !important;
   text-transform: uppercase !important;
   transition: color 0.12s !important;
@@ -9245,8 +9245,8 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-project-tree-files .pf-title {
-  font-size: 0.68rem !important;
-  font-weight: 700 !important;
+  font-size: var(--text-2xs) !important;
+  font-weight: var(--weight-semibold) !important;
   letter-spacing: 0.07em !important;
   text-transform: uppercase !important;
   flex: 1 !important;
@@ -9255,11 +9255,11 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-project-tree-files .pf-count {
   flex-shrink: 0;
   margin-left: auto;
-  margin-right: 4px;
+  margin-right: var(--space-2);
 }
 
 .sidebar-project-tree-files .pf-chevron {
-  font-size: 14px !important;
+  font-size: var(--text-base) !important;
   order: -1;
   opacity: 1 !important;
   color: inherit !important;

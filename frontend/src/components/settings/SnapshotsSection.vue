@@ -390,33 +390,33 @@ function handleRestore(cp) {
 
 <style scoped>
 .snapshots-section {
-  padding: 12px 0;
+  padding: var(--space-4) 0;
   min-height: 200px;
 }
 
 .snapshot-job-banner {
   background: rgba(var(--v-theme-primary), 0.1);
   border: 1px solid rgba(var(--v-theme-primary), 0.3);
-  border-radius: 6px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .snapshot-job-label {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   display: flex;
   align-items: center;
 }
 
 .snapshot-settings-row {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 
 .snapshot-create-row {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
   align-items: flex-start;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-3);
 }
 
 .snapshot-label-field {
@@ -427,12 +427,12 @@ function handleRestore(cp) {
 .snapshot-retention-card {
   display: flex;
   align-items: center;
-  font-size: 0.73rem;
+  font-size: var(--text-xs);
   opacity: 0.65;
   background: rgba(var(--v-theme-on-surface), 0.05);
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin-bottom: 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-3);
+  margin-bottom: var(--space-1);
   line-height: 1.4;
 }
 
@@ -442,22 +442,22 @@ function handleRestore(cp) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 32px 0;
+  padding: var(--space-7) 0;
   opacity: 0.6;
-  font-size: 0.85rem;
+  font-size: var(--text-base);
   text-align: center;
 }
 
 .snapshot-empty-hint {
-  font-size: 0.75rem;
-  margin-top: 4px;
+  font-size: var(--text-xs);
+  margin-top: var(--space-2);
 }
 
 .snapshot-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
   flex-wrap: wrap;
 }
@@ -478,7 +478,7 @@ function handleRestore(cp) {
 }
 
 .snapshot-created-at {
-  font-size: 0.73rem;
+  font-size: var(--text-xs);
   opacity: 0.7;
   white-space: nowrap;
 }
@@ -486,7 +486,7 @@ function handleRestore(cp) {
 .snapshot-row-label {
   flex: 1;
   min-width: 80px;
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .snapshot-label-text {
@@ -500,9 +500,9 @@ function handleRestore(cp) {
 
 .snapshot-row-stats {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   opacity: 0.65;
   white-space: nowrap;
   flex-shrink: 0;
@@ -511,25 +511,25 @@ function handleRestore(cp) {
 .snapshot-row-stats span {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .snapshot-row-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-shrink: 0;
 }
 
 .snapshot-inline-error {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-error));
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .snapshot-inline-success {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-success));
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 </style>

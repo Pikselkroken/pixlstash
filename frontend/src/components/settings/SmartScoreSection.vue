@@ -235,34 +235,34 @@ watch(
 
 <style scoped>
 .settings-section-divider {
-  margin: 4px 0 8px;
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .settings-section {
   display: flex;
   line-height: 1;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .settings-section-title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .settings-section-desc {
-  font-size: 0.92em;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .settings-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .settings-add-tag-row {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: flex-end;
 }
 
@@ -272,18 +272,18 @@ watch(
 
 .settings-error {
   color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
 }
 
 .settings-success {
   color: rgb(var(--v-theme-accent));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
 }
 
 .settings-tag-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-4);
 }
 
 .settings-tag-list .settings-token-empty {
@@ -293,9 +293,9 @@ watch(
 .settings-tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 6px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: rgba(var(--v-theme-on-surface), 0.9);
 }
@@ -303,7 +303,7 @@ watch(
 .settings-tag-chip--row {
   width: 100%;
   justify-content: space-between;
-  padding-right: 4px;
+  padding-right: var(--space-2);
 }
 
 .settings-tag-importance {
@@ -318,7 +318,7 @@ watch(
   height: 28px;
   padding-top: 0;
   padding-bottom: 0;
-  font-size: 0.9em;
+  font-size: var(--text-sm);
   background: transparent;
   box-shadow: none;
   border: none;
@@ -329,15 +329,15 @@ watch(
   height: 28px;
   padding-top: 0;
   padding-bottom: 0;
-  padding-right: 4px;
-  font-size: 0.85rem;
+  padding-right: var(--space-2);
+  font-size: var(--text-base);
   min-width: 0;
   overflow: hidden;
 }
 
 :deep(.settings-tag-importance .v-field__append-inner) {
   align-self: center;
-  margin-left: 2px;
+  margin-left: var(--space-1);
   padding-top: 0;
   padding-bottom: 0;
   height: 28px;
@@ -353,7 +353,7 @@ watch(
 }
 
 :deep(.settings-tag-importance .v-select__selection-text) {
-  font-size: 0.85rem;
+  font-size: var(--text-base);
   line-height: 1.1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -363,11 +363,11 @@ watch(
 }
 
 :deep(.settings-tag-importance .v-field__input input) {
-  font-size: 0.85rem;
+  font-size: var(--text-base);
 }
 
 .settings-tag-label {
-  font-size: 1em;
+  font-size: var(--text-base);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -381,17 +381,17 @@ watch(
   min-width: 0;
   height: 12px;
   width: 12px;
-  padding: 2;
+  padding: var(--space-1);
 }
 
 .settings-tag-delete:hover {
   color: rgba(var(--v-theme-error), 0.9);
   min-width: 0;
-  padding: 2;
+  padding: var(--space-1);
 }
 
 .settings-token-empty {
-  font-size: 0.9em;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
