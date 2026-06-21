@@ -120,17 +120,37 @@ class BulkResultResponse(BaseModel):
     sample: list[dict] = []
 
 
-def _notify_changed(server, picture_ids) -> None:
-    """Emit CHANGED_TAGS + sync the sidecar for each distinct, non-null picture id."""
+def _notify_changed(server, picture_ids, origin_client_id: str | None = None) -> None:
+    """Emit a SINGLE CHANGED_TAGS for all distinct ids + sync each sidecar.
+
+    Collapses the previous one-event-per-picture loop into one batched event so a
+    bulk accept/reopen does not flood the grid with N refresh frames (issue #500).
+    The event carries ``origin_client_id`` so the originating tab recognises its
+    own change and reconciles in place instead of raising a pill (issue #499).
+
+    This emits ``notify()`` directly (not via the background 2s coalescer in
+    ``vault.py``) on purpose: the coalescer flushes CHANGED_TAGS WITHOUT an origin,
+    which would re-introduce the self-pill. Interactive tag edits stay direct, just
+    batched.
+    """
+    distinct_ids: list[int] = []
     seen = set()
     for pid in picture_ids:
         if pid is None or pid in seen:
             continue
         seen.add(pid)
-        server.vault.notify(
-            EventType.CHANGED_TAGS,
-            {"picture_ids": [pid], "change_kind": "updated"},
-        )
+        distinct_ids.append(pid)
+    if not distinct_ids:
+        return
+    server.vault.notify(
+        EventType.CHANGED_TAGS,
+        {
+            "picture_ids": distinct_ids,
+            "origin_client_id": origin_client_id,
+            "change_kind": "updated",
+        },
+    )
+    for pid in distinct_ids:
         sync_picture_sidecar(server, pid)
 
 
@@ -300,7 +320,8 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ReviewSuggestionResponse,
     )
-    def accept_tag_suggestion(suggestion_id: int):
+    def accept_tag_suggestion(suggestion_id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             result = tag_suggestion_service.accept_suggestion(
                 server.vault, suggestion_id
@@ -310,7 +331,11 @@ def create_router(server) -> APIRouter:
         pic_id = result["picture_id"]
         server.vault.notify(
             EventType.CHANGED_TAGS,
-            {"picture_ids": [pic_id], "change_kind": "updated"},
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
         )
         sync_picture_sidecar(server, pic_id)
         return {"status": "accepted", **result}
@@ -324,7 +349,8 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ReviewSuggestionResponse,
     )
-    def reopen_tag_suggestion(suggestion_id: int):
+    def reopen_tag_suggestion(suggestion_id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             result = tag_suggestion_service.reopen_suggestion(
                 server.vault, suggestion_id
@@ -332,7 +358,11 @@ def create_router(server) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Suggestion not found")
         # Undo may have changed either the suspect or the twin — refresh both.
-        _notify_changed(server, [result["picture_id"], result.get("twin_picture_id")])
+        _notify_changed(
+            server,
+            [result["picture_id"], result.get("twin_picture_id")],
+            origin_client_id,
+        )
         return {"status": "reopened", **result}
 
     @router.post(
@@ -346,7 +376,8 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ReviewSuggestionResponse,
     )
-    def fix_twin_tag_suggestion(suggestion_id: int):
+    def fix_twin_tag_suggestion(suggestion_id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             result = tag_suggestion_service.fix_twin_suggestion(
                 server.vault, suggestion_id
@@ -355,7 +386,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Suggestion not found")
         except ValueError:
             raise HTTPException(status_code=400, detail="Suggestion has no twin")
-        _notify_changed(server, [result.get("twin_picture_id")])
+        _notify_changed(server, [result.get("twin_picture_id")], origin_client_id)
         return {"status": "twin_fixed", **result}
 
     @router.post(
@@ -368,14 +399,19 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ReviewSuggestionResponse,
     )
-    def swap_tag_suggestion(suggestion_id: int):
+    def swap_tag_suggestion(suggestion_id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             result = tag_suggestion_service.swap_suggestion(server.vault, suggestion_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="Suggestion not found")
         except ValueError:
             raise HTTPException(status_code=400, detail="Suggestion has no twin")
-        _notify_changed(server, [result["picture_id"], result.get("twin_picture_id")])
+        _notify_changed(
+            server,
+            [result["picture_id"], result.get("twin_picture_id")],
+            origin_client_id,
+        )
         return {"status": "swapped", **result}
 
     @router.post(
@@ -440,7 +476,8 @@ def create_router(server) -> APIRouter:
                 s["picture_ext"] = exts.get(s["picture_id"], "")
                 s["twin_ext"] = exts.get(s.get("twin_picture_id"), "")
         if not payload.dry_run:
-            _notify_changed(server, result["picture_ids"])
+            origin_client_id = getattr(request.state, "origin_client_id", None)
+            _notify_changed(server, result["picture_ids"], origin_client_id)
         return result
 
     @router.post(
@@ -449,9 +486,10 @@ def create_router(server) -> APIRouter:
         description="Reopens the given suggestion ids and reverses their label changes.",
         response_model=BulkResultResponse,
     )
-    def bulk_reopen_tag_suggestions(payload: BulkReopenRequest):
+    def bulk_reopen_tag_suggestions(payload: BulkReopenRequest, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         result = tag_suggestion_service.bulk_reopen(server.vault, payload.ids)
-        _notify_changed(server, result["picture_ids"])
+        _notify_changed(server, result["picture_ids"], origin_client_id)
         return result
 
     @router.post(
