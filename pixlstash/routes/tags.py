@@ -96,7 +96,7 @@ class ClearImpossibleTagsRequest(BaseModel):
     )
     filters: list[str] = Field(
         ...,
-        description='Active Impossible-tags filter kinds: "no_face" and/or "no_humans".',
+        description='Active Impossible-tags filter kinds: "no_face", "no_humans", and/or "object".',
     )
 
 

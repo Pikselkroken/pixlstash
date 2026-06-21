@@ -21,8 +21,17 @@ def _session() -> Session:
     return Session(engine)
 
 
-def _add(session: Session, path: str, *, real_face: bool, tags: list[str]) -> int:
-    pic = Picture(file_path=path, pixel_sha=path, format="JPEG")
+def _add(
+    session: Session,
+    path: str,
+    *,
+    real_face: bool,
+    tags: list[str],
+    description: str | None = None,
+) -> int:
+    pic = Picture(
+        file_path=path, pixel_sha=path, format="JPEG", description=description
+    )
     session.add(pic)
     session.commit()
     session.refresh(pic)
@@ -88,3 +97,34 @@ def test_no_face_filter_keeps_hair():
         # only the face-requiring tags go; hair stays
         assert set(removed) == {(p, "face"), (p, "nose")}
         assert _tags(s, p) == {"brown hair"}
+
+
+def test_object_filter_strips_all_person_tags_via_caption():
+    with _session() as s:
+        # no face + object caption + person tags → object signal strips ALL person tags
+        p_obj = _add(
+            s,
+            "/obj.jpg",
+            real_face=False,
+            tags=["brown hair", "face", "hand", "wooden"],
+            description="a wooden wardrobe with a mirror",
+        )
+        # no face but a real-person caption → object signal must NOT fire
+        p_person = _add(
+            s,
+            "/person.jpg",
+            real_face=False,
+            tags=["brown hair", "face"],
+            description="a woman with long brown hair",
+        )
+        removed = clear_in_session(s, [p_obj, p_person], ["object"])
+        assert set(removed) == {
+            (p_obj, "brown hair"),
+            (p_obj, "face"),
+            (p_obj, "hand"),
+        }
+        assert _tags(s, p_obj) == {"wooden"}  # the bottle keeps only its object tag
+        assert _tags(s, p_person) == {"brown hair", "face"}  # real person untouched
+        for tag in ("brown hair", "face", "hand"):
+            led = _ledger(s, p_obj, tag)
+            assert led is not None and led.label_state == "NEG"
