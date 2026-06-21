@@ -297,7 +297,7 @@
         </p>
       </div>
 
-      <div id="changes-since" style="display:none" class="changes-since">
+      <div id="changes-since" style="display: none" class="changes-since">
         <p class="changes-since-heading">
           Changes since v<span id="changes-since-version"></span>
         </p>
@@ -311,16 +311,16 @@
             Explore what changed before you upgrade
           </h2>
           <p class="whatsnew-copy">
-            See automatic snapshots, one-click and selective restore, breadcrumb
+            See automatic snapshots, full and selective restore, breadcrumb
             navigation, drag characters &amp; sets between projects, and the new
-            snapshot API — in one focused walkthrough with screenshots.
+            snapshot API in one focused walkthrough with screenshots.
           </p>
           <span class="whatsnew-cta">Open the What's New page →</span>
         </div>
         <div class="whatsnew-media">
           <img
             src="assets/ScreenshotSnapshots.jpg"
-            alt="PixlStash 1.5 — snapshots and one-click restore"
+            alt="PixlStash 1.5 — snapshots and easy restore"
           />
         </div>
       </a>
@@ -378,7 +378,7 @@
             <div class="method-icon method-icon--win">🪟</div>
             <div>
               <p class="method-title">Windows installer</p>
-              <p class="method-subtitle">One-click installer / .exe bundle</p>
+              <p class="method-subtitle">Simple installer / .exe bundle</p>
             </div>
           </div>
           <div class="method-steps">
@@ -709,9 +709,7 @@
             var clMap = parseChangelog(changelogText);
             var final = entries
               .map(function (e) {
-                var items = e.needsFallback
-                  ? clMap[e.version] || []
-                  : e.items;
+                var items = e.needsFallback ? clMap[e.version] || [] : e.items;
                 return { version: e.version, items: items };
               })
               .filter(function (e) {
