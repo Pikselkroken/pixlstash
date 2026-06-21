@@ -452,7 +452,7 @@
     "asset": "ScreenshotSnapshots.jpg",
     "label": "Snapshots & restore",
     "alt": "PixlStash snapshots panel with daily, weekly, and monthly restore points",
-    "caption": "Automatic, compressed snapshots of your metadata — never the image files — on a daily, weekly, and monthly schedule. Roll back to any restore point in one click; a safety snapshot is taken first.",
+    "caption": "Automatic, compressed snapshots of your metadata on a daily, weekly, and monthly schedule. Roll back to any restore point; a safety snapshot is taken first.",
     "kind": "image"
   },
   {

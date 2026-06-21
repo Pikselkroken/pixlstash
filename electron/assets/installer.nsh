@@ -52,10 +52,16 @@
   # `ShowInstDetails nevershow` because this include is pulled in after it.
   ShowInstDetails show
 
-  # Globals. Each macro that sets these is inserted exactly once, so declaring
-  # them here (also once) avoids any double-declaration.
+  # Globals. PixlInstallLogPath is set inside PixlWriteLogs (defined below), so it
+  # exists in both the installer and the uninstaller build. PixlKillResult is only
+  # set in customInit and read in customInstall, neither of which is inserted into
+  # the uninstaller, so declaring it there leaves it unset and unreferenced.
+  # electron-builder compiles NSIS with warnings-as-errors (warning 6001 "not
+  # referenced or never set"), so guard it to the installer build.
   Var /GLOBAL PixlInstallLogPath
-  Var /GLOBAL PixlKillResult
+  !ifndef BUILD_UNINSTALLER
+    Var /GLOBAL PixlKillResult
+  !endif
 
   # LVM constants for DumpLog (read the details ListView item text). Guarded so
   # we never clash with a constant MUI / the template already defined.
@@ -80,9 +86,12 @@
   # -------------------------------------------------------------------------
   Function PixlGetWindowsVersion
     StrCpy $0 "Windows (unknown build)"
-    ${If} ${IsWin11}
-      StrCpy $0 "Windows 11"
-    ${ElseIf} ${IsWin10}
+    # The electron-builder-bundled NSIS (3.0.4.x) ships a WinVer.nsh that predates
+    # Windows 11, so ${IsWin11} is undefined. Referencing it makes the LogicLib
+    # ${If} expand with the wrong token count ("macro _If requires 4 parameter(s),
+    # passed 2") and aborts the whole build. Windows 11 reports as Windows 10 with
+    # build >= 22000, so we detect it from the build number below instead.
+    ${If} ${IsWin10}
       StrCpy $0 "Windows 10"
     ${ElseIf} ${IsWin8.1}
       StrCpy $0 "Windows 8.1"
@@ -94,6 +103,10 @@
     ${If} ${AtLeastWin7}
       ReadRegStr $1 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentBuildNumber"
       ${If} $1 != ""
+        ${If} $0 == "Windows 10"
+        ${AndIf} $1 >= 22000
+          StrCpy $0 "Windows 11"
+        ${EndIf}
         StrCpy $0 "$0 (build $1)"
       ${EndIf}
     ${EndIf}

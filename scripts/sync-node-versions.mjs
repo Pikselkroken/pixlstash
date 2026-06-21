@@ -2,7 +2,7 @@
 // into the Node package manifests so the desktop app, the frontend bundle and
 // their lockfiles all advertise the same version.
 //
-// Updates four files in total — for each of `electron/` and `frontend/`:
+// Updates four files in total, for each of `electron/` and `frontend/`:
 //   - package.json        -> .version
 //   - package-lock.json   -> .version and .packages[""].version
 //

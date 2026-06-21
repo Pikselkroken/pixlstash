@@ -36,9 +36,10 @@ PixlStash runs on your machine and serves the UI at a local (or Internet-facing)
   </a>
 </p>
 
-PixlStash is available as a **native desktop app for Windows and Linux**
-(no Python or browser tab required), as a Docker image, or as a pip package
-(which also runs on macOS). The desktop app ships a ready-to-run CPU runtime,
+PixlStash is available as a **native desktop app for Windows, macOS (Apple
+Silicon), and Linux** (no Python or browser tab required), as a Docker image, or
+as a pip package that runs anywhere Python does (including Intel Macs). The
+desktop app ships a ready-to-run CPU runtime,
 so it works offline out of the box, and auto-detects your hardware to offer
 optional GPU acceleration (NVIDIA CUDA, or experimental AMD ROCm), which it
 installs on demand straight from PyPI / PyTorch.

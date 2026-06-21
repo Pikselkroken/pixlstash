@@ -1,12 +1,11 @@
 {
   "name": "pixlstash-frontend",
   "private": true,
-  "version": "1.6.5",
+  "version": "1.6.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "sync-version": "node ../scripts/sync-node-versions.mjs frontend",
-    "build": "npm run sync-version && vite build",
+    "build": "vite build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "preview": "vite preview",
