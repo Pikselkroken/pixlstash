@@ -1,6 +1,6 @@
 [project]
 name = "pixlstash"
-version = "1.6.4"
+version = "1.6.5"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
@@ -55,7 +55,7 @@ dependencies = [
     "transformers~=5.3",
     "bitsandbytes>=0.44.0",
     "torch~=2.12",
-    "torchvision~=0.25",
+    "torchvision~=0.27",
     "insightface>=0.7.3",
     "rapidfuzz>=3.14.3",
     "tqdm>=4.67.3",

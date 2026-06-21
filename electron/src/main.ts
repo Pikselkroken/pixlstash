@@ -83,6 +83,9 @@ let tray: Tray | null = null;
 // running backend when reopening from the tray (no full re-boot needed).
 let currentUrl: string | null = null;
 let quitting = false;
+// Set once before-quit has finished tearing the backend down, so the deferred
+// re-quit is allowed straight through instead of looping.
+let teardownComplete = false;
 // Desktop-shell preference: when true, closing the window hides it to the tray
 // (keeping the backend / remote server alive) instead of quitting. Loaded from
 // disk at startup and toggled from Settings → Backend.
@@ -573,7 +576,9 @@ async function changeBackendsLocation(rawDir: string): Promise<void> {
 
   const active = await activeOverlayAccel();
   if (active) {
-    serverProcess?.stop();
+    // Await teardown: the live backend holds the overlay files open, so the move
+    // below would fail until its process tree is actually gone.
+    await serverProcess?.stop();
     serverProcess = null;
   }
   let moveError: unknown;
@@ -613,7 +618,9 @@ function deviceFor(accel: Accel | null): string | undefined {
 /** Spawn the backend (bundled env + optional GPU overlay), inject the loopback session, load the UI. */
 async function startAndLoad(accel: Accel | null): Promise<void> {
   sendPhase({ phase: 'starting' });
-  serverProcess?.stop();
+  // Await teardown so the previous backend has released its port/files before
+  // the new one binds (a restart must not race the old process).
+  await serverProcess?.stop();
   serverProcess = new ServerProcess((code) => {
     if (!quitting) {
       dialog.showErrorBox(
@@ -922,11 +929,23 @@ if (!gotLock) {
     });
   });
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
     quitting = true;
-    serverProcess?.stop();
     tray?.destroy();
     tray = null;
+    // Confirm the backend's process tree is gone BEFORE Electron exits. On
+    // Windows the bundled python isn't reaped when we die, so a fire-and-forget
+    // stop can orphan it holding resources\python locked — which then wedges the
+    // next over-the-top update at "Installing" (issue #486). Defer the quit once
+    // while we tear down, then let it through.
+    if (teardownComplete || !serverProcess) return;
+    event.preventDefault();
+    const proc = serverProcess;
+    serverProcess = null;
+    void proc.stop().finally(() => {
+      teardownComplete = true;
+      app.quit();
+    });
   });
 
   app.on('window-all-closed', () => {

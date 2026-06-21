@@ -103,13 +103,35 @@ function startupFailureMessage(
   );
 }
 
-function killTree(child: ChildProcess, detached: boolean): void {
-  if (child.pid === undefined) return;
-  if (process.platform === 'win32') {
-    execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
-    return;
-  }
+/**
+ * Issue a kill against the backend's whole process tree. Resolves with a human
+ * message when the kill reported a real problem (so the caller can record it —
+ * no silent failures), else null.
+ *
+ * On Windows the backend is spawned non-detached and Windows does NOT reap a
+ * child when its parent dies (there is no kill-on-close job object), so an
+ * un-awaited stop can leave the bundled python orphaned, holding
+ * `resources\python\*.pyd/.dll` open — which is exactly what wedges a later
+ * over-the-top update at the "Installing" step (issue #486). We therefore both
+ * await the kill here and confirm the exit in `stop()`.
+ */
+function killTree(child: ChildProcess, detached: boolean): Promise<string | null> {
   const pid = child.pid;
+  if (pid === undefined) return Promise.resolve(null);
+  if (process.platform === 'win32') {
+    return new Promise((resolve) => {
+      execFile('taskkill', ['/pid', String(pid), '/T', '/F'], (err, _stdout, stderr) => {
+        const detail = (stderr || err?.message || '').trim();
+        // taskkill exits non-zero (128) when the process already exited — that's
+        // success for us. Surface anything else so a stuck kill is diagnosable.
+        if (err && !/not found|128|no (running )?tasks/i.test(detail)) {
+          resolve(`taskkill for backend pid ${pid} failed: ${detail}`);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  }
   const signal = (sig: NodeJS.Signals): void => {
     try {
       // When we spawned the backend detached it leads its own process group, so
@@ -131,6 +153,19 @@ function killTree(child: ChildProcess, detached: boolean): void {
   // (its handler is deferred behind the long native call), so escalate to an
   // unmaskable SIGKILL shortly after. No-op once the process is already gone.
   setTimeout(() => signal('SIGKILL'), 1500).unref();
+  return Promise.resolve(null);
+}
+
+/** Resolve once the child has actually exited, or after `timeoutMs` either way. */
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 /**
@@ -255,7 +290,7 @@ export class ServerProcess {
       await Promise.race([pollHealth(`${url}/version`, 120_000), startupCrash]);
     } catch (e) {
       failStartup = null; // the kill below must not re-reject settled startup
-      this.stop();
+      void this.stop(); // best-effort cleanup; don't delay surfacing the error
       throw e;
     }
 
@@ -264,14 +299,31 @@ export class ServerProcess {
     return this.running;
   }
 
-  stop(): void {
+  /**
+   * Stop the backend and *await* confirmation its process tree is gone, so a
+   * caller (app quit, settings restart, overlay move) can rely on the files
+   * being released before it proceeds. Records the teardown into the server log
+   * so a kill that misbehaves is diagnosable.
+   */
+  async stop(): Promise<void> {
     this.stopping = true;
-    if (this.child && !this.exited) {
-      killTree(this.child, this.detached);
-    }
+    const child = this.child;
+    const stream = this.logStream;
     this.child = null;
     this.running = null;
-    this.logStream?.end();
     this.logStream = null;
+    try {
+      if (child && !this.exited) {
+        stream?.write(`\n=== ${new Date().toISOString()} stopping backend (pid ${child.pid}) ===\n`);
+        const problem = await killTree(child, this.detached);
+        if (problem) stream?.write(`${problem}\n`);
+        await waitForExit(child, 5000);
+        stream?.write(
+          `=== backend ${this.exited ? 'stopped cleanly' : 'did NOT confirm exit within 5s'} ===\n`,
+        );
+      }
+    } finally {
+      stream?.end();
+    }
   }
 }

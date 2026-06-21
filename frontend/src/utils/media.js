@@ -263,7 +263,15 @@ export function safeDownloadName(name, fallback = 'download') {
   // Replace control chars (newlines, tabs, etc.) and the ':' separator with '_'.
   // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\u0000-\u001f\u007f:]/g, '_').trim();
-  return cleaned || fallback;
+  if (!cleaned) return fallback;
+  // Cap at 255 chars (the common filesystem filename limit) so a pathological
+  // multi-KB original_file_name can't produce an unbounded download name.
+  // Keep a short real extension; otherwise hard-truncate.
+  const MAX = 255;
+  if (cleaned.length <= MAX) return cleaned;
+  const dot = cleaned.lastIndexOf('.');
+  const ext = dot > 0 && cleaned.length - dot <= 16 ? cleaned.slice(dot) : '';
+  return cleaned.slice(0, MAX - ext.length) + ext;
 }
 
 export function getPictureId(id) {

@@ -2,7 +2,7 @@
   "name": "pixlstash-desktop",
   "productName": "PixlStash",
   "desktopName": "pixlstash.desktop",
-  "version": "1.6.3",
+  "version": "1.6.5",
   "description": "PixlStash desktop app — a native window around the local PixlStash server, with downloadable, hardware-matched compute backends.",
   "author": {
     "name": "Gaute Lindkvist",
@@ -13,7 +13,7 @@
   "main": "dist/main.js",
   "type": "commonjs",
   "scripts": {
-    "sync-version": "node scripts/sync-version.mjs",
+    "sync-version": "node ../scripts/sync-node-versions.mjs electron",
     "copy-assets": "node scripts/copy-assets.mjs",
     "check-electron": "node scripts/check-electron-binary.mjs",
     "build": "npm run sync-version && tsc && npm run copy-assets",
@@ -74,7 +74,8 @@
       "category": "public.app-category.photography",
       "icon": "assets/icon.png",
       "hardenedRuntime": true,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "notarize": false
     },
     "linux": {
       "target": [
@@ -89,7 +90,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "include": "installer.nsh"
     },
     "publish": {
       "provider": "github",

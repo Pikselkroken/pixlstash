@@ -1,3 +1,9 @@
+# [1.6.5]
+- Re-enable macOS build
+- Harden the desktop auto-update teardown so a failed or interrupted update can't leave the app in a broken state; write an installer log and surface a link for reporting issues
+- Fix issue #478: stop the caption sidecar from writing debug output, cap overly long download filenames, and widen the torchvision range to ~=0.27
+- Fix the tag menu re-opening on the next selection after dismissing it with ESC
+
 # [1.6.4] [Security:High]
 - Just released v1.6.3 to see a serious security issue in the undici NPM package
 
