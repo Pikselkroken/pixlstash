@@ -126,6 +126,10 @@ const STATS_HIDE_BREAKPOINT = 1280;
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
 const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
+// Coalescing window for incoming grid-driving WS events (see
+// useGridRealtimeSync). A burst of foreign events accumulates over this window
+// and applies once per category instead of one fetch+rebuild per event.
+const GRID_WS_COALESCE_MS = 200;
 
 // --- Non-reactive internals ---
 let mainAreaResizeObserver = null;
@@ -135,6 +139,7 @@ let columnsMenuCloseTimeout = null;
 let sidebarRefreshDebounceTimeout = null;
 let sidebarRefreshPicturesDebounceTimeout = null;
 let sidebarRefreshPicturesFlash = false;
+let gridWsCoalesceTimer = null;
 // Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
 let stopOpenSettings = null;
 
@@ -258,6 +263,27 @@ function fullGridReload() {
   gridStore.refreshGridVersion();
 }
 
+// Fixed-window scheduler for the realtime-sync coalescer. The composable arms
+// one flush per window (it skips schedule() while a flush is already pending),
+// so the first queued event starts a GRID_WS_COALESCE_MS timer and a
+// back-to-back burst flushes once at its end. cancel() lets onBeforeUnmount
+// drop a pending flush.
+const gridWsScheduler = {
+  schedule(flush) {
+    if (gridWsCoalesceTimer) clearTimeout(gridWsCoalesceTimer);
+    gridWsCoalesceTimer = setTimeout(() => {
+      gridWsCoalesceTimer = null;
+      flush();
+    }, GRID_WS_COALESCE_MS);
+  },
+  cancel() {
+    if (gridWsCoalesceTimer) {
+      clearTimeout(gridWsCoalesceTimer);
+      gridWsCoalesceTimer = null;
+    }
+  },
+};
+
 const gridRealtimeSync = useGridRealtimeSync({
   getMyClientId: () => wsStore.clientId,
   grid: gridApi,
@@ -266,6 +292,7 @@ const gridRealtimeSync = useGridRealtimeSync({
   getSelectedSort: () => sortStore.selectedSort,
   reload: fullGridReload,
   refreshSidebar: (flash) => refreshSidebarPicturesDebounced(flash),
+  scheduler: gridWsScheduler,
 });
 
 function connectUpdatesSocket() {
@@ -1994,6 +2021,7 @@ onBeforeUnmount(() => {
     clearTimeout(sidebarRefreshPicturesDebounceTimeout);
     sidebarRefreshPicturesDebounceTimeout = null;
   }
+  gridWsScheduler.cancel();
 });
 
 defineExpose({
