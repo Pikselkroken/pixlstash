@@ -198,7 +198,14 @@ def create_router(server) -> APIRouter:
 
         from pixlstash.event_types import EventType
 
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+                "change_kind": "updated",
+            },
+        )
         return _to_response(import_folder)
 
     @router.patch(
@@ -234,7 +241,14 @@ def create_router(server) -> APIRouter:
 
         from pixlstash.event_types import EventType
 
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+                "change_kind": "updated",
+            },
+        )
         return _to_response(folder)
 
     @router.delete(
@@ -260,7 +274,14 @@ def create_router(server) -> APIRouter:
 
         from pixlstash.event_types import EventType
 
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+                "change_kind": "updated",
+            },
+        )
         return {"status": "success", "id": folder_id}
 
     return router

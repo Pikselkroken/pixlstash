@@ -185,6 +185,14 @@ async def run_plugin_on_pictures(
             },
         )
     if output_ids:
-        vault.notify(EventType.CHANGED_PICTURES, output_ids)
+        vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": output_ids,
+                "source": "ui",
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
 
     return {"status": "success", **result}

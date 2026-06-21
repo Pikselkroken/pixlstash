@@ -588,7 +588,10 @@ class Vault:
             self.submit_task(task)
 
     def reset_description_interactive(
-        self, picture_id: int, engine_name: str | None = None
+        self,
+        picture_id: int,
+        engine_name: str | None = None,
+        origin_client_id: str | None = None,
     ) -> bool:
         """Request a fresh description pass for a picture by writing a sentinel.
 
@@ -604,6 +607,10 @@ class Vault:
         Args:
             picture_id: Primary key of the picture to reset.
             engine_name: Optional plugin name to embed in the sentinel.
+            origin_client_id: Opaque ``X-Client-Id`` of the originating tab,
+                threaded from the route handler so the CHANGED_PICTURES echo is
+                recognised as the user's own change (targeted reconcile, no pill)
+                instead of being treated as external.
 
         Returns:
             ``True`` if the picture was found and updated, ``False`` otherwise.
@@ -623,7 +630,14 @@ class Vault:
         found = self.db.run_task(_set_sentinel)
         if not found:
             return False
-        self.notify(EventType.CHANGED_PICTURES, {"picture_ids": [picture_id]})
+        self.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": [picture_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         self.redescribe_picture_interactive(picture_id, engine_name=engine_name)
         return True
 

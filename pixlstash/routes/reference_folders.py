@@ -618,7 +618,16 @@ def create_router(server) -> APIRouter:
         if not in_docker and initial_status == ReferenceFolderStatus.ACTIVE:
             from pixlstash.event_types import EventType
 
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "source": "ui",
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                    "change_kind": "updated",
+                },
+            )
         return _to_response(rf)
 
     @router.patch(
@@ -784,7 +793,16 @@ def create_router(server) -> APIRouter:
             server.vault.watch_reference_folder(folder_id, rf.folder)
             from pixlstash.event_types import EventType
 
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "source": "ui",
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                    "change_kind": "updated",
+                },
+            )
             response = _to_response(rf)
             response.relocation = relocation_report
             return response
@@ -1401,7 +1419,14 @@ def create_router(server) -> APIRouter:
         )
         from pixlstash.event_types import EventType
 
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+                "change_kind": "updated",
+            },
+        )
         return ReferenceFolderMetadataResponse(
             status="success",
             scope_path=scope,
