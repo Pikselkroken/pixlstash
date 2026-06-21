@@ -372,8 +372,7 @@
             props.pendingExternalImportCount === 1
               ? "new picture"
               : "new pictures"
-          }}
-          — click to load
+          }}, click to load
         </button>
         <button
           v-if="props.sortChangedExternalCount > 0"
@@ -381,7 +380,7 @@
           data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
         >
-          ⟳ View changed externally — click to refresh
+          ⟳ View changed externally, click to refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
@@ -6669,7 +6668,11 @@ function handleEmptyStateReset() {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding-top: 8px;
+  /* Offset the floating pill 8px from the top with a transform, not padding: a
+     sticky element reserves its box in normal flow, so padding-top here added
+     8px of height that pushed the grid down. transform doesn't affect layout,
+     so the grid stays flush while the pill still sits 8px below the top. */
+  transform: translateY(8px);
   pointer-events: none;
 }
 

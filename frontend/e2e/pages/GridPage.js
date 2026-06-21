@@ -77,12 +77,12 @@ export class GridPage {
   //   - "View changed externally" pill: raised on an external `updated` event
   //     that affects the current sort/filter.
 
-  /** The "↑ N new pictures — click to load" pill. */
+  /** The "↑ N new pictures, click to load" pill. */
   pendingImportsPill() {
     return this.page.getByTestId('pending-imports-pill')
   }
 
-  /** The "⟳ View changed externally — click to refresh" pill. */
+  /** The "⟳ View changed externally, click to refresh" pill. */
   sortChangedPill() {
     return this.page.getByTestId('sort-changed-pill')
   }
