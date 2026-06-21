@@ -372,3 +372,71 @@ Use two test folders on disk:
 - [ ] Restart container, then refresh UI — reference folder status transitions away from pending (active if mount is valid; mount error if invalid)
 - [ ] Add a new import folder path in Docker mode — restart prompt appears
 - [ ] After restart and adding a new file into mounted `import_test/`, verify automatic import picks up the file and it appears in the grid
+
+---
+
+## 19. Grid Live-Update (real-time sync)
+
+Covers the WebSocket-driven grid refresh and the two "pill" notifications. The
+echo-suppression chain decides whether a change is *yours* (reconcile silently)
+or *external* (raise a pill). Background fixes for [#499](https://github.com/Pikselkroken/pixlstash/issues/499),
+[#500](https://github.com/Pikselkroken/pixlstash/issues/500), and [#501](https://github.com/Pikselkroken/pixlstash/issues/501)
+landed here; see `docs/reviews/2026-06-grid-refresh-cleanup-plan.md`.
+
+Most positive/negative directions are automated (see `docs/regular-tests.md`,
+the `grid-*` specs). These manual checks cover what the e2e harness can't do
+deterministically: a real second client, background workers ON, network
+reconnect, and storage-denied `clientId`.
+
+The two pills:
+- **"New pictures"** — raised on an external picture *add*.
+- **"View changed externally — click to refresh"** — raised on an external
+  *update* that affects the current sort/filter.
+
+### 19.1 Own change is silent (#499)
+
+In a **single tab**, perform each action below and confirm the grid reconciles
+in place with **no pill** for your own action:
+
+- [ ] Add a tag to a picture (overlay → Add tag) — tag appears, no pill
+- [ ] Remove a tag from a picture — tag disappears, no pill
+- [ ] Change a star rating in the grid or overlay — rating updates, no pill
+- [ ] Add 3+ pictures to a set (Selection ▾ → add to set) — set count updates, no pill
+- [ ] Run an image plugin on a picture (e.g. Blur) — output appears, no pill
+- [ ] Reset tags on a picture (overlay → Tag Predictions → reset) — tags clear, no pill
+
+### 19.2 External change raises the correct pill
+
+Use **two tabs or two devices logged in as the same owner** (tab A is the
+observer; make changes in tab B).
+
+- [ ] In tab B, **import** a picture → tab A shows the **"New pictures"** pill; click it → the new picture loads into the grid
+- [ ] In tab B, **change a rating or add a tag** on a picture that affects tab A's current sort/filter → tab A shows the **"View changed externally"** pill; click it → the change is reflected
+- [ ] Confirm the pill text matches the change type (add → "New pictures"; update → "View changed externally")
+
+### 19.3 Quiet during bulk work (#500)
+
+Requires a **real server run with background workers ENABLED** (the e2e harness
+runs with `disable_background_workers: true`, so it cannot exercise this path).
+
+- [ ] Trigger a bulk sweep that fans out worker events: import a batch of 20+ pictures, or reset tags/quality on a large selection so background tagging/quality/smart-score reprocesses them
+- [ ] While the sweep runs, watch the grid — it should **not** churn or reshuffle continuously; updates land in coalesced batches, not one reflow per picture
+- [ ] The grid stays usable (scroll, sort, open overlay) during the sweep with no repeated full-grid reloads
+
+### 19.4 Overlay deferral
+
+- [ ] Open the lightbox (ImageOverlay) on any picture
+- [ ] From a second tab/device, make an external change (import or rating change) → confirm **no pill appears while the overlay is open**
+- [ ] Close the overlay → the grid reconciles and the pending change is applied (pill may appear on close if applicable)
+
+### 19.5 Reconnect after network drop
+
+- [ ] Open the grid, then in browser DevTools set the network to **Offline**
+- [ ] Wait a few seconds, then set the network back to **Online** → the WebSocket reconnects and the grid recovers to a usable state
+- [ ] ⚠️ **Known gap:** events that occurred *during* the offline window are lost (no replay on reconnect). A change made elsewhere while this tab was offline may not appear until a manual reload. Mark ✅ if reconnect itself recovers; note this gap.
+
+### 19.6 Storage-denied clientId (#501)
+
+- [ ] Open a **private/incognito window** (or a browser with `sessionStorage` blocked) and log in
+- [ ] Make an **own** change (add a tag or change a rating), then **reload immediately**
+- [ ] ⚠️ **Known narrow limitation:** in storage-denied mode the per-tab `clientId` regenerates on every reload, so an in-flight echo for the pre-reload mutation can be misclassified as external and wrongly raise a pill. Observe whether a pill appears right after reload; this is the documented edge case, not a regression of #499.

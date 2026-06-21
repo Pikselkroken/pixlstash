@@ -116,6 +116,22 @@ shrinks as automated coverage grows.
 |------|--------|--------|
 | lists restore points with a restore action (list-only) | Settings → Snapshots lists ≥1 restore point, each offering a Restore action (rollback itself is **not** clicked — it would rewrite the shared DB) | ✅ |
 
+## Grid live-update — `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-overlay-deferral.spec.js` (plan §19)
+WebSocket-driven grid refresh and the two pills. The e2e harness simulates an
+*external* change by sending requests with **no `X-Client-Id`**, and *own*
+changes by driving the UI / sending the tab's own client id; floods are fired
+via the guarded `POST /api/v1/test-hooks/ws-event` injection endpoint. Backs the
+fixes for [#499](https://github.com/Pikselkroken/pixlstash/issues/499) and
+[#500](https://github.com/Pikselkroken/pixlstash/issues/500).
+
+| Test | Covers | Status |
+|------|--------|--------|
+| own change (own `X-Client-Id`) raises no pill | Mutating with the tab's own client id reconciles silently — no pill (§19.1, #499) | ✅ |
+| external change raises the right pill | No-client-id mutation → external; add → "New pictures", update → "View changed externally"; click loads it (§19.2) | ✅ |
+| injection: own-origin suppressed, external add raises pill | `ws-event` injection with matching origin is suppressed; external `added` raises "New pictures" (§19.1/§19.2) | ✅ |
+| flood is coalesced | 100 external events → bounded number of grid refetches, not one per id (§19.3, #500) | ✅ |
+| overlay defers external changes | External change while overlay open → no pill; deferred reconcile on close (§19.4) | ✅ |
+
 ---
 
 ## Coverage gaps / testing debt (risk-based)
@@ -135,3 +151,18 @@ Tracked so they aren't forgotten — weighted by blast radius:
 - **Selection/context menu *actions* execute correctly** — `menu-parity.spec.js`
   only compares the *item lists*; it does not click through each action. Once
   #403 is fixed, consider asserting representative actions actually fire.
+- **Grid live-update — manual-only paths (plan §19).** The four `grid-*` specs
+  cover the deterministic core (own vs external, pill choice, flood coalescing,
+  overlay deferral). These are **not yet automated** and stay manual:
+  - *Real bulk work with background workers ON (§19.3, #500)* — the e2e backend
+    runs `disable_background_workers: true`, so worker tag/quality/smart-score
+    events never fire. The injection spec proves frontend coalescing under a
+    synthetic flood, but the real worker-driven path needs a live server run.
+  - *Real two-tab / two-device observation (§19.2)* — automated coverage uses
+    the no-client-id lever to fake "external"; genuine concurrent same-owner
+    clients are observed manually.
+  - *Network reconnect (§19.5)* — DevTools offline/online and the **known gap**
+    that events during downtime are lost (no replay) are not in the harness.
+  - *Storage-denied `clientId` (§19.6, #501)* — private-window `sessionStorage`
+    denial regenerates the client id per reload; this narrow misclassification
+    edge is manual. See `docs/reviews/2026-06-grid-refresh-cleanup-plan.md` §7.
