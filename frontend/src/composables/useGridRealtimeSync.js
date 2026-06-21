@@ -8,9 +8,17 @@
 //   - raising one of the two pills (new pictures / sort changed externally),
 //   - or, rarely, a logged full reload.
 //
-// All dependencies (stores, grid imperative API, predicates, logger) are
-// injected so the decision table can be unit-tested without a real grid or a
-// live Pinia instance.
+// The DECISION is synchronous and returns a `{ action, reason }` descriptor.
+// The grid SIDE-EFFECTS it implies (insert / per-id refresh / remove / pill)
+// are not applied inline: they are accumulated into per-category buffers and
+// flushed once per short coalescing window (see the coalescer below). A burst
+// of N foreign events therefore collapses into one batched insert, one batched
+// per-id refresh pass, and one batched remove — not N fetch+rebuild cycles.
+//
+// All dependencies (stores, grid imperative API, predicates, scheduler, logger)
+// are injected so the decision table can be unit-tested without a real grid or a
+// live Pinia instance. The default `schedule` flushes synchronously so unit
+// tests see side-effects immediately; App.vue passes a real debounce.
 
 const TARGETED = "targeted";
 const PILL = "pill";
@@ -23,13 +31,27 @@ const IGNORED = "ignored";
 // thumbnail fetch each) becomes a fetch storm. A foreign-tab "set project on
 // 400 pictures" or "apply scores" lands here; doing one reload (or deferring it
 // under an open overlay) is cheaper than hundreds of single-card refreshes.
+// Applied to the COALESCED batch, not to a single event — a window that
+// accumulates >50 distinct ids escalates to one reload.
 const MAX_TARGETED_UPDATE = 50;
+
+// Coalescing window for incoming grid-driving WS events. A burst (e.g. a bulk
+// tag accept that fires one frame per picture, or a foreign tab scoring a
+// folder) arrives as many frames back-to-back; we accumulate them and apply
+// once per window. 200ms is long enough to swallow a tight burst yet short
+// enough that a single real event still feels immediate. It sits between the
+// sidebar picture-count debounce (150ms) and the gridVersion throttle (1200ms),
+// consistent with the existing WS throttles.
+const COALESCE_WINDOW_MS = 200;
 
 // Server-computed sort fields whose value the originating tab can only guess
 // optimistically; even an own-origin echo for these needs a single-card
 // reconcile under the matching sort so the optimistic guess can't diverge from
 // server truth.
-const SERVER_COMPUTED_SORT_FIELDS = new Set(["smart_score", "character_likeness"]);
+const SERVER_COMPUTED_SORT_FIELDS = new Set([
+  "smart_score",
+  "character_likeness",
+]);
 
 function asPictureIds(payload) {
   return Array.isArray(payload?.picture_ids) ? payload.picture_ids : [];
@@ -53,6 +75,18 @@ function resolveChangeKind(payload) {
   return "updated";
 }
 
+// Default scheduler: run the flush synchronously. Keeps the composable's
+// side-effects observable in the same tick for unit tests; App.vue overrides
+// this with a real debounce so production coalesces across a window.
+function createSyncScheduler() {
+  return {
+    schedule(flush) {
+      flush();
+    },
+    cancel() {},
+  };
+}
+
 /**
  * @param {Object} deps
  * @param {() => string|null} deps.getMyClientId   Active tab's client id.
@@ -63,6 +97,7 @@ function resolveChangeKind(payload) {
  * @param {Object} [deps.logger]                    console-like; defaults to console.
  * @param {() => void} [deps.reload]                Full-reload fallback.
  * @param {() => void} [deps.refreshSidebar]        Sidebar picture-count refresh.
+ * @param {{schedule: (flush: () => void) => void, cancel: () => void}} [deps.scheduler]  Coalescing scheduler; defaults to synchronous flush (unit tests). App.vue passes a debounce.
  */
 export function useGridRealtimeSync(deps) {
   const {
@@ -74,7 +109,120 @@ export function useGridRealtimeSync(deps) {
     logger = console,
     reload = () => {},
     refreshSidebar = () => {},
+    scheduler = createSyncScheduler(),
   } = deps;
+
+  // --- Coalescing buffers -------------------------------------------------
+  // Accumulated across one window, then applied once per category on flush.
+  // Ordering correctness: a remove supersedes a prior add/update of the same id
+  // (and vice-versa) by mutating these buffers at enqueue time, so an add→remove
+  // of the same id inside the window nets out to a remove (and remove→add to an
+  // add), never both.
+  let addedIds = new Set();
+  let updatedFields = new Map(); // id -> Set<field>
+  let removedIds = new Set();
+  let sawRemove = false; // a removal event arrived this window (even empty-id)
+  let addPillIds = new Set(); // → "New pictures" pill
+  let sortPillIds = new Set(); // → "View changed externally" pill
+  let flushScheduled = false;
+
+  function resetBuffers() {
+    addedIds = new Set();
+    updatedFields = new Map();
+    removedIds = new Set();
+    sawRemove = false;
+    addPillIds = new Set();
+    sortPillIds = new Set();
+  }
+
+  function ensureFlushScheduled() {
+    if (flushScheduled) return;
+    flushScheduled = true;
+    scheduler.schedule(flushCoalesced);
+  }
+
+  function enqueueAdded(ids) {
+    for (const id of ids) {
+      removedIds.delete(id);
+      addedIds.add(id);
+    }
+    ensureFlushScheduled();
+  }
+
+  function enqueueUpdated(ids, fields) {
+    for (const id of ids) {
+      if (removedIds.has(id)) continue; // a pending remove wins
+      let set = updatedFields.get(id);
+      if (!set) {
+        set = new Set();
+        updatedFields.set(id, set);
+      }
+      for (const f of fields) set.add(f);
+    }
+    ensureFlushScheduled();
+  }
+
+  function enqueueRemoved(ids) {
+    sawRemove = true;
+    for (const id of ids) {
+      addedIds.delete(id);
+      updatedFields.delete(id);
+      removedIds.add(id);
+    }
+    ensureFlushScheduled();
+  }
+
+  function enqueueAddPill(ids) {
+    for (const id of ids) addPillIds.add(id);
+    ensureFlushScheduled();
+  }
+
+  function enqueueSortPill(ids) {
+    for (const id of ids) sortPillIds.add(id);
+    ensureFlushScheduled();
+  }
+
+  // Apply one window's worth of accumulated intents. Removes run first so a
+  // late add/update for an id that was also removed can't resurrect a card the
+  // server deleted; the enqueue-time bookkeeping above already keeps the three
+  // buffers disjoint, this is just defensive ordering.
+  function flushCoalesced() {
+    flushScheduled = false;
+    const removed = [...removedIds];
+    const hadRemove = sawRemove;
+    const added = [...addedIds];
+    const updated = [...updatedFields.entries()];
+    const addPill = [...addPillIds];
+    const sortPill = [...sortPillIds];
+    resetBuffers();
+
+    // Apply removals whenever a removal event arrived, even with no ids: an
+    // empty-id removal still signals the grid (matching the un-coalesced
+    // contract) and the call is a harmless no-op there.
+    if (hadRemove) {
+      grid.removeImagesById?.(removed);
+    }
+    if (added.length) {
+      grid.insertGridImagesById?.(added);
+    }
+    // The MAX_TARGETED_UPDATE escalation applies to the COALESCED batch: a
+    // window that accreted >50 distinct per-id refreshes is a fetch storm, so
+    // collapse it into one reload (or defer under an open overlay) instead of
+    // the per-id loop.
+    if (updated.length > MAX_TARGETED_UPDATE) {
+      reloadOrDefer("coalesced-updated-too-large");
+    } else {
+      for (const [id, fields] of updated) {
+        applyTargetedUpdate(id, [...fields]);
+      }
+    }
+    if (addPill.length) {
+      wsStore.addPendingExternalImportIds?.(addPill);
+    }
+    if (sortPill.length) {
+      wsStore.addSortChangedExternalIds?.(sortPill);
+    }
+  }
 
   function isOverlayOpen() {
     return grid.isOverlayOpen?.() === true;
@@ -159,6 +307,9 @@ export function useGridRealtimeSync(deps) {
       // Optimistic guess for a server-computed sort field can diverge from
       // server truth — reconcile each card, never reload. Cap the per-id
       // fetch loop: a large own-origin batch reconcile becomes a fetch storm.
+      // (Reconcile is its own immediate per-id pass, not the coalesced updated
+      // buffer, because it dispatches refreshSmartScoreForImage rather than the
+      // generic per-id refresh.)
       if (pictureIds.length > MAX_TARGETED_UPDATE) {
         return reloadOrDefer("own-origin-server-sort-reconcile-too-large");
       }
@@ -171,7 +322,7 @@ export function useGridRealtimeSync(deps) {
   // --- Owner UI change from a different tab -------------------------------
   function handleForeignUi(payload, changeKind, fields, pictureIds) {
     if (changeKind === "removed") {
-      grid.removeImagesById?.(pictureIds);
+      enqueueRemoved(pictureIds);
       return { action: TARGETED, reason: "foreign-ui-removed" };
     }
     // An empty-id add/update can't be targeted (e.g. restore-all broadcasts
@@ -183,29 +334,34 @@ export function useGridRealtimeSync(deps) {
     }
     if (changeKind === "added") {
       if (deferWhileOverlayOpen()) {
-        return { action: TARGETED, reason: "foreign-ui-added-overlay-deferred" };
+        return {
+          action: TARGETED,
+          reason: "foreign-ui-added-overlay-deferred",
+        };
       }
       if (grid.isImagesLoading?.()) {
         // Streaming fetch owns allGridImages; defer to the pill.
-        wsStore.addPendingExternalImportIds?.(pictureIds);
+        enqueueAddPill(pictureIds);
         return { action: PILL, reason: "foreign-ui-added-during-load" };
       }
-      grid.insertGridImagesById?.(pictureIds);
+      enqueueAdded(pictureIds);
       return { action: TARGETED, reason: "foreign-ui-added" };
     }
     // updated
     if (!pictureChangeAffectsView(fields)) {
       return { action: IGNORED, reason: "foreign-ui-updated-irrelevant" };
     }
-    // score/project (and any other view-affecting field) always render under the
-    // current sort, so we can't skip these — but each applyTargetedUpdate is a
-    // /metadata + thumbnail fetch. A large foreign batch (apply-scores /
-    // set-project on hundreds of pictures) would be a fetch storm; cap it with a
-    // single reload (or defer under an open overlay) instead of the per-id loop.
+    // A single event already over the cap is a fetch storm on its own (foreign
+    // apply-scores / set-project on hundreds of pictures): escalate immediately
+    // to one reload rather than queuing hundreds of per-id refreshes.
     if (pictureIds.length > MAX_TARGETED_UPDATE) {
       return reloadOrDefer("foreign-ui-updated-too-large");
     }
-    for (const id of pictureIds) applyTargetedUpdate(id, fields);
+    // Otherwise queue the per-id refreshes. Each id becomes one /metadata +
+    // thumbnail fetch on flush; the COALESCED batch is also capped at
+    // MAX_TARGETED_UPDATE (see flushCoalesced), so many sub-cap events whose
+    // distinct ids sum past 50 still escalate to a single reload there.
+    enqueueUpdated(pictureIds, fields);
     return { action: TARGETED, reason: "foreign-ui-updated" };
   }
 
@@ -213,7 +369,7 @@ export function useGridRealtimeSync(deps) {
   function handleExternal(payload, changeKind, fields, pictureIds) {
     if (changeKind === "removed") {
       // Never leave a stale 404-clickable card; remove silently.
-      grid.removeImagesById?.(pictureIds);
+      enqueueRemoved(pictureIds);
       return { action: TARGETED, reason: "external-removed" };
     }
     // An empty-id add/update can't be targeted (e.g. a restore-all broadcast, or
@@ -227,7 +383,7 @@ export function useGridRealtimeSync(deps) {
       if (deferWhileOverlayOpen()) {
         return { action: TARGETED, reason: "external-added-overlay-deferred" };
       }
-      wsStore.addPendingExternalImportIds?.(pictureIds);
+      enqueueAddPill(pictureIds);
       return { action: PILL, reason: "external-added" };
     }
     // updated
@@ -243,7 +399,7 @@ export function useGridRealtimeSync(deps) {
       }
       // Would reshuffle the grid — raise the pill instead of moving cards under
       // the user.
-      wsStore.addSortChangedExternalIds?.(pictureIds);
+      enqueueSortPill(pictureIds);
       return { action: PILL, reason: "external-updated-sort-affecting" };
     }
     // The changed fields are known and invisible to the current sort/filter
@@ -258,7 +414,9 @@ export function useGridRealtimeSync(deps) {
 
   /**
    * Apply a single picture-mutation event. Returns a `{ action, reason }`
-   * descriptor (used by tests; App.vue ignores the return).
+   * descriptor (used by tests; App.vue ignores the return). The descriptor
+   * reflects the DECISION; the implied grid side-effect is queued into the
+   * coalescer and applied on the next window flush.
    */
   function handlePictureEvent(payload) {
     const pictureIds = asPictureIds(payload);
@@ -309,7 +467,8 @@ export function useGridRealtimeSync(deps) {
     // The sidebar picture-count only changes for adds/removes or changes that
     // affect the view; skip the churn for pure background recomputes that the
     // current sort/filter ignore (preserves the smart-score-under-date-sort
-    // optimisation for the sidebar).
+    // optimisation for the sidebar). refreshSidebar is itself debounced in
+    // App.vue, so a burst already collapses to one count refresh.
     const changeKind = resolveChangeKind(payload);
     const touchesSidebar =
       affectsView || changeKind === "added" || changeKind === "removed";
@@ -324,6 +483,8 @@ export function useGridRealtimeSync(deps) {
     handleMessage,
     // Exposed for finer-grained tests and reuse.
     handlePictureEvent,
+    // Force any pending coalesced side-effects to apply now (e.g. on unmount).
+    flushNow: flushCoalesced,
   };
 }
 
@@ -331,4 +492,6 @@ export const __testing = {
   normaliseSource,
   resolveChangeKind,
   asPictureIds,
+  COALESCE_WINDOW_MS,
+  MAX_TARGETED_UPDATE,
 };

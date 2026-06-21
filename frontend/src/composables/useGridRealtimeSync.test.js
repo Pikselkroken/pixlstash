@@ -29,7 +29,8 @@ function makeHarness(overrides = {}) {
   const pictureChangeAffectsView = vi.fn((fields) => {
     if (!Array.isArray(fields) || fields.length === 0) return true;
     return fields.some((f) => {
-      if (f === "smart_score") return selectedSort.value.includes("SMART_SCORE");
+      if (f === "smart_score")
+        return selectedSort.value.includes("SMART_SCORE");
       if (f === "character_likeness")
         return selectedSort.value.includes("CHARACTER_LIKENESS");
       return true; // unknown field assumed relevant
@@ -174,7 +175,9 @@ describe("useGridRealtimeSync decision table", () => {
       picture_ids: [20, 21],
     });
     expect(res.action).toBe("pill");
-    expect(h.wsStore.addPendingExternalImportIds).toHaveBeenCalledWith([20, 21]);
+    expect(h.wsStore.addPendingExternalImportIds).toHaveBeenCalledWith([
+      20, 21,
+    ]);
     expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
   });
 
@@ -290,9 +293,7 @@ describe("useGridRealtimeSync — pills deferred while the overlay is open", () 
       fields: ["smart_score"],
     });
     expect(res.action).toBe("targeted");
-    expect(res.reason).toBe(
-      "external-updated-sort-affecting-overlay-deferred",
-    );
+    expect(res.reason).toBe("external-updated-sort-affecting-overlay-deferred");
     expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
     expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
   });
@@ -470,6 +471,167 @@ describe("useGridRealtimeSync — batch update fetch-storm cap", () => {
     expect(res.reason).toBe("foreign-ui-updated-too-large-overlay-deferred");
     expect(h.reload).not.toHaveBeenCalled();
     expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+});
+
+// A manual scheduler accumulates flush callbacks and only runs them on
+// `tick()`, so a burst of events stays buffered (as it would inside the real
+// 200ms debounce in App.vue) until we flush — letting us assert coalescing.
+function makeCoalescingHarness(overrides = {}) {
+  const grid = {
+    insertGridImagesById: vi.fn(),
+    refreshGridImage: vi.fn(),
+    repositionImageByScore: vi.fn(),
+    repositionImageBySmartScore: vi.fn(),
+    refreshSmartScoreForImage: vi.fn(),
+    removeImagesById: vi.fn(),
+    isImagesLoading: vi.fn(() => false),
+    isOverlayOpen: vi.fn(() => overrides.overlayOpen === true),
+    markOverlayDeferredRefresh: vi.fn(),
+  };
+  const wsStore = {
+    isUploadInProgress: false,
+    addPendingExternalImportIds: vi.fn(),
+    addSortChangedExternalIds: vi.fn(),
+  };
+  const reload = vi.fn();
+  const refreshSidebar = vi.fn();
+  const selectedSort = { value: overrides.selectedSort ?? "DATE_TAKEN" };
+  const pictureChangeAffectsView = vi.fn(() => true);
+
+  // Window-style scheduler: the first event arms one pending flush; the manual
+  // tick() runs it, mirroring the leading-edge fixed window in App.vue.
+  let pending = null;
+  const scheduler = {
+    schedule: (flush) => {
+      pending = flush;
+    },
+    cancel: () => {
+      pending = null;
+    },
+  };
+  const tick = () => {
+    const f = pending;
+    pending = null;
+    if (f) f();
+  };
+
+  const sync = useGridRealtimeSync({
+    getMyClientId: () => MY_ID,
+    grid,
+    wsStore,
+    pictureChangeAffectsView,
+    getSelectedSort: () => selectedSort.value,
+    logger: { warn: vi.fn() },
+    reload,
+    refreshSidebar,
+    scheduler,
+  });
+
+  return { sync, grid, wsStore, reload, refreshSidebar, selectedSort, tick };
+}
+
+describe("useGridRealtimeSync — coalescing window", () => {
+  it("100 foreign updates for one id -> a single refreshGridImage on flush", () => {
+    const h = makeCoalescingHarness();
+    for (let i = 0; i < 100; i++) {
+      h.sync.handleMessage({
+        type: "pictures_changed",
+        source: "ui",
+        origin_client_id: OTHER_ID,
+        change_kind: "updated",
+        fields: ["tags"],
+        picture_ids: [42],
+      });
+    }
+    // Nothing applied yet — still inside the window.
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+    h.tick();
+    // Deduped to the single distinct id.
+    expect(h.grid.refreshGridImage).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(42);
+  });
+
+  it("batched inserts collapse to one insertGridImagesById call", () => {
+    const h = makeCoalescingHarness();
+    h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "added",
+      picture_ids: [1, 2],
+    });
+    h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "added",
+      picture_ids: [3],
+    });
+    h.tick();
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledTimes(1);
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([1, 2, 3]);
+  });
+
+  it("external adds raise the New-pictures pill once per window", () => {
+    const h = makeCoalescingHarness();
+    h.sync.handleMessage({
+      type: "picture_imported",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [10],
+    });
+    h.sync.handleMessage({
+      type: "picture_imported",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [11],
+    });
+    h.tick();
+    expect(h.wsStore.addPendingExternalImportIds).toHaveBeenCalledTimes(1);
+    expect(h.wsStore.addPendingExternalImportIds).toHaveBeenCalledWith([
+      10, 11,
+    ]);
+  });
+
+  it("an add then a remove of the same id nets to a remove", () => {
+    const h = makeCoalescingHarness();
+    h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "added",
+      picture_ids: [5],
+    });
+    h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "removed",
+      picture_ids: [5],
+    });
+    h.tick();
+    expect(h.grid.removeImagesById).toHaveBeenCalledWith([5]);
+    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
+  });
+
+  it("coalesced per-id batch over MAX_TARGETED_UPDATE escalates to one reload", () => {
+    const h = makeCoalescingHarness();
+    // 51 distinct ids, one event each — each event is sub-cap, but the window's
+    // distinct-id total crosses MAX_TARGETED_UPDATE (50).
+    for (let id = 1; id <= 51; id++) {
+      h.sync.handleMessage({
+        type: "pictures_changed",
+        source: "ui",
+        origin_client_id: OTHER_ID,
+        change_kind: "updated",
+        fields: ["tags"],
+        picture_ids: [id],
+      });
+    }
+    h.tick();
+    expect(h.reload).toHaveBeenCalledTimes(1);
     expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
   });
 });

@@ -872,9 +872,14 @@ async function rejectPrediction(tag) {
       (p) => p.tag.trim().toLowerCase() === key && p.status === "REJECTED",
     )
   ) {
+    // Mirror the backend's synthetic 'manual' NEG row (record_human_label):
+    // confidence is the tagger's P(applies), which is 0 for a tag it never
+    // predicted — not 1.0. Using 0 keeps the optimistic chip consistent with
+    // what a refetch returns (and below the 0.3 near-miss threshold, so a
+    // removed manual tag doesn't masquerade as a high-confidence rejection).
     tagPredictions.value = [
       ...tagPredictions.value,
-      { tag: String(tag), confidence: 1.0, status: "REJECTED" },
+      { tag: String(tag), confidence: 0.0, status: "REJECTED" },
     ];
   }
 }

@@ -22,6 +22,7 @@ from pixlstash.utils.service.person_tags import (
     is_face_requiring,
     is_person_tag,
     plan_strips,
+    tags_to_clear,
 )
 
 
@@ -115,3 +116,36 @@ def test_meta_tag_outranks_object_caption_and_face():
     plan = plan_strips("a woman with brown hair", ["no humans", "brown hair", "lips"])
     assert plan["source"] == SOURCE_NO_HUMANS
     assert plan["flag"] == {"brown hair", "lips"}
+
+
+def test_to_clear_object_strips_all_person_tags():
+    # description-driven "object" filter: no face + object caption → every person-tag goes
+    out = tags_to_clear(
+        {"object"},
+        ["brown hair", "face", "hand", "wooden"],
+        has_real_face=False,
+        description="a wooden wardrobe with a mirror",
+    )
+    assert out == {"brown hair", "face", "hand"}  # the non-person "wooden" is kept
+
+
+def test_to_clear_object_needs_object_caption():
+    # a person caption is not "object" → the object filter strips nothing
+    out = tags_to_clear(
+        {"object"},
+        ["brown hair", "face"],
+        has_real_face=False,
+        description="a woman with long brown hair",
+    )
+    assert out == set()
+
+
+def test_to_clear_object_is_no_face_gated():
+    # a real detected face short-circuits every filter, the object filter included
+    out = tags_to_clear(
+        {"object"},
+        ["brown hair", "face"],
+        has_real_face=True,
+        description="a wooden wardrobe",
+    )
+    assert out == set()

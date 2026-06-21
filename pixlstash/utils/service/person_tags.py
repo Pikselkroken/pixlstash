@@ -386,6 +386,7 @@ def tags_to_clear(
     tags: list[str] | set[str],
     *,
     has_real_face: bool,
+    description: str | None = None,
 ) -> set[str]:
     """Which of a picture's tags the active live filters imply removing.
 
@@ -395,14 +396,18 @@ def tags_to_clear(
       * ``no_face``   → the face-requiring tags (only when no real face detected).
       * ``no_humans`` → all person-tags, when no real face *and* an object meta-tag is
         present.
+      * ``object``    → all person-tags, when no real face *and* the caption describes a
+        non-person object (``classify_description`` returns ``"object"``). This is the
+        description-driven signal, so it needs ``description`` to be passed.
 
-    Both filters are no-face-gated: a picture with a real detected face yields nothing
-    (on a faced picture it's the meta-tag that's wrong, never the person-tags).
+    All filters are no-face-gated: a picture with a real detected face yields nothing
+    (on a faced picture it's the meta-tag/caption that's wrong, never the person-tags).
 
     Args:
-        filters: Active filter kinds (subset of ``{"no_face", "no_humans"}``).
+        filters: Active filter kinds (subset of ``{"no_face", "no_humans", "object"}``).
         tags: The picture's current tags.
         has_real_face: Whether the picture has a non-sentinel face.
+        description: The picture's caption, required for the ``object`` filter.
 
     Returns:
         The set of (original-case) tag strings to remove.
@@ -414,5 +419,7 @@ def tags_to_clear(
     if "no_face" in filters:
         out |= {t for t in tags if is_face_requiring(t)}
     if "no_humans" in filters and any(_norm(t) in OBJECT_META_TAGS for t in tags):
+        out |= {t for t in tags if is_person_tag(t)}
+    if "object" in filters and classify_description(description) == "object":
         out |= {t for t in tags if is_person_tag(t)}
     return out

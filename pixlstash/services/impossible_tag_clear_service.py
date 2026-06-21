@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Face, Tag
+from pixlstash.db_models import Face, Picture, Tag
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.label_ledger import (
     NEG,
@@ -39,7 +39,8 @@ logger = get_logger(__name__)
 _ID_CHUNK = 900
 
 # Filter kinds the clear understands (mirrors the live predicate in PredicateFilter).
-VALID_FILTERS = ("no_face", "no_humans")
+# "object" is the description-driven signal (face-independent), cleared the same way.
+VALID_FILTERS = ("no_face", "no_humans", "object")
 
 
 def _chunks(seq: list, size: int = _ID_CHUNK):
@@ -68,11 +69,20 @@ def clear_in_session(
         tags_by_pic: dict[int, list[Tag]] = defaultdict(list)
         for tag_row in session.exec(select(Tag).where(Tag.picture_id.in_(chunk))).all():
             tags_by_pic[tag_row.picture_id].append(tag_row)
+        # Captions for the description-driven "object" filter (face-independent signal).
+        desc_by_pic: dict[int, str | None] = dict(
+            session.exec(
+                select(Picture.id, Picture.description).where(Picture.id.in_(chunk))
+            ).all()
+        )
 
         for pid in chunk:
             rows = tags_by_pic.get(pid, [])
             strip = tags_to_clear(
-                filters, [r.tag for r in rows], has_real_face=pid in faced
+                filters,
+                [r.tag for r in rows],
+                has_real_face=pid in faced,
+                description=desc_by_pic.get(pid),
             )
             if not strip:
                 continue

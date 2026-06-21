@@ -543,7 +543,15 @@ def register_routes(router, server):
                     server.import_tasks[task_id]["last_update_epoch_ms"] = int(
                         time.time() * 1000
                     )
-                    server.vault.notify(EventType.CHANGED_PICTURES)
+                    server.vault.notify(
+                        EventType.CHANGED_PICTURES,
+                        {
+                            "picture_ids": imported_ids or [],
+                            "source": "ui" if origin_client_id else "external",
+                            "origin_client_id": origin_client_id,
+                            "change_kind": "added",
+                        },
+                    )
                     if imported_ids:
                         # A genuine PixlStash tab attaches X-Client-Id (captured
                         # as origin_client_id); an external API client — e.g. a
@@ -568,7 +576,14 @@ def register_routes(router, server):
                     server.import_tasks[task_id]["last_update_epoch_ms"] = int(
                         time.time() * 1000
                     )
-                    server.vault.notify(EventType.CHANGED_PICTURES)
+                    server.vault.notify(
+                        EventType.CHANGED_PICTURES,
+                        {
+                            "source": "ui" if origin_client_id else "external",
+                            "origin_client_id": origin_client_id,
+                            "change_kind": "updated",
+                        },
+                    )
                 logger.info("Import task completed: task_id=%s", task_id)
             except Exception as exc:
                 server.import_tasks[task_id]["status"] = "failed"

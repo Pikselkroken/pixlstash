@@ -1089,7 +1089,8 @@ def create_router(server) -> APIRouter:
         description="Updates picture set name and/or description.",
         response_model=PictureSetUpdateResponse,
     )
-    def update_picture_set(id: int, payload: dict = Body(...)):
+    def update_picture_set(id: int, request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         name = payload.get("name")
         description = payload.get("description")
         raw_project_id = payload.get("project_id", _UNSET)
@@ -1263,7 +1264,14 @@ def create_router(server) -> APIRouter:
         if not success:
             raise HTTPException(status_code=404, detail="Picture set not found")
         if project_changed:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
         return {"status": "success"}
 
     @router.delete(
@@ -1366,7 +1374,8 @@ def create_router(server) -> APIRouter:
         description="Adds one picture to a set when the set and picture are valid and membership does not already exist.",
         response_model=PictureSetAddPictureResponse,
     )
-    def add_picture_to_set(id: int, picture_id: str):
+    def add_picture_to_set(id: int, picture_id: str, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         reference_character_id = _find_reference_character_id_for_set(id)
 
         def add_member(session, id, picture_id, reference_character_id=None):
@@ -1424,9 +1433,27 @@ def create_router(server) -> APIRouter:
             priority=DBPriority.IMMEDIATE,
         )
         if success:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            try:
+                changed_ids = [int(picture_id)]
+            except (TypeError, ValueError):
+                changed_ids = []
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": changed_ids,
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
             if reference_character_id is not None:
-                server.vault.notify(EventType.CHANGED_CHARACTERS)
+                server.vault.notify(
+                    EventType.CHANGED_CHARACTERS,
+                    {
+                        "source": "ui",
+                        "origin_client_id": origin_client_id,
+                    },
+                )
         else:
             raise HTTPException(
                 status_code=400,
@@ -1440,7 +1467,8 @@ def create_router(server) -> APIRouter:
         description="Removes one picture membership from a picture set.",
         response_model=PictureSetRemovePictureResponse,
     )
-    def remove_picture_from_set(id: int, picture_id: str):
+    def remove_picture_from_set(id: int, picture_id: str, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         reference_character_id = _find_reference_character_id_for_set(id)
 
         def remove_member(session, id, picture_id, reference_character_id=None):
@@ -1471,7 +1499,13 @@ def create_router(server) -> APIRouter:
         )
         if success:
             if reference_character_id is not None:
-                server.vault.notify(EventType.CHANGED_CHARACTERS)
+                server.vault.notify(
+                    EventType.CHANGED_CHARACTERS,
+                    {
+                        "source": "ui",
+                        "origin_client_id": origin_client_id,
+                    },
+                )
         else:
             raise HTTPException(status_code=404, detail="Picture not in set")
         return {"status": "success"}
@@ -1482,7 +1516,8 @@ def create_router(server) -> APIRouter:
         description="Adds a batch of pictures to a set (non-destructive). Skips pictures already in the set.",
         response_model=PictureSetBulkAddResponse,
     )
-    def bulk_add_pictures_to_set(id: int, payload: dict = Body(...)):
+    def bulk_add_pictures_to_set(id: int, request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         raw_ids = payload.get("picture_ids", [])
         if not isinstance(raw_ids, list):
             raise HTTPException(status_code=400, detail="picture_ids must be a list")
@@ -1543,7 +1578,15 @@ def create_router(server) -> APIRouter:
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
         if added > 0:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": picture_ids,
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
         return {"status": "success", "added": added}
 
     @router.put(
@@ -1552,7 +1595,10 @@ def create_router(server) -> APIRouter:
         description="Atomically replaces the entire member list of a set. All existing members are removed and the provided picture ids become the new members.",
         response_model=PictureSetBulkReplaceResponse,
     )
-    def bulk_replace_pictures_in_set(id: int, payload: dict = Body(...)):
+    def bulk_replace_pictures_in_set(
+        id: int, request: Request, payload: dict = Body(...)
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         raw_ids = payload.get("picture_ids", [])
         if not isinstance(raw_ids, list):
             raise HTTPException(status_code=400, detail="picture_ids must be a list")
@@ -1611,7 +1657,15 @@ def create_router(server) -> APIRouter:
         )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": picture_ids,
+                "source": "ui",
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         return {"status": "success", "members": added}
 
     return router
