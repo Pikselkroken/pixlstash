@@ -926,6 +926,7 @@ import {
 import { useRoute, useRouter } from "vue-router";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
@@ -2723,6 +2724,7 @@ const visibleRangeLabel = computed(() => {
 
 const userPrefsStore = useUserPrefsStore();
 const reviewFixesStore = useReviewFixesStore();
+const tasksStore = useTasksStore();
 // True while the modal review-fixes overlay is up. Grid keyboard shortcuts and
 // drag-and-drop are suppressed so they don't act on the grid behind it.
 const reviewOverlayOpen = computed(() => reviewFixesStore.overlayOpen);
@@ -5880,13 +5882,17 @@ async function confirmSegment() {
     .filter((id) => Number.isFinite(id) && id > 0);
   segmentDialogOpen.value = false;
   if (!ids.length || !props.backendUrl) return;
-  // Detection runs as a background GPU task; progress surfaces in the task
-  // manager and the overlay refreshes on the resulting CHANGED_PICTURES event.
+  // Detection runs as a background GPU task. The grid card refreshes in place
+  // on the resulting CHANGED_PICTURES event (detections is a card-content
+  // field), and the overlay reconciles too if open.
   try {
     await apiClient.post(`${props.backendUrl}/pictures/detect`, {
       picture_ids: ids,
       prompt: segmentPrompt.value.trim(),
     });
+    // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
+    // within one poll RTT instead of up to the 5 s idle interval later.
+    tasksStore.nudge();
   } catch (err) {
     console.error("Object detection request failed:", err);
   }

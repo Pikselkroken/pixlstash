@@ -33,6 +33,9 @@ function makeHarness(overrides = {}) {
         return selectedSort.value.includes("SMART_SCORE");
       if (f === "character_likeness")
         return selectedSort.value.includes("CHARACTER_LIKENESS");
+      // Detections are an opt-in overlay layer, never a sort/filter field —
+      // mirror App.vue.pictureChangeFieldAffectsView.
+      if (f === "detections") return false;
       return true; // unknown field assumed relevant
     });
   });
@@ -278,6 +281,126 @@ describe("useGridRealtimeSync decision table", () => {
     const res = h.sync.handleMessage({ type: "characters_changed" });
     expect(res.action).toBe("ignored");
     expect(res.reason).toBe("not-a-picture-event");
+  });
+});
+
+describe("useGridRealtimeSync — card-content-only updates (detections)", () => {
+  it("own-origin detections echo -> targeted refresh per id (not suppressed)", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [1, 2],
+      change_kind: "updated",
+      fields: ["detections"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("card-content-refresh");
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(1);
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(2);
+    expect(h.reload).not.toHaveBeenCalled();
+  });
+
+  it("external detections update -> targeted refresh per id (not ignored)", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [3, 4],
+      change_kind: "updated",
+      fields: ["detections"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("card-content-refresh");
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(3);
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(4);
+    expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
+    // A detections-only update is not view-affecting, so the sidebar count
+    // must not churn.
+    expect(h.refreshSidebar).not.toHaveBeenCalled();
+  });
+
+  it("foreign-ui detections update -> targeted refresh per id", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [5],
+      change_kind: "updated",
+      fields: ["detections"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("card-content-refresh");
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(5);
+  });
+
+  it("detections update over the cap -> single reload (no per-id storm)", () => {
+    const h = makeHarness();
+    const manyIds = Array.from({ length: 51 }, (_, i) => i + 1);
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: manyIds,
+      change_kind: "updated",
+      fields: ["detections"],
+    });
+    expect(res.action).toBe("reload");
+    expect(res.reason).toBe("card-content-refresh-too-large");
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+
+  it("detections update while overlay open -> deferred, no immediate refresh", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [6, 7],
+      change_kind: "updated",
+      fields: ["detections"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("card-content-refresh-overlay-deferred");
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("mixed fields (detections + a view field) follow the OLD path, not the new branch", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [8],
+      change_kind: "updated",
+      // `project` is view-affecting -> this is NOT card-content-only, so it must
+      // take the normal foreign-ui targeted-update path.
+      fields: ["detections", "project"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("foreign-ui-updated");
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(8);
+  });
+
+  it("a non-card-content field (smart_score) is not swallowed by the new branch", () => {
+    const h = makeHarness({ selectedSort: "SMART_SCORE" });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [9],
+      change_kind: "updated",
+      fields: ["smart_score"],
+    });
+    // Still the old external sort-affecting pill, not a card-content refresh.
+    expect(res.action).toBe("pill");
+    expect(res.reason).toBe("external-updated-sort-affecting");
+    expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([9]);
   });
 });
 

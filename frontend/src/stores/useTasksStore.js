@@ -242,6 +242,18 @@ export const useTasksStore = defineStore("tasks", () => {
     tick();
   }
 
+  // Kick an immediate progress fetch and switch to the fast cadence right away,
+  // instead of waiting out the current (possibly 5 s idle) interval. Used when
+  // the user explicitly starts background work (e.g. Segment) so the activity
+  // light / Tasks-tab pulse appear within one poll RTT rather than up to 5 s
+  // later. No-op-safe: fetchProgress() guards against concurrent fetches via
+  // fetchInFlight, and reschedule(true) fires tick() immediately.
+  function nudge() {
+    if (!polling) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+    reschedule(true);
+  }
+
   function stopPolling() {
     polling = false;
     if (timer) {
@@ -278,5 +290,6 @@ export const useTasksStore = defineStore("tasks", () => {
     setTasksTabOpen,
     startPolling,
     stopPolling,
+    nudge,
   };
 });

@@ -53,6 +53,16 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
   "character_likeness",
 ]);
 
+// "Card-content" fields change how a card *renders* (its overlays / icons) but
+// never its sort or filter position — by construction they are not
+// view-affecting, so they must never reshuffle the grid or raise a pill. The
+// card still needs a targeted in-place metadata refresh so the new content shows
+// without a full reload. `detections` is the canonical case: the grid draws
+// object boxes from `img.detections` (ImageGrid.getDetectionBboxOverlays, gated
+// on the `showDetections` prop), and a user-triggered Segment completes the same
+// way for every tab regardless of who started it.
+const CARD_CONTENT_FIELDS = new Set(["detections"]);
+
 function asPictureIds(payload) {
   return Array.isArray(payload?.picture_ids) ? payload.picture_ids : [];
 }
@@ -278,6 +288,14 @@ export function useGridRealtimeSync(deps) {
     });
   }
 
+  // True when every changed field is a card-content-only field (and there is at
+  // least one). These fields are, by construction, not view-affecting, so this
+  // can be handled uniformly for all origins with a targeted in-place refresh.
+  function fieldsAreCardContentOnly(fields) {
+    if (!Array.isArray(fields) || !fields.length) return false;
+    return fields.every((field) => CARD_CONTENT_FIELDS.has(field));
+  }
+
   // Reconcile a single card under the active sort. The WS event never carries
   // the new server-computed value, so for smart-score we fetch-then-reposition
   // (refreshSmartScoreForImage does both with the true value); otherwise we
@@ -428,6 +446,27 @@ export function useGridRealtimeSync(deps) {
     const source = normaliseSource(payload);
     const changeKind = resolveChangeKind(payload);
     const fields = Array.isArray(payload?.fields) ? payload.fields : [];
+
+    // Card-content-only update (e.g. detections): the card's rendered content
+    // changed but not its sort/filter position, so refresh each affected card in
+    // place for ALL origins (own-origin echo, foreign UI, external) uniformly —
+    // detection completion looks the same regardless of who triggered it. Never
+    // a pill, never a reshuffle. Cap the per-id fetch loop and defer under an
+    // open overlay, like the other targeted branches.
+    if (
+      changeKind === "updated" &&
+      fieldsAreCardContentOnly(fields) &&
+      pictureIds.length
+    ) {
+      if (pictureIds.length > MAX_TARGETED_UPDATE) {
+        return reloadOrDefer("card-content-refresh-too-large");
+      }
+      if (deferWhileOverlayOpen()) {
+        return { action: TARGETED, reason: "card-content-refresh-overlay-deferred" };
+      }
+      for (const id of pictureIds) grid.refreshGridImage?.(id);
+      return { action: TARGETED, reason: "card-content-refresh" };
+    }
 
     if (originClientId && myClientId && originClientId === myClientId) {
       return handleOwnOrigin(payload, changeKind, fields, pictureIds);
