@@ -52,10 +52,16 @@
   # `ShowInstDetails nevershow` because this include is pulled in after it.
   ShowInstDetails show
 
-  # Globals. Each macro that sets these is inserted exactly once, so declaring
-  # them here (also once) avoids any double-declaration.
+  # Globals. PixlInstallLogPath is set inside PixlWriteLogs (defined below), so it
+  # exists in both the installer and the uninstaller build. PixlKillResult is only
+  # set in customInit and read in customInstall, neither of which is inserted into
+  # the uninstaller, so declaring it there leaves it unset and unreferenced.
+  # electron-builder compiles NSIS with warnings-as-errors (warning 6001 "not
+  # referenced or never set"), so guard it to the installer build.
   Var /GLOBAL PixlInstallLogPath
-  Var /GLOBAL PixlKillResult
+  !ifndef BUILD_UNINSTALLER
+    Var /GLOBAL PixlKillResult
+  !endif
 
   # LVM constants for DumpLog (read the details ListView item text). Guarded so
   # we never clash with a constant MUI / the template already defined.
