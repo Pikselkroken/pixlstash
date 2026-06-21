@@ -3,7 +3,7 @@
   "productName": "PixlStash",
   "desktopName": "pixlstash.desktop",
   "version": "1.7.0-dev.2",
-  "description": "PixlStash desktop app — a native window around the local PixlStash server, with downloadable, hardware-matched compute backends.",
+  "description": "PixlStash desktop app: a native window around the local PixlStash server, with downloadable, hardware-matched compute backends.",
   "author": {
     "name": "Gaute Lindkvist",
     "email": "lindkvis@gmail.com"
@@ -13,7 +13,7 @@
   "main": "dist/main.js",
   "type": "commonjs",
   "scripts": {
-    "sync-version": "node scripts/sync-version.mjs",
+    "sync-version": "node ../scripts/sync-node-versions.mjs electron",
     "copy-assets": "node scripts/copy-assets.mjs",
     "check-electron": "node scripts/check-electron-binary.mjs",
     "build": "npm run sync-version && tsc && npm run copy-assets",

@@ -27,19 +27,21 @@ test.describe('authentication', () => {
     await grid.goto()
     await settings.open()
     await settings.openAccountTab()
-    const before = await settings.tokenRows.count()
 
-    const description = 'e2e release token'
+    // Tokens persist on the shared session, so prior runs/retries leave rows
+    // behind. Assert on a per-run unique description instead of an absolute
+    // count to keep the test independent of leaked state.
+    const description = `e2e release token ${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const newRow = settings.tokenRows.filter({ hasText: description })
+
     await settings.tokenDescription.fill(description)
     await settings.createTokenButton.click()
 
     // The new token appears in the list (a reveal dialog may overlay it, but
     // toBeVisible does not check occlusion). Escape is avoided — it closes the
     // whole settings dialog.
-    await expect(
-      settings.tokenRows.filter({ hasText: description }).first(),
-    ).toBeVisible()
-    expect(await settings.tokenRows.count()).toBe(before + 1)
+    await expect(newRow.first()).toBeVisible()
+    await expect(newRow).toHaveCount(1)
   })
 
   test('logs out via settings (§1.1)', async ({ browser, baseURL }) => {

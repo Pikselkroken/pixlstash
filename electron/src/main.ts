@@ -925,7 +925,12 @@ if (!gotLock) {
     });
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+      // Re-open through showWindow, which recreates the window AND navigates back
+      // to the already-running backend (currentUrl) or re-runs boot. Calling
+      // createMainWindow directly only loaded the static "Starting" splash, so on
+      // macOS (where closing the window destroys it, since there is no tray) a dock
+      // click left the app stuck on "Starting" forever with the backend still up.
+      showWindow();
     });
   });
 
