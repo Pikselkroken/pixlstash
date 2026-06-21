@@ -300,7 +300,7 @@
         <div class="tab-panel active" id="panel-desktop" role="tabpanel">
           <p class="section-title">Desktop App</p>
           <p class="section-subtitle">
-            A native PixlStash window for Windows, and Linux: no Python,
+            A native PixlStash window for Windows, macOS, and Linux: no Python,
             Node.js, or browser tab required. The app auto-detects your hardware
             and downloads a matching AI backend (NVIDIA, experimetal AMD or CPU)
             on first run.
@@ -316,9 +316,9 @@
                   target="_blank"
                   rel="noopener"
                   >latest release on GitHub</a
-                >: <code>.exe</code> (Windows) or <code>.AppImage</code>/<code
-                  >.deb</code
-                >
+                >: <code>.exe</code> (Windows),
+                <code>.dmg</code> (macOS, Apple Silicon), or
+                <code>.AppImage</code>/<code>.deb</code>
                 (Linux).
               </p>
             </div>
@@ -370,6 +370,22 @@
                 distro's equivalent. As a one-off alternative you can run
                 <code>./PixlStash-*.AppImage --appimage-extract-and-run</code>,
                 which doesn't need FUSE.
+              </p>
+            </div>
+
+            <div class="step">
+              <p class="sub-heading">macOS — Apple Silicon only</p>
+              <p class="step-note">
+                The macOS build is for <strong>Apple Silicon</strong> Macs (M1 and
+                later); Intel Macs are not currently supported, but you can run
+                PixlStash on them via the pip package or Docker. Open the
+                <code>.dmg</code> and drag <strong>PixlStash</strong> into your
+                <strong>Applications</strong> folder, then launch it. If macOS
+                won't open it (an unsigned build may report the app as damaged or
+                from an unidentified developer), right-click (or Control-click) the
+                app and choose <strong>Open</strong>, then confirm — or clear the
+                quarantine flag with
+                <code>xattr -dr com.apple.quarantine /Applications/PixlStash.app</code>.
               </p>
             </div>
 
