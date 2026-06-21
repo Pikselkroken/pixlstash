@@ -68,11 +68,12 @@ jobs:
         include:
           - { runner: ubuntu-latest, os: linux, arch: x64, accel: cpu }
           - { runner: windows-latest, os: win, arch: x64, accel: cpu }
-          # macOS builds disabled: the unsigned/un-notarised .dmg trips Gatekeeper
-          # ("PixlStash is damaged"), which is worse than not shipping it. Re-enable
-          # once Developer ID signing + notarisation is set up (see the signing env
-          # in the build step), restoring:
-          # - { runner: macos-14, os: mac, arch: arm64, accel: metal }
+          # macOS (Apple Silicon, Metal). Builds UNSIGNED until the Apple Developer ID
+          # signing secrets are added to the repo (see "Build Electron installers"
+          # below and docs/macos-signing-setup.md): unsigned artifacts get a
+          # "-unsigned" suffix and Gatekeeper quarantines them. Once the signing
+          # secrets are set the build signs + notarises and drops the suffix.
+          - { runner: macos-14, os: mac, arch: arm64, accel: metal }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -106,16 +107,55 @@ jobs:
             --wheel "$WHEEL" \
             --os ${{ matrix.os }} --arch ${{ matrix.arch }} --accel ${{ matrix.accel }} \
             --output-dir electron/resources
+      # Install deps in a step WITHOUT the signing secrets in scope: npm ci runs
+      # third-party dependency lifecycle scripts, which must never see the Apple
+      # certificate or notarisation credentials.
+      - name: Install desktop dependencies
+        working-directory: electron
+        run: npm ci
       - name: Build Electron installers
         working-directory: electron
-        # Unsigned by default; supply CSC_LINK/CSC_KEY_PASSWORD (win/mac) and
-        # APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID secrets to sign+notarise.
+        shell: bash
+        # macOS signing + notarisation is opt-in via secrets. When APPLE_CSC_LINK (a
+        # base64-encoded Developer ID Application .p12) is present the mac build is
+        # signed (and notarised, if the APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/
+        # APPLE_TEAM_ID secrets are also set) and ships under its clean name. When the
+        # cert secret is absent the build still runs but is UNSIGNED and labelled with
+        # a "-unsigned" suffix. Windows/Linux are unaffected and always unsigned here.
+        # Full setup: docs/macos-signing-setup.md.
+        #
+        # The Apple secrets are scoped to the macOS runner only (the ternary yields
+        # an empty string elsewhere) so the certificate never lands on the Windows or
+        # Linux runners that have no use for it.
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_LINK: ${{ matrix.os == 'mac' && secrets.APPLE_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'mac' && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.os == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.os == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.os == 'mac' && secrets.APPLE_TEAM_ID || '' }}
         run: |
-          npm ci
-          npm run dist -- --publish never
+          set -euo pipefail
+          if [ "${{ matrix.os }}" != "mac" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            npm run dist -- --publish never
+            exit 0
+          fi
+          # macOS: branch on whether the signing certificate secret is available.
+          if [ -n "${CSC_LINK:-}" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=true
+            if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+              echo "macOS: signing certificate and notarisation credentials found; signing + notarising."
+              npm run dist -- --publish never --config.mac.notarize.teamId="${APPLE_TEAM_ID}"
+            else
+              echo "::warning title=macOS signed but not notarised::Signing certificate is present but notarisation credentials (APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID) are missing. The app is signed but NOT notarised, so Gatekeeper will still block it on download. Add the notarisation secrets to finish the chain (docs/macos-signing-setup.md)."
+              npm run dist -- --publish never
+            fi
+          else
+            echo "::warning title=Unsigned macOS build::No Apple signing certificate (APPLE_CSC_LINK secret) found. Building UNSIGNED and labelling the artifact '-unsigned'. Gatekeeper will quarantine it until the signing secrets are added (docs/macos-signing-setup.md)."
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            npm run dist -- --publish never --config.mac.artifactName='${productName}-desktop-${version}-${os}-${arch}-unsigned.${ext}'
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pixlstash-desktop-${{ matrix.os }}-${{ matrix.arch }}
@@ -123,6 +163,8 @@ jobs:
             electron/release/*.exe
             electron/release/*.AppImage
             electron/release/*.deb
+            electron/release/*.dmg
+            electron/release/*.zip
       - name: Attach installers to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
@@ -132,4 +174,5 @@ jobs:
             electron/release/*.exe
             electron/release/*.AppImage
             electron/release/*.deb
+            electron/release/*.dmg
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}

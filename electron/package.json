@@ -74,7 +74,8 @@
       "category": "public.app-category.photography",
       "icon": "assets/icon.png",
       "hardenedRuntime": true,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "notarize": false
     },
     "linux": {
       "target": [
