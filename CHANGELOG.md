@@ -1,3 +1,6 @@
+# [1.6.7]
+- Fix the Windows installer build (NSIS) and the macOS desktop signing so the desktop apps build and ship
+
 # [1.6.6]
 - Fix macOS and Docker build issues on GitHub
 
