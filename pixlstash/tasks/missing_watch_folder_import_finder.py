@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 
 from sqlmodel import Session, select
@@ -44,7 +45,13 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         # set is treated as newly discovered regardless of its mtime/ctime, which
         # handles copy tools (e.g. shutil.copy2 on Windows) that preserve old
         # timestamps on the destination file.
+        #
+        # This set is read/written by the finder on the WorkPlanner thread and
+        # also mutated by WatchFolderImportTask (via ``discard_seen_paths``) on
+        # the TaskRunner thread when a candidate fails to import, so all access
+        # is guarded by ``_seen_lock`` to avoid a concurrent-mutation race.
         self._seen_file_paths: set[str] = set()
+        self._seen_lock = threading.Lock()
 
     def finder_name(self) -> str:
         return "MissingWatchFolderImportFinder"
@@ -101,8 +108,9 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
                     # candidate, even when both timestamps predate last_checked.
                     # This handles shutil.copy2 on Windows, which copies ctime
                     # from the source, making it equally old as mtime.
-                    is_new_path = normalized not in self._seen_file_paths
-                    self._seen_file_paths.add(normalized)
+                    with self._seen_lock:
+                        is_new_path = normalized not in self._seen_file_paths
+                        self._seen_file_paths.add(normalized)
                     if seen_ts > last_checked or is_new_path:
                         total_candidates += 1
                         candidate_files.append(
@@ -129,7 +137,28 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
             candidate_files=candidate_files,
             total_candidates=total_candidates,
             last_checked_updates=last_checked_updates,
+            finder=self,
         )
+
+    def discard_seen_paths(self, file_paths: list[str]) -> None:
+        """Forget paths so a later scan re-discovers them as new.
+
+        Called by :class:`WatchFolderImportTask` for candidate files that failed
+        to process (hash or import error). A file is normally added to
+        ``_seen_file_paths`` at discovery time; if it then fails to import and
+        also carries a copy-preserved old mtime (``seen_ts <= last_checked``),
+        it would never become a candidate again. Removing it here makes the
+        failure transient: the next scan sees the path as new and retries it.
+        """
+        if not file_paths:
+            return
+        normalized = {
+            os.path.normcase(os.path.abspath(path)) for path in file_paths if path
+        }
+        if not normalized:
+            return
+        with self._seen_lock:
+            self._seen_file_paths.difference_update(normalized)
 
     def _persist_db_last_checked(self, updates: dict[int, float]):
         def update(session: Session, values: dict[int, float]):
