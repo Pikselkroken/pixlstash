@@ -1,28 +1,21 @@
 import time
-from collections import defaultdict
 
 from sqlalchemy import func, desc
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
-    DEFAULT_SMART_SCORE_PENALIZED_TAGS,
-    DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     Picture,
     Quality,
-    Tag,
-    User,
 )
 from pixlstash.picture_scoring import (
     _load_builtin_anchors,
     _BUILTIN_MIN_GOOD,
     _BUILTIN_MIN_BAD,
+    attach_anomaly_inputs,
     prepare_smart_score_inputs,
 )
-from pixlstash.utils.quality.smart_score_utils import (
-    SmartScoreUtils,
-    smart_score_penalised_tags,
-)
+from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask
 
@@ -57,10 +50,8 @@ class SmartScoreTask(BaseTask):
         if not picture_ids:
             return {"changed_count": 0}
 
-        # Resolve penalised tags from the first (only) user.
-        penalised_tags = self._db.run_immediate_read_task(self._fetch_penalised_tags)
-        good_anchors, bad_anchors, candidates = self._db.run_immediate_read_task(
-            self._fetch_score_data, picture_ids, penalised_tags
+        good_anchors, bad_anchors, candidates, tag_precisions = (
+            self._db.run_immediate_read_task(self._fetch_score_data, picture_ids)
         )
 
         good_list, bad_list, cand_list, cand_ids = prepare_smart_score_inputs(
@@ -72,7 +63,10 @@ class SmartScoreTask(BaseTask):
             return {"changed_count": 0}
 
         scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
-            cand_list, good_list, bad_list
+            cand_list,
+            good_list,
+            bad_list,
+            config={"tag_precisions": tag_precisions},
         )
 
         id_to_score = {cand_ids[i]: float(scores[i]) for i in range(len(cand_ids))}
@@ -91,27 +85,14 @@ class SmartScoreTask(BaseTask):
         return {"changed_count": changed_count}
 
     @staticmethod
-    def _fetch_penalised_tags(session: Session) -> dict:
-        """Fetch the first user's penalised tag weights from the database."""
-        user = session.exec(select(User)).first()
-        if user is None:
-            return DEFAULT_SMART_SCORE_PENALIZED_TAGS or {}
-        parsed = smart_score_penalised_tags(
-            user.smart_score_penalised_tags,
-            DEFAULT_SMART_SCORE_PENALIZED_TAGS,
-            default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
-        )
-        return (
-            parsed if parsed is not None else (DEFAULT_SMART_SCORE_PENALIZED_TAGS or {})
-        )
+    def _fetch_score_data(session: Session, candidate_ids: list):
+        """Fetch anchors, candidates, and per-tag precision for smart score computation.
 
-    @staticmethod
-    def _fetch_score_data(
-        session: Session,
-        candidate_ids: list,
-        penalised_tags: dict,
-    ):
-        """Fetch anchors and candidates for smart score computation."""
+        Returns ``(good_anchors, bad_anchors, candidates, tag_precisions)``. Mirrors
+        :func:`pixlstash.picture_scoring.fetch_smart_score_data` and shares
+        :func:`pixlstash.picture_scoring.attach_anomaly_inputs`, so the background task
+        and the on-demand sort score identically.
+        """
         good = session.exec(
             select(Picture.image_embedding, Picture.score)
             .where(Picture.score >= 4)
@@ -143,14 +124,7 @@ class SmartScoreTask(BaseTask):
         )
         candidate_rows = session.exec(query).all()
 
-        penalised_tag_weights = {
-            str(tag).strip().lower(): int(weight)
-            for tag, weight in (penalised_tags or {}).items()
-            if str(tag).strip()
-        }
-
         candidates = []
-        candidate_id_list = []
         for pic, quality in candidate_rows:
             aest = pic.aesthetic_score
             if aest is None and quality is not None:
@@ -172,30 +146,13 @@ class SmartScoreTask(BaseTask):
                     "sharpness": quality.sharpness if quality else None,
                     "edge_density": quality.edge_density if quality else None,
                     "luminance_entropy": quality.luminance_entropy if quality else None,
+                    "noise_level": quality.noise_level if quality else None,
+                    "colorfulness": quality.colorfulness if quality else None,
                     "text_score": pic.text_score,
                 }
             )
-            candidate_id_list.append(pic.id)
 
-        penalised_tag_map = defaultdict(int)
-        if penalised_tag_weights and candidate_id_list:
-            tag_rows = session.exec(
-                select(Tag.picture_id, Tag.tag).where(
-                    Tag.picture_id.in_(candidate_id_list)
-                )
-            ).all()
-            for pic_id, tag in tag_rows:
-                if not tag:
-                    continue
-                key = tag.strip().lower()
-                weight = penalised_tag_weights.get(key)
-                if weight is not None:
-                    penalised_tag_map[pic_id] += weight
-            if penalised_tag_map:
-                for candidate in candidates:
-                    candidate["penalised_tag_count"] = penalised_tag_map.get(
-                        candidate["id"], 0
-                    )
+        tag_precisions = attach_anomaly_inputs(session, candidates)
 
         builtin_good, builtin_bad = _load_builtin_anchors()
         if len(good) < _BUILTIN_MIN_GOOD:
@@ -203,7 +160,7 @@ class SmartScoreTask(BaseTask):
         if len(bad) < _BUILTIN_MIN_BAD:
             bad = list(bad) + builtin_bad
 
-        return good, bad, candidates
+        return good, bad, candidates, tag_precisions
 
     @staticmethod
     def _persist_scores(session: Session, id_to_score: dict) -> int:

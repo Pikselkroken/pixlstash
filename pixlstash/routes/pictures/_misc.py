@@ -724,11 +724,13 @@ def register_routes(router, server):
                 penalised_tags = get_smart_score_penalised_tags_from_request(
                     server, request
                 )
-                good_anchors, bad_anchors, candidates = fetch_smart_score_data(
-                    server,
-                    None,
-                    candidate_ids=ordered_ids,
-                    penalised_tags=penalised_tags,
+                good_anchors, bad_anchors, candidates, tag_precisions = (
+                    fetch_smart_score_data(
+                        server,
+                        None,
+                        candidate_ids=ordered_ids,
+                        penalised_tags=penalised_tags,
+                    )
                 )
                 if candidates:
                     good_list, bad_list, cand_list, cand_ids = (
@@ -738,7 +740,10 @@ def register_routes(router, server):
                     )
                     if cand_list:
                         scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
-                            cand_list, good_list, bad_list
+                            cand_list,
+                            good_list,
+                            bad_list,
+                            config={"tag_precisions": tag_precisions},
                         )
                         smart_score_by_id = {
                             int(pid): float(score)

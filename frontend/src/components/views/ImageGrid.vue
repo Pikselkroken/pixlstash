@@ -784,6 +784,34 @@
       </template>
     </v-snackbar>
 
+    <!-- Clear impossible tags result + Undo -->
+    <v-snackbar
+      v-model="impossibleSnackbarVisible"
+      location="bottom"
+      :timeout="8000"
+      color="surface"
+      elevation="4"
+    >
+      <span>{{ impossibleSnackbarText }}</span>
+      <template #actions>
+        <v-btn
+          v-if="lastImpossibleRemoved.length"
+          color="primary"
+          variant="text"
+          @click="handleUndoImpossibleTags"
+        >
+          Undo
+        </v-btn>
+        <v-btn
+          color="default"
+          variant="text"
+          @click="impossibleSnackbarVisible = false"
+        >
+          Dismiss
+        </v-btn>
+      </template>
+    </v-snackbar>
+
     <SelectionBar
       ref="selectionBarRef"
       :selected-count="selectedImageIds.length"
@@ -807,6 +835,9 @@
       :all-grid-images="allGridImages"
       :selected-character="String(props.selectedCharacter)"
       :selected-set="String(props.selectedSet)"
+      :impossible-sources="props.impossibleSources"
+      :clearing-impossible="clearingImpossibleTags"
+      @clear-impossible-tags="handleClearImpossibleTags"
       @clear-selection="clearSelection"
       @added-to-set="handleOverlayAddedToSet"
       @remove-from-group="removeFromGroup"
@@ -979,6 +1010,7 @@ const props = defineProps({
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
+  impossibleSources: { type: Array, default: () => [] },
   sharedOnlyFilter: { type: Boolean, default: false },
   unassignedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
@@ -1134,6 +1166,66 @@ const badgeIconSizes = computed(() => {
 });
 
 const allGridImages = ref([]);
+
+// ---- Clear impossible tags (bulk action) ----
+const clearingImpossibleTags = ref(false);
+const impossibleSnackbarVisible = ref(false);
+const impossibleSnackbarText = ref("");
+// Stash of the last clear's removed {picture_id, tag} pairs, for Undo.
+const lastImpossibleRemoved = ref([]);
+
+async function handleClearImpossibleTags() {
+  const pictureIds = selectedImageIds.value
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  const filters = Array.isArray(props.impossibleSources)
+    ? props.impossibleSources
+    : [];
+  if (!pictureIds.length || !filters.length || clearingImpossibleTags.value) {
+    return;
+  }
+  clearingImpossibleTags.value = true;
+  try {
+    const res = await apiClient.post(
+      `${props.backendUrl}/pictures/impossible-tags/clear`,
+      { picture_ids: pictureIds, filters },
+    );
+    const removed = Array.isArray(res.data?.removed) ? res.data.removed : [];
+    const count =
+      typeof res.data?.count === "number" ? res.data.count : removed.length;
+    lastImpossibleRemoved.value = removed;
+    impossibleSnackbarText.value =
+      count > 0
+        ? `Removed ${count} tag${count === 1 ? "" : "s"}`
+        : "No impossible tags found";
+    impossibleSnackbarVisible.value = true;
+    debouncedFetchAllGridImages({ force: true });
+  } catch (e) {
+    console.error("[ImageGrid.vue] Failed to clear impossible tags:", e);
+    lastImpossibleRemoved.value = [];
+    impossibleSnackbarText.value = "Failed to clear impossible tags";
+    impossibleSnackbarVisible.value = true;
+  } finally {
+    clearingImpossibleTags.value = false;
+  }
+}
+
+async function handleUndoImpossibleTags() {
+  const pairs = lastImpossibleRemoved.value;
+  if (!Array.isArray(pairs) || !pairs.length) return;
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/impossible-tags/restore`, {
+      pairs,
+    });
+    impossibleSnackbarVisible.value = false;
+    lastImpossibleRemoved.value = [];
+    debouncedFetchAllGridImages({ force: true });
+  } catch (e) {
+    console.error("[ImageGrid.vue] Failed to restore impossible tags:", e);
+    impossibleSnackbarText.value = "Failed to undo";
+    impossibleSnackbarVisible.value = true;
+  }
+}
 
 // ---- Guest scoring state (READ-token users) ----
 // null = not yet decided, 'accepted' = cookie consent given, 'rejected' = declined
@@ -5024,6 +5116,7 @@ watch(
     () => props.tagConfidenceAboveFilter,
     () => props.tagConfidenceBelowFilter,
     () => props.faceBboxFilter,
+    () => props.impossibleSources,
     () => props.sharedOnlyFilter,
     () => props.unassignedOnlyFilter,
   ],

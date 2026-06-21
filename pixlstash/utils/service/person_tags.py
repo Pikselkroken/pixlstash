@@ -379,3 +379,40 @@ def plan_strips(description: str | None, tags: list[str] | set[str]) -> dict:
         "person_present": person_present,
         "face_present": face_present,
     }
+
+
+def tags_to_clear(
+    filters: list[str] | set[str],
+    tags: list[str] | set[str],
+    *,
+    has_real_face: bool,
+) -> set[str]:
+    """Which of a picture's tags the active live filters imply removing.
+
+    The exact mirror of the grid filter predicates, used by the bulk-clear endpoint so
+    "clear" removes precisely the tags that made the picture show up:
+
+      * ``no_face``   → the face-requiring tags (only when no real face detected).
+      * ``no_humans`` → all person-tags, when no real face *and* an object meta-tag is
+        present.
+
+    Both filters are no-face-gated: a picture with a real detected face yields nothing
+    (on a faced picture it's the meta-tag that's wrong, never the person-tags).
+
+    Args:
+        filters: Active filter kinds (subset of ``{"no_face", "no_humans"}``).
+        tags: The picture's current tags.
+        has_real_face: Whether the picture has a non-sentinel face.
+
+    Returns:
+        The set of (original-case) tag strings to remove.
+    """
+    if has_real_face:
+        return set()
+    tags = list(tags)
+    out: set[str] = set()
+    if "no_face" in filters:
+        out |= {t for t in tags if is_face_requiring(t)}
+    if "no_humans" in filters and any(_norm(t) in OBJECT_META_TAGS for t in tags):
+        out |= {t for t in tags if is_person_tag(t)}
+    return out
