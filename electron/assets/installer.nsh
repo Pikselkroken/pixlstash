@@ -9,7 +9,11 @@
 #   customHeader      -> installer.nsi (file scope, before .onInit). Defines our
 #                        helper functions + callbacks and flips the details view on.
 #   customInit        -> installer.nsi .onInit, AFTER initMultiUser ($INSTDIR known),
-#                        BEFORE the install Section / file extraction. Orphan-kill here.
+#                        BEFORE the install Section. Just seeds $PixlKillResult.
+#   customCheckAppRunning -> allowOnlyOneInstallerInstance.nsh, inside the install
+#                        Section, AFTER the user is prompted to close a running app
+#                        and BEFORE installApplicationFiles. Closes the app, THEN
+#                        sweeps the orphaned backend. Orphan-kill lives here now.
 #   customInstall     -> installSection.nsh, AFTER installApplicationFiles
 #                        (i.e. after the .7z is extracted into $INSTDIR). Markers + log.
 #   customFinishPage  -> assistedInstaller.nsh, replaces the default finish page.
@@ -20,15 +24,30 @@
 # Job Object) can survive after the app window closes. It holds the native
 # .pyd / .dll files open, so when Nsis7z tries to overwrite them the install
 # hangs on the "Installing" page with a frozen progress bar and no log.
-# electron-builder's built-in app-close only kills PixlStash.exe, never
-# python.exe, so the backend is orphaned and keeps the lock.
+# electron-builder's built-in app-close (PowerShell branch) does kill processes
+# under $INSTDIR, but its taskkill fallback only kills PixlStash.exe by name and
+# leaves python.exe orphaned, keeping the lock.
+#
+# ORDERING BUG (the "PixlStash died unexpectedly" report): the orphan-kill used
+# to run in customInit (.onInit), which fires SECONDS BEFORE electron-builder's
+# CHECK_APP_RUNNING prompt (that lives in the install Section, after .onInit). On
+# an over-the-top update the OLD PixlStash.exe is still running, so killing its
+# backend python.exe out from under it made the live app pop its own
+# "PixlStash backend stopped / exited unexpectedly" modal (main.ts onExit, which
+# fires whenever the backend dies while the app is not quitting) BEFORE the user
+# was ever asked to close the app. Fix: do nothing to the backend until the
+# standard prompt has CLOSED THE APP, then sweep the orphan. We therefore move
+# the kill out of customInit and into customCheckAppRunning, which runs after the
+# app is confirmed gone -- so the app's crash dialog can no longer appear.
 #
 # Fixes here:
 #   1. Make the install details view visible (ShowInstDetails show) so progress
 #      and any "Can't modify ...'s files" retry lines are visible and copyable.
-#   2. Kill the orphaned bundled backend BEFORE extraction (customInit), scoped
-#      strictly to python.exe under $INSTDIR\resources\python so we never touch
-#      an unrelated Python. This breaks the file lock that causes the hang.
+#   2. Override customCheckAppRunning: reproduce electron-builder's stock prompt +
+#      app-close loop verbatim, then (installer build only) sweep the orphaned
+#      bundled backend, scoped strictly to python.exe under
+#      $INSTDIR\resources\python so we never touch an unrelated Python. Running
+#      AFTER the app is gone keeps the file-lock fix while killing the dialog.
 #   3. Dump the details log to files (install dir + Desktop + %TEMP%) at the end
 #      of install and on user abort, so a failed/cancelled install is reportable.
 #   4. A finish-page link (and an abort message) that opens a pre-filled GitHub
@@ -53,15 +72,26 @@
   ShowInstDetails show
 
   # Globals. PixlInstallLogPath is set inside PixlWriteLogs (defined below), so it
-  # exists in both the installer and the uninstaller build. PixlKillResult is only
-  # set in customInit and read in customInstall, neither of which is inserted into
-  # the uninstaller, so declaring it there leaves it unset and unreferenced.
-  # electron-builder compiles NSIS with warnings-as-errors (warning 6001 "not
-  # referenced or never set"), so guard it to the installer build.
+  # exists in both the installer and the uninstaller build. PixlKillResult is set
+  # in customInit / customCheckAppRunning and read in customInstall; the latter two
+  # ARE reachable in the uninstaller build (customCheckAppRunning is inserted there
+  # too), but its writes there sit behind `!ifndef BUILD_UNINSTALLER`, so in the
+  # uninstaller PixlKillResult would be unset and unreferenced. electron-builder
+  # compiles NSIS with warnings-as-errors (warning 6001 "not referenced or never
+  # set"), so guard the declaration to the installer build to match.
   Var /GLOBAL PixlInstallLogPath
   !ifndef BUILD_UNINSTALLER
     Var /GLOBAL PixlKillResult
   !endif
+
+  # Defining customCheckAppRunning (below) makes the `!ifmacrondef
+  # customCheckAppRunning` block in electron-builder's allowOnlyOneInstallerInstance.nsh
+  # NOT run -- that block is where it would otherwise `!include getProcessInfo.nsh`
+  # and declare `Var pid`. Our override reuses ${GetProcessInfo} and the stock
+  # KILL_PROCESS macro (which filters on `PID ne $pid`), so we must provide both
+  # ourselves or the build fails on the undefined macro / variable.
+  !include "getProcessInfo.nsh"
+  Var pid
 
   # LVM constants for DumpLog (read the details ListView item text). Guarded so
   # we never clash with a constant MUI / the template already defined.
@@ -226,55 +256,136 @@
 
 # ---------------------------------------------------------------------------
 # customInit: in .onInit, AFTER initMultiUser (so $INSTDIR is the real, possibly
-# previously-installed location) and BEFORE the install Section runs. Earliest
-# safe place to break the file lock that hangs an UPDATE.
-#
-# The details ListView does not exist yet here, so DetailPrint output is not
-# shown to the user at this point. The kill does not need the ListView; nsExec
-# captures the result and we re-print it in customInstall.
+# previously-installed location) and BEFORE the install Section runs. Only seeds
+# the default $PixlKillResult so customInstall always has something to print; the
+# actual orphan-kill moved to customCheckAppRunning (see the header for why).
 # ---------------------------------------------------------------------------
 !macro customInit
   StrCpy $PixlKillResult "no previous backend checked (fresh install)"
+!macroend
 
-  # Only meaningful on an update: when the target dir already holds a bundled
-  # runtime. On a fresh install this path does not exist and the kill is skipped.
-  ${If} ${FileExists} "$INSTDIR\resources\python\python.exe"
-    # Guard against a single quote in the (user-chooseable) install path. A "'"
-    # would terminate the single-quoted nsExec literal below early and splice the
-    # rest of the path into raw command tokens. There is no -iex / Invoke-
-    # Expression sink (the .ps1 only uses -Root for a string prefix compare), and
-    # the installer runs as the same user who chose the path, so this is robustness
-    # rather than a privilege boundary. We skip the auto-kill and tell the user to
-    # close PixlStash manually instead of emitting a malformed command.
-    ${StrContains} $9 "'" "$INSTDIR"
-    ${If} $9 != ""
-      StrCpy $PixlKillResult "skipped auto-kill: install path contains a quote; close PixlStash manually before updating"
-    ${Else}
-      # Embed and run our scoped kill helper. The .ps1 is embedded verbatim (File)
-      # so its many PowerShell '$' are NOT subject to NSIS escaping. Extract into
-      # $PLUGINSDIR (a freshly-created, randomised, auto-wiped per-install temp dir,
-      # not a predictable $TEMP name, which closes the swap-the-script window),
-      # and pass the bundled runtime dir as -Root so it only stops python.exe under
-      # it. InitPluginsDir is idempotent; .onInit may not have created it yet.
-      InitPluginsDir
-      File "/oname=$PLUGINSDIR\pixlstash-kill-orphan.ps1" "${BUILD_RESOURCES_DIR}\kill-orphan-backend.ps1"
-      nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\pixlstash-kill-orphan.ps1" -Root "$INSTDIR\resources\python"'
-      Pop $0   # exit code (script always exits 0; non-zero => powershell missing)
-      StrCpy $PixlKillResult "orphan-kill ran for $INSTDIR\resources\python (exit $0)"
+# ---------------------------------------------------------------------------
+# customCheckAppRunning: REPLACES electron-builder's stock _CHECK_APP_RUNNING
+# (allowOnlyOneInstallerInstance.nsh), which CHECK_APP_RUNNING inserts inside the
+# install Section / uninstaller, i.e. AFTER the user has been prompted to close a
+# running PixlStash and BEFORE installApplicationFiles extracts over $INSTDIR.
+#
+# Everything up to `pixlNotRunning:` is electron-builder's stock body reproduced
+# verbatim (prompt -> graceful close -> force-kill -> elevated-app retry), so the
+# user-facing close behaviour is unchanged. Only the scoped python orphan-kill
+# AFTER it is ours. Because the app is confirmed gone before we touch python, the
+# old "backend exited unexpectedly" dialog can no longer fire. The sweep is
+# guarded to the installer build; the uninstaller keeps the stock behaviour (it
+# also inserts this macro, but had no python-kill before, and PixlKillResult /
+# BUILD_RESOURCES_DIR only exist in the installer build).
+# ---------------------------------------------------------------------------
+!macro customCheckAppRunning
+  ${GetProcessInfo} 0 $pid $1 $2 $3 $4
+  ${if} $3 != "${APP_EXECUTABLE_FILENAME}"
+    ${if} ${isUpdated}
+      # allow app to exit without explicit kill
+      Sleep 300
+    ${endIf}
 
-      # Fallback only when PowerShell is unavailable / constrained. Narrow:
-      # python.exe whose window title starts with PixlStash. Title-only, so it can
-      # in principle hit an unrelated PixlStash-titled python the same user runs;
-      # accepted as a best-effort last resort (CSO sign-off). Non-fatal.
-      ${If} $0 != "0"
-        nsExec::ExecToLog 'taskkill /F /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq PixlStash*"'
-        Pop $1
-        StrCpy $PixlKillResult "$PixlKillResult; powershell unavailable, used taskkill title fallback"
+    !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
+    ${if} $R0 == 0
+      ${if} ${isUpdated}
+        # allow app to exit without explicit kill
+        Sleep 1000
+        Goto pixlDoStopProcess
+      ${endIf}
+      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(appRunning)" /SD IDOK IDOK pixlDoStopProcess
+      Quit
+
+      pixlDoStopProcess:
+
+      DetailPrint "$(appClosing)"
+
+      !insertmacro KILL_PROCESS "${APP_EXECUTABLE_FILENAME}" 0
+      # to ensure that files are not "in-use"
+      Sleep 300
+
+      # Retry counter
+      StrCpy $R1 0
+
+      pixlLoop:
+        IntOp $R1 $R1 + 1
+
+        !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
+        ${if} $R0 == 0
+          # wait to give a chance to exit gracefully
+          Sleep 1000
+          !insertmacro KILL_PROCESS "${APP_EXECUTABLE_FILENAME}" 1 # 1 = force kill
+          !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
+          ${if} $R0 == 0
+            DetailPrint `Waiting for "${PRODUCT_NAME}" to close.`
+            Sleep 2000
+          ${else}
+            Goto pixlNotRunning
+          ${endIf}
+        ${else}
+          Goto pixlNotRunning
+        ${endIf}
+
+        # App likely running with elevated permissions.
+        # Ask user to close it manually
+        ${if} $R1 > 1
+          MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY pixlLoop
+          Quit
+        ${else}
+          Goto pixlLoop
+        ${endIf}
+      pixlNotRunning:
+    ${endIf}
+  ${endIf}
+
+  # --- PixlStash addition: sweep the orphaned bundled backend (GitHub #486). ---
+  # The app (if any) is confirmed gone above, so killing python now can no longer
+  # trigger its "backend exited unexpectedly" modal (main.ts onExit). This breaks
+  # the file lock that hangs an over-the-top update on machines where the stock
+  # check leaves python.exe orphaned (its taskkill fallback only kills the app exe
+  # by name). Installer build only -- the uninstaller keeps the stock behaviour.
+  !ifndef BUILD_UNINSTALLER
+    # Only meaningful on an update: when the target dir already holds a bundled
+    # runtime. On a fresh install this path does not exist and the kill is skipped.
+    ${If} ${FileExists} "$INSTDIR\resources\python\python.exe"
+      # Guard against a single quote in the (user-chooseable) install path. A "'"
+      # would terminate the single-quoted nsExec literal below early and splice the
+      # rest of the path into raw command tokens. There is no -iex / Invoke-
+      # Expression sink (the .ps1 only uses -Root for a string prefix compare), and
+      # the installer runs as the same user who chose the path, so this is robustness
+      # rather than a privilege boundary. We skip the auto-kill and tell the user to
+      # close PixlStash manually instead of emitting a malformed command.
+      ${StrContains} $9 "'" "$INSTDIR"
+      ${If} $9 != ""
+        StrCpy $PixlKillResult "skipped auto-kill: install path contains a quote; close PixlStash manually before updating"
+      ${Else}
+        # Embed and run our scoped kill helper. The .ps1 is embedded verbatim (File)
+        # so its many PowerShell '$' are NOT subject to NSIS escaping. Extract into
+        # $PLUGINSDIR (a freshly-created, randomised, auto-wiped per-install temp dir,
+        # not a predictable $TEMP name, which closes the swap-the-script window),
+        # and pass the bundled runtime dir as -Root so it only stops python.exe under
+        # it. InitPluginsDir is idempotent.
+        InitPluginsDir
+        File "/oname=$PLUGINSDIR\pixlstash-kill-orphan.ps1" "${BUILD_RESOURCES_DIR}\kill-orphan-backend.ps1"
+        nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\pixlstash-kill-orphan.ps1" -Root "$INSTDIR\resources\python"'
+        Pop $0   # exit code (script always exits 0; non-zero => powershell missing)
+        StrCpy $PixlKillResult "orphan-kill ran for $INSTDIR\resources\python (exit $0)"
+
+        # Fallback only when PowerShell is unavailable / constrained. Narrow:
+        # python.exe whose window title starts with PixlStash. Title-only, so it can
+        # in principle hit an unrelated PixlStash-titled python the same user runs;
+        # accepted as a best-effort last resort (CSO sign-off). Non-fatal.
+        ${If} $0 != "0"
+          nsExec::ExecToLog 'taskkill /F /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq PixlStash*"'
+          Pop $1
+          StrCpy $PixlKillResult "$PixlKillResult; powershell unavailable, used taskkill title fallback"
+        ${EndIf}
+
+        Delete "$PLUGINSDIR\pixlstash-kill-orphan.ps1"
       ${EndIf}
-
-      Delete "$PLUGINSDIR\pixlstash-kill-orphan.ps1"
     ${EndIf}
-  ${EndIf}
+  !endif
 !macroend
 
 # ---------------------------------------------------------------------------
