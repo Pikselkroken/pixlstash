@@ -31,6 +31,14 @@
       density="comfortable"
     />
     <v-select
+      v-model="tbExportBboxModeModel"
+      :items="exportStore.exportBboxOptions ?? []"
+      item-title="title"
+      item-value="value"
+      label="Bounding boxes"
+      density="comfortable"
+    />
+    <v-select
       v-if="tbExportCaptionModeModel === 'tags'"
       v-model="tbExportTagFormatModel"
       :items="exportStore.exportTagFormatOptions ?? []"
@@ -89,6 +97,12 @@ const tbExportResolutionModel = computed({
   get: () => exportStore.exportResolution,
   set: (v) => {
     exportStore.exportResolution = v;
+  },
+});
+const tbExportBboxModeModel = computed({
+  get: () => exportStore.exportBboxMode,
+  set: (v) => {
+    exportStore.exportBboxMode = v;
   },
 });
 const tbExportIncludeCharacterNameModel = computed({

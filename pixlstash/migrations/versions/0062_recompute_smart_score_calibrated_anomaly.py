@@ -8,8 +8,8 @@ and a CLIP-IQA objective quality term was added (see
 column; ``MissingSmartScoreFinder`` then recomputes every picture under the new rule on the
 next run. Schema-only otherwise — no columns are added or removed.
 
-Revision ID: 0061_recompute_smart_score_calibrated_anomaly
-Revises: 0060_tag_prediction_label_ledger
+Revision ID: 0062_recompute_smart_score_calibrated_anomaly
+Revises: 0061_add_detection
 Create Date: 2026-06-20 00:00:00.000000
 
 """
@@ -20,8 +20,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0061_recompute_smart_score_calibrated_anomaly"
-down_revision: Union[str, None] = "0060_tag_prediction_label_ledger"
+revision: str = "0062_recompute_smart_score_calibrated_anomaly"
+down_revision: Union[str, None] = "0061_add_detection"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

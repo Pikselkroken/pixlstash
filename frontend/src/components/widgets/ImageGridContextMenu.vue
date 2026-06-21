@@ -186,6 +186,15 @@
           <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
           Edit with ComfyUI
         </button>
+        <button
+          class="ctx-item"
+          title="Detect objects and store bounding boxes"
+          :disabled="!selectedImageIds.length || isReadOnly"
+          @click="onAction('segment')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+          Segment
+        </button>
         <div class="ctx-sep" />
       </template>
 
@@ -402,6 +411,7 @@ const emit = defineEmits([
   "open-tag-panel",
   "open-plugin-panel",
   "open-comfyui-panel",
+  "segment",
   "auto-tag",
   "generate-description",
   "share-picture",

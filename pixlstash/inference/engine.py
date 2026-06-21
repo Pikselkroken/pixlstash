@@ -372,6 +372,22 @@ class InferenceEngine:
         """Load Florence-2 if not already loaded."""
         self.lifecycle.ensure_captioning_ready(self.florence_service)
 
+    def detect_objects(self, image_paths: list, prompt: str | None = None) -> dict:
+        """Run Florence-2 object detection / phrase grounding on a batch.
+
+        Loads Florence-2 if needed (shared with captioning) and delegates to
+        :meth:`~pixlstash.tagger_plugins.florence2.Florence2Service.detect_objects`.
+
+        Args:
+            image_paths: Still-image file paths to detect objects in.
+            prompt: Optional phrase to ground; empty/None → dense ``<OD>``.
+
+        Returns:
+            ``{path: [(label, [x1, y1, x2, y2], score_or_None), ...]}``.
+        """
+        self.lifecycle.ensure_captioning_ready(self.florence_service)
+        return self.florence_service.detect_objects(image_paths, prompt=prompt)
+
     def is_captioning_initialized(self) -> bool:
         """Return ``True`` if Florence-2 is currently loaded."""
         return self.florence_service.is_loaded()

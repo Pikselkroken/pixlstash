@@ -294,6 +294,8 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/scores` | Bulk apply user ratings |
 | POST | `/pictures/{id}/face` | Create face record |
 | DELETE | `/pictures/{id}/face/{index}` | Delete face |
+| POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
+| GET | `/pictures/{id}/detections` | Stored detection boxes for a picture (registered before the `/{id}/{field}` catch-all) |
 | POST | `/pictures/likeness-search` | Reverse-image likeness search |
 
 ### `characters.py`
@@ -382,6 +384,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                             |
 | POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                      |
 | GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter              |
+| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                            |
 | GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                              |
 | GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                             |
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                 |
@@ -403,6 +406,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                  |
 | DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                             |
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                             |
+| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                  |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                    |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                     |
@@ -489,6 +493,14 @@ Picture
 Face: id, picture_id, frame_index, face_index, character_id,
       bbox (JSON), features (512-d InsightFace BLOB)
 
+Detection: id, picture_id, frame_index, detection_index,
+           label (open-vocab, indexed), bbox (JSON pixel xyxy),
+           score (nullable — Florence emits none), source
+           (e.g. "florence2:od"), attributes (JSON escape-hatch)
+           (UNIQUE picture_id+frame_index+detection_index)
+           → object-detection boxes, user-triggered (Segment); the
+             Picture.detections relationship cascades on delete
+
 Character: id, name, description, extra_metadata,
            reference_picture_set_id, project_id
 
@@ -566,8 +578,11 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | `SOURCE_FACE_LIKENESS` | GPU | `MissingSourceFaceLikenessCharacterFinder` | Face↔reference similarity |
 | `MISSING_FILE_PURGE` | CPU | `MissingFilePurgeFinder` | Remove records for vanished files |
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
+| `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
+
+**User-triggered tasks** (e.g. `DETECTION`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column.
 
 ---
 

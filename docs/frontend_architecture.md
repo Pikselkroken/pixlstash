@@ -227,6 +227,7 @@ The core image display engine. Responsibilities:
 - Fetches images from `GET /pictures` with all filter params as query args.
 - Manages stacks: collapsing/expanding, leader-map calculation, inline stack drag-sort (via `useStackOrdering`).
 - Multi-selection (shift-click, keyboard navigation with arrow keys) (via `useMultiSelect`).
+- **Segment (object detection)**: the context menu's "Segment" item emits `segment`; `ImageGrid` opens a small dialog for an optional label phrase and `POST`s `/pictures/detect` with the selected ids (empty phrase → dense detection). Progress shows in the task manager; the overlay refreshes on the resulting `changed_pictures` event.
 - Image scoring (guest and authenticated star rating).
 - Drag-and-drop reordering within sets (via `useGridDragDrop`).
 - Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `ComfyUiRunner`.
@@ -277,6 +278,7 @@ Full-screen image lightbox. Responsibilities:
 - **Frozen navigation backbone (overlay-open deferral, see §9.1).** prev/next and the filmstrip read membership from a snapshot of `allImages` (`frozenAllImages`, captured on open and cleared on close) via the `overlayImages` computed, not from the live `allImages` prop. This keeps left/right working for the overlay's whole lifetime even after the current picture stops matching the active filter (e.g. the user removes the tag the view is filtered on) or a background refetch reshuffles the grid. The currently displayed card stays fresh independently: it lives in `image.value` and is updated by local edits / `fetchOverlayMetadata`, not by the snapshot. Stack expansion still loads fresh members from `/stacks/{id}/pictures`; only the sequence/membership is frozen.
 - Image display with pan/zoom (fit / 1.5× / 2×).
 - Tag management: add, remove, autocomplete suggestions from `GET /tags/completions`.
+- Object-detection overlay: a `showDetections` toggle button (next to the face-bbox toggle) renders stored detection boxes fetched from `GET /pictures/{id}/detections` (`detectionBboxes` ref, same request-id race guard as faces), drawn with `getOverlayBoxStyle` and coloured per distinct label. Refetched whenever the displayed image id changes, like faces.
 - AI tag predictions (accept/reject).
 - Description editing (inline markdown-like text, copy button).
 - Stack expansion inline within the overlay.
@@ -294,7 +296,7 @@ Top/grid toolbar. Imports state directly from Pinia stores (`useGridStore`, `use
 Responsibilities:
 - Grid bar: sort selector, filter chips (tags, score, media type, resolution), column slider, stack controls, view mode toggles.
 - Top bar: search toggle, export menu, settings button, import button, sidebar/stats toggles.
-- Export menu: type (full/face), caption mode, resolution, tag format, character name inclusion.
+- Export menu: type (full/face), caption mode, resolution, tag format, character name inclusion, bounding-box sidecar (`exportBboxMode`: none / COCO JSON → `bbox_mode` query param).
 - Props: `selectedCount`, `selectedCharacter`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `backendUrl`, `comfyuiConfigured`.
 - Key emits: `comfyui-run-grid`, `expand-all-stacks`, `collapse-all-stacks`, `confirm-export-zip`, `open-import`, `open-settings`.
 

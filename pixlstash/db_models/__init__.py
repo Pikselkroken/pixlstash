@@ -1,5 +1,6 @@
 from .character import Character  # noqa: F401
 from .deleted_file_log import DeletedFileLog  # noqa: F401
+from .detection import Detection  # noqa: F401
 from .face import Face  # noqa: F401
 from .picture import Picture, SortMechanism  # noqa: F401
 from .picture_project import PictureProjectMember  # noqa: F401

@@ -34,6 +34,7 @@ from typing import Optional
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     DeletedFileLog,
+    Detection,
     Face,
     Picture,
     PictureProjectMember,
@@ -80,6 +81,12 @@ logger = get_logger(__name__)
 # eligibility queries over the id set). Requests over this cap are rejected
 # rather than silently truncated.
 BATCH_CHARACTER_LIKENESS_MAX_IDS = 1000
+
+# Upper bound on picture_ids per detection request. Each id becomes a unit of
+# GPU work in a single HIGH-priority DetectionTask, so an unbounded list lets a
+# caller enqueue detection over an entire library in one request. Mirrors the
+# batch-likeness cap above (reject over the limit rather than truncate).
+DETECT_MAX_IDS = 1000
 
 
 class _DetectedFace:
@@ -171,6 +178,28 @@ class FaceDeleteResponse(BaseModel):
 
     status: str
     message: str
+
+
+class PictureDetectionResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    picture_id: Optional[int] = None
+    frame_index: Optional[int] = None
+    detection_index: Optional[int] = None
+    label: Optional[str] = None
+    bbox: Optional[list] = None
+    score: Optional[float] = None
+    source: Optional[str] = None
+
+
+class DetectPicturesResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    task_id: Optional[str] = None
+    picture_ids: list[int] = []
+    prompt: str = ""
 
 
 class PictureCharacterLikenessResponse(BaseModel):
@@ -725,6 +754,103 @@ def register_routes(router, server):
             "missing_ids": missing_ids,
             "missing_count": len(missing_ids),
             "reset_triggered": bool(reset_triggered),
+        }
+
+    @router.post(
+        "/pictures/detect",
+        summary="Detect objects in pictures",
+        description=(
+            "Queues a user-triggered Florence-2 object-detection pass over a "
+            "batch of pictures. With an empty `prompt` it runs dense `<OD>` "
+            "detection; with a non-empty `prompt` it runs open-vocabulary "
+            "phrase grounding for that phrase. Detected labelled boxes are "
+            "stored per picture (replacing any previous detections) and "
+            "progress surfaces in the task manager."
+        ),
+        response_model=DetectPicturesResponse,
+    )
+    def detect_pictures(request: Request, payload: dict = Body(...)):
+        # Capture the originating tab's client id so the detection-complete
+        # event is attributed to this user's own action — the SPA suppresses the
+        # "view changed externally" pill for its own origin.
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        raw_ids = payload.get("picture_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        if len(raw_ids) > DETECT_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"picture_ids exceeds the maximum of {DETECT_MAX_IDS} ids per request",
+            )
+        try:
+            picture_ids = sorted(
+                {int(pid) for pid in raw_ids if pid is not None and int(pid) > 0}
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="picture_ids must contain valid positive integers",
+            ) from exc
+        if not picture_ids:
+            raise HTTPException(
+                status_code=400, detail="At least one valid picture id is required"
+            )
+
+        prompt = payload.get("prompt") or ""
+        if not isinstance(prompt, str):
+            prompt = str(prompt)
+        prompt = prompt.strip()
+
+        # Scope guard (BOLA): a scoped token may only run detection on pictures
+        # within its granted resource. None == owner / unscoped == no filter; an
+        # empty/disjoint set denies all (mirrors set_project_for_pictures).
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access these pictures",
+                )
+
+        engine = getattr(server.vault, "_engine", None)
+        if engine is None:
+            raise HTTPException(
+                status_code=503, detail="Inference engine not available."
+            )
+
+        def fetch_pictures(session: Session, ids: list[int]):
+            return session.exec(
+                select(Picture).where(
+                    Picture.id.in_(ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+
+        pics = server.vault.db.run_immediate_read_task(fetch_pictures, picture_ids)
+        if not pics:
+            raise HTTPException(status_code=404, detail="No pictures found")
+
+        from pixlstash.tasks.detection_task import DetectionTask
+
+        task = DetectionTask(
+            server.vault.db,
+            engine,
+            list(pics),
+            prompt=prompt or None,
+            origin_client_id=origin_client_id,
+        )
+        task_id = server.vault.submit_task(task)
+        if task_id is None:
+            raise HTTPException(status_code=503, detail="Task runner not available.")
+
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "picture_ids": [pic.id for pic in pics],
+            "prompt": prompt,
         }
 
     @router.get(
@@ -1738,6 +1864,46 @@ def register_routes(router, server):
             "reference_character_id": int(reference_character_id),
             "results": results,
         }
+
+    @router.get(
+        "/pictures/{id}/detections",
+        summary="Get picture detections",
+        description=(
+            "Returns the stored object-detection bounding boxes for a picture, "
+            "as produced by the Segment action. Boxes are pixel `xyxy` in the "
+            "original picture's coordinate space."
+        ),
+        response_model=list[PictureDetectionResponse],
+    )
+    def get_picture_detections(request: Request, id: str):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid picture id") from exc
+
+        # Object-level access check before any DB read, so the single return
+        # path is uniformly gated. Owner/unscoped sessions have token_scope is
+        # None and pass straight through; a scoped token outside this picture's
+        # grant gets a 403 here (mirrors get_picture / get_picture_field).
+        enforce_picture_scope(server, request, pic_id)
+
+        def fetch_detections(session: Session):
+            return Detection.find(session, picture_id=pic_id)
+
+        rows = server.vault.db.run_immediate_read_task(fetch_detections)
+        return [
+            {
+                "id": det.id,
+                "picture_id": det.picture_id,
+                "frame_index": det.frame_index,
+                "detection_index": det.detection_index,
+                "label": det.label,
+                "bbox": det.bbox,
+                "score": det.score,
+                "source": det.source,
+            }
+            for det in rows
+        ]
 
     @router.get(
         "/pictures/{id}/{field}",
