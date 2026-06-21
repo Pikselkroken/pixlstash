@@ -291,8 +291,8 @@ class Florence2Service:
         """Detect objects in a batch of still images.
 
         Runs Florence-2 dense object detection (``<OD>`` when *prompt* is empty)
-        or open-vocabulary phrase grounding
-        (``<CAPTION_TO_PHRASE_GROUNDING>`` when a *prompt* phrase is supplied)
+        or open-vocabulary detection
+        (``<OPEN_VOCABULARY_DETECTION>`` when a *prompt* phrase is supplied)
         and returns labelled bounding boxes.
 
         Coordinates are returned in **original picture pixels** as ``xyxy``.
@@ -320,7 +320,12 @@ class Florence2Service:
 
         phrase = (prompt or "").strip()
         if phrase:
-            task_token = "<CAPTION_TO_PHRASE_GROUNDING>"
+            # Open-vocabulary detection is the right task for a bare class-style
+            # prompt ("dog", "license plate"): it does one-to-one detection of
+            # the named object. <CAPTION_TO_PHRASE_GROUNDING> expects a full
+            # caption-like sentence and grounds noun phrases within it, which
+            # gives inconsistent results when fed a single label.
+            task_token = "<OPEN_VOCABULARY_DETECTION>"
             text_prompt = f"{task_token}{phrase}"
         else:
             task_token = "<OD>"
@@ -362,7 +367,11 @@ class Florence2Service:
                     max_new_tokens=max_new_tokens,
                     early_stopping=False,
                     do_sample=False,
-                    num_beams=1,
+                    # Beam search (Florence-2's reference default) over greedy:
+                    # detection is emitted as a sequence of location tokens, and
+                    # a single greedy path drops/duplicates boxes far more than
+                    # beams do. Keep do_sample=False so runs stay repeatable.
+                    num_beams=3,
                     pad_token_id=self._processor.tokenizer.pad_token_id,
                 )
             generated_texts = self._processor.batch_decode(
@@ -559,7 +568,7 @@ class Florence2Service:
 
         Args:
             generated_text: Raw decoded model output.
-            task_token: ``"<OD>"`` or ``"<CAPTION_TO_PHRASE_GROUNDING>"`` — the
+            task_token: ``"<OD>"`` or ``"<OPEN_VOCABULARY_DETECTION>"`` — the
                 key ``post_process_generation`` returns results under.
             image_size: ``(width, height)`` of the original picture in pixels;
                 Florence's normalised bins dequantise directly to these pixels.
@@ -574,7 +583,10 @@ class Florence2Service:
         )
         result = parsed.get(task_token, {}) or {}
         bboxes = result.get("bboxes", []) or []
-        labels = result.get("labels", []) or []
+        # <OD>/grounding return labels under "labels"; open-vocabulary detection
+        # returns them under "bboxes_labels". Accept either so all three task
+        # tokens parse through this one path.
+        labels = result.get("labels") or result.get("bboxes_labels") or []
         scores = result.get("scores", None)
 
         detections = []

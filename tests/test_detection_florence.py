@@ -2,8 +2,8 @@
 """Florence-2 object-detection tests (run on CPU with --force-cpu).
 
 Exercises ``Florence2Service.detect_objects`` via the engine wrapper
-``InferenceEngine.detect_objects``: dense ``<OD>`` detection, open-vocab phrase
-grounding, original-pixel coordinate scaling, and graceful failure handling.
+``InferenceEngine.detect_objects``: dense ``<OD>`` detection, open-vocabulary
+detection, original-pixel coordinate scaling, and graceful failure handling.
 """
 
 import gc
@@ -126,7 +126,7 @@ def test_detect_objects_coordinate_space(engine, image_files):
 
 
 def test_detect_objects_grounding_is_well_formed(engine, image_files):
-    """Open-vocab phrase grounding returns a well-formed (possibly empty) result."""
+    """Open-vocabulary detection returns a well-formed (possibly empty) result."""
     sample = image_files[:2]
     results = engine.detect_objects(sample, prompt="a person")
     assert set(results.keys()) <= set(sample)
