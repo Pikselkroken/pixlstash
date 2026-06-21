@@ -13,6 +13,7 @@ import { expect } from '@playwright/test'
 export class GridPage {
   constructor(page) {
     this.page = page
+    this.gridRoot = page.getByTestId('image-grid')
     this.grid = page.locator('.image-grid')
     this.scrollWrapper = page.locator('.grid-scroll-wrapper')
     this.cards = page.locator('.image-card')
@@ -67,6 +68,42 @@ export class GridPage {
   /** src of the first rendered thumbnail (encodes the top-left picture id). */
   firstThumbnailSrc() {
     return this.thumbnailImages.first().getAttribute('src')
+  }
+
+  // --- Grid-refresh pills (data-testid'd in ImageGrid.vue) ----------------
+  // Two distinct pills share the .pending-imports-pill class, so they are only
+  // distinguishable by testid:
+  //   - "New pictures" pill: raised on an external/foreign `added` event.
+  //   - "View changed externally" pill: raised on an external `updated` event
+  //     that affects the current sort/filter.
+
+  /** The "↑ N new pictures — click to load" pill. */
+  pendingImportsPill() {
+    return this.page.getByTestId('pending-imports-pill')
+  }
+
+  /** The "⟳ View changed externally — click to refresh" pill. */
+  sortChangedPill() {
+    return this.page.getByTestId('sort-changed-pill')
+  }
+
+  /** Either pill, for an "any pill appeared" assertion. */
+  anyPill() {
+    return this.page.locator(
+      '[data-testid="pending-imports-pill"], [data-testid="sort-changed-pill"]',
+    )
+  }
+
+  /**
+   * Assert that neither pill appears within `timeout` ms. Pills are raised
+   * synchronously when a foreign WS event is processed, so a short, bounded
+   * wait is enough: if the event has been delivered and the pill is going to
+   * appear, it will be present well before this resolves. Used by the
+   * own-change tests (own change must reconcile silently, never pill).
+   */
+  async expectNoPill(timeout = 2500) {
+    await expect(this.pendingImportsPill()).toHaveCount(0, { timeout })
+    await expect(this.sortChangedPill()).toHaveCount(0)
   }
 
   /** Locate a grid card by picture id via its thumbnail URL. */

@@ -364,6 +364,7 @@
         <button
           v-if="props.pendingExternalImportCount > 0"
           class="pending-imports-pill"
+          data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
           ↑ {{ props.pendingExternalImportCount }}
@@ -377,6 +378,7 @@
         <button
           v-if="props.sortChangedExternalCount > 0"
           class="pending-imports-pill"
+          data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
         >
           ⟳ View changed externally — click to refresh
@@ -440,6 +442,7 @@
           ...badgeCssVars,
         }"
         ref="gridContainer"
+        data-testid="image-grid"
         @click="handleGridBackgroundClick"
       >
         <!-- Top spacer for virtual scroll alignment -->
