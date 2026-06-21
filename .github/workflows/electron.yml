@@ -142,15 +142,17 @@ jobs:
             exit 0
           fi
           # macOS: branch on whether the signing certificate secret is available.
+          # Notarisation needs no config: electron-builder notarises automatically
+          # when APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID are all set
+          # (it reads them from the environment), and skips notarisation when they
+          # are absent. Setting a `notarize` value is unnecessary and `false` would
+          # disable it outright.
           if [ -n "${CSC_LINK:-}" ]; then
             export CSC_IDENTITY_AUTO_DISCOVERY=true
-            if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
-              echo "macOS: signing certificate and notarisation credentials found; signing + notarising."
-              npm run dist -- --publish never --config.mac.notarize.teamId="${APPLE_TEAM_ID}"
-            else
-              echo "::warning title=macOS signed but not notarised::Signing certificate is present but notarisation credentials (APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID) are missing. The app is signed but NOT notarised, so Gatekeeper will still block it on download. Add the notarisation secrets to finish the chain (docs/macos-signing-setup.md)."
-              npm run dist -- --publish never
+            if [ -z "${APPLE_ID:-}" ] && [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -z "${APPLE_TEAM_ID:-}" ]; then
+              echo "::warning title=macOS signed but not notarised::Signing certificate is present but no notarisation credentials are set. The app will be signed but NOT notarised, so Gatekeeper still blocks it on download. Add APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID to finish the chain (docs/macos-signing-setup.md)."
             fi
+            npm run dist -- --publish never
           else
             echo "::warning title=Unsigned macOS build::No Apple signing certificate (APPLE_CSC_LINK secret) found. Building UNSIGNED and labelling the artifact '-unsigned'. Gatekeeper will quarantine it until the signing secrets are added (docs/macos-signing-setup.md)."
             export CSC_IDENTITY_AUTO_DISCOVERY=false

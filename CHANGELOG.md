@@ -1,3 +1,6 @@
+# [1.6.6]
+- Fix macOS and Docker build issues on GitHub
+
 # [1.6.5]
 - Re-enable macOS build
 - Harden the desktop auto-update teardown so a failed or interrupted update can't leave the app in a broken state; write an installer log and surface a link for reporting issues
