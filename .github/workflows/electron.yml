@@ -141,6 +141,11 @@ jobs:
             npm run dist -- --publish never
             exit 0
           fi
+          # Signing the bundled Python/torch tree opens tens of thousands of files
+          # (torch alone ships thousands of headers), and the macOS runner's default
+          # descriptor limit (256) trips codesign with EMFILE. Raise it as high as
+          # the hard limit allows before building.
+          ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
           # macOS: branch on whether the signing certificate secret is available.
           # Notarisation needs no config: electron-builder notarises automatically
           # when APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID are all set
