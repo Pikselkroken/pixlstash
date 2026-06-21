@@ -258,7 +258,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | [pixlstash/auth.py](../pixlstash/auth.py) | `AuthService`: password + JWT + scoped tokens. Enforces resource-level permissions (picture / set / character / project). |
 | [pixlstash/task_runner.py](../pixlstash/task_runner.py) | Threaded executor with separate CPU and GPU pools. Monitors VRAM, gates GPU-heavy tasks, drains queues at shutdown. |
 | [pixlstash/work_planner.py](../pixlstash/work_planner.py) | Registers all `BaseTaskFinder`s, polls them in round-robin, enforces inflight limits and adaptive backoff. |
-| [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors and penalised tags) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These are distinct features sharing one module; candidates for future separation. |
+| [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors, a CLIP-IQA objective quality probe, and a calibrated anomaly penalty — confidence × precision, noisy-OR within tag families — see [`utils/quality/anomaly_penalty.py`](../pixlstash/utils/quality/anomaly_penalty.py) and [`docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md`](reviews/2026-06-smart-score-calibrated-anomaly-plan.md)) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These are distinct features sharing one module; candidates for future separation. |
 | [pixlstash/worker_config.py](../pixlstash/worker_config.py) | Global constants — `NUM_WORKERS`, per-task `*_MAX_INFLIGHT`, batch sizes. |
 | [pixlstash/startup_checks.py](../pixlstash/startup_checks.py) | Preflight: disk space, VRAM, CUDA, SSL. May force CPU mode. |
 | [pixlstash/event_types.py](../pixlstash/event_types.py) | `EventType` enum used by WebSocket event bus. |
@@ -294,6 +294,8 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/scores` | Bulk apply user ratings |
 | POST | `/pictures/{id}/face` | Create face record |
 | DELETE | `/pictures/{id}/face/{index}` | Delete face |
+| POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
+| GET | `/pictures/{id}/detections` | Stored detection boxes for a picture (registered before the `/{id}/{field}` catch-all) |
 | POST | `/pictures/likeness-search` | Reverse-image likeness search |
 
 ### `characters.py`
@@ -382,12 +384,15 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                             |
 | POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                      |
 | GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter              |
+| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                            |
 | GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                              |
 | GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                             |
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                 |
 | POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                               |
 | POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                    |
 | GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                 |
+| POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                            |
+| POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                     |
 | POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                              |
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                              |
 | POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness           |
@@ -401,6 +406,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                  |
 | DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                             |
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                             |
+| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                  |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                    |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                     |
@@ -487,6 +493,14 @@ Picture
 Face: id, picture_id, frame_index, face_index, character_id,
       bbox (JSON), features (512-d InsightFace BLOB)
 
+Detection: id, picture_id, frame_index, detection_index,
+           label (open-vocab, indexed), bbox (JSON pixel xyxy),
+           score (nullable — Florence emits none), source
+           (e.g. "florence2:od"), attributes (JSON escape-hatch)
+           (UNIQUE picture_id+frame_index+detection_index)
+           → object-detection boxes, user-triggered (Segment); the
+             Picture.detections relationship cascades on delete
+
 Character: id, name, description, extra_metadata,
            reference_picture_set_id, project_id
 
@@ -564,8 +578,11 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | `SOURCE_FACE_LIKENESS` | GPU | `MissingSourceFaceLikenessCharacterFinder` | Face↔reference similarity |
 | `MISSING_FILE_PURGE` | CPU | `MissingFilePurgeFinder` | Remove records for vanished files |
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
+| `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
+
+**User-triggered tasks** (e.g. `DETECTION`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column.
 
 ---
 
@@ -647,6 +664,18 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
 | [services/share_service.py](../pixlstash/services/share_service.py) | Validates picture share tokens (`UserToken`), resolves shared pictures, and returns the correct watermark bytes (custom or default) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
+| [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
+
+### 10.1 DB access rule for services (enforced in CI)
+
+A service function must take an explicit **`session: Session`** and do its DB work on that pre-opened session — the `*_in_session(session, ...)` pattern. **Services must not call `vault.db.run_task` / `vault.db.run_immediate_read_task` directly**; only `Vault` (and the thin per-service wrapper that bridges a route to the DB worker) owns the work-queue. This is rule 3 of the refactoring guardrails (see [docs/ideas/codebase-refactoring.md](ideas/codebase-refactoring.md) §3) and keeps `services/` from degrading into a second DB layer.
+
+The canonical shape — copy a sibling such as [`snapshot_service.py`](../pixlstash/services/snapshot_service.py) or [`restore_service.py`](../pixlstash/services/restore_service.py):
+
+- Pure, testable **`*_in_session(session, ...)`** functions hold all the logic.
+- A thin **vault wrapper** (`def do_x(vault, ...)`) does nothing but `vault.db.run_task(x_in_session, ...)` and shape the return.
+
+This rule is enforced by **`tests/test_architecture_guardrails.py::test_services_no_direct_db_calls`**, which fails CI on any `vault.db.run_*` call in `pixlstash/services/`. The test carries a small **allowlist** of transitional files that still keep the `vault.db.run_task` call inside their wrapper. **If you add or move a service file that contains such a wrapper, you must add it to that allowlist in the same change, with a one-line justification** — otherwise the guardrail fails (this is exactly how the impossible-tags clear service first broke CI). The allowlist is meant to shrink as files migrate fully behind `Vault` methods; do not grow it without cause.
 
 ---
 

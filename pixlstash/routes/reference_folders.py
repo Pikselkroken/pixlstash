@@ -1252,7 +1252,9 @@ def create_router(server) -> APIRouter:
                     status_code=404, detail="Reference folder not found."
                 )
             scope = _resolve_scope_path(rf.folder, payload.scope_path)
-            pictures = _pictures_for_metadata_scope(session, folder_id, rf.folder, scope)
+            pictures = _pictures_for_metadata_scope(
+                session, folder_id, rf.folder, scope
+            )
             tag_rows = session.exec(
                 select(Tag.picture_id, Tag.tag).where(
                     Tag.picture_id.in_([p.id for p in pictures if p.id is not None])
@@ -1340,7 +1342,9 @@ def create_router(server) -> APIRouter:
                     status_code=404, detail="Reference folder not found."
                 )
             scope = _resolve_scope_path(rf.folder, payload.scope_path)
-            pictures = _pictures_for_metadata_scope(session, folder_id, rf.folder, scope)
+            pictures = _pictures_for_metadata_scope(
+                session, folder_id, rf.folder, scope
+            )
             tags_count = 0
             descriptions_count = 0
             skipped_count = 0
@@ -1377,9 +1381,7 @@ def create_router(server) -> APIRouter:
                     if description_path:
                         pic.description = read_description_sidecar(description_path)
                         pic.description_file = description_path
-                        pic.description_file_mtime = get_sidecar_mtime(
-                            description_path
-                        )
+                        pic.description_file_mtime = get_sidecar_mtime(description_path)
                         descriptions_count += 1
                         dirty = True
                 if dirty:

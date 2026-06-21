@@ -127,6 +127,7 @@ export function useGridFetch(
       selectedDescending: props.selectedDescending ?? null,
       stackThreshold: props.stackThreshold ?? null,
       mediaTypeFilter: props.mediaTypeFilter ?? "all",
+      impossibleSources: props.impossibleSources ?? [],
       similarityCharacter: props.similarityCharacter ?? null,
       comfyuiModelFilter: props.comfyuiModelFilter ?? [],
       comfyuiLoraFilter: props.comfyuiLoraFilter ?? [],
@@ -318,6 +319,9 @@ export function useGridFetch(
     if (props.faceBboxFilter != null) {
       params.append("face_filter", props.faceBboxFilter);
     }
+    (props.impossibleSources || []).forEach((s) =>
+      params.append("impossible_tag_source", s),
+    );
     if (props.sharedOnlyFilter) {
       params.append("shared_only", "true");
     }
@@ -368,6 +372,9 @@ export function useGridFetch(
     if (props.faceBboxFilter != null) {
       params.append("face_filter", props.faceBboxFilter);
     }
+    (props.impossibleSources || []).forEach((s) =>
+      params.append("impossible_tag_source", s),
+    );
     if (props.applyTagFilter) {
       params.append("apply_tag_filter", "true");
     }
@@ -723,6 +730,8 @@ export function useGridFetch(
         (props.tagConfidenceBelowFilter || []).forEach((e) => _filterP.append('tag_confidence_below', e));
         // Filter params: face bbox filter
         if (props.faceBboxFilter != null) _filterP.set('face_filter', String(props.faceBboxFilter));
+        // Filter params: impossible-tag sources (repeatable, OR'd)
+        (props.impossibleSources || []).forEach((s) => _filterP.append('impossible_tag_source', s));
         // Filter params: shared only
         if (props.sharedOnlyFilter) _filterP.set('shared_only', 'true');
         // Filter params: hidden-tag filter

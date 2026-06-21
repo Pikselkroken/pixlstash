@@ -1,5 +1,6 @@
 """ZIP generation and export functionality for pictures and features."""
 
+import json
 import logging
 import os
 import re
@@ -72,6 +73,101 @@ class ExportUtils:
         zip_file.writestr(arcname, buffer.getvalue())
 
     @staticmethod
+    def _write_detection_sidecar(
+        zip_file, name_stem, arcname, pic, detections, scale_factor
+    ):
+        """Write a ``{name_stem}.json`` COCO-subset detection sidecar.
+
+        Boxes are pixel ``xyxy``; when the export is downscaled the box
+        coordinates and reported dimensions are scaled to match the exported
+        image. Florence detections carry no confidence, so ``score`` defaults
+        to ``0.0``.
+        """
+        width = getattr(pic, "width", None)
+        height = getattr(pic, "height", None)
+        objects = []
+        for det in detections:
+            bbox = det.bbox
+            if not bbox or len(bbox) != 4:
+                continue
+            if scale_factor < 1.0:
+                bbox = [int(round(v * scale_factor)) for v in bbox]
+            objects.append(
+                {
+                    "label": det.label or "",
+                    "bbox": bbox,
+                    "score": float(det.score) if det.score is not None else 0.0,
+                }
+            )
+        sidecar = {
+            "image": arcname,
+            "width": int(round(width * scale_factor)) if width else None,
+            "height": int(round(height * scale_factor)) if height else None,
+            "schema": "pixlstash.detections/v1",
+            "bbox_format": "xyxy_px",
+            "objects": objects,
+        }
+        zip_file.writestr(f"{name_stem}.json", json.dumps(sidecar, indent=2) + "\n")
+
+    @staticmethod
+    def _write_ideogram_sidecar(zip_file, name_stem, pic, detections, caption_text):
+        """Write an Ideogram-4 structured-JSON caption ``{name_stem}.json``.
+
+        This is the caption file ai-toolkit consumes for Ideogram-4 LoRA
+        training (set ``caption_ext: json`` in the dataset config). It follows
+        Ideogram-4's documented schema:
+
+        - boxes are **normalized** ``[y_min, x_min, y_max, x_max]`` on a 0-1000
+          grid (origin top-left) — resolution-independent, so the export's
+          ``resolution`` setting does not affect them;
+        - each detection becomes a ``compositional_deconstruction.elements``
+          entry of ``type: "obj"`` with its label as ``desc`` (key order
+          ``type, bbox, desc`` is significant — the model was trained on a fixed
+          key order);
+        - the picture's caption (when any) becomes ``high_level_description``;
+        - ``style_description`` is omitted (it is optional, and we do not derive
+          aesthetics/lighting/medium/palette) rather than emit a partial block.
+
+        See docs/integration_architecture.md §11.1 for the contract.
+        """
+        width = getattr(pic, "width", None) or 0
+        height = getattr(pic, "height", None) or 0
+
+        def _norm(value, size):
+            return max(0, min(1000, int(round(value / size * 1000))))
+
+        elements = []
+        if width > 0 and height > 0:
+            for det in detections:
+                bbox = det.bbox
+                if not bbox or len(bbox) != 4:
+                    continue
+                x1, y1, x2, y2 = bbox
+                ymin = _norm(y1, height)
+                xmin = _norm(x1, width)
+                ymax = _norm(y2, height)
+                xmax = _norm(x2, width)
+                if xmax <= xmin or ymax <= ymin:
+                    continue
+                # Key order (type, bbox, desc) matters for Ideogram-4.
+                elements.append(
+                    {
+                        "type": "obj",
+                        "bbox": [ymin, xmin, ymax, xmax],
+                        "desc": det.label or "",
+                    }
+                )
+
+        caption: dict = {}
+        if caption_text:
+            caption["high_level_description"] = caption_text
+        caption["compositional_deconstruction"] = {
+            "background": "",
+            "elements": elements,
+        }
+        zip_file.writestr(f"{name_stem}.json", json.dumps(caption, indent=2) + "\n")
+
+    @staticmethod
     def _parse_export_params(request, background_data):
         """
         Parse and normalise export parameters from request and background_data.
@@ -117,6 +213,25 @@ class ExportUtils:
         }
         scale_factor = scale_map.get(resolution_d, 1.0)
 
+        # Bounding-box sidecar mode for the picture's stored detections:
+        #   "none"         — no sidecar
+        #   "coco-json"    — a COCO-subset {stem}.json (pixel xyxy)
+        #   "ideogram-json"— an Ideogram-4 structured-JSON caption {stem}.json
+        #                    (normalized yxyx 0-1000; use ai-toolkit caption_ext=json)
+        # Only meaningful for FULL exports (face/crop exports have no per-image
+        # JSON sidecar concept).
+        bbox_mode = (
+            request.query_params.get("bbox_mode")
+            or request.query_params.get("bboxMode")
+            or background_data.get("bbox_mode")
+            or "none"
+        )
+        bbox_mode_d = (bbox_mode or "none").lower()
+        if bbox_mode_d not in {"none", "coco-json", "ideogram-json"}:
+            bbox_mode_d = "none"
+        if export_type_d != Picture.ExportType.FULL:
+            bbox_mode_d = "none"
+
         only_deleted = request.query_params.get("character_id") == "SCRAPHEAP"
         picture_ids = request.query_params.getlist("id")
 
@@ -137,6 +252,7 @@ class ExportUtils:
             "select_fields": select_fields,
             "use_original_file_names": use_original_file_names,
             "tag_format_d": tag_format_d,
+            "bbox_mode_d": bbox_mode_d,
         }
 
     @staticmethod
@@ -193,6 +309,7 @@ class ExportUtils:
             select_fields = params["select_fields"]
             use_original_file_names = params.get("use_original_file_names", False)
             tag_format_d = params.get("tag_format_d", "spaces")
+            bbox_mode_d = params.get("bbox_mode_d", "none")
             used_names: dict = {}
 
             pics = []
@@ -321,6 +438,25 @@ class ExportUtils:
             zip_path = os.path.join(TEMP_EXPORT_DIR, f"export_{task_id}.zip")
             feature_faces_by_pic = {}
             face_tags_by_face = {}
+
+            # Pre-fetch detection rows once when a bbox sidecar is requested, so
+            # the per-image loop is a dict lookup rather than N queries.
+            detections_by_pic: dict = {}
+            if bbox_mode_d in ("coco-json", "ideogram-json"):
+                from pixlstash.db_models.detection import Detection
+
+                def fetch_detections(session, ids):
+                    rows = session.exec(
+                        select(Detection).where(Detection.picture_id.in_(ids))
+                    ).all()
+                    grouped: dict = {}
+                    for det in rows:
+                        grouped.setdefault(det.picture_id, []).append(det)
+                    return grouped
+
+                detections_by_pic = server.vault.db.run_task(
+                    fetch_detections, [pic.id for pic in pics]
+                )
 
             if export_type_d != Picture.ExportType.FULL:
                 (
@@ -472,6 +608,24 @@ class ExportUtils:
                                 zip_file.writestr(
                                     f"{name_stem}.txt",
                                     f"{caption_text}\n",
+                                )
+
+                            if bbox_mode_d == "coco-json":
+                                ExportUtils._write_detection_sidecar(
+                                    zip_file,
+                                    name_stem,
+                                    arcname,
+                                    pic,
+                                    detections_by_pic.get(pic.id, []),
+                                    scale_factor,
+                                )
+                            elif bbox_mode_d == "ideogram-json":
+                                ExportUtils._write_ideogram_sidecar(
+                                    zip_file,
+                                    name_stem,
+                                    pic,
+                                    detections_by_pic.get(pic.id, []),
+                                    caption_text,
                                 )
                             export_tasks[task_id]["processed"] += 1
                         else:

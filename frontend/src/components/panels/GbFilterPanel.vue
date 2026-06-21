@@ -140,6 +140,28 @@
         <v-icon v-else size="16">{{ opt.icon }}</v-icon>
       </v-btn>
     </div>
+    <div class="gb-filter-section-label" style="margin-top: 10px">
+      Impossible tags
+    </div>
+    <div
+      class="gb-impossible-tags"
+      role="group"
+      aria-label="Impossible tags filter"
+    >
+      <label
+        v-for="opt in gbImpossibleSourceOptions"
+        :key="opt.value"
+        class="gb-impossible-tags-label"
+        :title="opt.tip"
+      >
+        <input
+          type="checkbox"
+          :checked="gbImpossibleSources.includes(opt.value)"
+          @change="gbToggleImpossibleSource(opt.value, $event.target.checked)"
+        />
+        {{ opt.label }}
+      </label>
+    </div>
     <div class="gb-filter-section-header" style="margin-top: 10px">
       <span class="gb-filter-section-label" style="margin-top: 0">Tags</span>
       <v-btn
@@ -600,6 +622,41 @@ const gbComfyuiLoraFilter = computed({
   },
 });
 
+// Impossible-tag sources. A value is "on" when present in the array; toggling a
+// checkbox adds/removes its key, OR-ing the selected sources in the grid query.
+const gbImpossibleSources = computed({
+  get: () => filterStore.impossibleSources,
+  set: (v) => {
+    filterStore.impossibleSources = Array.isArray(v) ? v : [];
+  },
+});
+
+const gbImpossibleSourceOptions = [
+  {
+    value: "no_face",
+    label: "Face tags, no face",
+    tip: "No detected face, but tagged face/nose/lips/eyes…",
+  },
+  {
+    value: "no_humans",
+    label: 'People tags on "no humans"',
+    tip: "Tagged 'no humans'/'scenery' but has people tags, no face",
+  },
+];
+
+function gbToggleImpossibleSource(value, checked) {
+  const current = Array.isArray(gbImpossibleSources.value)
+    ? gbImpossibleSources.value
+    : [];
+  if (checked) {
+    if (!current.includes(value)) {
+      gbImpossibleSources.value = [...current, value];
+    }
+  } else {
+    gbImpossibleSources.value = current.filter((v) => v !== value);
+  }
+}
+
 const gbMediaTypeOptions = [
   { value: "all", icon: "mdi-multimedia", title: "Show all media" },
   { value: "images", icon: "mdi-image", title: "Show images only" },
@@ -878,6 +935,21 @@ watch(
 
 .gb-filter-shared-only-label--right {
   margin-left: auto;
+}
+
+.gb-impossible-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.gb-impossible-tags-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+  cursor: pointer;
 }
 
 .gb-filter-section-label {

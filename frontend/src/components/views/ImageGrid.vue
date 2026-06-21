@@ -133,6 +133,7 @@
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+      @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
       @share-picture="sharePicture"
@@ -167,6 +168,39 @@
             @click="confirmRevokePictureShares"
           >
             Remove all shares
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ── Segment (object detection) dialog ─────────────────── -->
+    <v-dialog v-model="segmentDialogOpen" max-width="420">
+      <v-card>
+        <v-card-title style="font-size: 1rem; padding: 16px 20px 8px">
+          <v-icon size="16" style="margin-right: 6px; opacity: 0.7"
+            >mdi-shape-outline</v-icon
+          >
+          Detect objects
+        </v-card-title>
+        <v-card-text style="padding: 0 20px 4px">
+          <div style="font-size: 0.875rem; opacity: 0.85; margin-bottom: 10px">
+            Leave the label empty for dense object detection, or type a phrase to
+            detect only that (e.g. "dog").
+          </div>
+          <v-text-field
+            v-model="segmentPrompt"
+            label="Label (optional)"
+            density="comfortable"
+            hide-details
+            autofocus
+            @keydown.enter.stop.prevent="confirmSegment"
+          />
+        </v-card-text>
+        <v-card-actions style="padding: 8px 16px 16px">
+          <v-btn variant="text" @click="segmentDialogOpen = false">Cancel</v-btn>
+          <v-spacer />
+          <v-btn color="primary" variant="tonal" @click="confirmSegment">
+            Detect
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -635,6 +669,22 @@
                     </div>
                   </div>
                 </template>
+                <!-- Object detection (segmentation) overlays -->
+                <template v-if="isThumbnailReady(img.id) && img.thumbnail">
+                  <div
+                    v-for="overlay in getDetectionBboxOverlays(img)"
+                    :key="'det-' + overlay.detId + '-' + img.id"
+                    class="face-bbox-overlay"
+                    :style="overlay.style"
+                  >
+                    <div
+                      :style="{ color: overlay.color }"
+                      class="face-bbox-label"
+                    >
+                      {{ overlay.det.label }}
+                    </div>
+                  </div>
+                </template>
                 <div
                   v-if="
                     isThumbnailReady(img.id) &&
@@ -784,6 +834,34 @@
       </template>
     </v-snackbar>
 
+    <!-- Clear impossible tags result + Undo -->
+    <v-snackbar
+      v-model="impossibleSnackbarVisible"
+      location="bottom"
+      :timeout="8000"
+      color="surface"
+      elevation="4"
+    >
+      <span>{{ impossibleSnackbarText }}</span>
+      <template #actions>
+        <v-btn
+          v-if="lastImpossibleRemoved.length"
+          color="primary"
+          variant="text"
+          @click="handleUndoImpossibleTags"
+        >
+          Undo
+        </v-btn>
+        <v-btn
+          color="default"
+          variant="text"
+          @click="impossibleSnackbarVisible = false"
+        >
+          Dismiss
+        </v-btn>
+      </template>
+    </v-snackbar>
+
     <SelectionBar
       ref="selectionBarRef"
       :selected-count="selectedImageIds.length"
@@ -807,6 +885,9 @@
       :all-grid-images="allGridImages"
       :selected-character="String(props.selectedCharacter)"
       :selected-set="String(props.selectedSet)"
+      :impossible-sources="props.impossibleSources"
+      :clearing-impossible="clearingImpossibleTags"
+      @clear-impossible-tags="handleClearImpossibleTags"
       @clear-selection="clearSelection"
       @added-to-set="handleOverlayAddedToSet"
       @remove-from-group="removeFromGroup"
@@ -943,6 +1024,7 @@ const props = defineProps({
   stackThreshold: { type: [String, Number, null], default: null },
   showStars: Boolean,
   showFaceBboxes: Boolean,
+  showDetections: Boolean,
   showProblemIcon: Boolean,
   penalisedTagWeights: { type: Object, default: () => ({}) },
   showStacks: { type: Boolean, default: true },
@@ -979,6 +1061,7 @@ const props = defineProps({
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
+  impossibleSources: { type: Array, default: () => [] },
   sharedOnlyFilter: { type: Boolean, default: false },
   unassignedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
@@ -1103,6 +1186,9 @@ const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
 // Share picture dialog
 const sharePicDialogOpen = ref(false);
+// Segment (object detection) dialog
+const segmentDialogOpen = ref(false);
+const segmentPrompt = ref("");
 
 // ============================================================
 // GRID DATA STATE
@@ -1134,6 +1220,66 @@ const badgeIconSizes = computed(() => {
 });
 
 const allGridImages = ref([]);
+
+// ---- Clear impossible tags (bulk action) ----
+const clearingImpossibleTags = ref(false);
+const impossibleSnackbarVisible = ref(false);
+const impossibleSnackbarText = ref("");
+// Stash of the last clear's removed {picture_id, tag} pairs, for Undo.
+const lastImpossibleRemoved = ref([]);
+
+async function handleClearImpossibleTags() {
+  const pictureIds = selectedImageIds.value
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  const filters = Array.isArray(props.impossibleSources)
+    ? props.impossibleSources
+    : [];
+  if (!pictureIds.length || !filters.length || clearingImpossibleTags.value) {
+    return;
+  }
+  clearingImpossibleTags.value = true;
+  try {
+    const res = await apiClient.post(
+      `${props.backendUrl}/pictures/impossible-tags/clear`,
+      { picture_ids: pictureIds, filters },
+    );
+    const removed = Array.isArray(res.data?.removed) ? res.data.removed : [];
+    const count =
+      typeof res.data?.count === "number" ? res.data.count : removed.length;
+    lastImpossibleRemoved.value = removed;
+    impossibleSnackbarText.value =
+      count > 0
+        ? `Removed ${count} tag${count === 1 ? "" : "s"}`
+        : "No impossible tags found";
+    impossibleSnackbarVisible.value = true;
+    debouncedFetchAllGridImages({ force: true });
+  } catch (e) {
+    console.error("[ImageGrid.vue] Failed to clear impossible tags:", e);
+    lastImpossibleRemoved.value = [];
+    impossibleSnackbarText.value = "Failed to clear impossible tags";
+    impossibleSnackbarVisible.value = true;
+  } finally {
+    clearingImpossibleTags.value = false;
+  }
+}
+
+async function handleUndoImpossibleTags() {
+  const pairs = lastImpossibleRemoved.value;
+  if (!Array.isArray(pairs) || !pairs.length) return;
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/impossible-tags/restore`, {
+      pairs,
+    });
+    impossibleSnackbarVisible.value = false;
+    lastImpossibleRemoved.value = [];
+    debouncedFetchAllGridImages({ force: true });
+  } catch (e) {
+    console.error("[ImageGrid.vue] Failed to restore impossible tags:", e);
+    impossibleSnackbarText.value = "Failed to undo";
+    impossibleSnackbarVisible.value = true;
+  }
+}
 
 // ---- Guest scoring state (READ-token users) ----
 // null = not yet decided, 'accepted' = cookie consent given, 'rejected' = declined
@@ -2154,6 +2300,43 @@ function getFaceBboxOverlays(img) {
     face: entry.face,
     colorIdx,
   }));
+}
+
+// Detection (object) bbox overlays — mirror getFaceBboxOverlays, but colour
+// each box by its label so boxes sharing a label share a colour.
+function getDetectionBboxOverlays(img) {
+  void faceOverlayRedrawKey.value; // depend on redraw key
+  void thumbnailReadyMap[img.id];
+  if (
+    !props.showDetections ||
+    !img.detections ||
+    !img.detections.length ||
+    !(img.thumbnail_width || img.width) ||
+    !(img.thumbnail_height || img.height)
+  ) {
+    return [];
+  }
+  const el = thumbnailRefs[img.id];
+  if (!el) return [];
+  const labelColorIndex = new Map();
+  const firstFrameDetections = img.detections
+    .map((det, detIdx) => ({ det, detIdx }))
+    .filter((entry) => (entry.det.frame_index ?? 0) === 0);
+  return firstFrameDetections.map((entry) => {
+    const label = entry.det.label ?? "";
+    if (!labelColorIndex.has(label)) {
+      labelColorIndex.set(label, labelColorIndex.size);
+    }
+    const colorIdx = labelColorIndex.get(label);
+    return {
+      style: getFaceBboxStyle(entry.det.bbox, colorIdx, img, el, false),
+      detIdx: entry.detIdx,
+      detId: entry.det.id,
+      det: entry.det,
+      colorIdx,
+      color: faceBoxColor(colorIdx),
+    };
+  });
 }
 
 // Track which image is currently hovered
@@ -5024,6 +5207,7 @@ watch(
     () => props.tagConfidenceAboveFilter,
     () => props.tagConfidenceBelowFilter,
     () => props.faceBboxFilter,
+    () => props.impossibleSources,
     () => props.sharedOnlyFilter,
     () => props.unassignedOnlyFilter,
   ],
@@ -5150,6 +5334,20 @@ watch(
     if (faceEnabled === prevFace && length === prevLength) {
       return;
     }
+    invalidateVisibleThumbnailRanges();
+  },
+);
+
+watch(
+  [() => props.showDetections, () => allGridImages.value.length],
+  ([detEnabled, length], [prevDet, prevLength]) => {
+    if (!detEnabled) return;
+    if (length <= 0) return;
+    if (detEnabled === prevDet && length === prevLength) {
+      return;
+    }
+    // Re-fetch visible thumbnails so detection boxes (carried in the batch
+    // thumbnail response) populate when the overlay is switched on.
     invalidateVisibleThumbnailRanges();
   },
 );
@@ -5347,6 +5545,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       idx: start + idx, // Ensure idx is global index
       thumbnail: img?.thumbnail ?? null,
       faces: Array.isArray(img?.faces) ? img.faces : [],
+      detections: Array.isArray(img?.detections) ? img.detections : [],
       penalised_tags: Array.isArray(img?.penalised_tags)
         ? img.penalised_tags
         : [],
@@ -5445,6 +5644,13 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
         if (props.showFaceBboxes && gridImg.faces.length) {
+          overlayNeedsRedraw = true;
+        }
+        gridImg.detections =
+          thumbObj && Array.isArray(thumbObj.detections)
+            ? thumbObj.detections
+            : [];
+        if (props.showDetections && gridImg.detections.length) {
           overlayNeedsRedraw = true;
         }
         gridImg.penalised_tags =
@@ -5657,6 +5863,30 @@ function handleContextMenuOpenPluginPanel() {
 
 function handleContextMenuOpenComfyuiPanel() {
   selectionBarRef.value?.openComfyuiPanel();
+}
+
+function openSegmentDialog() {
+  if (!selectedImageIds.value.length || isReadOnly.value) return;
+  segmentPrompt.value = "";
+  segmentDialogOpen.value = true;
+}
+
+async function confirmSegment() {
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  segmentDialogOpen.value = false;
+  if (!ids.length || !props.backendUrl) return;
+  // Detection runs as a background GPU task; progress surfaces in the task
+  // manager and the overlay refreshes on the resulting CHANGED_PICTURES event.
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/detect`, {
+      picture_ids: ids,
+      prompt: segmentPrompt.value.trim(),
+    });
+  } catch (err) {
+    console.error("Object detection request failed:", err);
+  }
 }
 
 function sharePicture() {
@@ -5951,6 +6181,7 @@ async function exportCurrentViewToZip(options = {}) {
   const includeCharacterName = options.includeCharacterName !== false;
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
+  const bboxMode = options.bboxMode || "none";
   let url = `${props.backendUrl}/pictures/export`;
   let params;
   const selectedIds = selectedImageIds.value;
@@ -5981,6 +6212,9 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (resolution) {
     extraParams.append("resolution", resolution);
+  }
+  if (bboxMode && bboxMode !== "none") {
+    extraParams.append("bbox_mode", bboxMode);
   }
   const extraParamString = extraParams.toString();
   if (params) {

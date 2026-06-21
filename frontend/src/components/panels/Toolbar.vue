@@ -731,6 +731,12 @@ const gbShowFaceBboxesModel = computed({
     gridStore.showFaceBboxes = Boolean(v);
   },
 });
+const gbShowDetectionsModel = computed({
+  get: () => gridStore.showDetections,
+  set: (v) => {
+    gridStore.showDetections = Boolean(v);
+  },
+});
 const gbShowProblemIconModel = computed({
   get: () => gridStore.showProblemIcon,
   set: (v) => {
@@ -749,6 +755,19 @@ const gbOverlayOptions = computed(() => [
       },
       set value(v) {
         gbShowFaceBboxesModel.value = v;
+      },
+    },
+  },
+  {
+    key: "detections",
+    label: "Object boxes",
+    icon: "mdi-shape-outline",
+    model: {
+      get value() {
+        return gbShowDetectionsModel.value;
+      },
+      set value(v) {
+        gbShowDetectionsModel.value = v;
       },
     },
   },

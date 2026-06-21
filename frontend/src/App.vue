@@ -205,6 +205,10 @@ function pictureChangeFieldAffectsView(field) {
       filterStore.smartScoreBucketFilter != null
     );
   }
+  // Detections are an opt-in overlay layer, never a sort/filter field, so a
+  // detection change never affects grid membership or order — don't reload or
+  // raise the "view changed" pill for it.
+  if (field === "detections") return false;
   // Unknown field → assume it can affect the view, so refresh to be safe.
   return true;
 }
@@ -1636,6 +1640,7 @@ function confirmExportZip() {
     includeCharacterName: exportStore.exportIncludeCharacterName,
     useOriginalFileNames: exportStore.exportUseOriginalFileNames,
     resolution: exportStore.exportResolution,
+    bboxMode: exportStore.exportBboxMode,
   });
   exportStore.exportMenuOpen = false;
 }
@@ -2214,9 +2219,11 @@ defineExpose({
                 :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
                 :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
                 :faceBboxFilter="filterStore.faceBboxFilter"
+                :impossibleSources="filterStore.impossibleSources"
                 :sharedOnlyFilter="filterStore.sharedOnlyFilter"
                 :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
                 :showFaceBboxes="gridStore.showFaceBboxes"
+                :showDetections="gridStore.showDetections"
                 :showProblemIcon="gridStore.showProblemIcon"
                 :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
                 :showStacks="gridStore.showStacks"
