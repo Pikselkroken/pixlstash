@@ -28,7 +28,7 @@
             </label>
             <div ref="tagPickRef" class="rf-tag-pick">
               <button
-                class="rf-tag-trigger"
+                class="rf-control rf-tag-trigger"
                 type="button"
                 :disabled="store.scanning"
                 :aria-expanded="tagMenuOpen"
@@ -120,7 +120,7 @@
           <label class="rf-field">
             <span class="rf-field-label">Project</span>
             <select
-              class="rf-select rf-select--scope"
+              class="rf-control rf-select rf-select--scope"
               :value="store.scope.projectId ?? ''"
               @change="onScopeChange('projectId', $event.target.value, $event)"
             >
@@ -134,7 +134,7 @@
           <label class="rf-field">
             <span class="rf-field-label">Set</span>
             <select
-              class="rf-select rf-select--scope"
+              class="rf-control rf-select rf-select--scope"
               :value="store.scope.setId ?? ''"
               @change="onScopeChange('setId', $event.target.value, $event)"
             >
@@ -148,7 +148,7 @@
           <label class="rf-field">
             <span class="rf-field-label">Character</span>
             <select
-              class="rf-select rf-select--scope"
+              class="rf-control rf-select rf-select--scope"
               :value="store.scope.characterId ?? ''"
               @change="
                 onScopeChange('characterId', $event.target.value, $event)
@@ -180,6 +180,7 @@
         <label class="rf-bulk-thresh">
           Auto-resolve when both signals agree ≥
           <select
+            class="rf-control"
             :value="store.bulkThreshold"
             @change="store.setBulkThreshold(Number($event.target.value))"
           >
@@ -190,7 +191,7 @@
           </select>
         </label>
         <button
-          class="rf-bulk-preview"
+          class="rf-control rf-bulk-preview"
           type="button"
           :disabled="store.bulkCount === 0"
           title="Spot-check a sample of what would be auto-resolved before applying."
@@ -212,6 +213,7 @@
         <span v-if="store.lastBulk" class="rf-bulk-undo">
           resolved {{ store.lastBulk.count }} ·
           <button
+            class="rf-control"
             type="button"
             :disabled="store.bulkBusy"
             @click="store.undoBulk()"
@@ -227,7 +229,9 @@
 
         <div v-else-if="store.error" class="rf-state rf-state--error">
           {{ store.error }}
-          <button class="rf-retry" @click="store.fetchQueue()">Retry</button>
+          <button class="rf-control rf-retry" @click="store.fetchQueue()">
+            Retry
+          </button>
         </div>
 
         <div v-else-if="!current" class="rf-state rf-state--done">
@@ -461,7 +465,7 @@
             <span class="rf-confirm-msg">⚠ {{ pendingMessage }}</span>
             <div class="rf-confirm-actions">
               <button
-                class="rf-confirm-btn rf-confirm-btn--apply"
+                class="rf-control rf-confirm-btn rf-confirm-btn--apply"
                 type="button"
                 title="Apply this decision despite the earlier call (Enter)."
                 @click="confirmPendingDecision"
@@ -469,7 +473,7 @@
                 <kbd>↵</kbd> Apply
               </button>
               <button
-                class="rf-confirm-btn"
+                class="rf-control rf-confirm-btn"
                 type="button"
                 title="Leave the card unchanged (Esc)."
                 @click="cancelPendingDecision"
@@ -536,7 +540,7 @@
             </span>
           </div>
           <button
-            class="rf-preview-x"
+            class="rf-control rf-preview-x"
             type="button"
             @click="store.previewOpen = false"
           >
@@ -1422,33 +1426,33 @@ onUnmounted(() => {
 .rf-shell :deep(.overlay-toolbar) {
   gap: var(--space-3);
   min-height: 36px;
-  padding: 3px 10px;
+  padding: var(--space-2) var(--space-3);
 }
 .rf-shell :deep(.overlay-toolbar-actions) {
-  gap: 6px;
+  gap: var(--space-2);
 }
 .rf-shell :deep(.overlay-toolbar-title) {
   font-size: var(--text-xs);
 }
 .rf-shell :deep(.overlay-toolbar-close) {
   font-size: var(--text-2xs);
-  padding: 5px 10px;
+  padding: var(--space-2) var(--space-3);
 }
 
 .rf-field {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 .rf-field-label {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  font-size: 0.5875rem;
+  font-size: var(--text-2xs);
 }
 .rf-penalised-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 0.585rem;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   cursor: pointer;
   white-space: nowrap;
@@ -1460,19 +1464,34 @@ onUnmounted(() => {
 .rf-penalised-toggle--on {
   color: rgb(var(--v-theme-error));
 }
-.rf-select {
-  height: 32px;
+/* Shared neutral dark control. The ~dozen neutral buttons/selects in this overlay
+   (select, tag trigger, retry, bulk threshold/undo/preview, confirm, preview-close,
+   twin-fix) all wear the same dark-surface skin: faint fill, low-contrast border, sm
+   radius, lift on hover, fade when disabled. Define it once here; each control keeps
+   only its own size/padding/width overrides in its own rule. Semantic-coloured buttons
+   (.rf-bulk-btn, .rf-action--*, .rf-confirm-btn--apply) deliberately do NOT use this. */
+.rf-control,
+.rf-twin-fix {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgb(var(--v-theme-on-dark-surface));
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: var(--radius-sm);
-  padding: 0 6px;
-  font-size: 0.6rem;
-  max-width: 280px;
   cursor: pointer;
 }
-.rf-select:hover {
+.rf-control:hover:not(:disabled),
+.rf-twin-fix:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+.rf-control:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rf-select {
+  height: 32px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
+  max-width: 280px;
 }
 /* Scope filters sit in the same row as the tag picker; keep them compact so the row
    stays tidy and wraps cleanly when narrow. Native <select> clips the value to this width
@@ -1483,41 +1502,29 @@ onUnmounted(() => {
 
 .rf-scan-error {
   color: rgb(var(--v-theme-error));
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
 }
 
 /* Custom tag picker, matched to the toolbar control language: the trigger is the same
    surface/height/radius as .rf-select, and the floating panel (position:fixed from the
    trigger's rect — see tagMenuStyle) reads as the same dark family. */
 .rf-field--tag {
-  gap: 6px;
+  gap: var(--space-2);
 }
 .rf-tag-pick {
   position: relative;
   width: 150px;
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
 }
 .rf-tag-trigger {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: var(--space-2);
   width: 100%;
   height: 32px;
   padding: 0 var(--space-3);
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 0.6rem;
-}
-.rf-tag-trigger:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
-}
-.rf-tag-trigger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  font-size: var(--text-2xs);
 }
 .rf-tag-trigger-label {
   overflow: hidden;
@@ -1549,8 +1556,8 @@ onUnmounted(() => {
 .rf-tag-search {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
@@ -1561,7 +1568,7 @@ onUnmounted(() => {
   border: none;
   outline: none;
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
 }
 .rf-tag-search input::placeholder {
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
@@ -1573,7 +1580,7 @@ onUnmounted(() => {
 .rf-tag-empty {
   padding: var(--space-3) var(--space-4);
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
 }
 .rf-tag-item {
   display: flex;
@@ -1581,11 +1588,11 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: var(--space-3);
   width: 100%;
-  padding: 6px var(--space-4);
+  padding: var(--space-2) var(--space-4);
   background: none;
   border: none;
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
   text-align: left;
   cursor: pointer;
 }
@@ -1607,11 +1614,11 @@ onUnmounted(() => {
 }
 .rf-tag-count {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: 0.585rem;
+  font-size: var(--text-2xs);
   margin-left: var(--space-2);
 }
 .rf-tag-option {
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
 }
 
 .rf-progress {
@@ -1627,33 +1634,29 @@ onUnmounted(() => {
 }
 .rf-progress-tally {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
 }
 
 .rf-bulkbar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
   background: rgb(var(--v-theme-dark-surface));
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
 .rf-bulk-thresh select {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 6px;
-  padding: 3px var(--space-3);
-  margin-left: 6px;
+  padding: var(--space-2) var(--space-3);
+  margin-left: var(--space-2);
 }
 .rf-bulk-btn {
   background: rgb(var(--v-theme-success));
   color: rgb(var(--v-theme-on-success));
   border: 1px solid rgb(var(--v-theme-success));
-  border-radius: 6px;
-  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
   font-weight: var(--weight-semibold);
   cursor: pointer;
 }
@@ -1669,15 +1672,7 @@ onUnmounted(() => {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rf-bulk-undo button {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 6px;
-  padding: 3px 10px;
-  cursor: pointer;
-}
-.rf-bulk-undo button:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+  padding: var(--space-2) var(--space-3);
 }
 
 .rf-body {
@@ -1687,7 +1682,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 14px var(--space-5) 18px;
+  padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
 .rf-state {
@@ -1697,7 +1692,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
 }
 .rf-state--error {
   color: rgb(var(--v-theme-error));
@@ -1707,15 +1702,10 @@ onUnmounted(() => {
 }
 .rf-state-sub {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: 0.675rem;
+  font-size: var(--text-xs);
 }
 .rf-retry {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 6px;
-  padding: 6px 14px;
-  cursor: pointer;
+  padding: var(--space-2) var(--space-4);
 }
 
 .rf-review {
@@ -1726,7 +1716,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 /* Direct-tag affordance, pinned bottom-right of the review view. */
@@ -1739,13 +1729,13 @@ onUnmounted(() => {
 .rf-tag-apply-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid rgba(var(--v-theme-primary), 0.55);
   border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-primary), 0.16);
   color: rgb(var(--v-theme-on-surface));
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   cursor: pointer;
   box-shadow: var(--elevation-3);
@@ -1761,11 +1751,11 @@ onUnmounted(() => {
   justify-content: center;
   min-width: 18px;
   height: 18px;
-  padding: 0 5px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
-  font-size: 0.54rem;
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
 }
 /* The tag menu opens above the button. */
@@ -1787,9 +1777,9 @@ onUnmounted(() => {
 }
 .rf-verdict-pct {
   font-size: var(--text-xl);
-  font-weight: 800;
+  font-weight: var(--weight-bold);
   padding: var(--space-1) var(--space-4);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 .rf-verdict-text {
   color: rgb(var(--v-theme-on-dark-surface));
@@ -1809,13 +1799,13 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 .rf-signal-chip {
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: var(--radius-pill);
-  padding: 3px 10px;
+  padding: var(--space-2) var(--space-3);
 }
 .rf-signal-chip--muted {
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
@@ -1823,7 +1813,7 @@ onUnmounted(() => {
 }
 .rf-verdict-sub {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: 0.675rem;
+  font-size: var(--text-xs);
   text-align: center;
   margin: 0;
 }
@@ -1835,8 +1825,8 @@ onUnmounted(() => {
   gap: var(--space-4);
   width: 100%;
   max-width: 760px;
-  padding: 10px 14px;
-  border-radius: 10px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
   border: 1px solid var(--rf-bucket-accent, rgba(var(--v-theme-on-dark-surface), 0.14));
   border-left-width: 4px;
   background: color-mix(
@@ -1863,12 +1853,12 @@ onUnmounted(() => {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rf-bucket-meaning {
-  font-size: 0.615rem;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.72);
 }
 .rf-bucket-count {
   flex-shrink: 0;
-  font-size: 0.555rem;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -1896,7 +1886,7 @@ onUnmounted(() => {
   text-align: center;
 }
 .rf-question-sub {
-  font-size: 0.675rem;
+  font-size: var(--text-xs);
   font-weight: var(--weight-regular);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
@@ -1905,7 +1895,7 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 18px;
+  gap: var(--space-5);
   width: 100%;
   justify-content: center;
   align-items: stretch;
@@ -1923,13 +1913,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-3);
 }
 .rf-pane-title {
   font-weight: var(--weight-semibold);
 }
 .rf-chip {
-  font-size: 0.585rem;
+  font-size: var(--text-2xs);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill);
   white-space: nowrap;
@@ -1973,12 +1963,12 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-scrim), 0.66);
   color: rgb(var(--v-theme-on-dark-surface));
   cursor: zoom-in;
   opacity: 0;
-  transition: opacity 0.12s;
+  transition: opacity var(--dur-1) var(--ease-standard);
 }
 .rf-img-wrap:hover .rf-zoom-btn {
   opacity: 1;
@@ -2011,9 +2001,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: var(--space-3);
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  font-size: 0.585rem;
+  font-size: var(--text-2xs);
 }
 .rf-pane-conf {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
@@ -2021,23 +2011,18 @@ onUnmounted(() => {
 .rf-twin-fix {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  gap: var(--space-2);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 6px;
-  padding: 3px 10px;
-  cursor: pointer;
-  font-size: 0.585rem;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-2xs);
 }
 .rf-twin-fix:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rf-twin-fix kbd {
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
   border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  padding: 1px var(--space-2);
 }
 
 .rf-actions {
@@ -2052,7 +2037,7 @@ onUnmounted(() => {
   gap: var(--space-3);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: var(--radius-md);
-  padding: 10px 18px;
+  padding: var(--space-3) var(--space-5);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   cursor: pointer;
@@ -2062,8 +2047,8 @@ onUnmounted(() => {
 .rf-action kbd {
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
   border-radius: var(--radius-sm);
-  padding: 1px 6px;
-  font-size: 0.6rem;
+  padding: 1px var(--space-2);
+  font-size: var(--text-2xs);
 }
 .rf-action--remove {
   background: rgb(var(--v-theme-error));
@@ -2133,7 +2118,7 @@ onUnmounted(() => {
 .rf-actions-label {
   align-self: center;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
   margin-right: var(--space-1);
 }
 .rf-pane--flagged .rf-img {
@@ -2143,13 +2128,13 @@ onUnmounted(() => {
   box-shadow: 0 0 0 2px rgba(var(--v-theme-on-dark-surface), 0.55);
 }
 .rf-rec-pip {
-  font-size: 0.51rem;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   background: rgba(var(--v-theme-on-dark-surface), 0.22);
   border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  padding: 1px var(--space-2);
 }
 .rf-actions-gap {
   width: 32px;
@@ -2161,18 +2146,18 @@ onUnmounted(() => {
 .rf-confirm {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-4);
   flex-wrap: wrap;
   justify-content: center;
   max-width: 760px;
-  padding: var(--space-3) 14px;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid rgb(var(--v-theme-warning));
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.14);
 }
 .rf-confirm-msg {
   color: rgb(var(--v-theme-warning));
-  font-size: 0.675rem;
+  font-size: var(--text-xs);
 }
 .rf-confirm-actions {
   display: inline-flex;
@@ -2181,51 +2166,45 @@ onUnmounted(() => {
 .rf-confirm-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 6px;
-  padding: 5px var(--space-4);
-  font-size: 0.6375rem;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
-}
-.rf-confirm-btn:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 .rf-confirm-btn--apply {
   background: rgb(var(--v-theme-warning));
   border-color: rgb(var(--v-theme-warning));
   color: rgb(var(--v-theme-on-warning));
 }
-.rf-confirm-btn--apply:hover {
+/* Beat .rf-control:hover:not(:disabled) (equal specificity, defined earlier) so the
+   semantic warning hover wins over the shared neutral hover on the Apply button. */
+.rf-confirm-btn--apply:hover:not(:disabled) {
   background: rgba(var(--v-theme-warning), 0.85);
 }
 .rf-confirm-btn kbd {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
   border-radius: var(--radius-sm);
-  padding: 1px 5px;
-  font-size: 0.5625rem;
+  padding: 1px var(--space-2);
+  font-size: var(--text-2xs);
 }
 
 /* Passive per-pane consistency chip: subtle, muted, only rendered when there is a prior
    vote for that picture, to nudge consistency before a conflict even happens. */
 .rf-vote-hint {
   color: rgb(var(--v-theme-warning));
-  font-size: 0.555rem;
+  font-size: var(--text-2xs);
   font-style: italic;
 }
 
 .rf-hint {
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  font-size: 0.615rem;
+  font-size: var(--text-2xs);
 }
 .rf-hint kbd {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: var(--radius-sm);
-  padding: 1px 6px;
+  padding: 1px var(--space-2);
 }
 
 /* Bulk preview modal */
@@ -2256,24 +2235,19 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: 14px 18px;
+  padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
   font-weight: var(--weight-semibold);
 }
 .rf-preview-sub {
   display: block;
   font-weight: var(--weight-regular);
-  font-size: 0.615rem;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rf-preview-x {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 6px;
   width: 30px;
   height: 30px;
-  cursor: pointer;
   flex: 0 0 auto;
 }
 .rf-preview-empty {
@@ -2284,8 +2258,8 @@ onUnmounted(() => {
 .rf-preview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 14px;
-  padding: var(--space-5) 18px;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-5);
   overflow: auto;
 }
 .rf-preview-item {
@@ -2297,13 +2271,13 @@ onUnmounted(() => {
 }
 .rf-preview-imgs {
   display: flex;
-  gap: 6px;
+  gap: var(--space-2);
 }
 .rf-preview-img {
   width: 50%;
   height: 150px;
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-dark-surface));
   cursor: zoom-in;
 }
@@ -2311,38 +2285,26 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 2px rgba(var(--v-theme-error), 0.7);
 }
 .rf-preview-verdict {
-  margin-top: 6px;
+  margin-top: var(--space-2);
   text-align: center;
   font-weight: var(--weight-semibold);
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
 .rf-preview-foot {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-4) 18px;
+  padding: var(--space-4) var(--space-5);
   border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
 }
 .rf-preview-note {
   margin-right: auto;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: 0.6375rem;
+  font-size: var(--text-xs);
 }
 .rf-bulk-preview {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 6px;
-  padding: 5px var(--space-4);
-  cursor: pointer;
-}
-.rf-bulk-preview:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
-}
-.rf-bulk-preview:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+  padding: var(--space-2) var(--space-4);
 }
 
 /* Full-screen zoom layer */
@@ -2382,11 +2344,11 @@ onUnmounted(() => {
   background: rgba(var(--v-theme-dark-surface), 0.9);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: var(--radius-pill);
-  padding: var(--space-2) 14px;
+  padding: var(--space-2) var(--space-4);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  font-size: 0.615rem;
+  font-size: var(--text-2xs);
   white-space: nowrap;
-  transition: opacity 0.3s ease;
+  transition: opacity var(--dur-3) var(--ease-standard);
 }
 .rf-zoom-hint--hidden {
   opacity: 0;
@@ -2395,6 +2357,6 @@ onUnmounted(() => {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  padding: 1px var(--space-2);
 }
 </style>
