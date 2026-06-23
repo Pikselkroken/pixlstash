@@ -81,3 +81,71 @@ def knn_disagreement(emb: np.ndarray, has_tag: np.ndarray, k: int, block: int = 
                 twin_sim[glob] = float(sims[local, best])
 
     return pos_frac, twin_idx, twin_sim
+
+
+def _popcount_u64(values: np.ndarray) -> np.ndarray:
+    """Population count (number of set bits) per element of a uint64 array.
+
+    Vectorised: view the (n,) uint64 array as (n, 8) uint8, unpack to bits, sum.
+    Avoids a Python loop over the n rows.
+    """
+    as_bytes = values.astype(np.uint64).view(np.uint8).reshape(values.shape[0], 8)
+    return np.unpackbits(as_bytes, axis=1).sum(axis=1).astype(np.int64)
+
+
+def hamming_distance(a: int, b: int) -> int:
+    """Hamming distance (number of differing bits) between two integers."""
+    return int(int(a ^ b).bit_count())
+
+
+def nearest_opposite_by_hamming(
+    phash_ints: np.ndarray,
+    valid_mask: np.ndarray,
+    has_tag: np.ndarray,
+    i: int,
+    max_hamming: int,
+    twin_sim: np.ndarray | None = None,
+) -> int:
+    """Index of the opposite-labelled near-duplicate of row ``i`` by dhash Hamming distance.
+
+    Picks the opposite-labelled picture whose 64-bit perceptual hash (dhash) is closest to
+    row ``i``'s, among those within ``max_hamming`` bits. This is the "same image, altered"
+    signal: an oversaturated or watermarked copy of a picture lands a handful of bits away
+    from its original, so the original is the obvious thing to compare against in review.
+
+    Args:
+        phash_ints: (n,) array of 64-bit dhash values (any integer dtype; read as uint64).
+        valid_mask: (n,) bool — rows with a parseable phash. Invalid rows are ignored.
+        has_tag: (n,) bool — whether each row carries the (merged) tag.
+        i: row to find a near-duplicate for. Must itself have a valid phash.
+        max_hamming: inclusive Hamming-distance threshold (~<=8 bits ≈ near-identical).
+        twin_sim: optional (n,) CLIP cosine array used only to break ties (higher wins).
+
+    Returns:
+        Row index of the closest opposite-labelled in-threshold near-duplicate, or ``-1``
+        when none exists. Ties on Hamming distance are broken by higher ``twin_sim`` when
+        provided, otherwise by lower row index (deterministic).
+    """
+    n = phash_ints.shape[0]
+    if n == 0 or not valid_mask[i]:
+        return -1
+
+    ref = np.uint64(phash_ints[i])
+    dist = _popcount_u64(np.bitwise_xor(phash_ints.astype(np.uint64), ref))
+
+    # Eligible: valid phash, opposite label, within threshold, and not row i itself.
+    eligible = valid_mask & (has_tag != has_tag[i]) & (dist <= max_hamming)
+    eligible[i] = False
+    if not eligible.any():
+        return -1
+
+    cand = np.flatnonzero(eligible)
+    cand_dist = dist[cand]
+    best_dist = cand_dist.min()
+    tied = cand[cand_dist == best_dist]
+    if tied.size == 1:
+        return int(tied[0])
+    if twin_sim is not None:
+        # Break ties by higher CLIP cosine; np.argmax keeps the first (lowest index) max.
+        return int(tied[int(np.argmax(twin_sim[tied]))])
+    return int(tied.min())
