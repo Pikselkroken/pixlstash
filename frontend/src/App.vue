@@ -37,7 +37,6 @@ import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
-import SearchOverlay from "./components/views/SearchOverlay.vue";
 import ReviewFixesOverlay from "./components/views/ReviewFixesOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import { isInternalImageDrag } from "./utils/media.js";
@@ -1153,13 +1152,6 @@ function applyRouteToStores() {
 // Sync route → stores on every navigation (and immediately on mount for deep-linking).
 watch(route, applyRouteToStores, { immediate: true, deep: true });
 
-async function handleUpdateSearchQuery(value) {
-  const nextQuery = typeof value === "string" ? value.trim() : "";
-  searchStore.searchInput = nextQuery;
-  searchStore.searchQuery = nextQuery;
-  searchStore.addToSearchHistory(nextQuery);
-}
-
 // Stateless sidebar tabs: switching the Global ↔ Project mode (or the
 // project picker) must not navigate or change the grid — the route is the
 // single source of truth. These handlers therefore only mirror the value
@@ -1560,7 +1552,7 @@ function handleGlobalKeydown(e) {
   if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (!isEditable) {
       e.preventDefault();
-      openSearchOverlay();
+      searchStore.requestSearchFocus();
     }
   }
   if (
@@ -1672,19 +1664,8 @@ function confirmExportZip() {
   exportStore.exportMenuOpen = false;
 }
 
-// --- Search Overlay ---
-
-function openSearchOverlay() {
-  searchStore.searchOverlayVisible = true;
-}
-
-function closeSearchOverlay() {
-  searchStore.searchOverlayVisible = false;
-}
-
 // --- Review tags overlay ---
-// Visibility lives in the store so the grid toolbar can open it directly,
-// the same way the search button toggles searchStore.searchOverlayVisible.
+// Visibility lives in the store so the grid toolbar can open it directly.
 
 function handleClearSearch() {
   searchStore.searchQuery = "";
@@ -1715,10 +1696,6 @@ function applySearchHistory(query) {
   nextTick(() => {
     blurSearchInput();
   });
-}
-
-function clearSearchHistory() {
-  searchStore.clearSearchHistory();
 }
 
 function commitSearch() {
@@ -2323,8 +2300,10 @@ defineExpose({
                 @update:visible-range-label="
                   gridStore.visibleRangeLabel = $event
                 "
+                @update:match-count="gridStore.matchCount = $event"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
+                @local-import="handleLocalImport"
                 @confirm-export-zip="confirmExportZip"
               />
             </div>
@@ -2432,14 +2411,6 @@ defineExpose({
           </div>
         </main>
       </div>
-      <SearchOverlay
-        v-if="searchStore.searchOverlayVisible"
-        :modelValue="searchStore.searchQuery"
-        :history="searchStore.searchHistory"
-        @search="handleUpdateSearchQuery"
-        @close="closeSearchOverlay"
-        @clear-history="clearSearchHistory"
-      />
       <ReviewFixesOverlay
         v-if="reviewFixesStore.overlayOpen"
         :backendUrl="BACKEND_URL"

@@ -1,465 +1,452 @@
 <template>
-  <div class="gb-filter-panel popup-panel">
-    <div class="gb-filter-panel-header">
-      <div class="gb-filter-panel-title">Filters</div>
-      <v-btn
-        v-if="filterStore.isActive"
-        variant="text"
-        density="compact"
-        size="x-small"
-        color="primary"
-        class="gb-filter-clear-all-btn"
+  <div class="tbm gb-filter-panel">
+    <span class="tbm-caret tbm-caret--end"></span>
+    <div class="tbm-header">
+      <v-icon size="18" class="tbm-header-icon">mdi-filter</v-icon>
+      <span class="tbm-title">Filters</span>
+      <span class="tbm-spacer"></span>
+      <span class="tbm-count">{{ gbMatchCountLabel }}</span>
+      <button
+        class="tbm-ghost"
+        type="button"
+        :disabled="!filterStore.isActive"
         @click="filterStore.resetFilters()"
-        >Clear all</v-btn
       >
+        <v-icon size="15">mdi-close-circle-outline</v-icon>
+        Clear
+      </button>
     </div>
-    <div
-      v-if="!isReadOnly || isAllPicturesView"
-      class="gb-filter-shared-only-row"
-    >
-      <label v-if="!isReadOnly" class="gb-filter-shared-only-label">
-        <input
-          type="checkbox"
-          :checked="gbSharedOnlyFilter"
-          @change="gbSharedOnlyFilter = $event.target.checked"
-        />
-        Shared pictures only
-      </label>
-      <label
-        v-if="isAllPicturesView"
-        class="gb-filter-shared-only-label gb-filter-shared-only-label--right"
-      >
-        <input
-          type="checkbox"
-          :checked="gbUnassignedOnlyFilter"
-          @change="gbUnassignedOnlyFilter = $event.target.checked"
-        />
-        Unassigned only
-      </label>
-    </div>
-    <div class="gb-filter-section-label">Media</div>
-    <div
-      class="gb-media-type-toggle"
-      role="group"
-      aria-label="Media type filter"
-    >
-      <v-btn
-        v-for="opt in gbMediaTypeOptions"
-        :key="opt.value"
-        class="gb-media-type-button"
-        :class="{
-          'gb-media-type-button--active': gbMediaTypeFilter === opt.value,
-        }"
-        variant="text"
-        :title="opt.title"
-        :aria-pressed="gbMediaTypeFilter === opt.value"
-        @click="gbSetMediaTypeFilter(opt.value)"
-      >
-        <v-icon size="16">{{ opt.icon }}</v-icon>
-      </v-btn>
-    </div>
-    <div class="gb-score-range-section">
-      <div class="gb-score-range-headers">
-        <span class="gb-score-range-header-label">Min Score</span>
-        <span
-          class="gb-score-range-header-label gb-score-range-header-label--right"
-          >Max Score</span
-        >
-      </div>
-      <div class="gb-score-range-filter">
-        <div class="gb-score-range-stars">
-          <button
-            v-for="n in 5"
-            :key="'min-' + n"
-            class="gb-score-star-btn"
-            type="button"
-            :title="`Set minimum score ${n}`"
-            @click="gbSetMinScore(n)"
-          >
-            <v-icon
-              size="15"
-              :color="
-                gbMinScoreFilter != null && n <= gbMinScoreFilter
-                  ? 'warning'
-                  : undefined
-              "
-              >{{
-                gbMinScoreFilter != null && n <= gbMinScoreFilter
-                  ? "mdi-star"
-                  : "mdi-star-outline"
-              }}</v-icon
-            >
-          </button>
-        </div>
-        <div class="gb-score-range-stars gb-score-range-stars--right">
-          <button
-            v-for="n in 5"
-            :key="'max-' + n"
-            class="gb-score-star-btn"
-            type="button"
-            :title="`Set maximum score ${n}`"
-            @click="gbSetMaxScore(n)"
-          >
-            <v-icon
-              size="15"
-              :color="
-                gbMaxScoreFilter != null && n <= gbMaxScoreFilter
-                  ? 'warning'
-                  : undefined
-              "
-              >{{
-                gbMaxScoreFilter != null && n <= gbMaxScoreFilter
-                  ? "mdi-star"
-                  : "mdi-star-outline"
-              }}</v-icon
-            >
-          </button>
-        </div>
+
+    <!-- Shared / Unassigned scope -->
+    <div v-if="!isReadOnly || isAllPicturesView" class="tbm-section">
+      <div class="tbm-check-grid">
+        <label v-if="!isReadOnly" class="tbm-check">
+          <input
+            type="checkbox"
+            :checked="gbSharedOnlyFilter"
+            @change="gbSharedOnlyFilter = $event.target.checked"
+          />
+          Shared pictures only
+        </label>
+        <label v-if="isAllPicturesView" class="tbm-check">
+          <input
+            type="checkbox"
+            :checked="gbUnassignedOnlyFilter"
+            @change="gbUnassignedOnlyFilter = $event.target.checked"
+          />
+          Unassigned only
+        </label>
       </div>
     </div>
-    <div class="gb-filter-section-label" style="margin-top: 10px">Face</div>
-    <div class="gb-media-type-toggle" role="group" aria-label="Face filter">
-      <v-btn
-        v-for="opt in gbFaceBboxFilterOptions"
-        :key="String(opt.value)"
-        class="gb-media-type-button"
-        :class="{
-          'gb-media-type-button--active': gbFaceBboxFilter === opt.value,
-        }"
-        variant="text"
-        :title="opt.title"
-        :aria-pressed="gbFaceBboxFilter === opt.value"
-        @click="gbSetFaceBboxFilter(opt.value)"
-      >
-        <span
-          v-if="opt.value === 'without_face'"
-          class="gb-face-no-detection-icon"
-        >
-          <v-icon size="16">{{ opt.icon }}</v-icon>
-        </span>
-        <v-icon v-else size="16">{{ opt.icon }}</v-icon>
-      </v-btn>
-    </div>
-    <div class="gb-filter-section-label" style="margin-top: 10px">
-      Impossible tags
-    </div>
-    <div
-      class="gb-impossible-tags"
-      role="group"
-      aria-label="Impossible tags filter"
-    >
-      <label
-        v-for="opt in gbImpossibleSourceOptions"
-        :key="opt.value"
-        class="gb-impossible-tags-label"
-        :title="opt.tip"
-      >
-        <input
-          type="checkbox"
-          :checked="gbImpossibleSources.includes(opt.value)"
-          @change="gbToggleImpossibleSource(opt.value, $event.target.checked)"
-        />
-        {{ opt.label }}
-      </label>
-    </div>
-    <div class="gb-filter-section-header" style="margin-top: 10px">
-      <span class="gb-filter-section-label" style="margin-top: 0">Tags</span>
-      <v-btn
-        v-if="gbTagFilter.length || gbTagRejectedFilter.length"
-        variant="text"
-        density="compact"
-        size="x-small"
-        color="primary"
-        class="gb-filter-clear-all-btn"
-        @click="
-          gbTagFilter = [];
-          gbTagRejectedFilter = [];
-        "
-        >Clear</v-btn
-      >
-    </div>
-    <div class="gb-tag-filter-input-wrap">
-      <input
-        v-model="gbTagFilterInput"
-        class="gb-tag-filter-input"
-        placeholder="Filter by tag…"
-        autocomplete="off"
-        @keydown.enter.prevent="
-          gbTagFilterIndex >= 0 && gbTagFilterSuggestions.length
-            ? gbAddTagFilter(gbTagFilterSuggestions[gbTagFilterIndex])
-            : gbAddTagFilter(gbTagFilterInput.trim())
-        "
-        @keydown.tab.prevent="
-          gbTagFilterSuggestions.length
-            ? gbAddTagFilter(
-                gbTagFilterSuggestions[
-                  gbTagFilterIndex >= 0 ? gbTagFilterIndex : 0
-                ],
-              )
-            : gbAddTagFilter(gbTagFilterInput.trim())
-        "
-        @keydown.down.prevent="
-          gbTagFilterIndex = Math.min(
-            gbTagFilterIndex + 1,
-            gbTagFilterSuggestions.length - 1,
-          )
-        "
-        @keydown.up.prevent="
-          gbTagFilterIndex = Math.max(gbTagFilterIndex - 1, -1)
-        "
-        @keydown.escape.prevent="gbTagFilterSuggestions = []"
-      />
+
+    <!-- Media -->
+    <div class="tbm-section">
+      <span class="tbm-label">Media</span>
       <div
-        v-if="gbTagFilterSuggestions.length"
-        class="gb-tag-filter-dropdown"
-        :class="{
-          'gb-tag-filter-dropdown--hover-enabled': gbTagFilterHoverEnabled,
-        }"
-        @mousemove.once="gbTagFilterHoverEnabled = true"
+        class="tbm-seg tbm-seg--full"
+        role="group"
+        aria-label="Media type filter"
       >
         <button
-          v-for="(tag, idx) in gbTagFilterSuggestions"
-          :key="tag"
-          class="gb-tag-filter-suggestion"
-          :class="{
-            'gb-tag-filter-suggestion--active': idx === gbTagFilterIndex,
-          }"
+          v-for="opt in gbMediaTypeOptions"
+          :key="opt.value"
+          class="tbm-seg-btn"
+          :class="{ 'tbm-seg-btn--on': gbMediaTypeFilter === opt.value }"
           type="button"
-          @mousedown.prevent="gbAddTagFilter(tag)"
-          @mousemove="gbTagFilterIndex = idx"
+          :title="opt.title"
+          :aria-pressed="gbMediaTypeFilter === opt.value"
+          @click="gbSetMediaTypeFilter(opt.value)"
         >
-          {{ tag }}
+          <v-icon size="16">{{ opt.icon }}</v-icon>
+          {{ opt.label }}
         </button>
       </div>
     </div>
-    <div
-      v-if="gbTagFilter.length || gbTagRejectedFilter.length"
-      class="gb-tag-filter-chips"
-    >
-      <button
-        v-for="tag in gbTagFilter"
-        :key="`confirmed-${tag}`"
-        class="tag-chip tag-chip--filter"
-        type="button"
-        :title="`'${tag}' – click to switch to rejected match`"
-        @click.stop="gbToggleTagRejected(tag)"
-      >
-        <span class="tag-chip-label">{{ tag }}</span>
-        <v-icon
-          size="11"
-          class="tag-chip-close"
-          @click.stop="gbRemoveTagFilter(tag)"
-          >mdi-close</v-icon
-        >
-      </button>
-      <button
-        v-for="tag in gbTagRejectedFilter"
-        :key="`rejected-${tag}`"
-        class="tag-chip tag-chip--filter tag-chip--filter-rejected"
-        type="button"
-        :title="`'${tag}' (rejected) – click to switch to confirmed match`"
-        @click.stop="gbToggleTagRejected(tag)"
-      >
-        <span class="tag-chip-label">{{ tag }}</span>
-        <v-icon
-          size="11"
-          class="tag-chip-close"
-          @click.stop="gbRemoveTagFilter(tag)"
-          >mdi-close</v-icon
-        >
-      </button>
+
+    <!-- Score range -->
+    <div class="tbm-section">
+      <div class="tbm-grid-2">
+        <div>
+          <span class="tbm-label">Min score</span>
+          <div class="gb-score-stars">
+            <button
+              v-for="n in 5"
+              :key="'min-' + n"
+              class="gb-score-star-btn"
+              type="button"
+              :title="`Set minimum score ${n}`"
+              @click="gbSetMinScore(n)"
+            >
+              <v-icon
+                size="16"
+                :color="
+                  gbMinScoreFilter != null && n <= gbMinScoreFilter
+                    ? 'warning'
+                    : undefined
+                "
+                >{{
+                  gbMinScoreFilter != null && n <= gbMinScoreFilter
+                    ? "mdi-star"
+                    : "mdi-star-outline"
+                }}</v-icon
+              >
+            </button>
+          </div>
+        </div>
+        <div>
+          <span class="tbm-label tbm-label--right">Max score</span>
+          <div class="gb-score-stars gb-score-stars--right">
+            <button
+              v-for="n in 5"
+              :key="'max-' + n"
+              class="gb-score-star-btn"
+              type="button"
+              :title="`Set maximum score ${n}`"
+              @click="gbSetMaxScore(n)"
+            >
+              <v-icon
+                size="16"
+                :color="
+                  gbMaxScoreFilter != null && n <= gbMaxScoreFilter
+                    ? 'warning'
+                    : undefined
+                "
+                >{{
+                  gbMaxScoreFilter != null && n <= gbMaxScoreFilter
+                    ? "mdi-star"
+                    : "mdi-star-outline"
+                }}</v-icon
+              >
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="gb-filter-section-label" style="margin-top: 10px">
-      Tag confidence
+
+    <!-- Face -->
+    <div class="tbm-section">
+      <span class="tbm-label">Face</span>
+      <div class="tbm-btngroup" role="group" aria-label="Face filter">
+        <button
+          v-for="opt in gbFaceBboxFilterOptions"
+          :key="String(opt.value)"
+          class="tbm-btn"
+          :class="{ 'tbm-btn--on': gbFaceBboxFilter === opt.value }"
+          type="button"
+          :title="opt.title"
+          :aria-pressed="gbFaceBboxFilter === opt.value"
+          @click="gbSetFaceBboxFilter(opt.value)"
+        >
+          <v-icon size="16">{{ opt.icon }}</v-icon>
+          {{ opt.label }}
+        </button>
+      </div>
     </div>
-    <div class="gb-confidence-filter-row">
-      <div class="gb-tag-filter-input-wrap gb-confidence-filter-tag-wrap">
+
+    <!-- Impossible tags -->
+    <div class="tbm-section">
+      <span class="tbm-label">Impossible tags</span>
+      <div
+        class="tbm-check-grid"
+        role="group"
+        aria-label="Impossible tags filter"
+      >
+        <label
+          v-for="opt in gbImpossibleSourceOptions"
+          :key="opt.value"
+          class="tbm-check"
+          :title="opt.tip"
+        >
+          <input
+            type="checkbox"
+            :checked="gbImpossibleSources.includes(opt.value)"
+            @change="gbToggleImpossibleSource(opt.value, $event.target.checked)"
+          />
+          {{ opt.label }}
+        </label>
+      </div>
+    </div>
+
+    <!-- Tags -->
+    <div class="tbm-section">
+      <div class="gb-section-head">
+        <span class="tbm-label gb-label-inline">Tags</span>
+        <button
+          class="tbm-ghost"
+          type="button"
+          :disabled="!gbTagFilter.length && !gbTagRejectedFilter.length"
+          @click="
+            gbTagFilter = [];
+            gbTagRejectedFilter = [];
+          "
+        >
+          Clear
+        </button>
+      </div>
+      <div class="tbm-input-wrap gb-tags-input">
+        <v-icon size="16" class="tbm-input-icon">mdi-magnify</v-icon>
         <input
-          v-model="gbConfidenceTagInput"
-          class="gb-tag-filter-input gb-confidence-filter-tag-input"
-          placeholder="Tag…"
+          v-model="gbTagFilterInput"
+          class="tbm-input tbm-input--with-icon"
+          placeholder="Filter by tag…"
           autocomplete="off"
           @keydown.enter.prevent="
-            gbConfidenceTagIndex >= 0 && gbConfidenceTagSuggestions.length
-              ? gbSelectConfidenceTagSuggestion(
-                  gbConfidenceTagSuggestions[gbConfidenceTagIndex],
-                )
-              : gbAddConfidenceFilter(gbConfidenceTagInput.trim())
+            gbTagFilterIndex >= 0 && gbTagFilterSuggestions.length
+              ? gbAddTagFilter(gbTagFilterSuggestions[gbTagFilterIndex])
+              : gbAddTagFilter(gbTagFilterInput.trim())
           "
           @keydown.tab.prevent="
-            gbConfidenceTagSuggestions.length
-              ? gbSelectConfidenceTagSuggestion(
-                  gbConfidenceTagSuggestions[
-                    gbConfidenceTagIndex >= 0 ? gbConfidenceTagIndex : 0
+            gbTagFilterSuggestions.length
+              ? gbAddTagFilter(
+                  gbTagFilterSuggestions[
+                    gbTagFilterIndex >= 0 ? gbTagFilterIndex : 0
                   ],
                 )
-              : undefined
+              : gbAddTagFilter(gbTagFilterInput.trim())
           "
           @keydown.down.prevent="
-            gbConfidenceTagIndex = Math.min(
-              gbConfidenceTagIndex + 1,
-              gbConfidenceTagSuggestions.length - 1,
+            gbTagFilterIndex = Math.min(
+              gbTagFilterIndex + 1,
+              gbTagFilterSuggestions.length - 1,
             )
           "
           @keydown.up.prevent="
-            gbConfidenceTagIndex = Math.max(gbConfidenceTagIndex - 1, -1)
+            gbTagFilterIndex = Math.max(gbTagFilterIndex - 1, -1)
           "
-          @keydown.escape.prevent="gbConfidenceTagSuggestions = []"
+          @keydown.escape.prevent="gbTagFilterSuggestions = []"
         />
         <div
-          v-if="gbConfidenceTagSuggestions.length"
+          v-if="gbTagFilterSuggestions.length"
           class="gb-tag-filter-dropdown"
           :class="{
-            'gb-tag-filter-dropdown--hover-enabled':
-              gbConfidenceTagHoverEnabled,
+            'gb-tag-filter-dropdown--hover-enabled': gbTagFilterHoverEnabled,
           }"
-          @mousemove.once="gbConfidenceTagHoverEnabled = true"
+          @mousemove.once="gbTagFilterHoverEnabled = true"
         >
           <button
-            v-for="(tag, idx) in gbConfidenceTagSuggestions"
+            v-for="(tag, idx) in gbTagFilterSuggestions"
             :key="tag"
             class="gb-tag-filter-suggestion"
             :class="{
-              'gb-tag-filter-suggestion--active': idx === gbConfidenceTagIndex,
+              'gb-tag-filter-suggestion--active': idx === gbTagFilterIndex,
             }"
             type="button"
-            @mousedown.prevent="gbSelectConfidenceTagSuggestion(tag)"
-            @mousemove="gbConfidenceTagIndex = idx"
+            @mousedown.prevent="gbAddTagFilter(tag)"
+            @mousemove="gbTagFilterIndex = idx"
           >
             {{ tag }}
           </button>
         </div>
       </div>
-      <div class="gb-confidence-threshold-stepper">
+      <div
+        v-if="gbTagFilter.length || gbTagRejectedFilter.length"
+        class="gb-tag-chips"
+      >
+        <button
+          v-for="tag in gbTagFilter"
+          :key="`confirmed-${tag}`"
+          class="tag-chip tag-chip--filter"
+          type="button"
+          :title="`'${tag}' – click to switch to rejected match`"
+          @click.stop="gbToggleTagRejected(tag)"
+        >
+          <span class="tag-chip-label">{{ tag }}</span>
+          <v-icon
+            size="11"
+            class="tag-chip-close"
+            @click.stop="gbRemoveTagFilter(tag)"
+            >mdi-close</v-icon
+          >
+        </button>
+        <button
+          v-for="tag in gbTagRejectedFilter"
+          :key="`rejected-${tag}`"
+          class="tag-chip tag-chip--filter tag-chip--filter-rejected"
+          type="button"
+          :title="`'${tag}' (rejected) – click to switch to confirmed match`"
+          @click.stop="gbToggleTagRejected(tag)"
+        >
+          <span class="tag-chip-label">{{ tag }}</span>
+          <v-icon
+            size="11"
+            class="tag-chip-close"
+            @click.stop="gbRemoveTagFilter(tag)"
+            >mdi-close</v-icon
+          >
+        </button>
+      </div>
+    </div>
+
+    <!-- Tag confidence -->
+    <div class="tbm-section">
+      <span class="tbm-label">Tag confidence</span>
+      <div class="gb-confidence-row">
+        <div class="tbm-input-wrap gb-confidence-tag-wrap">
+          <input
+            v-model="gbConfidenceTagInput"
+            class="tbm-input"
+            placeholder="Tag…"
+            autocomplete="off"
+            @keydown.enter.prevent="
+              gbConfidenceTagIndex >= 0 && gbConfidenceTagSuggestions.length
+                ? gbSelectConfidenceTagSuggestion(
+                    gbConfidenceTagSuggestions[gbConfidenceTagIndex],
+                  )
+                : gbAddConfidenceFilter(gbConfidenceTagInput.trim())
+            "
+            @keydown.tab.prevent="
+              gbConfidenceTagSuggestions.length
+                ? gbSelectConfidenceTagSuggestion(
+                    gbConfidenceTagSuggestions[
+                      gbConfidenceTagIndex >= 0 ? gbConfidenceTagIndex : 0
+                    ],
+                  )
+                : undefined
+            "
+            @keydown.down.prevent="
+              gbConfidenceTagIndex = Math.min(
+                gbConfidenceTagIndex + 1,
+                gbConfidenceTagSuggestions.length - 1,
+              )
+            "
+            @keydown.up.prevent="
+              gbConfidenceTagIndex = Math.max(gbConfidenceTagIndex - 1, -1)
+            "
+            @keydown.escape.prevent="gbConfidenceTagSuggestions = []"
+          />
+          <div
+            v-if="gbConfidenceTagSuggestions.length"
+            class="gb-tag-filter-dropdown"
+            :class="{
+              'gb-tag-filter-dropdown--hover-enabled':
+                gbConfidenceTagHoverEnabled,
+            }"
+            @mousemove.once="gbConfidenceTagHoverEnabled = true"
+          >
+            <button
+              v-for="(tag, idx) in gbConfidenceTagSuggestions"
+              :key="tag"
+              class="gb-tag-filter-suggestion"
+              :class="{
+                'gb-tag-filter-suggestion--active':
+                  idx === gbConfidenceTagIndex,
+              }"
+              type="button"
+              @mousedown.prevent="gbSelectConfidenceTagSuggestion(tag)"
+              @mousemove="gbConfidenceTagIndex = idx"
+            >
+              {{ tag }}
+            </button>
+          </div>
+        </div>
+        <div class="tbm-seg" role="group" aria-label="Confidence comparison">
+          <button
+            class="tbm-seg-btn"
+            :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'above' }"
+            type="button"
+            title="High confidence, not labelled"
+            @click="gbConfidenceMode = 'above'"
+          >
+            ≥
+          </button>
+          <button
+            class="tbm-seg-btn"
+            :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'below' }"
+            type="button"
+            title="Low confidence, labelled"
+            @click="gbConfidenceMode = 'below'"
+          >
+            &lt;
+          </button>
+        </div>
         <input
           v-model.number="gbConfidenceThreshold"
           type="number"
           min="0"
           max="1"
           step="0.05"
-          class="gb-confidence-threshold-input"
+          class="tbm-num"
         />
+        <button
+          class="tbm-action tbm-action--primary"
+          type="button"
+          :disabled="!gbConfidenceTagInput.trim()"
+          @click="gbAddConfidenceFilter()"
+        >
+          <v-icon size="15">mdi-plus</v-icon>
+          Add
+        </button>
       </div>
-      <button
-        class="gb-confidence-mode-btn"
-        type="button"
-        :title="
-          gbConfidenceMode === 'above'
-            ? 'High confidence, not labelled – click to switch'
-            : 'Low confidence, labelled – click to switch'
+      <div
+        v-if="
+          gbTagConfidenceAboveFilter.length || gbTagConfidenceBelowFilter.length
         "
-        @click="
-          gbConfidenceMode = gbConfidenceMode === 'above' ? 'below' : 'above'
-        "
+        class="gb-tag-chips gb-confidence-chips"
       >
-        {{ gbConfidenceMode === "above" ? "≥" : "<" }}
-      </button>
-      <button
-        class="gb-confidence-add-btn"
-        type="button"
-        :disabled="!gbConfidenceTagInput.trim()"
-        @click="gbAddConfidenceFilter()"
-      >
-        Add
-      </button>
+        <button
+          v-for="entry in gbTagConfidenceAboveFilter"
+          :key="`ca-${entry}`"
+          class="tag-chip tag-chip--filter tag-chip--confidence-above"
+          type="button"
+          :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
+        >
+          <span class="tag-chip-label"
+            >≥{{ gbConfidenceEntryLabel(entry) }}</span
+          >
+          <v-icon
+            size="11"
+            class="tag-chip-close"
+            @click.stop="gbRemoveConfidenceAboveFilter(entry)"
+            >mdi-close</v-icon
+          >
+        </button>
+        <button
+          v-for="entry in gbTagConfidenceBelowFilter"
+          :key="`cb-${entry}`"
+          class="tag-chip tag-chip--filter tag-chip--confidence-below"
+          type="button"
+          :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
+        >
+          <span class="tag-chip-label"
+            >&lt;{{ gbConfidenceEntryLabel(entry) }}</span
+          >
+          <v-icon
+            size="11"
+            class="tag-chip-close"
+            @click.stop="gbRemoveConfidenceBelowFilter(entry)"
+            >mdi-close</v-icon
+          >
+        </button>
+      </div>
     </div>
+
+    <!-- ComfyUI -->
     <div
-      v-if="
-        gbTagConfidenceAboveFilter.length || gbTagConfidenceBelowFilter.length
-      "
-      class="gb-tag-filter-chips"
-    >
-      <button
-        v-for="entry in gbTagConfidenceAboveFilter"
-        :key="`ca-${entry}`"
-        class="tag-chip tag-chip--filter tag-chip--confidence-above"
-        type="button"
-        :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
-      >
-        <span class="tag-chip-label">≥{{ gbConfidenceEntryLabel(entry) }}</span>
-        <v-icon
-          size="11"
-          class="tag-chip-close"
-          @click.stop="gbRemoveConfidenceAboveFilter(entry)"
-          >mdi-close</v-icon
-        >
-      </button>
-      <button
-        v-for="entry in gbTagConfidenceBelowFilter"
-        :key="`cb-${entry}`"
-        class="tag-chip tag-chip--filter tag-chip--confidence-below"
-        type="button"
-        :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
-      >
-        <span class="tag-chip-label"
-          >&lt;{{ gbConfidenceEntryLabel(entry) }}</span
-        >
-        <v-icon
-          size="11"
-          class="tag-chip-close"
-          @click.stop="gbRemoveConfidenceBelowFilter(entry)"
-          >mdi-close</v-icon
-        >
-      </button>
-    </div>
-    <template
       v-if="gbComfyuiModelOptions.length || gbComfyuiLoraOptions.length"
+      class="tbm-section"
     >
       <div
-        class="gb-filter-section-header gb-comfyui-section-header"
-        style="margin-top: 10px; cursor: pointer"
+        class="gb-section-head gb-comfyui-section-header"
         @click="gbComfyuiFilterExpanded = !gbComfyuiFilterExpanded"
       >
-        <span class="gb-filter-section-label" style="margin-top: 0"
-          >ComfyUI</span
-        >
-        <v-icon size="16" style="opacity: 0.6">{{
+        <span class="tbm-label gb-label-inline">ComfyUI</span>
+        <v-icon size="16" class="gb-comfyui-chevron">{{
           gbComfyuiFilterExpanded ? "mdi-chevron-up" : "mdi-chevron-down"
         }}</v-icon>
       </div>
       <template v-if="gbComfyuiModelOptions.length && gbComfyuiFilterExpanded">
-        <div
-          style="
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 4px;
-            width: 100%;
-          "
-        >
-          <span
-            style="font-size: 0.85em; color: rgb(var(--v-theme-on-background))"
-            >Models</span
-          >
-          <v-btn
+        <div class="gb-comfy-list-head">
+          <span>Models</span>
+          <button
             v-if="gbComfyuiModelFilter.length"
-            variant="text"
-            density="compact"
-            size="x-small"
-            color="primary"
-            style="
-              min-width: 0;
-              padding: 0 4px;
-              height: 18px;
-              font-size: 0.75em;
-            "
+            class="tbm-ghost"
+            type="button"
             @click="gbComfyuiModelFilter = []"
-            >Clear</v-btn
           >
+            Clear
+          </button>
         </div>
-        <div
-          style="
-            width: 100%;
-            height: 200px;
-            overflow-y: auto;
-            margin-bottom: 8px;
-            border: 1px solid rgba(var(--v-theme-on-background), 0.18);
-            border-radius: 6px;
-            padding: 2px 4px;
-            background: rgba(var(--v-theme-on-background), 0.04);
-            color: rgb(var(--v-theme-on-background));
-          "
-        >
+        <div class="gb-comfy-list">
           <v-checkbox
             v-for="m in gbComfyuiModelOptions"
             :key="m"
@@ -473,47 +460,18 @@
         </div>
       </template>
       <template v-if="gbComfyuiLoraOptions.length && gbComfyuiFilterExpanded">
-        <div
-          style="
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 4px;
-            width: 100%;
-          "
-        >
-          <span
-            style="font-size: 0.85em; color: rgb(var(--v-theme-on-background))"
-            >LoRAs</span
-          >
-          <v-btn
+        <div class="gb-comfy-list-head">
+          <span>LoRAs</span>
+          <button
             v-if="gbComfyuiLoraFilter.length"
-            variant="text"
-            density="compact"
-            size="x-small"
-            color="primary"
-            style="
-              min-width: 0;
-              padding: 0 4px;
-              height: 18px;
-              font-size: 0.75em;
-            "
+            class="tbm-ghost"
+            type="button"
             @click="gbComfyuiLoraFilter = []"
-            >Clear</v-btn
           >
+            Clear
+          </button>
         </div>
-        <div
-          style="
-            width: 100%;
-            height: 200px;
-            overflow-y: auto;
-            border: 1px solid rgba(var(--v-theme-on-background), 0.18);
-            border-radius: 6px;
-            padding: 2px 4px;
-            background: rgba(var(--v-theme-on-background), 0.04);
-            color: rgb(var(--v-theme-on-background));
-          "
-        >
+        <div class="gb-comfy-list">
           <v-checkbox
             v-for="l in gbComfyuiLoraOptions"
             :key="l"
@@ -526,7 +484,7 @@
           />
         </div>
       </template>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -534,6 +492,7 @@
 import { ref, computed, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useGridStore } from "../../stores/useGridStore";
 
 const props = defineProps({
   backendUrl: { type: String, default: "" },
@@ -543,6 +502,14 @@ const props = defineProps({
 });
 
 const filterStore = useFilterStore();
+const gridStore = useGridStore();
+
+// Live "N matches" count for the header — published by ImageGrid into the grid
+// store (the full fetched set length, not the virtualised window).
+const gbMatchCountLabel = computed(() => {
+  const n = Number(gridStore.matchCount || 0);
+  return `${n.toLocaleString()} ${n === 1 ? "match" : "matches"}`;
+});
 
 const isAllPicturesView = computed(
   () =>
@@ -639,7 +606,7 @@ const gbImpossibleSourceOptions = [
   },
   {
     value: "no_humans",
-    label: 'People tags on "no humans"',
+    label: "People tags, no humans",
     tip: "Tagged 'no humans'/'scenery' but has people tags, no face",
   },
 ];
@@ -658,17 +625,43 @@ function gbToggleImpossibleSource(value, checked) {
 }
 
 const gbMediaTypeOptions = [
-  { value: "all", icon: "mdi-multimedia", title: "Show all media" },
-  { value: "images", icon: "mdi-image", title: "Show images only" },
-  { value: "videos", icon: "mdi-video", title: "Show videos only" },
+  {
+    value: "all",
+    icon: "mdi-multimedia",
+    label: "All",
+    title: "Show all media",
+  },
+  {
+    value: "images",
+    icon: "mdi-image-outline",
+    label: "Images",
+    title: "Show images only",
+  },
+  {
+    value: "videos",
+    icon: "mdi-video-outline",
+    label: "Video",
+    title: "Show videos only",
+  },
 ];
 
 const gbFaceBboxFilterOptions = [
-  { value: null, icon: "mdi-all-inclusive", title: "All pictures" },
-  { value: "with_face", icon: "mdi-face-man", title: "With detected face" },
+  {
+    value: null,
+    icon: "mdi-all-inclusive",
+    label: "Any",
+    title: "All pictures",
+  },
+  {
+    value: "with_face",
+    icon: "mdi-face-recognition",
+    label: "Has face",
+    title: "With detected face",
+  },
   {
     value: "without_face",
-    icon: "mdi-face-man",
+    icon: "mdi-account-off-outline",
+    label: "No face",
     title: "Without detected face",
   },
 ];
@@ -877,7 +870,11 @@ watch(
           gbComfyuiLoraOptions.value = Array.isArray(lRes.data)
             ? lRes.data
             : [];
-        } catch {}
+        } catch (err) {
+          // Non-fatal: the ComfyUI model/LoRA filters just stay empty if the
+          // metadata endpoints are unavailable. Log so it is not silent.
+          console.warn("Failed to load ComfyUI filter options", err);
+        }
       }
     } else {
       gbTagFilterInput.value = "";
@@ -888,199 +885,63 @@ watch(
 </script>
 
 <style scoped>
-/* ── Filter panel ─────────────────────────────────────────────────────────── */
 .gb-filter-panel {
-  align-items: flex-start;
-  gap: 6px;
-  padding: 10px 12px;
-  min-width: 280px;
-  max-width: 340px;
+  width: 376px;
+  max-width: 94vw;
 }
 
-.gb-filter-panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-}
-
-.gb-filter-panel-title {
-  font-size: 1.02em;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-.gb-filter-clear-all-btn {
-  min-width: 0;
-  padding: 0 4px;
-  height: 20px;
-  font-size: 0.8em;
-}
-
-.gb-filter-shared-only-row {
-  width: 100%;
+/* Inline label that sits on a header row with a trailing action. */
+.gb-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  margin-bottom: var(--space-3);
+}
+.gb-label-inline {
+  margin-bottom: 0;
 }
 
-.gb-filter-shared-only-label {
+/* ── Score stars ──────────────────────────────────────────────────────────── */
+.gb-score-stars {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85em;
-  cursor: pointer;
 }
-
-.gb-filter-shared-only-label--right {
-  margin-left: auto;
+.gb-score-stars--right {
+  justify-content: flex-end;
 }
-
-.gb-impossible-tags {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.gb-impossible-tags-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85em;
-  cursor: pointer;
-}
-
-.gb-filter-section-label {
-  font-size: 0.8em;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.6;
-  margin-top: 4px;
-  width: 100%;
-}
-
-.gb-filter-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-}
-
-.gb-media-type-toggle {
-  display: flex;
-  gap: 2px;
-  width: 100%;
-}
-
-.gb-media-type-button {
-  flex: 1 !important;
-  min-width: 0 !important;
-  padding: 0 4px !important;
-  height: 32px !important;
-  border-radius: 4px !important;
-  opacity: 0.55 !important;
-}
-
-.gb-media-type-button--active {
-  opacity: 1 !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
-  background: rgb(var(--v-theme-primary)) !important;
-}
-
-.gb-face-no-detection-icon {
-  position: relative;
-  display: inline-flex;
-}
-
-.gb-face-no-detection-icon::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%) rotate(45deg);
-  width: 2px;
-  height: 18px;
-  background: currentColor;
-  pointer-events: none;
-}
-
-.gb-score-range-section {
-  width: 100%;
-}
-
-.gb-score-range-headers {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 2px;
-}
-
-.gb-score-range-header-label {
-  font-size: 0.78em;
-  opacity: 0.65;
-}
-
-.gb-score-range-filter {
-  display: flex;
-  justify-content: space-between;
-}
-
-.gb-score-range-stars {
-  display: flex;
-  flex-shrink: 0;
-}
-
 .gb-score-star-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 1px 2px;
+  padding: var(--space-1) var(--space-1);
   background: none;
   border: none;
   cursor: pointer;
-  color: rgb(var(--v-theme-on-background));
-  opacity: 0.7;
+  color: rgba(var(--v-theme-on-panel), 0.7);
   line-height: 1;
 }
 .gb-score-star-btn:hover {
-  opacity: 1;
+  color: rgb(var(--v-theme-on-panel));
 }
 
-.gb-tag-filter-input-wrap {
-  position: relative;
-  width: 100%;
-}
-
-.gb-tag-filter-input {
-  width: 100%;
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px solid rgba(var(--v-theme-on-background), 0.25);
-  background: rgba(var(--v-theme-on-background), 0.06);
-  color: rgb(var(--v-theme-on-background));
-  font-size: 0.85em;
-  outline: none;
-  box-sizing: border-box;
-}
-
-.gb-tag-filter-input:focus {
-  border-color: rgb(var(--v-theme-primary));
+/* ── Tag input + suggestions ──────────────────────────────────────────────── */
+.gb-tags-input {
+  margin-top: 0;
 }
 
 .gb-tag-filter-dropdown {
   position: absolute;
-  top: calc(100% + 2px);
+  top: calc(100% + var(--space-1));
   left: 0;
   right: 0;
   z-index: 200;
-  background: rgba(var(--v-theme-background), 0.98);
-  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
-  border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  background: rgb(var(--v-theme-panel));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
   overflow: hidden;
-  pointer-events: none;
+  /* Must stay clickable: with pointer-events:none the suggestions can't receive
+     the mousedown and the click falls through to the control behind them. */
+  pointer-events: auto;
 }
 
 .gb-tag-filter-dropdown--hover-enabled {
@@ -1090,48 +951,50 @@ watch(
 .gb-tag-filter-suggestion {
   display: block;
   width: 100%;
-  padding: 5px 10px;
+  padding: var(--space-2) var(--space-4);
   text-align: left;
   cursor: pointer;
-  font-size: 0.85em;
+  font-size: var(--text-sm);
   background: transparent;
   border: none;
-  color: rgb(var(--v-theme-on-background));
+  color: rgb(var(--v-theme-on-panel));
 }
 
 .gb-tag-filter-suggestion--active,
 .gb-tag-filter-suggestion:hover {
-  background: rgba(var(--v-theme-primary), 0.12);
+  background: var(--hover-wash);
 }
 
-.gb-tag-filter-chips {
+/* ── Tag chips ────────────────────────────────────────────────────────────── */
+.gb-tag-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  width: 100%;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+.gb-confidence-chips {
+  margin-top: var(--space-4);
 }
 
 /* Filter tag pills. The base `.tag-chip` and these `--filter`/`--confidence`
-   variants live here because Vue scoped styles do not cross component
-   boundaries: the chips in this panel can't inherit the `.tag-chip` rule that
-   lives in TbTagPanel's scope, so the pill shape and colours are declared
-   locally. The variants give each chip its fill: green for a confirmed match,
-   red for a rejected (negative) match, success/warning for confidence bounds.
-   Hover previews the opposite state, since clicking a chip toggles it. */
+   variants are declared locally because Vue scoped styles do not cross
+   component boundaries: the chips here can't inherit a `.tag-chip` rule that
+   lives in another component's scope. Green = confirmed match, red = rejected,
+   success/warning = confidence bounds. Hover previews the opposite state. */
 .tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  border-radius: 12px;
-  padding: 2px 7px;
-  font-size: 0.78rem;
+  gap: var(--space-1);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
   cursor: pointer;
   transition:
-    background 0.15s,
-    opacity 0.15s;
+    background var(--dur-1) var(--ease-standard),
+    opacity var(--dur-1) var(--ease-standard);
   line-height: 1.5;
   white-space: nowrap;
-  border: none;
+  border: 1px solid transparent;
 }
 
 .tag-chip:disabled {
@@ -1145,8 +1008,8 @@ watch(
 
 .tag-chip--filter {
   background: rgba(var(--v-theme-primary), 0.18);
-  border: 1px solid rgba(var(--v-theme-primary), 0.5);
-  color: rgb(var(--v-theme-on-surface));
+  border-color: rgba(var(--v-theme-primary), 0.5);
+  color: rgb(var(--v-theme-on-panel));
 }
 
 .tag-chip--filter:hover {
@@ -1156,19 +1019,19 @@ watch(
 
 .tag-chip--filter-rejected {
   background: rgba(var(--v-theme-error), 0.14);
-  border: 1px solid rgba(var(--v-theme-error), 0.5);
+  border-color: rgba(var(--v-theme-error), 0.5);
   color: rgb(var(--v-theme-error));
 }
 
 .tag-chip--filter-rejected:hover {
   background: rgba(var(--v-theme-primary), 0.18);
   border-color: rgba(var(--v-theme-primary), 0.5);
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-on-panel));
 }
 
 .tag-chip--confidence-above {
   background: rgba(var(--v-theme-success), 0.14);
-  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  border-color: rgba(var(--v-theme-success), 0.5);
   color: rgb(var(--v-theme-success));
 }
 
@@ -1179,7 +1042,7 @@ watch(
 
 .tag-chip--confidence-below {
   background: rgba(var(--v-theme-warning), 0.14);
-  border: 1px solid rgba(var(--v-theme-warning), 0.5);
+  border-color: rgba(var(--v-theme-warning), 0.5);
   color: rgb(var(--v-theme-warning));
 }
 
@@ -1188,76 +1051,48 @@ watch(
   border-color: rgba(var(--v-theme-error), 0.5);
 }
 
-.gb-confidence-filter-row {
+/* ── Tag confidence row ───────────────────────────────────────────────────── */
+.gb-confidence-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  width: 100%;
-  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
-.gb-confidence-filter-tag-wrap {
+.gb-confidence-tag-wrap {
   flex: 1;
   min-width: 80px;
 }
 
-.gb-confidence-filter-tag-input {
-  width: 100%;
-}
-
-.gb-confidence-threshold-stepper {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.gb-confidence-threshold-input {
-  width: 64px;
-  padding: 4px 4px;
-  border-radius: 4px;
-  border: 1px solid rgba(var(--v-theme-on-background), 0.25);
-  background: rgba(var(--v-theme-on-background), 0.06);
-  color: rgb(var(--v-theme-on-background));
-  font-size: 0.85em;
-  text-align: center;
-  height: 28px;
-  box-sizing: border-box;
-}
-
-.gb-confidence-mode-btn {
-  min-width: 28px;
-  height: 28px;
-  border-radius: 4px;
-  border: 1px solid rgba(var(--v-theme-on-background), 0.25);
-  background: transparent;
-  color: rgb(var(--v-theme-on-background));
-  cursor: pointer;
-  font-size: 0.9em;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-}
-
-.gb-confidence-add-btn {
-  padding: 0 10px;
-  border-radius: 4px;
-  border: 1px solid rgba(var(--v-theme-primary), 0.5);
-  background: rgba(var(--v-theme-primary), 0.12);
-  color: rgb(var(--v-theme-primary));
-  cursor: pointer;
-  font-size: 0.85em;
-  height: 28px;
-  box-sizing: border-box;
-}
-
-.gb-confidence-add-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
+/* ── ComfyUI section ──────────────────────────────────────────────────────── */
 .gb-comfyui-section-header {
+  cursor: pointer;
+  margin-bottom: var(--space-3);
+}
+.gb-comfyui-chevron {
+  opacity: 0.6;
+}
+
+.gb-comfy-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-panel));
+}
+
+.gb-comfy-list {
   width: 100%;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+  background: rgb(var(--v-theme-input-background));
+  color: rgb(var(--v-theme-on-panel));
+}
+.gb-comfy-list:last-child {
+  margin-bottom: 0;
 }
 </style>

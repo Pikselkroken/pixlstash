@@ -57,6 +57,7 @@
       @collapse-all-stacks="collapseAllStacks"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
+      @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
     />
     <!-- ── Visible range pill ── -->
@@ -1002,11 +1003,13 @@ const emit = defineEmits([
   "update:set-difference-base-id",
   "update:embed-watermark",
   "update:visible-range-label",
+  "update:match-count",
   "load-pending-imports",
   "load-sort-changed",
   "flag-sort-changed",
   "open-settings",
   "open-import",
+  "local-import",
   "confirm-export-zip",
 ]);
 
@@ -2740,6 +2743,17 @@ watch(
   visibleRangeLabel,
   (label) => {
     emit("update:visible-range-label", label);
+  },
+  { immediate: true },
+);
+
+// Publish the total number of pictures matching the active filter/sort so the
+// Filter menu header can show a live "N matches" count. allGridImages holds the
+// full fetched set, so its length is the match total.
+watch(
+  () => allGridImages.value.length,
+  (count) => {
+    emit("update:match-count", count);
   },
   { immediate: true },
 );
