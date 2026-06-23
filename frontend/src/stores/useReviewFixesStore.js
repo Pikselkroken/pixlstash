@@ -441,20 +441,16 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     }
   }
 
-  // The tag picker's single entry point: pick a tag from the autocomplete and reliably load
-  // its queue, every time (the "scan doesn't always replace" fix). If the tag already has
-  // pending suggestions in the summary, just switch to it and load its queue; otherwise run
-  // the near-neighbour scan to populate it. Either way the queue ends up on the picked tag —
-  // fetchSummary no longer reverts an explicit pick, so even an empty scoped result sticks.
+  // The tag picker's single entry point: picking a tag always re-runs the near-neighbour
+  // scan so the queue reflects current data and the current twin-selection logic, rather
+  // than a stale cached snapshot from a previous scan. Re-scanning is cheap (synchronous,
+  // fast on a typical vault) and keeps already-reviewed rows — it only rebuilds the PENDING
+  // queue — so switching tags never loses review progress. scanTag is single-flight, so a
+  // pick made while a scan is already running is ignored rather than queued.
   async function selectOrScan(tag) {
     const t = (tag || "").trim();
     if (!t) return;
-    const known = tags.value.some((entry) => entry.tag === t);
-    if (known) {
-      await selectTag(t);
-    } else {
-      await scanTag(t);
-    }
+    await scanTag(t);
   }
 
   // Re-run the near-neighbour scan for the already-selected tag (rebuild its queue after the
