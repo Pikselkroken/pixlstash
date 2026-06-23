@@ -316,9 +316,8 @@
                   target="_blank"
                   rel="noopener"
                   >latest release on GitHub</a
-                >: <code>.exe</code> (Windows),
-                <code>.dmg</code> (macOS, Apple Silicon), or
-                <code>.AppImage</code>/<code>.deb</code>
+                >: <code>.exe</code> (Windows), <code>.dmg</code> (macOS, Apple
+                Silicon), or <code>.AppImage</code>/<code>.deb</code>
                 (Linux).
               </p>
             </div>
@@ -349,14 +348,14 @@
             <div class="step">
               <p class="sub-heading">Linux — make the AppImage executable</p>
               <p class="step-note">
-                A freshly downloaded <code>.AppImage</code> won't launch until you
-                mark it executable. Either
+                A freshly downloaded <code>.AppImage</code> won't launch until
+                you mark it executable. Either
                 <strong
                   >right-click → Properties → Permissions → Allow executing file
                   as a program</strong
-                >, or run
-                <code>chmod +x PixlStash-*.AppImage</code> in a terminal, then
-                double-click it (or run <code>./PixlStash-*.AppImage</code>). The
+                >, or run <code>chmod +x PixlStash-*.AppImage</code> in a
+                terminal, then double-click it (or run
+                <code>./PixlStash-*.AppImage</code>). The
                 <code>.deb</code> package installs normally and needs no extra
                 step.
               </p>
@@ -364,8 +363,8 @@
                 On newer distributions (e.g. Ubuntu&nbsp;24.04) the AppImage may
                 also need <strong>FUSE 2</strong>, which isn't installed by
                 default — if you see an error mentioning
-                <code>libfuse.so.2</code> or <em>"AppImages require FUSE to
-                run"</em>, install it with
+                <code>libfuse.so.2</code> or
+                <em>"AppImages require FUSE to run"</em>, install it with
                 <code>sudo apt install libfuse2</code> (Debian/Ubuntu) or your
                 distro's equivalent. As a one-off alternative you can run
                 <code>./PixlStash-*.AppImage --appimage-extract-and-run</code>,
@@ -376,22 +375,27 @@
             <div class="step">
               <p class="sub-heading">macOS: Apple Silicon only</p>
               <p class="step-note">
-                The macOS build is for <strong>Apple Silicon</strong> Macs (M1 and
-                later); Intel Macs are not currently supported, but you can run
-                PixlStash on them via the pip package or Docker. Open the
+                The macOS build is for <strong>Apple Silicon</strong> Macs (M1
+                and later); Intel Macs are not currently supported, but you can
+                run PixlStash on them via the pip package or Docker. Open the
                 <code>.dmg</code> and drag <strong>PixlStash</strong> into your
                 <strong>Applications</strong> folder, then launch it.
               </p>
             </div>
-
             <div class="step">
-              <p class="sub-heading">⚠️ Unsigned builds</p>
+              <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
               <p class="step-note">
-                Until the builds are signed with paid certificates, Windows
-                SmartScreen may warn that the app is from an unidentified
-                developer. On Windows click
-                <strong>More info → Run anyway</strong>;
+                Because the installer is not yet signed with a paid code-signing
+                certificate, Windows SmartScreen may show a red
+                <em>"Windows protected your PC"</em> dialog. This is expected.
+                Click <strong>More info</strong> and then
+                <strong>Run anyway</strong> to proceed.
               </p>
+              <img
+                class="smartscreen-img"
+                src="assets/SmartScreen.png"
+                alt="Windows SmartScreen – click More info then Run anyway"
+              />
             </div>
           </div>
         </div>
