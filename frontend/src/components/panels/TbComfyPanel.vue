@@ -1,77 +1,99 @@
 <template>
-  <div class="tb-comfyui-panel popup-panel">
-    <div class="tb-comfyui-header">
-      Generate with ComfyUI from a text prompt
+  <div class="tbm tb-comfyui-panel">
+    <span class="tbm-caret tbm-caret--start"></span>
+    <div class="tbm-header">
+      <v-icon size="18" class="tbm-header-icon">mdi-auto-fix</v-icon>
+      <span class="tbm-title">Generate from a text prompt</span>
     </div>
-    <div class="tb-comfyui-body">
-      <div v-if="tbComfyuiWorkflowLoading" class="tb-comfyui-note">
-        Loading workflows...
+
+    <div v-if="tbComfyuiWorkflowLoading" class="tbm-section tb-comfyui-note">
+      Loading workflows…
+    </div>
+    <template v-else-if="tbValidComfyWorkflows.length">
+      <div class="tbm-section">
+        <label class="tbm-field">
+          <span class="tbm-label">Workflow</span>
+          <div class="tbm-select-wrap">
+            <select v-model="tbComfyuiSelectedWorkflow" class="tbm-select">
+              <option
+                v-for="wf in tbValidComfyWorkflows"
+                :key="wf.name"
+                :value="wf.name"
+              >
+                {{ wf.display_name || wf.name }}
+              </option>
+            </select>
+            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+        </label>
       </div>
-      <div v-else>
-        <div v-if="tbComfyuiWorkflowError" class="tb-comfyui-error">
-          {{ tbComfyuiWorkflowError }}
-        </div>
-        <template v-if="tbValidComfyWorkflows.length">
-          <label class="tb-comfyui-label">Workflow</label>
-          <select v-model="tbComfyuiSelectedWorkflow" class="tb-comfyui-select">
-            <option
-              v-for="wf in tbValidComfyWorkflows"
-              :key="wf.name"
-              :value="wf.name"
-            >
-              {{ wf.display_name || wf.name }}
-            </option>
-          </select>
-          <label class="tb-comfyui-label">Caption</label>
-          <textarea
-            v-model="tbComfyuiCaption"
-            class="tb-comfyui-textarea"
-            rows="4"
-            placeholder="Optional caption for {{caption}}"
-            @keydown.stop
-          ></textarea>
-          <label class="tb-comfyui-label">Seed</label>
-          <div class="tb-comfyui-seed-row">
-            <button
-              type="button"
-              class="tb-comfyui-seed-btn"
-              :class="{ active: tbComfyuiSeedMode === 'random' }"
-              @click="tbComfyuiSeedMode = 'random'"
-            >
-              Random
-            </button>
-            <button
-              type="button"
-              class="tb-comfyui-seed-btn"
-              :class="{ active: tbComfyuiSeedMode === 'fixed' }"
-              @click="tbComfyuiSeedMode = 'fixed'"
-            >
-              Fixed
-            </button>
+
+      <div class="tbm-section">
+        <span class="tbm-label">Prompt</span>
+        <textarea
+          v-model="tbComfyuiCaption"
+          class="tbm-textarea"
+          rows="4"
+          placeholder="Describe the image to generate…"
+          @keydown.stop
+        ></textarea>
+      </div>
+
+      <div class="tbm-section tb-gen-run">
+        <div class="tb-gen-seed">
+          <span class="tbm-label">Seed</span>
+          <div class="tb-gen-seed-row">
+            <div class="tbm-seg" role="group" aria-label="Seed mode">
+              <button
+                class="tbm-seg-btn"
+                :class="{ 'tbm-seg-btn--on': tbComfyuiSeedMode === 'random' }"
+                type="button"
+                @click="tbComfyuiSeedMode = 'random'"
+              >
+                <v-icon size="15">mdi-dice-multiple-outline</v-icon>
+                Random
+              </button>
+              <button
+                class="tbm-seg-btn"
+                :class="{ 'tbm-seg-btn--on': tbComfyuiSeedMode === 'fixed' }"
+                type="button"
+                @click="tbComfyuiSeedMode = 'fixed'"
+              >
+                <v-icon size="15">mdi-lock-outline</v-icon>
+                Fixed
+              </button>
+            </div>
             <input
               v-if="tbComfyuiSeedMode === 'fixed'"
               v-model.number="tbComfyuiSeed"
               type="number"
-              class="tb-comfyui-seed-input"
+              class="tbm-num tb-gen-seed-input"
               min="0"
               max="4294967295"
               @keydown.stop
             />
-            <button
-              class="tb-comfyui-run-btn"
-              type="button"
-              :disabled="!tbCanRunComfyWorkflow"
-              @click="tbRunComfyuiOnGrid"
-            >
-              <v-icon size="14">mdi-play</v-icon> Run
-            </button>
           </div>
-        </template>
-        <div v-else class="tb-comfyui-note">No valid T2I workflows found.</div>
-        <div v-if="tbComfyuiRunError" class="tb-comfyui-error">
-          {{ tbComfyuiRunError }}
         </div>
+        <button
+          class="tbm-action tbm-action--primary tbm-action--lg"
+          type="button"
+          :disabled="!tbCanRunComfyWorkflow"
+          @click="tbRunComfyuiOnGrid"
+        >
+          <v-icon size="16">mdi-play</v-icon>
+          Run
+        </button>
       </div>
+    </template>
+    <div v-else class="tbm-section tb-comfyui-note">
+      No valid T2I workflows found.
+    </div>
+
+    <div
+      v-if="tbComfyuiWorkflowError || tbComfyuiRunError"
+      class="tbm-section tb-comfyui-error"
+    >
+      {{ tbComfyuiWorkflowError || tbComfyuiRunError }}
     </div>
   </div>
 </template>
@@ -165,104 +187,39 @@ function tbRunComfyuiOnGrid() {
 
 <style scoped>
 .tb-comfyui-panel {
-  padding: var(--space-4) var(--space-4);
-  min-width: 260px;
-  gap: var(--space-3);
+  width: 392px;
+  max-width: 92vw;
 }
 
-.tb-comfyui-header {
-  font-size: var(--text-md);
-  font-weight: 500;
-}
-
-.tb-comfyui-body {
+.tb-gen-run {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  align-items: flex-end;
+  gap: var(--space-4);
 }
-
-.tb-comfyui-label {
-  font-size: var(--text-sm);
-  font-weight: 500;
-  color: rgba(var(--v-theme-on-background), 0.65);
-  margin-bottom: var(--space-1);
-  display: block;
-}
-
-.tb-comfyui-select,
-.tb-comfyui-textarea,
-.tb-comfyui-seed-input {
-  width: 100%;
-  background: rgba(var(--v-theme-surface), 0.5);
-  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-background));
-  font-family: inherit;
-  font-size: var(--text-base);
-  padding: var(--space-2) var(--space-3);
-  box-sizing: border-box;
-}
-
-.tb-comfyui-seed-row {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-  flex-wrap: wrap;
-  margin-top: var(--space-2);
-}
-
-.tb-comfyui-seed-btn {
-  background: rgba(var(--v-theme-surface), 0.3);
-  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-background));
-  cursor: pointer;
-  padding: var(--space-2) var(--space-3);
-  font-family: inherit;
-  font-size: var(--text-sm);
-  transition: background 0.15s;
-}
-
-.tb-comfyui-seed-btn.active {
-  background: rgba(var(--v-theme-primary), 0.35);
-  border-color: rgba(var(--v-theme-primary), 0.6);
-}
-
-.tb-comfyui-seed-input {
+.tb-gen-seed {
   flex: 1;
-  min-width: 70px;
+  min-width: 0;
 }
-
-.tb-comfyui-run-btn {
+.tb-gen-seed-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-primary), 0.25);
-  border: 1px solid rgba(var(--v-theme-primary), 0.5);
-  color: rgb(var(--v-theme-primary));
-  cursor: pointer;
-  font-family: inherit;
-  font-size: var(--text-base);
-  font-weight: 500;
-  transition: background 0.15s;
 }
-
-.tb-comfyui-run-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
+.tb-gen-seed-row .tbm-seg {
+  flex: 1;
+}
+.tb-gen-seed-input {
+  width: 96px;
+  flex-shrink: 0;
 }
 
 .tb-comfyui-note {
   font-size: var(--text-base);
-  opacity: 0.65;
-  padding: var(--space-1) 0;
+  color: rgba(var(--v-theme-on-panel), 0.65);
 }
 
 .tb-comfyui-error {
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-error));
-  padding: var(--space-1) 0;
 }
 </style>

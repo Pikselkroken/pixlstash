@@ -1,69 +1,133 @@
 <template>
-  <div class="tb-export-panel popup-panel">
-    <div class="tb-export-title">
-      Export {{ exportStore.exportCount ?? 0 }} picture{{
-        (exportStore.exportCount ?? 0) === 1 ? "" : "s"
-      }}
+  <div class="tbm tb-export-panel">
+    <span class="tbm-caret tbm-caret--start"></span>
+    <div class="tbm-header">
+      <v-icon size="18" class="tbm-header-icon">mdi-tray-arrow-down</v-icon>
+      <span class="tbm-title"
+        >Export
+        <span class="tbm-mono">{{ exportStore.exportCount ?? 0 }}</span>
+        picture{{ (exportStore.exportCount ?? 0) === 1 ? "" : "s" }}</span
+      >
     </div>
-    <v-select
-      v-model="tbExportTypeModel"
-      :items="exportStore.exportTypeOptions ?? []"
-      item-title="title"
-      item-value="value"
-      label="Export type"
-      density="comfortable"
-    />
-    <v-select
-      v-model="tbExportCaptionModeModel"
-      :items="exportStore.exportCaptionOptions ?? []"
-      item-title="title"
-      item-value="value"
-      label="Captions"
-      density="comfortable"
-      :disabled="exportStore.exportTypeLocksCaptions"
-    />
-    <v-select
-      v-model="tbExportResolutionModel"
-      :items="exportStore.exportResolutionOptions ?? []"
-      item-title="title"
-      item-value="value"
-      label="Resolution"
-      density="comfortable"
-    />
-    <v-select
-      v-model="tbExportBboxModeModel"
-      :items="exportStore.exportBboxOptions ?? []"
-      item-title="title"
-      item-value="value"
-      label="Bounding boxes"
-      density="comfortable"
-    />
-    <v-select
-      v-if="tbExportCaptionModeModel === 'tags'"
-      v-model="tbExportTagFormatModel"
-      :items="exportStore.exportTagFormatOptions ?? []"
-      item-title="title"
-      item-value="value"
-      label="Tag format"
-      density="comfortable"
-    />
-    <v-switch
-      v-model="tbExportIncludeCharacterNameModel"
-      label="Include character name"
-      color="primary"
-      density="comfortable"
-      :disabled="
-        tbExportCaptionModeModel === 'none' ||
-        exportStore.exportTypeLocksCaptions
-      "
-    />
-    <v-switch
-      v-model="tbExportUseOriginalFileNamesModel"
-      label="Use original file names"
-      color="primary"
-      density="comfortable"
-    />
-    <v-btn color="primary" @click="onExport"> Export </v-btn>
+
+    <div class="tbm-section">
+      <div class="tbm-grid-2">
+        <label class="tbm-field">
+          <span class="tbm-label">Export type</span>
+          <div class="tbm-select-wrap">
+            <select v-model="tbExportTypeModel" class="tbm-select">
+              <option
+                v-for="o in exportStore.exportTypeOptions ?? []"
+                :key="o.value"
+                :value="o.value"
+              >
+                {{ o.title }}
+              </option>
+            </select>
+            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+        </label>
+        <label class="tbm-field">
+          <span class="tbm-label">Captions</span>
+          <div class="tbm-select-wrap">
+            <select
+              v-model="tbExportCaptionModeModel"
+              class="tbm-select"
+              :disabled="exportStore.exportTypeLocksCaptions"
+            >
+              <option
+                v-for="o in exportStore.exportCaptionOptions ?? []"
+                :key="o.value"
+                :value="o.value"
+              >
+                {{ o.title }}
+              </option>
+            </select>
+            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+        </label>
+        <label class="tbm-field">
+          <span class="tbm-label">Resolution</span>
+          <div class="tbm-select-wrap">
+            <select v-model="tbExportResolutionModel" class="tbm-select">
+              <option
+                v-for="o in exportStore.exportResolutionOptions ?? []"
+                :key="o.value"
+                :value="o.value"
+              >
+                {{ o.title }}
+              </option>
+            </select>
+            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+        </label>
+        <label class="tbm-field">
+          <span class="tbm-label">Bounding boxes</span>
+          <div class="tbm-select-wrap">
+            <select v-model="tbExportBboxModeModel" class="tbm-select">
+              <option
+                v-for="o in exportStore.exportBboxOptions ?? []"
+                :key="o.value"
+                :value="o.value"
+              >
+                {{ o.title }}
+              </option>
+            </select>
+            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+        </label>
+      </div>
+      <label
+        v-if="tbExportCaptionModeModel === 'tags'"
+        class="tbm-field tb-export-tagformat"
+      >
+        <span class="tbm-label">Tag format</span>
+        <div class="tbm-select-wrap">
+          <select v-model="tbExportTagFormatModel" class="tbm-select">
+            <option
+              v-for="o in exportStore.exportTagFormatOptions ?? []"
+              :key="o.value"
+              :value="o.value"
+            >
+              {{ o.title }}
+            </option>
+          </select>
+          <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+        </div>
+      </label>
+    </div>
+
+    <div class="tbm-section">
+      <v-switch
+        v-model="tbExportIncludeCharacterNameModel"
+        label="Include character name"
+        color="primary"
+        density="compact"
+        hide-details
+        :disabled="
+          tbExportCaptionModeModel === 'none' ||
+          exportStore.exportTypeLocksCaptions
+        "
+      />
+      <v-switch
+        v-model="tbExportUseOriginalFileNamesModel"
+        label="Use original file names"
+        color="primary"
+        density="compact"
+        hide-details
+      />
+    </div>
+
+    <div class="tbm-section">
+      <button
+        class="tbm-action tbm-action--primary tbm-action--lg tbm-action--full"
+        type="button"
+        @click="onExport"
+      >
+        <v-icon size="18">mdi-tray-arrow-down</v-icon>
+        Export
+      </button>
+    </div>
   </div>
 </template>
 
@@ -126,14 +190,16 @@ function onExport() {
 
 <style scoped>
 .tb-export-panel {
-  padding: var(--space-4) var(--space-4);
-  min-width: 260px;
-  gap: var(--space-3);
+  width: 392px;
+  max-width: 92vw;
 }
 
-.tb-export-title {
-  font-size: var(--text-md);
-  font-weight: 500;
-  padding-bottom: var(--space-2);
+.tb-export-tagformat {
+  margin-top: var(--space-4);
+}
+
+/* Stack the two switches with the section's group gap. */
+.tb-export-panel .v-switch + .v-switch {
+  margin-top: var(--space-2);
 }
 </style>
