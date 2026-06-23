@@ -1916,6 +1916,7 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxFolderScopePath.value = null;
     sidebarCtxImportFolder.value = null;
     sidebarCtxProject.value = null;
+    sidebarCtxAllPictures.value = false;
     const numId = Number(item.id);
     // If the right-clicked char is part of a multi-selection, offer bulk delete
     if (
@@ -5969,7 +5970,9 @@ defineExpose({
           <v-icon size="15" class="sidebar-ctx-icon"
             >mdi-share-variant-outline</v-icon
           >
-          Share
+          <span class="sidebar-ctx-label"
+            >Share "{{ sidebarCtxCharacter.name }}"</span
+          >
         </button>
         <button
           class="sidebar-ctx-item"
@@ -6033,7 +6036,7 @@ defineExpose({
           <v-icon size="15" class="sidebar-ctx-icon"
             >mdi-share-variant-outline</v-icon
           >
-          Share
+          <span class="sidebar-ctx-label">Share "{{ sidebarCtxSet.name }}"</span>
         </button>
         <button
           class="sidebar-ctx-item"
@@ -8816,6 +8819,7 @@ defineExpose({
   box-shadow: var(--elevation-3);
   padding: var(--space-2) 0;
   min-width: 140px;
+  max-width: 260px;
   user-select: none;
 }
 
@@ -8833,6 +8837,14 @@ defineExpose({
   text-align: left;
   white-space: nowrap;
   transition: background 0.1s;
+}
+
+/* Truncate long resource names in share items so the menu can't overflow. */
+.sidebar-ctx-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .sidebar-ctx-item:hover {
