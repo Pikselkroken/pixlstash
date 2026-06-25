@@ -2,6 +2,11 @@
 import { computed, ref } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { VSwitch } from "vuetify/components";
+import AppSelect from "../widgets/AppSelect.vue";
+import AppButton from "../widgets/AppButton.vue";
+import SettingsSection from "./SettingsSection.vue";
+import SettingsSliderRow from "./SettingsSliderRow.vue";
 
 const sidebarStore = useSidebarStore();
 
@@ -73,6 +78,14 @@ const themeModeOptions = [
   { title: "Dark", value: "dark" },
 ];
 
+// AppSelect takes { label, value }; map the existing { title, value } lists.
+const themeSelectOptions = computed(() =>
+  themeModeOptions.map((o) => ({ label: o.title, value: o.value })),
+);
+const dateSelectOptions = computed(() =>
+  dateFormatOptions.map((o) => ({ label: o.title, value: o.value })),
+);
+
 const clearingGuestSession = ref(false);
 const hasGuestSessionCookie = computed(() =>
   document.cookie
@@ -97,196 +110,114 @@ async function clearGuestSession() {
 </script>
 
 <template>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div
-      class="settings-section-title"
-      title="Adjust the sidebar thumbnail size."
-    >
-      Sidebar Thumbnails
-    </div>
-    <div class="settings-slider-row">
-      <span class="settings-slider-value">
-        {{ sidebarThumbnailSizeModel }}px
-      </span>
-      <v-slider
+  <div>
+    <SettingsSection title="Sidebar Thumbnails" first>
+      <SettingsSliderRow
         v-model="sidebarThumbnailSizeModel"
         :min="20"
         :max="64"
         :step="4"
-        hide-details
-        track-color="#666"
-        thumb-color="primary"
-        class="settings-slider"
+        suffix="px"
+      />
+    </SettingsSection>
+
+    <SettingsSection
+      title="Sidebar Width"
+      desc="Show the sidebar at full width or as a narrow icon dock."
+    >
+      <div class="sidebar-width-toggle">
+        <button
+          class="sidebar-width-opt"
+          :class="{ active: !sidebarStore.sidebarDocked }"
+          type="button"
+          @click="sidebarStore.setSidebarDocked(false)"
+        >
+          <span class="swi swi--full">
+            <span class="swi-rail"></span>
+            <span class="swi-content"></span>
+          </span>
+          <span class="sidebar-width-label">Full</span>
+        </button>
+        <button
+          class="sidebar-width-opt"
+          :class="{ active: sidebarStore.sidebarDocked }"
+          type="button"
+          @click="sidebarStore.setSidebarDocked(true)"
+        >
+          <span class="swi swi--dock">
+            <span class="swi-rail"></span>
+            <span class="swi-content"></span>
+          </span>
+          <span class="sidebar-width-label">Dock</span>
+        </button>
+      </div>
+    </SettingsSection>
+
+    <div class="appearance-selects">
+      <AppSelect
+        v-model="themeModeModel"
+        label="Theme"
+        :options="themeSelectOptions"
+      />
+      <AppSelect
+        v-model="dateFormatModel"
+        label="Date Format"
+        :options="dateSelectOptions"
       />
     </div>
-  </div>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div
-      class="settings-section-title"
-      title="Show the sidebar at full width or as a narrow icon dock."
+
+    <div class="appearance-switch">
+      <v-switch
+        v-model="showKeyboardHintModel"
+        color="accent"
+        density="compact"
+        hide-details
+        label="Show keyboard shortcut (F1) indicator"
+      />
+    </div>
+
+    <SettingsSection
+      v-if="isReadOnly"
+      title="Privacy"
+      desc="If you previously accepted the ratings cookie, your scores are remembered across visits. Clicking below clears the cookie so your next visit starts fresh with no scores retrieved."
     >
-      Sidebar Width
-    </div>
-    <div class="sidebar-width-toggle">
-      <button
-        class="sidebar-width-opt"
-        :class="{ active: !sidebarStore.sidebarDocked }"
-        type="button"
-        @click="sidebarStore.setSidebarDocked(false)"
-      >
-        <span class="swi swi--full">
-          <span class="swi-rail"></span>
-          <span class="swi-content"></span>
-        </span>
-        <span class="sidebar-width-label">Full</span>
-      </button>
-      <button
-        class="sidebar-width-opt"
-        :class="{ active: sidebarStore.sidebarDocked }"
-        type="button"
-        @click="sidebarStore.setSidebarDocked(true)"
-      >
-        <span class="swi swi--dock">
-          <span class="swi-rail"></span>
-          <span class="swi-content"></span>
-        </span>
-        <span class="sidebar-width-label">Dock</span>
-      </button>
-    </div>
-    <div class="settings-section-desc">
-      Show the sidebar at full width or as a narrow icon dock.
-    </div>
-  </div>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div
-      class="settings-section-title"
-      title="Choose a light or dark theme."
-    >
-      Theme
-    </div>
-    <v-select
-      v-model="themeModeModel"
-      :items="themeModeOptions"
-      item-title="title"
-      item-value="value"
-      density="compact"
-      variant="filled"
-      class="settings-add-tag-input"
-      hide-details
-    />
-  </div>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div
-      class="settings-section-title"
-      title="Choose how dates are shown in the grid and overlays."
-    >
-      Date Format
-    </div>
-    <v-select
-      v-model="dateFormatModel"
-      :items="dateFormatOptions"
-      item-title="title"
-      item-value="value"
-      density="compact"
-      variant="filled"
-      class="settings-add-tag-input"
-      hide-details
-    />
-  </div>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <v-checkbox
-      v-model="showKeyboardHintModel"
-      density="compact"
-      hide-details
-      label="Show keyboard shortcut (F1) indicator"
-    />
-  </div>
-  <template v-if="isReadOnly">
-    <v-divider class="settings-section-divider" />
-    <div class="settings-section">
-      <div class="settings-section-title">Privacy</div>
-      <div class="settings-section-desc">
-        If you previously accepted the ratings cookie, your scores
-        are remembered across visits. Clicking below clears the
-        cookie so your next visit starts fresh with no scores
-        retrieved.
-      </div>
-      <v-btn
-        variant="tonal"
-        size="small"
-        color="default"
-        style="margin-top: 10px"
-        :loading="clearingGuestSession"
-        :disabled="!hasGuestSessionCookie"
+      <AppButton
+        variant="secondary"
+        :disabled="!hasGuestSessionCookie || clearingGuestSession"
         @click="clearGuestSession"
       >
         Clear ratings cookie
-      </v-btn>
-      <div
-        v-if="!hasGuestSessionCookie"
-        class="settings-section-desc"
-        style="margin-top: 6px; opacity: 0.6"
-      >
+      </AppButton>
+      <div v-if="!hasGuestSessionCookie" class="appearance-note">
         No ratings cookie is currently set.
       </div>
-    </div>
-  </template>
+    </SettingsSection>
+  </div>
 </template>
 
 <style scoped>
-.settings-section-divider {
-  margin: var(--space-2) 0 var(--space-3);
+.appearance-selects {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding: var(--space-5) 0;
 }
 
-.settings-section {
-  display: flex;
-  line-height: 1;
-  flex-direction: column;
-  gap: var(--space-3);
+.appearance-switch {
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding-top: var(--space-5);
 }
 
-.settings-section-title {
-  font-weight: var(--weight-semibold);
-}
-
-.settings-section-desc {
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.settings-slider-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
+.appearance-note {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.5);
   margin-top: var(--space-2);
-  padding-right: var(--space-3);
-}
-
-.settings-slider-value {
-  min-width: 64px;
-  font-weight: var(--weight-semibold);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.settings-slider {
-  flex: 1 1 auto;
-  margin-right: var(--space-3);
-  overflow: visible;
-}
-
-.settings-add-tag-input {
-  flex: 1 1 auto;
 }
 
 .sidebar-width-toggle {
   display: flex;
   gap: var(--space-3);
-  margin-top: var(--space-2);
 }
 .sidebar-width-opt {
   flex: 1;

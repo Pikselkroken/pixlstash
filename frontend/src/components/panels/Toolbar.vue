@@ -433,6 +433,7 @@
           <TbImportPanel
             :backend-url="props.backendUrl"
             :open="tbImportMenuOpen"
+            :default-project-id="projectStore.selectedProjectId"
             @local-import="
               emit('local-import', $event);
               tbImportMenuOpen = false;
@@ -526,6 +527,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useProjectStore } from "../../stores/useProjectStore";
 import GbFilterPanel from "./GbFilterPanel.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
@@ -575,6 +577,7 @@ const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
 const reviewFixesStore = useReviewFixesStore();
 const tasksStore = useTasksStore();
+const projectStore = useProjectStore();
 
 const tbComfyuiMenuOpen = ref(false);
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────

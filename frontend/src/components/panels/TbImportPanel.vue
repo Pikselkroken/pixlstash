@@ -185,7 +185,12 @@ watch(
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen) fetchProjects();
+    if (isOpen) {
+      // Default to the currently-selected project (None when none is selected)
+      // each time the menu opens, discarding any prior manual override.
+      selectedProjectId.value = props.defaultProjectId ?? null;
+      fetchProjects();
+    }
   },
   { immediate: true },
 );

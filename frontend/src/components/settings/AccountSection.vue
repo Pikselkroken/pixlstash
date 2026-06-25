@@ -1,7 +1,13 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
+import { VSwitch } from "vuetify/components";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
+import AppSelect from "../widgets/AppSelect.vue";
+import SettingsSection from "./SettingsSection.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -28,6 +34,10 @@ const newlyCreatedToken = ref("");
 const tokenCopied = ref(false);
 const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
+// Presentational-only: visibility of the "New API token" create form dialog.
+// The create-token logic (createUserToken) is unchanged; this ref just controls
+// whether the form is shown in a dialog instead of inline.
+const createTokenDialogOpen = ref(false);
 const tokenToDelete = ref(null);
 const tokenScope = ref("ALL");
 const tokenResourceType = ref(null);
@@ -60,6 +70,7 @@ function resetForm() {
   newlyCreatedToken.value = "";
   tokenDialogOpen.value = false;
   tokenDeleteDialogOpen.value = false;
+  createTokenDialogOpen.value = false;
   tokenToDelete.value = null;
   tokenScope.value = "ALL";
   tokenResourceType.value = null;
@@ -178,7 +189,9 @@ function formatTokenTimestamp(value) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString();
+  // Date-only keeps the table columns compact (a full locale datetime is far
+  // too wide for the dense token table).
+  return date.toLocaleDateString();
 }
 
 function isTokenExpired(token) {
@@ -191,7 +204,7 @@ function formatTokenExpiry(token) {
   const date = new Date(token.expires_at);
   if (Number.isNaN(date.getTime())) return "Never";
   if (date < new Date()) return "Expired";
-  return date.toLocaleString();
+  return date.toLocaleDateString();
 }
 
 async function copyToken() {
@@ -285,6 +298,7 @@ async function createUserToken() {
     });
     newlyCreatedToken.value = res.data?.token || "";
     tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
+    if (newlyCreatedToken.value) createTokenDialogOpen.value = false;
     tokenDescription.value = "";
     tokenWatermark.value = false;
     await fetchUserTokens();
@@ -412,196 +426,284 @@ watch(
 </script>
 
 <template>
-  <div class="settings-section">
-    <div
-      class="settings-section-title"
-      title="Change your password or manage sign-in options."
-    >
-      Account
-    </div>
-    <div class="settings-account-meta">
-      <span class="settings-account-label">Username</span>
-      <span class="settings-account-value">
-        {{ settingsUsername || "Not set" }}
-      </span>
-    </div>
-    <div class="settings-form">
+  <div class="account-pane">
+    <!-- ── Account ───────────────────────────────────────────────────── -->
+    <SettingsSection title="Account" first>
+      <div class="account-meta">
+        <span class="account-meta__label">Username</span>
+        <span class="account-meta__value">
+          {{ settingsUsername || "Not set" }}
+        </span>
+      </div>
+      <!-- Hidden username field helps password managers associate the change. -->
       <input
         v-if="settingsUsername"
         type="text"
         name="username"
         :value="settingsUsername"
         autocomplete="username"
-        style="
-          position: absolute;
-          opacity: 0;
-          height: 0;
-          width: 0;
-          pointer-events: none;
-        "
+        class="account-hidden-username"
         tabindex="-1"
       />
-      <v-text-field
-        v-if="settingsHasPassword"
-        v-model="currentPassword"
-        label="Current password"
-        type="password"
-        density="compact"
-        variant="filled"
-        hide-details
-        autocomplete="current-password"
-        name="current-password"
-      />
-      <v-text-field
-        v-model="newPassword"
-        label="New password"
-        :type="showNewPassword ? 'text' : 'password'"
-        density="compact"
-        variant="filled"
-        hide-details
-        autocomplete="new-password"
-        name="new-password"
-        :append-inner-icon="showNewPassword ? 'mdi-eye-off' : 'mdi-eye'"
-        @click:append-inner="showNewPassword = !showNewPassword"
-      />
-      <div v-if="settingsError" class="settings-error">
+      <div class="account-password-grid">
+        <AppInput
+          v-if="settingsHasPassword"
+          v-model="currentPassword"
+          label="Current password"
+          type="password"
+          :disabled="settingsLoading"
+        />
+        <AppInput
+          v-model="newPassword"
+          label="New password"
+          :type="showNewPassword ? 'text' : 'password'"
+          :disabled="settingsLoading"
+          @enter="submitPasswordChange"
+        />
+        <AppButton
+          variant="primary_green"
+          :disabled="settingsLoading"
+          @click="submitPasswordChange"
+        >
+          Update
+        </AppButton>
+      </div>
+      <div v-if="settingsError" class="account-error">
         {{ settingsError }}
       </div>
-      <div v-if="settingsSuccess" class="settings-success">
+      <div v-if="settingsSuccess" class="account-success">
         {{ settingsSuccess }}
       </div>
-      <v-btn
-        variant="outlined"
-        color="primary"
-        class="settings-action-btn"
-        :loading="settingsLoading"
-        :disabled="settingsLoading"
-        @click="submitPasswordChange"
-      >
-        Update Password
-      </v-btn>
-    </div>
+    </SettingsSection>
+
+    <!-- ── Sharing + Watermark ───────────────────────────────────────── -->
+    <SettingsSection>
+      <div class="account-share-heads">
+        <div class="account-share-heads__main">Sharing</div>
+        <div class="account-share-heads__wm">Watermark</div>
+      </div>
+      <div class="account-share-row">
+        <div class="account-share-left">
+          <div class="account-share-desc">
+            Share links use your browser's current address. Set this to a public
+            URL (e.g. a
+            <a
+              href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Cloudflare Tunnel</a
+            >
+            address) so links work for people outside your network.
+          </div>
+          <AppInput
+            v-model="publicUrlValue"
+            label="Public base URL (optional)"
+            placeholder="https://my-tunnel.example.com"
+            :disabled="publicUrlLoading"
+            @enter="savePublicUrl"
+            @blur="savePublicUrl"
+          />
+          <div
+            v-if="publicUrlError || publicUrlSuccess"
+            class="account-share-status"
+          >
+            <span v-if="publicUrlError" class="account-error">
+              {{ publicUrlError }}
+            </span>
+            <span v-else-if="publicUrlSuccess" class="account-success">
+              {{ publicUrlSuccess }}
+            </span>
+          </div>
+        </div>
+        <!-- WatermarkDrop: 184px click-or-drop target with reset overlay.
+             Logic (file input ref, change handler, preview src, clear) is
+             unchanged from the script. -->
+        <div class="account-share-right">
+          <div class="wm-drop">
+            <button
+              type="button"
+              class="wm-drop__target"
+              :class="{ 'wm-drop__target--has-image': watermarkPreviewUrl }"
+              :style="
+                watermarkPreviewUrl
+                  ? { backgroundImage: `url(${watermarkPreviewUrl})` }
+                  : null
+              "
+              title="Upload watermark"
+              :disabled="watermarkUploading"
+              @click="watermarkInputRef?.click()"
+            >
+              <template v-if="!watermarkPreviewUrl">
+                <v-icon size="26">mdi-image-plus-outline</v-icon>
+                <span class="wm-drop__hint">Click or drop an image</span>
+              </template>
+            </button>
+            <button
+              v-if="watermarkPreviewUrl"
+              type="button"
+              class="wm-drop__reset"
+              title="Reset to default watermark"
+              :disabled="watermarkUploading"
+              @click="clearWatermark"
+            >
+              <v-icon size="15">mdi-close</v-icon>
+            </button>
+            <input
+              ref="watermarkInputRef"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              class="wm-drop__input"
+              @change="handleWatermarkUpload"
+            />
+          </div>
+          <div v-if="watermarkUploadError" class="account-error">
+            {{ watermarkUploadError }}
+          </div>
+        </div>
+      </div>
+    </SettingsSection>
+
+    <!-- ── API Tokens ────────────────────────────────────────────────── -->
+    <SettingsSection title="API Tokens">
+      <template #action>
+        <AppButton
+          variant="primary_green"
+          size="sm"
+          icon-left="plus"
+          :disabled="tokensLoading"
+          @click="createTokenDialogOpen = true"
+        >
+          New token
+        </AppButton>
+      </template>
+
+      <div v-if="tokensError" class="account-error account-tokens-error">
+        {{ tokensError }}
+      </div>
+
+      <div v-if="tokens.length" class="account-token-table-wrap">
+        <table class="account-token-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Scope</th>
+              <th>Created</th>
+              <th>Last used</th>
+              <th>Expires</th>
+              <th>Watermark</th>
+              <th class="account-token-th-actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="token in tokens" :key="token.id">
+              <td class="account-token-name">
+                {{ token.description || "Token" }}
+              </td>
+              <td>
+                <span
+                  v-if="token.scope"
+                  class="account-token-pill"
+                  :class="{
+                    'account-token-pill--read': token.scope !== 'ALL',
+                  }"
+                >
+                  <template v-if="token.scope === 'ALL'">
+                    <v-icon size="11">mdi-shield-account-outline</v-icon>
+                    Full access
+                  </template>
+                  <template v-else-if="token.resource_type === 'project'">
+                    <v-icon size="11">mdi-folder-outline</v-icon>
+                    {{ token.resource_name ?? `Project #${token.resource_id}` }}
+                  </template>
+                  <template v-else-if="token.resource_type === 'character'">
+                    <v-icon size="11">mdi-account-outline</v-icon>
+                    {{
+                      token.resource_name ?? `Character #${token.resource_id}`
+                    }}
+                  </template>
+                  <template v-else-if="token.resource_type === 'picture_set'">
+                    <v-icon size="11">mdi-image-multiple-outline</v-icon>
+                    {{ token.resource_name ?? `Set #${token.resource_id}` }}
+                  </template>
+                  <template v-else>Read-only</template>
+                </span>
+              </td>
+              <td class="account-token-sub">
+                {{ formatTokenTimestamp(token.created_at) }}
+              </td>
+              <td class="account-token-sub">
+                {{ formatTokenTimestamp(token.last_used_at) }}
+              </td>
+              <td
+                class="account-token-sub"
+                :class="{ 'account-token-expired': isTokenExpired(token) }"
+              >
+                {{ formatTokenExpiry(token) }}
+              </td>
+              <td class="account-token-wm">
+                <v-switch
+                  :model-value="token.watermark"
+                  color="accent"
+                  density="compact"
+                  hide-details
+                  class="account-token-wm-switch"
+                  :disabled="
+                    tokensLoading ||
+                    watermarkUpdating.has(token.id) ||
+                    token.scope !== 'READ'
+                  "
+                  @update:model-value="updateTokenWatermark(token, $event)"
+                />
+              </td>
+              <td class="account-token-actions">
+                <AppButton
+                  variant="ghost"
+                  size="sm"
+                  icon-left="delete"
+                  icon-only
+                  title="Revoke"
+                  :disabled="tokensLoading"
+                  @click="confirmDeleteToken(token)"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else-if="!tokensLoading" class="account-token-empty">
+        No API tokens yet.
+      </div>
+    </SettingsSection>
   </div>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div
-      class="settings-section-title"
-      title="Set a public URL so share links work outside your local network (e.g. a Cloudflare Tunnel address)."
-    >
-      Sharing
-    </div>
-    <div class="settings-public-url-form">
-      <v-text-field
-        v-model="publicUrlValue"
-        label="Public base URL (optional)"
-        placeholder="https://my-tunnel.example.com"
-        density="compact"
-        variant="underlined"
-        hide-details
-        :disabled="publicUrlLoading"
-        @keydown.enter.prevent="savePublicUrl"
-      />
-      <v-btn
-        variant="outlined"
-        color="primary"
-        class="settings-action-btn"
-        :loading="publicUrlLoading"
-        :disabled="publicUrlLoading"
-        @click="savePublicUrl"
-      >
-        Save
-      </v-btn>
-    </div>
-    <div v-if="publicUrlError" class="settings-error">
-      {{ publicUrlError }}
-    </div>
-    <div v-if="publicUrlSuccess" class="settings-success">
-      {{ publicUrlSuccess }}
-    </div>
-    <div class="settings-section-desc">
-      Share links use your browser's current address by default. Set this to a
-      public URL (e.g. a
-      <a
-        href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/"
-        target="_blank"
-        rel="noopener noreferrer"
-        >Cloudflare Tunnel</a
-      >
-      address) so links work for people outside your network.
-    </div>
-    <!-- Watermark -->
-    <div class="settings-watermark-row">
-      <img
-        v-if="watermarkPreviewUrl"
-        :src="watermarkPreviewUrl"
-        class="settings-watermark-preview"
-        alt="Watermark preview"
-      />
-      <input
-        ref="watermarkInputRef"
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        style="display: none"
-        @change="handleWatermarkUpload"
-      />
-      <v-btn
-        size="small"
-        variant="outlined"
-        :loading="watermarkUploading"
-        :disabled="watermarkUploading"
-        @click="watermarkInputRef?.click()"
-      >
-        Upload watermark
-      </v-btn>
-      <v-btn
-        size="small"
-        variant="text"
-        color="error"
-        :disabled="watermarkUploading"
-        title="Reset to default watermark"
-        @click="clearWatermark"
-      >
-        Reset
-      </v-btn>
-    </div>
-    <div v-if="watermarkUploadError" class="settings-error">
-      {{ watermarkUploadError }}
-    </div>
-  </div>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div
-      class="settings-section-title"
-      title="Manage tokens for authenticated API access."
-    >
-      API Tokens
-    </div>
-    <div class="settings-tokens">
-      <v-text-field
+
+  <!-- ── New API token dialog (create form) ──────────────────────────── -->
+  <AppDialog
+    :open="createTokenDialogOpen"
+    title="New API token"
+    :width="460"
+    @close="createTokenDialogOpen = false"
+  >
+    <div class="account-token-form">
+      <AppInput
         v-model="tokenDescription"
         label="Token description"
-        density="compact"
-        variant="underlined"
-        class="settings-add-tag-input token-field"
-        hide-details
+        placeholder="e.g. CI pipeline"
         :disabled="tokensLoading"
-        @keydown.enter.prevent="createUserToken"
+        @enter="createUserToken"
       />
-      <v-select
+      <AppSelect
         v-model="tokenScope"
-        :items="[
-          { title: 'Full access', value: 'ALL' },
-          { title: 'Read-only share', value: 'READ' },
-        ]"
-        item-title="title"
-        item-value="value"
         label="Access type"
-        density="compact"
-        variant="underlined"
-        class="token-field"
-        hide-details
         :disabled="tokensLoading"
+        :options="[
+          { label: 'Full access', value: 'ALL' },
+          { label: 'Read-only share', value: 'READ' },
+        ]"
       />
+      <!-- Read-only-scope controls preserved from the original form. These keep
+           their Vuetify chrome on purpose: the resource-type/resource models
+           carry a real null (clearable) and numeric ids that a native <select>
+           would coerce to strings. -->
       <template v-if="tokenScope === 'READ'">
         <v-select
           v-model="tokenResourceType"
@@ -614,8 +716,7 @@ watch(
           item-value="value"
           label="Resource type"
           density="compact"
-          variant="underlined"
-          class="token-field"
+          variant="outlined"
           hide-details
           clearable
           :disabled="tokensLoading"
@@ -628,35 +729,10 @@ watch(
           item-value="id"
           label="Resource"
           density="compact"
-          variant="underlined"
-          class="token-field"
+          variant="outlined"
           hide-details
           :loading="shareResourceLoading"
           :disabled="tokensLoading || shareResourceLoading"
-        />
-        <v-text-field
-          v-model="tokenExpiresAt"
-          label="Expires on (optional)"
-          type="date"
-          :min="
-            (() => {
-              const d = new Date();
-              d.setDate(d.getDate() + 1);
-              return d.toISOString().slice(0, 10);
-            })()
-          "
-          :max="
-            (() => {
-              const d = new Date();
-              d.setFullYear(d.getFullYear() + 1);
-              return d.toISOString().slice(0, 10);
-            })()
-          "
-          density="compact"
-          variant="underlined"
-          class="token-field"
-          hide-details="auto"
-          :disabled="tokensLoading"
         />
         <v-checkbox
           v-if="tokenResourceType === 'project'"
@@ -667,366 +743,360 @@ watch(
           :disabled="tokensLoading"
         />
       </template>
-      <v-checkbox
+      <AppInput
+        v-model="tokenExpiresAt"
+        label="Expires on (optional)"
+        type="date"
+        :disabled="tokensLoading"
+      />
+      <v-switch
+        v-if="tokenScope === 'READ'"
         v-model="tokenWatermark"
-        label="Apply watermark"
+        color="accent"
         density="compact"
         hide-details
-        :disabled="tokensLoading || tokenScope !== 'READ'"
+        label="Apply watermark"
+        :disabled="tokensLoading"
       />
-      <v-btn
-        variant="outlined"
-        color="primary"
-        class="settings-action-btn"
-        :loading="tokensLoading"
+      <div v-if="tokensError" class="account-error">{{ tokensError }}</div>
+    </div>
+    <template #footer>
+      <AppButton
+        variant="secondary"
+        :disabled="tokensLoading"
+        @click="createTokenDialogOpen = false"
+      >
+        Cancel
+      </AppButton>
+      <AppButton
+        variant="primary_green"
+        icon-left="key-plus"
         :disabled="tokensLoading"
         @click="createUserToken"
       >
-        Create Token
-      </v-btn>
-      <div v-if="tokensError" class="settings-error">
-        {{ tokensError }}
+        Create token
+      </AppButton>
+    </template>
+  </AppDialog>
+
+  <!-- ── Created-token display dialog (token value + share URL) ──────── -->
+  <AppDialog
+    :open="tokenDialogOpen"
+    title="New API token"
+    :width="520"
+    @close="tokenDialogOpen = false"
+  >
+    <div class="account-token-reveal">
+      <div class="account-token-warning">
+        Copy this token now. You won't be able to see it again.
       </div>
-      <div class="settings-token-list">
-        <table v-if="tokens.length" class="settings-token-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Scope</th>
-              <th>Created</th>
-              <th>Last used</th>
-              <th>Expires</th>
-              <th>Watermark</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="token in tokens"
-              :key="token.id"
-              class="settings-token-row"
-            >
-              <td class="settings-token-desc">
-                {{ token.description || "Token" }}
-              </td>
-              <td>
-                <v-chip
-                  v-if="token.scope"
-                  size="x-small"
-                  :color="token.scope === 'ALL' ? 'default' : 'info'"
-                  class="settings-token-scope-chip"
-                >
-                  <template v-if="token.scope === 'ALL'">
-                    <v-icon size="11" start>mdi-shield-account-outline</v-icon>
-                    Full access
-                  </template>
-                  <template v-else-if="token.resource_type === 'project'">
-                    <v-icon size="11" start>mdi-folder-outline</v-icon>
-                    {{ token.resource_name ?? `Project #${token.resource_id}` }}
-                  </template>
-                  <template v-else-if="token.resource_type === 'character'">
-                    <v-icon size="11" start>mdi-account-outline</v-icon>
-                    {{
-                      token.resource_name ?? `Character #${token.resource_id}`
-                    }}
-                  </template>
-                  <template v-else-if="token.resource_type === 'picture_set'">
-                    <v-icon size="11" start>mdi-image-multiple-outline</v-icon>
-                    {{ token.resource_name ?? `Set #${token.resource_id}` }}
-                  </template>
-                  <template v-else>Read-only</template>
-                </v-chip>
-              </td>
-              <td class="settings-token-sub">
-                {{ formatTokenTimestamp(token.created_at) }}
-              </td>
-              <td class="settings-token-sub">
-                {{ formatTokenTimestamp(token.last_used_at) }}
-              </td>
-              <td
-                class="settings-token-sub"
-                :class="{ 'settings-token-expired': isTokenExpired(token) }"
-              >
-                {{ formatTokenExpiry(token) }}
-              </td>
-              <td class="settings-token-watermark">
-                <v-checkbox
-                  :model-value="token.watermark"
-                  density="compact"
-                  hide-details
-                  class="settings-token-wm-checkbox"
-                  :disabled="tokensLoading || watermarkUpdating.has(token.id) || token.scope !== 'READ'"
-                  @update:model-value="updateTokenWatermark(token, $event)"
-                />
-              </td>
-              <td class="settings-token-actions">
-                <v-btn
-                  icon
-                  size="small"
-                  density="compact"
-                  variant="text"
-                  class="settings-token-delete"
-                  :disabled="tokensLoading"
-                  @click="confirmDeleteToken(token)"
-                >
-                  <v-icon size="16">mdi-delete</v-icon>
-                </v-btn>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div
-          v-if="!tokensLoading && !tokens.length"
-          class="settings-token-empty"
-        >
-          No API tokens.
+      <div class="account-token-value-row">
+        <div class="account-token-value">{{ newlyCreatedToken }}</div>
+        <AppButton
+          variant="ghost"
+          size="sm"
+          :icon-left="tokenCopied ? 'check' : 'content-copy'"
+          icon-only
+          :title="tokenCopied ? 'Copied!' : 'Copy token'"
+          @click="copyToken"
+        />
+      </div>
+      <template v-if="shareUrl">
+        <div class="account-token-warning">
+          Share this URL — anyone with it gets read access to the selected
+          resource.
         </div>
-      </div>
+        <div class="account-token-value-row">
+          <div class="account-token-value account-token-value--url">
+            {{ shareUrl }}
+          </div>
+          <AppButton
+            variant="ghost"
+            size="sm"
+            :icon-left="shareLinkCopied ? 'check' : 'link'"
+            icon-only
+            :title="shareLinkCopied ? 'Copied!' : 'Copy share link'"
+            @click="copyShareLink"
+          />
+        </div>
+      </template>
     </div>
-  </div>
+    <template #footer>
+      <AppButton variant="primary_green" @click="tokenDialogOpen = false">
+        Close
+      </AppButton>
+    </template>
+  </AppDialog>
 
-  <v-dialog v-model="tokenDialogOpen" max-width="520">
-    <v-card class="settings-token-dialog">
-      <v-card-title class="settings-dialog-title">New API Token</v-card-title>
-      <v-card-text class="settings-dialog-body">
-        <div class="settings-token-warning">
-          Copy this token now. You won't be able to see it again.
-        </div>
-        <div class="settings-token-value-row">
-          <div class="settings-token-value">{{ newlyCreatedToken }}</div>
-          <v-btn
-            icon
-            variant="text"
-            size="small"
-            class="settings-token-copy-btn"
-            :title="tokenCopied ? 'Copied!' : 'Copy token'"
-            @click="copyToken"
-          >
-            <v-icon size="18">{{
-              tokenCopied ? "mdi-check" : "mdi-content-copy"
-            }}</v-icon>
-          </v-btn>
-        </div>
-        <template v-if="shareUrl">
-          <div class="settings-token-warning" style="margin-top: 8px">
-            Share this URL — anyone with it gets read access to the selected
-            resource.
-          </div>
-          <div class="settings-token-value-row">
-            <div
-              class="settings-token-value"
-              style="word-break: break-all; font-size: 11px"
-            >
-              {{ shareUrl }}
-            </div>
-            <v-btn
-              icon
-              variant="text"
-              size="small"
-              class="settings-token-copy-btn"
-              :title="shareLinkCopied ? 'Copied!' : 'Copy share link'"
-              @click="copyShareLink"
-            >
-              <v-icon size="18">{{
-                shareLinkCopied ? "mdi-check" : "mdi-link"
-              }}</v-icon>
-            </v-btn>
-          </div>
-        </template>
-      </v-card-text>
-      <v-card-actions class="settings-dialog-actions">
-        <v-spacer />
-        <v-btn
-          variant="outlined"
-          color="primary"
-          @click="tokenDialogOpen = false"
-        >
-          Close
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
-
-  <v-dialog v-model="tokenDeleteDialogOpen" max-width="420">
-    <v-card class="settings-token-dialog">
-      <v-card-title class="settings-dialog-title">Delete token?</v-card-title>
-      <v-card-text class="settings-dialog-body">
-        This will permanently revoke the selected token.
-      </v-card-text>
-      <v-card-actions class="settings-dialog-actions">
-        <v-spacer />
-        <v-btn variant="text" @click="tokenDeleteDialogOpen = false">
-          Cancel
-        </v-btn>
-        <v-btn
-          color="error"
-          variant="outlined"
-          :loading="tokensLoading"
-          @click="deleteUserToken"
-        >
-          Delete
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+  <!-- ── Delete-token confirm dialog ─────────────────────────────────── -->
+  <AppDialog
+    :open="tokenDeleteDialogOpen"
+    title="Delete token?"
+    :width="420"
+    @close="tokenDeleteDialogOpen = false"
+  >
+    <div class="account-token-confirm">
+      This will permanently revoke the selected token.
+    </div>
+    <template #footer>
+      <AppButton
+        variant="secondary"
+        :disabled="tokensLoading"
+        @click="tokenDeleteDialogOpen = false"
+      >
+        Cancel
+      </AppButton>
+      <AppButton
+        variant="danger"
+        icon-left="delete-outline"
+        :disabled="tokensLoading"
+        @click="deleteUserToken"
+      >
+        Delete
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-/* Shared layout classes (duplicated from parent for scoped isolation) */
-.settings-section {
+.account-pane {
+  display: block;
+}
+
+/* ── Account ──────────────────────────────────────────────────────────── */
+.account-meta {
   display: flex;
-  line-height: 1;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.settings-section-title {
-  font-weight: var(--weight-semibold);
-}
-
-.settings-section-desc {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  line-height: 1.4;
-}
-
-.settings-section-divider {
-  margin: var(--space-2) 0 var(--space-3);
-}
-
-.settings-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.settings-error {
-  color: rgb(var(--v-theme-error));
-  font-size: var(--text-xs);
-}
-
-.settings-success {
-  color: rgb(var(--v-theme-accent));
-  font-size: var(--text-xs);
-}
-
-.settings-action-btn {
-  align-self: flex-start;
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
-}
-
-.settings-action-btn:hover {
-  background-color: rgb(var(--v-theme-accent)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
-}
-
-.settings-add-tag-input {
-  flex: 1 1 auto;
-}
-
-/* Account-specific */
-.settings-account-meta {
-  display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: center;
-  padding: var(--space-3) 0 var(--space-1);
+  padding: var(--space-1) 0 var(--space-4);
 }
 
-.settings-account-label {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+.account-meta__label {
+  font-size: var(--text-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label);
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
-.settings-account-value {
+.account-meta__value {
   font-weight: var(--weight-semibold);
 }
 
-.settings-public-url-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+.account-hidden-username {
+  position: absolute;
+  opacity: 0;
+  height: 0;
+  width: 0;
+  pointer-events: none;
 }
 
-.settings-watermark-row {
+.account-password-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--space-4);
+  align-items: flex-end;
+}
+
+.account-error {
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-error));
+}
+
+.account-success {
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-accent));
+}
+
+/* ── Sharing + Watermark ──────────────────────────────────────────────── */
+.account-share-heads {
+  display: flex;
+  gap: var(--space-6);
+  margin-bottom: var(--space-3);
+}
+
+.account-share-heads__main {
+  flex: 1;
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+}
+
+.account-share-heads__wm {
+  flex-shrink: 0;
+  width: 184px;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+}
+
+.account-share-row {
+  display: flex;
+  gap: var(--space-6);
+  align-items: stretch;
+}
+
+.account-share-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.account-share-desc {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  line-height: var(--leading-snug);
+}
+
+.account-share-desc a {
+  color: rgb(var(--v-theme-accent));
+}
+
+.account-share-status {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin-top: var(--space-3);
-  flex-wrap: wrap;
+  min-height: 1em;
 }
 
-.settings-watermark-preview {
-  max-height: 36px;
-  max-width: 120px;
-  object-fit: contain;
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  padding: var(--space-1);
-}
-
-/* Token styles */
-.settings-tokens {
+.account-share-right {
+  flex-shrink: 0;
+  width: 184px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
 }
 
-.token-field {
+/* WatermarkDrop — the thumbnail IS the control: click opens the file picker,
+   drop sets the image, a reset overlay clears it. */
+.wm-drop {
+  position: relative;
+  width: 184px;
+  flex: 1;
+  min-height: 96px;
+}
+
+.wm-drop__target {
+  width: 100%;
+  height: 100%;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1.5px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-1) var(--ease-standard),
+    background var(--dur-1) var(--ease-standard);
+}
+
+.wm-drop__target:hover:not(:disabled) {
+  border-color: rgb(var(--v-theme-accent));
+  background: var(--hover-wash);
+}
+
+.wm-drop__target:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.wm-drop__target:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.wm-drop__target--has-image {
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.wm-drop__hint {
   font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  text-align: center;
 }
 
-.token-field :deep(.v-label) {
-  font-size: var(--text-xs);
+.wm-drop__reset {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  /* The one allowed exception: a translucent black scrim with a white icon. */
+  background: rgba(var(--v-theme-scrim), 0.6);
+  color: #fff;
+  backdrop-filter: blur(2px);
 }
 
-.token-field :deep(.v-field__input) {
-  font-size: var(--text-xs);
+.wm-drop__reset:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
-.settings-token-loading {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.7);
+.wm-drop__input {
+  display: none;
 }
 
-.settings-token-list {
-  max-height: 200px;
-  overflow-y: auto;
-  padding-right: var(--space-2);
+/* ── API Tokens table ─────────────────────────────────────────────────── */
+.account-tokens-error {
+  margin-bottom: var(--space-3);
 }
 
-.settings-token-table {
+.account-token-table-wrap {
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.account-token-table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--text-xs);
 }
 
-.settings-token-table thead th {
+.account-token-table thead th {
   text-align: left;
-  padding: var(--space-1) var(--space-3) var(--space-2);
+  padding: var(--space-2) var(--space-3);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: rgba(var(--v-theme-on-surface), 0.5);
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  letter-spacing: var(--tracking-label);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: rgb(var(--v-theme-input-background));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
   white-space: nowrap;
 }
 
-.settings-token-row td {
-  padding: var(--space-1) var(--space-3);
-  vertical-align: middle;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.05);
+.account-token-th-actions {
+  text-align: right;
 }
 
-.settings-token-row:last-child td {
+.account-token-table tbody tr {
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.account-token-table tbody tr:last-child {
   border-bottom: none;
 }
 
-.settings-token-desc {
+.account-token-table td {
+  padding: var(--space-2) var(--space-3);
+  vertical-align: middle;
+}
+
+.account-token-name {
   font-weight: var(--weight-semibold);
   white-space: nowrap;
   overflow: hidden;
@@ -1034,101 +1104,109 @@ watch(
   max-width: 140px;
 }
 
-.settings-token-sub {
-  color: rgba(var(--v-theme-on-surface), 0.7);
+.account-token-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-2xs);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  color: rgb(var(--v-theme-on-surface));
   white-space: nowrap;
 }
 
-.settings-token-expired {
+.account-token-pill--read {
+  color: rgb(var(--v-theme-info));
+}
+
+.account-token-sub {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  white-space: nowrap;
+}
+
+.account-token-expired {
   color: rgb(var(--v-theme-error));
   font-weight: var(--weight-semibold);
 }
 
-.settings-token-actions {
-  text-align: right;
-  white-space: nowrap;
-  padding-left: 0;
-}
-
-.settings-token-watermark {
+.account-token-wm {
   text-align: center;
   white-space: nowrap;
-  padding: 0 var(--space-2);
 }
 
-.settings-token-wm-checkbox {
+.account-token-wm-switch {
   display: inline-flex;
   justify-content: center;
 }
 
-.settings-token-wm-checkbox :deep(.v-input__control) {
+.account-token-wm-switch :deep(.v-input__control) {
   flex: none;
 }
 
-.settings-token-delete {
-  color: rgba(var(--v-theme-error), 0.9);
+.account-token-actions {
+  text-align: right;
+  white-space: nowrap;
 }
 
-.settings-token-empty {
+.account-token-empty {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
+  padding: var(--space-3) var(--space-1);
 }
 
-/* Token dialog styles */
-.settings-token-dialog {
-  padding-bottom: var(--space-3);
-}
-
-.settings-dialog-title {
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-lg);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-shrink: 0;
-}
-
-.settings-dialog-body {
+/* ── Dialog bodies ────────────────────────────────────────────────────── */
+.account-token-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  line-height: 1;
-  overflow-y: auto !important;
-  flex: 1 !important;
-  min-height: 0 !important;
+  gap: var(--space-5);
 }
 
-.settings-dialog-actions {
-  padding-top: 0;
-}
-
-.settings-token-warning {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-bottom: var(--space-3);
-}
-
-.settings-token-value-row {
+.account-token-check {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
 }
 
-.settings-token-value {
+.account-token-reveal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.account-token-warning {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.account-token-value-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.account-token-value {
   flex: 1;
+  min-width: 0;
   word-break: break-all;
   font-family: var(--font-mono);
-  background: rgba(var(--v-theme-surface), 0.2);
+  font-size: var(--text-sm);
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
 }
 
-.settings-token-copy-btn {
-  flex-shrink: 0;
-  opacity: 0.7;
+.account-token-value--url {
+  font-size: var(--text-xs);
 }
 
-.settings-token-copy-btn:hover {
-  opacity: 1;
+.account-token-confirm {
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
+  line-height: var(--leading-snug);
 }
 </style>
