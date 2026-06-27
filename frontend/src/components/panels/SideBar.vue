@@ -43,8 +43,7 @@ const sidebarStore = useSidebarStore();
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
 // bar, so the sidebar copies below are gated on !isDesktop.
-const isDesktop =
-  typeof window !== "undefined" && !!window.pixlstashDesktop;
+const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
   docked: { type: Boolean, default: false },
@@ -1455,6 +1454,16 @@ const sidebarThumbnailSizeLarge = computed(
   () => sidebarThumbnailSizeModel.value + 8,
 );
 
+// Scale sidebar text with the thumbnail size: full size at 40px-and-up thumbnails,
+// smaller below (≈0.8% per px under 40, floored at 0.85) so dense small-thumb
+// layouts stay balanced. Feeds --sidebar-font-scale, which rescales the type-ramp
+// tokens on the .sidebar scope (see the stylesheet).
+const sidebarFontScale = computed(() => {
+  const t = sidebarThumbnailSizeModel.value;
+  if (t >= 40) return 1;
+  return Math.max(0.85, Math.round((1 - (40 - t) * 0.008) * 1000) / 1000);
+});
+
 // Expanded-sidebar width (drag-resizable). Clamp ≈50%–125% of the 240px default.
 const SIDEBAR_WIDTH_MIN = 120;
 const SIDEBAR_WIDTH_MAX = 300;
@@ -1475,9 +1484,18 @@ const sidebarWidthModel = computed({
 // not emit/persist on every frame — we commit once on pointer-up.
 const sidebarDragWidth = ref(null);
 
+// Below 150px the expanded sidebar is too tight for the per-entry image counts;
+// drop them. Uses the live drag width while resizing, the saved width otherwise.
+const sidebarIsNarrow = computed(
+  () =>
+    !props.docked &&
+    (sidebarDragWidth.value ?? sidebarWidthModel.value ?? 240) < 150,
+);
+
 const sidebarThumbStyle = computed(() => {
   const style = {
     "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
+    "--sidebar-font-scale": sidebarFontScale.value,
   };
   // Apply the resized width only when expanded; docked width is driven by the
   // thumbnail size in CSS, so leave it to the stylesheet there.
@@ -2760,7 +2778,9 @@ function isInternalImageDrag(event) {
 
 function readDraggedImageIds(event) {
   try {
-    const data = JSON.parse(event?.dataTransfer?.getData("application/json") || "{}");
+    const data = JSON.parse(
+      event?.dataTransfer?.getData("application/json") || "{}",
+    );
     return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
   } catch (e) {
     console.error("Could not parse drag data:", e);
@@ -2772,7 +2792,9 @@ function handleReferenceFolderDragOver(folderId, scopePath, event) {
   if (draggingEntityKind.value || !isInternalImageDrag(event)) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-  dragOverReferenceTargetKey.value = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
+  dragOverReferenceTargetKey.value = scopePath
+    ? `path-${scopePath}`
+    : `rf-${folderId}`;
 }
 
 function handleReferenceFolderDragLeave(folderId, scopePath) {
@@ -2814,18 +2836,16 @@ async function handleReferenceFolderDrop(folderId, scopePath, event) {
       );
       return;
     }
-    alert("Failed to move images: " + (detail?.message || detail || e.message || e));
+    alert(
+      "Failed to move images: " + (detail?.message || detail || e.message || e),
+    );
   }
 }
 
 function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
   const folder = referenceFolders.value.find((rf) => rf.id === rfId);
   if (!folder) return;
-  openSidebarCtxMenu(
-    "folder-path",
-    { folder, path, label },
-    event,
-  );
+  openSidebarCtxMenu("folder-path", { folder, path, label }, event);
 }
 
 async function onProjectDrop(projectId, event) {
@@ -3676,7 +3696,9 @@ defineExpose({
 
   <v-dialog v-model="referenceFolderRelocateOpen" max-width="560">
     <v-card class="relocate-card">
-      <v-card-title class="relocate-title">Relocate Reference Folder</v-card-title>
+      <v-card-title class="relocate-title"
+        >Relocate Reference Folder</v-card-title
+      >
       <v-card-text class="relocate-body">
         <div class="relocate-path-block">
           <div class="relocate-path-label">Current folder</div>
@@ -3754,7 +3776,10 @@ defineExpose({
   <aside
     ref="sidebarRootRef"
     class="sidebar"
-    :class="{ 'sidebar-docked': props.docked }"
+    :class="{
+      'sidebar-docked': props.docked,
+      'sidebar--narrow': sidebarIsNarrow,
+    }"
     :style="sidebarThumbStyle"
   >
     <!-- Drag the right edge to resize the expanded sidebar (hidden when docked). -->
@@ -4093,37 +4118,38 @@ defineExpose({
       </div>
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
-        <button
-          class="sidebar-view-tab"
-          :class="{
-            active:
-              sidebarPrimaryTab === 'library' && projectViewMode === 'global',
-          }"
-          @click="selectLibraryTab('global')"
-        >
-          <v-icon size="14">mdi-earth</v-icon>
-          Global
-        </button>
-        <button
-          class="sidebar-view-tab"
-          :class="{
-            active:
-              sidebarPrimaryTab === 'library' && projectViewMode === 'project',
-          }"
-          @click="selectLibraryTab('project')"
-        >
-          <v-icon size="14">mdi-folder-outline</v-icon>
-          Projects
-        </button>
-        <button
-          v-if="!isReadOnly"
-          class="sidebar-view-tab"
-          :class="{ active: sidebarPrimaryTab === 'folders' }"
-          @click="selectFoldersTab()"
-        >
-          <v-icon size="14">mdi-folder-network-outline</v-icon>
-          Folders
-        </button>
+          <button
+            class="sidebar-view-tab"
+            :class="{
+              active:
+                sidebarPrimaryTab === 'library' && projectViewMode === 'global',
+            }"
+            @click="selectLibraryTab('global')"
+          >
+            <v-icon size="14">mdi-earth</v-icon>
+            Global
+          </button>
+          <button
+            class="sidebar-view-tab"
+            :class="{
+              active:
+                sidebarPrimaryTab === 'library' &&
+                projectViewMode === 'project',
+            }"
+            @click="selectLibraryTab('project')"
+          >
+            <v-icon size="14">mdi-folder-outline</v-icon>
+            Projects
+          </button>
+          <button
+            v-if="!isReadOnly"
+            class="sidebar-view-tab"
+            :class="{ active: sidebarPrimaryTab === 'folders' }"
+            @click="selectFoldersTab()"
+          >
+            <v-icon size="14">mdi-folder-network-outline</v-icon>
+            Folders
+          </button>
         </div>
       </div>
     </div>
@@ -4723,7 +4749,8 @@ defineExpose({
                 "
                 @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
                 @dragover="
-                  !inDocker && handleReferenceFolderDragOver(rf.id, null, $event)
+                  !inDocker &&
+                  handleReferenceFolderDragOver(rf.id, null, $event)
                 "
                 @dragleave="
                   !inDocker && handleReferenceFolderDragLeave(rf.id, null)
@@ -4776,7 +4803,11 @@ defineExpose({
                 <span class="sidebar-folder-label">{{
                   rf.label || rf.folder
                 }}</span>
-                <span v-if="!inDocker" class="sidebar-folder-actions" @click.stop>
+                <span
+                  v-if="!inDocker"
+                  class="sidebar-folder-actions"
+                  @click.stop
+                >
                   <button
                     type="button"
                     class="sidebar-folder-action-btn"
@@ -6036,7 +6067,9 @@ defineExpose({
           <v-icon size="15" class="sidebar-ctx-icon"
             >mdi-share-variant-outline</v-icon
           >
-          <span class="sidebar-ctx-label">Share "{{ sidebarCtxSet.name }}"</span>
+          <span class="sidebar-ctx-label"
+            >Share "{{ sidebarCtxSet.name }}"</span
+          >
         </button>
         <button
           class="sidebar-ctx-item"
@@ -6412,7 +6445,7 @@ defineExpose({
 .sidebar-collections-help {
   font-size: var(--text-base);
   font-style: italic;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-view-header {
@@ -6438,7 +6471,7 @@ defineExpose({
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
   transition:
     color 0.12s,
@@ -6446,7 +6479,7 @@ defineExpose({
 }
 .sidebar-pin-toggle:hover {
   background: rgba(var(--v-theme-sidebar-text), 0.1);
-  color: rgba(var(--v-theme-sidebar-text), 0.9);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 .sidebar-pin-toggle.pinned {
   color: rgb(var(--v-theme-accent));
@@ -6471,7 +6504,7 @@ defineExpose({
   border-radius: var(--sidebar-item-radius);
   border: 1px solid rgba(var(--v-theme-sidebar-text), 0.22);
   background: rgba(var(--v-theme-sidebar-text), 0.06);
-  color: rgba(var(--v-theme-sidebar-text), 0.8);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 /* Scale the pin glyph with the box (overrides the inline size="18" on <v-icon>),
    matching the nav-icon glyphs in the rail below. Slightly less than the nav
@@ -6483,7 +6516,7 @@ defineExpose({
 }
 .sidebar-pin-toggle--dock:hover {
   background: rgba(var(--v-theme-sidebar-text), 0.13);
-  color: rgba(var(--v-theme-sidebar-text), 0.95);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 .sidebar-pin-toggle--dock.pinned {
   border-color: rgba(var(--v-theme-accent), 0.7);
@@ -6499,17 +6532,17 @@ defineExpose({
   font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-view-title-icon {
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-view-tabs-row {
   display: flex;
   align-items: center;
-  padding: 0 var(--space-2) var(--space-1) var(--space-2);
+  padding: 0 var(--space-1) var(--space-1);
   position: relative;
   z-index: 1;
   margin-top: 0;
@@ -6521,7 +6554,7 @@ defineExpose({
 
 .sidebar-view-tabs-icon {
   flex-shrink: 0;
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-view-tabs-label {
@@ -6529,7 +6562,7 @@ defineExpose({
   font-size: var(--text-2xs);
   font-weight: 500;
   letter-spacing: 0.04em;
-  color: rgba(var(--v-theme-sidebar-text), 0.35);
+  color: rgb(var(--v-theme-sidebar-text));
   white-space: nowrap;
 }
 
@@ -6552,7 +6585,7 @@ defineExpose({
   gap: var(--space-2);
   /* Trimmed vertical padding so the header (title row + this tab row) stays at the
      48px toolbar height when the tabs sit on one line; min-height pads any slack. */
-  padding: var(--space-2) var(--space-3) var(--space-1);
+  padding: var(--space-1) var(--space-2);
   /* Grow to fill the row, but don't shrink below the icon+label — so when the
      sidebar is narrowed the tabs wrap onto new lines instead of clipping. */
   flex: 1 0 auto;
@@ -6564,7 +6597,7 @@ defineExpose({
   letter-spacing: 0.02em;
   cursor: pointer;
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
   transition:
     color 0.15s,
     border-color 0.15s;
@@ -6584,7 +6617,7 @@ defineExpose({
 
 .sidebar-view-tab:hover:not(.active) {
   background: rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgba(var(--v-theme-sidebar-text), 0.9);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -6650,7 +6683,7 @@ defineExpose({
 
 .sidebar-no-projects-text {
   font-size: var(--text-base);
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  color: rgb(var(--v-theme-sidebar-text));
   margin: 0;
   line-height: 1.5;
 }
@@ -6673,7 +6706,7 @@ defineExpose({
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
   border-left: 3px solid transparent;
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.22);
@@ -6683,7 +6716,7 @@ defineExpose({
 }
 
 .sidebar-project-tree-add:hover {
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
   background: rgba(var(--v-theme-accent), 0.08);
 }
 
@@ -6713,7 +6746,7 @@ defineExpose({
     background 0.12s,
     color 0.12s,
     border-color 0.12s;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
   position: relative;
 }
 
@@ -6721,7 +6754,7 @@ defineExpose({
   background:
     linear-gradient(var(--hover-wash), var(--hover-wash)),
     rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-tree-row.active {
@@ -6741,8 +6774,7 @@ defineExpose({
 
 .sidebar-project-tree-row.active:hover {
   background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)),
-    var(--active-wash);
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
   color: var(--active-text);
 }
 
@@ -6839,14 +6871,14 @@ defineExpose({
   padding-right: var(--sidebar-header-action-right-edge) !important;
   min-height: 24px;
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   transition: color 0.12s;
   user-select: none;
 }
 
 .sidebar-project-tree-subheader:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-tree-sub-chevron {
@@ -6884,7 +6916,7 @@ defineExpose({
 .sidebar-project-tree-empty {
   padding: var(--space-1) var(--space-3) var(--space-1) var(--space-5);
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-sidebar-text), 0.35);
+  color: rgb(var(--v-theme-sidebar-text));
   font-style: italic;
 }
 
@@ -6930,7 +6962,9 @@ defineExpose({
   color: rgb(var(--v-theme-on-primary));
   font-weight: 600;
   border-left: 3px solid rgb(var(--v-theme-primary));
-  padding-left: var(--space-3); /* compensate for the 3px border so text stays aligned */
+  padding-left: var(
+    --space-3
+  ); /* compensate for the 3px border so text stays aligned */
 }
 
 .sidebar-collapsed-project-submenu {
@@ -7007,7 +7041,7 @@ defineExpose({
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
+  color: rgb(var(--v-theme-sidebar-text));
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.4);
   background: rgba(var(--v-theme-tertiary), 0.2);
 }
@@ -7096,7 +7130,7 @@ defineExpose({
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-menu-wrap {
@@ -7113,7 +7147,7 @@ defineExpose({
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.65);
+  color: rgb(var(--v-theme-sidebar-text));
   font-size: var(--text-sm);
   font-weight: 500;
   min-height: 26px;
@@ -7130,7 +7164,7 @@ defineExpose({
   border: none;
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.65);
+  color: rgb(var(--v-theme-sidebar-text));
   font-size: var(--text-sm);
   font-weight: 500;
   min-height: 26px;
@@ -7143,7 +7177,7 @@ defineExpose({
 
 .sidebar-project-trigger:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.9);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-trigger-label {
@@ -7305,6 +7339,17 @@ defineExpose({
   --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 4px);
   --sidebar-space-y: 2px;
   --sidebar-item-radius: 25%;
+  /* Rescale the type ramp for the whole sidebar in one place, driven by
+     --sidebar-font-scale (set from the thumbnail size in the inline style;
+     defaults to 1 = unchanged). Every sidebar text rule uses these tokens, so
+     this scales them all at once. Values mirror docs/design/design-tokens.css. */
+  --sidebar-font-scale: 1;
+  --text-2xs: calc(0.6875rem * var(--sidebar-font-scale));
+  --text-xs: calc(0.75rem * var(--sidebar-font-scale));
+  --text-sm: calc(0.8125rem * var(--sidebar-font-scale));
+  --text-base: calc(0.875rem * var(--sidebar-font-scale));
+  --text-md: calc(1rem * var(--sidebar-font-scale));
+  --text-xl: calc(1.375rem * var(--sidebar-font-scale));
   color: rgb(var(--v-theme-sidebar-text));
   background: rgb(var(--v-theme-sidebar));
   padding: 0;
@@ -7591,7 +7636,7 @@ defineExpose({
   justify-content: center;
   border-radius: var(--sidebar-item-radius);
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.84);
+  color: rgb(var(--v-theme-sidebar-text));
   position: relative;
   transition:
     background-color 0.18s ease,
@@ -7599,13 +7644,13 @@ defineExpose({
 }
 
 .sidebar-collapsed-item.active {
-  color: rgba(var(--v-theme-sidebar-text), 0.84);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-collapsed-item--add {
   background: rgba(var(--v-theme-sidebar-text), 0.07);
   border: 1px dashed rgba(var(--v-theme-sidebar-text), 0.25);
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
   position: relative;
   overflow: hidden;
 }
@@ -7760,11 +7805,12 @@ defineExpose({
   letter-spacing: 0.07em;
   text-transform: uppercase;
   min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
-  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) var(--space-3) var(--space-1) var(--space-3);
+  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) var(--space-3)
+    var(--space-1) var(--space-3);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
   align-items: center;
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-section-header--collapsible {
@@ -7774,13 +7820,13 @@ defineExpose({
 
 .sidebar-section-header--collapsible:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-section-chevron {
   margin-right: var(--space-2);
   flex-shrink: 0;
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   transition: transform 0.15s;
 }
 
@@ -7811,7 +7857,7 @@ defineExpose({
   font-size: var(--text-sm);
   font-weight: 400;
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.76);
+  color: rgb(var(--v-theme-sidebar-text));
   transition:
     background 0.12s,
     color 0.12s,
@@ -7878,7 +7924,7 @@ defineExpose({
   flex-shrink: 0;
   font-size: var(--text-2xs);
   font-weight: 500;
-  color: rgba(var(--v-theme-sidebar-text), 0.38);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-readonly-notice-label {
@@ -7942,13 +7988,12 @@ defineExpose({
 
 .sidebar-list-item:hover {
   background: var(--hover-wash);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-list-item.active:hover {
   background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)),
-    var(--active-wash);
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
   color: var(--active-text);
 }
 
@@ -7977,7 +8022,7 @@ defineExpose({
   min-height: 22px;
   justify-content: center;
   text-align: center;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-move-to-project-wrap {
@@ -8197,7 +8242,7 @@ defineExpose({
 
 .sidebar-list-count {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
+  color: rgb(var(--v-theme-sidebar-text));
   min-width: 2.4em;
   text-align: right;
   margin: 0;
@@ -8237,6 +8282,12 @@ defineExpose({
   margin: 0;
 }
 
+/* Under ~150px there isn't room for the per-entry image counts — drop them. */
+.sidebar--narrow .sidebar-list-count,
+.sidebar--narrow .sidebar-folder-count-badge {
+  display: none;
+}
+
 /* ── Share link indicator icon on sidebar list items ──────────── */
 .sidebar-shared-icon {
   opacity: 0.5;
@@ -8266,7 +8317,7 @@ defineExpose({
 }
 
 .add-character-inline {
-  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
@@ -8309,7 +8360,7 @@ defineExpose({
 
 .edit-character-inline,
 .edit-set-inline {
-  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
@@ -8377,7 +8428,7 @@ defineExpose({
 }
 
 .delete-character-inline {
-  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
@@ -8461,7 +8512,7 @@ defineExpose({
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-all-pictures-row.drag-over-project {
@@ -8559,7 +8610,7 @@ defineExpose({
   padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-3);
   min-height: 28px;
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
   background: transparent;
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
@@ -8581,7 +8632,7 @@ defineExpose({
       rgba(var(--v-theme-accent), 0.08)
     ),
     rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-section-chevron {
@@ -8614,7 +8665,7 @@ defineExpose({
   flex-shrink: 0;
   opacity: 0.66;
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.66);
+  color: rgb(var(--v-theme-sidebar-text));
   transition:
     opacity 0.15s,
     color 0.15s;
@@ -8636,7 +8687,7 @@ defineExpose({
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3) var(--space-2) var(--space-3);
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.8);
+  color: rgb(var(--v-theme-sidebar-text));
   user-select: none;
   min-height: 28px;
   border-left: 3px solid transparent;
@@ -8651,7 +8702,7 @@ defineExpose({
 
 .sidebar-folder-row:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-row.active {
@@ -8679,7 +8730,7 @@ defineExpose({
 .sidebar-folder-children {
   padding-left: var(--space-2);
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: var(--space-5);
+  margin-left: var(--space-1);
 }
 
 .sidebar-folder-label {
@@ -8757,7 +8808,7 @@ defineExpose({
   text-align: right;
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-row.active .sidebar-folder-count-badge {
@@ -8765,7 +8816,7 @@ defineExpose({
 }
 
 .sidebar-folder-status--active {
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
   border-radius: var(--radius-sm);
   transition:
@@ -8783,7 +8834,7 @@ defineExpose({
 }
 
 .sidebar-folder-status--scanning {
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
   display: flex;
   align-items: center;
 }
@@ -8801,7 +8852,7 @@ defineExpose({
 .sidebar-folder-empty-row {
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  color: rgb(var(--v-theme-sidebar-text));
   font-style: italic;
 }
 
@@ -9241,7 +9292,7 @@ button.sidebar-ctx-item:disabled:hover {
   font-weight: var(--weight-semibold) !important;
   letter-spacing: 0.07em !important;
   gap: var(--space-2) !important;
-  color: rgba(var(--v-theme-sidebar-text), 0.4) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   text-transform: uppercase !important;
   transition: color 0.12s !important;
   user-select: none !important;
@@ -9249,7 +9300,7 @@ button.sidebar-ctx-item:disabled:hover {
 
 .sidebar-project-tree-files .pf-header:hover {
   background: rgba(var(--v-theme-accent), 0.08) !important;
-  color: rgba(var(--v-theme-sidebar-text), 0.92) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
 }
 
 .sidebar-project-tree-files .pf-header-icon {

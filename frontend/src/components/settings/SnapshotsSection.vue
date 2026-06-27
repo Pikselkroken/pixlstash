@@ -423,6 +423,9 @@ function handleRestore(cp) {
 .snapshot-list {
   border-top: 1px solid rgb(var(--v-theme-divider));
   padding-top: var(--space-2);
+  /* The list scrolls internally so the Snapshots tab itself doesn't scroll. */
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 .snapshot-loading,

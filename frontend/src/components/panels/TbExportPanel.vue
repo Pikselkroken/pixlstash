@@ -1,6 +1,6 @@
 <template>
   <div class="tbm tb-export-panel">
-    <span class="tbm-caret tbm-caret--start"></span>
+    <span class="tbm-caret tbm-caret--end"></span>
     <div class="tbm-header">
       <v-icon size="18" class="tbm-header-icon">mdi-tray-arrow-down</v-icon>
       <span class="tbm-title"
@@ -24,7 +24,9 @@
                 {{ o.title }}
               </option>
             </select>
-            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+            <v-icon size="18" class="tbm-select-chevron"
+              >mdi-chevron-down</v-icon
+            >
           </div>
         </label>
         <label class="tbm-field">
@@ -43,7 +45,9 @@
                 {{ o.title }}
               </option>
             </select>
-            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+            <v-icon size="18" class="tbm-select-chevron"
+              >mdi-chevron-down</v-icon
+            >
           </div>
         </label>
         <label class="tbm-field">
@@ -58,7 +62,9 @@
                 {{ o.title }}
               </option>
             </select>
-            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+            <v-icon size="18" class="tbm-select-chevron"
+              >mdi-chevron-down</v-icon
+            >
           </div>
         </label>
         <label class="tbm-field">
@@ -73,7 +79,9 @@
                 {{ o.title }}
               </option>
             </select>
-            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+            <v-icon size="18" class="tbm-select-chevron"
+              >mdi-chevron-down</v-icon
+            >
           </div>
         </label>
       </div>

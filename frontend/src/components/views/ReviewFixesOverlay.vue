@@ -8,6 +8,8 @@
         <template #title>Review tags</template>
 
         <template #actions>
+          <span class="rf-divider" aria-hidden="true"></span>
+
           <!-- Custom tag picker over the whole vault tag list, modelled on AddToEntityControl:
                a compact trigger button (current tag + chevron) opens a dropdown panel with an
                autofocused search input above a scrollable, alphabetised list. Typing filters by
@@ -17,15 +19,17 @@
                the topbar's clip and sits above the overlay. The icon-button re-scans the active tag. -->
           <div class="rf-field rf-field--tag">
             <span class="rf-field-label">Tag</span>
-            <label
+            <button
               class="rf-penalised-toggle"
               :class="{ 'rf-penalised-toggle--on': penalisedOnly }"
+              type="button"
+              :aria-pressed="penalisedOnly"
               title="Only list smart-score penalised tags in the picker"
+              @click="penalisedOnly = !penalisedOnly"
             >
-              <input type="checkbox" v-model="penalisedOnly" />
               <v-icon size="13">mdi-alert-octagon-outline</v-icon>
               Penalised only
-            </label>
+            </button>
             <div ref="tagPickRef" class="rf-tag-pick">
               <button
                 class="rf-control rf-tag-trigger"
@@ -115,6 +119,8 @@
             store.scanError
           }}</span>
 
+          <span class="rf-spacer" aria-hidden="true"></span>
+
           <!-- Scope filters: narrow the queue to a project / set / character. Each "Any"
                option clears that dimension; changes re-run summary/queue/bulk via setScope. -->
           <label class="rf-field">
@@ -167,61 +173,19 @@
               >{{ store.remainingTotal }} left</span
             >
             <span class="rf-progress-tally">
-              ✗ {{ store.removedCount }} · + {{ store.addedCount }} · ✓
-              {{ store.keptCount }}
+              <span class="rf-tally rf-tally--removed"
+                >✗ {{ store.removedCount }}</span
+              >
+              <span class="rf-tally rf-tally--added"
+                >+ {{ store.addedCount }}</span
+              >
+              <span class="rf-tally rf-tally--kept"
+                >✓ {{ store.keptCount }}</span
+              >
             </span>
           </div>
         </template>
       </OverlayToolbar>
-
-      <!-- Bulk: auto-resolve only pairs where the near-twin vote and the tagger AGREE,
-           so you hand-compare the rest. -->
-      <div class="rf-bulkbar">
-        <label class="rf-bulk-thresh">
-          Auto-resolve when both signals agree ≥
-          <select
-            class="rf-control"
-            :value="store.bulkThreshold"
-            @change="store.setBulkThreshold(Number($event.target.value))"
-          >
-            <option :value="0.99">99%</option>
-            <option :value="0.95">95%</option>
-            <option :value="0.9">90%</option>
-            <option :value="0.8">80%</option>
-          </select>
-        </label>
-        <button
-          class="rf-control rf-bulk-preview"
-          type="button"
-          :disabled="store.bulkCount === 0"
-          title="Spot-check a sample of what would be auto-resolved before applying."
-          @click="store.previewOpen = true"
-        >
-          Preview
-        </button>
-        <button
-          class="rf-bulk-btn"
-          type="button"
-          :disabled="store.bulkCount === 0 || store.bulkBusy"
-          :title="`Apply every pair where the near-twin vote and the tagger agree and both clear the threshold for “${store.activeTag}”, in one go (undoable).`"
-          @click="store.runBulk()"
-        >
-          Resolve {{ store.bulkCount }} agreed one{{
-            store.bulkCount === 1 ? "" : "s"
-          }}
-        </button>
-        <span v-if="store.lastBulk" class="rf-bulk-undo">
-          resolved {{ store.lastBulk.count }} ·
-          <button
-            class="rf-control"
-            type="button"
-            :disabled="store.bulkBusy"
-            @click="store.undoBulk()"
-          >
-            Undo all
-          </button>
-        </span>
-      </div>
 
       <!-- Body -->
       <section class="rf-body">
@@ -258,26 +222,33 @@
         </div>
 
         <div v-else class="rf-review">
+          <!-- Combined prompt + guidance banner: the verdict bucket and the review
+               question are merged into one strip. The bucket's accent colours the
+               icon, the 4px left border, a tint of the fill, and the title pill;
+               with no tagger prediction it falls back to a neutral banner. -->
           <div
-            v-if="currentBucket"
-            class="rf-bucket"
-            :class="`rf-bucket--${currentBucket.key}`"
+            class="rf-banner"
+            :class="
+              currentBucket
+                ? `rf-banner--${currentBucket.key}`
+                : 'rf-banner--neutral'
+            "
           >
-            <v-icon :size="24" class="rf-bucket-icon">{{
-              currentBucket.icon
+            <v-icon :size="26" class="rf-banner-icon">{{
+              currentBucket ? currentBucket.icon : "mdi-help-circle-outline"
             }}</v-icon>
-            <div class="rf-bucket-text">
-              <span class="rf-bucket-title">{{ currentBucket.title }}</span>
-              <span class="rf-bucket-meaning">{{ currentBucket.meaning }}</span>
+            <div class="rf-banner-text">
+              <div class="rf-banner-title">
+                The left is tagged “{{ current.tag }}” — but is it?
+              </div>
+              <div class="rf-banner-meaning">{{ bannerMeaning }}</div>
             </div>
-            <span class="rf-bucket-count"
-              >{{ bucketRemaining }} left in this group</span
-            >
-          </div>
-
-          <div class="rf-question">
-            The left is flagged “{{ current.tag }}” — but is it?
-            <span class="rf-question-sub">{{ verdict.sub }}</span>
+            <div v-if="currentBucket" class="rf-banner-aside">
+              <span class="rf-banner-pill">{{ currentBucket.title }}</span>
+              <span class="rf-banner-count"
+                >{{ bucketRemaining }} left in this group</span
+              >
+            </div>
           </div>
 
           <div class="rf-pair">
@@ -285,12 +256,18 @@
               class="rf-pane rf-pane--flagged"
               :class="{ 'rf-pane--selected': isPaneSelected(taggedSide.id) }"
             >
-              <div class="rf-pane-head">
-                <span class="rf-pane-title">Left · the flagged one</span>
-                <span class="rf-chip rf-chip--has"
-                  >⚑ predicted “{{ current.tag }}”</span
-                >
-              </div>
+              <figcaption class="rf-pane-head">
+                <span class="rf-pane-id">#{{ taggedSide.id }}</span>
+                <span class="rf-pane-pred">
+                  <span class="rf-pane-pred-label rf-pane-pred-label--has">
+                    <v-icon size="13">mdi-tag</v-icon>
+                    Predicted “{{ current.tag }}”
+                  </span>
+                  <span class="rf-pane-conf"
+                    >· {{ confText(true, taggedSide.conf) }}</span
+                  >
+                </span>
+              </figcaption>
               <div class="rf-img-wrap">
                 <img
                   class="rf-img"
@@ -313,14 +290,11 @@
                   <v-icon size="16">mdi-check-bold</v-icon>
                 </span>
               </div>
-              <figcaption class="rf-pane-foot">
-                <span>#{{ taggedSide.id }}</span>
-                <span class="rf-pane-conf">{{
-                  confLabel(taggedSide.conf)
-                }}</span>
-                <span v-if="voteHint(taggedSide.id)" class="rf-vote-hint">
-                  {{ voteHint(taggedSide.id) }}
-                </span>
+              <figcaption
+                v-if="voteHint(taggedSide.id)"
+                class="rf-pane-foot"
+              >
+                <span class="rf-vote-hint">{{ voteHint(taggedSide.id) }}</span>
               </figcaption>
             </figure>
 
@@ -328,10 +302,15 @@
               class="rf-pane"
               :class="{ 'rf-pane--selected': isPaneSelected(untaggedSide.id) }"
             >
-              <div class="rf-pane-head">
-                <span class="rf-pane-title">Right · its near-twin</span>
-                <span class="rf-chip rf-chip--missing">not flagged</span>
-              </div>
+              <figcaption class="rf-pane-head">
+                <span class="rf-pane-id">#{{ untaggedSide.id }}</span>
+                <span class="rf-pane-pred">
+                  <span class="rf-pane-pred-label">Not tagged</span>
+                  <span class="rf-pane-conf"
+                    >· {{ confText(false, untaggedSide.conf) }}</span
+                  >
+                </span>
+              </figcaption>
               <div class="rf-img-wrap">
                 <img
                   class="rf-img"
@@ -354,14 +333,11 @@
                   <v-icon size="16">mdi-check-bold</v-icon>
                 </span>
               </div>
-              <figcaption class="rf-pane-foot">
-                <span>#{{ untaggedSide.id }}</span>
-                <span class="rf-pane-conf">{{
-                  confLabel(untaggedSide.conf)
-                }}</span>
-                <span v-if="voteHint(untaggedSide.id)" class="rf-vote-hint">
-                  {{ voteHint(untaggedSide.id) }}
-                </span>
+              <figcaption
+                v-if="voteHint(untaggedSide.id)"
+                class="rf-pane-foot"
+              >
+                <span class="rf-vote-hint">{{ voteHint(untaggedSide.id) }}</span>
               </figcaption>
             </figure>
           </div>
@@ -483,12 +459,6 @@
             </div>
           </div>
 
-          <p class="rf-hint">
-            <kbd>L</kbd> left only · <kbd>B</kbd> both · <kbd>N</kbd> neither ·
-            <kbd>R</kbd> right only (swap) · <kbd>S</kbd> skip ·
-            <kbd>U</kbd> undo · <kbd>T</kbd> tag selected · <kbd>Esc</kbd> close
-          </p>
-
           <!-- Direct tagging of the selected pane(s), independent of the queue
                decision. Anchored bottom-right; the menu opens above the button. -->
           <div ref="tagApplyRef" class="rf-tag-apply">
@@ -519,91 +489,6 @@
           </div>
         </div>
       </section>
-    </div>
-
-    <!-- Bulk preview: spot-check a sample of what "Resolve" would auto-apply. -->
-    <div
-      v-if="store.previewOpen"
-      class="rf-preview"
-      @click.self="store.previewOpen = false"
-    >
-      <div class="rf-preview-card">
-        <div class="rf-preview-head">
-          <div>
-            Preview — {{ store.bulkCount }} agreed one{{
-              store.bulkCount === 1 ? "" : "s"
-            }}
-            at ≥{{ Math.round(store.bulkThreshold * 100) }}%
-            <span class="rf-preview-sub">
-              showing the {{ store.bulkSample.length }} least tagger-confident
-              (the riskiest)
-            </span>
-          </div>
-          <button
-            class="rf-control rf-preview-x"
-            type="button"
-            @click="store.previewOpen = false"
-          >
-            <v-icon size="18">mdi-close</v-icon>
-          </button>
-        </div>
-
-        <div v-if="!store.bulkSample.length" class="rf-preview-empty">
-          No pair where both signals agree this strongly — lower the bar, or
-          review manually.
-        </div>
-        <div v-else class="rf-preview-grid">
-          <figure
-            v-for="s in store.bulkSample"
-            :key="s.id"
-            class="rf-preview-item"
-          >
-            <div class="rf-preview-imgs">
-              <img
-                class="rf-preview-img rf-preview-img--flagged"
-                :src="imgSrc(sampleLeft(s).id, sampleLeft(s).ext)"
-                :alt="`flagged #${sampleLeft(s).id}`"
-                title="Click to zoom"
-                @click="openZoom(sampleLeft(s).id, sampleLeft(s).ext)"
-                @error="onImgError($event, sampleLeft(s).id)"
-              />
-              <img
-                class="rf-preview-img"
-                :src="imgSrc(sampleRight(s).id, sampleRight(s).ext)"
-                :alt="`twin #${sampleRight(s).id}`"
-                title="Click to zoom"
-                @click="openZoom(sampleRight(s).id, sampleRight(s).ext)"
-                @error="onImgError($event, sampleRight(s).id)"
-              />
-            </div>
-            <figcaption class="rf-preview-verdict">
-              → {{ cornerLabel(s.corner) }} ·
-              {{ Math.round(s.confidence * 100) }}%
-            </figcaption>
-          </figure>
-        </div>
-
-        <div class="rf-preview-foot">
-          <span class="rf-preview-note">
-            Left = flagged · right = its twin. These look right? Resolve them.
-          </span>
-          <button
-            class="rf-action rf-action--skip"
-            type="button"
-            @click="store.previewOpen = false"
-          >
-            Close
-          </button>
-          <button
-            class="rf-bulk-btn"
-            type="button"
-            :disabled="store.bulkCount === 0 || store.bulkBusy"
-            @click="store.runBulk()"
-          >
-            Resolve all {{ store.bulkCount }}
-          </button>
-        </div>
-      </div>
     </div>
 
     <!-- Full-screen zoom: click an image to inspect detail; scroll to magnify, drag to pan. -->
@@ -1020,36 +905,33 @@ const bucketRemaining = computed(() => {
   return store.items.filter((it) => store.decision(it).corner === corner).length;
 });
 
-const CORNER_LABELS = {
-  both: "Both",
-  neither: "Neither",
-  leftonly: "Left only",
-  rightonly: "Right only ⇄",
-};
-function cornerLabel(c) {
-  return CORNER_LABELS[c] || c;
-}
-// In a bulk-sample item, left = the flagged image, right = its twin.
-function sampleLeft(s) {
-  return s.direction === "remove"
-    ? { id: s.picture_id, ext: s.picture_ext }
-    : { id: s.twin_picture_id, ext: s.twin_ext };
-}
-function sampleRight(s) {
-  return s.direction === "remove"
-    ? { id: s.twin_picture_id, ext: s.twin_ext }
-    : { id: s.picture_id, ext: s.picture_ext };
-}
+// One guidance line for the merged banner: the bucket's "what to do" meaning, with
+// the tagger-unsure caveat appended when the prediction is weak. With no bucket (no
+// tagger prediction) it falls back to the verdict's own sub-line.
+const bannerMeaning = computed(() => {
+  if (currentBucket.value) {
+    const unsure =
+      verdict.value && !verdict.value.strong
+        ? " · Tagger is unsure here — your call."
+        : "";
+    return currentBucket.value.meaning + unsure;
+  }
+  return verdict.value?.sub ?? "";
+});
 
-function confLabel(conf) {
+// Compact per-pane confidence phrasing for the pane header. The tagger's raw
+// confidence is P(tag applies); we read it from each pane's own point of view so
+// it's unambiguous: the flagged (left) pane says "X% sure" when the model agrees
+// it has the tag and "X% sure it isn't" when it leans clean. The untagged twin
+// (right) just says "X% sure" — the strength of the prediction, without an "it
+// is"/"it isn't" qualifier that only muddies an already-untagged image.
+function confText(flagged, conf) {
   if (conf === null || conf === undefined) return "no tagger prediction";
-  const tag = current.value?.tag ?? "this";
   const pct = Math.round(conf * 100);
-  // The raw confidence is P(tag applies); state which way that points so it's
-  // unambiguous (high = the model thinks it IS the tag, even if it's untagged).
-  return conf >= 0.5
-    ? `tagger: ${pct}% sure it IS “${tag}”`
-    : `tagger: ${100 - pct}% sure it's NOT “${tag}”`;
+  const sureNot = conf < 0.5;
+  const sure = sureNot ? 100 - pct : pct;
+  if (flagged) return sureNot ? `${sure}% sure it isn’t` : `${sure}% sure`;
+  return `${sure}% sure`;
 }
 
 // --- Decision dispatch + live consistency guard ----------------------------
@@ -1295,7 +1177,6 @@ function handleKeyDown(event) {
   if (
     current.value &&
     !pendingDecision.value &&
-    !store.previewOpen &&
     !zoom.value &&
     (event.key === "ArrowLeft" || event.key === "ArrowRight")
   ) {
@@ -1330,24 +1211,18 @@ function handleKeyDown(event) {
     return;
   }
 
-  // Escape unwinds the topmost layer: tag menu → zoom → preview → pane
-  // selection → overlay. A pane selection is cleared before the overlay closes,
-  // so the first Esc drops the selection and the second leaves.
+  // Escape unwinds the topmost layer: tag menu → zoom → pane selection → overlay.
+  // A pane selection is cleared before the overlay closes, so the first Esc drops
+  // the selection and the second leaves.
   if (key === "escape") {
     if (tagApplyOpen.value) closeTagApply();
     else if (zoom.value) closeZoom();
-    else if (store.previewOpen) store.previewOpen = false;
     else if (selectedPaneIds.value.length) selectedPaneIds.value = [];
     else emit("close");
     event.preventDefault();
     event.stopImmediatePropagation();
     return;
   }
-
-  // The preview modal is a read-only spot-check — don't let review keys resolve the
-  // queue underneath it (clicking an image to zoom still works). A zoomed preview
-  // image is fine to keep open; only Esc (above) dismisses it.
-  if (store.previewOpen) return;
 
   let handled = true;
   if (key === "l") {
@@ -1431,8 +1306,15 @@ onUnmounted(() => {
 .rf-shell :deep(.overlay-toolbar-actions) {
   gap: var(--space-2);
 }
+/* Title sits next to Close and does NOT grow (the shell default is flex:1, which
+   would shove the tag/scope groups to the right edge); a .rf-spacer pushes the
+   progress block right instead, matching the design. */
 .rf-shell :deep(.overlay-toolbar-title) {
-  font-size: var(--text-xs);
+  flex: 0 0 auto;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 .rf-shell :deep(.overlay-toolbar-close) {
   font-size: var(--text-2xs);
@@ -1447,29 +1329,59 @@ onUnmounted(() => {
 .rf-field-label {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
+
+/* Vertical hairline between toolbar groups (title | tag | scope). */
+.rf-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 24px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.18);
+}
+/* Flexible spacer: separates the left cluster (title + tag controls) from the
+   right cluster (scope filters + progress). */
+.rf-spacer {
+  flex: 1 1 auto;
+  min-width: var(--space-3);
+}
+/* Penalised-only filter as a compact toggle button (not a checkbox + label):
+   neutral pill when off, error-tinted when on. */
 .rf-penalised-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  cursor: pointer;
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
-}
-.rf-penalised-toggle input {
   cursor: pointer;
-  accent-color: rgb(var(--v-theme-error));
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.rf-penalised-toggle:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 .rf-penalised-toggle--on {
+  border-color: rgb(var(--v-theme-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 15%, transparent);
   color: rgb(var(--v-theme-error));
 }
-/* Shared neutral dark control. The ~dozen neutral buttons/selects in this overlay
-   (select, tag trigger, retry, bulk threshold/undo/preview, confirm, preview-close,
-   twin-fix) all wear the same dark-surface skin: faint fill, low-contrast border, sm
-   radius, lift on hover, fade when disabled. Define it once here; each control keeps
-   only its own size/padding/width overrides in its own rule. Semantic-coloured buttons
-   (.rf-bulk-btn, .rf-action--*, .rf-confirm-btn--apply) deliberately do NOT use this. */
+/* Shared neutral dark control. The neutral buttons/selects in this overlay
+   (scope selects, tag trigger, retry, confirm, twin-fix) all wear the same
+   dark-surface skin: faint fill, low-contrast border, sm radius, lift on hover,
+   fade when disabled. Define it once here; each control keeps only its own
+   size/padding/width overrides in its own rule. Semantic-coloured buttons
+   (.rf-action--*, .rf-confirm-btn--apply) deliberately do NOT use this. */
 .rf-control,
 .rf-twin-fix {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
@@ -1490,7 +1402,8 @@ onUnmounted(() => {
 .rf-select {
   height: 32px;
   padding: 0 var(--space-2);
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   max-width: 280px;
 }
 /* Scope filters sit in the same row as the tag picker; keep them compact so the row
@@ -1514,7 +1427,7 @@ onUnmounted(() => {
 .rf-tag-pick {
   position: relative;
   width: 150px;
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
 }
 .rf-tag-trigger {
   display: flex;
@@ -1524,7 +1437,8 @@ onUnmounted(() => {
   width: 100%;
   height: 32px;
   padding: 0 var(--space-3);
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
 }
 .rf-tag-trigger-label {
   overflow: hidden;
@@ -1621,58 +1535,34 @@ onUnmounted(() => {
   font-size: var(--text-xs);
 }
 
+/* Progress: a single right-aligned row — "{n} left" then the colour-coded tally. */
 .rf-progress {
-  margin-left: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--space-1);
-}
-.rf-progress-remaining {
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-2xs);
-}
-.rf-progress-tally {
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: var(--text-2xs);
-}
-
-.rf-bulkbar {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  background: rgb(var(--v-theme-dark-surface));
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
-.rf-bulk-thresh select {
-  padding: var(--space-2) var(--space-3);
-  margin-left: var(--space-2);
-}
-.rf-bulk-btn {
-  background: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-  border: 1px solid rgb(var(--v-theme-success));
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-4);
+.rf-progress-remaining {
   font-weight: var(--weight-semibold);
-  cursor: pointer;
+  font-size: var(--text-sm);
 }
-.rf-bulk-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-success), 0.85);
+.rf-progress-tally {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
-.rf-bulk-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.rf-tally {
+  font-weight: var(--weight-semibold);
 }
-.rf-bulk-undo {
-  margin-left: auto;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+.rf-tally--removed {
+  color: rgb(var(--v-theme-error));
 }
-.rf-bulk-undo button {
-  padding: var(--space-2) var(--space-3);
+.rf-tally--added {
+  color: rgb(var(--v-theme-primary));
+}
+.rf-tally--kept {
+  color: rgb(var(--v-theme-success));
 }
 
 .rf-body {
@@ -1817,78 +1707,83 @@ onUnmounted(() => {
   text-align: center;
   margin: 0;
 }
-/* Group banner: announces the current verdict bucket and what to do. The
-   left accent + icon are tinted per bucket. */
-.rf-bucket {
+/* Combined prompt + guidance banner: merges the verdict bucket and the review
+   question into one strip. The bucket's accent (set per-corner below) colours the
+   icon, the 4px left border, a tint of the fill, and the title pill; with no
+   tagger prediction the neutral variant leaves the accent var unset. */
+.rf-banner {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-4);
   width: 100%;
-  max-width: 760px;
+  max-width: 1180px;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  border: 1px solid var(--rf-bucket-accent, rgba(var(--v-theme-on-dark-surface), 0.14));
-  border-left-width: 4px;
+  border: 1px solid
+    var(--rf-banner-accent, rgba(var(--v-theme-on-dark-surface), 0.18));
+  border-left: 4px solid
+    var(--rf-banner-accent, rgba(var(--v-theme-on-dark-surface), 0.4));
   background: color-mix(
     in srgb,
-    var(--rf-bucket-accent, rgb(var(--v-theme-on-dark-surface))) 14%,
-    rgba(var(--v-theme-dark-surface), 0.6)
+    var(--rf-banner-accent, rgb(var(--v-theme-on-dark-surface))) 12%,
+    rgb(var(--v-theme-dark-surface))
   );
 }
-.rf-bucket-icon {
-  color: var(--rf-bucket-accent, currentColor);
+.rf-banner-icon {
+  color: var(--rf-banner-accent, currentColor);
   flex-shrink: 0;
 }
-.rf-bucket-text {
+.rf-banner-text {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
+  gap: 2px;
   text-align: left;
 }
-.rf-bucket-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-bold);
+.rf-banner-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-on-dark-surface));
 }
-.rf-bucket-meaning {
+.rf-banner-meaning {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.72);
 }
-.rf-bucket-count {
+.rf-banner-aside {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+.rf-banner-pill {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  color: var(--rf-banner-accent);
+  background: color-mix(in srgb, var(--rf-banner-accent) 22%, transparent);
+}
+.rf-banner-count {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.rf-bucket--neither {
-  --rf-bucket-accent: rgb(var(--v-theme-error));
+.rf-banner--neither {
+  --rf-banner-accent: rgb(var(--v-theme-error));
 }
-.rf-bucket--both {
-  --rf-bucket-accent: rgb(var(--v-theme-success));
+.rf-banner--both {
+  --rf-banner-accent: rgb(var(--v-theme-primary));
 }
-.rf-bucket--leftonly {
-  --rf-bucket-accent: rgb(var(--v-theme-tertiary));
+.rf-banner--leftonly {
+  --rf-banner-accent: rgb(var(--v-theme-accent));
 }
-.rf-bucket--rightonly {
-  --rf-bucket-accent: rgb(var(--v-theme-warning));
-}
-
-.rf-question {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-bold);
-  text-align: center;
-}
-.rf-question-sub {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+.rf-banner--rightonly {
+  --rf-banner-accent: rgb(var(--v-theme-tertiary));
 }
 
 .rf-pair {
@@ -1900,37 +1795,58 @@ onUnmounted(() => {
   justify-content: center;
   align-items: stretch;
 }
+/* Each pane is a bordered card: a header strip (id + prediction + confidence)
+   over an image that fills the rest, with an optional vote-hint foot. The flagged
+   (left) pane carries the accent border. */
 .rf-pane {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   min-height: 0;
   flex: 1 1 0;
   max-width: 50%;
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: rgba(var(--v-theme-on-dark-surface), 0.04);
+}
+.rf-pane--flagged {
+  border-color: rgb(var(--v-theme-accent));
+}
+.rf-pane--selected {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: -1px;
 }
 .rf-pane-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
 }
-.rf-pane-title {
-  font-weight: var(--weight-semibold);
-}
-.rf-chip {
+.rf-pane-id {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: var(--text-2xs);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+.rf-pane-pred {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-2xs);
+}
+.rf-pane-pred-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
-.rf-chip--has {
-  background: rgba(var(--v-theme-error), 0.18);
-  color: rgb(var(--v-theme-error));
-}
-.rf-chip--missing {
-  background: rgba(var(--v-theme-success), 0.16);
-  color: rgb(var(--v-theme-success));
+.rf-pane-pred-label--has {
+  color: rgb(var(--v-theme-accent));
 }
 /* Image area wraps the <img> so the magnifier button and selection check can
    be positioned over it. Takes the flex space the <img> used to. */
@@ -1940,6 +1856,7 @@ onUnmounted(() => {
   min-height: 0;
   min-width: 0;
   display: flex;
+  background: rgb(var(--v-theme-dark-surface));
 }
 .rf-img {
   flex: 1;
@@ -1948,7 +1865,6 @@ onUnmounted(() => {
   max-width: 100%;
   object-fit: contain;
   object-position: center;
-  border-radius: var(--radius-md);
   background: rgb(var(--v-theme-dark-surface));
   /* Click selects now; the magnifier button / scroll wheel zoom. */
   cursor: pointer;
@@ -1993,20 +1909,18 @@ onUnmounted(() => {
 .rf-pane--selected .rf-pane-check {
   display: inline-flex;
 }
-.rf-pane--selected .rf-img {
-  outline: 3px solid rgb(var(--v-theme-primary));
-  outline-offset: -3px;
-}
 .rf-pane-foot {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
   font-size: var(--text-2xs);
 }
 .rf-pane-conf {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  white-space: nowrap;
 }
 .rf-twin-fix {
   display: inline-flex;
@@ -2050,70 +1964,30 @@ onUnmounted(() => {
   padding: 1px var(--space-2);
   font-size: var(--text-2xs);
 }
-.rf-action--remove {
-  background: rgb(var(--v-theme-error));
-  border-color: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-}
-.rf-action--remove:hover {
-  background: rgba(var(--v-theme-error), 0.85);
-}
-.rf-action--add {
-  background: rgb(var(--v-theme-success));
-  border-color: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-}
-.rf-action--add:hover {
-  background: rgba(var(--v-theme-success), 0.85);
-}
-.rf-action--keep-good {
-  background: rgb(var(--v-theme-success));
-  border-color: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-}
-.rf-action--keep-good:hover {
-  background: rgba(var(--v-theme-success), 0.85);
-}
-.rf-action--keep:hover,
-.rf-action--skip:hover,
-.rf-action--undo:hover {
+/* Decisions read as one neutral set; only the tagger's likely call is lifted with
+   an accent border + tint and a "likely" pip, so the eye lands on it without the
+   whole row turning into competing colours. */
+.rf-action:hover:not(:disabled) {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 .rf-action--undo:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.rf-action--leftonly {
-  background: rgb(var(--v-theme-info));
-  border-color: rgb(var(--v-theme-info));
-  color: rgb(var(--v-theme-on-info));
+.rf-action--rec {
+  border-color: rgb(var(--v-theme-accent));
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-accent)) 14%,
+    rgba(var(--v-theme-on-dark-surface), 0.08)
+  );
 }
-.rf-action--leftonly:hover {
-  background: rgba(var(--v-theme-info), 0.85);
-}
-.rf-action--both {
-  background: rgb(var(--v-theme-error));
-  border-color: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-}
-.rf-action--both:hover {
-  background: rgba(var(--v-theme-error), 0.85);
-}
-.rf-action--neither {
-  background: rgb(var(--v-theme-success));
-  border-color: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-}
-.rf-action--neither:hover {
-  background: rgba(var(--v-theme-success), 0.85);
-}
-.rf-action--swap {
-  background: rgb(var(--v-theme-warning));
-  border-color: rgb(var(--v-theme-warning));
-  color: rgb(var(--v-theme-on-warning));
-}
-.rf-action--swap:hover {
-  background: rgba(var(--v-theme-warning), 0.85);
+.rf-action--rec:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-accent)) 22%,
+    rgba(var(--v-theme-on-dark-surface), 0.08)
+  );
 }
 .rf-actions-label {
   align-self: center;
@@ -2121,20 +1995,12 @@ onUnmounted(() => {
   font-size: var(--text-xs);
   margin-right: var(--space-1);
 }
-.rf-pane--flagged .rf-img {
-  box-shadow: 0 0 0 2px rgba(var(--v-theme-error), 0.55);
-}
-.rf-action--rec {
-  box-shadow: 0 0 0 2px rgba(var(--v-theme-on-dark-surface), 0.55);
-}
 .rf-rec-pip {
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
-  background: rgba(var(--v-theme-on-dark-surface), 0.22);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-2);
+  color: rgb(var(--v-theme-accent));
 }
 .rf-actions-gap {
   width: 32px;
@@ -2194,117 +2060,6 @@ onUnmounted(() => {
   color: rgb(var(--v-theme-warning));
   font-size: var(--text-2xs);
   font-style: italic;
-}
-
-.rf-hint {
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  font-size: var(--text-2xs);
-}
-.rf-hint kbd {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-2);
-}
-
-/* Bulk preview modal */
-.rf-preview {
-  position: fixed;
-  /* Below the title bar (0px in a browser) so it never covers the window
-     controls; the card centres within the reduced box. */
-  inset: var(--titlebar-h) 0 0 0;
-  z-index: 4050;
-  background: rgba(var(--v-theme-scrim), 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-6);
-}
-.rf-preview-card {
-  display: flex;
-  flex-direction: column;
-  width: min(1100px, 95vw);
-  max-height: 90vh;
-  background: rgb(var(--v-theme-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-.rf-preview-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  font-weight: var(--weight-semibold);
-}
-.rf-preview-sub {
-  display: block;
-  font-weight: var(--weight-regular);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-.rf-preview-x {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
-}
-.rf-preview-empty {
-  padding: 40px;
-  text-align: center;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-.rf-preview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--space-4);
-  padding: var(--space-5) var(--space-5);
-  overflow: auto;
-}
-.rf-preview-item {
-  margin: 0;
-  background: rgba(var(--v-theme-on-dark-surface), 0.04);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-}
-.rf-preview-imgs {
-  display: flex;
-  gap: var(--space-2);
-}
-.rf-preview-img {
-  width: 50%;
-  height: 150px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-dark-surface));
-  cursor: zoom-in;
-}
-.rf-preview-img--flagged {
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-error), 0.7);
-}
-.rf-preview-verdict {
-  margin-top: var(--space-2);
-  text-align: center;
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-}
-.rf-preview-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-}
-.rf-preview-note {
-  margin-right: auto;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: var(--text-xs);
-}
-.rf-bulk-preview {
-  padding: var(--space-2) var(--space-4);
 }
 
 /* Full-screen zoom layer */

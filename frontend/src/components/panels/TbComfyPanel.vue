@@ -1,6 +1,6 @@
 <template>
   <div class="tbm tb-comfyui-panel">
-    <span class="tbm-caret tbm-caret--start"></span>
+    <span class="tbm-caret tbm-caret--end"></span>
     <div class="tbm-header">
       <v-icon size="18" class="tbm-header-icon">mdi-auto-fix</v-icon>
       <span class="tbm-title">Generate from a text prompt</span>
@@ -23,7 +23,9 @@
                 {{ wf.display_name || wf.name }}
               </option>
             </select>
-            <v-icon size="18" class="tbm-select-chevron">mdi-chevron-down</v-icon>
+            <v-icon size="18" class="tbm-select-chevron"
+              >mdi-chevron-down</v-icon
+            >
           </div>
         </label>
       </div>

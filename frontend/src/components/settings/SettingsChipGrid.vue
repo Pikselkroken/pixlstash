@@ -27,9 +27,12 @@ const hasItems = computed(() => {
 .chip-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--space-2);
+  gap: var(--space-1) var(--space-2);
   margin-bottom: var(--space-3);
-  max-height: 132px;
+  /* Each list caps and scrolls on its own so the whole tab stays within the
+     pane height (no outer/global scrollbar). Tall enough to hold four full
+     penalised-tag rows (~28px each + row gaps) without clipping the fourth. */
+  max-height: 125px;
   overflow-y: auto;
 }
 

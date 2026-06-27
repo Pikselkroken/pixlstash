@@ -2418,7 +2418,7 @@ defineExpose({
       />
     </div>
     <button
-      v-show="userPrefsStore.showKeyboardHint"
+      v-show="userPrefsStore.showKeyboardHint && !reviewFixesStore.overlayOpen"
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,

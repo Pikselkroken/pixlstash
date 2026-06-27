@@ -132,7 +132,7 @@ function childImageCount() {
   padding: var(--space-2) var(--space-3);
   cursor: pointer;
   font-size: var(--text-sm);
-  color: rgba(var(--v-theme-sidebar-text), 0.85);
+  color: rgb(var(--v-theme-sidebar-text));
   user-select: none;
 }
 
@@ -154,7 +154,7 @@ function childImageCount() {
 .sidebar-folder-children {
   padding-left: var(--space-2);
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: var(--space-4);
+  margin-left: var(--space-1);
 }
 
 .sidebar-folder-label {
@@ -184,7 +184,7 @@ function childImageCount() {
   text-align: right;
   font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-row.active .sidebar-folder-count-badge {
@@ -198,7 +198,7 @@ function childImageCount() {
 }
 
 .sidebar-folder-status--active {
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
   border-radius: var(--radius-sm);
   transition:
@@ -220,7 +220,7 @@ function childImageCount() {
 .sidebar-folder-empty-row {
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  color: rgb(var(--v-theme-sidebar-text));
   font-style: italic;
 }
 

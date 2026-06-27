@@ -12,7 +12,10 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <div class="bar-split-button" :class="{ 'bar-split-button--open': gbSortMenuOpen }">
+            <div
+              class="bar-split-button"
+              :class="{ 'bar-split-button--open': gbSortMenuOpen }"
+            >
               <button
                 class="bar-btn bar-split-toggle"
                 type="button"
@@ -61,7 +64,9 @@
                     ? "mdi-sort-descending"
                     : "mdi-sort-ascending"
                 }}</v-icon>
-                <span>{{ gbDescendingModel ? "Descending" : "Ascending" }}</span>
+                <span>{{
+                  gbDescendingModel ? "Descending" : "Ascending"
+                }}</span>
               </button>
             </div>
 
@@ -300,7 +305,9 @@
                   type="button"
                   @click="ovl.model.value = !ovl.model.value"
                 >
-                  <v-icon size="18" class="tbm-toggle-icon">{{ ovl.icon }}</v-icon>
+                  <v-icon size="18" class="tbm-toggle-icon">{{
+                    ovl.icon
+                  }}</v-icon>
                   <span class="tbm-toggle-label">{{ ovl.label }}</span>
                 </button>
               </div>
@@ -313,8 +320,8 @@
         <v-menu
           v-model="gbSearchMenuOpen"
           :close-on-content-click="false"
-          location="bottom start"
-          origin="top start"
+          location="bottom end"
+          origin="top end"
           :offset="8"
           transition="scale-transition"
         >
@@ -334,7 +341,7 @@
             </button>
           </template>
           <div class="tbm gb-search-panel">
-            <span class="tbm-caret tbm-caret--start"></span>
+            <span class="tbm-caret tbm-caret--end"></span>
             <div class="tbm-header">
               <v-icon size="18" class="tbm-header-icon">mdi-magnify</v-icon>
               <span class="tbm-title">Search</span>
@@ -377,22 +384,12 @@
             </div>
           </div>
         </v-menu>
-        <!-- ── Toolbar: Review and fix tags ──────────────────────────── -->
-        <button
-          class="bar-btn bar-btn--icon"
-          type="button"
-          :disabled="isReadOnly"
-          title="Review and fix tags"
-          @click="reviewFixesStore.overlayOpen = true"
-        >
-          <v-icon size="20">mdi-tag-check-outline</v-icon>
-        </button>
         <!-- ── Toolbar: Export ───────────────────────────────────────── -->
         <v-menu
           v-model="exportStore.exportMenuOpen"
           :close-on-content-click="false"
-          location="bottom start"
-          origin="top start"
+          location="bottom end"
+          origin="top end"
           :offset="8"
           transition="scale-transition"
         >
@@ -414,8 +411,8 @@
           v-if="!isReadOnly"
           v-model="tbImportMenuOpen"
           :close-on-content-click="false"
-          location="bottom start"
-          origin="top start"
+          location="bottom end"
+          origin="top end"
           :offset="8"
           transition="scale-transition"
         >
@@ -449,8 +446,8 @@
           v-if="filterStore.comfyuiConfigured"
           v-model="tbComfyuiMenuOpen"
           :close-on-content-click="false"
-          location="bottom start"
-          origin="top start"
+          location="bottom end"
+          origin="top end"
           :offset="8"
           transition="scale-transition"
         >
@@ -479,8 +476,18 @@
       <!-- ── Conditional separator: ComfyUI | ApplyTo (shown when bar is narrow) ── -->
       <div class="bar-separator bar-separator--gap-guard"></div>
       <div class="selection-bar-right">
-        <!-- ── Separator: grid controls | Settings ────────────────────── -->
+        <!-- ── Separator: grid controls | actions ─────────────────────── -->
         <div class="bar-separator"></div>
+        <!-- ── Toolbar: Review and fix tags (an action, not a menu) ───── -->
+        <button
+          class="bar-btn bar-btn--icon"
+          type="button"
+          :disabled="isReadOnly"
+          title="Review and fix tags"
+          @click="reviewFixesStore.overlayOpen = true"
+        >
+          <v-icon size="20">mdi-tag-check-outline</v-icon>
+        </button>
         <!-- ── Toolbar: Settings ─────────────────────────────────────── -->
         <button
           class="bar-btn bar-btn--icon"
@@ -508,7 +515,10 @@
           <!-- App-wide activity light: pulses whenever the task manager has any
                active work, so background tasks are visible without opening the
                stats sidebar. -->
-          <span v-if="tasksStore.hasActiveTasks" class="tb-stats-activity"></span>
+          <span
+            v-if="tasksStore.hasActiveTasks"
+            class="tb-stats-activity"
+          ></span>
         </button>
       </div>
     </div>
@@ -1067,7 +1077,10 @@ const gbCollapseAllStacksDisabled = computed(
   cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
-  color: rgb(var(--v-theme-on-background));
+  /* Icons and labels take the sidebar's treatment: the toolbar-text token
+     (identical to sidebar-text) at the sidebar's muted alpha, brightening on
+     hover/active — so the toolbar and sidebar chrome read as one strip. */
+  color: rgb(var(--v-theme-toolbar-text));
   background: transparent;
   /* A transparent 1px border is reserved so the open state (which colours the
      border) does not change the box size and make the button jump. */
@@ -1079,7 +1092,8 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 .bar-btn:hover {
-  background: rgba(var(--v-theme-on-background), 0.1);
+  background: rgba(var(--v-theme-toolbar-text), 0.1);
+  color: rgb(var(--v-theme-toolbar-text));
 }
 
 .bar-btn--active {
@@ -1147,7 +1161,7 @@ const gbCollapseAllStacksDisabled = computed(
 
 .bar-btn-prefix {
   font-size: var(--text-sm);
-  opacity: 0.55;
+  opacity: 0.6;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -1351,6 +1365,8 @@ const gbCollapseAllStacksDisabled = computed(
   white-space: nowrap;
   font-size: var(--text-base);
   flex-shrink: 1;
+  /* The current selection reads at full strength against the muted "Sort:". */
+  color: rgb(var(--v-theme-toolbar-text));
 }
 
 .bar-btn-sort-secondary {

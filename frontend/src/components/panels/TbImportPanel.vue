@@ -1,8 +1,10 @@
 <template>
   <div class="tbm tb-import-panel">
-    <span class="tbm-caret tbm-caret--start"></span>
+    <span class="tbm-caret tbm-caret--end"></span>
     <div class="tbm-header tb-import-header">
-      <v-icon size="18" class="tbm-header-icon">mdi-cloud-upload-outline</v-icon>
+      <v-icon size="18" class="tbm-header-icon"
+        >mdi-cloud-upload-outline</v-icon
+      >
       <span class="tbm-title">Import photos to</span>
       <span class="tbm-spacer"></span>
       <div class="tbm-select-wrap tb-import-project">
@@ -49,7 +51,9 @@
         @dragleave.stop.prevent="onDragLeave"
         @drop.stop.prevent="onDrop"
       >
-        <v-icon size="30" class="tb-import-dropzone-icon">mdi-tray-arrow-up</v-icon>
+        <v-icon size="30" class="tb-import-dropzone-icon"
+          >mdi-tray-arrow-up</v-icon
+        >
         <div class="tb-import-dropzone-text">{{ dropMessage }}</div>
       </div>
       <input
@@ -73,7 +77,10 @@
     </div>
 
     <!-- Folder watch -->
-    <div v-else-if="activeTab === 'watch'" class="tbm-section tb-import-guidance">
+    <div
+      v-else-if="activeTab === 'watch'"
+      class="tbm-section tb-import-guidance"
+    >
       <span class="tbm-label">Automatic folder monitoring</span>
       <p class="tb-import-note">Import folders are managed in PixlStash.</p>
       <ol>

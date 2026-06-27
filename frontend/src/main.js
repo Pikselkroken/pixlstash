@@ -35,9 +35,9 @@ const pixlStashLight = {
     // style.css) so the titlebar + toolbar + sidebar read as one strip; these
     // values drive the browser layout.
     'sidebar': '#f0ede9',
-    'sidebar-text': '#23211d',
+    'sidebar-text': '#25231e',
     'toolbar': '#f0ede9',
-    'toolbar-text': '#23211d',
+    'toolbar-text': '#25231e',
     'sidebar-hover': '#b0732b',
     'on-sidebar-hover': '#ffffff',
     // Raised controls: inputs and buttons sit above the canvas, pure/near white.
@@ -83,9 +83,9 @@ const pixlStashDark = {
   dark: true,
   colors: {
     'sidebar': '#23282f',
-    'sidebar-text': '#f2e5da',
+    'sidebar-text': '#d8d0c8',
     'toolbar': '#23282f',
-    'toolbar-text': '#f2e5da',
+    'toolbar-text': '#d8d0c8',
     'sidebar-hover': '#f28f3b',
     'on-sidebar-hover': '#f2e5da',
     'input-background': '#2b3138',

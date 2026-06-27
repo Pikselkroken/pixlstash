@@ -564,7 +564,7 @@ watch(
     </SettingsSection>
 
     <!-- ── API Tokens ────────────────────────────────────────────────── -->
-    <SettingsSection title="API Tokens">
+    <SettingsSection title="API Tokens" class="account-tokens-section">
       <template #action>
         <AppButton
           variant="primary_green"
@@ -588,9 +588,9 @@ watch(
               <th>Name</th>
               <th>Scope</th>
               <th>Created</th>
-              <th>Last used</th>
+              <th>Used</th>
               <th>Expires</th>
-              <th>Watermark</th>
+              <th class="account-token-th-wm">Mark</th>
               <th class="account-token-th-actions"></th>
             </tr>
           </thead>
@@ -860,7 +860,13 @@ watch(
 
 <style scoped>
 .account-pane {
-  display: block;
+  /* Fill the fixed-height Settings content box and lay the sections out as a
+     column, so the API Tokens list can flex into the leftover space and scroll
+     internally instead of pushing the whole pane past the content area. */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 /* ── Account ──────────────────────────────────────────────────────────── */
@@ -1054,10 +1060,23 @@ watch(
   margin-bottom: var(--space-3);
 }
 
+/* The API Tokens section is the flexible one: it grows to consume the pane's
+   leftover height. Its header stays put while the table below scrolls inside it. */
+.account-tokens-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .account-token-table-wrap {
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  overflow: hidden;
+  /* Fill the section's leftover height and scroll internally, so the Settings
+     content area itself never grows a (global) scrollbar. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .account-token-table {
@@ -1068,7 +1087,7 @@ watch(
 
 .account-token-table thead th {
   text-align: left;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
@@ -1077,6 +1096,10 @@ watch(
   background: rgb(var(--v-theme-input-background));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   white-space: nowrap;
+  /* Stay visible while the list scrolls under it. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .account-token-th-actions {
@@ -1092,7 +1115,7 @@ watch(
 }
 
 .account-token-table td {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   vertical-align: middle;
 }
 
@@ -1101,7 +1124,11 @@ watch(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 140px;
+  max-width: 100px;
+}
+
+.account-token-th-wm {
+  text-align: center;
 }
 
 .account-token-pill {
@@ -1139,10 +1166,18 @@ watch(
 .account-token-wm-switch {
   display: inline-flex;
   justify-content: center;
+  /* Shrink the Vuetify switch so it doesn't drive the row height. */
+  transform: scale(0.8);
+  transform-origin: center;
+  margin: -6px 0;
 }
 
 .account-token-wm-switch :deep(.v-input__control) {
   flex: none;
+}
+
+.account-token-wm-switch :deep(.v-selection-control) {
+  min-height: 0;
 }
 
 .account-token-actions {

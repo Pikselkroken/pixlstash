@@ -252,6 +252,34 @@ watch(
       </div>
     </SettingsSection>
 
+    <SettingsSection title="VRAM Budget (GB)">
+      <div class="vram-row">
+        <span class="vram-value">{{ maxVramGbValue }} GB</span>
+        <div class="vram-track">
+          <v-slider
+            v-model="maxVramGbValue"
+            :min="VRAM_BUDGET_MIN_GB"
+            :max="maxVramGbMax"
+            :step="VRAM_BUDGET_STEP_GB"
+            hide-details
+            density="compact"
+            color="accent"
+            track-color="rgba(var(--v-theme-on-surface), 0.2)"
+            :disabled="maxVramGbLoading || maxVramGbHydrating"
+          />
+        </div>
+        <span class="vram-meta">
+          max {{ maxVramGbMax }} GB
+          <template v-if="maxVramGbError">
+            · <span class="vram-err">{{ maxVramGbError }}</span>
+          </template>
+          <template v-else-if="maxVramGbSuccess">
+            · {{ maxVramGbSuccess }}
+          </template>
+        </span>
+      </div>
+    </SettingsSection>
+
     <SettingsSection
       title="Auto-tagging"
       desc="Plugins that generate tags and captions automatically. Hint: you can also pick taggers for selected pictures in the tag panel or context menu."
@@ -280,34 +308,6 @@ watch(
           />
         </SettingsFieldBlock>
       </SettingsTwoCol>
-    </SettingsSection>
-
-    <SettingsSection title="VRAM Budget (GB)">
-      <div class="vram-row">
-        <span class="vram-value">{{ maxVramGbValue }} GB</span>
-        <div class="vram-track">
-          <v-slider
-            v-model="maxVramGbValue"
-            :min="VRAM_BUDGET_MIN_GB"
-            :max="maxVramGbMax"
-            :step="VRAM_BUDGET_STEP_GB"
-            hide-details
-            density="compact"
-            color="accent"
-            track-color="rgba(var(--v-theme-on-surface), 0.2)"
-            :disabled="maxVramGbLoading || maxVramGbHydrating"
-          />
-        </div>
-        <span class="vram-meta">
-          max {{ maxVramGbMax }} GB
-          <template v-if="maxVramGbError">
-            · <span class="vram-err">{{ maxVramGbError }}</span>
-          </template>
-          <template v-else-if="maxVramGbSuccess">
-            · {{ maxVramGbSuccess }}
-          </template>
-        </span>
-      </div>
     </SettingsSection>
   </div>
 </template>

@@ -296,9 +296,10 @@ watch(
 }
 
 /* Each pane fills the content height so panes that pin content to the bottom
-   (e.g. the Backend tab's library/log links) have a full-height box to work in. */
+   (e.g. the Backend tab's library/log links, the Snapshots retention notes)
+   have a full-height box to push that content against. */
 .settings-pane {
-  min-height: 100%;
+  height: 100%;
 }
 
 /* Vuetify's switch label defaults to 1rem / 0.6 opacity, which reads oversized
