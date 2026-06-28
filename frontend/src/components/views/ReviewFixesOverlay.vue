@@ -43,8 +43,6 @@
                 <span
                   class="rf-tag-trigger-label"
                   :class="{
-                    'rf-tag-anomaly':
-                      store.activeTag && store.isAnomalyTag(store.activeTag),
                     'rf-tag-trigger-label--placeholder': !store.activeTag,
                   }"
                 >
@@ -1847,7 +1845,7 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 .rf-tally {
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-regular);
 }
 .rf-tally--removed {
   color: rgb(var(--v-theme-error));
@@ -2086,6 +2084,9 @@ onUnmounted(() => {
   display: flex;
   gap: var(--space-5);
   width: 100%;
+  /* Match the banner's cap so the picture frame and the banner above it are the
+     same width (both centred in .rf-review). */
+  max-width: 1180px;
   justify-content: center;
   align-items: stretch;
 }

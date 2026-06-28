@@ -70,7 +70,7 @@ function childImageCount() {
       "
     >
       <v-icon
-        size="16"
+        size="12"
         class="sidebar-folder-chevron"
         :style="{ visibility: hasChildren() ? 'visible' : 'hidden' }"
         @click.stop="emit('toggle', entry.path)"

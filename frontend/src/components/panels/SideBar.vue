@@ -4093,29 +4093,6 @@ defineExpose({
       </Teleport>
     </div>
     <div v-else-if="!scopedResourceType" class="sidebar-view-header">
-      <div v-if="isDesktop" class="sidebar-view-title-row">
-        <span class="sidebar-view-title-text">
-          <v-icon size="13" class="sidebar-view-title-icon"
-            >mdi-bookshelf</v-icon
-          >
-          Library
-        </span>
-        <button
-          class="sidebar-pin-toggle"
-          :class="{ pinned: sidebarStore.sidebarPinned }"
-          type="button"
-          :title="
-            sidebarStore.sidebarPinned
-              ? 'Unpin sidebar (auto-hide)'
-              : 'Pin sidebar open'
-          "
-          @click="sidebarStore.toggleSidebarPinned()"
-        >
-          <v-icon size="15">{{
-            sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
-          }}</v-icon>
-        </button>
-      </div>
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
           <button
@@ -4127,7 +4104,7 @@ defineExpose({
             @click="selectLibraryTab('global')"
           >
             <v-icon size="14">mdi-earth</v-icon>
-            Global
+            <span class="sidebar-view-tab-label">Global</span>
           </button>
           <button
             class="sidebar-view-tab"
@@ -4139,7 +4116,7 @@ defineExpose({
             @click="selectLibraryTab('project')"
           >
             <v-icon size="14">mdi-folder-outline</v-icon>
-            Projects
+            <span class="sidebar-view-tab-label">Projects</span>
           </button>
           <button
             v-if="!isReadOnly"
@@ -4148,10 +4125,28 @@ defineExpose({
             @click="selectFoldersTab()"
           >
             <v-icon size="14">mdi-folder-network-outline</v-icon>
-            Folders
+            <span class="sidebar-view-tab-label">Folders</span>
           </button>
         </div>
       </div>
+      <!-- Pin lives here (it controls the sidebar). Compact trailing icon button so
+           the three tabs keep the rest of the row and collapse their labels as the
+           sidebar narrows. -->
+      <button
+        class="sidebar-pin-toggle sidebar-tab-pin"
+        :class="{ pinned: sidebarStore.sidebarPinned }"
+        type="button"
+        :title="
+          sidebarStore.sidebarPinned
+            ? 'Unpin sidebar (auto-hide)'
+            : 'Pin sidebar open'
+        "
+        @click="sidebarStore.toggleSidebarPinned()"
+      >
+        <v-icon size="15">{{
+          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
+        }}</v-icon>
+      </button>
     </div>
     <div class="sidebar-scroll" ref="dockedScrollRef">
       <template v-if="props.docked">
@@ -4772,7 +4767,7 @@ defineExpose({
                 "
               >
                 <v-icon
-                  size="16"
+                  size="12"
                   class="sidebar-folder-chevron"
                   :style="{
                     visibility:
@@ -4968,7 +4963,7 @@ defineExpose({
                 "
               >
                 <v-icon
-                  size="16"
+                  size="12"
                   class="sidebar-folder-chevron"
                   style="visibility: hidden"
                 >
@@ -6450,16 +6445,28 @@ defineExpose({
 
 .sidebar-view-header {
   display: flex;
-  flex-direction: column;
+  align-items: stretch;
   flex-shrink: 0;
+  /* Fixed 36px so the tabs' bottom edge aligns with the 36px toolbar's, regardless
+     of the sidebar font scaling. min-height:0 defeats the flex default
+     (min-height:auto) — without it the tab content pushes this past its set height
+     (the toolbar, a plain block, isn't subject to that). Re-pin --text-xs (the only
+     ramp token the tabs use) to its literal value so the tab labels are exempt from
+     --sidebar-font-scale and the height never drifts. */
+  height: 36px;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  --text-xs: 0.75rem;
 }
 
-.sidebar-view-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-  padding: 0 var(--space-2) 0 var(--space-3);
+/* Pin button at the right edge of the tab row; fixed size so the tabs take the
+   rest of the row. */
+.sidebar-tab-pin {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: var(--space-1);
 }
 
 .sidebar-pin-toggle {
@@ -6493,7 +6500,7 @@ defineExpose({
   justify-content: center;
   /* At least toolbar height (so the icons below line up under the toolbar), but
      grow to fit the pin when thumbnails are sized larger than that. */
-  height: max(48px, var(--sidebar-thumb-size));
+  height: max(40px, var(--sidebar-thumb-size));
   flex-shrink: 0;
 }
 .sidebar-pin-toggle--dock {
@@ -6524,32 +6531,21 @@ defineExpose({
   color: rgb(var(--v-theme-accent));
 }
 
-.sidebar-view-title-text {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-view-title-icon {
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
 .sidebar-view-tabs-row {
   display: flex;
-  align-items: center;
-  padding: 0 var(--space-1) var(--space-1);
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
   position: relative;
   z-index: 1;
-  margin-top: 0;
-  margin-bottom: 0;
   gap: 0;
   background: transparent;
   border-bottom: none;
+  /* Query container for the progressive tab-label collapse (see the @container
+     rules below). Sits on the tabs row — not the header — so the thresholds
+     measure the space actually left for the tabs after the pin button. */
+  container: sidebartabs / inline-size;
 }
 
 .sidebar-view-tabs-icon {
@@ -6573,9 +6569,10 @@ defineExpose({
 
 .sidebar-view-tabs {
   display: flex;
-  flex-wrap: wrap;
+  align-items: stretch;
   gap: 0;
   flex: 1;
+  min-width: 0;
 }
 
 .sidebar-view-tab {
@@ -6583,21 +6580,24 @@ defineExpose({
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  /* Trimmed vertical padding so the header (title row + this tab row) stays at the
-     48px toolbar height when the tabs sit on one line; min-height pads any slack. */
-  padding: var(--space-1) var(--space-2);
-  /* Grow to fill the row, but don't shrink below the icon+label — so when the
-     sidebar is narrowed the tabs wrap onto new lines instead of clipping. */
-  flex: 1 0 auto;
+  padding: 0 var(--space-2);
+  /* Equal widths that can shrink; labels are dropped (icon-only) when the sidebar
+     is narrow, so the tabs always stay on one line and the header height (and its
+     alignment with the toolbar) never changes. */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
   border-radius: 0;
   border: none;
   border-bottom: 2px solid transparent;
+  /* Overlap the header's 1px bottom border so the active underline sits on it. */
+  margin-bottom: -1px;
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
   cursor: pointer;
   background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
+  color: rgba(var(--v-theme-sidebar-text), 0.55);
   transition:
     color 0.15s,
     border-color 0.15s;
@@ -6609,6 +6609,38 @@ defineExpose({
   color: inherit;
 }
 
+/* Tab text label — shown whole or not at all (no ellipsis). It's dropped in two
+   stages by the @container rules below as the header narrows. */
+.sidebar-view-tab-label {
+  white-space: nowrap;
+}
+
+/* Stage 1 — the non-selected tabs shed their text and shrink to their icon, so
+   the selected tab keeps its label and takes the freed space. */
+@container sidebartabs (max-width: 205px) {
+  .sidebar-view-tab:not(.active) .sidebar-view-tab-label {
+    display: none;
+  }
+  .sidebar-view-tab:not(.active) {
+    flex: 0 1 auto;
+  }
+  .sidebar-view-tab.active {
+    flex: 1 1 auto;
+  }
+}
+
+/* Stage 2 — too tight even for the selected label: every tab is icon-only and
+   the three share the row equally again. */
+@container sidebartabs (max-width: 115px) {
+  .sidebar-view-tab.active .sidebar-view-tab-label {
+    display: none;
+  }
+  .sidebar-view-tab:not(.active),
+  .sidebar-view-tab.active {
+    flex: 1 1 0;
+  }
+}
+
 .sidebar-view-tab.active {
   background: transparent;
   color: rgb(var(--v-theme-accent));
@@ -6616,15 +6648,7 @@ defineExpose({
 }
 
 .sidebar-view-tab:hover:not(.active) {
-  background: rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgb(var(--v-theme-sidebar-text));
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .sidebar-view-tab {
-    min-height: 44px;
-    padding: var(--space-3) var(--space-3);
-  }
 }
 
 .sidebar-tab-panel {
@@ -8607,7 +8631,7 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-3);
+  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-1);
   min-height: 28px;
   cursor: pointer;
   color: rgb(var(--v-theme-sidebar-text));
@@ -8684,8 +8708,8 @@ defineExpose({
 .sidebar-folder-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-3);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-1);
   cursor: pointer;
   color: rgb(var(--v-theme-sidebar-text));
   user-select: none;

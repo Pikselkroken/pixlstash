@@ -943,7 +943,10 @@ const gbCollapseAllStacksDisabled = computed(
   background: rgba(var(--v-theme-toolbar), 0.95);
   padding: 0 var(--space-3);
   margin: 0;
-  height: 48px;
+  height: 36px;
+  /* 1px divider along the bottom. box-sizing:border-box keeps the bar at 36px
+     (the border sits inside), so this doesn't grow the toolbar. */
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -1086,7 +1089,7 @@ const gbCollapseAllStacksDisabled = computed(
      border) does not change the box size and make the button jump. */
   border: 1px solid transparent;
   box-sizing: border-box;
-  height: 40px;
+  height: 32px;
   white-space: nowrap;
   position: relative;
 }
@@ -1106,8 +1109,8 @@ const gbCollapseAllStacksDisabled = computed(
 
 /* Icon-only bar button */
 .bar-btn--icon {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   display: flex;
   align-items: center;
