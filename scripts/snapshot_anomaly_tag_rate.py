@@ -25,7 +25,7 @@ PENALIZED_TAGS = [
     "missing toe",
     "extra toe",
     "fused toes",
-    "pixelated",
+    "blocky",
 ]
 
 

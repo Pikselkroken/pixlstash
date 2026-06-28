@@ -87,20 +87,13 @@ def test_penalty_respects_cap():
             "bad anatomy": 1.0,
             "watermark": 1.0,
             "noise": 1.0,
-            "oversaturation": 1.0,
-            "pixelated": 1.0,
+            "blocky": 1.0,
             "waxy skin": 1.0,
         },
         metrics={"noise_level": 1.0, "colorfulness": 1.0, "sharpness": 0.0},
         cap=DEFAULT_PENALTY_CAP,
     )
     assert huge <= DEFAULT_PENALTY_CAP
-
-
-def test_corroboration_oversaturation_tracks_colorfulness():
-    low = anomaly_penalty({"oversaturation": 0.9}, metrics={"colorfulness": 0.1})
-    high = anomaly_penalty({"oversaturation": 0.9}, metrics={"colorfulness": 0.95})
-    assert 0.0 < low < high
 
 
 def test_corroboration_noise_disambiguated_by_sharpness():

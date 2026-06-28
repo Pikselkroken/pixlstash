@@ -11,7 +11,7 @@ PixlStash auto-assigns a 1–5 "smart score" so the grid ranks images without th
 rating everything. The goal is to land that score as close as possible to **how most
 people would score the image**. Two input changes prompted a rethink:
 
-- **4 new full-image anomaly tags** — `compression artifacts`, `noise`, `oversaturation`,
+- **4 new full-image anomaly tags** — `blocky`, `noise`
   `watermark` — global quality defects (not body-part defects) a human downscores
   regardless of subject.
 - **Several anomaly tags raised to ~0.90 precision**: a broader and more accurate set of
@@ -77,7 +77,7 @@ penalty   = w_penalised · min( Σ_f severity_f · noisyOR_f , CAP=3.5 )
 SEVERITY_GAIN`, reading the per-tag weights from `DEFAULT_SMART_SCORE_PENALIZED_TAGS` (the
 single editable source of truth — also where the 4 new IQA tags are registered). With
 `SEVERITY_GAIN = 1.5` and `w_penalised = 0.50`: anatomy 1.5, watermark 1.2, compression 0.9,
-noise/oversaturation/skin 0.6. The gain + power let a confident catastrophic defect drive
+noise/skin 0.6. The gain + power let a confident catastrophic defect drive
 the score to the floor while *reliability stays a separate axis* (the precision discount):
 "malformed hand" is as severe as "bad anatomy" but harder to predict, so same severity,
 lower precision, less punishment per detection. Worked behaviour on a clean reference image
@@ -101,7 +101,6 @@ Where a family declares a corroborator, `e_t` is multiplied by a bounded factor 
 `[0.5, 1.0]` from an objective metric, so two independent signals agreeing raises effective
 precision and disagreement damps (never zeroes — a noisy metric cannot dominate the model):
 
-- **oversaturation ↔ `colorfulness`** (Hasler–Süsstrunk) — clean corroborator.
 - **noise ↔ `noise_level`**, *disambiguated by sharpness*: `noise_level` (mean |Laplacian|)
   is confounded with edge detail, so agreement = `noise_norm · (1 − sharpness)` (noisy but
   not sharp). `compression` has no defensible objective metric and is left uncorroborated.

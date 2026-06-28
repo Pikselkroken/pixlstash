@@ -79,17 +79,12 @@ ANOMALY_FAMILIES = (
     },
     {
         "name": "compression",
-        "tags": ("compression artifacts", "jpeg artifacts", "pixelated"),
+        "tags": ("compression artifacts", "jpeg artifacts", "blocky"),
     },
     {
         "name": "noise",
         "corroborate": "noise",
         "tags": ("noise", "film grain"),
-    },
-    {
-        "name": "oversaturation",
-        "corroborate": "oversaturation",
-        "tags": ("oversaturation",),
     },
     {
         "name": "watermark",
@@ -154,13 +149,6 @@ def _clip01(value) -> float:
 
 def _agreement(metric_name: str, metrics: dict) -> float | None:
     """Objective support in [0, 1] for a defect, or ``None`` if the metric is absent."""
-    if metric_name == "oversaturation":
-        colorfulness = metrics.get("colorfulness")
-        if colorfulness is None:
-            return None
-        return _clip01(
-            (colorfulness - COLORFULNESS_LO) / (COLORFULNESS_HI - COLORFULNESS_LO)
-        )
     if metric_name == "noise":
         noise = metrics.get("noise_level")
         if noise is None:
