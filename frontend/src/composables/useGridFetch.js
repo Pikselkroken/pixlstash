@@ -590,6 +590,11 @@ export function useGridFetch(
         // guard. Defer the whole reconcile to overlay close instead.
         if (overlayOpen.value) {
           pendingOverlayGridRefresh.value = true;
+          // We started the sort progress bar above but are deferring this fetch
+          // to overlay-close, so it will never reach the completion below.
+          // Dismiss the bar now, otherwise "Sorting by …" is stranded forever.
+          if (isSortedFetch && options?.showProgress === true)
+            completeSmartScoreProgress(loadId, 0, false);
           return;
         }
         // Streaming: COUNT(*) → placeholder grid → parallel first/last batches → background fill.
