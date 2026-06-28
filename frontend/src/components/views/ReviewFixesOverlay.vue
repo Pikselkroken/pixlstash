@@ -267,17 +267,86 @@
                     >· {{ confText(true, taggedSide.conf) }}</span
                   >
                 </span>
+                <!-- Heatmap/box toggle: only when there's a region to show for this card.
+                     Reflects the persisted on/off state; tinted accent when on. -->
+                <button
+                  v-if="hasRegion"
+                  type="button"
+                  class="rf-heatmap-toggle"
+                  :class="{ 'rf-heatmap-toggle--on': store.heatmapEnabled }"
+                  :aria-pressed="store.heatmapEnabled"
+                  :title="
+                    store.heatmapEnabled
+                      ? `Hide the “${current.tag}” heatmap (H)`
+                      : `Show where “${current.tag}” is (H)`
+                  "
+                  @click.stop="store.setHeatmapEnabled(!store.heatmapEnabled)"
+                >
+                  <!-- Locator glyph + label. One glyph for both states; on/off is
+                       carried by the red --on tint, aria-pressed, and the title. -->
+                  <v-icon size="15">mdi-image-filter-center-focus</v-icon>
+                  <span class="rf-heatmap-toggle-label">Tag location</span>
+                </button>
               </figcaption>
               <div class="rf-img-wrap">
                 <img
+                  ref="flaggedImgRef"
                   class="rf-img"
                   :src="imgSrc(taggedSide.id, taggedSide.ext)"
                   :alt="`picture ${taggedSide.id}`"
                   title="Click to select · scroll to zoom"
                   @click="togglePaneSelection(taggedSide.id)"
                   @wheel.prevent="openZoom(taggedSide.id, taggedSide.ext)"
+                  @load="onFlaggedImgLoad"
                   @error="onImgError($event, taggedSide.id)"
                 />
+                <!-- Anomaly overlay, aligned to the image's RENDERED content box (object-fit:
+                     contain letterboxes the image inside .rf-img, so the layer is positioned
+                     by the computed contain-rect, not the wrapper). The heatmap fills the
+                     rect (pointer-events:none — visual only); the box is a clickable hotspot
+                     that zooms into the region. Hidden in the zoom view (raw image only). -->
+                <div
+                  v-if="regionVisible"
+                  class="rf-region"
+                  :style="regionLayerStyle"
+                >
+                  <img
+                    v-if="taggedRegion.heatmap"
+                    class="rf-region-heatmap"
+                    :src="taggedRegion.heatmap"
+                    alt=""
+                  />
+                  <button
+                    v-for="(b, i) in taggedRegion.boxes"
+                    :key="i"
+                    type="button"
+                    class="rf-region-box"
+                    :style="boxStyle(b)"
+                    :title="`Zoom into this “${current.tag}” region`"
+                    @click.stop="zoomToRegion(b)"
+                  >
+                    <v-icon size="14" class="rf-region-box-icon"
+                      >mdi-magnify-plus-outline</v-icon
+                    >
+                  </button>
+                </div>
+                <!-- Indeterminate "locating" indicator. Shown (after a short delay so
+                     it doesn't flash for fast/cached responses) while the region is
+                     being fetched — the first fetch after the tagger has been idle-
+                     unloaded loads the model server-side, which takes a few seconds. -->
+                <div
+                  v-if="showRegionLoading"
+                  class="rf-region-loading"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span class="rf-region-loading-text">
+                    Locating “{{ current.tag }}”…
+                  </span>
+                  <span class="rf-region-loading-bar" aria-hidden="true">
+                    <span class="rf-region-loading-fill"></span>
+                  </span>
+                </div>
                 <button
                   type="button"
                   class="rf-zoom-btn"
@@ -518,6 +587,17 @@
         {{ Math.round(zoomScale * 100) }}% · scroll to zoom · drag to pan ·
         click or Esc to close · <kbd>←</kbd>/<kbd>→</kbd> still apply
       </div>
+      <!-- Framed-zoom escape: jump back out to the whole image (the box was a hint). -->
+      <button
+        v-if="zoom.box"
+        type="button"
+        class="rf-zoom-fit"
+        title="Show the whole image"
+        @click.stop="fitZoom"
+      >
+        <v-icon size="15">mdi-fit-to-page-outline</v-icon>
+        Whole image
+      </button>
     </div>
   </div>
 </template>
@@ -801,6 +881,26 @@ watch(
   },
 );
 
+// Kick off the anomaly-region fetch for the flagged pane. We only fetch for anomaly
+// (smart-score penalised) tags — those are the ones the model can localise; other tags
+// would just 422. The source includes the anomaly-status of the current tag so we (re)try
+// once the background anomalyTags set lands (it isn't loaded yet when the first card
+// arrives). The store caches per (id, tag) and de-dupes in-flight, so retries are cheap.
+watch(
+  () => [
+    current.value?.picture_id,
+    current.value?.tag ? store.isAnomalyTag(current.value.tag) : false,
+  ],
+  () => {
+    const tag = current.value?.tag;
+    const side = taggedSide.value;
+    if (side?.id != null && tag && store.isAnomalyTag(tag)) {
+      store.fetchAnomalyRegion(side.id, tag);
+    }
+  },
+  { immediate: true },
+);
+
 // Minimal image objects so TbTagPanel can show a thumbnail preview of the panes.
 const selectedSideImages = computed(() => {
   const sides = [taggedSide.value, untaggedSide.value].filter(Boolean);
@@ -1048,10 +1148,141 @@ function onImgError(event, id) {
   el.src = `${props.backendUrl}/pictures/thumbnails/${id}.webp`;
 }
 
+// --- Anomaly-region overlay (heatmap + box) on the flagged pane -------------
+//
+// The heatmap PNG and the box coords are normalised to the FULL image, but .rf-img uses
+// object-fit: contain, so the image is letterboxed inside its element. We therefore align
+// the overlay layer to the image's RENDERED content rect (the contain-fit rectangle), not
+// the wrapper. renderedRect is recomputed from the flagged image's natural size and its
+// current rendered (client) size, kept live by a ResizeObserver so it follows window/panel
+// resizes. Inside that rect the heatmap fills 100% and the box is placed by percentages.
+const flaggedImgRef = ref(null);
+const flaggedNatW = ref(0);
+const flaggedNatH = ref(0);
+const flaggedBoxW = ref(0); // rendered element width (px)
+const flaggedBoxH = ref(0); // rendered element height (px)
+let flaggedRO = null;
+
+function measureFlagged() {
+  const el = flaggedImgRef.value;
+  if (!el) return;
+  flaggedBoxW.value = el.clientWidth;
+  flaggedBoxH.value = el.clientHeight;
+}
+
+function onFlaggedImgLoad(event) {
+  const img = event.target;
+  flaggedNatW.value = img.naturalWidth || 0;
+  flaggedNatH.value = img.naturalHeight || 0;
+  measureFlagged();
+}
+
+// Observe the flagged image element across cards (the element is reused; only its src
+// changes). Re-observe when the ref swaps (e.g. leaving/entering the review state).
+watch(flaggedImgRef, (el, prev) => {
+  if (flaggedRO && prev) flaggedRO.unobserve(prev);
+  if (el) {
+    if (!flaggedRO) flaggedRO = new ResizeObserver(measureFlagged);
+    flaggedRO.observe(el);
+    measureFlagged();
+  }
+});
+
+// The contain-fit rectangle of the flagged image within its element, in px. Null until we
+// know both the natural and rendered sizes.
+const renderedRect = computed(() => {
+  const nw = flaggedNatW.value;
+  const nh = flaggedNatH.value;
+  const cw = flaggedBoxW.value;
+  const ch = flaggedBoxH.value;
+  if (!nw || !nh || !cw || !ch) return null;
+  const scale = Math.min(cw / nw, ch / nh);
+  const dw = nw * scale;
+  const dh = nh * scale;
+  return { left: (cw - dw) / 2, top: (ch - dh) / 2, width: dw, height: dh };
+});
+
+// The cached region for the flagged pane's (id, tag). Only a SHOWABLE region (a real box,
+// not diffuse) counts — that's what drives the toggle's presence and the overlay.
+const taggedRegion = computed(() => {
+  const side = taggedSide.value;
+  const tag = current.value?.tag;
+  if (!side || !tag) return null;
+  const r = store.anomalyRegionFor(side.id, tag);
+  if (!r || r.diffuse || !Array.isArray(r.boxes) || r.boxes.length === 0) {
+    return null;
+  }
+  return r;
+});
+
+// There's something to show for this card (drives the toggle's visibility).
+const hasRegion = computed(() => !!taggedRegion.value);
+// Actually paint it: there's a region AND the user has the toggle on.
+const regionVisible = computed(() => hasRegion.value && store.heatmapEnabled);
+
+// Is the flagged pane's region fetch in flight? (Only meaningful for anomaly tags.)
+const regionLoadingNow = computed(() => {
+  const side = taggedSide.value;
+  const tag = current.value?.tag;
+  if (!side || !tag || !store.isAnomalyTag(tag)) return false;
+  return store.isRegionLoading(side.id, tag);
+});
+
+// Gate the indicator behind a short delay so it only appears for genuinely slow
+// fetches (a server-side model load), not the fast cached/already-resident case —
+// otherwise it flashes on every card. Cleared if the fetch resolves within the delay.
+const showRegionLoading = ref(false);
+let regionLoadingTimer = null;
+watch(regionLoadingNow, (loading) => {
+  if (regionLoadingTimer) {
+    clearTimeout(regionLoadingTimer);
+    regionLoadingTimer = null;
+  }
+  if (loading) {
+    regionLoadingTimer = setTimeout(() => {
+      showRegionLoading.value = true;
+    }, 350);
+  } else {
+    showRegionLoading.value = false;
+  }
+});
+
+const regionLayerStyle = computed(() => {
+  const r = renderedRect.value;
+  if (!r) return { display: "none" };
+  return {
+    left: `${r.left}px`,
+    top: `${r.top}px`,
+    width: `${r.width}px`,
+    height: `${r.height}px`,
+  };
+});
+
+// Position one box hotspot (normalised [x, y, w, h]) within the rendered-image rect.
+function boxStyle(box) {
+  if (!Array.isArray(box) || box.length !== 4) return {};
+  const [x, y, w, h] = box;
+  return {
+    left: `${x * 100}%`,
+    top: `${y * 100}%`,
+    width: `${w * 100}%`,
+    height: `${h * 100}%`,
+  };
+}
+
+// Click a box → open the zoom framed to that region (no heatmap/box in the zoom view).
+function zoomToRegion(box) {
+  const side = taggedSide.value;
+  const target = box || taggedRegion.value?.boxes?.[0];
+  if (!side || !target) return;
+  openZoom(side.id, side.ext, target);
+}
+
 // --- Zoom: click an image to inspect it full-screen; scroll/buttons magnify, drag-scroll pans.
-const zoom = ref(null); // { src } or null
+const zoom = ref(null); // { src, box } or null
 const zoomScale = ref(1);
 const zoomNaturalW = ref(0);
+const zoomNaturalH = ref(0);
 
 // The hint pill sits at bottom-centre and would otherwise permanently cover that
 // part of the image (native scroll can't pan content out from under a fixed pill).
@@ -1079,8 +1310,11 @@ const zoomStyle = computed(() =>
     : {},
 );
 
-function openZoom(id, ext) {
-  zoom.value = { src: imgSrc(id, ext) };
+// openZoom takes an optional normalised box [x, y, w, h]: when given, onZoomLoad frames the
+// zoom on that region (scale + scroll) instead of fitting the whole image. The zoom view
+// never renders the heatmap/box overlay — it's the raw image, just framed to the region.
+function openZoom(id, ext, box = null) {
+  zoom.value = { src: imgSrc(id, ext), box };
   zoomScale.value = 1;
   zoomNaturalW.value = 0;
   pokeHint();
@@ -1090,13 +1324,55 @@ function closeZoom() {
   clearHintTimer();
 }
 function onZoomLoad(event) {
-  // Start at "fit the viewport height" so detail is already visible, then let the
-  // user magnify further. naturalWidth drives the pixel width we render at.
   const img = event.target;
-  zoomNaturalW.value = img.naturalWidth || 0;
-  const fitByHeight =
-    img.naturalHeight > 0 ? (window.innerHeight * 0.92) / img.naturalHeight : 1;
+  const nw = img.naturalWidth || 0;
+  const nh = img.naturalHeight || 0;
+  zoomNaturalW.value = nw;
+  zoomNaturalH.value = nh;
+  const box = zoom.value?.box || null;
+  const container = img.parentElement; // .rf-zoom (the scroll container)
+  if (box && nw && nh && container) {
+    // Frame the region: scale so the box (nearly) fills the viewport, contained, with a
+    // little breathing room, then scroll so the box centre sits in the viewport centre.
+    const availW = container.clientWidth;
+    const availH = container.clientHeight;
+    const boxW = nw * box[2];
+    const boxH = nh * box[3];
+    const pad = 0.9; // leave a margin around the region so it isn't edge-to-edge
+    const scale = Math.max(
+      0.25,
+      Math.min((availW / boxW) * pad, (availH / boxH) * pad, 12),
+    );
+    zoomScale.value = scale;
+    // Wait for the new width to lay out before reading/setting scroll (clamped by the
+    // browser to the scrollable range, so over-shooting on a small image is harmless).
+    nextTick(() => {
+      const cx = nw * (box[0] + box[2] / 2) * scale;
+      const cy = nh * (box[1] + box[3] / 2) * scale;
+      container.scrollLeft = cx - availW / 2;
+      container.scrollTop = cy - availH / 2;
+    });
+    return;
+  }
+  // Plain zoom: start at "fit the viewport height" so detail is already visible.
+  const fitByHeight = nh > 0 ? (window.innerHeight * 0.92) / nh : 1;
   zoomScale.value = Math.max(0.25, Math.min(fitByHeight, 4));
+}
+// Escape the framed view: reset to fit-the-whole-image and recentre. The box was only a
+// hint, so dropping it here keeps the user in plain-zoom mode afterwards.
+function fitZoom() {
+  const nh = zoomNaturalH.value;
+  const fit = nh > 0 ? (window.innerHeight * 0.92) / nh : 1;
+  zoomScale.value = Math.max(0.25, Math.min(fit, 4));
+  if (zoom.value) zoom.value = { ...zoom.value, box: null };
+  nextTick(() => {
+    const el = document.querySelector(".rf-zoom");
+    if (el) {
+      el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+      el.scrollTop = 0;
+    }
+  });
+  pokeHint();
 }
 function nudgeZoom(factor) {
   zoomScale.value = Math.max(0.1, Math.min(zoomScale.value * factor, 12));
@@ -1241,6 +1517,10 @@ function handleKeyDown(event) {
     closeZoom();
   } else if (key === "t") {
     openTagApply();
+  } else if (key === "h") {
+    // Toggle the anomaly heatmap/box, only when there's one to show for this card.
+    if (hasRegion.value) store.setHeatmapEnabled(!store.heatmapEnabled);
+    else handled = false;
   } else {
     handled = false;
   }
@@ -1263,6 +1543,9 @@ onUnmounted(() => {
   document.removeEventListener("pointerdown", handleTagOutsideClick, true);
   window.removeEventListener("resize", positionTagMenu);
   clearHintTimer();
+  if (regionLoadingTimer) clearTimeout(regionLoadingTimer);
+  flaggedRO?.disconnect();
+  flaggedRO = null;
 });
 </script>
 
@@ -1909,6 +2192,154 @@ onUnmounted(() => {
 .rf-pane--selected .rf-pane-check {
   display: inline-flex;
 }
+
+/* Heatmap/box visibility toggle in the flagged pane head. Compact icon button in the
+   neutral dark-control skin; pushed to the right of the head. When ON it wears the pane's
+   key-state accent (the same accent that borders the flagged pane). */
+/* The Tag-location toggle reads as an anomaly control, so it is red (matching the
+   red anomaly tags and the warm heatmap). Faint red when off, a stronger red fill
+   when on; state is also carried by aria-pressed and the title. */
+.rf-heatmap-toggle {
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, rgb(var(--v-theme-error)) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 10%, transparent);
+  color: rgb(var(--v-theme-error));
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+.rf-heatmap-toggle-label {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.rf-heatmap-toggle:hover {
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 18%, transparent);
+}
+.rf-heatmap-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.rf-heatmap-toggle--on {
+  border-color: rgb(var(--v-theme-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 30%, transparent);
+  color: rgb(var(--v-theme-error));
+}
+
+/* Anomaly overlay layer, positioned to the image's rendered content rect (see
+   renderedRect in the script). Visual only — the layer doesn't catch pointer events; the
+   box hotspot inside re-enables them for itself. */
+.rf-region {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+.rf-region-heatmap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  opacity: 0.9;
+  pointer-events: none;
+  animation: rf-region-fade var(--dur-2) var(--ease-decelerate);
+}
+@keyframes rf-region-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.9;
+  }
+}
+/* The bounding box doubles as the click-to-zoom hotspot. Accent border with a scrim ring
+   so it reads on any photo; subtle accent wash + magnifier on hover. */
+.rf-region-box {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: var(--space-1);
+  border: 2px solid rgb(var(--v-theme-accent));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-scrim), 0.5);
+  cursor: zoom-in;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+.rf-region-box:hover {
+  background: color-mix(in srgb, rgb(var(--v-theme-accent)) 16%, transparent);
+}
+.rf-region-box:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.rf-region-box-icon {
+  color: rgb(var(--v-theme-accent));
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-standard);
+}
+.rf-region-box:hover .rf-region-box-icon,
+.rf-region-box:focus-visible .rf-region-box-icon {
+  opacity: 1;
+}
+
+/* "Locating…" indicator while the region is being fetched (model load + Grad-CAM).
+   A small scrim pill over the flagged image with an indeterminate progress bar —
+   the load has no measurable percentage, so the bar conveys activity, not a value. */
+.rf-region-loading {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-scrim), 0.72);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  pointer-events: none;
+}
+.rf-region-loading-bar {
+  position: relative;
+  width: 120px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-dark-surface), 0.2);
+  overflow: hidden;
+}
+.rf-region-loading-fill {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  animation: rf-region-indeterminate 1.1s var(--ease-standard) infinite;
+}
+@keyframes rf-region-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
 .rf-pane-foot {
   display: flex;
   align-items: center;
@@ -2107,6 +2538,33 @@ onUnmounted(() => {
 }
 .rf-zoom-hint--hidden {
   opacity: 0;
+}
+/* "Show whole image" escape from a framed (box) zoom. Sits bottom-left, opposite the
+   centred hint pill, in the same pill language but interactive. */
+.rf-zoom-fit {
+  position: fixed;
+  left: var(--space-5);
+  bottom: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: rgba(var(--v-theme-dark-surface), 0.9);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+  color: rgba(var(--v-theme-on-dark-surface), 0.85);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+.rf-zoom-fit:hover {
+  background: rgba(var(--v-theme-dark-surface), 0.98);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+.rf-zoom-fit:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .rf-zoom-hint kbd {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);

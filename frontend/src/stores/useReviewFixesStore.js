@@ -13,6 +13,22 @@ import { apiClient } from "../utils/apiClient";
 
 const PAGE_SIZE = 300;
 
+// localStorage key for the "show the anomaly heatmap + box on the flagged pane" toggle.
+// Remembered across cards and sessions (the overlay reads/writes it through the store).
+const HEATMAP_PREF_KEY = "pixlstash:reviewHeatmap";
+
+// Read the persisted heatmap-toggle preference, defaulting to ON. All localStorage access
+// is wrapped (private mode / disabled storage throws on read) so a failure just falls back
+// to the default rather than breaking the overlay.
+function readHeatmapPref() {
+  try {
+    const raw = window.localStorage.getItem(HEATMAP_PREF_KEY);
+    return raw === null ? true : raw === "1";
+  } catch {
+    return true;
+  }
+}
+
 // One picture can be the RIGHT-side twin of many cards, so the user judges the same
 // picture's tag-status repeatedly and may answer inconsistently. We tally those calls
 // per (tag, pictureId) and warn when a new decision contradicts a CONFIDENT prior.
@@ -40,6 +56,78 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
   const previewOpen = ref(false);
   const scanning = ref(false); // a near-neighbour scan is running
   const scanError = ref(null);
+
+  // Anomaly-region overlay (Grad-CAM heatmap + bounding box) for the flagged pane.
+  // `heatmapEnabled` is the user's show/hide toggle, persisted across cards and sessions.
+  // `anomalyRegions` caches the per-(pictureId, tag) region so flipping the toggle or
+  // revisiting a card never refetches: the value is the region object on success, or `null`
+  // when there's nothing to show (diffuse / 404 / 422 / 503). A key that is simply ABSENT
+  // means "not fetched yet". `regionInFlight` de-dupes concurrent fetches for the same key.
+  const heatmapEnabled = ref(readHeatmapPref());
+  const anomalyRegions = ref({});
+  const regionInFlight = new Set();
+  // Reactive per-key loading flag so the overlay can show a "locating…" indicator
+  // while a fetch is in flight. The first fetch after the tagger has been idle-
+  // unloaded triggers a server-side model load (a few seconds), so this matters.
+  const regionLoading = ref({});
+
+  function regionKey(pictureId, tag) {
+    return `${pictureId}|${tag}`;
+  }
+
+  // True while the region for (pictureId, tag) is being fetched (model load +
+  // Grad-CAM). Reads the reactive ref so component computeds stay reactive.
+  function isRegionLoading(pictureId, tag) {
+    if (pictureId == null || !tag) return false;
+    return !!regionLoading.value[regionKey(pictureId, tag)];
+  }
+
+  // The cached region for (pictureId, tag), or null when none/not-yet-fetched. Reads the
+  // anomalyRegions ref so component computeds that call this stay reactive.
+  function anomalyRegionFor(pictureId, tag) {
+    if (pictureId == null || !tag) return null;
+    return anomalyRegions.value[regionKey(pictureId, tag)] ?? null;
+  }
+
+  function setHeatmapEnabled(value) {
+    heatmapEnabled.value = !!value;
+    try {
+      window.localStorage.setItem(HEATMAP_PREF_KEY, heatmapEnabled.value ? "1" : "0");
+    } catch {
+      // Persisting the preference is best-effort; a storage failure just means it won't
+      // survive a reload. The in-memory toggle still works for this session.
+    }
+  }
+
+  // Fetch the anomaly region for one (pictureId, tag) and cache the result. Cached and
+  // in-flight keys short-circuit. Any non-200 (422 not-a-label, 404 missing, 503 model
+  // not loaded) caches `null` so the overlay simply shows nothing and never refetches —
+  // the contract is "handle gracefully, no error spam", so failures degrade silently.
+  async function fetchAnomalyRegion(pictureId, tag) {
+    if (pictureId == null || !tag) return null;
+    const key = regionKey(pictureId, tag);
+    if (key in anomalyRegions.value) return anomalyRegions.value[key];
+    if (regionInFlight.has(key)) return null;
+    regionInFlight.add(key);
+    regionLoading.value = { ...regionLoading.value, [key]: true };
+    try {
+      const res = await apiClient.get(`/pictures/${pictureId}/anomaly_region`, {
+        params: { tag },
+      });
+      const data = res.data ?? null;
+      anomalyRegions.value = { ...anomalyRegions.value, [key]: data };
+      return data;
+    } catch {
+      // 422 / 404 / 503 (or transient) — no overlay for this card; cache the miss.
+      anomalyRegions.value = { ...anomalyRegions.value, [key]: null };
+      return null;
+    } finally {
+      regionInFlight.delete(key);
+      const next = { ...regionLoading.value };
+      delete next[key];
+      regionLoading.value = next;
+    }
+  }
 
   // Scope filters: narrow the suggestion queue/summary/bulk to one project / set / character.
   // characterId may be a number (a real character) or the literal "UNASSIGNED". Null means
@@ -682,6 +770,8 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     undoStack.value = [];
     lastBulk.value = null;
     tagVotes.value = {};
+    anomalyRegions.value = {}; // drop cached heatmaps/boxes; keep the heatmapEnabled pref
+    regionLoading.value = {};
     scope.value = { projectId: null, setId: null, characterId: null };
     removedCount.value = 0;
     addedCount.value = 0;
@@ -713,6 +803,12 @@ export const useReviewFixesStore = defineStore("reviewFixes", () => {
     previewOpen,
     scanning,
     scanError,
+    heatmapEnabled,
+    anomalyRegions,
+    setHeatmapEnabled,
+    anomalyRegionFor,
+    isRegionLoading,
+    fetchAnomalyRegion,
     scanTag,
     selectOrScan,
     rescanActiveTag,
