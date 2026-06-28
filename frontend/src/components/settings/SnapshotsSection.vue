@@ -296,6 +296,8 @@ function handleRestore(cp) {
             v-else
             class="snapshot-label-text"
             :class="{ 'snapshot-label-text--empty': !cp.label }"
+            title="Double-click to rename"
+            @dblclick="!activeJob && startEditing(cp)"
           >
             {{ cp.label || "—" }}
           </span>
@@ -327,16 +329,8 @@ function handleRestore(cp) {
           <AppButton
             variant="ghost"
             size="sm"
-            icon-left="pencil-outline"
-            icon-only
-            title="Rename"
-            :disabled="!!activeJob || editingLabel[cp.id] !== undefined"
-            @click="startEditing(cp)"
-          />
-          <AppButton
-            variant="ghost"
-            size="sm"
             icon-left="restore"
+            icon-only
             :disabled="!!activeJob || !cp.is_compatible"
             :title="
               !cp.is_compatible
@@ -344,9 +338,7 @@ function handleRestore(cp) {
                 : 'Restore everything from this snapshot'
             "
             @click="handleRestore(cp)"
-          >
-            Restore
-          </AppButton>
+          />
           <AppButton
             variant="ghost"
             size="sm"
@@ -464,17 +456,19 @@ function handleRestore(cp) {
 .snapshot-row-meta {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-shrink: 0;
-  min-width: 150px;
+  min-width: 120px;
 }
 
 /* ── Kind pill ─────────────────────────────────────────────────────────── */
+/* Compact: 11px is the type-ramp floor, so the pill is shrunk via tighter
+   padding rather than a smaller font, freeing row width for the label. */
 .kind-pill {
   font-size: var(--text-2xs);
-  font-weight: var(--weight-bold);
-  letter-spacing: 0.04em;
-  padding: var(--space-1) var(--space-3);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
   white-space: nowrap;
   color: rgba(var(--v-theme-on-surface), 0.6);
@@ -513,6 +507,7 @@ function handleRestore(cp) {
   white-space: nowrap;
   font-style: italic;
   color: rgb(var(--v-theme-on-surface));
+  cursor: text;
 }
 
 .snapshot-label-text--empty {
