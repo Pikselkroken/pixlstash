@@ -34,6 +34,7 @@
         ref="menuRef"
         class="ate-menu"
         role="menu"
+        :style="menuStyle"
         :class="{
           open: menuOpen,
           flyout: placement === 'right',
@@ -51,44 +52,50 @@
           />
         </div>
 
-        <div v-if="isLoading" class="ate-empty">{{ config.loadingText }}</div>
-        <div v-else-if="filteredItems.length === 0" class="ate-empty">
-          {{ config.emptyText }}
+        <!-- Only the item list scrolls; the search box above and status below stay
+             pinned. The list's max height is sized to the viewport in sizeMenu(), so
+             a long list (or a flyout opened low on screen) scrolls instead of
+             running off the bottom. -->
+        <div class="ate-list">
+          <div v-if="isLoading" class="ate-empty">{{ config.loadingText }}</div>
+          <div v-else-if="filteredItems.length === 0" class="ate-empty">
+            {{ config.emptyText }}
+          </div>
+          <button
+            v-for="item in filteredItems"
+            :key="item.key"
+            :class="[
+              'ate-item',
+              {
+                'ate-item--disabled': isItemDisabled(item),
+                'ate-item--checked': getItemState(item) === 'checked',
+              },
+            ]"
+            type="button"
+            role="menuitem"
+            :disabled="isItemDisabled(item)"
+            @click.stop="toggleItem(item)"
+          >
+            <v-icon size="16" class="ate-item-check">
+              {{
+                getItemState(item) === "checked"
+                  ? "mdi-checkbox-marked"
+                  : getItemState(item) === "partial"
+                    ? "mdi-minus-box-outline"
+                    : "mdi-checkbox-blank-outline"
+              }}
+            </v-icon>
+            <span class="ate-item-name">{{ item.name }}</span>
+            <span v-if="isSet" class="ate-item-meta">
+              <span
+                v-if="isLastUsedItem(item)"
+                class="ate-item-shortcut"
+                title="Press A to add to this set"
+                >A</span
+              >
+            </span>
+          </button>
         </div>
-        <button
-          v-for="item in filteredItems"
-          :key="item.key"
-          :class="[
-            'ate-item',
-            {
-              'ate-item--disabled': isItemDisabled(item),
-              'ate-item--checked': getItemState(item) === 'checked',
-            },
-          ]"
-          type="button"
-          role="menuitem"
-          :disabled="isItemDisabled(item)"
-          @click.stop="toggleItem(item)"
-        >
-          <v-icon size="16" class="ate-item-check">
-            {{
-              getItemState(item) === "checked"
-                ? "mdi-checkbox-marked"
-                : getItemState(item) === "partial"
-                  ? "mdi-minus-box-outline"
-                  : "mdi-checkbox-blank-outline"
-            }}
-          </v-icon>
-          <span class="ate-item-name">{{ item.name }}</span>
-          <span v-if="isSet" class="ate-item-meta">
-            <span
-              v-if="isLastUsedItem(item)"
-              class="ate-item-shortcut"
-              title="Press A to add to this set"
-              >A</span
-            >
-          </span>
-        </button>
 
         <div v-if="statusMessage" class="ate-status">
           {{ statusMessage }}
@@ -187,27 +194,21 @@ const picturesWithFaces = ref(new Set());
 
 const flyoutFlipped = ref(false);
 const flyoutClickedOpen = ref(false);
-const flyoutMenuStyle = ref({});
 
-// --- Flyout positioning ---
-function positionFlyout() {
-  if (props.placement !== "right" || !rootRef.value) return;
-  const rect = rootRef.value.getBoundingClientRect();
-  const menuW = 250;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const left =
-    rect.right + 4 + menuW <= vw - 8
-      ? rect.right + 4
-      : Math.max(8, rect.left - menuW - 4);
-  const top = Math.min(rect.top, vh - 32);
-  flyoutMenuStyle.value = {
-    position: "fixed",
-    top: `${top}px`,
-    left: `${left}px`,
-    maxHeight: `${vh - top - 16}px`,
-    overflowY: "auto",
-  };
+// Dynamic max-height so the menu never runs off the bottom of the screen: measure
+// the menu's top in the viewport and cap its height to what's left below it. The
+// inner .ate-list scrolls; the search box and status stay pinned. Recomputed on
+// open and on resize/scroll (scroll uses capture, to catch a scrolling ancestor
+// such as the sidebar when this is a flyout).
+const menuStyle = ref({});
+function sizeMenu() {
+  nextTick(() => {
+    const el = menuRef.value;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    const avail = window.innerHeight - top - 12;
+    menuStyle.value = { maxHeight: `${Math.max(140, Math.round(avail))}px` };
+  });
 }
 
 // --- URL helpers ---
@@ -297,6 +298,9 @@ function toggleMenu() {
 function openMenu() {
   menuOpen.value = true;
   fetchItems(true);
+  sizeMenu();
+  window.addEventListener("resize", sizeMenu);
+  window.addEventListener("scroll", sizeMenu, true);
   if (props.placement !== "right") {
     nextTick(() => searchInputRef.value?.focus());
     document.addEventListener("pointerdown", handleOutsideClick, true);
@@ -306,6 +310,8 @@ function openMenu() {
 function closeMenu() {
   menuOpen.value = false;
   searchQuery.value = "";
+  window.removeEventListener("resize", sizeMenu);
+  window.removeEventListener("scroll", sizeMenu, true);
   if (flyoutClickedOpen.value) {
     document.removeEventListener("pointerdown", handleOutsideClick, true);
     flyoutClickedOpen.value = false;
@@ -716,7 +722,8 @@ async function addToLastSet() {
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("pointerdown", handleOutsideClick, true);
-  window.removeEventListener("resize", positionFlyout);
+  window.removeEventListener("resize", sizeMenu);
+  window.removeEventListener("scroll", sizeMenu, true);
 });
 
 watch(
@@ -783,6 +790,13 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   top: calc(100% + 8px);
   left: 0;
   min-width: 220px;
+  /* Flex column so the search box and status stay pinned while only the item list
+     scrolls. The CSS cap is a fallback; sizeMenu() sets an exact viewport-aware
+     max-height inline. overflow:hidden keeps the scroll area within the rounded card. */
+  display: flex;
+  flex-direction: column;
+  max-height: 72vh;
+  overflow: hidden;
   padding: var(--space-3);
   border-radius: var(--radius-md);
   background-color: rgb(var(--v-theme-surface));
@@ -795,6 +809,15 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
     opacity var(--dur-1) var(--ease-standard),
     transform var(--dur-1) var(--ease-standard);
   z-index: 6;
+}
+
+/* The scrolling region: only the item list scrolls when the menu is height-capped.
+   min-height:0 lets it shrink inside the flex column so overflow actually engages. */
+.ate-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ate-menu.force-dark {
@@ -845,6 +868,7 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 }
 
 .ate-search {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -933,6 +957,7 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 }
 
 .ate-status {
+  flex: 0 0 auto;
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-xs);
