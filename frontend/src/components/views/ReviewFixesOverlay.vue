@@ -1688,6 +1688,17 @@ onUnmounted(() => {
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   max-width: 280px;
+  /* The overlay chrome is always dark (see .rf-shell), but a native <select>'s
+     popup is painted by the OS/browser and defaults to a light background while
+     inheriting our light control text — unreadable. color-scheme:dark switches
+     the native popup to dark; the explicit option colours below are the
+     cross-browser belt-and-braces for engines that paint option backgrounds. */
+  color-scheme: dark;
+}
+/* The dropdown option list, made legible against the dark overlay chrome. */
+.rf-select option {
+  background-color: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 /* Scope filters sit in the same row as the tag picker; keep them compact so the row
    stays tidy and wraps cleanly when narrow. Native <select> clips the value to this width
