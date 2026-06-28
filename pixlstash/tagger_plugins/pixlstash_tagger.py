@@ -41,16 +41,24 @@ PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 # These are collected from face-crop passes and merged into the picture's flat tag list.
 QUALITY_CROP_TAG_WHITELIST = frozenset(
     {
-        "pixelated",
-        "blurry",
-        "jpeg artifacts",
-        "chromatic aberration",
-        "scan artifacts",
-        "film grain",
+        "blocky",
         "malformed teeth",
+        "flux chin",
     }
 )
-PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 448
+# The subset of the whitelist that only makes sense on a face. When no face is found
+# the quality pass falls back to a centre crop, which contains no face — judging these
+# anomalies from it would be meaningless, so they are excluded there.
+FACE_QUALITY_CROP_TAGS = frozenset(
+    {
+        "malformed teeth",
+        "flux chin",
+    }
+)
+# Whitelist for the centre-crop fallback: the high-res quality tags that are not tied
+# to a face (e.g. blockiness).
+CENTRE_CROP_TAG_WHITELIST = QUALITY_CROP_TAG_WHITELIST - FACE_QUALITY_CROP_TAGS
+PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 576
 PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
 
 # ------------------------------------------------------------------------- #

@@ -12,12 +12,14 @@ import os
 import tempfile
 
 from fastapi.testclient import TestClient
-from sqlmodel import select
+from sqlmodel import delete, select
 
+from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
 from pixlstash.services import tag_prediction_service, tag_suggestion_service
+from pixlstash.tasks.tag_task import TagTask
 from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -268,6 +270,68 @@ def test_tagger_does_not_clobber_human_label():
         # delete_tag_predictions (the re-tag bulk path) must not remove the human row.
         tag_prediction_service.delete_tag_predictions(server.vault, pic_id)
         assert _ledger(server, pic_id, "malformed hand")[:2] == ("NEG", "human")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _status(server, pic_id, tag):
+    """Return the review-UI status of a prediction row (or None)."""
+
+    def _fetch(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == pic_id, TagPrediction.tag == tag
+            )
+        ).first()
+        return row.status if row else None
+
+    return server.vault.db.run_immediate_read_task(_fetch)
+
+
+def test_retag_status_flip_preserves_accepted_human_label():
+    """Re-tagging must not push a human-accepted tag into the rejected pile.
+
+    Regression for the ImageOverlay re-tag bug: both status-resolution passes
+    (_resolve_pending_predictions and _write_predictions_from_tags) auto-flipped
+    a prediction's status from the freshly-applied tag set, ignoring the durable
+    human POS label. When the new pass didn't re-apply the tag, the accepted row
+    flipped to REJECTED even at 100% confidence.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, "malformed hand", 0.88, "epoch-50")
+
+        # Human accepts the tag: POS/human, status CONFIRMED, Tag row created.
+        tag_prediction_service.confirm_tag_prediction(
+            server.vault, pic_id, "malformed hand"
+        )
+        assert _ledger(server, pic_id, "malformed hand")[:2] == ("POS", "human")
+        assert _status(server, pic_id, "malformed hand") == "CONFIRMED"
+
+        # Simulate a re-tag whose applied set no longer contains the tag: drop the
+        # Tag row, then run the two status-resolution passes the TagTask runs.
+        def _drop_tag(session):
+            session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+            session.commit()
+
+        server.vault.db.run_task(_drop_tag)
+
+        server.vault.db.run_task(TagTask._resolve_pending_predictions, [pic_id])
+        assert _status(server, pic_id, "malformed hand") == "CONFIRMED"
+
+        # The fresh pass scores it at 100% but doesn't apply it (empty applied set).
+        server.vault.db.run_task(
+            TagTask._write_predictions_from_tags,
+            {pic_id: {"malformed hand": 1.0}},
+            {pic_id: set()},
+            "epoch-99",
+        )
+        assert _status(server, pic_id, "malformed hand") == "CONFIRMED"
+        # The durable human label is untouched.
+        assert _ledger(server, pic_id, "malformed hand")[:2] == ("POS", "human")
     finally:
         server.vault.close()
         temp_dir.cleanup()
