@@ -3235,13 +3235,18 @@ async function deleteSelected() {
         },
       );
     } else {
-      await Promise.all(
-        idsToRemove.map((id) =>
-          apiClient.delete(`${backendUrl}/pictures/${id}`).catch((err) => {
-            alert(`Error deleting image ${id}: ${err.message}`);
-          }),
-        ),
-      );
+      // Soft-delete via the bulk endpoint instead of one DELETE per id, which
+      // floods the browser/Electron per-host connection pool on large selections
+      // (excess sockets get reset and surface as axios "Network Error"). Chunk to
+      // the server's per-request id cap so a huge selection is a handful of
+      // requests, not thousands; each chunk broadcasts a single ``removed`` event.
+      const BULK_DELETE_CHUNK = 1000;
+      for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
+        const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
+        await apiClient.delete(`${backendUrl}/pictures`, {
+          data: { picture_ids: chunk },
+        });
+      }
     }
     removeImagesById(idsToRemove);
     selectedImageIds.value = [];
@@ -6551,7 +6556,10 @@ function handleEmptyStateReset() {
 }
 
 .grid-content-area {
-  --selbar-height: 48px;
+  /* Offset for the absolutely-positioned 36px toolbar. Set 2px under the toolbar
+     height so the grid content tucks right beneath the toolbar's bottom border
+     with no dark seam (the toolbar overlays the 2px, so nothing is clipped). */
+  --selbar-height: 34px;
   /* Container context for the floating SelectionBar's `@container selbar`
      query. The bar itself is `width: max-content` and cannot host the
      container (inline-size containment collapses the pill — see the note in

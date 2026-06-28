@@ -205,6 +205,68 @@ def test_delete_picture_denied_out_of_scope(env, monkeypatch):
     assert r_in.status_code == 200, r_in.text
 
 
+def test_bulk_delete_denied_when_any_out_of_scope(env, monkeypatch):
+    """Bulk soft-delete enforces scope on EVERY id before any write: a single
+    out-of-scope id 403s the whole request and nothing is soft-deleted (no partial
+    leak outside the token's grant)."""
+    server, client, picture_ids, _ = env
+    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
+    _scope_to(monkeypatch, [crud_module], {in_scope})
+    r_out = client.request(
+        "DELETE",
+        f"{API}/pictures",
+        json={"picture_ids": [in_scope, out_of_scope]},
+    )
+    assert r_out.status_code == 403, r_out.text
+    # Fail-closed: the in-scope picture in the same request must NOT have been
+    # soft-deleted (it is still in the active listing).
+    _scope_to(monkeypatch, [crud_module], None)
+    r = client.get(f"{API}/pictures")
+    assert r.status_code == 200, r.text
+    assert in_scope in {p["id"] for p in r.json()}, "partial soft-delete leaked"
+
+
+def test_bulk_delete_in_scope_succeeds(env, monkeypatch):
+    server, client, picture_ids, _ = env
+    in_scope = picture_ids[0]
+    _scope_to(monkeypatch, [crud_module], {in_scope})
+    r = client.request("DELETE", f"{API}/pictures", json={"picture_ids": [in_scope]})
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted_count"] == 1, r.text
+    # Owner view: the picture left the active listing (really soft-deleted).
+    _scope_to(monkeypatch, [crud_module], None)
+    r = client.get(f"{API}/pictures")
+    assert in_scope not in {p["id"] for p in r.json()}, r.text
+
+
+def test_bulk_delete_owner_deletes_all(env, monkeypatch):
+    server, client, picture_ids, _ = env
+    _scope_to(monkeypatch, [crud_module], None)
+    targets = picture_ids[:2]
+    r = client.request("DELETE", f"{API}/pictures", json={"picture_ids": targets})
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted_count"] == 2, r.text
+
+
+def test_bulk_delete_rejects_empty_payload(env, monkeypatch):
+    server, client, picture_ids, _ = env
+    _scope_to(monkeypatch, [crud_module], None)
+    r = client.request("DELETE", f"{API}/pictures", json={"picture_ids": []})
+    assert r.status_code == 400, r.text
+
+
+def test_bulk_delete_rejects_oversized_payload(env, monkeypatch):
+    """The id-count cap rejects (422) before any per-id scope read / row fetch, so
+    one request can't serialise unbounded work on the DB queue."""
+    server, client, picture_ids, _ = env
+    _scope_to(monkeypatch, [crud_module], None)
+    # 1001 ids (need not exist — the cap is checked before any DB access).
+    r = client.request(
+        "DELETE", f"{API}/pictures", json={"picture_ids": list(range(1, 1002))}
+    )
+    assert r.status_code == 422, r.text
+
+
 def test_patch_picture_denied_out_of_scope(env, monkeypatch):
     """PATCH /pictures/{id} mutates score/description/tags — must be scoped.
 
