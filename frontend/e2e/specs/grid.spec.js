@@ -25,16 +25,21 @@ test.describe('image grid', () => {
     await expect(overlay).toBeHidden()
   })
 
-  test('opens the search overlay from the toolbar', async ({ page }) => {
+  test('opens the search menu with the F shortcut', async ({ page }) => {
     await page.goto('/')
-    // The magnify button toggles searchStore.searchOverlayVisible.
-    await page.locator('.mdi-magnify').first().click()
+    await expect(page.locator('.thumbnail-card').first()).toBeVisible({
+      timeout: 15_000,
+    })
 
-    const search = page.locator('.search-overlay')
-    await expect(search).toBeVisible()
-    await expect(search.locator('input').first()).toBeFocused()
+    // Search is an icon-trigger popover in the grid toolbar (it replaced the old
+    // full-screen search popup). The "F" shortcut opens it and focuses the field.
+    await page.keyboard.press('f')
+
+    const panel = page.locator('.gb-search-panel')
+    await expect(panel).toBeVisible()
+    await expect(panel.locator('input')).toBeFocused()
 
     await page.keyboard.press('Escape')
-    await expect(search).toBeHidden()
+    await expect(panel).toBeHidden()
   })
 })

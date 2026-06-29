@@ -112,14 +112,20 @@ def test_no_new_direct_db_calls_from_routes():
 
 
 def test_services_no_direct_db_calls():
-    # Known transitional service files that still call vault.db.run_* directly.
-    # Remove each file from this set once it is migrated to accept a Session.
+    # See docs/backend_architecture.md §10.1 for the rule and what to do on failure.
+    # Known transitional service files that still call vault.db.run_* directly
+    # (inside a thin wrapper around their *_in_session functions).
+    # Add a new such file here WITH a justification; remove each file from this
+    # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
         "pixlstash/services/share_service.py",  # vault-injection pattern
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
+        "pixlstash/services/tag_suggestion_service.py",  # vault-injection pattern; review-queue writeback
+        "pixlstash/services/tagger_run_service.py",  # vault-injection pattern; tagger run history upsert
         "pixlstash/services/tag_scan_service.py",  # vault-injection pattern; sync near-neighbour tag scan
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
@@ -138,8 +144,11 @@ def test_services_no_direct_db_calls():
             if _DB_CALL_PATTERN.search(line):
                 violations.append(f"{rel}:{lineno}: {line.strip()}")
     assert not violations, (
-        "Service files must receive a pre-opened session, not call vault.db directly:\n"
-        + "\n".join(violations)
+        "Service files must receive a pre-opened session, not call vault.db directly.\n"
+        "Either (a) refactor the function to take `session: Session` (the *_in_session "
+        "pattern), or (b) if this is a thin wrapper around an *_in_session function, add "
+        "the file to _direct_db_call_service_allowlist above with a one-line justification.\n"
+        "See docs/backend_architecture.md §10.1.\n" + "\n".join(violations)
     )
 
 

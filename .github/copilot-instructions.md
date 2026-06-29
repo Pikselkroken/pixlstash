@@ -20,8 +20,18 @@ Use the following architecture documents depending on the scope of the task:
 3. Full‑stack tasks (involving both frontend and backend):
    Read and follow both documents plus `/docs/integration_architecture.md` for guidance on how to integrate frontend and backend changes effectively.
 
+4. Any task that adds or changes UI (a new feature, a component, a screen, a control):
+   The **design manual in `/docs/design/` is mandatory, not advisory.** Read
+   `/docs/design/visual-language.md` and build against the tokens in
+   `/docs/design/design-tokens.css` and the color themes in `frontend/src/main.js`.
+   New UI must use the existing tokens (spacing, radius, type ramp, elevation, motion,
+   color) — never a hardcoded hex, off-grid spacing, ad-hoc radius, raw `rgba(0,0,0,…)`
+   shadow, or `em`/`px` font-size outside the ramp. A genuinely new value is a design
+   decision: route it to the `lead-designer` skill, do not inline a one-off. Anything
+   that changes a flow, a state, or what a control does also goes past the `ui-ux-expert`.
+
 Task classification rules:
-- If the task involves UI, components, state management, routing, or client-side logic → treat it as a frontend task.
+- If the task involves UI, components, state management, routing, or client-side logic → treat it as a frontend task **and apply the design manual (item 4)**.
 - If the task involves APIs, storage, indexing, ML pipelines, or server-side logic → treat it as a backend task.
 - If the task touches both (e.g., API changes that require UI updates) → treat it as a full‑stack task.
 
@@ -40,6 +50,8 @@ This repo ships role-specific **skills** — personas with their own expertise (
 | Routine backend work that copies an existing pattern (mirror a CRUD endpoint, add a field + migration, straightforward tests, obvious bugfix, type hints/docstrings) | `junior-backend-developer` |
 | Frontend code: Vue 3, JS, HTML, CSS, state/data flow, routing, browser/CORS/CSP issues, rendering | `senior-frontend-developer` |
 | Routine frontend work that mirrors an existing component (presentational component, props/emits, simple layout fix, basic route/computed, a11y attributes, copy) | `junior-frontend-developer` |
+| Visual language: the design manual in `/docs/design/`, tokens, type/color/spacing/iconography, making UI look sleek and consistently PixlStash, auditing visual drift | `lead-designer` |
+| Usability: flows, information hierarchy, discoverability, accessibility (WCAG), keyboard/power-user efficiency, anything that changes what a control does or how a screen behaves | `ui-ux-expert` |
 | ML: training/fine-tuning, model eval, embeddings, captioning, quality scoring, architecture/dataset choices | `machine-learning-expert` |
 | ComfyUI graphs, nodes, model selection, generation/upscale/inpaint pipelines | `comfyui-workflow-wizard` |
 | CI/CD, GitHub Actions, pipeline speed/flakiness, release automation, the `pixlstash-metrics` collector | `ci-expert` |

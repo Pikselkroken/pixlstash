@@ -1,7 +1,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import (
@@ -17,11 +17,21 @@ from pixlstash.utils.service.caption_utils import (
     serialize_tag_objects,
     sync_picture_sidecar,
 )
+from pixlstash.utils.service.label_ledger import (
+    NEG,
+    POS,
+    record_human_label_if_relevant,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 from pixlstash.routes.pictures._helpers import enforce_picture_scope
+from pixlstash.services.impossible_tag_clear_service import (
+    VALID_FILTERS,
+    clear_impossible_tags,
+    restore_cleared_tags,
+)
 
 logger = get_logger(__name__)
 
@@ -69,6 +79,50 @@ class BulkPictureTagsResponse(BaseModel):
 
     id: int
     tags: list[TagItemResponse] = []
+
+
+class ClearedTagPair(BaseModel):
+    """One removed ``(picture, tag)``, returned for the undo and echoed back to restore."""
+
+    picture_id: int = Field(..., description="Picture the tag was removed from.")
+    tag: str = Field(..., description="The removed tag value.")
+
+
+class ClearImpossibleTagsRequest(BaseModel):
+    """Bulk-clear request: the selected pictures and the active grid filters to apply."""
+
+    picture_ids: list[int] = Field(
+        ..., description="Selected picture ids to clear wrong tags from."
+    )
+    filters: list[str] = Field(
+        ...,
+        description='Active Impossible-tags filter kinds: "no_face", "no_humans", and/or "object".',
+    )
+
+
+class ClearImpossibleTagsResponse(BaseModel):
+    """Result of a bulk clear: how many tags were removed, and which (for undo)."""
+
+    status: str
+    count: int = Field(..., description="Number of (picture, tag) removals.")
+    removed: list[ClearedTagPair] = Field(
+        default=[], description="The removed pairs, to pass back to /restore for undo."
+    )
+
+
+class RestoreClearedTagsRequest(BaseModel):
+    """Undo request: re-add the pairs a previous clear removed."""
+
+    pairs: list[ClearedTagPair] = Field(
+        ..., description="The (picture, tag) pairs to re-add."
+    )
+
+
+class RestoreClearedTagsResponse(BaseModel):
+    """Result of an undo."""
+
+    status: str
+    restored: int = Field(..., description="Number of pairs re-added.")
 
 
 def _sync_sidecar(server, pic_id: int) -> list[dict]:
@@ -131,6 +185,8 @@ def create_router(server) -> APIRouter:
                     if not any(t.tag == tag for t in pic.tags):
                         pic.tags.append(Tag(tag=tag, picture_id=pic_id))
                     session.add(pic)
+                    # Manually applying an anomaly tag is a human POS decision.
+                    record_human_label_if_relevant(session, pic_id, tag, POS)
                     session.flush()
                     recompute_anomaly_tag_uncertainty(session, pic_id)
                     session.commit()
@@ -233,6 +289,9 @@ def create_router(server) -> APIRouter:
                     raise HTTPException(
                         status_code=404, detail="Tag not found on picture"
                     )
+                # Manually removing an anomaly tag is a human NEG decision — record it
+                # before the delete so the reviewed negative survives the lost Tag row.
+                record_human_label_if_relevant(session, pic_id, target.tag, NEG)
                 session.delete(target)
                 session.flush()
                 recompute_anomaly_tag_uncertainty(session, pic_id)
@@ -295,6 +354,8 @@ def create_router(server) -> APIRouter:
                 t.id for t in pic.tags if t.tag == tag_value and t.id is not None
             ]
             if tag_ids:
+                # Explicit single-tag removal is a human NEG decision; record it.
+                record_human_label_if_relevant(session, pic_id, tag_value, NEG)
                 session.exec(delete(Tag).where(Tag.id.in_(tag_ids)))
             session.flush()
             recompute_anomaly_tag_uncertainty(session, pic_id)
@@ -359,6 +420,87 @@ def create_router(server) -> APIRouter:
         )
         fresh_tags = _sync_sidecar(server, pic_id)
         return {"status": "success", "tags": fresh_tags}
+
+    @router.post(
+        "/pictures/impossible-tags/clear",
+        summary="Bulk-clear impossible tags",
+        description=(
+            "Remove the wrong tags surfaced by the live Impossible-tags grid filters "
+            "from the selected pictures, recording a human NEG per removed tag so the "
+            "cleanup is durable training signal. Owner-only; returns the removed "
+            "(picture, tag) pairs for an undo."
+        ),
+        response_model=ClearImpossibleTagsResponse,
+    )
+    def clear_impossible_tags_endpoint(
+        request: Request, payload: ClearImpossibleTagsRequest
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        filters = [f for f in payload.filters if f in VALID_FILTERS]
+        if not filters:
+            raise HTTPException(
+                status_code=400,
+                detail=f"filters must be a non-empty subset of {list(VALID_FILTERS)}",
+            )
+        picture_ids = [int(p) for p in payload.picture_ids]
+        # Defense in depth: a scoped token cannot reach this POST (owner-only by the
+        # middleware gate), but if a scoped picture set is ever active, never act on a
+        # picture outside it.
+        allowed = fetch_scope_allowed_picture_ids(server, request)
+        if allowed is not None:
+            picture_ids = [p for p in picture_ids if p in allowed]
+        if not picture_ids:
+            return {"status": "success", "count": 0, "removed": []}
+
+        result = clear_impossible_tags(server.vault, picture_ids, filters)
+        touched = sorted({r["picture_id"] for r in result["removed"]})
+        if touched:
+            server.vault.notify(
+                EventType.CHANGED_TAGS,
+                {
+                    "picture_ids": touched,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
+            for pid in touched:
+                _sync_sidecar(server, pid)
+        return {"status": "success", **result}
+
+    @router.post(
+        "/pictures/impossible-tags/restore",
+        summary="Undo a bulk impossible-tags clear",
+        description=(
+            "Re-add tags removed by a previous /clear and reset their human-label "
+            "ledger entries. Owner-only."
+        ),
+        response_model=RestoreClearedTagsResponse,
+    )
+    def restore_impossible_tags_endpoint(
+        request: Request, payload: RestoreClearedTagsRequest
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        pairs = [(int(p.picture_id), p.tag) for p in payload.pairs]
+        allowed = fetch_scope_allowed_picture_ids(server, request)
+        if allowed is not None:
+            pairs = [(p, t) for (p, t) in pairs if p in allowed]
+        if not pairs:
+            return {"status": "success", "restored": 0}
+
+        result = restore_cleared_tags(server.vault, pairs)
+        touched = result.get("picture_ids") or []
+        if touched:
+            server.vault.notify(
+                EventType.CHANGED_TAGS,
+                {
+                    "picture_ids": touched,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
+            for pid in touched:
+                _sync_sidecar(server, pid)
+        return {"status": "success", "restored": result["restored"]}
 
     @router.get(
         "/tags",

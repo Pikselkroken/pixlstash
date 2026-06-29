@@ -364,6 +364,33 @@ class InferenceEngine:
             self._pixlstash_tagger_enabled and self.pixlstash_tagger_service.is_loaded()
         )
 
+    def ensure_pixlstash_tagger_ready(self) -> bool:
+        """Load the PixlStash anomaly tagger on demand (idempotent).
+
+        ``safe_idle_unload`` releases the tagger between tagging runs, so
+        interactive consumers (the review anomaly-region endpoint) must be able
+        to bring it back without waiting for a tagging task to keep it resident.
+        Downloads the model first if its files are missing, then loads it under
+        the shared init lock via the lifecycle manager.
+
+        Returns:
+            ``True`` if the tagger is enabled and ready for inference, ``False``
+            if it is disabled or failed to load.
+        """
+        if not self._pixlstash_tagger_enabled:
+            return False
+        service = self.pixlstash_tagger_service
+        if service.is_loaded():
+            return True
+        if service.needs_download():
+            service.download()
+        return self.lifecycle.ensure_tagging_ready(
+            self.wd14_service,
+            service,
+            use_wd14=False,
+            use_pixlstash_tagger=True,
+        )
+
     def ensure_clip_ready(self) -> None:
         """Load the CLIP model if not already loaded."""
         self.clip_service.ensure_ready()
@@ -371,6 +398,22 @@ class InferenceEngine:
     def _ensure_captioning_ready(self) -> None:
         """Load Florence-2 if not already loaded."""
         self.lifecycle.ensure_captioning_ready(self.florence_service)
+
+    def detect_objects(self, image_paths: list, prompt: str | None = None) -> dict:
+        """Run Florence-2 object detection / phrase grounding on a batch.
+
+        Loads Florence-2 if needed (shared with captioning) and delegates to
+        :meth:`~pixlstash.tagger_plugins.florence2.Florence2Service.detect_objects`.
+
+        Args:
+            image_paths: Still-image file paths to detect objects in.
+            prompt: Optional phrase to ground; empty/None → dense ``<OD>``.
+
+        Returns:
+            ``{path: [(label, [x1, y1, x2, y2], score_or_None), ...]}``.
+        """
+        self.lifecycle.ensure_captioning_ready(self.florence_service)
+        return self.florence_service.detect_objects(image_paths, prompt=prompt)
 
     def is_captioning_initialized(self) -> bool:
         """Return ``True`` if Florence-2 is currently loaded."""

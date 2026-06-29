@@ -20,12 +20,16 @@ from pixlstash.db_models import (
     PictureSetMember,
     Quality,
     Tag,
+    TagPrediction,
     User,
 )
+from pixlstash.services.tagger_run_service import get_latest_tag_precisions
+from pixlstash.utils.quality.anomaly_penalty import ANOMALY_PENALTY_TAGS
 from pixlstash.utils.quality.smart_score_utils import (
     SmartScoreUtils,
     smart_score_penalised_tags,
 )
+from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
 from pixlstash.utils.service.filter_helpers import combine_likeness_scores
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.pixl_logging import get_logger
@@ -698,6 +702,73 @@ def count_pictures_by_character_likeness(
     return server.vault.db.run_task(run_count, priority=DBPriority.IMMEDIATE)
 
 
+def fetch_anomaly_confidences(session: Session, picture_ids) -> tuple[dict, dict]:
+    """Return per-picture anomaly probabilities and human-verified tags.
+
+    Reads ``TagPrediction`` for the anomaly vocabulary only. A human decision in the
+    label ledger overrides the model: a human POS folds to probability 1.0 (and is
+    flagged so the penalty bypasses the precision floor), a human NEG folds to 0.0.
+
+    Returns:
+        ``(probs_map, human_map)`` where ``probs_map`` is
+        ``{picture_id: {tag: probability}}`` and ``human_map`` is
+        ``{picture_id: {tag, ...}}`` of human-verified present tags.
+    """
+    probs_map: dict = defaultdict(dict)
+    human_map: dict = defaultdict(set)
+    if not picture_ids:
+        return probs_map, human_map
+
+    rows = session.exec(
+        select(
+            TagPrediction.picture_id,
+            TagPrediction.tag,
+            TagPrediction.confidence,
+            TagPrediction.label_state,
+            TagPrediction.label_source,
+        ).where(
+            TagPrediction.picture_id.in_(picture_ids),
+            func.lower(TagPrediction.tag).in_(ANOMALY_PENALTY_TAGS),
+        )
+    ).all()
+
+    for picture_id, tag, confidence, label_state, label_source in rows:
+        if not tag:
+            continue
+        key = tag.strip().lower()
+        if label_source == HUMAN and label_state == POS:
+            probs_map[picture_id][key] = 1.0
+            human_map[picture_id].add(key)
+        elif label_source == HUMAN and label_state == NEG:
+            probs_map[picture_id][key] = 0.0
+        else:
+            probs_map[picture_id][key] = (
+                float(confidence) if confidence is not None else 0.0
+            )
+
+    return probs_map, human_map
+
+
+def attach_anomaly_inputs(session: Session, candidates) -> dict:
+    """Attach calibrated anomaly inputs to candidate dicts; return the precision map.
+
+    Adds ``anomaly_probs`` and ``anomaly_human`` to each candidate (see
+    :func:`fetch_anomaly_confidences`) and returns ``{tag: precision}`` from the latest
+    evaluated :class:`TaggerRun` for the scorer. Shared by both smart-score fetch paths
+    so the on-demand sort and the background task stay in lockstep.
+    """
+    precisions = get_latest_tag_precisions(session)
+    ids = [c.get("id") for c in candidates if c.get("id") is not None]
+    if not ids:
+        return precisions
+    probs_map, human_map = fetch_anomaly_confidences(session, ids)
+    for candidate in candidates:
+        pid = candidate.get("id")
+        candidate["anomaly_probs"] = probs_map.get(pid, {})
+        candidate["anomaly_human"] = human_map.get(pid, frozenset())
+    return precisions
+
+
 def fetch_smart_score_data(
     server,
     format,
@@ -706,7 +777,13 @@ def fetch_smart_score_data(
     include_deleted: bool = False,
     only_deleted: bool = False,
 ):
-    """Fetch anchors, character references, and candidates for smart score calculation."""
+    """Fetch anchors, character references, and candidates for smart score calculation.
+
+    Returns ``(good_anchors, bad_anchors, candidates, tag_precisions)``. ``penalised_tags``
+    is retained for signature compatibility but no longer drives the score: the calibrated
+    anomaly penalty (see :mod:`pixlstash.utils.quality.anomaly_penalty`) supersedes the old
+    per-user integer weights.
+    """
 
     def fetch_data(session: Session):
         # Anchors
@@ -741,7 +818,7 @@ def fetch_smart_score_data(
 
         if candidate_ids is not None:
             if not candidate_ids:
-                return good, bad, []
+                return good, bad, [], {}
             query = query.where(Picture.id.in_(candidate_ids))
 
         if format:
@@ -751,14 +828,7 @@ def fetch_smart_score_data(
 
         candidate_rows = session.exec(query).all()
 
-        penalised_tag_weights = {
-            str(tag).strip().lower(): int(weight)
-            for tag, weight in (penalised_tags or {}).items()
-            if str(tag).strip()
-        }
-
         candidates = []
-        candidate_id_list = []
         for pic, quality in candidate_rows:
             aest = pic.aesthetic_score
             quality_score = None
@@ -785,34 +855,15 @@ def fetch_smart_score_data(
                     "luminance_entropy": (
                         quality.luminance_entropy if quality else None
                     ),
+                    "noise_level": quality.noise_level if quality else None,
+                    "colorfulness": quality.colorfulness if quality else None,
                     "text_score": pic.text_score,
                 }
             )
-            candidate_id_list.append(pic.id)
 
-        penalised_tag_map = defaultdict(int)
-        if penalised_tag_weights and candidate_id_list:
-            tag_rows = session.exec(
-                select(Tag.picture_id, Tag.tag).where(
-                    Tag.picture_id.in_(candidate_id_list),
-                )
-            ).all()
-            for pic_id, tag in tag_rows:
-                if not tag:
-                    continue
-                key = tag.strip().lower()
-                weight = penalised_tag_weights.get(key)
-                if weight is not None:
-                    penalised_tag_map[pic_id] += weight
-
-            if penalised_tag_map:
-                for candidate in candidates:
-                    candidate["penalised_tag_count"] = penalised_tag_map.get(
-                        candidate["id"], 0
-                    )
-
-        if candidate_id_list:
-            pass  # tag_count no longer used by smart score
+        # Calibrated anomaly inputs + per-tag precision (replaces the old per-user
+        # integer-weight tag sum).
+        tag_precisions = attach_anomaly_inputs(session, candidates)
 
         # Supplement with built-in anchors when the user has few rated images.
         builtin_good, builtin_bad = _load_builtin_anchors()
@@ -821,7 +872,7 @@ def fetch_smart_score_data(
         if len(bad) < _BUILTIN_MIN_BAD:
             bad = list(bad) + builtin_bad
 
-        return good, bad, candidates
+        return good, bad, candidates, tag_precisions
 
     return server.vault.db.run_immediate_read_task(fetch_data)
 
@@ -914,12 +965,15 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
                     "id": pid,
                     "embedding": v,
                     "aesthetic_score": get_attr(p, "aesthetic_score"),
-                    "penalised_tag_count": get_attr(p, "penalised_tag_count") or 0,
+                    "anomaly_probs": get_attr(p, "anomaly_probs") or {},
+                    "anomaly_human": get_attr(p, "anomaly_human") or frozenset(),
                     "width": get_attr(p, "width"),
                     "height": get_attr(p, "height"),
                     "sharpness": get_attr(p, "sharpness"),
                     "edge_density": get_attr(p, "edge_density"),
                     "luminance_entropy": get_attr(p, "luminance_entropy"),
+                    "noise_level": get_attr(p, "noise_level"),
+                    "colorfulness": get_attr(p, "colorfulness"),
                     "text_score": get_attr(p, "text_score"),
                 }
             )
@@ -960,7 +1014,7 @@ def find_pictures_by_smart_score(
             logger.debug("Progress reporting failed during sort.", exc_info=True)
 
     # 1. Fetch data
-    good_anchors, bad_anchors, candidates = fetch_smart_score_data(
+    good_anchors, bad_anchors, candidates, tag_precisions = fetch_smart_score_data(
         server,
         format,
         candidate_ids=candidate_ids,
@@ -1005,6 +1059,7 @@ def find_pictures_by_smart_score(
                     batch,
                     good_list,
                     bad_list,
+                    config={"tag_precisions": tag_precisions},
                 )
                 score_chunks.append(np.asarray(batch_scores, dtype=np.float32))
                 processed = end

@@ -15,6 +15,7 @@ import ProjectFiles from "./ProjectFiles.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
+import FolderBrowser from "../editors/FolderBrowser.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -42,8 +43,7 @@ const sidebarStore = useSidebarStore();
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
 // bar, so the sidebar copies below are gated on !isDesktop.
-const isDesktop =
-  typeof window !== "undefined" && !!window.pixlstashDesktop;
+const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
   docked: { type: Boolean, default: false },
@@ -140,7 +140,6 @@ const labelRefs = new Map();
 const labelObservers = new Map();
 
 const dragOverSet = ref(null);
-const dragOverProjectPictures = ref(false);
 
 const peopleSectionCollapsed = ref(false);
 const setsSectionCollapsed = ref(false);
@@ -262,6 +261,7 @@ const setCtxIconMenuOpen = ref(false);
 const setCtxColorMenuOpen = ref(false);
 const setCtxAppearanceMenuPos = ref({ top: 0, left: 0, openUp: false });
 const sidebarCtxFolder = ref(null); // reference folder object or null
+const sidebarCtxFolderScopePath = ref(null); // null means the reference folder root
 const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
@@ -363,6 +363,7 @@ const referenceFoldersCollapsed = ref(false);
 const importFoldersCollapsed = ref(false);
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
+const dragOverReferenceTargetKey = ref(null);
 
 // Reference folder editor state
 const referenceFolderEditorOpen = ref(false);
@@ -370,6 +371,13 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 const importFolderEditorOpen = ref(false);
 const importFolderEditorFolder = ref(null); // null = create, object = edit
 const addFolderTypeDialogOpen = ref(false);
+const referenceFolderRelocateOpen = ref(false);
+const referenceFolderRelocateFolder = ref(null);
+const referenceFolderRelocateDestination = ref("");
+const referenceFolderRelocateBrowseOpen = ref(false);
+const referenceFolderRelocateLoading = ref(false);
+const referenceFolderRelocateError = ref("");
+const referenceFolderRelocateResult = ref("");
 
 function openAddFolderTypeDialog() {
   addFolderTypeDialogOpen.value = true;
@@ -394,6 +402,78 @@ function closeReferenceFolderEditor() {
   referenceFolderEditorFolder.value = null;
 }
 
+function pathParent(path) {
+  const raw = String(path || "");
+  if (!raw || raw === "/") return "/";
+  const trimmed = raw.replace(/[\\/]+$/, "");
+  if (/^[A-Za-z]:$/.test(trimmed)) return `${trimmed}\\`;
+  const match = trimmed.match(/^(.*)[\\/][^\\/]+$/);
+  if (!match) return "/";
+  const parent = match[1];
+  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return parent || "/";
+}
+
+function openReferenceFolderRelocateDialog(folder) {
+  if (!folder || inDocker.value) return;
+  referenceFolderRelocateFolder.value = folder;
+  referenceFolderRelocateDestination.value = "";
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+  referenceFolderRelocateOpen.value = true;
+}
+
+function closeReferenceFolderRelocateDialog() {
+  if (referenceFolderRelocateLoading.value) return;
+  referenceFolderRelocateOpen.value = false;
+  referenceFolderRelocateFolder.value = null;
+  referenceFolderRelocateDestination.value = "";
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+}
+
+const referenceFolderRelocateInitialPath = computed(() =>
+  pathParent(referenceFolderRelocateFolder.value?.folder || ""),
+);
+
+const relocationRegisteredPaths = computed(() => {
+  const currentId = Number(referenceFolderRelocateFolder.value?.id);
+  return referenceFolders.value
+    .filter((rf) => Number(rf.id) !== currentId)
+    .map((rf) => rf.folder.replace(/[\\/]+$/, ""));
+});
+
+async function relocateReferenceFolder() {
+  const folder = referenceFolderRelocateFolder.value;
+  const destination = referenceFolderRelocateDestination.value.trim();
+  if (!folder?.id || !destination) return;
+  referenceFolderRelocateLoading.value = true;
+  referenceFolderRelocateError.value = "";
+  referenceFolderRelocateResult.value = "";
+  try {
+    const { data } = await apiClient.post(
+      `/reference-folders/${folder.id}/relocate`,
+      { destination_folder: destination },
+    );
+    await fetchReferenceFolders();
+    folderBrowseCache.value = {};
+    for (const rf of referenceFolders.value) {
+      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
+    }
+    emit("images-moved", {
+      imageIds: data?.moved_picture_ids || [],
+      kind: "reference-folder",
+      refresh: true,
+    });
+    referenceFolderRelocateResult.value = `Moved ${data?.moved_entry_count ?? 0} item${data?.moved_entry_count === 1 ? "" : "s"} and updated ${data?.rewritten_count ?? 0} picture path${data?.rewritten_count === 1 ? "" : "s"}.`;
+  } catch (error) {
+    referenceFolderRelocateError.value =
+      error?.response?.data?.detail || error?.message || "Relocation failed.";
+  } finally {
+    referenceFolderRelocateLoading.value = false;
+  }
+}
+
 function openImportFolderEditor(folder = null) {
   importFolderEditorFolder.value = folder ?? null;
   importFolderEditorOpen.value = true;
@@ -410,10 +490,22 @@ function showDockerRestartPrompt() {
   );
 }
 
-async function referenceFolderSaved() {
+async function referenceFolderSaved(savedFolder = null) {
   const createdNewFolder = !referenceFolderEditorFolder.value?.id;
   closeReferenceFolderEditor();
   await fetchReferenceFolders();
+  if (savedFolder?.relocation) {
+    const relocation = savedFolder.relocation;
+    const issues =
+      Number(relocation.missing_count || 0) +
+      Number(relocation.unmatched_count || 0);
+    const issueText = issues
+      ? ` ${issues} item${issues === 1 ? "" : "s"} need attention.`
+      : "";
+    window.alert(
+      `Reference folder relocated. Rewritten ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`,
+    );
+  }
   // A newly added folder may be active-but-unscanned, so ensure polling runs.
   _startFolderStatusPoll();
   if (inDocker.value && createdNewFolder) {
@@ -1361,8 +1453,18 @@ const sidebarThumbnailSizeLarge = computed(
   () => sidebarThumbnailSizeModel.value + 8,
 );
 
+// Scale sidebar text with the thumbnail size: full size at 40px-and-up thumbnails,
+// smaller below (≈0.8% per px under 40, floored at 0.85) so dense small-thumb
+// layouts stay balanced. Feeds --sidebar-font-scale, which rescales the type-ramp
+// tokens on the .sidebar scope (see the stylesheet).
+const sidebarFontScale = computed(() => {
+  const t = sidebarThumbnailSizeModel.value;
+  if (t >= 40) return 1;
+  return Math.max(0.85, Math.round((1 - (40 - t) * 0.008) * 1000) / 1000);
+});
+
 // Expanded-sidebar width (drag-resizable). Clamp ≈50%–125% of the 240px default.
-const SIDEBAR_WIDTH_MIN = 120;
+const SIDEBAR_WIDTH_MIN = 140;
 const SIDEBAR_WIDTH_MAX = 300;
 const clampSidebarWidth = (v) =>
   Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(v)));
@@ -1381,9 +1483,18 @@ const sidebarWidthModel = computed({
 // not emit/persist on every frame — we commit once on pointer-up.
 const sidebarDragWidth = ref(null);
 
+// Below 150px the expanded sidebar is too tight for the per-entry image counts;
+// drop them. Uses the live drag width while resizing, the saved width otherwise.
+const sidebarIsNarrow = computed(
+  () =>
+    !props.docked &&
+    (sidebarDragWidth.value ?? sidebarWidthModel.value ?? 240) < 150,
+);
+
 const sidebarThumbStyle = computed(() => {
   const style = {
     "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
+    "--sidebar-font-scale": sidebarFontScale.value,
   };
   // Apply the resized width only when expanded; docked width is driven by the
   // thumbnail size in CSS, so leave it to the stylesheet there.
@@ -1819,8 +1930,10 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
     sidebarCtxFolder.value = null;
+    sidebarCtxFolderScopePath.value = null;
     sidebarCtxImportFolder.value = null;
     sidebarCtxProject.value = null;
+    sidebarCtxAllPictures.value = false;
     const numId = Number(item.id);
     // If the right-clicked char is part of a multi-selection, offer bulk delete
     if (
@@ -1837,6 +1950,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = item;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1844,6 +1958,15 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = item;
+      sidebarCtxFolderScopePath.value = null;
+      sidebarCtxImportFolder.value = null;
+      sidebarCtxProject.value = null;
+      sidebarCtxAllPictures.value = false;
+    } else if (type === "folder-path") {
+      sidebarCtxCharacter.value = null;
+      sidebarCtxSet.value = null;
+      sidebarCtxFolder.value = item?.folder || null;
+      sidebarCtxFolderScopePath.value = item?.path || null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1851,6 +1974,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = item;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
@@ -1858,6 +1982,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = item;
       sidebarCtxAllPictures.value = false;
@@ -1865,6 +1990,7 @@ function openSidebarCtxMenu(type, item, event) {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
       sidebarCtxFolder.value = null;
+      sidebarCtxFolderScopePath.value = null;
       sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = true;
@@ -2643,6 +2769,82 @@ function handleDragOverProject(id) {
 
 function handleDragLeaveProject() {
   dragOverProjectId.value = null;
+}
+
+function isInternalImageDrag(event) {
+  return event?.dataTransfer?.types?.includes("application/json");
+}
+
+function readDraggedImageIds(event) {
+  try {
+    const data = JSON.parse(
+      event?.dataTransfer?.getData("application/json") || "{}",
+    );
+    return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
+  } catch (e) {
+    console.error("Could not parse drag data:", e);
+    return [];
+  }
+}
+
+function handleReferenceFolderDragOver(folderId, scopePath, event) {
+  if (draggingEntityKind.value || !isInternalImageDrag(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dragOverReferenceTargetKey.value = scopePath
+    ? `path-${scopePath}`
+    : `rf-${folderId}`;
+}
+
+function handleReferenceFolderDragLeave(folderId, scopePath) {
+  const key = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
+  if (dragOverReferenceTargetKey.value === key) {
+    dragOverReferenceTargetKey.value = null;
+  }
+}
+
+async function handleReferenceFolderDrop(folderId, scopePath, event) {
+  dragOverReferenceTargetKey.value = null;
+  if (draggingEntityKind.value) return;
+  const imageIds = readDraggedImageIds(event);
+  if (!imageIds.length) return;
+  try {
+    const body = { picture_ids: imageIds };
+    if (scopePath) body.destination_subpath = scopePath;
+    const { data } = await apiClient.post(
+      `/reference-folders/${folderId}/move-pictures`,
+      body,
+    );
+    await fetchReferenceFolders();
+    folderBrowseCache.value = {};
+    for (const rf of referenceFolders.value) {
+      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
+    }
+    emit("images-moved", {
+      imageIds: data?.moved_picture_ids || imageIds,
+      kind: "reference-folder",
+      refresh: true,
+    });
+  } catch (e) {
+    const detail = e?.response?.data?.detail;
+    const failures = detail?.failures || [];
+    if (failures.length) {
+      const first = failures[0];
+      alert(
+        `Failed to move ${failures.length} image${failures.length === 1 ? "" : "s"}: ${first.reason || "unknown error"}`,
+      );
+      return;
+    }
+    alert(
+      "Failed to move images: " + (detail?.message || detail || e.message || e),
+    );
+  }
+}
+
+function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
+  const folder = referenceFolders.value.find((rf) => rf.id === rfId);
+  if (!folder) return;
+  openSidebarCtxMenu("folder-path", { folder, path, label }, event);
 }
 
 async function onProjectDrop(projectId, event) {
@@ -3437,6 +3639,7 @@ defineExpose({
     @close="closeReferenceFolderEditor"
     @saved="referenceFolderSaved"
     @deleted="referenceFolderDeleted"
+    @relocate="openReferenceFolderRelocateDialog"
   />
   <FolderEditor
     type="import"
@@ -3490,10 +3693,92 @@ defineExpose({
     </v-card>
   </v-dialog>
 
+  <v-dialog v-model="referenceFolderRelocateOpen" max-width="560">
+    <v-card class="relocate-card">
+      <v-card-title class="relocate-title"
+        >Relocate Reference Folder</v-card-title
+      >
+      <v-card-text class="relocate-body">
+        <div class="relocate-path-block">
+          <div class="relocate-path-label">Current folder</div>
+          <div
+            class="relocate-path-value"
+            :title="referenceFolderRelocateFolder?.folder"
+          >
+            {{ referenceFolderRelocateFolder?.folder }}
+          </div>
+        </div>
+        <div class="relocate-path-block">
+          <div class="relocate-path-label">Destination folder</div>
+          <div class="relocate-destination-row">
+            <v-text-field
+              v-model="referenceFolderRelocateDestination"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              readonly
+              placeholder="Choose an empty folder"
+            />
+            <v-btn
+              variant="outlined"
+              size="small"
+              icon
+              title="Choose destination folder"
+              @click="referenceFolderRelocateBrowseOpen = true"
+            >
+              <v-icon size="18">mdi-folder-open-outline</v-icon>
+            </v-btn>
+          </div>
+        </div>
+        <div class="relocate-warning">
+          This moves every file and subfolder from the current reference folder
+          into the destination folder, then updates PixlStash to use the new
+          location. The destination must be empty.
+        </div>
+        <div v-if="referenceFolderRelocateError" class="relocate-error">
+          {{ referenceFolderRelocateError }}
+        </div>
+        <div v-if="referenceFolderRelocateResult" class="relocate-result">
+          {{ referenceFolderRelocateResult }}
+        </div>
+      </v-card-text>
+      <v-card-actions class="relocate-actions">
+        <v-spacer />
+        <v-btn variant="text" @click="closeReferenceFolderRelocateDialog">
+          {{ referenceFolderRelocateResult ? "Close" : "Cancel" }}
+        </v-btn>
+        <v-btn
+          v-if="!referenceFolderRelocateResult"
+          color="primary"
+          variant="flat"
+          :loading="referenceFolderRelocateLoading"
+          :disabled="!referenceFolderRelocateDestination"
+          @click="relocateReferenceFolder"
+        >
+          Move Files and Relocate
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <FolderBrowser
+    :open="referenceFolderRelocateBrowseOpen"
+    :initial-path="referenceFolderRelocateInitialPath"
+    :registered-paths="relocationRegisteredPaths"
+    :image-root="referenceFoldersImageRoot"
+    already-registered-label="Already a reference folder"
+    allow-create-folder
+    @select="(path) => (referenceFolderRelocateDestination = path)"
+    @close="referenceFolderRelocateBrowseOpen = false"
+  />
+
   <aside
     ref="sidebarRootRef"
     class="sidebar"
-    :class="{ 'sidebar-docked': props.docked }"
+    :class="{
+      'sidebar-docked': props.docked,
+      'sidebar--narrow': sidebarIsNarrow,
+    }"
     :style="sidebarThumbStyle"
   >
     <!-- Drag the right edge to resize the expanded sidebar (hidden when docked). -->
@@ -3550,41 +3835,7 @@ defineExpose({
           </div>
         </div>
       </div>
-      <button
-        v-if="!props.docked"
-        class="sidebar-pin-toggle sidebar-brand-pin"
-        :class="{ pinned: sidebarStore.sidebarPinned }"
-        type="button"
-        :title="
-          sidebarStore.sidebarPinned
-            ? 'Unpin sidebar (auto-hide)'
-            : 'Pin sidebar open'
-        "
-        @click="sidebarStore.toggleSidebarPinned()"
-      >
-        <v-icon size="15">{{
-          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
-        }}</v-icon>
-      </button>
     </div>
-    <div v-if="props.docked" class="sidebar-dock-header">
-      <button
-        class="sidebar-pin-toggle sidebar-pin-toggle--dock"
-        :class="{ pinned: sidebarStore.sidebarPinned }"
-        type="button"
-        :title="
-          sidebarStore.sidebarPinned
-            ? 'Unpin sidebar (auto-hide)'
-            : 'Pin sidebar open'
-        "
-        @click="sidebarStore.toggleSidebarPinned()"
-      >
-        <v-icon size="18">{{
-          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
-        }}</v-icon>
-      </button>
-    </div>
-    <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
     <div
       v-if="props.docked"
       class="sidebar-collapsed-project-wrap"
@@ -3602,10 +3853,10 @@ defineExpose({
         >
           <v-icon size="20">{{
             sidebarPrimaryTab === "folders"
-              ? "mdi-folder-network-outline"
+              ? "mdi-folder-outline"
               : projectViewMode === "global"
                 ? "mdi-earth"
-                : "mdi-folder-outline"
+                : "mdi-briefcase-outline"
           }}</v-icon>
         </div>
       </div>
@@ -3652,7 +3903,7 @@ defineExpose({
             @mouseenter="openProjectSubMenu('projects', $event)"
             @click.stop="openProjectSubMenu('projects', $event)"
           >
-            <v-icon size="14">mdi-folder-outline</v-icon>
+            <v-icon size="14">mdi-briefcase-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Projects</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
@@ -3669,7 +3920,7 @@ defineExpose({
             @mouseenter="openProjectSubMenu('folders', $event)"
             @click.stop="openProjectSubMenu('folders', $event)"
           >
-            <v-icon size="14">mdi-folder-network-outline</v-icon>
+            <v-icon size="14">mdi-folder-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Folders</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
@@ -3807,62 +4058,40 @@ defineExpose({
       </Teleport>
     </div>
     <div v-else-if="!scopedResourceType" class="sidebar-view-header">
-      <div v-if="isDesktop" class="sidebar-view-title-row">
-        <span class="sidebar-view-title-text">
-          <v-icon size="13" class="sidebar-view-title-icon"
-            >mdi-bookshelf</v-icon
-          >
-          Library
-        </span>
-        <button
-          class="sidebar-pin-toggle"
-          :class="{ pinned: sidebarStore.sidebarPinned }"
-          type="button"
-          :title="
-            sidebarStore.sidebarPinned
-              ? 'Unpin sidebar (auto-hide)'
-              : 'Pin sidebar open'
-          "
-          @click="sidebarStore.toggleSidebarPinned()"
-        >
-          <v-icon size="15">{{
-            sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
-          }}</v-icon>
-        </button>
-      </div>
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
-        <button
-          class="sidebar-view-tab"
-          :class="{
-            active:
-              sidebarPrimaryTab === 'library' && projectViewMode === 'global',
-          }"
-          @click="selectLibraryTab('global')"
-        >
-          <v-icon size="14">mdi-earth</v-icon>
-          Global
-        </button>
-        <button
-          class="sidebar-view-tab"
-          :class="{
-            active:
-              sidebarPrimaryTab === 'library' && projectViewMode === 'project',
-          }"
-          @click="selectLibraryTab('project')"
-        >
-          <v-icon size="14">mdi-folder-outline</v-icon>
-          Projects
-        </button>
-        <button
-          v-if="!isReadOnly"
-          class="sidebar-view-tab"
-          :class="{ active: sidebarPrimaryTab === 'folders' }"
-          @click="selectFoldersTab()"
-        >
-          <v-icon size="14">mdi-folder-network-outline</v-icon>
-          Folders
-        </button>
+          <button
+            class="sidebar-view-tab"
+            :class="{
+              active:
+                sidebarPrimaryTab === 'library' && projectViewMode === 'global',
+            }"
+            @click="selectLibraryTab('global')"
+          >
+            <v-icon size="14">mdi-earth</v-icon>
+            <span class="sidebar-view-tab-label">Global</span>
+          </button>
+          <button
+            class="sidebar-view-tab"
+            :class="{
+              active:
+                sidebarPrimaryTab === 'library' &&
+                projectViewMode === 'project',
+            }"
+            @click="selectLibraryTab('project')"
+          >
+            <v-icon size="14">mdi-briefcase-outline</v-icon>
+            <span class="sidebar-view-tab-label">Projects</span>
+          </button>
+          <button
+            v-if="!isReadOnly"
+            class="sidebar-view-tab"
+            :class="{ active: sidebarPrimaryTab === 'folders' }"
+            @click="selectFoldersTab()"
+          >
+            <v-icon size="14">mdi-folder-outline</v-icon>
+            <span class="sidebar-view-tab-label">Folders</span>
+          </button>
         </div>
       </div>
     </div>
@@ -4451,9 +4680,26 @@ defineExpose({
             >
               <div
                 class="sidebar-folder-row sidebar-folder-root-row"
-                :class="{ active: selectedFolderKey === 'rf-' + rf.id }"
-                :title="rf.folder"
+                :class="{
+                  active: selectedFolderKey === 'rf-' + rf.id,
+                  droppable: dragOverReferenceTargetKey === 'rf-' + rf.id,
+                }"
+                :title="
+                  inDocker
+                    ? rf.folder
+                    : `${rf.folder} - drop dragged reference images here to move them`
+                "
                 @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
+                @dragover="
+                  !inDocker &&
+                  handleReferenceFolderDragOver(rf.id, null, $event)
+                "
+                @dragleave="
+                  !inDocker && handleReferenceFolderDragLeave(rf.id, null)
+                "
+                @drop.prevent="
+                  !inDocker && handleReferenceFolderDrop(rf.id, null, $event)
+                "
                 @click="
                   if (!inDocker) {
                     if (!expandedFolderIds.has(rf.id))
@@ -4468,7 +4714,7 @@ defineExpose({
                 "
               >
                 <v-icon
-                  size="16"
+                  size="12"
                   class="sidebar-folder-chevron"
                   :style="{
                     visibility:
@@ -4499,6 +4745,28 @@ defineExpose({
                 <span class="sidebar-folder-label">{{
                   rf.label || rf.folder
                 }}</span>
+                <span
+                  v-if="!inDocker"
+                  class="sidebar-folder-actions"
+                  @click.stop
+                >
+                  <button
+                    type="button"
+                    class="sidebar-folder-action-btn"
+                    title="Relocate folder and move files"
+                    @click="openReferenceFolderRelocateDialog(rf)"
+                  >
+                    <v-icon size="13">mdi-folder-move-outline</v-icon>
+                  </button>
+                  <button
+                    type="button"
+                    class="sidebar-folder-action-btn"
+                    title="Edit folder settings"
+                    @click="openReferenceFolderEditor(rf)"
+                  >
+                    <v-icon size="13">mdi-pencil-outline</v-icon>
+                  </button>
+                </span>
                 <span
                   v-if="rf.status === 'mount_error'"
                   class="sidebar-folder-status-badge sidebar-folder-status--mount_error"
@@ -4565,8 +4833,22 @@ defineExpose({
                       :selected-folder-key="selectedFolderKey"
                       :folder-browse-cache="folderBrowseCache"
                       :expanded-folder-ids="expandedFolderIds"
+                      :drop-target-key="dragOverReferenceTargetKey"
                       @select="handleFolderNodeSelect"
                       @toggle="handleFolderNodeToggle"
+                      @drag-over="
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDragOver(rfId, path, event)
+                      "
+                      @drag-leave="
+                        ({ rfId, path }) =>
+                          handleReferenceFolderDragLeave(rfId, path)
+                      "
+                      @drop="
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDrop(rfId, path, event)
+                      "
+                      @context="handleReferenceFolderNodeContext"
                     />
                   </template>
                   <div
@@ -4628,7 +4910,7 @@ defineExpose({
                 "
               >
                 <v-icon
-                  size="16"
+                  size="12"
                   class="sidebar-folder-chevron"
                   style="visibility: hidden"
                 >
@@ -5661,7 +5943,9 @@ defineExpose({
           <v-icon size="15" class="sidebar-ctx-icon"
             >mdi-share-variant-outline</v-icon
           >
-          Share
+          <span class="sidebar-ctx-label"
+            >Share "{{ sidebarCtxCharacter.name }}"</span
+          >
         </button>
         <button
           class="sidebar-ctx-item"
@@ -5725,7 +6009,9 @@ defineExpose({
           <v-icon size="15" class="sidebar-ctx-icon"
             >mdi-share-variant-outline</v-icon
           >
-          Share
+          <span class="sidebar-ctx-label"
+            >Share "{{ sidebarCtxSet.name }}"</span
+          >
         </button>
         <button
           class="sidebar-ctx-item"
@@ -5972,6 +6258,20 @@ defineExpose({
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
         <button
+          v-if="!inDocker && !sidebarCtxFolderScopePath"
+          class="sidebar-ctx-item"
+          @click="
+            openReferenceFolderRelocateDialog(sidebarCtxFolder);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-folder-move-outline</v-icon
+          >
+          Relocate
+        </button>
+        <button
+          v-if="!sidebarCtxFolderScopePath"
           class="sidebar-ctx-item"
           @click="
             openReferenceFolderEditor(sidebarCtxFolder);
@@ -5982,6 +6282,7 @@ defineExpose({
           Edit
         </button>
         <button
+          v-if="!sidebarCtxFolderScopePath"
           class="sidebar-ctx-item sidebar-ctx-item--danger"
           @click="
             deleteReferenceFolderById(sidebarCtxFolder.id);
@@ -6064,181 +6365,116 @@ defineExpose({
 
 <style scoped>
 .sidebar-project-header {
-  padding-top: 4px;
-  padding-bottom: 4px;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
   justify-content: center;
 }
 
 .sidebar-section-divider {
   height: 1px;
   background: rgba(var(--v-theme-border), 0.2);
-  margin: 2px 0;
+  margin: var(--space-1) 0;
 }
 
 .sidebar-collections-help-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 0 4px 4px;
+  gap: var(--space-3);
+  padding: 0 var(--space-2) var(--space-2);
 }
 
 .sidebar-collections-help {
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   font-style: italic;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-view-header {
   display: flex;
-  flex-direction: column;
+  align-items: stretch;
   flex-shrink: 0;
-}
-
-.sidebar-view-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-  padding: 0 4px 0 10px;
-}
-
-.sidebar-pin-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
-  cursor: pointer;
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-.sidebar-pin-toggle:hover {
-  background: rgba(var(--v-theme-sidebar-text), 0.1);
-  color: rgba(var(--v-theme-sidebar-text), 0.9);
-}
-.sidebar-pin-toggle.pinned {
-  color: rgb(var(--v-theme-accent));
-}
-
-/* Dock header: a toolbar-height band so the dock's icons line up below the
-   toolbar, holding the pin toggle as a proper (non-faded) toggle button. */
-.sidebar-dock-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* At least toolbar height (so the icons below line up under the toolbar), but
-     grow to fit the pin when thumbnails are sized larger than that. */
-  height: max(48px, var(--sidebar-thumb-size));
-  flex-shrink: 0;
-}
-.sidebar-pin-toggle--dock {
-  /* Match the docked thumbnail / nav-icon footprint so the rail reads as one
-     uniform column of equally-sized items. */
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
-  border: 1px solid rgba(var(--v-theme-sidebar-text), 0.22);
-  background: rgba(var(--v-theme-sidebar-text), 0.06);
-  color: rgba(var(--v-theme-sidebar-text), 0.8);
-}
-/* Scale the pin glyph with the box (overrides the inline size="18" on <v-icon>),
-   matching the nav-icon glyphs in the rail below. Slightly less than the nav
-   icons' fill since the pin's border already frames it. */
-.sidebar-pin-toggle--dock .v-icon {
-  font-size: calc(var(--sidebar-thumb-size) * 0.82) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.82) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.82) !important;
-}
-.sidebar-pin-toggle--dock:hover {
-  background: rgba(var(--v-theme-sidebar-text), 0.13);
-  color: rgba(var(--v-theme-sidebar-text), 0.95);
-}
-.sidebar-pin-toggle--dock.pinned {
-  border-color: rgba(var(--v-theme-accent), 0.7);
-  background: rgba(var(--v-theme-accent), 0.18);
-  color: rgb(var(--v-theme-accent));
-}
-
-.sidebar-view-title-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
-}
-
-.sidebar-view-title-icon {
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  /* Fixed 36px so the tabs' bottom edge aligns with the 36px toolbar's, regardless
+     of the sidebar font scaling. min-height:0 defeats the flex default
+     (min-height:auto) — without it the tab content pushes this past its set height
+     (the toolbar, a plain block, isn't subject to that). Re-pin --text-xs (the only
+     ramp token the tabs use) to its literal value so the tab labels are exempt from
+     --sidebar-font-scale and the height never drifts. */
+  height: 36px;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  --text-xs: 0.75rem;
 }
 
 .sidebar-view-tabs-row {
   display: flex;
-  align-items: center;
-  padding: 0px 4px 2px 4px;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
   position: relative;
   z-index: 1;
-  margin-top: 0;
-  margin-bottom: 0;
   gap: 0;
   background: transparent;
   border-bottom: none;
+  /* Query container for the progressive tab-label collapse (see the @container
+     rules below). Sits on the tabs row — not the header — so the thresholds
+     measure the space actually left for the tabs after the pin button. */
+  container: sidebartabs / inline-size;
 }
 
 .sidebar-view-tabs-icon {
   flex-shrink: 0;
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-view-tabs-label {
   flex-shrink: 0;
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   font-weight: 500;
   letter-spacing: 0.04em;
-  color: rgba(var(--v-theme-sidebar-text), 0.35);
+  color: rgb(var(--v-theme-sidebar-text));
   white-space: nowrap;
 }
 
 .sidebar-view-tabs-arrow {
-  font-size: 0.8em;
+  font-size: var(--text-sm);
   opacity: 0.7;
 }
 
 .sidebar-view-tabs {
   display: flex;
-  flex-wrap: wrap;
+  align-items: stretch;
   gap: 0;
   flex: 1;
+  min-width: 0;
 }
 
 .sidebar-view-tab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  /* Trimmed vertical padding so the header (title row + this tab row) stays at the
-     48px toolbar height when the tabs sit on one line; min-height pads any slack. */
-  padding: 3px 8px 2px;
-  /* Grow to fill the row, but don't shrink below the icon+label — so when the
-     sidebar is narrowed the tabs wrap onto new lines instead of clipping. */
-  flex: 1 0 auto;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  /* Equal widths that can shrink; labels are dropped (icon-only) when the sidebar
+     is narrow, so the tabs always stay on one line and the header height (and its
+     alignment with the toolbar) never changes. */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
   border-radius: 0;
   border: none;
   border-bottom: 2px solid transparent;
-  font-size: 0.74rem;
-  font-weight: 600;
+  /* Overlap the header's 1px bottom border so the active underline sits on it. */
+  margin-bottom: -1px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
   cursor: pointer;
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgba(var(--v-theme-sidebar-text), 0.55);
   transition:
     color 0.15s,
     border-color 0.15s;
@@ -6250,6 +6486,38 @@ defineExpose({
   color: inherit;
 }
 
+/* Tab text label — shown whole or not at all (no ellipsis). It's dropped in two
+   stages by the @container rules below as the header narrows. */
+.sidebar-view-tab-label {
+  white-space: nowrap;
+}
+
+/* Stage 1 — the non-selected tabs shed their text and shrink to their icon, so
+   the selected tab keeps its label and takes the freed space. */
+@container sidebartabs (max-width: 205px) {
+  .sidebar-view-tab:not(.active) .sidebar-view-tab-label {
+    display: none;
+  }
+  .sidebar-view-tab:not(.active) {
+    flex: 0 1 auto;
+  }
+  .sidebar-view-tab.active {
+    flex: 1 1 auto;
+  }
+}
+
+/* Stage 2 — too tight even for the selected label: every tab is icon-only and
+   the three share the row equally again. */
+@container sidebartabs (max-width: 115px) {
+  .sidebar-view-tab.active .sidebar-view-tab-label {
+    display: none;
+  }
+  .sidebar-view-tab:not(.active),
+  .sidebar-view-tab.active {
+    flex: 1 1 0;
+  }
+}
+
 .sidebar-view-tab.active {
   background: transparent;
   color: rgb(var(--v-theme-accent));
@@ -6257,15 +6525,7 @@ defineExpose({
 }
 
 .sidebar-view-tab:hover:not(.active) {
-  background: rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgba(var(--v-theme-sidebar-text), 0.9);
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .sidebar-view-tab {
-    min-height: 44px;
-    padding: 8px 8px;
-  }
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-tab-panel {
@@ -6300,7 +6560,7 @@ defineExpose({
 
 .sidebar-section-scroll::-webkit-scrollbar-thumb {
   background: rgb(var(--v-theme-accent));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .sidebar-section-scroll::-webkit-scrollbar-track {
@@ -6312,8 +6572,8 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  padding: 40px 24px;
+  gap: var(--space-5);
+  padding: var(--space-8) var(--space-6);
   text-align: center;
 }
 
@@ -6323,15 +6583,15 @@ defineExpose({
 }
 
 .sidebar-no-projects-text {
-  font-size: 0.9rem;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  font-size: var(--text-base);
+  color: rgb(var(--v-theme-sidebar-text));
   margin: 0;
   line-height: 1.5;
 }
 
 .sidebar-no-projects-btn :deep(.v-btn__content) {
-  font-size: 0.82rem;
-  padding: 2px 4px 2px 4px;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2);
 }
 
 .sidebar-no-projects-btn--folders {
@@ -6342,12 +6602,12 @@ defineExpose({
 .sidebar-project-tree-add {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 8px;
-  font-size: 0.8rem;
-  font-weight: 700;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
   border-left: 3px solid transparent;
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.22);
@@ -6357,14 +6617,14 @@ defineExpose({
 }
 
 .sidebar-project-tree-add:hover {
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
   background: rgba(var(--v-theme-accent), 0.08);
 }
 
 .sidebar-project-tree-node {
   display: flex;
   flex-direction: column;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
 }
 
@@ -6375,8 +6635,8 @@ defineExpose({
 .sidebar-project-tree-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 var(--sidebar-right-edge, 8px) 0 8px;
+  gap: var(--space-2);
+  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-3);
   min-height: 28px;
   cursor: pointer;
   border-left: 3px solid transparent;
@@ -6387,7 +6647,7 @@ defineExpose({
     background 0.12s,
     color 0.12s,
     border-color 0.12s;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
   position: relative;
 }
 
@@ -6395,7 +6655,7 @@ defineExpose({
   background:
     linear-gradient(var(--hover-wash), var(--hover-wash)),
     rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-tree-row.active {
@@ -6415,8 +6675,7 @@ defineExpose({
 
 .sidebar-project-tree-row.active:hover {
   background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)),
-    var(--active-wash);
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
   color: var(--active-text);
 }
 
@@ -6426,7 +6685,7 @@ defineExpose({
   background: rgba(var(--v-theme-primary), 0.22);
   outline: 2px dashed rgb(var(--v-theme-primary));
   outline-offset: -2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .sidebar-project-tree-expand-indicator {
@@ -6458,7 +6717,7 @@ defineExpose({
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   overflow: hidden;
 }
 
@@ -6467,8 +6726,8 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.7rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -6476,7 +6735,7 @@ defineExpose({
 .sidebar-project-tree-actions {
   display: none;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-shrink: 0;
 }
 
@@ -6508,19 +6767,19 @@ defineExpose({
 .sidebar-project-tree-subheader {
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 2px 0 2px 10px;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   min-height: 24px;
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   transition: color 0.12s;
   user-select: none;
 }
 
 .sidebar-project-tree-subheader:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-tree-sub-chevron {
@@ -6542,8 +6801,8 @@ defineExpose({
 }
 
 .sidebar-project-tree-subheader-label {
-  font-size: 0.68rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: inherit;
@@ -6552,13 +6811,13 @@ defineExpose({
 
 /* Child items indented under a project sub-section */
 .sidebar-project-tree-child {
-  padding-left: 16px !important;
+  padding-left: var(--space-5) !important;
 }
 
 .sidebar-project-tree-empty {
-  padding: 2px 8px 2px 20px;
-  font-size: 0.72rem;
-  color: rgba(var(--v-theme-sidebar-text), 0.35);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-5);
+  font-size: var(--text-2xs);
+  color: rgb(var(--v-theme-sidebar-text));
   font-style: italic;
 }
 
@@ -6568,7 +6827,7 @@ defineExpose({
 
 .sidebar-no-projects-btn--folders :deep(.v-btn__content) {
   white-space: nowrap;
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .sidebar-collapsed-project-wrap {
@@ -6584,7 +6843,7 @@ defineExpose({
   z-index: 300;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: none;
   overflow: hidden;
   min-width: 180px;
@@ -6604,7 +6863,9 @@ defineExpose({
   color: rgb(var(--v-theme-on-primary));
   font-weight: 600;
   border-left: 3px solid rgb(var(--v-theme-primary));
-  padding-left: 7px; /* compensate for the 3px border so text stays aligned */
+  padding-left: var(
+    --space-3
+  ); /* compensate for the 3px border so text stays aligned */
 }
 
 .sidebar-collapsed-project-submenu {
@@ -6612,7 +6873,7 @@ defineExpose({
   z-index: 301;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   min-width: 180px;
   max-height: 60vh;
@@ -6623,7 +6884,7 @@ defineExpose({
 .sidebar-project-menu-separator {
   height: 1px;
   background: rgba(var(--v-theme-border), 0.3);
-  margin: 2px 0;
+  margin: var(--space-1) 0;
 }
 
 .sidebar-project-menu-has-sub {
@@ -6661,7 +6922,7 @@ defineExpose({
   z-index: 300;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -6676,12 +6937,12 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  padding: 6px 12px;
-  font-size: 0.72rem;
-  font-weight: 600;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
+  color: rgb(var(--v-theme-sidebar-text));
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.4);
   background: rgba(var(--v-theme-tertiary), 0.2);
 }
@@ -6705,8 +6966,8 @@ defineExpose({
 .sidebar-collapsed-flyout-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   cursor: pointer;
   color: rgb(var(--v-theme-on-surface));
   transition: background 0.12s;
@@ -6724,13 +6985,13 @@ defineExpose({
 .sidebar-collapsed-flyout-thumb {
   width: 32px;
   height: 32px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   object-fit: cover;
   flex-shrink: 0;
 }
 
 .sidebar-collapsed-flyout-label {
-  font-size: 0.88rem;
+  font-size: var(--text-base);
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
@@ -6739,7 +7000,7 @@ defineExpose({
 .sidebar-collapsed-flyout-item-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-shrink: 0;
   margin-left: auto;
   visibility: hidden;
@@ -6752,8 +7013,8 @@ defineExpose({
 .sidebar-collapsed-flyout-item-actions .v-icon {
   opacity: 0.55;
   cursor: pointer;
-  padding: 2px;
-  border-radius: 3px;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
   transition:
     opacity 0.1s,
     background 0.1s;
@@ -6765,12 +7026,12 @@ defineExpose({
 }
 
 .sidebar-project-menu-section-label {
-  padding: 6px 10px 2px;
-  font-size: 0.7rem;
-  font-weight: 600;
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-menu-wrap {
@@ -6783,12 +7044,12 @@ defineExpose({
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.65);
-  font-size: 0.81rem;
+  color: rgb(var(--v-theme-sidebar-text));
+  font-size: var(--text-sm);
   font-weight: 500;
   min-height: 26px;
 }
@@ -6798,14 +7059,14 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
-  padding: 3px 10px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-radius: 0;
   border: none;
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.65);
-  font-size: 0.81rem;
+  color: rgb(var(--v-theme-sidebar-text));
+  font-size: var(--text-sm);
   font-weight: 500;
   min-height: 26px;
   cursor: pointer;
@@ -6817,7 +7078,7 @@ defineExpose({
 
 .sidebar-project-trigger:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.9);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-trigger-label {
@@ -6854,14 +7115,14 @@ defineExpose({
 .sidebar-project-menu-item {
   display: flex;
   align-items: center;
-  padding: 4px 10px;
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
-  font-size: 0.81rem;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-tertiary));
   transition:
     background 0.1s,
     color 0.1s;
-  gap: 6px;
+  gap: var(--space-3);
   min-height: 26px;
 }
 
@@ -6901,10 +7162,10 @@ defineExpose({
 .sidebar-project-menu-add {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 0.81rem;
-  font-weight: 600;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
   color: rgba(var(--v-theme-on-tertiary), 0.65);
   border-top: 1px solid rgba(var(--v-theme-border), 0.25);
@@ -6928,15 +7189,15 @@ defineExpose({
 .sidebar-native-select {
   background: rgba(var(--v-theme-surface), 0.3);
   color: rgb(var(--v-theme-on-surface));
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   min-height: 32px;
   height: 32px;
-  font-size: 1em;
+  font-size: var(--text-md);
   box-shadow: 2px 2px 6px rgba(var(--v-theme-shadow), 0.2);
-  margin-left: 6px;
+  margin-left: var(--space-3);
   box-sizing: border-box;
-  padding-left: 8px;
-  padding-right: 8px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
   border: 1px solid rgba(var(--v-theme-border), 0.5);
   width: 230px;
   transition: border 0.15s;
@@ -6961,13 +7222,13 @@ defineExpose({
   display: flex;
   align-items: center;
   min-height: 32px;
-  padding: 0 12px;
-  margin-left: 6px;
-  border-radius: 4px;
+  padding: 0 var(--space-4);
+  margin-left: var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-surface), 0.2);
   color: rgba(var(--v-theme-on-surface), 0.7);
   border: 1px dashed rgba(var(--v-theme-border), 0.5);
-  font-size: 0.95em;
+  font-size: var(--text-md);
 }
 /* Sidebar right edge for counts */
 .sidebar {
@@ -6979,6 +7240,17 @@ defineExpose({
   --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 4px);
   --sidebar-space-y: 2px;
   --sidebar-item-radius: 25%;
+  /* Rescale the type ramp for the whole sidebar in one place, driven by
+     --sidebar-font-scale (set from the thumbnail size in the inline style;
+     defaults to 1 = unchanged). Every sidebar text rule uses these tokens, so
+     this scales them all at once. Values mirror docs/design/design-tokens.css. */
+  --sidebar-font-scale: 1;
+  --text-2xs: calc(0.6875rem * var(--sidebar-font-scale));
+  --text-xs: calc(0.75rem * var(--sidebar-font-scale));
+  --text-sm: calc(0.8125rem * var(--sidebar-font-scale));
+  --text-base: calc(0.875rem * var(--sidebar-font-scale));
+  --text-md: calc(1rem * var(--sidebar-font-scale));
+  --text-xl: calc(1.375rem * var(--sidebar-font-scale));
   color: rgb(var(--v-theme-sidebar-text));
   background: rgb(var(--v-theme-sidebar));
   padding: 0;
@@ -7024,8 +7296,8 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 4px 0 2px;
-  gap: 1px;
+  padding: var(--space-2) 0 var(--space-1);
+  gap: var(--space-1);
   position: static;
 }
 
@@ -7045,26 +7317,15 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 4px 4px 2px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-1);
   background: transparent;
-}
-
-/* Pin/auto-hide toggle in the browser sidebar's top-right (uses the empty space
-   beside the wordmark; mirrors the desktop title-bar pin). */
-.sidebar-brand-pin {
-  align-self: flex-start;
-  flex-shrink: 0;
-  margin: 2px 4px 0 0;
-}
-.sidebar-brand-pin.pinned {
-  color: rgb(var(--v-theme-accent));
 }
 
 .sidebar-brand-left {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 2px 2px 2px 10px;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
 }
 
 .sidebar-brand-logo {
@@ -7079,7 +7340,7 @@ defineExpose({
 .sidebar-brand-logo-link {
   display: flex;
   align-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   outline: none;
 }
 
@@ -7092,7 +7353,7 @@ defineExpose({
 .sidebar-brand-title {
   /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. "Pixl" uses the
      sidebar text colour, "Stash" the accent — matching the desktop title bar. */
-  font-size: 24px;
+  font-size: var(--text-xl);
   color: rgb(var(--v-theme-sidebar-text));
   --wordmark-accent: rgb(var(--v-theme-accent));
 }
@@ -7109,13 +7370,13 @@ defineExpose({
      row and looked "gone"). */
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-2);
   white-space: nowrap;
-  margin-top: 3px;
+  margin-top: var(--space-2);
 }
 
 .sidebar-update-available {
-  font-size: 0.65rem;
+  font-size: var(--text-2xs);
   line-height: 1;
   color: rgba(var(--v-theme-accent), 0.8);
   text-decoration: none;
@@ -7133,7 +7394,7 @@ defineExpose({
   padding: 0;
   width: 10px;
   height: 10px;
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
   line-height: 1;
   background: transparent;
   border: none;
@@ -7148,7 +7409,7 @@ defineExpose({
 }
 
 .sidebar-update-security {
-  color: #e57c00;
+  color: rgb(var(--v-theme-warning));
 }
 
 .sidebar-update-security:hover {
@@ -7156,7 +7417,7 @@ defineExpose({
 }
 
 .sidebar-update-security--high {
-  color: #e53935;
+  color: rgb(var(--v-theme-error));
 }
 
 .sidebar-update-security--high:hover {
@@ -7169,7 +7430,7 @@ defineExpose({
   width: 30px;
   height: 30px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   border: none;
   box-shadow: none;
@@ -7186,7 +7447,7 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   gap: var(--sidebar-space-y);
-  padding: 4px 0 8px;
+  padding: var(--space-2) 0 var(--space-3);
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
@@ -7209,7 +7470,7 @@ defineExpose({
   transform: translateY(-50%) scaleY(0);
   width: 3px;
   height: 60%;
-  border-radius: 0 2px 2px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: rgb(var(--v-theme-primary));
   transition: transform 0.18s ease;
   pointer-events: none;
@@ -7265,7 +7526,7 @@ defineExpose({
   justify-content: center;
   border-radius: var(--sidebar-item-radius);
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.84);
+  color: rgb(var(--v-theme-sidebar-text));
   position: relative;
   transition:
     background-color 0.18s ease,
@@ -7273,13 +7534,13 @@ defineExpose({
 }
 
 .sidebar-collapsed-item.active {
-  color: rgba(var(--v-theme-sidebar-text), 0.84);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-collapsed-item--add {
   background: rgba(var(--v-theme-sidebar-text), 0.07);
   border: 1px dashed rgba(var(--v-theme-sidebar-text), 0.25);
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
   position: relative;
   overflow: hidden;
 }
@@ -7361,7 +7622,7 @@ defineExpose({
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   pointer-events: none;
   opacity: 0;
   z-index: 2;
@@ -7417,11 +7678,11 @@ defineExpose({
 .sidebar-collapsed-divider {
   width: 70%;
   height: 1px;
-  margin: 2px auto;
+  margin: var(--space-1) auto;
   background: rgba(var(--v-theme-sidebar-text), 0.15);
 }
 
-@media (max-width: 999px) {
+@media (max-width: 849px) {
   .sidebar {
     height: 100%;
   }
@@ -7429,16 +7690,17 @@ defineExpose({
 
 .sidebar-section-header {
   position: relative;
-  font-size: 0.68rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
   min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
-  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) 10px 2px 10px;
+  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) var(--space-3)
+    var(--space-1) var(--space-3);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
   align-items: center;
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-section-header--collapsible {
@@ -7448,13 +7710,13 @@ defineExpose({
 
 .sidebar-section-header--collapsible:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-section-chevron {
-  margin-right: 3px;
+  margin-right: var(--space-2);
   flex-shrink: 0;
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   transition: transform 0.15s;
 }
 
@@ -7477,15 +7739,15 @@ defineExpose({
   display: flex;
   align-items: center;
   min-height: calc(var(--sidebar-thumb-size) + 6px);
-  padding: 3px 8px;
+  padding: var(--space-2) var(--space-3);
   padding-right: var(--sidebar-right-edge) !important;
   cursor: pointer;
   border-radius: 0;
   margin-bottom: 0;
-  font-size: 0.81rem;
+  font-size: var(--text-sm);
   font-weight: 400;
   background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.76);
+  color: rgb(var(--v-theme-sidebar-text));
   transition:
     background 0.12s,
     color 0.12s,
@@ -7524,7 +7786,7 @@ defineExpose({
   background: rgba(var(--v-theme-on-surface), 0.05);
   background-clip: padding-box;
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   transition: background 0.15s ease;
 }
 
@@ -7545,14 +7807,14 @@ defineExpose({
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 6px 10px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3);
   border-top: 1px solid rgba(var(--v-theme-border), 0.2);
   background: rgb(var(--v-theme-sidebar));
   flex-shrink: 0;
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   font-weight: 500;
-  color: rgba(var(--v-theme-sidebar-text), 0.38);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-readonly-notice-label {
@@ -7566,13 +7828,13 @@ defineExpose({
 .sidebar-readonly-notice-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 7px;
-  border-radius: 5px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-accent), 0.15);
   color: rgb(var(--v-theme-accent));
-  font-size: 0.68rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-decoration: none;
   transition:
     background 0.15s,
@@ -7595,7 +7857,7 @@ defineExpose({
 }
 
 .sidebar-footer {
-  padding: 4px 0 0 0;
+  padding: var(--space-2) 0 0 0;
 }
 
 .sidebar-footer-item {
@@ -7616,13 +7878,12 @@ defineExpose({
 
 .sidebar-list-item:hover {
   background: var(--hover-wash);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-list-item.active:hover {
   background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)),
-    var(--active-wash);
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
   color: var(--active-text);
 }
 
@@ -7639,7 +7900,7 @@ defineExpose({
 .sidebar-header-actions {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: var(--space-1);
   min-width: 40px;
   justify-content: flex-end;
   margin-left: auto;
@@ -7651,7 +7912,7 @@ defineExpose({
   min-height: 22px;
   justify-content: center;
   text-align: center;
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-move-to-project-wrap {
@@ -7669,24 +7930,24 @@ defineExpose({
     rgb(var(--v-theme-sidebar))
   );
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   min-width: 180px;
   max-width: 300px;
   max-height: 420px; /* keep in sync with MOVE_MENU_MAX_H in the script */
   overflow-y: auto;
-  padding: 4px 0;
+  padding: var(--space-2) 0;
   box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.3);
   white-space: nowrap;
 }
 
 .sidebar-move-menu-group-header {
-  padding: 6px 10px 3px;
-  font-size: 0.72rem;
-  font-weight: 600;
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-tertiary), 0.45);
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .sidebar-move-menu-group-header:first-child {
@@ -7700,9 +7961,9 @@ defineExpose({
 .sidebar-move-menu-item {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
-  font-size: 0.85rem;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-base);
   cursor: pointer;
   color: rgb(var(--v-theme-on-tertiary));
   overflow: hidden;
@@ -7717,7 +7978,7 @@ defineExpose({
 
 .sidebar-move-menu-item--create {
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
   font-style: italic;
   opacity: 0.85;
 }
@@ -7733,7 +7994,7 @@ defineExpose({
 .sidebar-list-icon {
   display: flex;
   align-items: center;
-  margin-right: 6px;
+  margin-right: var(--space-3);
   justify-content: center;
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
@@ -7858,9 +8119,9 @@ defineExpose({
   z-index: 1200;
   color: rgb(var(--v-theme-on-error));
   background: rgba(var(--v-theme-error), 0.8);
-  padding: 10px 16px;
-  border-radius: 14px;
-  font-size: 0.9em;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-base);
   line-height: 1.3;
   box-shadow: 0 8px 20px rgba(var(--v-theme-shadow), 0.25);
   pointer-events: none;
@@ -7870,8 +8131,8 @@ defineExpose({
 }
 
 .sidebar-list-count {
-  font-size: 0.75rem;
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-sidebar-text));
   min-width: 2.4em;
   text-align: right;
   margin: 0;
@@ -7886,13 +8147,13 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.65em;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding: 2px 2px;
-  margin-right: 4px;
-  border-radius: 4px;
+  padding: var(--space-1) var(--space-1);
+  margin-right: var(--space-2);
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-primary));
   background: rgba(var(--v-theme-primary), 0.7);
   position: relative;
@@ -7902,13 +8163,19 @@ defineExpose({
 .sidebar-character-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   margin-left: auto;
   justify-content: flex-end;
 }
 
 .sidebar-character-actions .sidebar-list-count {
   margin: 0;
+}
+
+/* Under ~150px there isn't room for the per-entry image counts — drop them. */
+.sidebar--narrow .sidebar-list-count,
+.sidebar--narrow .sidebar-folder-count-badge {
+  display: none;
 }
 
 /* ── Share link indicator icon on sidebar list items ──────────── */
@@ -7924,14 +8191,14 @@ defineExpose({
   color: rgb(var(--v-theme-primary));
   flex-shrink: 0;
   pointer-events: none;
-  margin-right: 2px;
+  margin-right: var(--space-1);
 }
 
 .sidebar-character-toggle {
   cursor: pointer;
   color: rgb(var(--v-theme-sidebar-text));
   opacity: 0.8;
-  margin-right: 4px;
+  margin-right: var(--space-2);
 }
 
 .sidebar-character-toggle:hover {
@@ -7940,11 +8207,11 @@ defineExpose({
 }
 
 .add-character-inline {
-  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
-  font-size: 1rem;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
+  font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -7962,12 +8229,12 @@ defineExpose({
 
 .clear-selection-inline {
   color: rgb(var(--v-theme-primary)) !important;
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   cursor: pointer;
   background: transparent;
   border: none;
   padding: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -7983,11 +8250,11 @@ defineExpose({
 
 .edit-character-inline,
 .edit-set-inline {
-  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
-  font-size: 1rem;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
+  font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -8051,11 +8318,11 @@ defineExpose({
 }
 
 .delete-character-inline {
-  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
-  font-size: 1rem;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
+  font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   display: flex;
@@ -8080,16 +8347,16 @@ defineExpose({
 .sidebar-sort-select {
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
-  border-radius: 6px !important;
+  border-radius: var(--radius-md) !important;
   min-height: 36px !important;
   height: 36px !important;
-  font-size: 0.97em;
+  font-size: var(--text-md);
   box-shadow: none;
   margin-top: 0px;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
   align-items: center;
-  padding-left: 6px;
-  padding-right: 6px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
 }
 
 /* Remove extra height from v-input root for select */
@@ -8097,25 +8364,25 @@ defineExpose({
 .sidebar-sort-select .v-field {
   min-height: 32px !important;
   height: 32px !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
   box-shadow: none !important;
 }
 
 .sidebar-sort-select .v-field__input {
   min-height: 28px !important;
   height: 28px !important;
-  padding-top: 2px !important;
-  padding-bottom: 2px !important;
+  padding-top: var(--space-1) !important;
+  padding-bottom: var(--space-1) !important;
   align-items: center;
 }
 
 /* Items within People/Sets sections get a tree indent */
 .sidebar-section-scroll .sidebar-list-item {
-  padding-left: 16px;
+  padding-left: var(--space-5);
 }
 
 .sidebar-section-block .sidebar-section-header {
-  padding-bottom: 1px;
+  padding-bottom: var(--space-1);
 }
 
 /* All-pictures row: same compact height as regular items */
@@ -8130,12 +8397,12 @@ defineExpose({
 /* Keep All Pictures / Scrapheap rows compact but slightly prominent */
 .sidebar-all-pictures-row .sidebar-list-item {
   min-height: calc(min(var(--sidebar-thumb-size), 22px) + 6px) !important;
-  padding-top: 3px !important;
-  padding-bottom: 3px !important;
-  font-size: 0.8rem;
-  font-weight: 700;
+  padding-top: var(--space-2) !important;
+  padding-bottom: var(--space-2) !important;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-all-pictures-row.drag-over-project {
@@ -8156,9 +8423,9 @@ defineExpose({
   transform: translateY(-50%);
   background: rgba(var(--v-theme-secondary), 0.75);
   color: rgb(var(--v-theme-on-secondary));
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-size: 0.9em;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-base);
   white-space: nowrap;
   pointer-events: none;
   z-index: 1000 !important;
@@ -8168,7 +8435,7 @@ defineExpose({
   .sidebar-list-item,
   .sidebar-list-item.active {
     min-height: 56px;
-    padding: 6px 10px;
+    padding: var(--space-3) var(--space-3);
   }
 
   .sidebar-section-header {
@@ -8178,7 +8445,7 @@ defineExpose({
   .sidebar-all-pictures-row .sidebar-list-item,
   .sidebar-all-pictures-row .sidebar-list-item.active {
     min-height: 48px;
-    padding: 6px 10px;
+    padding: var(--space-3) var(--space-3);
   }
 
   .sidebar-list-icon {
@@ -8210,14 +8477,14 @@ defineExpose({
 .sidebar-folders-loading {
   display: flex;
   justify-content: center;
-  padding: 32px;
+  padding: var(--space-7);
 }
 
 .sidebar-folders-list {
   flex: 0 0 auto;
   overflow-y: visible;
   overflow-x: hidden;
-  padding: 2px 0;
+  padding: var(--space-1) 0;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
 }
 
@@ -8229,11 +8496,11 @@ defineExpose({
 .sidebar-folder-section-header {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 var(--sidebar-right-edge, 8px) 0 8px;
+  gap: var(--space-2);
+  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-1);
   min-height: 28px;
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: rgb(var(--v-theme-sidebar-text));
   background: transparent;
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
@@ -8255,7 +8522,7 @@ defineExpose({
       rgba(var(--v-theme-accent), 0.08)
     ),
     rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-section-chevron {
@@ -8272,8 +8539,8 @@ defineExpose({
 
 .sidebar-folder-section-title {
   flex: 1 1 auto;
-  font-size: 0.7rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   overflow: hidden;
@@ -8288,7 +8555,7 @@ defineExpose({
   flex-shrink: 0;
   opacity: 0.66;
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.66);
+  color: rgb(var(--v-theme-sidebar-text));
   transition:
     opacity 0.15s,
     color 0.15s;
@@ -8307,10 +8574,10 @@ defineExpose({
 .sidebar-folder-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px 3px 10px;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-1);
   cursor: pointer;
-  color: rgba(var(--v-theme-sidebar-text), 0.8);
+  color: rgb(var(--v-theme-sidebar-text));
   user-select: none;
   min-height: 28px;
   border-left: 3px solid transparent;
@@ -8320,12 +8587,12 @@ defineExpose({
 }
 
 .sidebar-folder-root-row {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 
 .sidebar-folder-row:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgba(var(--v-theme-sidebar-text), 0.92);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-row.active {
@@ -8344,10 +8611,16 @@ defineExpose({
   color: rgb(var(--v-theme-on-primary));
 }
 
+.sidebar-folder-row.droppable {
+  filter: brightness(1.2);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
 .sidebar-folder-children {
-  padding-left: 4px;
+  padding-left: var(--space-2);
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: 18px;
+  margin-left: var(--space-1);
 }
 
 .sidebar-folder-label {
@@ -8358,6 +8631,42 @@ defineExpose({
   min-width: 0;
 }
 
+.sidebar-folder-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.sidebar-folder-row:hover .sidebar-folder-actions,
+.sidebar-folder-row:focus-within .sidebar-folder-actions,
+.sidebar-folder-row.active .sidebar-folder-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-folder-action-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.sidebar-folder-action-btn:hover {
+  background: rgba(var(--v-theme-accent), 0.18);
+  opacity: 1;
+}
+
 .sidebar-folder-chevron,
 .sidebar-folder-icon {
   flex-shrink: 0;
@@ -8366,30 +8675,30 @@ defineExpose({
 
 /* All folder icons fixed at 16px regardless of thumbnail size */
 .sidebar-folders-list :deep(.sidebar-folder-icon) {
-  font-size: 16px !important;
+  font-size: var(--text-md) !important;
   width: 16px !important;
   height: 16px !important;
 }
 .sidebar-folders-list :deep(.sidebar-folder-chevron) {
-  font-size: 16px !important;
+  font-size: var(--text-md) !important;
   width: 16px !important;
   height: 16px !important;
 }
 
 .sidebar-folder-status-badge {
   flex-shrink: 0;
-  margin-left: 2px;
+  margin-left: var(--space-1);
   opacity: 0.75;
 }
 
 .sidebar-folder-count-badge {
   flex-shrink: 0;
-  margin-left: 4px;
+  margin-left: var(--space-2);
   min-width: 22px;
   text-align: right;
-  font-size: 0.74rem;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-row.active .sidebar-folder-count-badge {
@@ -8397,9 +8706,9 @@ defineExpose({
 }
 
 .sidebar-folder-status--active {
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   transition:
     color 0.15s,
     opacity 0.15s;
@@ -8415,7 +8724,7 @@ defineExpose({
 }
 
 .sidebar-folder-status--scanning {
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
   display: flex;
   align-items: center;
 }
@@ -8427,13 +8736,13 @@ defineExpose({
 .sidebar-folder-loading-row {
   display: flex;
   justify-content: center;
-  padding: 8px;
+  padding: var(--space-3);
 }
 
 .sidebar-folder-empty-row {
-  padding: 4px 8px;
-  font-size: 0.78rem;
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-sidebar-text));
   font-style: italic;
 }
 
@@ -8447,20 +8756,21 @@ defineExpose({
   z-index: 2000;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
-  padding: 4px 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-2) 0;
   min-width: 140px;
+  max-width: 260px;
   user-select: none;
 }
 
 .sidebar-ctx-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 7px 14px;
-  font-size: 13px;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-surface));
   background: transparent;
   border: none;
@@ -8468,6 +8778,14 @@ defineExpose({
   text-align: left;
   white-space: nowrap;
   transition: background 0.1s;
+}
+
+/* Truncate long resource names in share items so the menu can't overflow. */
+.sidebar-ctx-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .sidebar-ctx-item:hover {
@@ -8501,7 +8819,7 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-ctx-arrow {
   margin-left: auto;
   opacity: 0.5;
-  font-size: 1rem;
+  font-size: var(--text-md);
   line-height: 1;
 }
 
@@ -8518,25 +8836,25 @@ button.sidebar-ctx-item:disabled:hover {
   z-index: 2100;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.28);
-  padding: 6px 8px 8px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-3) var(--space-3) var(--space-3);
   user-select: none;
   max-height: calc(100vh - 16px);
   overflow-y: auto;
 }
 
 .sidebar-ctx-appearance-label {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   opacity: 0.55;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  margin-bottom: 7px;
+  margin-bottom: var(--space-3);
 }
 
 .sidebar-ctx-icon-section-wrap {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
   align-items: flex-start;
 }
 
@@ -8545,8 +8863,8 @@ button.sidebar-ctx-item:disabled:hover {
   flex-direction: column;
   align-items: center;
   align-self: stretch;
-  padding: 24px 2px;
-  gap: 3px;
+  padding: var(--space-6) var(--space-1);
+  gap: var(--space-2);
 }
 
 .sidebar-ctx-icon-or-line {
@@ -8556,7 +8874,7 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-ctx-icon-or-text {
-  font-size: 0.55rem;
+  font-size: var(--text-2xs);
   opacity: 0.35;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -8571,7 +8889,7 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-ctx-icon-btn--cards-large {
   width: 48px;
   height: 48px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 2px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -8595,25 +8913,25 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-ctx-icon-grid {
   display: grid;
   grid-template-columns: repeat(8, 28px);
-  column-gap: 1px;
-  row-gap: 2px;
+  column-gap: var(--space-1);
+  row-gap: var(--space-1);
 }
 
 .sidebar-ctx-cat-header {
   grid-column: 1 / -1;
-  font-size: 0.58rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   opacity: 0.45;
-  padding: 5px 0 2px;
+  padding: var(--space-2) 0 var(--space-1);
   line-height: 1;
 }
 
 .sidebar-ctx-icon-btn {
   width: 28px;
   height: 28px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -8628,7 +8946,7 @@ button.sidebar-ctx-item:disabled:hover {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   display: block;
 }
 
@@ -8642,12 +8960,12 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-ctx-color-section-header {
-  font-size: 0.58rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   opacity: 0.45;
-  padding: 0 0 5px;
+  padding: 0 0 var(--space-2);
   line-height: 1;
 }
 
@@ -8655,14 +8973,14 @@ button.sidebar-ctx-item:disabled:hover {
   display: grid;
   grid-template-columns: repeat(6, 26px);
   grid-auto-rows: 26px;
-  gap: 5px;
+  gap: var(--space-2);
   align-items: center;
 }
 
 .sidebar-ctx-color-swatch {
   width: 26px;
   height: 26px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 2px solid transparent;
   cursor: pointer;
   outline: none;
@@ -8692,40 +9010,40 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .folder-type-card {
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
 }
 
 .folder-type-title {
-  font-size: 1.04rem;
-  font-weight: 700;
-  padding: 16px 18px 8px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-5) var(--space-5) var(--space-3);
 }
 
 .folder-type-body {
-  padding: 8px 18px 0;
+  padding: var(--space-3) var(--space-5) 0;
 }
 
 .folder-type-subtitle {
-  margin: 0 0 10px;
-  font-size: 0.83rem;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.62);
 }
 
 .folder-type-options {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .folder-type-option {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-3);
   width: 100%;
   border: 1px solid rgba(var(--v-theme-border), 0.35);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-surface), 0.4);
-  padding: 10px 12px;
+  padding: var(--space-3) var(--space-4);
   text-align: left;
   cursor: pointer;
   color: rgb(var(--v-theme-on-surface));
@@ -8739,20 +9057,95 @@ button.sidebar-ctx-item:disabled:hover {
 .folder-type-option-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .folder-type-option-text strong {
-  font-size: 0.88rem;
-  font-weight: 700;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
 }
 
 .folder-type-option-text small {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.62);
 }
 
 .folder-type-actions {
+  padding: var(--space-3) var(--space-5) var(--space-4);
+}
+
+.relocate-card {
+  border-radius: 14px;
+}
+
+.relocate-title {
+  font-size: 1.04rem;
+  font-weight: 700;
+  padding: 16px 18px 8px;
+}
+
+.relocate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 18px 0;
+}
+
+.relocate-path-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.relocate-path-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  opacity: 0.68;
+  text-transform: uppercase;
+}
+
+.relocate-path-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface-variant), 0.35);
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+
+.relocate-destination-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.relocate-destination-row .v-text-field {
+  flex: 1;
+}
+
+.relocate-warning {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+}
+
+.relocate-error {
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-error), 0.08);
+  border: 1px solid rgba(var(--v-theme-error), 0.22);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.relocate-result {
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-accent));
+}
+
+.relocate-actions {
   padding: 10px 16px 14px;
 }
 </style>
@@ -8767,7 +9160,7 @@ button.sidebar-ctx-item:disabled:hover {
   background: rgba(var(--v-theme-on-surface), 0.05) !important;
   background-clip: padding-box !important;
   border: 2px solid transparent !important;
-  border-radius: 8px !important;
+  border-radius: var(--radius-md) !important;
   transition: background 0.15s ease !important;
 }
 .sidebar-scroll:hover::-webkit-scrollbar-thumb {
@@ -8783,13 +9176,13 @@ button.sidebar-ctx-item:disabled:hover {
 /* Override ProjectFiles header inside the project tree to match subheader style */
 .sidebar-project-tree-files .pf-header {
   min-height: 24px !important;
-  padding: 2px 0 2px 10px !important;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3) !important;
   padding-right: var(--sidebar-header-action-right-edge) !important;
-  font-size: 0.68rem !important;
-  font-weight: 700 !important;
+  font-size: var(--text-2xs) !important;
+  font-weight: var(--weight-semibold) !important;
   letter-spacing: 0.07em !important;
-  gap: 3px !important;
-  color: rgba(var(--v-theme-sidebar-text), 0.4) !important;
+  gap: var(--space-2) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   text-transform: uppercase !important;
   transition: color 0.12s !important;
   user-select: none !important;
@@ -8797,7 +9190,7 @@ button.sidebar-ctx-item:disabled:hover {
 
 .sidebar-project-tree-files .pf-header:hover {
   background: rgba(var(--v-theme-accent), 0.08) !important;
-  color: rgba(var(--v-theme-sidebar-text), 0.92) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
 }
 
 .sidebar-project-tree-files .pf-header-icon {
@@ -8805,8 +9198,8 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-project-tree-files .pf-title {
-  font-size: 0.68rem !important;
-  font-weight: 700 !important;
+  font-size: var(--text-2xs) !important;
+  font-weight: var(--weight-semibold) !important;
   letter-spacing: 0.07em !important;
   text-transform: uppercase !important;
   flex: 1 !important;
@@ -8815,11 +9208,11 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-project-tree-files .pf-count {
   flex-shrink: 0;
   margin-left: auto;
-  margin-right: 4px;
+  margin-right: var(--space-2);
 }
 
 .sidebar-project-tree-files .pf-chevron {
-  font-size: 14px !important;
+  font-size: var(--text-base) !important;
   order: -1;
   opacity: 1 !important;
   color: inherit !important;

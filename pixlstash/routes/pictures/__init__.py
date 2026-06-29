@@ -5,6 +5,7 @@ from pixlstash.utils.service.picture_stats import clear_stats_cache  # noqa: F40
 from ._helpers import MEDIA_TYPE_BY_FORMAT  # noqa: F401
 from ._listing import select_pictures_for_listing  # noqa: F401
 from . import (
+    _anomaly,
     _crud,
     _export,
     _face_search,
@@ -27,6 +28,9 @@ def create_router(server) -> APIRouter:
     _likeness_search.register_routes(router, server)
     _face_search.register_routes(router, server)
     _import.register_routes(router, server)
+    # Register before _crud so /pictures/{id}/anomaly_region is matched ahead of
+    # the /pictures/{id}/{field} catch-all registered in _crud.
+    _anomaly.register_routes(router, server)
     _crud.register_routes(router, server)
     _listing.register_routes(router, server)
     return router

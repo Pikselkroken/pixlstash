@@ -8,9 +8,16 @@ export const useSearchStore = defineStore("search", () => {
   const searchInput = ref("");
   const searchHistory = ref([]);
   const isSearchHistoryOpen = ref(false);
-  const searchOverlayVisible = ref(false);
+  // Bumped to ask the toolbar's inline search field to take focus (e.g. the "F"
+  // shortcut). The field watches this token rather than App holding a ref down
+  // through ImageGrid → Toolbar.
+  const searchFocusToken = ref(0);
 
   const isSearchActive = computed(() => !!searchQuery.value?.trim());
+
+  function requestSearchFocus() {
+    searchFocusToken.value++;
+  }
 
   const filteredSearchHistory = computed(() => {
     const needle = (searchInput.value || "").trim().toLowerCase();
@@ -55,9 +62,10 @@ export const useSearchStore = defineStore("search", () => {
     searchInput,
     searchHistory,
     isSearchHistoryOpen,
-    searchOverlayVisible,
+    searchFocusToken,
     isSearchActive,
     filteredSearchHistory,
+    requestSearchFocus,
     addToSearchHistory,
     clearSearchHistory,
     commitSearch,

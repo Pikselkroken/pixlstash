@@ -142,7 +142,7 @@ def register_routes(router, server):
         "/pictures/plugins/{name}",
         include_in_schema=False,
         summary="Run image plugin",
-        description="Runs a named image plugin on selected pictures and imports outputs into stacks.",
+        description="Runs a named image plugin on selected pictures and imports the outputs. By default each output is placed in its source picture's stack; pass stack=false to skip stacking while still inheriting the source's set/project/face associations.",
         response_model=PicturePluginRunResponse,
     )
     async def run_picture_plugin(
@@ -191,6 +191,11 @@ def register_routes(router, server):
         if not isinstance(parameters, dict):
             raise HTTPException(status_code=400, detail="parameters must be an object")
 
+        # Optional physical stacking of plugin outputs. Default true preserves
+        # the historical behaviour; when false, outputs skip the stack but still
+        # inherit the source's set/project/face associations.
+        stack = bool(payload.get("stack", True))
+
         raw_captions = payload.get("captions")
         captions: list[str] | None = None
         if isinstance(raw_captions, list):
@@ -209,6 +214,7 @@ def register_routes(router, server):
                 parameters,
                 captions,
                 origin_client_id=origin_client_id,
+                stack=stack,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
@@ -718,11 +724,13 @@ def register_routes(router, server):
                 penalised_tags = get_smart_score_penalised_tags_from_request(
                     server, request
                 )
-                good_anchors, bad_anchors, candidates = fetch_smart_score_data(
-                    server,
-                    None,
-                    candidate_ids=ordered_ids,
-                    penalised_tags=penalised_tags,
+                good_anchors, bad_anchors, candidates, tag_precisions = (
+                    fetch_smart_score_data(
+                        server,
+                        None,
+                        candidate_ids=ordered_ids,
+                        penalised_tags=penalised_tags,
+                    )
                 )
                 if candidates:
                     good_list, bad_list, cand_list, cand_ids = (
@@ -732,7 +740,10 @@ def register_routes(router, server):
                     )
                     if cand_list:
                         scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
-                            cand_list, good_list, bad_list
+                            cand_list,
+                            good_list,
+                            bad_list,
+                            config={"tag_precisions": tag_precisions},
                         )
                         smart_score_by_id = {
                             int(pid): float(score)

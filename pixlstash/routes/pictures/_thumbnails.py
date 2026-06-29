@@ -395,6 +395,7 @@ def register_routes(router, server):
                     "id",
                     "file_path",
                     "faces",
+                    "detections",
                     "thumbnail_left",
                     "thumbnail_top",
                     "thumbnail_side",
@@ -462,12 +463,39 @@ def register_routes(router, server):
                     mapped_any = mapped_any or mapped
                     face_data.append({**entry, "bbox": mapped_bbox})
 
+                # Object detections, mapped into thumbnail-crop space exactly
+                # like faces so the grid overlay renders them identically.
+                detection_entries = []
+                for det in getattr(pic, "detections", []):
+                    bbox = getattr(det, "bbox", None)
+                    if bbox and isinstance(bbox, str):
+                        try:
+                            bbox = ast.literal_eval(bbox)
+                        except Exception:
+                            bbox = None
+                    if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                        detection_entries.append(
+                            {
+                                "id": det.id,
+                                "bbox": list(bbox),
+                                "label": det.label,
+                                "score": det.score,
+                                "frame_index": getattr(det, "frame_index", None),
+                            }
+                        )
+                detection_data = []
+                for entry in detection_entries:
+                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
+                    mapped_any = mapped_any or mapped
+                    detection_data.append({**entry, "bbox": mapped_bbox})
+
                 imported_at = getattr(pic, "imported_at", None)
                 v = int(imported_at.timestamp()) if imported_at is not None else 0
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
                 results[pic.id] = {
                     "thumbnail": thumbnail_url,
                     "faces": face_data,
+                    "detections": detection_data,
                     "thumbnail_width": 256 if mapped_any else None,
                     "thumbnail_height": 256 if mapped_any else None,
                     "penalised_tags": list(
@@ -481,6 +509,7 @@ def register_routes(router, server):
                 results[pic.id] = {
                     "thumbnail": None,
                     "faces": [],
+                    "detections": [],
                     "penalised_tags": [],
                 }
         response = JSONResponse(results)

@@ -280,6 +280,131 @@ class Florence2Service:
                 for image_path in image_paths
             }
 
+    def detect_objects(
+        self,
+        image_paths: list,
+        prompt: Optional[str] = None,
+        max_new_tokens: int = 1024,
+        max_dim: int = 1024,
+        _retry_on_cpu: bool = True,
+    ) -> dict:
+        """Detect objects in a batch of still images.
+
+        Runs Florence-2 dense object detection (``<OD>`` when *prompt* is empty)
+        or open-vocabulary detection
+        (``<OPEN_VOCABULARY_DETECTION>`` when a *prompt* phrase is supplied)
+        and returns labelled bounding boxes.
+
+        Coordinates are returned in **original picture pixels** as ``xyxy``.
+        Florence emits scale-invariant normalised bins (0-1000), so passing each
+        image's *original* size to ``post_process_generation`` dequantises
+        straight back to original pixels — independent of the ``max_dim`` resize
+        we feed the model for speed (the resize preserves aspect ratio, and the
+        bins are per-axis fractions).
+
+        Args:
+            image_paths: List of still-image file paths (non-video).
+            prompt: Optional phrase to ground. Empty/None → dense ``<OD>``.
+            max_new_tokens: Generation cap; detection token strings are long.
+            max_dim: Longest side (px) each image is resized to before inference.
+            _retry_on_cpu: When True, retry once on CPU after a CUDA error.
+
+        Returns:
+            ``{path: [(label, [x1, y1, x2, y2], score_or_None), ...]}``.  Paths
+            that fail to load are omitted; ``score`` is ``None`` for detectors
+            (like Florence ``<OD>``/grounding) that emit no per-box confidence.
+        """
+        if self._model is None:
+            logger.error("Florence-2 model is not initialised")
+            return {}
+
+        phrase = (prompt or "").strip()
+        if phrase:
+            # Open-vocabulary detection is the right task for a bare class-style
+            # prompt ("dog", "license plate"): it does one-to-one detection of
+            # the named object. <CAPTION_TO_PHRASE_GROUNDING> expects a full
+            # caption-like sentence and grounds noun phrases within it, which
+            # gives inconsistent results when fed a single label.
+            task_token = "<OPEN_VOCABULARY_DETECTION>"
+            text_prompt = f"{task_token}{phrase}"
+        else:
+            task_token = "<OD>"
+            text_prompt = task_token
+
+        try:
+            # (path, fed_image, (orig_w, orig_h)) — fed_image is the resized
+            # copy handed to the processor; orig size drives box dequantisation.
+            valid_items = []
+            for image_path in image_paths:
+                try:
+                    image = Image.open(image_path).convert("RGB")
+                    orig_size = (image.width, image.height)
+                    fed_image = _resize_to_max_dim(image, max_dim=max_dim)
+                    valid_items.append((image_path, fed_image, orig_size))
+                except Exception as image_error:
+                    logger.error(
+                        "Florence-2 failed to load image for detection %s: %s",
+                        image_path,
+                        image_error,
+                    )
+
+            if not valid_items:
+                return {}
+
+            images = [img for _, img, _ in valid_items]
+            inputs = self._processor(
+                text=[text_prompt] * len(images),
+                images=images,
+                return_tensors="pt",
+                padding=True,
+            )
+            inputs = _move_inputs_to_device(inputs, self._model_device, self._dtype)
+
+            with torch.inference_mode():
+                generated_ids = self._model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    max_new_tokens=max_new_tokens,
+                    early_stopping=False,
+                    do_sample=False,
+                    # Beam search (Florence-2's reference default) over greedy:
+                    # detection is emitted as a sequence of location tokens, and
+                    # a single greedy path drops/duplicates boxes far more than
+                    # beams do. Keep do_sample=False so runs stay repeatable.
+                    num_beams=3,
+                    pad_token_id=self._processor.tokenizer.pad_token_id,
+                )
+            generated_texts = self._processor.batch_decode(
+                generated_ids, skip_special_tokens=False
+            )
+
+            detections: dict = {}
+            for (image_path, _, orig_size), generated_text in zip(
+                valid_items, generated_texts
+            ):
+                detections[image_path] = self._parse_detections(
+                    generated_text, task_token, orig_size
+                )
+            return detections
+
+        except Exception as e:
+            if _retry_on_cpu and self._is_cuda_error(e):
+                logger.warning(
+                    "Florence-2 detection failed on GPU (%s); retrying on CPU.", e
+                )
+                if self._reload_on_cpu(cause=e):
+                    return self.detect_objects(
+                        image_paths,
+                        prompt=prompt,
+                        max_new_tokens=max_new_tokens,
+                        max_dim=max_dim,
+                        _retry_on_cpu=False,
+                    )
+
+            logger.error("Florence-2 detection failed: %s", e)
+            logger.debug(traceback.format_exc())
+            return {}
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -437,6 +562,52 @@ class Florence2Service:
         if not caption:
             return None
         return _truncate_at_sentence(caption)
+
+    def _parse_detections(self, generated_text: str, task_token: str, image_size):
+        """Parse Florence detection output into ``[(label, xyxy_px, score|None)]``.
+
+        Args:
+            generated_text: Raw decoded model output.
+            task_token: ``"<OD>"`` or ``"<OPEN_VOCABULARY_DETECTION>"`` — the
+                key ``post_process_generation`` returns results under.
+            image_size: ``(width, height)`` of the original picture in pixels;
+                Florence's normalised bins dequantise directly to these pixels.
+
+        Returns:
+            List of ``(label, [x1, y1, x2, y2], score_or_None)``. Boxes are
+            clamped to image bounds (CLAUDE.md) and degenerate boxes dropped.
+        """
+        width, height = image_size
+        parsed = self._processor.post_process_generation(
+            generated_text, task=task_token, image_size=(width, height)
+        )
+        result = parsed.get(task_token, {}) or {}
+        bboxes = result.get("bboxes", []) or []
+        # <OD>/grounding return labels under "labels"; open-vocabulary detection
+        # returns them under "bboxes_labels". Accept either so all three task
+        # tokens parse through this one path.
+        labels = result.get("labels") or result.get("bboxes_labels") or []
+        scores = result.get("scores", None)
+
+        detections = []
+        for idx, (bbox, label) in enumerate(zip(bboxes, labels)):
+            if not bbox or len(bbox) != 4:
+                continue
+            x1, y1, x2, y2 = bbox
+            x1 = max(0, min(int(round(x1)), width))
+            y1 = max(0, min(int(round(y1)), height))
+            x2 = max(0, min(int(round(x2)), width))
+            y2 = max(0, min(int(round(y2)), height))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            score = None
+            if scores is not None and idx < len(scores):
+                try:
+                    score = float(scores[idx])
+                except (TypeError, ValueError):
+                    score = None
+            detections.append((str(label).strip(), [x1, y1, x2, y2], score))
+        return detections
 
     def _is_cuda_error(self, error: Exception) -> bool:
         return (

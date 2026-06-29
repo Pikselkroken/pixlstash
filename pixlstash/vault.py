@@ -12,7 +12,7 @@ from typing import Optional
 from concurrent.futures import Future
 
 from sqlmodel import Session, select
-from sqlalchemy import func
+from sqlalchemy import func, and_
 
 
 from .database import DBPriority, VaultDatabase
@@ -588,7 +588,10 @@ class Vault:
             self.submit_task(task)
 
     def reset_description_interactive(
-        self, picture_id: int, engine_name: str | None = None
+        self,
+        picture_id: int,
+        engine_name: str | None = None,
+        origin_client_id: str | None = None,
     ) -> bool:
         """Request a fresh description pass for a picture by writing a sentinel.
 
@@ -604,6 +607,10 @@ class Vault:
         Args:
             picture_id: Primary key of the picture to reset.
             engine_name: Optional plugin name to embed in the sentinel.
+            origin_client_id: Opaque ``X-Client-Id`` of the originating tab,
+                threaded from the route handler so the CHANGED_PICTURES echo is
+                recognised as the user's own change (targeted reconcile, no pill)
+                instead of being treated as external.
 
         Returns:
             ``True`` if the picture was found and updated, ``False`` otherwise.
@@ -623,7 +630,14 @@ class Vault:
         found = self.db.run_task(_set_sentinel)
         if not found:
             return False
-        self.notify(EventType.CHANGED_PICTURES, {"picture_ids": [picture_id]})
+        self.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": [picture_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         self.redescribe_picture_interactive(picture_id, engine_name=engine_name)
         return True
 
@@ -735,6 +749,24 @@ class Vault:
                         changed_count,
                         remaining,
                     )
+            return
+
+        if task.type == "DetectionTask":
+            picture_ids = result.get("picture_ids") or []
+            if picture_ids:
+                # Attribute to the originating tab and tag the change as the
+                # (grid-invisible) "detections" field, so the SPA refreshes
+                # detection overlays without raising the external-change pill or
+                # reshuffling the grid.
+                self.notify(
+                    EventType.CHANGED_PICTURES,
+                    {
+                        "picture_ids": picture_ids,
+                        "change_kind": "updated",
+                        "fields": ["detections"],
+                        "origin_client_id": task.params.get("origin_client_id"),
+                    },
+                )
             return
 
         changed = result.get("changed") if isinstance(result, dict) else None
@@ -958,6 +990,9 @@ class Vault:
     def _build_worker_progress_snapshot(self) -> dict:
         progress = {}
         for worker_type in TaskType.all():
+            # When set by a branch below, this overrides the finder-based
+            # activity check (used by user-triggered tasks that have no finder).
+            worker_active_override = None
             total = int(
                 self.db.run_immediate_read_task(self._count_total_pictures) or 0
             )
@@ -972,6 +1007,12 @@ class Vault:
                     self.db.run_immediate_read_task(self._count_missing_tags) or 0
                 )
                 label = "pictures_tagged"
+            elif worker_type == TaskType.TAG_PREDICTION_BACKFILL:
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_tag_predictions)
+                    or 0
+                )
+                label = "tag_prediction_backfill"
             elif worker_type == TaskType.QUALITY:
                 missing = int(
                     self.db.run_immediate_read_task(self._count_missing_quality) or 0
@@ -1058,10 +1099,38 @@ class Vault:
                     self.db.run_immediate_read_task(self._count_missing_text_score) or 0
                 )
                 label = "text_score"
+            elif worker_type == TaskType.DETECTION:
+                # User-triggered (no finder): surface live progress straight from
+                # the running task(s), mirroring the WATCH_FOLDERS handling.
+                label = "object_detection"
+                active_detection_tasks = (
+                    self._task_runner.get_active_tasks_of_type("DetectionTask")
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_detection_tasks:
+                    total = sum(
+                        int(getattr(t, "_total_count", 0))
+                        for t in active_detection_tasks
+                    )
+                    processed = sum(
+                        int(getattr(t, "_processed_count", 0))
+                        for t in active_detection_tasks
+                    )
+                    missing = max(0, total - processed)
+                    worker_active_override = True
+                else:
+                    total = 0
+                    missing = 0
+                    worker_active_override = False
             else:
                 missing = 0
                 label = "planner_managed"
-            worker_active = self._is_worker_active(worker_type)
+            worker_active = (
+                worker_active_override
+                if worker_active_override is not None
+                else self._is_worker_active(worker_type)
+            )
             progress[worker_type.value] = {
                 "label": label,
                 "current": max(total - missing, 0),
@@ -1101,6 +1170,27 @@ class Vault:
             select(func.count())
             .select_from(Picture)
             .where(Picture.tags.any(has_sentinel))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_tag_predictions(session: Session) -> int:
+        """Count pictures with real tags but no tag-prediction rows.
+
+        These were tagged before predictions were written inline (or by a
+        different engine then); the MissingTagPredictionFinder back-fills them.
+        """
+        has_sentinel = Tag.tag.like(
+            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+        )
+        has_real_tag = Picture.tags.any(and_(Tag.tag.is_not(None), ~has_sentinel))
+        no_prediction = ~Picture.tag_predictions.any()
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(has_real_tag, no_prediction, Picture.deleted.is_(False))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]

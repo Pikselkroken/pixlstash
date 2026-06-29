@@ -34,6 +34,7 @@
         ref="menuRef"
         class="ate-menu"
         role="menu"
+        :style="menuStyle"
         :class="{
           open: menuOpen,
           flyout: placement === 'right',
@@ -51,44 +52,50 @@
           />
         </div>
 
-        <div v-if="isLoading" class="ate-empty">{{ config.loadingText }}</div>
-        <div v-else-if="filteredItems.length === 0" class="ate-empty">
-          {{ config.emptyText }}
+        <!-- Only the item list scrolls; the search box above and status below stay
+             pinned. The list's max height is sized to the viewport in sizeMenu(), so
+             a long list (or a flyout opened low on screen) scrolls instead of
+             running off the bottom. -->
+        <div class="ate-list">
+          <div v-if="isLoading" class="ate-empty">{{ config.loadingText }}</div>
+          <div v-else-if="filteredItems.length === 0" class="ate-empty">
+            {{ config.emptyText }}
+          </div>
+          <button
+            v-for="item in filteredItems"
+            :key="item.key"
+            :class="[
+              'ate-item',
+              {
+                'ate-item--disabled': isItemDisabled(item),
+                'ate-item--checked': getItemState(item) === 'checked',
+              },
+            ]"
+            type="button"
+            role="menuitem"
+            :disabled="isItemDisabled(item)"
+            @click.stop="toggleItem(item)"
+          >
+            <v-icon size="16" class="ate-item-check">
+              {{
+                getItemState(item) === "checked"
+                  ? "mdi-checkbox-marked"
+                  : getItemState(item) === "partial"
+                    ? "mdi-minus-box-outline"
+                    : "mdi-checkbox-blank-outline"
+              }}
+            </v-icon>
+            <span class="ate-item-name">{{ item.name }}</span>
+            <span v-if="isSet" class="ate-item-meta">
+              <span
+                v-if="isLastUsedItem(item)"
+                class="ate-item-shortcut"
+                title="Press A to add to this set"
+                >A</span
+              >
+            </span>
+          </button>
         </div>
-        <button
-          v-for="item in filteredItems"
-          :key="item.key"
-          :class="[
-            'ate-item',
-            {
-              'ate-item--disabled': isItemDisabled(item),
-              'ate-item--checked': getItemState(item) === 'checked',
-            },
-          ]"
-          type="button"
-          role="menuitem"
-          :disabled="isItemDisabled(item)"
-          @click.stop="toggleItem(item)"
-        >
-          <v-icon size="16" class="ate-item-check">
-            {{
-              getItemState(item) === "checked"
-                ? "mdi-checkbox-marked"
-                : getItemState(item) === "partial"
-                  ? "mdi-minus-box-outline"
-                  : "mdi-checkbox-blank-outline"
-            }}
-          </v-icon>
-          <span class="ate-item-name">{{ item.name }}</span>
-          <span v-if="isSet" class="ate-item-meta">
-            <span
-              v-if="isLastUsedItem(item)"
-              class="ate-item-shortcut"
-              title="Press A to add to this set"
-              >A</span
-            >
-          </span>
-        </button>
 
         <div v-if="statusMessage" class="ate-status">
           {{ statusMessage }}
@@ -187,27 +194,21 @@ const picturesWithFaces = ref(new Set());
 
 const flyoutFlipped = ref(false);
 const flyoutClickedOpen = ref(false);
-const flyoutMenuStyle = ref({});
 
-// --- Flyout positioning ---
-function positionFlyout() {
-  if (props.placement !== "right" || !rootRef.value) return;
-  const rect = rootRef.value.getBoundingClientRect();
-  const menuW = 250;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const left =
-    rect.right + 4 + menuW <= vw - 8
-      ? rect.right + 4
-      : Math.max(8, rect.left - menuW - 4);
-  const top = Math.min(rect.top, vh - 32);
-  flyoutMenuStyle.value = {
-    position: "fixed",
-    top: `${top}px`,
-    left: `${left}px`,
-    maxHeight: `${vh - top - 16}px`,
-    overflowY: "auto",
-  };
+// Dynamic max-height so the menu never runs off the bottom of the screen: measure
+// the menu's top in the viewport and cap its height to what's left below it. The
+// inner .ate-list scrolls; the search box and status stay pinned. Recomputed on
+// open and on resize/scroll (scroll uses capture, to catch a scrolling ancestor
+// such as the sidebar when this is a flyout).
+const menuStyle = ref({});
+function sizeMenu() {
+  nextTick(() => {
+    const el = menuRef.value;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    const avail = window.innerHeight - top - 12;
+    menuStyle.value = { maxHeight: `${Math.max(140, Math.round(avail))}px` };
+  });
 }
 
 // --- URL helpers ---
@@ -297,6 +298,9 @@ function toggleMenu() {
 function openMenu() {
   menuOpen.value = true;
   fetchItems(true);
+  sizeMenu();
+  window.addEventListener("resize", sizeMenu);
+  window.addEventListener("scroll", sizeMenu, true);
   if (props.placement !== "right") {
     nextTick(() => searchInputRef.value?.focus());
     document.addEventListener("pointerdown", handleOutsideClick, true);
@@ -306,6 +310,8 @@ function openMenu() {
 function closeMenu() {
   menuOpen.value = false;
   searchQuery.value = "";
+  window.removeEventListener("resize", sizeMenu);
+  window.removeEventListener("scroll", sizeMenu, true);
   if (flyoutClickedOpen.value) {
     document.removeEventListener("pointerdown", handleOutsideClick, true);
     flyoutClickedOpen.value = false;
@@ -716,7 +722,8 @@ async function addToLastSet() {
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("pointerdown", handleOutsideClick, true);
-  window.removeEventListener("resize", positionFlyout);
+  window.removeEventListener("resize", sizeMenu);
+  window.removeEventListener("scroll", sizeMenu, true);
 });
 
 watch(
@@ -745,12 +752,12 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   background-color: rgba(var(--v-theme-surface), 0.85);
   color: rgb(var(--v-theme-on-surface));
   border: none;
-  padding: 2px 8px;
-  border-radius: 3px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.85rem;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
   line-height: 1.4;
   cursor: pointer;
 }
@@ -783,18 +790,34 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   top: calc(100% + 8px);
   left: 0;
   min-width: 220px;
-  padding: 10px;
-  border-radius: 10px;
+  /* Flex column so the search box and status stay pinned while only the item list
+     scrolls. The CSS cap is a fallback; sizeMenu() sets an exact viewport-aware
+     max-height inline. overflow:hidden keeps the scroll area within the rounded card. */
+  display: flex;
+  flex-direction: column;
+  max-height: 72vh;
+  overflow: hidden;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
   background-color: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--elevation-2);
   opacity: 0;
   transform: translateY(-6px);
   pointer-events: none;
   transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
+    opacity var(--dur-1) var(--ease-standard),
+    transform var(--dur-1) var(--ease-standard);
   z-index: 6;
+}
+
+/* The scrolling region: only the item list scrolls when the menu is height-capped.
+   min-height:0 lets it shrink inside the flex column so overflow actually engages. */
+.ate-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ate-menu.force-dark {
@@ -803,12 +826,12 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 }
 
 .ate-menu.force-dark .ate-search {
-  color: rgba(255, 255, 255, 0.55);
-  background: rgba(255, 255, 255, 0.06);
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  background: rgba(var(--v-theme-on-dark-surface), 0.06);
 }
 
 .ate-menu.force-dark .ate-search input {
-  color: #fff;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .ate-menu.force-dark .ate-item {
@@ -816,25 +839,25 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 }
 
 .ate-menu.force-dark .ate-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
 }
 
 .ate-menu.force-dark .ate-item-count {
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .ate-menu.force-dark .ate-item-shortcut {
-  border-color: rgba(255, 255, 255, 0.32);
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.32);
+  color: rgba(var(--v-theme-on-dark-surface), 0.9);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
 }
 
 .ate-menu.force-dark .ate-empty {
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .ate-menu.force-dark .ate-status {
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
 
 .ate.open .ate-menu,
@@ -845,15 +868,16 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 }
 
 .ate-search {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.72rem;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
-  padding: 6px 8px;
-  border-radius: 8px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-surface), 0.06);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-3);
 }
 
 .ate-search input {
@@ -861,22 +885,22 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   border: none;
   color: rgb(var(--v-theme-on-surface));
   width: 100%;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   outline: none;
 }
 
 .ate-item {
   width: 100%;
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: 0.78rem;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-surface));
   background: transparent;
   border: none;
   text-align: left;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   cursor: pointer;
 }
 
@@ -898,7 +922,7 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .ate-item:hover {
@@ -912,30 +936,31 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 }
 
 .ate-item-count {
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .ate-item-shortcut {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.32);
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 0.68rem;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-2xs);
   line-height: 1;
   color: rgba(var(--v-theme-on-surface), 0.9);
   background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .ate-empty {
-  padding: 6px 8px;
-  font-size: 0.75rem;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .ate-status {
-  margin-top: 6px;
-  padding: 6px 8px;
-  font-size: 0.72rem;
+  flex: 0 0 auto;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
@@ -944,12 +969,12 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   top: calc(100% + 8px);
   left: 0;
   max-width: 220px;
-  padding: 6px 10px;
-  border-radius: 8px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
-  font-size: 0.74rem;
+  box-shadow: var(--elevation-3);
+  font-size: var(--text-xs);
   line-height: 1.2;
   z-index: 12;
   pointer-events: none;
@@ -970,10 +995,10 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   width: 100%;
   background: transparent;
   color: rgb(var(--v-theme-on-surface));
-  padding: 7px 14px;
+  padding: var(--space-2) var(--space-5);
   border-radius: 0;
-  font-size: 13px;
-  gap: 8px;
+  font-size: var(--text-sm);
+  gap: var(--space-3);
 }
 
 .ate--flyout .ate-btn:hover:not(:disabled) {
@@ -992,10 +1017,10 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   top: 0;
   min-width: 185px;
   max-width: 185px;
-  padding: 4px 0;
-  border-radius: 6px;
+  padding: var(--space-2) 0;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--elevation-3);
   transform: translateX(-4px);
   z-index: 2500;
 }
@@ -1022,8 +1047,8 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 
 .ate--flyout .ate-item {
   border-radius: 0;
-  padding: 7px 14px;
-  font-size: 13px;
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--text-sm);
 }
 
 .ate--flyout .ate-item-name {
@@ -1033,14 +1058,14 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 }
 
 .ate--flyout .ate-search {
-  margin: 4px 6px 6px;
-  padding: 5px 8px;
-  border-radius: 4px;
+  margin: var(--space-2) var(--space-2) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
 }
 
 .ate--flyout .ate-empty,
 .ate--flyout .ate-status {
-  padding: 6px 14px;
-  font-size: 13px;
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--text-sm);
 }
 </style>

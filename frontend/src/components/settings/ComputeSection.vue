@@ -6,9 +6,30 @@
 // reloads this page — so a successful action ends with the app reloading.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { apiClient, login } from "../../utils/apiClient";
+import AppButton from "../widgets/AppButton.vue";
+import AppStepper from "../widgets/AppStepper.vue";
+import SettingsSection from "./SettingsSection.vue";
+import SettingsRow from "./SettingsRow.vue";
+import SettingsTwoCol from "./SettingsTwoCol.vue";
+import { VSwitch, VIcon, VTooltip, VProgressLinear } from "vuetify/components";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
+  // The proposal splits this into two tabs sharing one component: 'compute'
+  // (acceleration) and 'backend' (remote access + desktop + updates). Each
+  // instance loads and renders only its own half.
+  view: { type: String, default: "compute" },
+  checkForUpdates: { type: Boolean, default: null },
+});
+
+const emit = defineEmits(["update:check-for-updates"]);
+
+const isBackend = computed(() => props.view === "backend");
+
+// "Check for updates automatically" — lives on the Backend tab's Desktop block.
+const checkForUpdatesModel = computed({
+  get: () => props.checkForUpdates ?? false,
+  set: (value) => emit("update:check-for-updates", value),
 });
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
@@ -168,7 +189,10 @@ async function changeLocation() {
   const dir = await desktop.pickBackendLocation(backendLocation.value);
   if (!dir) return;
   await guarded(async () => {
-    progress.value = { message: "Moving GPU files to the new location…", fraction: -1 };
+    progress.value = {
+      message: "Moving GPU files to the new location…",
+      fraction: -1,
+    };
     const res = await desktop.setBackendLocation(dir);
     backendLocation.value = res?.dir || dir;
   });
@@ -286,17 +310,28 @@ function subFor(item) {
   return "Downloads torch + GPU libraries (~2.5 GB) from PyPI / PyTorch.";
 }
 
+function loadForView() {
+  if (isBackend.value) {
+    refreshServer();
+    refreshDesktopPrefs();
+    refreshAuthState();
+  } else {
+    refresh();
+    refreshLocation();
+  }
+}
+
 onMounted(() => {
-  if (desktop?.onProgress) {
+  // Only the compute view installs accelerators, so only it needs progress.
+  if (!isBackend.value && desktop?.onProgress) {
     stopProgress = desktop.onProgress((p) => {
-      progress.value = { message: p.message || "Working…", fraction: p.fraction };
+      progress.value = {
+        message: p.message || "Working…",
+        fraction: p.fraction,
+      };
     });
   }
-  refresh();
-  refreshLocation();
-  refreshServer();
-  refreshDesktopPrefs();
-  refreshAuthState();
+  loadForView();
 });
 
 onUnmounted(() => {
@@ -307,399 +342,317 @@ onUnmounted(() => {
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen) {
-      refresh();
-      refreshLocation();
-      refreshServer();
-      refreshDesktopPrefs();
-      refreshAuthState();
-    }
+    if (isOpen) loadForView();
   },
 );
 </script>
 
 <template>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div class="settings-section-title">Remote access</div>
-    <div class="settings-section-desc">
-      Let other devices on your network open this library in a browser. The app
-      window always uses a private local connection — this only controls the
-      separate connection from the outside. Changing it restarts the local
-      server.
-    </div>
-
-    <template v-if="server">
-      <div class="compute-row">
-        <div class="compute-meta">
-          <div class="compute-label">Enable server</div>
-          <div class="compute-sub">
-            Serve the library to other devices on your network.
-          </div>
-        </div>
-        <v-switch
-          v-model="serverDraft.enabled"
-          color="primary"
-          density="compact"
-          hide-details
-          :disabled="busy"
-        />
-      </div>
-
-      <div
-        class="compute-row"
-        :class="{ 'server-row--disabled': !serverDraft.enabled }"
-      >
-        <div class="compute-meta">
-          <div class="compute-label">Port</div>
-          <div class="compute-sub">The port other devices connect to.</div>
-        </div>
-        <div class="server-port-field">
-          <v-tooltip
-            v-if="portConflict"
-            :text="portWarning"
-            location="top"
-            max-width="280"
-          >
-            <template #activator="{ props: tooltipProps }">
-              <v-icon
-                v-bind="tooltipProps"
-                color="error"
-                size="18"
-                tabindex="0"
-                class="server-port-warning"
-                :aria-label="portWarning"
-                >mdi-alert-circle</v-icon
-              >
-            </template>
-          </v-tooltip>
-          <input
-            v-model.number="serverDraft.port"
-            type="number"
-            min="1"
-            max="65535"
-            class="server-port-input"
-            :class="{ 'server-port-input--error': portConflict }"
-            :disabled="!serverDraft.enabled || busy"
-          />
-        </div>
-      </div>
-
-      <div
-        class="compute-row"
-        :class="{ 'server-row--disabled': !serverDraft.enabled }"
-      >
-        <div class="compute-meta">
-          <div class="compute-label">Use HTTPS (SSL)</div>
-          <div class="compute-sub">
-            Encrypts the outside connection with a self-signed certificate —
-            browsers will warn on first connect.
-          </div>
-        </div>
-        <v-switch
-          v-model="serverDraft.ssl"
-          color="primary"
-          density="compact"
-          hide-details
-          :disabled="!serverDraft.enabled || busy"
-        />
-      </div>
-
-      <!-- Remote access is saved-on but the listener can't bind without an owner
-           login: tell the user it's not actually active yet. -->
-      <div v-if="server.enabled && !accountClaimed" class="settings-error">
-        Remote access is enabled but not active yet — set an owner login below to
-        start it.
-      </div>
-
-      <!-- First-run owner setup. Remote devices sign in with this; the backend
-           refuses to expose the server until the owner account is claimed. -->
-      <div v-if="needsOwnerSetup" class="owner-setup">
-        <div class="compute-sub owner-setup-desc">
-          Remote devices sign in with an owner username and password. Set one now
-          — until you do, PixlStash keeps the network listener off so another
-          device on your network can't claim your library.
-        </div>
-        <input
-          v-model="ownerUsername"
-          type="text"
-          class="owner-input"
-          placeholder="Username"
-          autocomplete="username"
-          :disabled="busy"
-        />
-        <div class="owner-password-field">
-          <input
-            v-model="ownerPassword"
-            :type="ownerShowPassword ? 'text' : 'password'"
-            class="owner-input"
-            placeholder="Password (min 8 characters)"
-            autocomplete="new-password"
+  <!-- ── Backend tab: remote access + desktop ───────────────────────────── -->
+  <div v-if="isBackend" class="compute-backend">
+    <SettingsSection
+      title="Remote access"
+      desc="Let other devices on your network open this library in a browser. The app window always uses a private local connection — this only controls the separate connection from the outside. Changing it restarts the local server."
+      first
+    >
+      <template v-if="server">
+        <SettingsRow
+          label="Enable server"
+          sub="Serve the library to other devices on your network."
+        >
+          <v-switch
+            v-model="serverDraft.enabled"
+            color="accent"
+            density="compact"
+            hide-details
             :disabled="busy"
-            @keydown.enter.prevent="applyServer"
           />
-          <button
-            type="button"
-            class="owner-password-toggle"
-            :aria-label="ownerShowPassword ? 'Hide password' : 'Show password'"
-            @click="ownerShowPassword = !ownerShowPassword"
+        </SettingsRow>
+
+        <SettingsTwoCol>
+          <SettingsRow
+            label="Port"
+            sub="The port other devices connect to."
+            :dim="!serverDraft.enabled"
           >
-            <v-icon size="18">{{
-              ownerShowPassword ? "mdi-eye-off" : "mdi-eye"
-            }}</v-icon>
-          </button>
+            <div class="server-port-control">
+              <v-tooltip
+                v-if="portConflict"
+                :text="portWarning"
+                location="top"
+                max-width="280"
+              >
+                <template #activator="{ props: tooltipProps }">
+                  <v-icon
+                    v-bind="tooltipProps"
+                    color="error"
+                    size="18"
+                    tabindex="0"
+                    class="server-port-warning"
+                    :aria-label="portWarning"
+                    >mdi-alert-circle</v-icon
+                  >
+                </template>
+              </v-tooltip>
+              <AppStepper
+                :model-value="String(serverDraft.port)"
+                :min="1024"
+                :max="65535"
+                :disabled="!serverDraft.enabled || busy"
+                @update:model-value="serverDraft.port = Number($event)"
+              />
+            </div>
+          </SettingsRow>
+          <SettingsRow
+            label="Use HTTPS (SSL)"
+            sub="Self-signed certificate; browsers warn on first connect."
+            :dim="!serverDraft.enabled"
+          >
+            <v-switch
+              v-model="serverDraft.ssl"
+              color="accent"
+              density="compact"
+              hide-details
+              :disabled="!serverDraft.enabled || busy"
+            />
+          </SettingsRow>
+        </SettingsTwoCol>
+
+        <!-- Saved-on but the listener can't bind without an owner login. -->
+        <div v-if="server.enabled && !accountClaimed" class="settings-error">
+          Remote access is enabled but not active yet — set an owner login below
+          to start it.
         </div>
-        <div v-if="ownerError" class="settings-error">{{ ownerError }}</div>
-      </div>
 
-      <div
-        v-if="server.enabled && accountClaimed"
-        class="compute-sub server-urls"
-      >
-        <template v-if="server.urls.length">
-          Reachable at:
-          <span v-for="url in server.urls" :key="url" class="server-url">
-            {{ url }}
-          </span>
-        </template>
-        <template v-else>
-          Reachable on this machine's network address, port {{ server.port }}.
-        </template>
-      </div>
+        <!-- First-run owner setup. -->
+        <div v-if="needsOwnerSetup" class="owner-setup">
+          <div class="owner-setup-desc">
+            Remote devices sign in with an owner username and password. Set one
+            now — until you do, PixlStash keeps the network listener off so
+            another device on your network can't claim your library.
+          </div>
+          <input
+            v-model="ownerUsername"
+            type="text"
+            class="owner-input"
+            placeholder="Username"
+            autocomplete="username"
+            :disabled="busy"
+          />
+          <div class="owner-password-field">
+            <input
+              v-model="ownerPassword"
+              :type="ownerShowPassword ? 'text' : 'password'"
+              class="owner-input"
+              placeholder="Password (min 8 characters)"
+              autocomplete="new-password"
+              :disabled="busy"
+              @keydown.enter.prevent="applyServer"
+            />
+            <button
+              type="button"
+              class="owner-password-toggle"
+              :aria-label="
+                ownerShowPassword ? 'Hide password' : 'Show password'
+              "
+              @click="ownerShowPassword = !ownerShowPassword"
+            >
+              <v-icon size="18">{{
+                ownerShowPassword ? "mdi-eye-off" : "mdi-eye"
+              }}</v-icon>
+            </button>
+          </div>
+          <div v-if="ownerError" class="settings-error">{{ ownerError }}</div>
+        </div>
 
-      <v-btn
-        size="small"
-        class="settings-action-btn server-apply-btn"
-        :disabled="busy || (needsOwnerSetup ? !ownerFormValid : !serverDirty)"
-        @click="applyServer"
+        <div class="compute-apply-row">
+          <div v-if="server.enabled && accountClaimed" class="server-urls">
+            <template v-if="server.urls.length">
+              Reachable at:
+              <span v-for="url in server.urls" :key="url" class="server-url">
+                {{ url }}
+              </span>
+            </template>
+            <template v-else>
+              Reachable on this machine's network address, port
+              {{ server.port }}.
+            </template>
+          </div>
+          <AppButton
+            variant="primary_green"
+            size="sm"
+            class="compute-apply-btn"
+            :disabled="
+              busy || (needsOwnerSetup ? !ownerFormValid : !serverDirty)
+            "
+            @click="applyServer"
+          >
+            {{
+              needsOwnerSetup
+                ? "Create login &amp; enable"
+                : "Apply &amp; restart"
+            }}
+          </AppButton>
+        </div>
+      </template>
+      <div v-else class="compute-loading">Loading…</div>
+    </SettingsSection>
+
+    <SettingsSection title="Desktop">
+      <SettingsTwoCol>
+        <SettingsRow
+          label="Hide to tray on close"
+          sub="Keep PixlStash (and any remote server) running in the background when you close the window. Reopen it from the tray icon."
+        >
+          <v-switch
+            :model-value="hideToTrayOnClose"
+            color="accent"
+            density="compact"
+            hide-details
+            @update:model-value="setHideToTray($event)"
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Check for updates"
+          sub="Checks once a day and shows a sidebar notice when a new version is out. Sends only your app version and install type, anonymously."
+        >
+          <v-switch
+            v-model="checkForUpdatesModel"
+            color="accent"
+            density="compact"
+            hide-details
+          />
+        </SettingsRow>
+      </SettingsTwoCol>
+    </SettingsSection>
+
+    <!-- Pinned to the bottom of the Backend pane. -->
+    <div class="compute-links">
+      <AppButton
+        variant="ghost"
+        size="sm"
+        icon-left="folder-image"
+        @click="openLibraryFolder"
       >
-        {{ needsOwnerSetup ? "Create login &amp; enable" : "Apply &amp; restart" }}
-      </v-btn>
-    </template>
-    <div v-else class="settings-token-empty">Loading…</div>
+        Open library folder
+      </AppButton>
+      <AppButton
+        variant="ghost"
+        size="sm"
+        icon-left="text-box-outline"
+        @click="showLogs"
+      >
+        Show server logs
+      </AppButton>
+    </div>
   </div>
 
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div class="settings-section-title">Compute acceleration</div>
-    <div class="settings-section-desc">
-      PixlStash includes a built-in runtime that works out of the box. If this
-      machine has a discrete GPU, add acceleration for faster tagging and search.
-      Switching the runtime restarts the local server.
-    </div>
-
-    <template v-if="state">
-      <div class="compute-row">
-        <div class="compute-meta">
-          <div class="compute-label">{{ activeLabel }}</div>
-          <div class="compute-sub">
-            {{
-              state.bundled.active
-                ? "Built-in runtime · active"
-                : "GPU acceleration · active"
-            }}
-          </div>
-        </div>
-        <v-btn
-          v-if="!state.bundled.active"
-          variant="text"
-          size="small"
-          :disabled="busy"
-          @click="useBuiltIn"
+  <!-- ── Compute tab: acceleration runtime ──────────────────────────────── -->
+  <div v-else>
+    <SettingsSection
+      title="Compute acceleration"
+      desc="PixlStash includes a built-in runtime that works out of the box. If this machine has a discrete GPU, add acceleration for faster tagging and search. Switching the runtime restarts the local server."
+      first
+    >
+      <template v-if="state">
+        <SettingsRow
+          :label="activeLabel"
+          :sub="
+            state.bundled.active
+              ? 'Built-in runtime · active'
+              : 'GPU acceleration · active'
+          "
         >
-          Use built-in
-        </v-btn>
-      </div>
+          <AppButton
+            v-if="!state.bundled.active"
+            variant="ghost"
+            size="sm"
+            :disabled="busy"
+            @click="useBuiltIn"
+          >
+            Use built-in
+          </AppButton>
+        </SettingsRow>
 
-      <div v-for="item in state.items" :key="item.accel" class="compute-row">
-        <div class="compute-meta">
-          <div class="compute-label">{{ item.label }}</div>
-          <div class="compute-sub">{{ subFor(item) }}</div>
-        </div>
-        <div class="compute-actions">
-          <v-btn
+        <SettingsRow
+          v-for="item in state.items"
+          :key="item.accel"
+          :label="item.label"
+          :sub="subFor(item)"
+        >
+          <AppButton
             v-if="!item.installed"
-            size="small"
-            class="settings-action-btn"
+            variant="primary_green"
+            size="sm"
             :disabled="busy"
             @click="install(item.accel)"
           >
             {{ item.recommended ? "Install (recommended)" : "Install" }}
-          </v-btn>
+          </AppButton>
           <template v-else>
-            <v-btn
+            <AppButton
               v-if="!item.active"
-              size="small"
-              class="settings-action-btn"
+              variant="primary_green"
+              size="sm"
               :disabled="busy"
               @click="use(item.accel)"
             >
               Use
-            </v-btn>
-            <v-btn variant="text" size="small" :disabled="busy" @click="remove(item.accel)">
+            </AppButton>
+            <AppButton
+              variant="ghost"
+              size="sm"
+              :disabled="busy"
+              @click="remove(item.accel)"
+            >
               Remove
-            </v-btn>
+            </AppButton>
           </template>
-        </div>
-      </div>
+        </SettingsRow>
 
-      <div v-if="!state.items.length" class="settings-token-empty">
-        No discrete GPU detected — the built-in runtime is the best fit for this
-        machine.
-      </div>
-
-      <div v-if="state.items.length && backendLocation" class="compute-row">
-        <div class="compute-meta">
-          <div class="compute-label">Install location</div>
-          <div class="compute-sub compute-location-path">{{ backendLocation }}</div>
+        <div v-if="!state.items.length" class="compute-note">
+          No discrete GPU detected — the built-in runtime is the best fit for
+          this machine.
         </div>
-        <v-btn
-          variant="text"
-          size="small"
-          :disabled="busy"
-          @click="changeLocation"
+
+        <SettingsRow
+          v-if="state.items.length && backendLocation"
+          label="Install location"
+          :sub="backendLocation"
         >
-          Change…
-        </v-btn>
-      </div>
+          <AppButton
+            variant="ghost"
+            size="sm"
+            :disabled="busy"
+            @click="changeLocation"
+          >
+            Change…
+          </AppButton>
+        </SettingsRow>
 
-      <div v-if="progress" class="compute-progress">
-        <v-progress-linear
-          :indeterminate="!(progress.fraction >= 0)"
-          :model-value="progress.fraction >= 0 ? progress.fraction * 100 : 0"
-          color="primary"
-          height="6"
-          rounded
-        />
-        <div class="compute-sub">{{ progress.message }}</div>
-      </div>
-
-      <div v-if="error" class="settings-error">{{ error }}</div>
-    </template>
-    <div v-else class="settings-token-empty">Loading…</div>
-  </div>
-
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div class="settings-section-title">Desktop</div>
-    <div class="compute-row">
-      <div class="compute-meta">
-        <div class="compute-label">Hide to tray on close</div>
-        <div class="compute-sub">
-          Keep PixlStash (and any remote server) running in the background when
-          you close the window. Reopen it from the tray icon.
+        <div v-if="progress" class="compute-progress">
+          <v-progress-linear
+            :indeterminate="!(progress.fraction >= 0)"
+            :model-value="progress.fraction >= 0 ? progress.fraction * 100 : 0"
+            color="accent"
+            height="6"
+            rounded
+          />
+          <div class="compute-note">{{ progress.message }}</div>
         </div>
-      </div>
-      <v-switch
-        :model-value="hideToTrayOnClose"
-        color="primary"
-        density="compact"
-        hide-details
-        @update:model-value="setHideToTray($event)"
-      />
-    </div>
-    <div class="compute-links">
-      <v-btn
-        variant="text"
-        size="small"
-        prepend-icon="mdi-folder-image"
-        @click="openLibraryFolder"
-      >
-        Open library folder
-      </v-btn>
-      <v-btn
-        variant="text"
-        size="small"
-        prepend-icon="mdi-text-box-outline"
-        @click="showLogs"
-      >
-        Show server logs
-      </v-btn>
-    </div>
+
+        <div v-if="error" class="settings-error">{{ error }}</div>
+      </template>
+      <div v-else class="compute-loading">Loading…</div>
+    </SettingsSection>
   </div>
-  <v-divider class="settings-section-divider" />
 </template>
 
 <style scoped>
-.settings-section-divider {
-  margin: 4px 0 8px;
-}
-
-.settings-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.settings-section-title {
-  font-weight: 600;
-}
-
-.settings-section-desc {
-  font-size: 0.92em;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.compute-row {
+.server-port-control {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 8px;
-}
-
-.compute-meta {
-  min-width: 0;
-}
-
-.compute-label {
-  font-weight: 600;
-}
-
-.compute-sub {
-  font-size: 0.85em;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  margin-top: 2px;
-}
-
-.compute-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.compute-location-path {
-  overflow-wrap: anywhere;
-}
-
-.compute-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* Reserve two lines so the layout doesn't jump as the message length changes. */
-.compute-progress .compute-sub {
-  min-height: 2.4em;
-}
-
-.compute-links {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.server-row--disabled {
-  opacity: 0.5;
-}
-
-.server-port-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   flex-shrink: 0;
 }
 
@@ -707,68 +660,97 @@ watch(
   cursor: help;
 }
 
-.server-port-input--error {
-  border-color: rgb(var(--v-theme-error));
+/* The "Reachable at …" line and the Apply button share one row: text on the
+   left (truncating if long), button pinned right, both on a single line. */
+.compute-apply-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
 }
 
-.server-port-input {
-  width: 96px;
+.compute-apply-btn {
+  margin-left: auto;
   flex-shrink: 0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  padding: 4px 8px;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
-  border-radius: 4px;
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: inherit;
-  outline: none;
-  appearance: textfield;
-  -moz-appearance: textfield;
 }
 
-.server-port-input::-webkit-inner-spin-button,
-.server-port-input::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
+/* Fill the pane height so the links can be pushed to the bottom. */
+.compute-backend {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
 }
 
-.server-port-input:disabled {
-  cursor: default;
+.compute-links {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  /* Pinned to the bottom of the Backend pane. */
+  margin-top: auto;
+  padding-top: var(--space-5);
+}
+
+.compute-note {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  line-height: var(--leading-snug);
+}
+
+.compute-loading {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.compute-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Reserve two lines so the layout doesn't jump as the message length changes. */
+.compute-progress .compute-note {
+  min-height: 2.4em;
 }
 
 .server-urls {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .server-url {
-  font-family: monospace;
+  font-family: var(--font-mono);
   color: rgb(var(--v-theme-on-surface));
-}
-
-.server-apply-btn {
-  align-self: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .owner-setup {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  gap: var(--space-3);
+  padding: var(--space-4);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .owner-setup-desc {
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  line-height: var(--leading-snug);
 }
 
 .owner-input {
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--space-3) var(--space-3);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.28);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: inherit;
   outline: none;
@@ -797,26 +779,12 @@ watch(
   background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
   cursor: pointer;
-  padding: 4px;
-}
-
-.settings-token-empty {
-  font-size: 0.9em;
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  padding: var(--space-2);
 }
 
 .settings-error {
   color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
+  font-size: var(--text-xs);
   white-space: pre-wrap;
-}
-
-.settings-action-btn {
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
-}
-
-.settings-action-btn:hover {
-  background-color: rgb(var(--v-theme-accent)) !important;
 }
 </style>

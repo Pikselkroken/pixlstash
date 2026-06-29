@@ -86,6 +86,13 @@ def create_router(server) -> APIRouter:
         show_problem_icon: Optional[bool] = None
         compact_mode: Optional[bool] = None
         sidebar_docked: Optional[bool] = None
+        sidebar_pinned: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When true the sidebar stays pinned open and takes layout "
+                "space; when false it auto-hides and slides in on hover."
+            ),
+        )
         hide_purge_snapshot_warning: Optional[bool] = Field(
             default=None,
             description=(

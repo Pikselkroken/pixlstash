@@ -583,6 +583,7 @@ def create_router(server) -> APIRouter:
         response_model=CharacterMutationResponse,
     )
     async def patch_character(id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         data = await request.json()
         name = data.get("name")
         description = data.get("description")
@@ -749,9 +750,19 @@ def create_router(server) -> APIRouter:
                 project_id,
                 priority=DBPriority.IMMEDIATE,
             )
-            server.vault.notify(EventType.CHANGED_CHARACTERS)
+            server.vault.notify(
+                EventType.CHANGED_CHARACTERS,
+                {"origin_client_id": origin_client_id},
+            )
             if project_membership_updated:
-                server.vault.notify(EventType.CHANGED_PICTURES)
+                server.vault.notify(
+                    EventType.CHANGED_PICTURES,
+                    {
+                        "source": "ui",
+                        "origin_client_id": origin_client_id,
+                        "change_kind": "updated",
+                    },
+                )
 
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
@@ -764,7 +775,8 @@ def create_router(server) -> APIRouter:
         description="Deletes a character, clears character assignment from faces, and removes its reference set when present.",
         response_model=CharacterDeleteResponse,
     )
-    def delete_character(id: int):
+    def delete_character(id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
 
             def clear_character_and_nullify_faces(session: Session, character_id: int):
@@ -803,7 +815,10 @@ def create_router(server) -> APIRouter:
                 id,
                 priority=DBPriority.IMMEDIATE,
             )
-            server.vault.notify(EventType.CHANGED_CHARACTERS)
+            server.vault.notify(
+                EventType.CHANGED_CHARACTERS,
+                {"origin_client_id": origin_client_id},
+            )
             return {"status": "success", "deleted_id": id}
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
@@ -1232,7 +1247,8 @@ def create_router(server) -> APIRouter:
         description="Creates a character and its linked reference picture set.",
         response_model=CharacterMutationResponse,
     )
-    def create_character(payload: dict = Body(...)):
+    def create_character(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
 
             def create_character_and_reference_set(session, payload):
@@ -1263,7 +1279,10 @@ def create_router(server) -> APIRouter:
                 priority=DBPriority.IMMEDIATE,
             )
             logger.debug("Created character: {}".format(char_dict))
-            server.vault.notify(EventType.CHANGED_CHARACTERS)
+            server.vault.notify(
+                EventType.CHANGED_CHARACTERS,
+                {"origin_client_id": origin_client_id},
+            )
             return {"status": "success", "character": char_dict}
         except Exception as e:
             logger.error(f"Error creating character: {e}")

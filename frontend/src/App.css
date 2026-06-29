@@ -73,7 +73,7 @@ body {
 
 .export-dialog-card {
   position: relative;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-background), 0.9);
   color: rgb(var(--v-theme-on-background));
   box-shadow: 2px 2px 12px rgba(var(--v-theme-shadow), 0.4);
@@ -82,8 +82,8 @@ body {
 .export-dialog-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 8px 0;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) 0;
 }
 
 .export-dialog-shell {
@@ -108,24 +108,24 @@ body {
    dropped. Keeping it makes lightningcss reject ':deep' as an invalid
    pseudo-class at build time. */
 .export-dialog-card .v-card-text {
-  padding: 12px 16px 8px;
+  padding: var(--space-4) var(--space-5) var(--space-3);
 }
 
 .export-dialog-card .v-card-actions {
-  padding: 8px 16px 12px;
-  gap: 12px;
+  padding: var(--space-3) var(--space-5) var(--space-4);
+  gap: var(--space-4);
 }
 
 .export-btn-cancel {
   background: rgb(var(--v-theme-cancel-button));
   color: rgb(var(--v-theme-cancel-button-text));
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .export-btn-confirm {
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .export-btn-cancel:hover,
@@ -135,16 +135,16 @@ body {
 
 .empty-state {
   color: rgba(var(--v-theme-on-background), 0.6);
-  font-size: 1.2rem;
-  margin-top: 32px;
+  font-size: var(--text-lg);
+  margin-top: var(--space-7);
   text-align: center;
 }
 
 .app-btn-base {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   text-transform: none;
   letter-spacing: 0.02em;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   box-shadow: none;
   border: none;
   background-color: transparent !important;
@@ -157,7 +157,7 @@ body {
   background-color: transparent !important;
 }
 
-@media (min-width: 1000px) {
+@media (min-width: 850px) {
   /* Hide the in-flow sidebar when closed — but not the auto-hide overlay, which
      stays in the DOM (off-screen) so it can slide in. */
   .sidebar-shell:not(.open):not(.sidebar-overlay) {
@@ -176,11 +176,28 @@ body {
   bottom: 0;
   z-index: 150;
   transform: translateX(-100%);
-  transition: transform 0.2s ease;
+  /* Clearly-visible slide for the auto-show/auto-hide drawer; the shadow grows in
+     alongside it so the reveal reads as depth, not just a jump. */
+  transition:
+    transform var(--dur-2) var(--ease-decelerate),
+    box-shadow var(--dur-2) var(--ease-decelerate);
 }
 .sidebar-shell.sidebar-overlay.open {
   transform: translateX(0);
-  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--elevation-4);
+}
+/* Reduced-motion exception. The global reset in design-tokens.css forces every
+   CSS transition-duration to ~0 under prefers-reduced-motion, which snaps this
+   slide. Keep it: the auto-hide slide is *communicative* (it shows the panel
+   entering/leaving from the screen edge it lives on), not decoration — the kind
+   of motion the reduced-motion guidance says you may preserve. Class specificity
+   (0,2,0) beats the universal `*` reset (0,0,0) even though both are !important.
+   The transform/box-shadow properties + easing come from the rule above; we only
+   need to restore the duration the reset zeroed out. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell.sidebar-overlay {
+    transition-duration: var(--dur-2) !important;
+  }
 }
 /* Visible "there's a sidebar here" band shown while the sidebar is auto-hidden;
    hovering (or tapping) it reveals the sidebar. A centered handle with an expand
@@ -188,7 +205,7 @@ body {
 .sidebar-hover-trigger {
   position: fixed;
   left: 0;
-  top: calc(var(--titlebar-h, 0px) + 48px);
+  top: calc(var(--titlebar-h, 0px) + 36px);
   bottom: 0;
   width: 8px;
   z-index: 140;
@@ -210,11 +227,11 @@ body {
   justify-content: center;
   width: 20px;
   height: 52px;
-  border-radius: 0 9px 9px 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
   /* Solid, clearly-visible handle (was a faint 0.28 wash) with a light arrow. */
   background: rgba(var(--v-theme-on-background), 0.72);
   color: rgb(var(--v-theme-background));
-  box-shadow: 1px 0 8px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--elevation-2);
   transition:
     background 0.15s ease,
     color 0.15s ease;
@@ -224,27 +241,10 @@ body {
   color: rgb(var(--v-theme-on-accent));
 }
 
-@media (max-width: 999px) {
-  .sidebar-shell {
-    position: fixed;
-    left: 0;
-    top: calc(var(--titlebar-h, 0px) + 48px);
-    bottom: 0;
-    z-index: 150;
-    transform: translateX(-100%);
-    transition: transform 0.3s ease;
-  }
-
-  .sidebar-shell.open {
-    transform: translateX(0);
-  }
-}
-
-@media (max-width: 999px) and (hover: none) and (pointer: coarse) {
-  .sidebar-shell {
-    top: calc(var(--titlebar-h, 0px) + 56px);
-  }
-}
+/* Narrow widths reuse the same auto-hide overlay as the unpinned sidebar (the
+   store forces it below the breakpoint), so there is no separate mobile-drawer
+   layout that offsets the sidebar downward — it is always either pinned in-flow
+   or the .sidebar-overlay slide-in above. */
 
 /* Tiny5 — the brand wordmark pixel font (logo). */
 @font-face {
@@ -280,8 +280,8 @@ button:focus:not(:focus-visible) {
 }
 
 .media-type-toggle {
-  border-radius: 8px;
-  margin-left: 4px;
+  border-radius: var(--radius-md);
+  margin-left: var(--space-2);
   display: inline-flex;
 }
 
@@ -302,7 +302,7 @@ button:focus:not(:focus-visible) {
   align-items: center;
   justify-content: center;
   border: 2px dashed;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   width: 28px;
   height: 28px;
   box-sizing: border-box;
@@ -314,7 +314,7 @@ button:focus:not(:focus-visible) {
   align-items: center;
   justify-content: center;
   border: 2px dashed;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   width: 28px;
   height: 28px;
   box-sizing: border-box;
@@ -322,39 +322,15 @@ button:focus:not(:focus-visible) {
   color: rgb(var(--v-theme-secondary)) !important;
 }
 
-/* Ensure search overlay is visible and styled correctly */
-.search-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(var(--v-theme-scrim), 0.9);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-.search-overlay-content {
-  background: rgb(var(--v-theme-panel));
-  color: rgb(var(--v-theme-on-panel));
-  padding: 20px;
-  border-radius: 8px;
-  box-shadow: 0 4px 6px rgba(var(--v-theme-shadow), 0.1);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
 /* Keyboard shortcuts FAB */
 .shortcuts-fab {
   position: fixed;
-  bottom: 8px;
-  right: 8px;
+  bottom: var(--space-3);
+  right: var(--space-3);
   z-index: 2000;
   width: 48px;
   height: 24px;
-  border-radius: 10;
+  border-radius: var(--radius-md);
   background: rgb(var(--v-theme-panel));
   color: rgb(var(--v-theme-on-panel));
   border: 1px solid rgba(var(--v-theme-on-background), 0.15);
@@ -364,9 +340,9 @@ button:focus:not(:focus-visible) {
   cursor: pointer;
   opacity: 0.7;
   transition: opacity 0.15s;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-  gap: 4px;
-  font-size: 0.7em;
+  box-shadow: var(--elevation-2);
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
   transition:
     opacity 0.15s,
     bottom 0.15s,
@@ -390,9 +366,9 @@ button:focus:not(:focus-visible) {
   color: rgb(var(--v-theme-on-panel));
 }
 .shortcuts-dialog-title {
-  font-size: 1rem;
-  font-weight: 600;
-  padding-bottom: 4px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  padding-bottom: var(--space-2);
 }
 .shortcuts-dialog-body {
   padding-top: 0;
@@ -400,10 +376,10 @@ button:focus:not(:focus-visible) {
 .shortcuts-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: var(--text-base);
 }
 .shortcuts-table td {
-  padding: 4px 8px;
+  padding: var(--space-2) var(--space-3);
   vertical-align: middle;
 }
 .shortcuts-table td:first-child {
@@ -411,12 +387,12 @@ button:focus:not(:focus-visible) {
   width: 1%;
 }
 .shortcuts-section {
-  padding-top: 14px !important;
-  padding-bottom: 2px !important;
-  font-size: 0.7rem;
-  font-weight: 700;
+  padding-top: var(--space-4) !important;
+  padding-bottom: var(--space-1) !important;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   opacity: 0.5;
 }
 .shortcut-disabled td {
@@ -429,23 +405,23 @@ button:focus:not(:focus-visible) {
 }
 kbd {
   display: inline-block;
-  padding: 1px 5px;
-  font-size: 0.8em;
-  font-family: monospace;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
   background: rgba(var(--v-theme-on-background), 0.08);
   border: 1px solid rgba(var(--v-theme-on-background), 0.2);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   line-height: 1.5;
 }
 
 .update-check-dialog {
-  padding: 8px 4px;
+  padding: var(--space-3) var(--space-2);
 }
 
 .update-check-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  padding-bottom: 4px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  padding-bottom: var(--space-2);
 }
 
 .update-check-body {
@@ -454,22 +430,551 @@ kbd {
 }
 
 .update-check-note {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   opacity: 0.7;
 }
 
 .update-check-actions {
   justify-content: flex-end;
-  gap: 8px;
-  padding-top: 8px;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
 }
 
 /* ── Popup panel base — shared by all floating dropdown/popover panels ─────── */
 .popup-panel {
-  border-radius: 8px;
-  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
   background: rgba(var(--v-theme-background), 0.96);
   color: rgb(var(--v-theme-on-background));
   display: flex;
   flex-direction: column;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Toolbar menus — shared chrome for the Sort / Filter / Grid-view popovers.
+   These three menus live in two different components (Toolbar.vue and
+   GbFilterPanel.vue) but must read as one family, so their chrome and controls
+   are defined here, globally, on the design tokens. See the "Toolbar Menus"
+   card in the PixlStash Design System.
+
+   Surface: --panel (one elevation above cards), a hairline --border, the
+   popover radius (--radius-lg) and elevation (--elevation-3). A caret bridges
+   the open trigger to its menu so the button and panel read as one object.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tbm {
+  position: relative;
+  background: rgb(var(--v-theme-panel));
+  color: rgb(var(--v-theme-on-panel));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+}
+
+/* Caret that bridges the open trigger button to its panel. */
+.tbm-caret {
+  position: absolute;
+  top: -6px;
+  width: 11px;
+  height: 11px;
+  background: rgb(var(--v-theme-panel));
+  border-left: 1px solid rgb(var(--v-theme-border));
+  border-top: 1px solid rgb(var(--v-theme-border));
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.tbm-caret--start {
+  left: 22px;
+}
+.tbm-caret--end {
+  right: 22px;
+}
+
+.tbm-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+.tbm-header-icon {
+  color: rgb(var(--v-theme-accent));
+  flex-shrink: 0;
+}
+.tbm-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.tbm-subtitle {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), 0.6);
+  margin-top: var(--space-1);
+}
+.tbm-spacer {
+  flex: 1 1 auto;
+}
+.tbm-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), 0.6);
+  white-space: nowrap;
+  /* Hard-reserve room for "1,000,000 matches" — fixed basis, no grow, no shrink
+     — so the header never shifts as the count changes. Right-aligned and clipped
+     so the digits sit next to Clear and an extreme count can't push it. */
+  flex: 0 0 9rem;
+  width: 9rem;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tbm-section {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+.tbm-section:last-child {
+  border-bottom: none;
+  /* The outer bottom edge needs more room than the tight inter-section rhythm,
+     otherwise the last control hugs the panel edge. */
+  padding-bottom: var(--space-5);
+}
+
+/* Uppercase field label inside a menu section. */
+.tbm-label {
+  display: block;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-panel), 0.55);
+  margin-bottom: var(--space-3);
+}
+.tbm-label--right {
+  text-align: right;
+}
+
+/* Two-column grids used for option toggles and checkboxes. */
+.tbm-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.tbm-check-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3) var(--space-4);
+  align-items: start;
+}
+.tbm-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: var(--space-3);
+}
+.tbm-header--top {
+  align-items: flex-start;
+}
+.tbm-mono {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+}
+.tbm-btn--compact {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 var(--space-4);
+}
+
+/* ── Toggle button (ghost when off, olive primary when on) ─────────────────
+   The workhorse control for the menus: sort options, strictness, overlays. */
+.tbm-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  /* Allow the toggle (a grid item) to shrink to its track so a long label
+     ellipsizes instead of overflowing the column and skewing the padding. */
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  text-align: left;
+  color: rgb(var(--v-theme-on-panel));
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard);
+}
+.tbm-toggle:hover {
+  background: var(--hover-wash);
+}
+.tbm-toggle .tbm-toggle-icon {
+  color: rgba(var(--v-theme-on-panel), 0.6);
+  flex-shrink: 0;
+}
+.tbm-toggle-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tbm-toggle-end {
+  margin-left: auto;
+  color: rgb(var(--v-theme-on-primary));
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.tbm-toggle--on {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  /* No weight change on select — the fill marks the state. Bolding reflows the
+     label (it can wrap the centred overlay labels), which we don't want. */
+}
+.tbm-toggle--on:hover {
+  background: rgb(var(--v-theme-primary));
+}
+.tbm-toggle--on .tbm-toggle-icon {
+  color: rgb(var(--v-theme-on-primary));
+}
+.tbm-toggle--pending {
+  opacity: 0.5;
+}
+
+/* Vertical variant (icon over label) — used for the grid-view overlay toggles. */
+.tbm-toggle--vertical {
+  flex-direction: column;
+  gap: var(--space-2);
+  justify-content: center;
+  text-align: center;
+  min-height: 0;
+  padding: var(--space-3) var(--space-2);
+  border-color: rgb(var(--v-theme-border));
+  background: rgba(var(--v-theme-on-panel), 0.03);
+}
+.tbm-toggle--vertical .tbm-toggle-label {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+}
+/* Selected overlay toggle: a semi-transparent primary wash + primary border,
+   not the solid olive fill (the border space is already reserved by the base
+   1px transparent border, so selecting never changes the box size). */
+.tbm-toggle--vertical.tbm-toggle--on {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border-color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-panel));
+}
+.tbm-toggle--vertical.tbm-toggle--on .tbm-toggle-icon {
+  color: rgb(var(--v-theme-primary));
+}
+
+/* ── Outline toggle-button group (Any / Has face / No face …) ──────────────
+   Selected segment fills olive; the rest are outlined. */
+.tbm-btngroup {
+  display: flex;
+  gap: var(--space-3);
+}
+.tbm-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-panel));
+  background: transparent;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard);
+}
+.tbm-btn:hover {
+  background: var(--hover-wash);
+}
+.tbm-btn--on {
+  background: rgb(var(--v-theme-primary));
+  border-color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+.tbm-btn--on:hover {
+  background: rgb(var(--v-theme-primary));
+}
+
+/* ── Segmented control (track + equal segments) ───────────────────────────── */
+.tbm-seg {
+  display: inline-flex;
+  padding: var(--space-1);
+  gap: var(--space-1);
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+}
+.tbm-seg--full {
+  display: flex;
+}
+.tbm-seg-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-panel), 0.7);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+.tbm-seg-btn:hover {
+  color: rgb(var(--v-theme-on-panel));
+}
+.tbm-seg-btn--on {
+  color: rgb(var(--v-theme-on-primary));
+  background: rgb(var(--v-theme-primary));
+}
+.tbm-seg-btn--on:hover {
+  color: rgb(var(--v-theme-on-primary));
+}
+
+/* ── Checkbox row ─────────────────────────────────────────────────────────── */
+.tbm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  color: rgb(var(--v-theme-on-panel));
+}
+.tbm-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* ── Text input ───────────────────────────────────────────────────────────── */
+.tbm-input-wrap {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+}
+.tbm-input-wrap .tbm-input-icon {
+  position: absolute;
+  left: var(--space-3);
+  color: rgba(var(--v-theme-on-panel), 0.5);
+  pointer-events: none;
+}
+.tbm-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-panel));
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--dur-1) var(--ease-standard);
+}
+.tbm-input--with-icon {
+  padding-left: calc(var(--space-5) + var(--space-4));
+}
+/* Focus: a single thin accent border — not the olive border plus a thick accent
+   ring stacked (that read as an awkward double outline). */
+.tbm-input:focus {
+  border-color: rgb(var(--v-theme-accent));
+}
+
+/* ── Numeric field (mono) ─────────────────────────────────────────────────── */
+.tbm-num {
+  width: 58px;
+  min-height: 36px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-panel));
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  outline: none;
+  box-sizing: border-box;
+}
+.tbm-num:focus {
+  border-color: rgb(var(--v-theme-accent));
+}
+
+/* ── Solid action button (primary / secondary) ────────────────────────────── */
+.tbm-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter var(--dur-1) var(--ease-standard);
+}
+.tbm-action:hover {
+  filter: brightness(1.06);
+}
+.tbm-action:disabled {
+  opacity: 0.38;
+  cursor: default;
+  filter: none;
+}
+.tbm-action--primary {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+.tbm-action--secondary {
+  background: rgba(var(--v-theme-on-panel), 0.08);
+  color: rgb(var(--v-theme-on-panel));
+}
+.tbm-action--outline {
+  background: transparent;
+  border: 1px solid rgb(var(--v-theme-border));
+  color: rgb(var(--v-theme-on-panel));
+}
+.tbm-action--lg {
+  min-height: 42px;
+  padding: 0 var(--space-5);
+  font-size: var(--text-base);
+}
+.tbm-action--full {
+  width: 100%;
+}
+
+/* ── Field (label + control stacked) ──────────────────────────────────────── */
+.tbm-field {
+  display: block;
+}
+
+/* ── Styled native select (option list never clipped by popover overflow) ──── */
+.tbm-select-wrap {
+  position: relative;
+}
+.tbm-select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 var(--space-7) 0 var(--space-4);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-panel));
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--dur-1) var(--ease-standard);
+}
+.tbm-select:focus {
+  border-color: rgb(var(--v-theme-accent));
+}
+.tbm-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tbm-select-chevron {
+  position: absolute;
+  right: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(var(--v-theme-on-panel), 0.6);
+  pointer-events: none;
+}
+
+/* ── Textarea ─────────────────────────────────────────────────────────────── */
+.tbm-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 92px;
+  padding: var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  color: rgb(var(--v-theme-on-panel));
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--dur-1) var(--ease-standard);
+}
+.tbm-textarea:focus {
+  border-color: rgb(var(--v-theme-accent));
+}
+
+/* ── Ghost (text) button — header actions like Clear / direction ──────────── */
+.tbm-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-panel), 0.75);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+.tbm-ghost:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-panel));
+}
+.tbm-ghost:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+
+/* ── Open trigger state — the toolbar button while its menu is open ────────── */
+.bar-btn--open {
+  background: rgb(var(--v-theme-panel)) !important;
+  border: 1px solid rgb(var(--v-theme-border)) !important;
+  color: rgb(var(--v-theme-on-background)) !important;
+  border-radius: var(--radius-sm);
+}
+.bar-btn--open .bar-btn-chevron {
+  transform: rotate(180deg);
+  transition: transform var(--dur-1) var(--ease-standard);
 }

@@ -258,7 +258,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | [pixlstash/auth.py](../pixlstash/auth.py) | `AuthService`: password + JWT + scoped tokens. Enforces resource-level permissions (picture / set / character / project). |
 | [pixlstash/task_runner.py](../pixlstash/task_runner.py) | Threaded executor with separate CPU and GPU pools. Monitors VRAM, gates GPU-heavy tasks, drains queues at shutdown. |
 | [pixlstash/work_planner.py](../pixlstash/work_planner.py) | Registers all `BaseTaskFinder`s, polls them in round-robin, enforces inflight limits and adaptive backoff. |
-| [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors and penalised tags) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These are distinct features sharing one module; candidates for future separation. |
+| [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors, a CLIP-IQA objective quality probe, and a calibrated anomaly penalty — confidence × precision, noisy-OR within tag families — see [`utils/quality/anomaly_penalty.py`](../pixlstash/utils/quality/anomaly_penalty.py) and [`docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md`](reviews/2026-06-smart-score-calibrated-anomaly-plan.md)) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These are distinct features sharing one module; candidates for future separation. |
 | [pixlstash/worker_config.py](../pixlstash/worker_config.py) | Global constants — `NUM_WORKERS`, per-task `*_MAX_INFLIGHT`, batch sizes. |
 | [pixlstash/startup_checks.py](../pixlstash/startup_checks.py) | Preflight: disk space, VRAM, CUDA, SSL. May force CPU mode. |
 | [pixlstash/event_types.py](../pixlstash/event_types.py) | `EventType` enum used by WebSocket event bus. |
@@ -294,6 +294,8 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/scores` | Bulk apply user ratings |
 | POST | `/pictures/{id}/face` | Create face record |
 | DELETE | `/pictures/{id}/face/{index}` | Delete face |
+| POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
+| GET | `/pictures/{id}/detections` | Stored detection boxes for a picture (registered before the `/{id}/{field}` catch-all) |
 | POST | `/pictures/likeness-search` | Reverse-image likeness search |
 
 ### `characters.py`
@@ -348,106 +350,124 @@ Public guest scoring and shared-link endpoints.
 > Auto-generated from `server.api.openapi()`. Regenerate with `python scripts/render_backend_architecture.py`.
 
 <!-- AUTOGEN:start name="routes" -->
-| Method | Path                                                                          | Tags         | Summary                                          |
-| ------ | ----------------------------------------------------------------------------- | ------------ | ------------------------------------------------ |
-| GET    | /api/v1/characters                                                            | characters   | List characters                                  |
-| POST   | /api/v1/characters                                                            | characters   | Create character                                 |
-| POST   | /api/v1/characters/likeness-search                                            | characters   | Search characters by face likeness               |
-| POST   | /api/v1/characters/membership                                                 | characters   | Batch character membership lookup                |
-| POST   | /api/v1/characters/{character_id}/faces                                       | characters   | Assign faces to character                        |
-| DELETE | /api/v1/characters/{character_id}/faces                                       | characters   | Unassign faces from character                    |
-| PATCH  | /api/v1/characters/{id}                                                       | characters   | Update character                                 |
-| DELETE | /api/v1/characters/{id}                                                       | characters   | Delete character                                 |
-| GET    | /api/v1/characters/{id}                                                       | characters   | Get character by id                              |
-| GET    | /api/v1/characters/{id}/reference_pictures                                    | characters   | List reference pictures                          |
-| GET    | /api/v1/characters/{id}/summary                                               | characters   | Get character category summary                   |
-| GET    | /api/v1/characters/{id}/{field}                                               | characters   | Get character field                              |
-| GET    | /api/v1/check-session                                                         | auth         | Check Session                                    |
-| GET    | /api/v1/login                                                                 | auth         | Check Registration                               |
-| POST   | /api/v1/login                                                                 | auth         | Login                                            |
-| POST   | /api/v1/logout                                                                | auth         | Logout                                           |
-| GET    | /api/v1/picture_sets                                                          | picture_sets | List picture sets                                |
-| POST   | /api/v1/picture_sets                                                          | picture_sets | Create picture set                               |
-| POST   | /api/v1/picture_sets/membership                                               | picture_sets | Batch set membership lookup                      |
-| GET    | /api/v1/picture_sets/{id}                                                     | picture_sets | Get picture set                                  |
-| PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets | Update picture set                               |
-| DELETE | /api/v1/picture_sets/{id}                                                     | picture_sets | Delete picture set                               |
-| GET    | /api/v1/picture_sets/{id}/members                                             | picture_sets | List picture set members                         |
-| POST   | /api/v1/picture_sets/{id}/members                                             | picture_sets | Bulk add pictures to set                         |
-| PUT    | /api/v1/picture_sets/{id}/members                                             | picture_sets | Bulk replace picture set members                 |
-| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets | Add picture to set                               |
-| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets | Remove picture from set                          |
-| GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets | Get picture set thumbnail                        |
-| GET    | /api/v1/pictures                                                              | pictures     | List pictures                                    |
-| POST   | /api/v1/pictures/apply-scores                                                 | pictures     | Batch apply manual scores                        |
-| POST   | /api/v1/pictures/character_likeness/batch                                     | pictures     | Batch picture character likeness                 |
-| GET    | /api/v1/pictures/count                                                        | pictures     | Total picture count for a listing filter         |
-| GET    | /api/v1/pictures/export                                                       | pictures     | Start picture export job                         |
-| GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures     | Download completed export                        |
-| GET    | /api/v1/pictures/export/status                                                | pictures     | Get export job status                            |
-| POST   | /api/v1/pictures/face-search                                                  | pictures     | Search by face likeness                          |
-| POST   | /api/v1/pictures/import                                                       | pictures     | Import media files                               |
-| GET    | /api/v1/pictures/import/status                                                | pictures     | Get import job status                            |
-| POST   | /api/v1/pictures/likeness-search                                              | pictures     | Search by image likeness                         |
-| PATCH  | /api/v1/pictures/project                                                      | pictures     | Set project for pictures                         |
-| POST   | /api/v1/pictures/score_character_likeness                                     | pictures     | Score uploaded images by character likeness      |
-| DELETE | /api/v1/pictures/scrapheap                                                    | pictures     | Permanently delete scrapheap pictures            |
-| POST   | /api/v1/pictures/scrapheap/restore                                            | pictures     | Restore deleted pictures                         |
-| GET    | /api/v1/pictures/search                                                       | pictures     | Search pictures by text                          |
-| GET    | /api/v1/pictures/stream                                                       | pictures     | Stream pictures in batches                       |
-| POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags         | Fetch tags for multiple pictures                 |
-| POST   | /api/v1/pictures/thumbnails                                                   | pictures     | Get batch thumbnail metadata                     |
-| GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures     | Get picture thumbnail image                      |
-| PATCH  | /api/v1/pictures/{id}                                                         | pictures     | Patch picture fields                             |
-| DELETE | /api/v1/pictures/{id}                                                         | pictures     | Move picture to scrapheap                        |
-| GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures     | Get original picture file                        |
-| GET    | /api/v1/pictures/{id}/metadata                                                | pictures     | Get picture metadata                             |
-| POST   | /api/v1/pictures/{id}/tags                                                    | tags         | Add tag to picture                               |
-| GET    | /api/v1/pictures/{id}/tags                                                    | tags         | List picture tags                                |
-| DELETE | /api/v1/pictures/{id}/tags                                                    | tags         | Clear all tags on picture                        |
-| POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags         | Remove tag everywhere on picture                 |
-| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags         | Remove picture tag                               |
-| GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks       | Get picture's stack                              |
-| GET    | /api/v1/projects                                                              | projects     | List all projects                                |
-| POST   | /api/v1/projects                                                              | projects     | Create a project                                 |
-| POST   | /api/v1/projects/membership                                                   | projects     | Batch project membership lookup                  |
-| GET    | /api/v1/projects/{id_or_name}                                                 | projects     | Get a project by ID or name                      |
-| GET    | /api/v1/projects/{id_or_name}/picture_sets                                    | projects     | List picture sets for a project                  |
-| PUT    | /api/v1/projects/{project_id}                                                 | projects     | Update a project                                 |
-| DELETE | /api/v1/projects/{project_id}                                                 | projects     | Delete a project                                 |
-| GET    | /api/v1/projects/{project_id}/attachments                                     | projects     | List attachments for a project                   |
-| POST   | /api/v1/projects/{project_id}/attachments                                     | projects     | Upload an attachment to a project                |
-| POST   | /api/v1/projects/{project_id}/attachments/url                                 | projects     | Add a URL bookmark to a project                  |
-| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects     | Download a project attachment                    |
-| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects     | Delete a project attachment                      |
-| GET    | /api/v1/projects/{project_id}/export                                          | projects     | Export project as ZIP                            |
-| GET    | /api/v1/projects/{project_id}/summary                                         | projects     | Get project picture count                        |
-| GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters   | Get character by project name and character name |
-| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets | Get picture set by project name and set name     |
-| GET    | /api/v1/snapshots                                                             | snapshots    | List Snapshots                                   |
-| POST   | /api/v1/snapshots                                                             | snapshots    | Create Snapshot                                  |
-| GET    | /api/v1/snapshots/status                                                      | snapshots    | Snapshots Status                                 |
-| PATCH  | /api/v1/snapshots/{snapshot_id}                                               | snapshots    | Rename Snapshot                                  |
-| DELETE | /api/v1/snapshots/{snapshot_id}                                               | snapshots    | Delete Snapshot                                  |
-| POST   | /api/v1/snapshots/{snapshot_id}/hash-compare                                  | snapshots    | Hash Compare                                     |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore                                       | snapshots    | Restore Snapshot                                 |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/batch                                 | snapshots    | Restore Batch                                    |
-| GET    | /api/v1/snapshots/{snapshot_id}/restore/preview                               | snapshots    | Preview Full Restore                             |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/preview/batch                         | snapshots    | Preview Batch Restore                            |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}         | snapshots    | Restore Resource                                 |
-| GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots    | Preview Resource Restore                         |
-| GET    | /api/v1/sort_mechanisms                                                       | pictures     | List picture sort mechanisms                     |
-| POST   | /api/v1/stacks                                                                | stacks       | Create stack                                     |
-| GET    | /api/v1/stacks/{stack_id}                                                     | stacks       | Get stack details                                |
-| POST   | /api/v1/stacks/{stack_id}/members                                             | stacks       | Add stack members                                |
-| DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks       | Remove stack members                             |
-| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks       | Set member position                              |
-| PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks       | Reorder stack                                    |
-| GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks       | List pictures in stack                           |
-| GET    | /api/v1/tags                                                                  | tags         | List all tags                                    |
-| GET    | /version                                                                      | server       | Read Version                                     |
-| WS     | /api/v1/ws/updates                                                            | config       | Real-time event stream                           |
-| WS     | /api/v1/ws/comfyui                                                            | comfyui      | ComfyUI workflow progress                        |
+| Method | Path                                                                          | Tags            | Summary                                               |
+| ------ | ----------------------------------------------------------------------------- | --------------- | ----------------------------------------------------- |
+| GET    | /api/v1/characters                                                            | characters      | List characters                                       |
+| POST   | /api/v1/characters                                                            | characters      | Create character                                      |
+| POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                    |
+| POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                     |
+| POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                             |
+| DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                         |
+| PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                      |
+| DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                      |
+| GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                   |
+| GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                               |
+| GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                        |
+| GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                   |
+| GET    | /api/v1/check-session                                                         | auth            | Check Session                                         |
+| GET    | /api/v1/login                                                                 | auth            | Check Registration                                    |
+| POST   | /api/v1/login                                                                 | auth            | Login                                                 |
+| POST   | /api/v1/logout                                                                | auth            | Logout                                                |
+| GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                     |
+| POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                    |
+| POST   | /api/v1/picture_sets/membership                                               | picture_sets    | Batch set membership lookup                           |
+| GET    | /api/v1/picture_sets/{id}                                                     | picture_sets    | Get picture set                                       |
+| PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets    | Update picture set                                    |
+| DELETE | /api/v1/picture_sets/{id}                                                     | picture_sets    | Delete picture set                                    |
+| GET    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | List picture set members                              |
+| POST   | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk add pictures to set                              |
+| PUT    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk replace picture set members                      |
+| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Add picture to set                                    |
+| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Remove picture from set                               |
+| GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets    | Get picture set thumbnail                             |
+| DELETE | /api/v1/pictures                                                              | pictures        | Bulk move pictures to scrapheap                       |
+| GET    | /api/v1/pictures                                                              | pictures        | List pictures                                         |
+| POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                             |
+| POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                      |
+| GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter              |
+| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                            |
+| GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                              |
+| GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                             |
+| GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                 |
+| POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                               |
+| POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                    |
+| GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                 |
+| POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                            |
+| POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                     |
+| POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                              |
+| PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                              |
+| POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness           |
+| DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                 |
+| POST   | /api/v1/pictures/scrapheap/restore                                            | pictures        | Restore deleted pictures                              |
+| GET    | /api/v1/pictures/search                                                       | pictures        | Search pictures by text                               |
+| GET    | /api/v1/pictures/stream                                                       | pictures        | Stream pictures in batches                            |
+| POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                      |
+| POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                          |
+| GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures        | Get picture thumbnail image                           |
+| PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                  |
+| DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                             |
+| GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                             |
+| GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                              |
+| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                |
+| GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                  |
+| POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                    |
+| GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                     |
+| DELETE | /api/v1/pictures/{id}/tags                                                    | tags            | Clear all tags on picture                             |
+| POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags            | Remove tag everywhere on picture                      |
+| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags            | Remove picture tag                                    |
+| GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks          | Get picture's stack                                   |
+| GET    | /api/v1/projects                                                              | projects        | List all projects                                     |
+| POST   | /api/v1/projects                                                              | projects        | Create a project                                      |
+| POST   | /api/v1/projects/membership                                                   | projects        | Batch project membership lookup                       |
+| GET    | /api/v1/projects/{id_or_name}                                                 | projects        | Get a project by ID or name                           |
+| GET    | /api/v1/projects/{id_or_name}/picture_sets                                    | projects        | List picture sets for a project                       |
+| PUT    | /api/v1/projects/{project_id}                                                 | projects        | Update a project                                      |
+| DELETE | /api/v1/projects/{project_id}                                                 | projects        | Delete a project                                      |
+| GET    | /api/v1/projects/{project_id}/attachments                                     | projects        | List attachments for a project                        |
+| POST   | /api/v1/projects/{project_id}/attachments                                     | projects        | Upload an attachment to a project                     |
+| POST   | /api/v1/projects/{project_id}/attachments/url                                 | projects        | Add a URL bookmark to a project                       |
+| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Download a project attachment                         |
+| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Delete a project attachment                           |
+| GET    | /api/v1/projects/{project_id}/export                                          | projects        | Export project as ZIP                                 |
+| GET    | /api/v1/projects/{project_id}/summary                                         | projects        | Get project picture count                             |
+| GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters      | Get character by project name and character name      |
+| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets    | Get picture set by project name and set name          |
+| GET    | /api/v1/snapshots                                                             | snapshots       | List Snapshots                                        |
+| POST   | /api/v1/snapshots                                                             | snapshots       | Create Snapshot                                       |
+| GET    | /api/v1/snapshots/status                                                      | snapshots       | Snapshots Status                                      |
+| PATCH  | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Rename Snapshot                                       |
+| DELETE | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Delete Snapshot                                       |
+| POST   | /api/v1/snapshots/{snapshot_id}/hash-compare                                  | snapshots       | Hash Compare                                          |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore                                       | snapshots       | Restore Snapshot                                      |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/batch                                 | snapshots       | Restore Batch                                         |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/preview                               | snapshots       | Preview Full Restore                                  |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/preview/batch                         | snapshots       | Preview Batch Restore                                 |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}         | snapshots       | Restore Resource                                      |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots       | Preview Resource Restore                              |
+| GET    | /api/v1/sort_mechanisms                                                       | pictures        | List picture sort mechanisms                          |
+| POST   | /api/v1/stacks                                                                | stacks          | Create stack                                          |
+| GET    | /api/v1/stacks/{stack_id}                                                     | stacks          | Get stack details                                     |
+| POST   | /api/v1/stacks/{stack_id}/members                                             | stacks          | Add stack members                                     |
+| DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks          | Remove stack members                                  |
+| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                   |
+| PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                         |
+| GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                |
+| GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                       |
+| POST   | /api/v1/tag_suggestions/bulk-accept                                           | tag_suggestions | Resolve all confident suggestions for a tag           |
+| POST   | /api/v1/tag_suggestions/bulk-reopen                                           | tag_suggestions | Batch-undo a bulk accept                              |
+| POST   | /api/v1/tag_suggestions/scan                                                  | tag_suggestions | Scan a tag for near-neighbour label disagreements     |
+| GET    | /api/v1/tag_suggestions/summary                                               | tag_suggestions | Per-tag suggestion counts                             |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/accept                                | tag_suggestions | Accept a tag-fix suggestion                           |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/dismiss                               | tag_suggestions | Dismiss a tag-fix suggestion                          |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/fix-twin                              | tag_suggestions | Resolve a suggestion in the twin's favour             |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/reopen                                | tag_suggestions | Reopen (undo) a reviewed suggestion                   |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/swap                                  | tag_suggestions | Swap a pair's labels (both were wrong, opposite ways) |
+| POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger        |
+| GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)              |
+| GET    | /api/v1/tags                                                                  | tags            | List all tags                                         |
+| GET    | /version                                                                      | server          | Read Version                                          |
+| WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                |
+| WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                             |
 <!-- AUTOGEN:end name="routes" -->
 
 ---
@@ -474,6 +494,14 @@ Picture
 ```text
 Face: id, picture_id, frame_index, face_index, character_id,
       bbox (JSON), features (512-d InsightFace BLOB)
+
+Detection: id, picture_id, frame_index, detection_index,
+           label (open-vocab, indexed), bbox (JSON pixel xyxy),
+           score (nullable — Florence emits none), source
+           (e.g. "florence2:od"), attributes (JSON escape-hatch)
+           (UNIQUE picture_id+frame_index+detection_index)
+           → object-detection boxes, user-triggered (Segment); the
+             Picture.detections relationship cascades on delete
 
 Character: id, name, description, extra_metadata,
            reference_picture_set_id, project_id
@@ -539,6 +567,7 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | `FACE_EXTRACTION` | GPU | `MissingFaceExtractionFinder` | InsightFace detection + 512-d embedding |
 | `QUALITY` | CPU | `MissingQualityFinder` | OpenCV quality metrics |
 | `TAGGER` | GPU | `MissingTagFinder` | All enabled tag plugins (union) |
+| `TAG_PREDICTION_BACKFILL` | GPU | `MissingTagPredictionFinder` | Recover `tag_prediction` rows for pictures with tags but no predictions (runs the PixlStash tagger for raw scores only; never re-tags). Gated on the PixlStash tagger being active; depends on `FACE_EXTRACTION` + `TAGGER` so live work runs first. |
 | `DESCRIPTION` | GPU | `MissingDescriptionFinder` | Image caption generation |
 | `TEXT_EMBEDDING` | GPU | `MissingTextEmbeddingFinder` | SentenceTransformer on captions |
 | `IMAGE_EMBEDDING` | GPU | `MissingImageEmbeddingFinder` | CLIP image embedding |
@@ -551,8 +580,11 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | `SOURCE_FACE_LIKENESS` | GPU | `MissingSourceFaceLikenessCharacterFinder` | Face↔reference similarity |
 | `MISSING_FILE_PURGE` | CPU | `MissingFilePurgeFinder` | Remove records for vanished files |
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
+| `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
+
+**User-triggered tasks** (e.g. `DETECTION`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column.
 
 ---
 
@@ -634,6 +666,18 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
 | [services/share_service.py](../pixlstash/services/share_service.py) | Validates picture share tokens (`UserToken`), resolves shared pictures, and returns the correct watermark bytes (custom or default) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
+| [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
+
+### 10.1 DB access rule for services (enforced in CI)
+
+A service function must take an explicit **`session: Session`** and do its DB work on that pre-opened session — the `*_in_session(session, ...)` pattern. **Services must not call `vault.db.run_task` / `vault.db.run_immediate_read_task` directly**; only `Vault` (and the thin per-service wrapper that bridges a route to the DB worker) owns the work-queue. This is rule 3 of the refactoring guardrails (see [docs/ideas/codebase-refactoring.md](ideas/codebase-refactoring.md) §3) and keeps `services/` from degrading into a second DB layer.
+
+The canonical shape — copy a sibling such as [`snapshot_service.py`](../pixlstash/services/snapshot_service.py) or [`restore_service.py`](../pixlstash/services/restore_service.py):
+
+- Pure, testable **`*_in_session(session, ...)`** functions hold all the logic.
+- A thin **vault wrapper** (`def do_x(vault, ...)`) does nothing but `vault.db.run_task(x_in_session, ...)` and shape the return.
+
+This rule is enforced by **`tests/test_architecture_guardrails.py::test_services_no_direct_db_calls`**, which fails CI on any `vault.db.run_*` call in `pixlstash/services/`. The test carries a small **allowlist** of transitional files that still keep the `vault.db.run_task` call inside their wrapper. **If you add or move a service file that contains such a wrapper, you must add it to that allowlist in the same change, with a one-line justification** — otherwise the guardrail fails (this is exactly how the impossible-tags clear service first broke CI). The allowlist is meant to shrink as files migrate fully behind `Vault` methods; do not grow it without cause.
 
 ---
 
@@ -782,6 +826,21 @@ Selected milestones:
 - **Threading caveat (load-bearing).** The contextvar is valid **only on the request's own task**. The attribution-critical emits — import (`run_in_executor`), plugin service — fire on **detached worker threads** where the contextvar is dead. So those call sites capture the origin synchronously at request entry and carry it explicitly in the event `data` dict, and the broadcaster reads `source`/`origin_client_id` **from `data` only — never from the contextvar**. Synchronous in-request emits (PATCH/DELETE on pictures, tags, characters, project, apply-scores, scrapheap) take `request: Request` and pass `origin_client_id` (plus `change_kind="removed"` on deletes) into `data`. Background emitters inherit the `external`/`None` defaults.
 - **In-app ComfyUI generation is a deliberate exception.** It is UI-initiated but completes **asynchronously** on a detached worker after the request returns, so there is no optimistic client-side copy to suppress. `_process_comfyui_outputs` ([routes/comfyui.py](../pixlstash/routes/comfyui.py)) emits a **single** `PICTURE_IMPORTED` with `source: "ui"`, `change_kind: "added"`, and **no origin echo** (`origin_client_id` omitted) — so **every** owner tab, including the initiating one, does a slick in-place insert (`handleForeignUi` → `insertGridImagesById`) rather than the originator suppressing its own echo. It does **not** fire a second `CHANGED_PICTURES` broadcast (the field-scoped `Missing*Finder` events emit their own targeted events later), and already-existing re-imports (`duplicate_ids`) get no event. The runner therefore captures and threads no `origin_client_id` at all.
 - **Security.** `X-Client-Id` / `origin_client_id` is attacker-controllable and used **only** for frontend echo-matching — **never** for authorization or scoping. It is length-capped and not logged at INFO; the stream stays owner-only. See [docs/reviews/feature-slick-grid-updates.md](reviews/feature-slick-grid-updates.md).
+
+#### Aspirational: centralised origin-stamping chokepoint (NOT YET IMPLEMENTED — target state)
+
+> **This subsection describes a target architecture that does not exist in the code today.** As of this writing, origin threading is **per-handler opt-in**: each mutating handler must remember to read `getattr(request.state, "origin_client_id", None)` and put it into the event `data` dict. The only thing stopping a self-pill (issue #499) is a human remembering to do that at every emit site. This is the same failure shape as the per-handler authorization opt-in described in §16.1/§16.2: correctness by remembering, not by construction.
+
+**Why this keeps recurring.** The grid-refresh cleanup (`docs/reviews/2026-06-grid-refresh-cleanup-plan.md`) found ~12 user-reachable emit sites that dropped `origin_client_id`, each producing a "pill on the user's own change". They were fixed by threading origin in by hand (Phase 6), but the next new mutating endpoint will reintroduce the bug exactly the same way — by omission. An emit site that *forgets* origin is structurally indistinguishable from a genuine background emit (both default to `source:"external"`, `origin_client_id:None`), so the broadcaster cannot tell a bug from a legitimate external event.
+
+**Target architecture: stamp origin centrally, so an emit site is correct by omission.** Move origin attribution out of the call sites and into one place that the request already flows through:
+
+1. **The broadcaster (or a thin wrapper around `vault.notify`) stamps `origin_client_id` from request context automatically** for any emit that happens on, or is causally tied to, an in-flight request. The load-bearing constraint stays the same as today: the broadcaster runs on `self._ws_loop`, a different task than the request, so the contextvar is dead there. The central stamp must therefore capture the origin **at `notify()` call time on the request's own task** (where `origin_client_id_var` is live) and attach it to the event before it is handed to the WS loop — rather than each handler hand-copying it into `data`.
+2. **Detached-worker emits (import `run_in_executor`, plugin service, ComfyUI) remain explicit.** They already fire on threads where the contextvar is dead and there is no request to read; they pass origin (or deliberately omit it, as ComfyUI does) in `data`. The central stamp must **not** overwrite an origin already present in `data`, so these deliberate cases keep working. Precedence: explicit `data` value wins; central stamp fills only the gap.
+3. **Background/finder emits stay origin-less by construction** — they run with no request on the stack, so the central stamp finds nothing to attach and the `external`/`None` defaults apply, which is correct.
+4. **A startup/CI assertion is the backstop.** Mirroring the §16.2 "no undeclared data route" check: enumerate the mutating emit sites (or assert at the wrapper) that any synchronous in-request `CHANGED_*` / `PICTURE_IMPORTED` emit carries a non-defaulted origin unless the route is explicitly declared origin-exempt. This turns "every user-reachable emit carries origin" from a manual review cell into a machine fact.
+
+**Migration path** (same shape as §16.2): (a) land the central stamp behind the existing explicit threading, capturing origin at `notify()` time without removing the per-handler dict entries; (b) verify equivalence with the Phase 2 WS-sniffer specs (own-origin echo suppressed, external still pills) in both directions; (c) only then remove the now-redundant per-handler `origin_client_id` plumbing. Until it ships, **threading origin into every user-reachable emit site by hand is the binding rule**, and any new mutating emit that omits it is a self-pill bug, not a judgement call. New work should steer toward the central stamp rather than adding more per-handler opt-in plumbing.
 
 ### WebSocket authentication
 

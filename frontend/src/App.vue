@@ -27,7 +27,9 @@ import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
+import { useReviewFixesStore } from "./stores/useReviewFixesStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
+import { useTasksStore } from "./stores/useTasksStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -35,7 +37,7 @@ import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
-import SearchOverlay from "./components/views/SearchOverlay.vue";
+import ReviewFixesOverlay from "./components/views/ReviewFixesOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import { isInternalImageDrag } from "./utils/media.js";
 
@@ -55,7 +57,9 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
+const reviewFixesStore = useReviewFixesStore();
 const snapshotsStore = useSnapshotsStore();
+const tasksStore = useTasksStore();
 
 // --- Router ---
 const route = useRoute();
@@ -116,11 +120,15 @@ const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
 const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 14;
-const SIDEBAR_HIDE_BREAKPOINT = 1000;
+const SIDEBAR_HIDE_BREAKPOINT = 790;
 const STATS_HIDE_BREAKPOINT = 1280;
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
 const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
+// Coalescing window for incoming grid-driving WS events (see
+// useGridRealtimeSync). A burst of foreign events accumulates over this window
+// and applies once per category instead of one fetch+rebuild per event.
+const GRID_WS_COALESCE_MS = 200;
 
 // --- Non-reactive internals ---
 let mainAreaResizeObserver = null;
@@ -130,6 +138,7 @@ let columnsMenuCloseTimeout = null;
 let sidebarRefreshDebounceTimeout = null;
 let sidebarRefreshPicturesDebounceTimeout = null;
 let sidebarRefreshPicturesFlash = false;
+let gridWsCoalesceTimer = null;
 // Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
 let stopOpenSettings = null;
 
@@ -200,6 +209,10 @@ function pictureChangeFieldAffectsView(field) {
       filterStore.smartScoreBucketFilter != null
     );
   }
+  // Detections are an opt-in overlay layer, never a sort/filter field, so a
+  // detection change never affects grid membership or order — don't reload or
+  // raise the "view changed" pill for it.
+  if (field === "detections") return false;
   // Unknown field → assume it can affect the view, so refresh to be safe.
   return true;
 }
@@ -228,7 +241,8 @@ function sendUpdatesFilters() {
 // delegates to the ImageGrid template-ref's defineExpose'd methods (Tier-3
 // imperative API), no-oping safely if the grid isn't mounted yet.
 const gridApi = {
-  insertGridImagesById: (ids) => gridContainer.value?.insertGridImagesById?.(ids),
+  insertGridImagesById: (ids) =>
+    gridContainer.value?.insertGridImagesById?.(ids),
   refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
   repositionImageByScore: (id, score) =>
     gridContainer.value?.repositionImageByScore?.(id, score),
@@ -248,6 +262,27 @@ function fullGridReload() {
   gridStore.refreshGridVersion();
 }
 
+// Fixed-window scheduler for the realtime-sync coalescer. The composable arms
+// one flush per window (it skips schedule() while a flush is already pending),
+// so the first queued event starts a GRID_WS_COALESCE_MS timer and a
+// back-to-back burst flushes once at its end. cancel() lets onBeforeUnmount
+// drop a pending flush.
+const gridWsScheduler = {
+  schedule(flush) {
+    if (gridWsCoalesceTimer) clearTimeout(gridWsCoalesceTimer);
+    gridWsCoalesceTimer = setTimeout(() => {
+      gridWsCoalesceTimer = null;
+      flush();
+    }, GRID_WS_COALESCE_MS);
+  },
+  cancel() {
+    if (gridWsCoalesceTimer) {
+      clearTimeout(gridWsCoalesceTimer);
+      gridWsCoalesceTimer = null;
+    }
+  },
+};
+
 const gridRealtimeSync = useGridRealtimeSync({
   getMyClientId: () => wsStore.clientId,
   grid: gridApi,
@@ -256,6 +291,7 @@ const gridRealtimeSync = useGridRealtimeSync({
   getSelectedSort: () => sortStore.selectedSort,
   reload: fullGridReload,
   refreshSidebar: (flash) => refreshSidebarPicturesDebounced(flash),
+  scheduler: gridWsScheduler,
 });
 
 function connectUpdatesSocket() {
@@ -312,8 +348,19 @@ function connectUpdatesSocket() {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
+      // Origin-aware: only this tab's own tag edits may refresh a tag-filtered
+      // grid in place. A tag change from outside (background tagging, another
+      // tab) must not reshuffle the user's filtered view — the grid raises a
+      // click-to-refresh pill instead (see ImageGrid's wsTagUpdate watcher).
+      // The flag rides on wsTagUpdate; the overlay still refreshes its open
+      // card's tags for any origin.
+      const isOwn = !!(
+        payload.origin_client_id &&
+        wsStore.clientId &&
+        payload.origin_client_id === wsStore.clientId
+      );
       const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
-      wsStore.wsTagUpdate = { key: nextKey, pictureIds };
+      wsStore.wsTagUpdate = { key: nextKey, pictureIds, external: !isOwn };
     } else if (payload?.type === "descriptions_changed") {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
@@ -390,6 +437,17 @@ function loadSortChangedExternal() {
   fullGridReload();
 }
 
+// ImageGrid asks to raise the "view changed externally" pill for an external
+// tag change under an active tag filter (instead of reshuffling the filtered
+// grid under the user). Skip ids already queued in the "new pictures" pill so a
+// just-imported batch being tagged doesn't double-pill.
+function onFlagSortChanged(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const pending = new Set(wsStore.pendingExternalImportIds);
+  const fresh = ids.filter((id) => !pending.has(id));
+  if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
+}
+
 function onRestoreConfirmed() {
   gridStore.wsUpdateKey = Date.now();
   gridStore.refreshGridVersion();
@@ -461,11 +519,21 @@ function isExternalFileDragEvent(event) {
 
 function handleWindowDragOver(event) {
   if (!isExternalFileDragEvent(event)) return;
+  // The review-fixes overlay is a modal review surface; dropping files into it
+  // must never start an import. Skip preventDefault so the drag is not shown as
+  // droppable here.
+  if (reviewFixesStore.overlayOpen) return;
   event.preventDefault();
 }
 
 function handleWindowDrop(event) {
   if (!isExternalFileDragEvent(event)) return;
+  // While the review-fixes overlay is open, swallow the drop without importing
+  // (still preventDefault so the browser does not navigate to the dropped file).
+  if (reviewFixesStore.overlayOpen) {
+    event.preventDefault();
+    return;
+  }
   event.preventDefault();
   if (isInsideImageGrid(event)) {
     return;
@@ -1084,13 +1152,6 @@ function applyRouteToStores() {
 // Sync route → stores on every navigation (and immediately on mount for deep-linking).
 watch(route, applyRouteToStores, { immediate: true, deep: true });
 
-async function handleUpdateSearchQuery(value) {
-  const nextQuery = typeof value === "string" ? value.trim() : "";
-  searchStore.searchInput = nextQuery;
-  searchStore.searchQuery = nextQuery;
-  searchStore.addToSearchHistory(nextQuery);
-}
-
 // Stateless sidebar tabs: switching the Global ↔ Project mode (or the
 // project picker) must not navigate or change the grid — the route is the
 // single source of truth. These handlers therefore only mirror the value
@@ -1259,6 +1320,9 @@ async function fetchConfig() {
     if (typeof res.data.sidebar_docked === "boolean") {
       sidebarStore.setSidebarDocked(res.data.sidebar_docked);
     }
+    if (typeof res.data.sidebar_pinned === "boolean") {
+      sidebarStore.setSidebarPinned(res.data.sidebar_pinned);
+    }
     if (typeof res.data.date_format === "string" && res.data.date_format) {
       userPrefsStore.dateFormat = res.data.date_format;
     }
@@ -1311,6 +1375,10 @@ async function fetchConfig() {
       typeof res.data.sidebar_docked === "boolean"
         ? res.data.sidebar_docked
         : sidebarStore.sidebarDocked;
+    config.sidebar_pinned =
+      typeof res.data.sidebar_pinned === "boolean"
+        ? res.data.sidebar_pinned
+        : sidebarStore.sidebarPinned;
     config.date_format = userPrefsStore.dateFormat;
     config.theme_mode = userPrefsStore.themeMode;
     config.stack_strictness =
@@ -1366,6 +1434,7 @@ async function fetchConfig() {
       expand_all_stacks: gridStore.showStacks,
       compact_mode: gridStore.compactMode,
       sidebar_docked: sidebarStore.sidebarDocked,
+      sidebar_pinned: sidebarStore.sidebarPinned,
       date_format: userPrefsStore.dateFormat,
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
@@ -1429,6 +1498,9 @@ async function patchConfigUIOptions() {
   if (typeof sidebarStore.sidebarDocked === "boolean") {
     patch.sidebar_docked = sidebarStore.sidebarDocked;
   }
+  if (typeof sidebarStore.sidebarPinned === "boolean") {
+    patch.sidebar_pinned = sidebarStore.sidebarPinned;
+  }
   if (
     typeof userPrefsStore.dateFormat === "string" &&
     userPrefsStore.dateFormat
@@ -1469,6 +1541,9 @@ async function patchConfigUIOptions() {
 }
 
 function handleGlobalKeydown(e) {
+  // The review-fixes overlay is modal and owns its own keyboard handler; don't
+  // run the app/grid shortcuts (scroll, search, help) behind it.
+  if (reviewFixesStore.overlayOpen) return;
   const tag = document.activeElement?.tagName?.toLowerCase();
   const isEditable =
     tag === "input" ||
@@ -1488,7 +1563,7 @@ function handleGlobalKeydown(e) {
   if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (!isEditable) {
       e.preventDefault();
-      openSearchOverlay();
+      searchStore.requestSearchFocus();
     }
   }
   if (
@@ -1550,7 +1625,13 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   }
 }
 
-function handleImagesMovedToSet({ imageIds }) {
+function handleImagesMoved({ imageIds, kind, refresh }) {
+  if (kind === "reference-folder" || refresh) {
+    wsStore.clearSortChangedExternalIds();
+    gridStore.refreshGridVersion();
+    refreshSidebar();
+    return;
+  }
   if (
     selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID ||
     selectionStore.selectedSet
@@ -1589,19 +1670,13 @@ function confirmExportZip() {
     includeCharacterName: exportStore.exportIncludeCharacterName,
     useOriginalFileNames: exportStore.exportUseOriginalFileNames,
     resolution: exportStore.exportResolution,
+    bboxMode: exportStore.exportBboxMode,
   });
   exportStore.exportMenuOpen = false;
 }
 
-// --- Search Overlay ---
-
-function openSearchOverlay() {
-  searchStore.searchOverlayVisible = true;
-}
-
-function closeSearchOverlay() {
-  searchStore.searchOverlayVisible = false;
-}
+// --- Review tags overlay ---
+// Visibility lives in the store so the grid toolbar can open it directly.
 
 function handleClearSearch() {
   searchStore.searchQuery = "";
@@ -1632,10 +1707,6 @@ function applySearchHistory(query) {
   nextTick(() => {
     blurSearchInput();
   });
-}
-
-function clearSearchHistory() {
-  searchStore.clearSearchHistory();
 }
 
 function commitSearch() {
@@ -1789,6 +1860,14 @@ watch(
 );
 
 watch(
+  () => sidebarStore.sidebarPinned,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
   () => userPrefsStore.sidebarThumbnailSize,
   () => {
     if (!configLoaded.value) return;
@@ -1849,6 +1928,10 @@ watch(
 
 // --- Lifecycle ---
 onMounted(async () => {
+  // Start the app-wide tasks poll so the activity indicators (Tasks-tab icon,
+  // stats-sidebar light) are live everywhere, not only while the Tasks tab is
+  // open. The store self-throttles when idle and pauses on a hidden tab.
+  tasksStore.startPolling();
   fetch("/version")
     .then((r) => r.json())
     .then((data) => {
@@ -1911,6 +1994,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disconnectUpdatesSocket();
+  tasksStore.stopPolling();
   if (stopOpenSettings) stopOpenSettings();
   window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);
@@ -1933,6 +2017,7 @@ onBeforeUnmount(() => {
     clearTimeout(sidebarRefreshPicturesDebounceTimeout);
     sidebarRefreshPicturesDebounceTimeout = null;
   }
+  gridWsScheduler.cancel();
 });
 
 defineExpose({
@@ -2029,7 +2114,7 @@ defineExpose({
             @select-folder="handleSelectFolder"
             @update:folder-scanning="folderScanning = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
-            @images-moved="handleImagesMovedToSet"
+            @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
@@ -2158,9 +2243,11 @@ defineExpose({
                 :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
                 :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
                 :faceBboxFilter="filterStore.faceBboxFilter"
+                :impossibleSources="filterStore.impossibleSources"
                 :sharedOnlyFilter="filterStore.sharedOnlyFilter"
                 :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
                 :showFaceBboxes="gridStore.showFaceBboxes"
+                :showDetections="gridStore.showDetections"
                 :showProblemIcon="gridStore.showProblemIcon"
                 :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
                 :showStacks="gridStore.showStacks"
@@ -2228,11 +2315,14 @@ defineExpose({
                 :sortChangedExternalCount="wsStore.sortChangedExternalCount"
                 @load-pending-imports="loadPendingExternalImports"
                 @load-sort-changed="loadSortChangedExternal"
+                @flag-sort-changed="onFlagSortChanged"
                 @update:visible-range-label="
                   gridStore.visibleRangeLabel = $event
                 "
+                @update:match-count="gridStore.matchCount = $event"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
+                @local-import="handleLocalImport"
                 @confirm-export-zip="confirmExportZip"
               />
             </div>
@@ -2340,17 +2430,14 @@ defineExpose({
           </div>
         </main>
       </div>
-      <SearchOverlay
-        v-if="searchStore.searchOverlayVisible"
-        :modelValue="searchStore.searchQuery"
-        :history="searchStore.searchHistory"
-        @search="handleUpdateSearchQuery"
-        @close="closeSearchOverlay"
-        @clear-history="clearSearchHistory"
+      <ReviewFixesOverlay
+        v-if="reviewFixesStore.overlayOpen"
+        :backendUrl="BACKEND_URL"
+        @close="reviewFixesStore.overlayOpen = false"
       />
     </div>
     <button
-      v-show="userPrefsStore.showKeyboardHint"
+      v-show="userPrefsStore.showKeyboardHint && !reviewFixesStore.overlayOpen"
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,

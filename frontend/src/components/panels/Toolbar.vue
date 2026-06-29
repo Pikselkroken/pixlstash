@@ -8,10 +8,14 @@
           :close-on-content-click="false"
           location="bottom start"
           origin="top start"
+          :offset="8"
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <div class="bar-split-button">
+            <div
+              class="bar-split-button"
+              :class="{ 'bar-split-button--open': gbSortMenuOpen }"
+            >
               <button
                 class="bar-btn bar-split-toggle"
                 type="button"
@@ -39,155 +43,128 @@
               </button>
             </div>
           </template>
-          <div class="gb-sort-panel popup-panel">
-            <div class="gb-sort-header">
-              <div class="gb-sort-panel-title">
-                Sort order
-                <span>Choose one</span>
-              </div>
-              <v-btn
-                class="gb-sort-direction"
-                variant="text"
+          <div class="tbm gb-sort-panel">
+            <span class="tbm-caret tbm-caret--start"></span>
+            <div class="tbm-header">
+              <v-icon size="18" class="tbm-header-icon">{{
+                gbSortTypeIcon
+              }}</v-icon>
+              <span class="tbm-title">Sort order</span>
+              <span class="tbm-spacer"></span>
+              <button
+                class="tbm-ghost"
+                type="button"
                 :disabled="
-                  Boolean(
-                    searchStore.searchQuery && searchStore.searchQuery.trim(),
-                  ) || gbSortModel === LIKENESS_GROUPS_SORT_KEY_GB
+                  gbSearchActive || gbSortModel === LIKENESS_GROUPS_SORT_KEY_GB
                 "
                 @click="gbToggleSortDirection"
               >
-                <v-icon size="18">
-                  {{
-                    gbDescendingModel
-                      ? "mdi-sort-descending"
-                      : "mdi-sort-ascending"
-                  }}
-                </v-icon>
+                <v-icon size="16">{{
+                  gbDescendingModel
+                    ? "mdi-sort-descending"
+                    : "mdi-sort-ascending"
+                }}</v-icon>
                 <span>{{
                   gbDescendingModel ? "Descending" : "Ascending"
                 }}</span>
-              </v-btn>
+              </button>
             </div>
-            <div
-              v-if="
-                Boolean(
-                  searchStore.searchQuery && searchStore.searchQuery.trim(),
-                )
-              "
-              class="gb-sort-search-note"
-            >
+
+            <div v-if="gbSearchActive" class="tbm-section gb-sort-search-note">
               Search relevance (fixed)
             </div>
-            <v-btn-toggle
-              :model-value="gbSortMenuModel"
-              @update:model-value="gbHandleSortModelUpdate"
-              mandatory
-              class="gb-sort-grid"
-              :disabled="
-                Boolean(
-                  searchStore.searchQuery && searchStore.searchQuery.trim(),
-                )
-              "
-            >
-              <v-btn
-                v-for="opt in filteredSortOptions"
-                :key="opt.value"
-                :value="opt.value"
-                class="gb-sort-grid-btn"
-                variant="text"
-              >
-                <v-icon size="18">{{ gbGetSortIcon(opt.value) }}</v-icon>
-                <span class="gb-sort-grid-label">{{ opt.label }}</span>
-                <v-icon
-                  v-if="gbSortMenuModel === opt.value"
-                  size="16"
-                  class="gb-sort-grid-selected"
-                  >mdi-circle-medium</v-icon
+
+            <div class="tbm-section">
+              <div class="tbm-grid-2">
+                <button
+                  v-for="opt in filteredSortOptions"
+                  :key="opt.value"
+                  class="tbm-toggle"
+                  :class="{ 'tbm-toggle--on': gbSortMenuModel === opt.value }"
+                  type="button"
+                  :disabled="gbSearchActive"
+                  @click="gbHandleSortModelUpdate(opt.value)"
                 >
-              </v-btn>
-            </v-btn-toggle>
-            <div
-              v-if="gbSortMenuModel === SIMILARITY_SORT_KEY_GB"
-              class="gb-sort-similarity-row"
-            >
-              <span>Similarity to ...</span>
-              <div class="gb-similarity-scroll">
-                <v-btn-toggle
-                  v-model="gbSimilarityCharacterModel"
-                  class="gb-sort-grid"
-                  :class="{
-                    'gb-sort-grid--pending-parameter':
-                      gbIsPendingSimilarityParameter,
-                  }"
-                  :disabled="!gbHasSimilarityOptions"
-                >
-                  <v-btn
-                    v-for="opt in sortStore.similarityCharacterOptions ?? []"
-                    :key="opt.value"
-                    :value="opt.value"
-                    class="gb-sort-grid-btn"
-                    variant="text"
-                    @click="gbHandleSimilarityOptionClick(opt.value)"
+                  <v-icon size="18" class="tbm-toggle-icon">{{
+                    gbGetSortIcon(opt.value)
+                  }}</v-icon>
+                  <span class="tbm-toggle-label">{{ opt.label }}</span>
+                  <span
+                    v-if="
+                      gbSortMenuModel === opt.value &&
+                      (opt.value === SIMILARITY_SORT_KEY_GB ||
+                        opt.value === LIKENESS_GROUPS_SORT_KEY_GB)
+                    "
+                    class="tbm-toggle-end"
                   >
-                    <img
-                      v-if="opt.thumbnail"
-                      :src="opt.thumbnail"
-                      class="gb-similarity-thumb"
-                      alt=""
-                    />
-                    <div
-                      v-else
-                      class="gb-similarity-thumb gb-similarity-thumb--placeholder"
-                    ></div>
-                    <span class="gb-sort-grid-label">{{ opt.text }}</span>
-                    <v-icon
-                      v-if="gbSimilarityCharacterModel === opt.value"
-                      size="16"
-                      class="gb-sort-grid-selected"
-                      :class="{
-                        'gb-sort-grid-selected--pending':
-                          gbIsPendingSimilarityParameter,
-                      }"
-                      >mdi-circle-medium</v-icon
-                    >
-                  </v-btn>
-                </v-btn-toggle>
+                    <v-icon size="16">mdi-circle-medium</v-icon>
+                  </span>
+                </button>
               </div>
             </div>
+
+            <div
+              v-if="gbSortMenuModel === SIMILARITY_SORT_KEY_GB"
+              class="tbm-section"
+            >
+              <span class="tbm-label">Similarity to …</span>
+              <div
+                class="gb-sim-grid"
+                :class="{
+                  'tbm-toggle--pending': gbIsPendingSimilarityParameter,
+                }"
+              >
+                <button
+                  v-for="opt in sortStore.similarityCharacterOptions ?? []"
+                  :key="opt.value"
+                  class="gb-sim-btn"
+                  :class="{
+                    'gb-sim-btn--on': gbSimilarityCharacterModel === opt.value,
+                  }"
+                  type="button"
+                  :disabled="!gbHasSimilarityOptions"
+                  :title="opt.text"
+                  @click="gbHandleSimilarityOptionClick(opt.value)"
+                >
+                  <img
+                    v-if="opt.thumbnail"
+                    :src="opt.thumbnail"
+                    class="gb-sim-avatar"
+                    alt=""
+                  />
+                  <span
+                    v-else
+                    class="gb-sim-avatar gb-sim-avatar--placeholder"
+                  ></span>
+                  <span class="gb-sim-name">{{ opt.text }}</span>
+                </button>
+              </div>
+            </div>
+
             <div
               v-if="gbSortMenuModel === LIKENESS_GROUPS_SORT_KEY_GB"
-              class="gb-sort-similarity-row"
+              class="tbm-section"
             >
-              <span>Group strictness</span>
-              <div class="gb-similarity-scroll">
-                <v-btn-toggle
-                  v-model="gbStackThresholdModel"
-                  class="gb-sort-grid"
+              <span class="tbm-label">Group strictness</span>
+              <div
+                class="tbm-grid-2"
+                :class="{ 'tbm-toggle--pending': gbIsPendingStackParameter }"
+              >
+                <button
+                  v-for="opt in gbStackThresholdOptions"
+                  :key="opt.value"
+                  class="tbm-toggle"
                   :class="{
-                    'gb-sort-grid--pending-parameter':
-                      gbIsPendingStackParameter,
+                    'tbm-toggle--on': gbStackThresholdModel === opt.value,
                   }"
+                  type="button"
+                  @click="
+                    gbStackThresholdModel = opt.value;
+                    gbHandleStackThresholdOptionClick(opt.value);
+                  "
                 >
-                  <v-btn
-                    v-for="opt in gbStackThresholdOptions"
-                    :key="opt.value"
-                    :value="opt.value"
-                    class="gb-sort-grid-btn"
-                    variant="text"
-                    @click="gbHandleStackThresholdOptionClick(opt.value)"
-                  >
-                    <span class="gb-sort-grid-label">{{ opt.label }}</span>
-                    <v-icon
-                      v-if="gbStackThresholdModel === opt.value"
-                      size="16"
-                      class="gb-sort-grid-selected"
-                      :class="{
-                        'gb-sort-grid-selected--pending':
-                          gbIsPendingStackParameter,
-                      }"
-                      >mdi-circle-medium</v-icon
-                    >
-                  </v-btn>
-                </v-btn-toggle>
+                  <span class="tbm-toggle-label">{{ opt.label }}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -198,24 +175,32 @@
           :close-on-content-click="false"
           location="bottom end"
           origin="top end"
+          :offset="8"
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
               class="bar-btn bar-btn--boxed"
-              :class="{ 'bar-btn--active': filterStore.isActive }"
+              :class="{
+                'bar-btn--active': filterStore.isActive && !gbFilterMenuOpen,
+                'bar-btn--open': gbFilterMenuOpen,
+              }"
               type="button"
               title="Filters"
             >
-              <v-icon size="19">mdi-filter</v-icon>
-              <span
-                v-if="filterStore.activeCount > 0"
-                class="bar-filter-badge"
-                >{{
-                  filterStore.activeCount > 99 ? "99+" : filterStore.activeCount
-                }}</span
-              >
+              <span class="bar-icon-badge-wrap">
+                <v-icon size="19">mdi-filter</v-icon>
+                <span
+                  v-if="filterStore.activeCount > 0"
+                  class="bar-filter-badge"
+                  >{{
+                    filterStore.activeCount > 99
+                      ? "99+"
+                      : filterStore.activeCount
+                  }}</span
+                >
+              </span>
               <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
@@ -232,12 +217,14 @@
           :close-on-content-click="false"
           location="bottom end"
           origin="top end"
+          :offset="8"
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
               class="bar-btn bar-btn--boxed"
+              :class="{ 'bar-btn--open': gbViewMenuOpen }"
               type="button"
               title="View options"
             >
@@ -245,19 +232,26 @@
               <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="gb-view-panel popup-panel">
-            <div class="gb-filter-section-label">Grid View</div>
-            <v-switch
-              v-model="gbCompactModeModel"
-              label="Compact mode"
-              color="primary"
-              density="compact"
-              hide-details
-              class="gb-view-switch"
-            />
-            <div class="gb-columns-row">
+          <div class="tbm gb-view-panel">
+            <span class="tbm-caret tbm-caret--end"></span>
+            <div class="tbm-header">
+              <v-icon size="18" class="tbm-header-icon">mdi-view-grid</v-icon>
+              <span class="tbm-title">Grid view</span>
+              <span class="tbm-spacer"></span>
+              <button
+                class="tbm-btn tbm-btn--compact"
+                :class="{ 'tbm-btn--on': gbCompactModeModel }"
+                type="button"
+                @click="gbCompactModeModel = !gbCompactModeModel"
+              >
+                <v-icon size="16">mdi-view-compact-outline</v-icon>
+                <span>Compact</span>
+              </button>
+            </div>
+
+            <div class="tbm-section gb-columns-row">
               <span class="gb-columns-label"
-                >Columns: {{ gbPendingColumns }}</span
+                >Columns: <b class="tbm-mono">{{ gbPendingColumns }}</b></span
               >
               <v-slider
                 class="gb-columns-slider"
@@ -267,114 +261,206 @@
                 :step="1"
                 density="compact"
                 hide-details
-                track-color="#888"
+                color="primary"
                 thumb-color="primary"
                 @end="gbCommitColumns"
               />
             </div>
-            <div class="gb-stacks-controls">
-              <div class="gb-filter-section-label">Stacks</div>
-              <div class="gb-stacks-buttons">
-                <v-btn
-                  class="gb-stack-toggle-btn"
-                  color="primary"
-                  variant="flat"
-                  size="small"
+
+            <div class="tbm-section">
+              <span class="tbm-label">Stacks</span>
+              <div class="tbm-btngroup">
+                <button
+                  class="tbm-action tbm-action--secondary"
+                  type="button"
+                  style="flex: 1"
                   :disabled="gbExpandAllStacksDisabled"
                   @click="emit('expand-all-stacks')"
-                  >Expand all</v-btn
                 >
-                <v-btn
-                  class="gb-stack-toggle-btn"
-                  color="primary"
-                  variant="flat"
-                  size="small"
+                  <v-icon size="16">mdi-arrow-expand-vertical</v-icon>
+                  Expand all
+                </button>
+                <button
+                  class="tbm-action tbm-action--secondary"
+                  type="button"
+                  style="flex: 1"
                   :disabled="gbCollapseAllStacksDisabled"
                   @click="emit('collapse-all-stacks')"
-                  >Collapse all</v-btn
                 >
+                  <v-icon size="16">mdi-arrow-collapse-vertical</v-icon>
+                  Collapse all
+                </button>
               </div>
             </div>
-            <div class="gb-filter-section-label" style="margin-top: 10px">
-              Overlays
-            </div>
-            <div class="gb-overlay-grid">
-              <button
-                v-for="ovl in gbOverlayOptions"
-                :key="ovl.key"
-                class="gb-overlay-btn"
-                :class="{ 'gb-overlay-btn--active': ovl.model.value }"
-                :title="ovl.label"
-                type="button"
-                @click="ovl.model.value = !ovl.model.value"
-              >
-                <v-icon size="16">{{ ovl.icon }}</v-icon>
-                <span class="gb-overlay-btn-label">{{ ovl.label }}</span>
-              </button>
+
+            <div class="tbm-section">
+              <span class="tbm-label">Overlays</span>
+              <div class="tbm-grid-3">
+                <button
+                  v-for="ovl in gbOverlayOptions"
+                  :key="ovl.key"
+                  class="tbm-toggle tbm-toggle--vertical"
+                  :class="{ 'tbm-toggle--on': ovl.model.value }"
+                  :title="ovl.label"
+                  type="button"
+                  @click="ovl.model.value = !ovl.model.value"
+                >
+                  <v-icon size="18" class="tbm-toggle-icon">{{
+                    ovl.icon
+                  }}</v-icon>
+                  <span class="tbm-toggle-label">{{ ovl.label }}</span>
+                </button>
+              </div>
             </div>
           </div>
         </v-menu>
         <!-- ── Toolbar: divider ─────────────────────────────────────── -->
         <div class="bar-separator"></div>
-        <!-- ── Toolbar: Search ──────────────────────────────────────── -->
-        <button
-          class="bar-btn bar-btn--icon"
-          :class="{ 'bar-btn--active': searchStore.isSearchActive }"
-          type="button"
-          title="Search (F)"
-          @click="searchStore.searchOverlayVisible = true"
-        >
-          <v-icon size="20">mdi-magnify</v-icon>
-        </button>
-        <!-- ── Toolbar: Export ───────────────────────────────────────── -->
+        <!-- ── Toolbar: Search (icon trigger → search menu popover) ───── -->
         <v-menu
-          v-model="exportStore.exportMenuOpen"
+          v-model="gbSearchMenuOpen"
           :close-on-content-click="false"
-          location="bottom start"
-          origin="top start"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="bar-btn bar-btn--icon tb-export-btn"
-              type="button"
-              title="Export current grid to zip"
-            >
-              <v-icon size="20">mdi-download</v-icon>
-            </button>
-          </template>
-          <TbExportPanel @confirm-export="emit('confirm-export-zip')" />
-        </v-menu>
-        <!-- ── Toolbar: Import ───────────────────────────────────────── -->
-        <button
-          class="bar-btn bar-btn--icon"
-          type="button"
-          :disabled="isReadOnly"
-          title="Import photos"
-          @click="emit('open-import')"
-        >
-          <v-icon size="20">mdi-cloud-upload-outline</v-icon>
-        </button>
-        <!-- ── Toolbar: ComfyUI T2I ──────────────────────────────────── -->
-        <v-menu
-          v-if="filterStore.comfyuiConfigured"
-          v-model="tbComfyuiMenuOpen"
-          :close-on-content-click="false"
-          location="bottom start"
-          origin="top start"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
               class="bar-btn bar-btn--icon"
-              :class="{ 'bar-btn--active': tbComfyuiMenuOpen }"
+              :class="{
+                'bar-btn--active':
+                  searchStore.isSearchActive && !gbSearchMenuOpen,
+                'bar-btn--open': gbSearchMenuOpen,
+              }"
+              type="button"
+              title="Search (F)"
+            >
+              <v-icon size="20">mdi-magnify</v-icon>
+            </button>
+          </template>
+          <div class="tbm gb-search-panel">
+            <span class="tbm-caret tbm-caret--end"></span>
+            <div class="tbm-header">
+              <v-icon size="18" class="tbm-header-icon">mdi-magnify</v-icon>
+              <span class="tbm-title">Search</span>
+            </div>
+            <div class="gb-search-field">
+              <div class="tbm-input-wrap">
+                <v-icon size="16" class="tbm-input-icon">mdi-magnify</v-icon>
+                <input
+                  ref="searchInputRef"
+                  v-model="searchStore.searchInput"
+                  class="tbm-input tbm-input--with-icon"
+                  type="text"
+                  placeholder="Search your library…"
+                  autocomplete="off"
+                  @keydown.enter.prevent="onSearchEnter"
+                  @keydown.escape.prevent="onSearchEscape"
+                />
+              </div>
+            </div>
+            <div
+              v-if="gbSearchHistoryItems.length"
+              class="tbm-section gb-search-recent"
+            >
+              <span class="tbm-label">Recent</span>
+              <div class="gb-recent-list">
+                <button
+                  v-for="item in gbSearchHistoryItems"
+                  :key="item"
+                  class="gb-recent-row"
+                  type="button"
+                  @click="gbApplySearchHistory(item)"
+                >
+                  <v-icon size="16" class="gb-recent-icon">mdi-history</v-icon>
+                  <span class="gb-recent-label">{{ item }}</span>
+                  <v-icon size="14" class="gb-recent-apply"
+                    >mdi-arrow-top-left</v-icon
+                  >
+                </button>
+              </div>
+            </div>
+          </div>
+        </v-menu>
+        <!-- ── Toolbar: Export ───────────────────────────────────────── -->
+        <v-menu
+          v-model="exportStore.exportMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--icon tb-export-btn"
+              :class="{ 'bar-btn--open': exportStore.exportMenuOpen }"
+              type="button"
+              title="Export current grid to zip"
+            >
+              <v-icon size="20">mdi-tray-arrow-down</v-icon>
+            </button>
+          </template>
+          <TbExportPanel @confirm-export="emit('confirm-export-zip')" />
+        </v-menu>
+        <!-- ── Toolbar: Import (icon trigger → import menu popover) ────── -->
+        <v-menu
+          v-if="!isReadOnly"
+          v-model="tbImportMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--icon"
+              :class="{ 'bar-btn--open': tbImportMenuOpen }"
+              type="button"
+              title="Import photos"
+            >
+              <v-icon size="20">mdi-cloud-upload-outline</v-icon>
+            </button>
+          </template>
+          <TbImportPanel
+            :backend-url="props.backendUrl"
+            :open="tbImportMenuOpen"
+            :default-project-id="projectStore.selectedProjectId"
+            @local-import="
+              emit('local-import', $event);
+              tbImportMenuOpen = false;
+            "
+            @open-full-import="
+              emit('open-import');
+              tbImportMenuOpen = false;
+            "
+          />
+        </v-menu>
+        <!-- ── Toolbar: ComfyUI T2I ──────────────────────────────────── -->
+        <v-menu
+          v-if="filterStore.comfyuiConfigured"
+          v-model="tbComfyuiMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--icon"
+              :class="{ 'bar-btn--open': tbComfyuiMenuOpen }"
               type="button"
               :disabled="isReadOnly"
               title="Generate new image with ComfyUI from a text prompt"
             >
-              <v-icon size="20">mdi-image-plus</v-icon>
+              <v-icon size="20">mdi-image-plus-outline</v-icon>
             </button>
           </template>
           <TbComfyPanel
@@ -390,8 +476,18 @@
       <!-- ── Conditional separator: ComfyUI | ApplyTo (shown when bar is narrow) ── -->
       <div class="bar-separator bar-separator--gap-guard"></div>
       <div class="selection-bar-right">
-        <!-- ── Separator: grid controls | Settings ────────────────────── -->
+        <!-- ── Separator: grid controls | actions ─────────────────────── -->
         <div class="bar-separator"></div>
+        <!-- ── Toolbar: Review and fix tags (an action, not a menu) ───── -->
+        <button
+          class="bar-btn bar-btn--icon"
+          type="button"
+          :disabled="isReadOnly"
+          title="Review and fix tags"
+          @click="reviewFixesStore.overlayOpen = true"
+        >
+          <v-icon size="20">mdi-tag-check-outline</v-icon>
+        </button>
         <!-- ── Toolbar: Settings ─────────────────────────────────────── -->
         <button
           class="bar-btn bar-btn--icon"
@@ -403,15 +499,26 @@
         </button>
         <!-- ── Toolbar: Stats toggle ──── -->
         <button
-          class="bar-btn bar-btn--icon"
+          class="bar-btn bar-btn--icon tb-stats-btn"
           :class="{ 'bar-btn--active': sidebarStore.statsOpen }"
           type="button"
           :title="
-            sidebarStore.statsOpen ? 'Hide stats sidebar' : 'Show stats sidebar'
+            tasksStore.hasActiveTasks
+              ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'} running`
+              : sidebarStore.statsOpen
+                ? 'Hide stats sidebar'
+                : 'Show stats sidebar'
           "
           @click="sidebarStore.toggleStats()"
         >
           <v-icon size="20">mdi-chart-bar</v-icon>
+          <!-- App-wide activity light: pulses whenever the task manager has any
+               active work, so background tasks are visible without opening the
+               stats sidebar. -->
+          <span
+            v-if="tasksStore.hasActiveTasks"
+            class="tb-stats-activity"
+          ></span>
         </button>
       </div>
     </div>
@@ -419,7 +526,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
@@ -428,9 +535,13 @@ import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
+import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
+import { useProjectStore } from "../../stores/useProjectStore";
 import GbFilterPanel from "./GbFilterPanel.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
+import TbImportPanel from "./TbImportPanel.vue";
 const props = defineProps({
   selectedCount: Number,
   selectedCharacter: String,
@@ -447,8 +558,11 @@ const emit = defineEmits([
   "collapse-all-stacks",
   "confirm-export-zip",
   "open-import",
+  "local-import",
   "open-settings",
 ]);
+
+const tbImportMenuOpen = ref(false);
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
@@ -471,6 +585,9 @@ const gridStore = useGridStore();
 const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
+const reviewFixesStore = useReviewFixesStore();
+const tasksStore = useTasksStore();
+const projectStore = useProjectStore();
 
 const tbComfyuiMenuOpen = ref(false);
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
@@ -478,6 +595,44 @@ const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
 const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";
 const gbSortMenuOpen = ref(false);
 const gbPendingSortSelection = ref(null);
+
+// True while a text search is active — sort is then locked to relevance.
+const gbSearchActive = computed(() =>
+  Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()),
+);
+
+// ── Grid Bar: Search (icon trigger → search menu popover) ──────────────────────
+const searchInputRef = ref(null);
+const gbSearchMenuOpen = ref(false);
+// Full history when the field is empty; prefix-filtered while typing.
+const gbSearchHistoryItems = computed(() => searchStore.filteredSearchHistory);
+
+function onSearchEnter() {
+  searchStore.commitSearch();
+  gbSearchMenuOpen.value = false;
+}
+function onSearchEscape() {
+  gbSearchMenuOpen.value = false;
+}
+function gbApplySearchHistory(item) {
+  searchStore.searchInput = item;
+  searchStore.commitSearch();
+  gbSearchMenuOpen.value = false;
+}
+
+// Focus the field whenever the menu opens (click or the "F" shortcut).
+watch(gbSearchMenuOpen, (open) => {
+  if (open) nextTick(() => searchInputRef.value?.focus());
+});
+
+// The global "F" shortcut opens the search menu (App bumps this token rather
+// than holding a ref down through ImageGrid → Toolbar).
+watch(
+  () => searchStore.searchFocusToken,
+  () => {
+    gbSearchMenuOpen.value = true;
+  },
+);
 
 const gbSortModel = computed({
   get: () => sortStore.selectedSort ?? "",
@@ -709,6 +864,12 @@ const gbShowFaceBboxesModel = computed({
     gridStore.showFaceBboxes = Boolean(v);
   },
 });
+const gbShowDetectionsModel = computed({
+  get: () => gridStore.showDetections,
+  set: (v) => {
+    gridStore.showDetections = Boolean(v);
+  },
+});
 const gbShowProblemIconModel = computed({
   get: () => gridStore.showProblemIcon,
   set: (v) => {
@@ -727,6 +888,19 @@ const gbOverlayOptions = computed(() => [
       },
       set value(v) {
         gbShowFaceBboxesModel.value = v;
+      },
+    },
+  },
+  {
+    key: "detections",
+    label: "Object boxes",
+    icon: "mdi-shape-outline",
+    model: {
+      get value() {
+        return gbShowDetectionsModel.value;
+      },
+      set value(v) {
+        gbShowDetectionsModel.value = v;
       },
     },
   },
@@ -767,9 +941,12 @@ const gbCollapseAllStacksDisabled = computed(
      tuned independently of the grid canvas. Set `toolbar` == `background` in the
      theme to keep them identical. */
   background: rgba(var(--v-theme-toolbar), 0.95);
-  padding: 0 10px;
+  padding: 0 var(--space-3);
   margin: 0;
-  height: 48px;
+  height: 36px;
+  /* 1px divider along the bottom. box-sizing:border-box keeps the bar at 36px
+     (the border sits inside), so this doesn't grow the toolbar. */
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -786,13 +963,13 @@ const gbCollapseAllStacksDisabled = computed(
 .selection-bar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   flex-shrink: 0;
 }
 .selection-bar-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   margin-left: auto;
   flex-shrink: 0;
 }
@@ -806,27 +983,120 @@ const gbCollapseAllStacksDisabled = computed(
   display: flex;
   align-items: center;
   background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+/* Open state: the whole split button adopts the panel fill + border so it reads
+   as one object with its menu (the caret bridges the gap). */
+.bar-split-button--open {
+  border-color: rgb(var(--v-theme-border));
+  background: rgb(var(--v-theme-panel));
+}
+
+.bar-split-button--open .bar-split-toggle,
+.bar-split-button--open .bar-split-menu {
+  background: transparent;
+}
+
+.bar-split-button--open .bar-btn-chevron {
+  transform: rotate(180deg);
+  transition: transform var(--dur-1) var(--ease-standard);
+}
+
+/* ── Search menu (icon trigger → popover with input + recent searches) ─────── */
+.gb-search-panel {
+  width: 420px;
+  max-width: 92vw;
+}
+.gb-search-field {
+  /* Match the section side padding (12px) so the input lines up with the recent
+     rows and with every other toolbar menu; top matches the menu headers (8px).
+     The tight 4px bottom only works when a Recent section sits below and supplies
+     its own top padding. */
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+.gb-search-field:last-child {
+  /* No Recent section below: the field owns the panel's bottom edge, so match the
+     section last-child rhythm (16px) instead of hugging the edge with 4px. */
+  padding-bottom: var(--space-5);
+}
+.gb-search-recent {
+  padding-top: var(--space-4);
+}
+/* Icon-only triggers (e.g. Search) flag their open state in accent, matching the
+   design's IconTrigger; the labelled Sort/Filter/View triggers stay text-coloured. */
+.bar-btn--icon.bar-btn--open {
+  color: rgb(var(--v-theme-accent)) !important;
+}
+.gb-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.gb-recent-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
   border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-panel));
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+.gb-recent-row:hover {
+  background: var(--hover-wash);
+}
+.gb-recent-icon {
+  color: rgba(var(--v-theme-on-panel), 0.5);
+  flex-shrink: 0;
+}
+.gb-recent-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gb-recent-apply {
+  color: rgba(var(--v-theme-on-panel), 0.35);
+  flex-shrink: 0;
+}
+.gb-recent-row:hover .gb-recent-apply {
+  color: rgba(var(--v-theme-on-panel), 0.7);
 }
 
 .bar-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 9px;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
   cursor: pointer;
-  font-size: 0.88em;
+  font-size: var(--text-base);
   font-family: inherit;
-  color: rgb(var(--v-theme-on-background));
+  /* Icons and labels take the sidebar's treatment: the toolbar-text token
+     (identical to sidebar-text) at the sidebar's muted alpha, brightening on
+     hover/active — so the toolbar and sidebar chrome read as one strip. */
+  color: rgb(var(--v-theme-toolbar-text));
   background: transparent;
-  border: none;
-  height: 40px;
+  /* A transparent 1px border is reserved so the open state (which colours the
+     border) does not change the box size and make the button jump. */
+  border: 1px solid transparent;
+  box-sizing: border-box;
+  height: 32px;
   white-space: nowrap;
   position: relative;
 }
 
 .bar-btn:hover {
-  background: rgba(var(--v-theme-on-background), 0.1);
+  background: rgba(var(--v-theme-toolbar-text), 0.1);
+  color: rgb(var(--v-theme-toolbar-text));
 }
 
 .bar-btn--active {
@@ -834,13 +1104,13 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 .bar-btn--boxed {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* Icon-only bar button */
 .bar-btn--icon {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   display: flex;
   align-items: center;
@@ -848,51 +1118,101 @@ const gbCollapseAllStacksDisabled = computed(
   flex-shrink: 0;
 }
 
+/* App-wide task-activity light on the stats toggle. */
+.tb-stats-btn {
+  position: relative;
+}
+
+.tb-stats-activity {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
+  animation: tb-stats-pulse 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes tb-stats-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tb-stats-activity {
+    animation: none;
+  }
+}
+
 .bar-btn-label {
   max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.92em;
+  font-size: var(--text-base);
 }
 
 .bar-btn-prefix {
-  font-size: 0.82em;
-  opacity: 0.55;
+  font-size: var(--text-sm);
+  opacity: 0.6;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .bar-split-toggle {
-  border-radius: 5px 0 0 5px;
-  padding-right: 5px;
-  border: none;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  padding-right: var(--space-2);
 }
 
 .bar-split-menu {
-  border-radius: 0 5px 5px 0;
-  padding-left: 6px;
-  padding-right: 6px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
 }
 
+/* Wrapper so the filter-count badge can overlay the icon without affecting
+   layout (the badge is absolutely positioned within this). */
+.bar-icon-badge-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Small count badge, overlaid on the top-right of the filter icon. Absolutely
+   positioned so it never changes the size of the button or shifts the chevron
+   and the buttons that follow it. */
 .bar-filter-badge {
+  position: absolute;
+  top: -5px;
+  right: -7px;
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
-  border-radius: 8px;
-  font-size: 0.65em;
-  font-weight: 700;
-  padding: 0 4px;
-  min-width: 14px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  padding: 0 var(--space-2);
+  min-width: 15px;
+  height: 15px;
   text-align: center;
-  line-height: 14px;
-  flex-shrink: 0;
+  line-height: 15px;
+  pointer-events: none;
 }
 
 .bar-separator {
   width: 1px;
   height: 24px;
   background: rgba(var(--v-theme-on-background), 0.2);
-  margin: 0 4px;
+  margin: 0 var(--space-2);
   align-self: center;
   flex-shrink: 0;
 }
@@ -911,144 +1231,96 @@ const gbCollapseAllStacksDisabled = computed(
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
 .gb-sort-panel {
-  min-width: 340px;
-  max-width: 400px;
-  padding: 8px 8px 10px;
-}
-.gb-sort-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 6px;
-}
-
-.gb-sort-panel-title {
-  font-size: 1em;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.gb-sort-panel-title span {
-  font-size: 0.78em;
-  font-weight: 400;
-  opacity: 0.6;
-}
-
-.gb-sort-direction {
-  font-size: 0.82em;
-  min-width: 0;
+  width: 320px;
+  max-width: 92vw;
 }
 
 .gb-sort-search-note {
-  font-size: 0.8em;
-  opacity: 0.7;
-  padding: 4px 4px 8px;
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-panel), 0.7);
 }
 
-.gb-sort-grid {
-  display: flex !important;
-  flex-wrap: wrap;
-  gap: 2px;
-  width: 100%;
-  height: auto !important;
-  background: transparent !important;
-}
-
-.gb-sort-grid--pending-parameter .v-btn {
-  opacity: 0.5;
-}
-
-.gb-sort-grid-btn {
-  flex: 1 1 calc(50% - 2px);
-  min-width: 100px;
-  max-width: none;
-  height: 32px !important;
-  justify-content: flex-start !important;
-  padding: 0 8px !important;
-  font-size: 0.82em;
-  color: rgb(var(--v-theme-on-background)) !important;
-  opacity: 1 !important;
-}
-
-.gb-sort-grid-btn.v-btn--active {
-  color: rgb(var(--v-theme-on-primary)) !important;
-  background: rgb(var(--v-theme-primary)) !important;
-}
-
-.gb-sort-grid-label {
-  flex: 1;
-  text-align: left;
-  font-size: 0.9em;
-  margin-left: 4px;
-}
-
-.gb-sort-grid-selected {
-  color: rgb(var(--v-theme-on-primary)) !important;
-  margin-left: auto;
-}
-
-.gb-sort-grid-selected--pending {
-  opacity: 0.4;
-}
-
-.gb-sort-similarity-row {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 2px;
-}
-
-.gb-sort-similarity-row > span {
-  font-size: 0.85em;
-  font-weight: 600;
-  opacity: 0.75;
-}
-
-.gb-similarity-scroll {
+/* Similarity character picker — a 2-up grid of avatar rows. */
+.gb-sim-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1) var(--space-4);
+  max-height: 320px;
+  overflow-y: auto;
+  /* Never scroll sideways — long names ellipsize instead (see .gb-sim-name). */
   overflow-x: hidden;
-  width: 100%;
 }
 
-.gb-similarity-thumb {
-  width: 28px;
-  height: 28px;
+.gb-sim-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  /* Allow the grid item to shrink below its content so the name can ellipsize
+     rather than forcing a horizontal scrollbar. */
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-panel));
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+.gb-sim-btn:hover {
+  background: var(--hover-wash);
+}
+
+.gb-sim-btn--on {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-weight: var(--weight-semibold);
+}
+
+.gb-sim-btn--on:hover {
+  background: rgb(var(--v-theme-primary));
+}
+
+.gb-sim-avatar {
+  width: 24px;
+  height: 24px;
   object-fit: cover;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.gb-similarity-thumb--placeholder {
-  background: rgba(var(--v-theme-on-background), 0.15);
+.gb-sim-avatar--placeholder {
+  background: rgba(var(--v-theme-on-panel), 0.15);
+}
+
+.gb-sim-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── View panel ───────────────────────────────────────────────────────────── */
 .gb-view-panel {
-  align-items: flex-start;
-  gap: 6px;
-  padding: 8px 12px 12px;
-  min-width: 220px;
-}
-
-.gb-view-switch {
-  width: 100%;
+  width: 264px;
+  max-width: 92vw;
 }
 
 .gb-columns-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
+  gap: var(--space-4);
 }
 
 .gb-columns-label {
-  font-size: 0.82em;
+  font-size: var(--text-sm);
   white-space: nowrap;
   flex-shrink: 0;
-  min-width: 76px;
 }
 
 .gb-columns-slider {
@@ -1057,67 +1329,10 @@ const gbCollapseAllStacksDisabled = computed(
   margin-bottom: 0;
 }
 
-.gb-stacks-controls {
-  width: 100%;
-}
-
-.gb-stacks-buttons {
-  display: flex;
-  gap: 6px;
-}
-
-.gb-stack-toggle-btn {
-  flex: 1;
-}
-
-.gb-overlay-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  width: 100%;
-}
-
-.gb-overlay-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 5px 4px;
-  border-radius: 5px;
-  border: 1px solid rgba(var(--v-theme-on-background), 0.14);
-  background: rgba(var(--v-theme-on-background), 0.04);
-  color: rgb(var(--v-theme-on-background));
-  cursor: pointer;
-  font-size: 0;
-  opacity: 0.5;
-  transition:
-    opacity 0.12s,
-    background 0.12s;
-}
-
-.gb-overlay-btn:hover {
-  opacity: 0.8;
-  background: rgba(var(--v-theme-on-background), 0.09);
-}
-
-.gb-overlay-btn--active {
-  opacity: 1;
-  color: rgb(var(--v-theme-on-primary));
-  border-color: rgb(var(--v-theme-primary));
-  background: rgb(var(--v-theme-primary));
-}
-
-.gb-overlay-btn-label {
-  font-size: 0.72em;
-  white-space: nowrap;
-  line-height: 1.2;
-  color: inherit;
-}
-
 @media (hover: none) and (pointer: coarse) {
   .selection-bar-overlay {
     height: 56px;
-    padding: 0 4px;
+    padding: 0 var(--space-2);
   }
 
   .bar-btn,
@@ -1142,7 +1357,7 @@ const gbCollapseAllStacksDisabled = computed(
 
   .bar-split-menu {
     border-left: none;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
   }
 }
 
@@ -1151,8 +1366,10 @@ const gbCollapseAllStacksDisabled = computed(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.92em;
+  font-size: var(--text-base);
   flex-shrink: 1;
+  /* The current selection reads at full strength against the muted "Sort:". */
+  color: rgb(var(--v-theme-toolbar-text));
 }
 
 .bar-btn-sort-secondary {
@@ -1160,7 +1377,7 @@ const gbCollapseAllStacksDisabled = computed(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.92em;
+  font-size: var(--text-base);
   flex-shrink: 1;
 }
 

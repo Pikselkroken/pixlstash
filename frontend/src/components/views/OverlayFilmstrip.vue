@@ -240,7 +240,7 @@ function onFilmstripWheel(event) {
   height: 100%;
   object-fit: cover;
   display: block;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .filmstrip-thumb-image-active {
@@ -256,7 +256,7 @@ function onFilmstripWheel(event) {
   justify-content: center;
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .filmstrip-badge {
@@ -267,7 +267,7 @@ function onFilmstripWheel(event) {
   background: rgba(var(--v-theme-dark-surface), 0.7);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.35);
   border-radius: 6px;
-  padding: 2px 4px;
+  padding: var(--space-1) var(--space-2);
   color: rgb(var(--v-theme-on-dark-surface));
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   z-index: 2;

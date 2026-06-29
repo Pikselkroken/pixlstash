@@ -19,8 +19,29 @@ DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     "flux chin": 1,
     "silicone breasts": 0,
     "malformed foot": 4,
-    "pixelated": 2,
+    # IQA / signal-degradation tags (added 2026-06-20). Weights are an initial
+    # proposal to tune; the tagger detection thresholds come from the post-train gate.
+    "blocky": 3,
+    "noise": 2,
+    "watermark": 4,
 }
+# Tags that PixlTagger merges into a parent just before training (its tag_remap),
+# mirrored here as PixlStash's own editable copy. A picture tagged with a child here
+# effectively *has* the parent, so the tag-suggestion scan must not flag the parent as
+# "missing" on it. Loosen this (drop entries) as the model improves enough to tell the
+# child tags apart on their own. Child → parent; keep in sync with pixltagger's
+# pixlstash.json tag_remap (only the non-null, merge-into-a-parent entries).
+DEFAULT_TAG_MERGES = {
+    "extra digit": "malformed hand",
+    "missing digit": "malformed hand",
+    "extra toe": "malformed foot",
+    "missing toe": "malformed foot",
+    "missing limb": "bad anatomy",
+    "extra limb": "bad anatomy",
+    "swapped hands": "bad anatomy",
+    "swapped feet": "bad anatomy",
+}
+
 TAG_EMPTY_SENTINEL = (
     ""  # deprecated: use TAG_PENDING_SENTINEL; kept for migration compat
 )

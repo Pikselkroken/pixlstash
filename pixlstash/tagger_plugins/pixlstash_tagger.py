@@ -6,12 +6,19 @@ and content tags beyond what WD14 covers.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import threading
+from io import BytesIO
 from typing import Callable
 
+import cv2
+import numpy as np
 import torch
+import torch.nn.functional as F
+from PIL import Image
 from torchvision import transforms
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
@@ -26,7 +33,7 @@ PIXLSTASH_TAGGER_REV_FILENAME = "pixlstash-anomaly-tagger.revision"
 # Pin a specific HuggingFace git commit SHA so the model is re-downloaded
 # whenever this value is updated, even if the local file already exists.
 # Set to "main" to always use the latest commit on the default branch.
-PIXLSTASH_TAGGER_REVISION = "d456616956954587e1a8c2d31c60c72f89a4ac3d"
+PIXLSTASH_TAGGER_REVISION = "17c0d862c4032c489e4dafcb7f00764b8a928941"
 PIXLSTASH_TAGGER_DEFAULT_THRESHOLD = 0.50
 PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 
@@ -34,17 +41,63 @@ PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 # These are collected from face-crop passes and merged into the picture's flat tag list.
 QUALITY_CROP_TAG_WHITELIST = frozenset(
     {
-        "pixelated",
-        "blurry",
-        "jpeg artifacts",
-        "chromatic aberration",
-        "scan artifacts",
-        "film grain",
+        "blocky",
         "malformed teeth",
+        "flux chin",
     }
 )
-PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 448
+# The subset of the whitelist that only makes sense on a face. When no face is found
+# the quality pass falls back to a centre crop, which contains no face — judging these
+# anomalies from it would be meaningless, so they are excluded there.
+FACE_QUALITY_CROP_TAGS = frozenset(
+    {
+        "malformed teeth",
+        "flux chin",
+    }
+)
+# Whitelist for the centre-crop fallback: the high-res quality tags that are not tied
+# to a face (e.g. blockiness).
+CENTRE_CROP_TAG_WHITELIST = QUALITY_CROP_TAG_WHITELIST - FACE_QUALITY_CROP_TAGS
+PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 576
 PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
+
+# ------------------------------------------------------------------------- #
+# Grad-CAM anomaly-localisation tuning
+#
+# These drive ``PixlStashTaggerService.localize_anomaly``: a Grad-CAM pass that
+# turns an anomaly label into an APPROXIMATE bounding box plus a heatmap overlay
+# for the "zoom to the anomaly" review hint. They are deliberately exposed as
+# module-level constants so they can be recalibrated without touching logic.
+# The values are slightly tighter than the throwaway prototype, chosen after
+# eyeballing prototype output.
+# ------------------------------------------------------------------------- #
+# Fraction-of-peak in the normalised [0,1] heatmap that counts as "hot" when
+# deriving the tight box.
+PIXLSTASH_ANOMALY_CAM_THRESHOLD = 0.5
+# A thresholded box covering more than this fraction of the frame is treated as
+# diffuse (no meaningful localised region).
+PIXLSTASH_ANOMALY_DIFFUSE_AREA_FRAC = 0.55
+# If more than this fraction of pixels are "hot", the activation is too spread
+# out to localise -> diffuse.
+PIXLSTASH_ANOMALY_DIFFUSE_HOT_FRAC = 0.55
+# A high mean activation across the whole frame means a global/surface defect
+# rather than a localised one -> diffuse.
+PIXLSTASH_ANOMALY_DIFFUSE_MEAN = 0.35
+# Pad the tight box by this fraction of the image size so the hint comfortably
+# contains the region.
+PIXLSTASH_ANOMALY_BOX_PAD_FRAC = 0.08
+# A connected hot region smaller than this fraction of the frame is treated as
+# noise and dropped (so specks in the CAM don't become boxes).
+PIXLSTASH_ANOMALY_MIN_BOX_FRAC = 0.01
+# Cap the number of boxes returned (largest regions first) so a busy CAM doesn't
+# clutter the image with many tiny hints.
+PIXLSTASH_ANOMALY_MAX_BOXES = 5
+# Side length (px) of the square RGBA heatmap PNG returned as a data URI.
+PIXLSTASH_ANOMALY_HEATMAP_SIZE = 256
+
+
+class UnknownAnomalyLabel(ValueError):
+    """Raised when a requested anomaly label is not known to the tagger model."""
 
 
 class PixlStashTaggerService:
@@ -82,6 +135,10 @@ class PixlStashTaggerService:
         self._transform = None
         self._transform_cache: dict[int, transforms.Compose] = {}
         self._dtype = torch.float32
+        # Serialises Grad-CAM localisation runs. The CAM needs gradients in
+        # fp32, so it briefly upcasts the shared model; the lock keeps two
+        # localisations from racing on that upcast/restore (see localize_anomaly).
+        self._localize_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # State queries
@@ -672,6 +729,81 @@ class PixlStashTaggerService:
                 results[path] = scores
         return results
 
+    def resolve_label_index(self, label: str) -> int | None:
+        """Map an anomaly tag string to its model label index.
+
+        Tries an exact match against the model's raw labels first, then a
+        sanitised comparison (underscores to spaces, lowercased) so review tags
+        stored in their naturalised form (e.g. ``"malformed hand"``) resolve to
+        the corresponding raw label.
+
+        Args:
+            label: The anomaly tag/label to look up.
+
+        Returns:
+            The integer label index, or ``None`` if the model does not know it.
+        """
+        if self._label_to_idx is None or not label:
+            return None
+        if label in self._label_to_idx:
+            return self._label_to_idx[label]
+        target = sanitise_tag(label)
+        for raw_label, idx in self._label_to_idx.items():
+            if sanitise_tag(raw_label) == target:
+                return idx
+        return None
+
+    def localize_anomaly(self, pil_image: Image.Image, label: str) -> dict:
+        """Locate an anomaly label in an image via Grad-CAM (approximate).
+
+        Runs a single Grad-CAM pass on the last ConvNeXt stage for the given
+        label and derives an APPROXIMATE bounding box plus a colourised heatmap
+        overlay. Intended as a "zoom to the anomaly" UI hint, not precise
+        detection. When the activation is too spread out (a global or surface
+        defect), the result is flagged diffuse with no box or heatmap.
+
+        Grad-CAM needs gradients, so this runs OUTSIDE ``torch.inference_mode``
+        and forces fp32: the CUDA model is kept in fp16 for the hot tagging
+        path, which yields NaN gradients. To stay correct without permanently
+        mutating the shared model, the model is temporarily upcast to fp32 for
+        the CAM and its original dtype is restored in a ``finally`` block. A
+        per-service lock serialises localisation calls so two of them never race
+        on that upcast/restore.
+
+        Args:
+            pil_image: The source image (any mode; converted to RGB).
+            label: The anomaly tag/label to localise.
+
+        Returns:
+            ``{"boxes": [[x, y, w, h], ...], "diffuse": bool, "heatmap": str |
+            None}`` where each box is normalised to ``[0, 1]`` (one per connected
+            hot region) and ``heatmap`` is an RGBA PNG ``data:`` URI. ``boxes`` is
+            empty, ``heatmap`` is ``None`` and ``diffuse`` is ``True`` for
+            diffuse/non-localisable activations.
+
+        Raises:
+            RuntimeError: If the model is not loaded.
+            UnknownAnomalyLabel: If ``label`` is not a label the model knows.
+        """
+        if self._model is None or self._label_to_idx is None:
+            raise RuntimeError("PixlStash tagger model is not loaded")
+        label_idx = self.resolve_label_index(label)
+        if label_idx is None:
+            raise UnknownAnomalyLabel(label)
+
+        rgb_image = pil_image.convert("RGB")
+        with self._localize_lock:
+            cam = self._compute_gradcam(rgb_image, label_idx)
+
+        boxes, diffuse = self._boxes_from_cam(cam)
+        if diffuse or not boxes:
+            return {"boxes": [], "diffuse": True, "heatmap": None}
+        return {
+            "boxes": [[round(float(v), 4) for v in b] for b in boxes],
+            "diffuse": False,
+            "heatmap": self._render_anomaly_heatmap(cam),
+        }
+
     # ------------------------------------------------------------------ #
     # Private helpers
     # ------------------------------------------------------------------ #
@@ -709,6 +841,138 @@ class PixlStashTaggerService:
             transform = self._build_transform(image_size)
             self._transform_cache[image_size] = transform
         return transform
+
+    def _compute_gradcam(self, rgb_image: Image.Image, label_idx: int) -> np.ndarray:
+        """Return a normalised ``[0, 1]`` Grad-CAM heatmap for ``label_idx``.
+
+        Hooks the last ConvNeXt stage, runs one forward+backward pass at the
+        full image size, and resizes the class-activation map to the input
+        resolution. The shared model is temporarily upcast to fp32 (CUDA keeps
+        it in fp16 for the hot path, which produces NaN gradients) and restored
+        to its original dtype in ``finally`` so the hot tagging path is
+        unaffected.
+        """
+        model = self._model
+        transform = self._get_transform(self._image_size_full)
+        inp = (
+            transform(rgb_image)
+            .unsqueeze(0)
+            .to(device=self._device, dtype=torch.float32)
+        )
+
+        original_dtype = next(model.parameters()).dtype
+        upcast = original_dtype != torch.float32
+        activations: dict = {}
+        gradients: dict = {}
+        target_layer = model.features[-1]  # last ConvNeXt stage, NCHW
+
+        def fwd_hook(_m, _i, out):
+            activations["v"] = out
+            out.register_hook(lambda g: gradients.__setitem__("v", g))
+
+        handle = target_layer.register_forward_hook(fwd_hook)
+        try:
+            if upcast:
+                # Temporary: restored below so the fp16 hot path is unchanged.
+                model.float()
+            model.eval()
+            model.zero_grad(set_to_none=True)
+            logits = model(inp)  # (1, num_labels)
+            logits[0, label_idx].backward()
+            acts = activations["v"]  # (1, C, h, w)
+            grads = gradients["v"]  # (1, C, h, w)
+            weights = grads.mean(dim=(2, 3), keepdim=True)  # (1, C, 1, 1)
+            cam = F.relu((weights * acts).sum(dim=1, keepdim=True))  # (1, 1, h, w)
+            cam = F.interpolate(
+                cam,
+                size=(self._image_size_full, self._image_size_full),
+                mode="bilinear",
+                align_corners=False,
+            )
+            cam = cam.squeeze().detach().cpu().numpy()
+        finally:
+            handle.remove()
+            if upcast:
+                model.to(original_dtype)
+            model.zero_grad(set_to_none=True)
+
+        cam = cam.astype(np.float32)
+        cam -= cam.min()
+        peak = cam.max()
+        if peak > 1e-8:
+            cam /= peak
+        return cam
+
+    def _boxes_from_cam(self, cam: np.ndarray) -> tuple[list[tuple], bool]:
+        """Derive one padded box per connected hot region, plus a diffuse flag.
+
+        Returns ``(boxes, diffuse)`` where ``boxes`` is a list of ``(x, y, w, h)``
+        tuples normalised to ``[0, 1]`` (one per connected component in the
+        thresholded CAM, largest first, capped). ``diffuse`` is ``True`` when the
+        activation is too spread out to localise (large hot fraction or high mean
+        activation), in which case ``boxes`` is empty.
+
+        Diffuseness is judged from the hot *fraction* and mean activation, NOT
+        the enclosing bounding box: two genuinely separate regions (e.g. both
+        hands) span a large enclosing box yet are not diffuse, so the enclosing
+        area is the wrong signal once multiple boxes are supported.
+        """
+        mask = cam >= PIXLSTASH_ANOMALY_CAM_THRESHOLD
+        if not mask.any():
+            return [], True
+        hot_frac = float(mask.mean())
+        if (
+            hot_frac > PIXLSTASH_ANOMALY_DIFFUSE_HOT_FRAC
+            or float(cam.mean()) > PIXLSTASH_ANOMALY_DIFFUSE_MEAN
+        ):
+            return [], True
+
+        h, w = cam.shape
+        num, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8), connectivity=8
+        )
+        min_area = PIXLSTASH_ANOMALY_MIN_BOX_FRAC * h * w
+        pad = int(PIXLSTASH_ANOMALY_BOX_PAD_FRAC * max(h, w))
+        comps: list[tuple[tuple, int]] = []
+        for i in range(1, num):  # 0 is background
+            cx, cy, cw, ch, area = (int(v) for v in stats[i])
+            if area < min_area:
+                continue  # speck — not a real region
+            x0 = max(0, cx - pad)
+            y0 = max(0, cy - pad)
+            x1 = min(w - 1, cx + cw - 1 + pad)
+            y1 = min(h - 1, cy + ch - 1 + pad)
+            comps.append(((x0 / w, y0 / h, (x1 - x0) / w, (y1 - y0) / h), area))
+        if not comps:
+            return [], True
+        comps.sort(key=lambda c: c[1], reverse=True)
+        boxes = [c[0] for c in comps[:PIXLSTASH_ANOMALY_MAX_BOXES]]
+        return boxes, False
+
+    def _render_anomaly_heatmap(self, cam: np.ndarray) -> str:
+        """Render a CAM as a warm RGBA PNG data URI (alpha = intensity).
+
+        The overlay blends over the source image on the frontend: RGB is a warm
+        colour (orange where cooler, red where hottest) and alpha scales with
+        activation so low-intensity areas stay transparent.
+        """
+        size = PIXLSTASH_ANOMALY_HEATMAP_SIZE
+        cam_clamped = np.clip(cam, 0.0, 1.0)
+        cam_img = Image.fromarray((cam_clamped * 255).astype(np.uint8)).resize(
+            (size, size), Image.BILINEAR
+        )
+        cam_small = np.asarray(cam_img).astype(np.float32) / 255.0
+        rgba = np.zeros((size, size, 4), dtype=np.uint8)
+        rgba[..., 0] = 255  # red stays high for a warm map
+        rgba[..., 1] = ((1.0 - cam_small) * 160).astype(np.uint8)  # cooler -> orange
+        rgba[..., 2] = 0
+        rgba[..., 3] = (cam_small * 255).astype(np.uint8)  # alpha = intensity
+        out = Image.fromarray(rgba, mode="RGBA")
+        buf = BytesIO()
+        out.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(
+            "ascii"
+        )
 
 
 class PixlStashTaggerPlugin(TaggerPlugin):

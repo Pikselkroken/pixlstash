@@ -24,7 +24,10 @@ from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
 from pixlstash.utils.service.tag_prediction_utils import PENALISED_TAG_SET
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.inference.engine import InferenceEngine
-from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
+from pixlstash.tagger_plugins.pixlstash_tagger import (
+    CENTRE_CROP_TAG_WHITELIST,
+    QUALITY_CROP_TAG_WHITELIST,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
@@ -284,6 +287,31 @@ class TagTask(BaseTask):
             if tag_val is not None:
                 existing_tags_map.setdefault(pid, set()).add(tag_val)
 
+        # Human labels outrank the tagger in the ground-truth Tag table (mirrors the
+        # prediction-status invariant / not_human_labeled): a tag the user confirmed
+        # (POS) stays applied even when the fresh pass can't reproduce it — e.g. a
+        # manually-added 'watermark' the model has no vocabulary for — and a tag the
+        # user rejected (NEG) is never re-applied. Without this, re-tagging silently
+        # drops a human-accepted tag that the model doesn't emit.
+        human_pos_by_pic: dict[int, set[str]] = {}
+        human_neg_by_pic: dict[int, set[str]] = {}
+        human_rows = session.exec(
+            select(
+                TagPrediction.picture_id,
+                TagPrediction.tag,
+                TagPrediction.label_state,
+            ).where(
+                TagPrediction.picture_id.in_(list(existing_picture_ids)),
+                TagPrediction.label_source == "human",
+                TagPrediction.label_state.in_(["POS", "NEG"]),
+            )
+        ).all()
+        for pid, tag_val, state in human_rows:
+            if tag_val is None:
+                continue
+            target = human_pos_by_pic if state == "POS" else human_neg_by_pic
+            target.setdefault(pid, set()).add(tag_val)
+
         # Determine which pictures need updating and their new effective tags.
         pics_to_update: list[tuple[int, set]] = []
         for update in updates:
@@ -300,6 +328,9 @@ class TagTask(BaseTask):
             # only re-queues pictures that still carry a retag sentinel, so a
             # picture with no tags at all will not be reprocessed.
             effective_tags = set(tags) if tags else set()
+            # Apply durable human supervision on top of the model's call.
+            effective_tags |= human_pos_by_pic.get(pic_id, set())
+            effective_tags -= human_neg_by_pic.get(pic_id, set())
 
             if effective_tags == existing_tags_map.get(pic_id, set()):
                 continue
@@ -376,6 +407,14 @@ class TagTask(BaseTask):
                 )
             ).all()
             for pred in all_preds:
+                # Never auto-flip a human-labeled row: its POS/NEG decision is
+                # durable supervision whose status was set by record_human_label
+                # (mirrors not_human_labeled() / the delete-guard in
+                # _write_predictions_from_tags). Without this, re-tagging a
+                # picture pushes an accepted tag into the rejected pile when the
+                # fresh tagger pass doesn't re-apply it.
+                if pred.label_source == "human":
+                    continue
                 correct_status = "CONFIRMED" if pred.tag in applied_tags else "REJECTED"
                 if pred.status != correct_status:
                     pred.status = correct_status
@@ -462,7 +501,7 @@ class TagTask(BaseTask):
 
                 # --- Quality crop pass ---
                 # Fetch face bboxes and run the custom tagger on expanded crops so
-                # that quality tags (e.g. "pixelated") that are invisible at full-
+                # that quality tags (e.g. "blocky") that are invisible at full-
                 # image resolution can still be detected.
                 crop_inference_s = 0.0
                 crop_fetch_s = 0.0
@@ -478,6 +517,9 @@ class TagTask(BaseTask):
                     target = active_workflow.pixlstash_tagger_image_size_quality_crop()
                     quality_items = []
                     key_to_path = {}
+                    # Paths whose crop is the faceless centre-crop fallback; these are
+                    # judged against the reduced CENTRE_CROP_TAG_WHITELIST (no face tags).
+                    centre_crop_paths: set = set()
                     for pic in batch:
                         file_path = ImageUtils.resolve_picture_path(
                             self._db.image_root, pic.file_path
@@ -488,8 +530,6 @@ class TagTask(BaseTask):
                             for face in faces
                             if face.bbox and getattr(face, "face_index", 0) >= 0
                         ]
-                        if not valid_faces:
-                            continue
                         try:
                             img = preloaded_images.get(file_path)
                             if img is None:
@@ -516,19 +556,33 @@ class TagTask(BaseTask):
                                     img = PILImage.open(file_path).convert("RGB")
                                 preloaded_images[file_path] = img
                             w, h = img.size
-                            largest_face = max(
-                                valid_faces,
-                                key=lambda face: max(
-                                    0,
-                                    (float(face.bbox[2]) - float(face.bbox[0]))
-                                    * (float(face.bbox[3]) - float(face.bbox[1])),
-                                ),
-                            )
-                            expanded = expand_bbox_to_square(
-                                largest_face.bbox, w, h, target
-                            )
+                            if valid_faces:
+                                largest_face = max(
+                                    valid_faces,
+                                    key=lambda face: max(
+                                        0,
+                                        (float(face.bbox[2]) - float(face.bbox[0]))
+                                        * (float(face.bbox[3]) - float(face.bbox[1])),
+                                    ),
+                                )
+                                expanded = expand_bbox_to_square(
+                                    largest_face.bbox, w, h, target
+                                )
+                                key = f"{file_path}#face{largest_face.id}"
+                            else:
+                                # No face detected: fall back to a centre crop so
+                                # whole-image quality defects (blockiness, blur, jpeg
+                                # artifacts) still get a high-resolution pass instead of
+                                # relying only on the downscaled full-image pass. A
+                                # zero-size box at the image centre expands to the same
+                                # target-sized square the face path uses.
+                                centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
+                                expanded = expand_bbox_to_square(
+                                    centre_bbox, w, h, target
+                                )
+                                key = f"{file_path}#centre"
+                                centre_crop_paths.add(file_path)
                             crop = img.crop(expanded)
-                            key = f"{file_path}#face{largest_face.id}"
                             quality_items.append((key, crop))
                             key_to_path[key] = file_path
                         except Exception as exc:
@@ -548,40 +602,56 @@ class TagTask(BaseTask):
                             else None,
                         )
                         crop_inference_s = time.perf_counter() - crop_inf_start
-                        # Accumulate quality tags found across all crops per picture path.
+                        # The crop's authoritative tag set depends on its type: a face
+                        # crop owns the full whitelist; the faceless centre-crop fallback
+                        # owns only the non-face quality tags.
+                        whitelist_by_path = {
+                            path: (
+                                CENTRE_CROP_TAG_WHITELIST
+                                if path in centre_crop_paths
+                                else QUALITY_CROP_TAG_WHITELIST
+                            )
+                            for path in key_to_path.values()
+                        }
+                        # Accumulate quality tags found across all crops per picture path,
+                        # keeping only those the crop is allowed to own.
                         quality_tags_by_path = {}
                         for key, quality_tags in quality_results.items():
                             path = key_to_path.get(key)
                             if path:
+                                allowed = whitelist_by_path[path]
                                 quality_tags_by_path.setdefault(path, set()).update(
-                                    quality_tags
+                                    t for t in quality_tags if t in allowed
                                 )
-                        # Crops are ground truth for whitelist tags: strip any whitelist
-                        # tags the full-image pass may have produced, then add only what
-                        # the crops confirmed.  Only applies to pictures that had at least
-                        # one crop — pictures without faces are left untouched.
+                        # Crops are ground truth for the tags they own: strip those tags
+                        # if the full-image pass produced them, then add only what the
+                        # crop confirmed.  Applies to every picture that produced a crop —
+                        # the largest face when one was found, otherwise the centre-crop
+                        # fallback (which leaves face tags from the full-image pass alone).
                         for path, crop_quality in quality_tags_by_path.items():
                             if path not in tag_results:
                                 continue
+                            allowed = whitelist_by_path[path]
                             stripped = [
-                                t
-                                for t in tag_results[path]
-                                if t not in QUALITY_CROP_TAG_WHITELIST
+                                t for t in tag_results[path] if t not in allowed
                             ]
                             tag_results[path] = stripped + list(crop_quality)
                             if crop_quality:
                                 logger.debug(
                                     "Quality crop tags for %s: %s", path, crop_quality
                                 )
-                        # Boost whitelist-tag prediction scores using crop confidence.
+                        # Boost prediction scores using crop confidence, limited to the
+                        # tags the crop is allowed to own (centre crops don't boost face
+                        # tags).
                         if full_scores_by_path and crop_raw_scores:
                             for key, tag_scores in crop_raw_scores.items():
                                 path = key_to_path.get(key)
                                 if path is None:
                                     continue
+                                allowed = whitelist_by_path[path]
                                 merged = full_scores_by_path.setdefault(path, {})
                                 for tag, conf in tag_scores.items():
-                                    if tag not in QUALITY_CROP_TAG_WHITELIST:
+                                    if tag not in allowed:
                                         continue
                                     if conf > merged.get(tag, 0.0):
                                         merged[tag] = conf
@@ -771,10 +841,14 @@ class TagTask(BaseTask):
         }
 
         # --- Bulk delete stale model-version rows ---
+        # Never delete a human-labeled row: its label_state/label_source is durable
+        # supervision the tagger must not clobber (mirrors not_human_labeled()).
         stale_ids = [
             row.id
             for row in existing_rows
-            if row.model_version != model_version and row.model_version != "manual"
+            if row.model_version != model_version
+            and row.model_version != "manual"
+            and row.label_source != "human"
         ]
         if stale_ids:
             session.exec(delete(TagPrediction).where(TagPrediction.id.in_(stale_ids)))
@@ -818,7 +892,13 @@ class TagTask(BaseTask):
                         )
                     )
                     written += 1
-                elif existing.status != status or existing.confidence != confidence:
+                # Never clobber a human-labeled row: its status/confidence is
+                # durable POS/NEG supervision (mirrors the delete-guard above and
+                # not_human_labeled()). Auto-flipping it here is what dropped an
+                # accepted tag into the rejected pile on re-tag.
+                elif existing.label_source != "human" and (
+                    existing.status != status or existing.confidence != confidence
+                ):
                     existing.confidence = confidence
                     existing.model_version = model_version
                     existing.status = status

@@ -34,6 +34,7 @@ from typing import Optional
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     DeletedFileLog,
+    Detection,
     Face,
     Picture,
     PictureProjectMember,
@@ -80,6 +81,18 @@ logger = get_logger(__name__)
 # eligibility queries over the id set). Requests over this cap are rejected
 # rather than silently truncated.
 BATCH_CHARACTER_LIKENESS_MAX_IDS = 1000
+
+# Upper bound on picture_ids per detection request. Each id becomes a unit of
+# GPU work in a single HIGH-priority DetectionTask, so an unbounded list lets a
+# caller enqueue detection over an entire library in one request. Mirrors the
+# batch-likeness cap above (reject over the limit rather than truncate).
+DETECT_MAX_IDS = 1000
+
+# Upper bound on picture_ids per bulk soft-delete request. A scoped token runs one
+# per-id scope DB read, and the delete pass one row fetch per id, so an unbounded
+# list would serialise that much work on the DB queue from a single request.
+# Mirrors the caps above; the frontend chunks larger selections into multiple calls.
+BULK_DELETE_MAX_IDS = 1000
 
 
 class _DetectedFace:
@@ -171,6 +184,28 @@ class FaceDeleteResponse(BaseModel):
 
     status: str
     message: str
+
+
+class PictureDetectionResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    picture_id: Optional[int] = None
+    frame_index: Optional[int] = None
+    detection_index: Optional[int] = None
+    label: Optional[str] = None
+    bbox: Optional[list] = None
+    score: Optional[float] = None
+    source: Optional[str] = None
+
+
+class DetectPicturesResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    task_id: Optional[str] = None
+    picture_ids: list[int] = []
+    prompt: str = ""
 
 
 class PictureCharacterLikenessResponse(BaseModel):
@@ -356,6 +391,15 @@ class PictureDeleteResponse(BaseModel):
 
     status: str
     message: str
+
+
+class BulkPictureDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    # Number of pictures newly soft-deleted by this request (already-deleted or
+    # missing ids are skipped and not counted).
+    deleted_count: int
 
 
 def register_routes(router, server):
@@ -725,6 +769,103 @@ def register_routes(router, server):
             "missing_ids": missing_ids,
             "missing_count": len(missing_ids),
             "reset_triggered": bool(reset_triggered),
+        }
+
+    @router.post(
+        "/pictures/detect",
+        summary="Detect objects in pictures",
+        description=(
+            "Queues a user-triggered Florence-2 object-detection pass over a "
+            "batch of pictures. With an empty `prompt` it runs dense `<OD>` "
+            "detection; with a non-empty `prompt` it runs open-vocabulary "
+            "phrase grounding for that phrase. Detected labelled boxes are "
+            "stored per picture (replacing any previous detections) and "
+            "progress surfaces in the task manager."
+        ),
+        response_model=DetectPicturesResponse,
+    )
+    def detect_pictures(request: Request, payload: dict = Body(...)):
+        # Capture the originating tab's client id so the detection-complete
+        # event is attributed to this user's own action — the SPA suppresses the
+        # "view changed externally" pill for its own origin.
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        raw_ids = payload.get("picture_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        if len(raw_ids) > DETECT_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"picture_ids exceeds the maximum of {DETECT_MAX_IDS} ids per request",
+            )
+        try:
+            picture_ids = sorted(
+                {int(pid) for pid in raw_ids if pid is not None and int(pid) > 0}
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="picture_ids must contain valid positive integers",
+            ) from exc
+        if not picture_ids:
+            raise HTTPException(
+                status_code=400, detail="At least one valid picture id is required"
+            )
+
+        prompt = payload.get("prompt") or ""
+        if not isinstance(prompt, str):
+            prompt = str(prompt)
+        prompt = prompt.strip()
+
+        # Scope guard (BOLA): a scoped token may only run detection on pictures
+        # within its granted resource. None == owner / unscoped == no filter; an
+        # empty/disjoint set denies all (mirrors set_project_for_pictures).
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access these pictures",
+                )
+
+        engine = getattr(server.vault, "_engine", None)
+        if engine is None:
+            raise HTTPException(
+                status_code=503, detail="Inference engine not available."
+            )
+
+        def fetch_pictures(session: Session, ids: list[int]):
+            return session.exec(
+                select(Picture).where(
+                    Picture.id.in_(ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+
+        pics = server.vault.db.run_immediate_read_task(fetch_pictures, picture_ids)
+        if not pics:
+            raise HTTPException(status_code=404, detail="No pictures found")
+
+        from pixlstash.tasks.detection_task import DetectionTask
+
+        task = DetectionTask(
+            server.vault.db,
+            engine,
+            list(pics),
+            prompt=prompt or None,
+            origin_client_id=origin_client_id,
+        )
+        task_id = server.vault.submit_task(task)
+        if task_id is None:
+            raise HTTPException(status_code=503, detail="Task runner not available.")
+
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "picture_ids": [pic.id for pic in pics],
+            "prompt": prompt,
         }
 
     @router.get(
@@ -1740,6 +1881,46 @@ def register_routes(router, server):
         }
 
     @router.get(
+        "/pictures/{id}/detections",
+        summary="Get picture detections",
+        description=(
+            "Returns the stored object-detection bounding boxes for a picture, "
+            "as produced by the Segment action. Boxes are pixel `xyxy` in the "
+            "original picture's coordinate space."
+        ),
+        response_model=list[PictureDetectionResponse],
+    )
+    def get_picture_detections(request: Request, id: str):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid picture id") from exc
+
+        # Object-level access check before any DB read, so the single return
+        # path is uniformly gated. Owner/unscoped sessions have token_scope is
+        # None and pass straight through; a scoped token outside this picture's
+        # grant gets a 403 here (mirrors get_picture / get_picture_field).
+        enforce_picture_scope(server, request, pic_id)
+
+        def fetch_detections(session: Session):
+            return Detection.find(session, picture_id=pic_id)
+
+        rows = server.vault.db.run_immediate_read_task(fetch_detections)
+        return [
+            {
+                "id": det.id,
+                "picture_id": det.picture_id,
+                "frame_index": det.frame_index,
+                "detection_index": det.detection_index,
+                "label": det.label,
+                "bbox": det.bbox,
+                "score": det.score,
+                "source": det.source,
+            }
+            for det in rows
+        ]
+
+    @router.get(
         "/pictures/{id}/{field}",
         include_in_schema=False,
         summary="Get raw picture field",
@@ -2231,3 +2412,81 @@ def register_routes(router, server):
         return JSONResponse(
             content={"status": "success", "message": f"Picture id={id} deleted."}
         )
+
+    @router.delete(
+        "/pictures",
+        summary="Bulk move pictures to scrapheap",
+        description=(
+            "Soft-deletes multiple pictures in one request by marking them deleted "
+            '(they appear in scrapheap views). Body: {"picture_ids": [int, ...]}. '
+            "Single-round-trip replacement for issuing one DELETE /pictures/{id} per "
+            "id, which floods the client connection pool on large selections."
+        ),
+        response_model=BulkPictureDeleteResponse,
+    )
+    def delete_pictures_bulk(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        maybe_ids = payload.get("picture_ids") if isinstance(payload, dict) else None
+        if not isinstance(maybe_ids, list) or not maybe_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        # Cap the id count so one request can't serialise unbounded per-id scope
+        # reads + row fetches on the DB queue (mirrors DETECT_MAX_IDS et al.).
+        if len(maybe_ids) > BULK_DELETE_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"picture_ids exceeds the maximum of {BULK_DELETE_MAX_IDS} "
+                    "ids per request"
+                ),
+            )
+        try:
+            pic_ids = [int(pid) for pid in maybe_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="picture_ids must contain valid integers"
+            )
+
+        # Scope guard (BOLA): enforce per-picture scope on EVERY id BEFORE any write,
+        # mirroring the single-delete guard in delete_picture. enforce_picture_scope
+        # fails closed (returns only for unscoped/owner tokens; 403s anything a scoped
+        # token can't reach), so a single out-of-scope id aborts the whole request and
+        # no partial soft-delete leaks outside the token's resource.
+        for pic_id in pic_ids:
+            enforce_picture_scope(server, request, pic_id)
+
+        def delete_pics(session, ids):
+            newly_deleted: list[int] = []
+            affected_stacks: set = set()
+            for pid in ids:
+                pic = session.get(Picture, pid)
+                if not pic or pic.deleted:
+                    continue
+                pic.deleted = True
+                session.add(pic)
+                # Soft-deleting a stack member must not strand stack_position 0 (the
+                # whole stack would vanish from the grid). Collect the affected stacks
+                # and normalise each once after every selected member is marked deleted,
+                # so a still-live member is promoted to leader.
+                if pic.stack_id is not None:
+                    affected_stacks.add(pic.stack_id)
+                newly_deleted.append(pid)
+            for stack_id in affected_stacks:
+                normalize_stack_positions(session, stack_id)
+            session.commit()
+            return newly_deleted
+
+        deleted_ids = server.vault.db.run_task(delete_pics, pic_ids)
+        # Soft-delete removes the cards from active grid views. Broadcast a single
+        # ``removed`` event so other tabs drop the stale cards in one update.
+        if deleted_ids:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": deleted_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "removed",
+                },
+            )
+        return {"status": "success", "deleted_count": len(deleted_ids)}

@@ -203,7 +203,7 @@ function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
-    minWidth: 900,
+    minWidth: 800,
     minHeight: 600,
     backgroundColor: '#1b1f24',
     icon: APP_ICON,

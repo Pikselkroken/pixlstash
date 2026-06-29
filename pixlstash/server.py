@@ -53,6 +53,12 @@ from pixlstash.routes.comfyui import create_router as create_comfyui_router
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
 )
+from pixlstash.routes.tag_suggestions import (
+    create_router as create_tag_suggestions_router,
+)
+from pixlstash.routes.tagger_runs import (
+    create_router as create_tagger_runs_router,
+)
 from pixlstash.routes.reference_folders import (
     create_router as create_reference_folders_router,
 )
@@ -64,6 +70,7 @@ from pixlstash.routes.guest_scores import create_router as create_guest_scores_r
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
+from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
@@ -2470,6 +2477,16 @@ class Server:
             include_in_schema=False,
         )
         self.api.include_router(
+            create_tag_suggestions_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tag_suggestions"],
+        )
+        self.api.include_router(
+            create_tagger_runs_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tagger_runs"],
+        )
+        self.api.include_router(
             create_pictures_router(self),
             prefix=API_V1_PREFIX,
             tags=["pictures"],
@@ -2509,6 +2526,22 @@ class Server:
             create_share_router(self),
             tags=["share"],
         )
+
+        # E2E-only test hooks. Registered ONLY when ``enable_test_hooks`` is
+        # true (default False) so the route is absent (404), not merely 403, in
+        # production. The only caller that sets the flag is the Playwright e2e
+        # backend launcher (frontend/e2e/serve_e2e_backend.py); production
+        # configs never set it. The endpoint is additionally owner-only.
+        if self._server_config.get("enable_test_hooks", False):
+            logger.warning(
+                "enable_test_hooks=True: registering e2e-only test-hooks router "
+                "(/api/v1/test-hooks/*). This must NEVER be set in production."
+            )
+            self.api.include_router(
+                create_test_hooks_router(self),
+                prefix=API_V1_PREFIX,
+                include_in_schema=False,
+            )
 
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):
