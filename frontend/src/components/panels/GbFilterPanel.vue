@@ -827,6 +827,9 @@ watch(
       gbTagFilterSuggestions.value = [];
     }
   },
+  // The menu mounts this panel lazily already open, so a change-only watch
+  // misses the first true and never loads the ComfyUI model/LoRA options.
+  { immediate: true },
 );
 </script>
 
