@@ -140,7 +140,6 @@ const labelRefs = new Map();
 const labelObservers = new Map();
 
 const dragOverSet = ref(null);
-const dragOverProjectPictures = ref(false);
 
 const peopleSectionCollapsed = ref(false);
 const setsSectionCollapsed = ref(false);
@@ -1465,7 +1464,7 @@ const sidebarFontScale = computed(() => {
 });
 
 // Expanded-sidebar width (drag-resizable). Clamp ≈50%–125% of the 240px default.
-const SIDEBAR_WIDTH_MIN = 120;
+const SIDEBAR_WIDTH_MIN = 140;
 const SIDEBAR_WIDTH_MAX = 300;
 const clampSidebarWidth = (v) =>
   Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(v)));
@@ -3836,41 +3835,7 @@ defineExpose({
           </div>
         </div>
       </div>
-      <button
-        v-if="!props.docked"
-        class="sidebar-pin-toggle sidebar-brand-pin"
-        :class="{ pinned: sidebarStore.sidebarPinned }"
-        type="button"
-        :title="
-          sidebarStore.sidebarPinned
-            ? 'Unpin sidebar (auto-hide)'
-            : 'Pin sidebar open'
-        "
-        @click="sidebarStore.toggleSidebarPinned()"
-      >
-        <v-icon size="15">{{
-          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
-        }}</v-icon>
-      </button>
     </div>
-    <div v-if="props.docked" class="sidebar-dock-header">
-      <button
-        class="sidebar-pin-toggle sidebar-pin-toggle--dock"
-        :class="{ pinned: sidebarStore.sidebarPinned }"
-        type="button"
-        :title="
-          sidebarStore.sidebarPinned
-            ? 'Unpin sidebar (auto-hide)'
-            : 'Pin sidebar open'
-        "
-        @click="sidebarStore.toggleSidebarPinned()"
-      >
-        <v-icon size="18">{{
-          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
-        }}</v-icon>
-      </button>
-    </div>
-    <div v-if="props.docked" class="sidebar-collapsed-divider"></div>
     <div
       v-if="props.docked"
       class="sidebar-collapsed-project-wrap"
@@ -3888,10 +3853,10 @@ defineExpose({
         >
           <v-icon size="20">{{
             sidebarPrimaryTab === "folders"
-              ? "mdi-folder-network-outline"
+              ? "mdi-folder-outline"
               : projectViewMode === "global"
                 ? "mdi-earth"
-                : "mdi-folder-outline"
+                : "mdi-briefcase-outline"
           }}</v-icon>
         </div>
       </div>
@@ -3938,7 +3903,7 @@ defineExpose({
             @mouseenter="openProjectSubMenu('projects', $event)"
             @click.stop="openProjectSubMenu('projects', $event)"
           >
-            <v-icon size="14">mdi-folder-outline</v-icon>
+            <v-icon size="14">mdi-briefcase-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Projects</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
@@ -3955,7 +3920,7 @@ defineExpose({
             @mouseenter="openProjectSubMenu('folders', $event)"
             @click.stop="openProjectSubMenu('folders', $event)"
           >
-            <v-icon size="14">mdi-folder-network-outline</v-icon>
+            <v-icon size="14">mdi-folder-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Folders</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
@@ -4115,7 +4080,7 @@ defineExpose({
             }"
             @click="selectLibraryTab('project')"
           >
-            <v-icon size="14">mdi-folder-outline</v-icon>
+            <v-icon size="14">mdi-briefcase-outline</v-icon>
             <span class="sidebar-view-tab-label">Projects</span>
           </button>
           <button
@@ -4124,29 +4089,11 @@ defineExpose({
             :class="{ active: sidebarPrimaryTab === 'folders' }"
             @click="selectFoldersTab()"
           >
-            <v-icon size="14">mdi-folder-network-outline</v-icon>
+            <v-icon size="14">mdi-folder-outline</v-icon>
             <span class="sidebar-view-tab-label">Folders</span>
           </button>
         </div>
       </div>
-      <!-- Pin lives here (it controls the sidebar). Compact trailing icon button so
-           the three tabs keep the rest of the row and collapse their labels as the
-           sidebar narrows. -->
-      <button
-        class="sidebar-pin-toggle sidebar-tab-pin"
-        :class="{ pinned: sidebarStore.sidebarPinned }"
-        type="button"
-        :title="
-          sidebarStore.sidebarPinned
-            ? 'Unpin sidebar (auto-hide)'
-            : 'Pin sidebar open'
-        "
-        @click="sidebarStore.toggleSidebarPinned()"
-      >
-        <v-icon size="15">{{
-          sidebarStore.sidebarPinned ? "mdi-pin" : "mdi-pin-outline"
-        }}</v-icon>
-      </button>
     </div>
     <div class="sidebar-scroll" ref="dockedScrollRef">
       <template v-if="props.docked">
@@ -6461,76 +6408,6 @@ defineExpose({
   --text-xs: 0.75rem;
 }
 
-/* Pin button at the right edge of the tab row; fixed size so the tabs take the
-   rest of the row. */
-.sidebar-tab-pin {
-  flex: 0 0 auto;
-  align-self: center;
-  margin-left: var(--space-1);
-}
-
-.sidebar-pin-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  cursor: pointer;
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-.sidebar-pin-toggle:hover {
-  background: rgba(var(--v-theme-sidebar-text), 0.1);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-.sidebar-pin-toggle.pinned {
-  color: rgb(var(--v-theme-accent));
-}
-
-/* Dock header: a toolbar-height band so the dock's icons line up below the
-   toolbar, holding the pin toggle as a proper (non-faded) toggle button. */
-.sidebar-dock-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* At least toolbar height (so the icons below line up under the toolbar), but
-     grow to fit the pin when thumbnails are sized larger than that. */
-  height: max(40px, var(--sidebar-thumb-size));
-  flex-shrink: 0;
-}
-.sidebar-pin-toggle--dock {
-  /* Match the docked thumbnail / nav-icon footprint so the rail reads as one
-     uniform column of equally-sized items. */
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
-  border: 1px solid rgba(var(--v-theme-sidebar-text), 0.22);
-  background: rgba(var(--v-theme-sidebar-text), 0.06);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-/* Scale the pin glyph with the box (overrides the inline size="18" on <v-icon>),
-   matching the nav-icon glyphs in the rail below. Slightly less than the nav
-   icons' fill since the pin's border already frames it. */
-.sidebar-pin-toggle--dock .v-icon {
-  font-size: calc(var(--sidebar-thumb-size) * 0.82) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.82) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.82) !important;
-}
-.sidebar-pin-toggle--dock:hover {
-  background: rgba(var(--v-theme-sidebar-text), 0.13);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-.sidebar-pin-toggle--dock.pinned {
-  border-color: rgba(var(--v-theme-accent), 0.7);
-  background: rgba(var(--v-theme-accent), 0.18);
-  color: rgb(var(--v-theme-accent));
-}
-
 .sidebar-view-tabs-row {
   display: flex;
   align-items: stretch;
@@ -7444,17 +7321,6 @@ defineExpose({
   background: transparent;
 }
 
-/* Pin/auto-hide toggle in the browser sidebar's top-right (uses the empty space
-   beside the wordmark; mirrors the desktop title-bar pin). */
-.sidebar-brand-pin {
-  align-self: flex-start;
-  flex-shrink: 0;
-  margin: var(--space-1) var(--space-2) 0 0;
-}
-.sidebar-brand-pin.pinned {
-  color: rgb(var(--v-theme-accent));
-}
-
 .sidebar-brand-left {
   display: flex;
   align-items: center;
@@ -7816,7 +7682,7 @@ defineExpose({
   background: rgba(var(--v-theme-sidebar-text), 0.15);
 }
 
-@media (max-width: 999px) {
+@media (max-width: 849px) {
   .sidebar {
     height: 100%;
   }

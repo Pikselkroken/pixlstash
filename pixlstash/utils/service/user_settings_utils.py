@@ -52,6 +52,7 @@ def serialize_user_config(user) -> dict:
         "show_problem_icon",
         "compact_mode",
         "sidebar_docked",
+        "sidebar_pinned",
         "hide_purge_snapshot_warning",
         "date_format",
         "theme_mode",
@@ -158,6 +159,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "show_problem_icon",
         "compact_mode",
         "sidebar_docked",
+        "sidebar_pinned",
         "hide_purge_snapshot_warning",
         "expand_all_stacks",
         "show_stacks",
@@ -370,6 +372,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.sidebar_docked != new_value:
                 user.sidebar_docked = new_value
+                updated = True
+            continue
+        if key == "sidebar_pinned":
+            # Boolean toggle; pinned-open is the default state, so coerce a
+            # blank/None patch back to True rather than silently unpinning.
+            if value in ("", None, "null"):
+                new_value = True
+            else:
+                new_value = bool(value)
+            if user.sidebar_pinned != new_value:
+                user.sidebar_pinned = new_value
                 updated = True
             continue
         if key == "hide_purge_snapshot_warning":

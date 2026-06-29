@@ -54,6 +54,13 @@ const themeModeModel = computed({
   },
 });
 
+// Bound straight to the sidebar store (like the Sidebar Width toggle above);
+// App.vue watches sidebarStore.sidebarPinned and persists the change.
+const sidebarPinnedModel = computed({
+  get: () => sidebarStore.sidebarPinned,
+  set: (value) => sidebarStore.setSidebarPinned(!!value),
+});
+
 const showKeyboardHintModel = computed({
   get: () => props.showKeyboardHint ?? true,
   set: (value) => {
@@ -150,6 +157,21 @@ async function clearGuestSession() {
           </span>
           <span class="sidebar-width-label">Dock</span>
         </button>
+      </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Sidebar Visibility"
+      desc="Keep the sidebar pinned open, or let it auto-hide and slide in when you hover the edge."
+    >
+      <div class="appearance-switch">
+        <v-switch
+          v-model="sidebarPinnedModel"
+          color="accent"
+          density="compact"
+          hide-details
+          label="Keep sidebar pinned open"
+        />
       </div>
     </SettingsSection>
 
