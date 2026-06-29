@@ -1008,7 +1008,11 @@ watch(
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   overflow: hidden;
-  pointer-events: none;
+  /* Must stay clickable: with pointer-events:none the suggestions can't receive
+     the mousedown, and worse, the dropdown never gets the mousemove that would
+     flip --hover-enabled back on, so the popup is permanently keyboard-only.
+     Clicks then fall through to the control behind the dropdown. */
+  pointer-events: auto;
 }
 
 .gb-tag-filter-dropdown--hover-enabled {
