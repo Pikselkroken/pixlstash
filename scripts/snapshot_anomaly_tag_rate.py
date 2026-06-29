@@ -8,7 +8,7 @@ from pathlib import Path
 PENALIZED_TAGS = [
     "incorrect reflection",
     "fused fingers",
-    "malformed eye",
+    "malformed eyes",
     "bad anatomy",
     "extra digit",
     "missing digit",
