@@ -262,7 +262,7 @@
                     Predicted “{{ current.tag }}”
                   </span>
                   <span class="rf-pane-conf"
-                    >· {{ confText(true, taggedSide.conf) }}</span
+                    >· {{ confText(taggedSide.conf) }}</span
                   >
                 </span>
                 <!-- Heatmap/box toggle: only when there's a region to show for this card.
@@ -374,7 +374,7 @@
                 <span class="rf-pane-pred">
                   <span class="rf-pane-pred-label">Not tagged</span>
                   <span class="rf-pane-conf"
-                    >· {{ confText(false, untaggedSide.conf) }}</span
+                    >· {{ confText(untaggedSide.conf) }}</span
                   >
                 </span>
               </figcaption>
@@ -1017,19 +1017,20 @@ const bannerMeaning = computed(() => {
   return verdict.value?.sub ?? "";
 });
 
-// Compact per-pane confidence phrasing for the pane header. The tagger's raw
-// confidence is P(tag applies); we read it from each pane's own point of view so
-// it's unambiguous: the flagged (left) pane says "X% sure" when the model agrees
-// it has the tag and "X% sure it isn't" when it leans clean. The untagged twin
-// (right) just says "X% sure" — the strength of the prediction, without an "it
-// is"/"it isn't" qualifier that only muddies an already-untagged image.
-function confText(flagged, conf) {
+// Per-pane confidence phrasing for the pane header. The tagger's raw confidence
+// is P(tag applies), read from each pane's own point of view. State the direction
+// explicitly — "X% sure the tag is present" vs "X% sure the tag is not present" —
+// so a bare "X% sure" can never be read the wrong way (a 97%-sure prediction on an
+// untagged image means the model thinks the tag *is* present, the opposite of what
+// "Not tagged · 97% sure" looks like at a glance).
+function confText(conf) {
   if (conf === null || conf === undefined) return "no tagger prediction";
   const pct = Math.round(conf * 100);
-  const sureNot = conf < 0.5;
-  const sure = sureNot ? 100 - pct : pct;
-  if (flagged) return sureNot ? `${sure}% sure it isn’t` : `${sure}% sure`;
-  return `${sure}% sure`;
+  const present = conf >= 0.5;
+  const sure = present ? pct : 100 - pct;
+  return present
+    ? `${sure}% sure the tag is present`
+    : `${sure}% sure the tag is not present`;
 }
 
 // --- Decision dispatch + live consistency guard ----------------------------
