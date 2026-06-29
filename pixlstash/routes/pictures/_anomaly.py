@@ -19,10 +19,9 @@ from typing import Optional
 
 from fastapi import HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import picture_service
 from pixlstash.tagger_plugins.pixlstash_tagger import UnknownAnomalyLabel
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import sanitise_tag
@@ -179,15 +178,7 @@ def register_routes(router, server):
             cache_key[2],
         )
 
-        def fetch_file_path(session: Session):
-            return session.exec(
-                select(Picture.file_path).where(
-                    Picture.id == pic_id,
-                    Picture.deleted.is_(False),
-                )
-            ).first()
-
-        rel_path = server.vault.db.run_immediate_read_task(fetch_file_path)
+        rel_path = picture_service.fetch_picture_file_path(server.vault.db, pic_id)
         if rel_path is None:
             raise HTTPException(status_code=404, detail="Picture not found")
 
