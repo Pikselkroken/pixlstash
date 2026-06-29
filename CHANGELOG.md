@@ -1,3 +1,6 @@
+# [1.6.9]
+- Fix windows electron installer build issue
+
 # [1.6.8]
 - Re-enable ComfyUI-filters after a property watch change caused it to get disabled
 - Restore filter tag pill and section styling
