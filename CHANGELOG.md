@@ -1,3 +1,8 @@
+# [1.6.8]
+- Re-enable ComfyUI-filters after a property watch change caused it to get disabled
+- Restore filter tag pill and section styling
+- Fix filter menu tag suggestions not being clickable
+
 # [1.6.7]
 - Fix the Windows installer build (NSIS) and the macOS desktop signing so the desktop apps build and ship
 
