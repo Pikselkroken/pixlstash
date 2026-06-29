@@ -17,473 +17,525 @@
       </button>
     </div>
 
-    <!-- Shared / Unassigned scope -->
-    <div v-if="!isReadOnly || isAllPicturesView" class="tbm-section">
-      <div class="tbm-check-grid">
-        <label v-if="!isReadOnly" class="tbm-check">
-          <input
-            type="checkbox"
-            :checked="gbSharedOnlyFilter"
-            @change="gbSharedOnlyFilter = $event.target.checked"
-          />
-          Shared pictures only
-        </label>
-        <label v-if="isAllPicturesView" class="tbm-check">
-          <input
-            type="checkbox"
-            :checked="gbUnassignedOnlyFilter"
-            @change="gbUnassignedOnlyFilter = $event.target.checked"
-          />
-          Unassigned only
-        </label>
-      </div>
-    </div>
-
-    <!-- Media -->
-    <div class="tbm-section">
-      <span class="tbm-label">Media</span>
-      <div
-        class="tbm-seg tbm-seg--full"
-        role="group"
-        aria-label="Media type filter"
-      >
-        <button
-          v-for="opt in gbMediaTypeOptions"
-          :key="opt.value"
-          class="tbm-seg-btn"
-          :class="{ 'tbm-seg-btn--on': gbMediaTypeFilter === opt.value }"
-          type="button"
-          :title="opt.title"
-          :aria-pressed="gbMediaTypeFilter === opt.value"
-          @click="gbSetMediaTypeFilter(opt.value)"
-        >
-          <v-icon size="16">{{ opt.icon }}</v-icon>
-          {{ opt.label }}
-        </button>
-      </div>
-    </div>
-
-    <!-- Score range -->
-    <div class="tbm-section">
-      <div class="tbm-grid-2">
-        <div>
-          <span class="tbm-label">Min score</span>
-          <div class="gb-score-stars">
-            <button
-              v-for="n in 5"
-              :key="'min-' + n"
-              class="gb-score-star-btn"
-              type="button"
-              :title="`Set minimum score ${n}`"
-              @click="gbSetMinScore(n)"
-            >
-              <v-icon
-                size="16"
-                :color="
-                  gbMinScoreFilter != null && n <= gbMinScoreFilter
-                    ? 'warning'
-                    : undefined
-                "
-                >{{
-                  gbMinScoreFilter != null && n <= gbMinScoreFilter
-                    ? "mdi-star"
-                    : "mdi-star-outline"
-                }}</v-icon
-              >
-            </button>
-          </div>
-        </div>
-        <div>
-          <span class="tbm-label tbm-label--right">Max score</span>
-          <div class="gb-score-stars gb-score-stars--right">
-            <button
-              v-for="n in 5"
-              :key="'max-' + n"
-              class="gb-score-star-btn"
-              type="button"
-              :title="`Set maximum score ${n}`"
-              @click="gbSetMaxScore(n)"
-            >
-              <v-icon
-                size="16"
-                :color="
-                  gbMaxScoreFilter != null && n <= gbMaxScoreFilter
-                    ? 'warning'
-                    : undefined
-                "
-                >{{
-                  gbMaxScoreFilter != null && n <= gbMaxScoreFilter
-                    ? "mdi-star"
-                    : "mdi-star-outline"
-                }}</v-icon
-              >
-            </button>
-          </div>
+    <!-- Scrollable body so a tall filter set (incl. the ComfyUI models at the
+         bottom) is never clipped off the bottom of the screen. -->
+    <div class="gb-filter-body">
+      <!-- Shared / Unassigned scope -->
+      <div v-if="!isReadOnly || isAllPicturesView" class="tbm-section">
+        <div class="tbm-check-grid">
+          <label v-if="!isReadOnly" class="tbm-check">
+            <input
+              type="checkbox"
+              :checked="gbSharedOnlyFilter"
+              @change="gbSharedOnlyFilter = $event.target.checked"
+            />
+            Shared pictures only
+          </label>
+          <label v-if="isAllPicturesView" class="tbm-check">
+            <input
+              type="checkbox"
+              :checked="gbUnassignedOnlyFilter"
+              @change="gbUnassignedOnlyFilter = $event.target.checked"
+            />
+            Unassigned only
+          </label>
         </div>
       </div>
-    </div>
 
-    <!-- Face -->
-    <div class="tbm-section">
-      <span class="tbm-label">Face</span>
-      <div class="tbm-btngroup" role="group" aria-label="Face filter">
-        <button
-          v-for="opt in gbFaceBboxFilterOptions"
-          :key="String(opt.value)"
-          class="tbm-btn"
-          :class="{ 'tbm-btn--on': gbFaceBboxFilter === opt.value }"
-          type="button"
-          :title="opt.title"
-          :aria-pressed="gbFaceBboxFilter === opt.value"
-          @click="gbSetFaceBboxFilter(opt.value)"
-        >
-          <v-icon size="16">{{ opt.icon }}</v-icon>
-          {{ opt.label }}
-        </button>
-      </div>
-    </div>
-
-    <!-- Impossible tags -->
-    <div class="tbm-section">
-      <span class="tbm-label">Impossible tags</span>
-      <div
-        class="tbm-check-grid"
-        role="group"
-        aria-label="Impossible tags filter"
-      >
-        <label
-          v-for="opt in gbImpossibleSourceOptions"
-          :key="opt.value"
-          class="tbm-check"
-          :title="opt.tip"
-        >
-          <input
-            type="checkbox"
-            :checked="gbImpossibleSources.includes(opt.value)"
-            @change="gbToggleImpossibleSource(opt.value, $event.target.checked)"
-          />
-          {{ opt.label }}
-        </label>
-      </div>
-    </div>
-
-    <!-- Tags -->
-    <div class="tbm-section">
-      <div class="gb-section-head">
-        <span class="tbm-label gb-label-inline">Tags</span>
-        <button
-          class="tbm-ghost"
-          type="button"
-          :disabled="!gbTagFilter.length && !gbTagRejectedFilter.length"
-          @click="
-            gbTagFilter = [];
-            gbTagRejectedFilter = [];
-          "
-        >
-          Clear
-        </button>
-      </div>
-      <div class="tbm-input-wrap gb-tags-input">
-        <v-icon size="16" class="tbm-input-icon">mdi-magnify</v-icon>
-        <input
-          v-model="gbTagFilterInput"
-          class="tbm-input tbm-input--with-icon"
-          placeholder="Filter by tag…"
-          autocomplete="off"
-          @keydown.enter.prevent="
-            gbTagFilterIndex >= 0 && gbTagFilterSuggestions.length
-              ? gbAddTagFilter(gbTagFilterSuggestions[gbTagFilterIndex])
-              : gbAddTagFilter(gbTagFilterInput.trim())
-          "
-          @keydown.tab.prevent="
-            gbTagFilterSuggestions.length
-              ? gbAddTagFilter(
-                  gbTagFilterSuggestions[
-                    gbTagFilterIndex >= 0 ? gbTagFilterIndex : 0
-                  ],
-                )
-              : gbAddTagFilter(gbTagFilterInput.trim())
-          "
-          @keydown.down.prevent="
-            gbTagFilterIndex = Math.min(
-              gbTagFilterIndex + 1,
-              gbTagFilterSuggestions.length - 1,
-            )
-          "
-          @keydown.up.prevent="
-            gbTagFilterIndex = Math.max(gbTagFilterIndex - 1, -1)
-          "
-          @keydown.escape.prevent="gbTagFilterSuggestions = []"
-        />
-        <div
-          v-if="gbTagFilterSuggestions.length"
-          class="gb-tag-filter-dropdown"
-          :class="{
-            'gb-tag-filter-dropdown--hover-enabled': gbTagFilterHoverEnabled,
-          }"
-          @mousemove.once="gbTagFilterHoverEnabled = true"
-        >
-          <button
-            v-for="(tag, idx) in gbTagFilterSuggestions"
-            :key="tag"
-            class="gb-tag-filter-suggestion"
-            :class="{
-              'gb-tag-filter-suggestion--active': idx === gbTagFilterIndex,
-            }"
-            type="button"
-            @mousedown.prevent="gbAddTagFilter(tag)"
-            @mousemove="gbTagFilterIndex = idx"
+      <!-- Media + Face — icon-only on one row; labels move to tooltips/aria. -->
+      <div class="tbm-section">
+        <div class="gb-media-face-row">
+          <div
+            class="tbm-seg gb-icon-group"
+            role="group"
+            aria-label="Media type filter"
           >
-            {{ tag }}
+            <button
+              v-for="opt in gbMediaTypeOptions"
+              :key="opt.value"
+              class="tbm-seg-btn gb-icon-btn"
+              :class="{ 'tbm-seg-btn--on': gbMediaTypeFilter === opt.value }"
+              type="button"
+              :title="opt.title"
+              :aria-label="opt.label"
+              :aria-pressed="gbMediaTypeFilter === opt.value"
+              @click="gbSetMediaTypeFilter(opt.value)"
+            >
+              <v-icon size="16">{{ opt.icon }}</v-icon>
+            </button>
+          </div>
+          <div
+            class="tbm-btngroup gb-icon-group"
+            role="group"
+            aria-label="Face filter"
+          >
+            <button
+              v-for="opt in gbFaceBboxFilterOptions"
+              :key="String(opt.value)"
+              class="tbm-btn gb-icon-btn"
+              :class="{ 'tbm-btn--on': gbFaceBboxFilter === opt.value }"
+              type="button"
+              :title="opt.title"
+              :aria-label="opt.label"
+              :aria-pressed="gbFaceBboxFilter === opt.value"
+              @click="gbSetFaceBboxFilter(opt.value)"
+            >
+              <v-icon size="16">{{ opt.icon }}</v-icon>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Score range -->
+      <div class="tbm-section">
+        <div class="tbm-grid-2">
+          <div>
+            <span class="tbm-label">Min score</span>
+            <div class="gb-score-stars">
+              <button
+                v-for="n in 5"
+                :key="'min-' + n"
+                class="gb-score-star-btn"
+                type="button"
+                :title="`Set minimum score ${n}`"
+                @click="gbSetMinScore(n)"
+              >
+                <v-icon
+                  size="16"
+                  :color="
+                    gbMinScoreFilter != null && n <= gbMinScoreFilter
+                      ? 'warning'
+                      : undefined
+                  "
+                  >{{
+                    gbMinScoreFilter != null && n <= gbMinScoreFilter
+                      ? "mdi-star"
+                      : "mdi-star-outline"
+                  }}</v-icon
+                >
+              </button>
+            </div>
+          </div>
+          <div>
+            <span class="tbm-label tbm-label--right">Max score</span>
+            <div class="gb-score-stars gb-score-stars--right">
+              <button
+                v-for="n in 5"
+                :key="'max-' + n"
+                class="gb-score-star-btn"
+                type="button"
+                :title="`Set maximum score ${n}`"
+                @click="gbSetMaxScore(n)"
+              >
+                <v-icon
+                  size="16"
+                  :color="
+                    gbMaxScoreFilter != null && n <= gbMaxScoreFilter
+                      ? 'warning'
+                      : undefined
+                  "
+                  >{{
+                    gbMaxScoreFilter != null && n <= gbMaxScoreFilter
+                      ? "mdi-star"
+                      : "mdi-star-outline"
+                  }}</v-icon
+                >
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Impossible tags (collapsible) -->
+      <div class="tbm-section">
+        <div
+          class="gb-section-head gb-collapse-head"
+          @click="gbImpossibleExpanded = !gbImpossibleExpanded"
+        >
+          <span class="tbm-label gb-label-inline">
+            Impossible tags
+            <span v-if="gbImpossibleSources.length" class="gb-collapse-count">{{
+              gbImpossibleSources.length
+            }}</span>
+          </span>
+          <v-icon size="16" class="gb-collapse-chevron">{{
+            gbImpossibleExpanded ? "mdi-chevron-up" : "mdi-chevron-down"
+          }}</v-icon>
+        </div>
+        <div
+          v-if="gbImpossibleExpanded"
+          class="tbm-check-grid"
+          role="group"
+          aria-label="Impossible tags filter"
+        >
+          <label
+            v-for="opt in gbImpossibleSourceOptions"
+            :key="opt.value"
+            class="tbm-check"
+            :title="opt.tip"
+          >
+            <input
+              type="checkbox"
+              :checked="gbImpossibleSources.includes(opt.value)"
+              @change="
+                gbToggleImpossibleSource(opt.value, $event.target.checked)
+              "
+            />
+            {{ opt.label }}
+          </label>
+        </div>
+      </div>
+
+      <!-- Tags -->
+      <div class="tbm-section">
+        <div class="gb-section-head">
+          <span class="tbm-label gb-label-inline">Tags</span>
+          <button
+            class="tbm-ghost"
+            type="button"
+            :disabled="!gbTagFilter.length && !gbTagRejectedFilter.length"
+            @click="
+              gbTagFilter = [];
+              gbTagRejectedFilter = [];
+            "
+          >
+            Clear
           </button>
         </div>
-      </div>
-      <div
-        v-if="gbTagFilter.length || gbTagRejectedFilter.length"
-        class="gb-tag-chips"
-      >
-        <button
-          v-for="tag in gbTagFilter"
-          :key="`confirmed-${tag}`"
-          class="tag-chip tag-chip--filter"
-          type="button"
-          :title="`'${tag}' – click to switch to rejected match`"
-          @click.stop="gbToggleTagRejected(tag)"
-        >
-          <span class="tag-chip-label">{{ tag }}</span>
-          <v-icon
-            size="11"
-            class="tag-chip-close"
-            @click.stop="gbRemoveTagFilter(tag)"
-            >mdi-close</v-icon
-          >
-        </button>
-        <button
-          v-for="tag in gbTagRejectedFilter"
-          :key="`rejected-${tag}`"
-          class="tag-chip tag-chip--filter tag-chip--filter-rejected"
-          type="button"
-          :title="`'${tag}' (rejected) – click to switch to confirmed match`"
-          @click.stop="gbToggleTagRejected(tag)"
-        >
-          <span class="tag-chip-label">{{ tag }}</span>
-          <v-icon
-            size="11"
-            class="tag-chip-close"
-            @click.stop="gbRemoveTagFilter(tag)"
-            >mdi-close</v-icon
-          >
-        </button>
-      </div>
-    </div>
-
-    <!-- Tag confidence -->
-    <div class="tbm-section">
-      <span class="tbm-label">Tag confidence</span>
-      <div class="gb-confidence-row">
-        <div class="tbm-input-wrap gb-confidence-tag-wrap">
+        <div class="tbm-input-wrap gb-tags-input">
+          <v-icon size="16" class="tbm-input-icon">mdi-magnify</v-icon>
           <input
-            v-model="gbConfidenceTagInput"
-            class="tbm-input"
-            placeholder="Tag…"
+            v-model="gbTagFilterInput"
+            class="tbm-input tbm-input--with-icon"
+            placeholder="Filter by tag…"
             autocomplete="off"
             @keydown.enter.prevent="
-              gbConfidenceTagIndex >= 0 && gbConfidenceTagSuggestions.length
-                ? gbSelectConfidenceTagSuggestion(
-                    gbConfidenceTagSuggestions[gbConfidenceTagIndex],
-                  )
-                : gbAddConfidenceFilter(gbConfidenceTagInput.trim())
+              gbTagFilterIndex >= 0 && gbTagFilterSuggestions.length
+                ? gbAddTagFilter(gbTagFilterSuggestions[gbTagFilterIndex])
+                : gbAddTagFilter(gbTagFilterInput.trim())
             "
             @keydown.tab.prevent="
-              gbConfidenceTagSuggestions.length
-                ? gbSelectConfidenceTagSuggestion(
-                    gbConfidenceTagSuggestions[
-                      gbConfidenceTagIndex >= 0 ? gbConfidenceTagIndex : 0
+              gbTagFilterSuggestions.length
+                ? gbAddTagFilter(
+                    gbTagFilterSuggestions[
+                      gbTagFilterIndex >= 0 ? gbTagFilterIndex : 0
                     ],
                   )
-                : undefined
+                : gbAddTagFilter(gbTagFilterInput.trim())
             "
             @keydown.down.prevent="
-              gbConfidenceTagIndex = Math.min(
-                gbConfidenceTagIndex + 1,
-                gbConfidenceTagSuggestions.length - 1,
+              gbTagFilterIndex = Math.min(
+                gbTagFilterIndex + 1,
+                gbTagFilterSuggestions.length - 1,
               )
             "
             @keydown.up.prevent="
-              gbConfidenceTagIndex = Math.max(gbConfidenceTagIndex - 1, -1)
+              gbTagFilterIndex = Math.max(gbTagFilterIndex - 1, -1)
             "
-            @keydown.escape.prevent="gbConfidenceTagSuggestions = []"
+            @keydown.escape.prevent="gbTagFilterSuggestions = []"
           />
           <div
-            v-if="gbConfidenceTagSuggestions.length"
+            v-if="gbTagFilterSuggestions.length"
             class="gb-tag-filter-dropdown"
             :class="{
-              'gb-tag-filter-dropdown--hover-enabled':
-                gbConfidenceTagHoverEnabled,
+              'gb-tag-filter-dropdown--hover-enabled': gbTagFilterHoverEnabled,
             }"
-            @mousemove.once="gbConfidenceTagHoverEnabled = true"
+            @mousemove.once="gbTagFilterHoverEnabled = true"
           >
             <button
-              v-for="(tag, idx) in gbConfidenceTagSuggestions"
+              v-for="(tag, idx) in gbTagFilterSuggestions"
               :key="tag"
               class="gb-tag-filter-suggestion"
               :class="{
-                'gb-tag-filter-suggestion--active':
-                  idx === gbConfidenceTagIndex,
+                'gb-tag-filter-suggestion--active': idx === gbTagFilterIndex,
               }"
               type="button"
-              @mousedown.prevent="gbSelectConfidenceTagSuggestion(tag)"
-              @mousemove="gbConfidenceTagIndex = idx"
+              @mousedown.prevent="gbAddTagFilter(tag)"
+              @mousemove="gbTagFilterIndex = idx"
             >
               {{ tag }}
             </button>
           </div>
         </div>
-        <div class="tbm-seg" role="group" aria-label="Confidence comparison">
+        <div
+          v-if="gbTagFilter.length || gbTagRejectedFilter.length"
+          class="gb-tag-chips"
+        >
           <button
-            class="tbm-seg-btn"
-            :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'above' }"
+            v-for="tag in gbTagFilter"
+            :key="`confirmed-${tag}`"
+            class="tag-chip tag-chip--filter"
             type="button"
-            title="High confidence, not labelled"
-            @click="gbConfidenceMode = 'above'"
+            :title="`'${tag}' – click to switch to rejected match`"
+            @click.stop="gbToggleTagRejected(tag)"
           >
-            ≥
+            <span class="tag-chip-label">{{ tag }}</span>
+            <v-icon
+              size="11"
+              class="tag-chip-close"
+              @click.stop="gbRemoveTagFilter(tag)"
+              >mdi-close</v-icon
+            >
           </button>
           <button
-            class="tbm-seg-btn"
-            :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'below' }"
+            v-for="tag in gbTagRejectedFilter"
+            :key="`rejected-${tag}`"
+            class="tag-chip tag-chip--filter tag-chip--filter-rejected"
             type="button"
-            title="Low confidence, labelled"
-            @click="gbConfidenceMode = 'below'"
+            :title="`'${tag}' (rejected) – click to switch to confirmed match`"
+            @click.stop="gbToggleTagRejected(tag)"
           >
-            &lt;
+            <span class="tag-chip-label">{{ tag }}</span>
+            <v-icon
+              size="11"
+              class="tag-chip-close"
+              @click.stop="gbRemoveTagFilter(tag)"
+              >mdi-close</v-icon
+            >
           </button>
         </div>
-        <input
-          v-model.number="gbConfidenceThreshold"
-          type="number"
-          min="0"
-          max="1"
-          step="0.05"
-          class="tbm-num"
-        />
-        <button
-          class="tbm-action tbm-action--primary"
-          type="button"
-          :disabled="!gbConfidenceTagInput.trim()"
-          @click="gbAddConfidenceFilter()"
-        >
-          <v-icon size="15">mdi-plus</v-icon>
-          Add
-        </button>
       </div>
-      <div
-        v-if="
-          gbTagConfidenceAboveFilter.length || gbTagConfidenceBelowFilter.length
-        "
-        class="gb-tag-chips gb-confidence-chips"
-      >
-        <button
-          v-for="entry in gbTagConfidenceAboveFilter"
-          :key="`ca-${entry}`"
-          class="tag-chip tag-chip--filter tag-chip--confidence-above"
-          type="button"
-          :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
-        >
-          <span class="tag-chip-label"
-            >≥{{ gbConfidenceEntryLabel(entry) }}</span
-          >
-          <v-icon
-            size="11"
-            class="tag-chip-close"
-            @click.stop="gbRemoveConfidenceAboveFilter(entry)"
-            >mdi-close</v-icon
-          >
-        </button>
-        <button
-          v-for="entry in gbTagConfidenceBelowFilter"
-          :key="`cb-${entry}`"
-          class="tag-chip tag-chip--filter tag-chip--confidence-below"
-          type="button"
-          :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
-        >
-          <span class="tag-chip-label"
-            >&lt;{{ gbConfidenceEntryLabel(entry) }}</span
-          >
-          <v-icon
-            size="11"
-            class="tag-chip-close"
-            @click.stop="gbRemoveConfidenceBelowFilter(entry)"
-            >mdi-close</v-icon
-          >
-        </button>
-      </div>
-    </div>
 
-    <!-- ComfyUI -->
-    <div
-      v-if="gbComfyuiModelOptions.length || gbComfyuiLoraOptions.length"
-      class="tbm-section"
-    >
-      <div
-        class="gb-section-head gb-comfyui-section-header"
-        @click="gbComfyuiFilterExpanded = !gbComfyuiFilterExpanded"
-      >
-        <span class="tbm-label gb-label-inline">ComfyUI</span>
-        <v-icon size="16" class="gb-comfyui-chevron">{{
-          gbComfyuiFilterExpanded ? "mdi-chevron-up" : "mdi-chevron-down"
-        }}</v-icon>
+      <!-- Tag confidence (collapsible) -->
+      <div class="tbm-section">
+        <div
+          class="gb-section-head gb-collapse-head"
+          @click="gbConfidenceExpanded = !gbConfidenceExpanded"
+        >
+          <span class="tbm-label gb-label-inline">
+            Tag confidence
+            <span v-if="gbConfidenceActiveCount" class="gb-collapse-count">{{
+              gbConfidenceActiveCount
+            }}</span>
+          </span>
+          <v-icon size="16" class="gb-collapse-chevron">{{
+            gbConfidenceExpanded ? "mdi-chevron-up" : "mdi-chevron-down"
+          }}</v-icon>
+        </div>
+        <template v-if="gbConfidenceExpanded">
+          <div class="gb-confidence-row">
+            <div class="tbm-input-wrap gb-confidence-tag-wrap">
+              <input
+                v-model="gbConfidenceTagInput"
+                class="tbm-input"
+                placeholder="Tag…"
+                autocomplete="off"
+                @keydown.enter.prevent="
+                  gbConfidenceTagIndex >= 0 && gbConfidenceTagSuggestions.length
+                    ? gbSelectConfidenceTagSuggestion(
+                        gbConfidenceTagSuggestions[gbConfidenceTagIndex],
+                      )
+                    : gbAddConfidenceFilter(gbConfidenceTagInput.trim())
+                "
+                @keydown.tab.prevent="
+                  gbConfidenceTagSuggestions.length
+                    ? gbSelectConfidenceTagSuggestion(
+                        gbConfidenceTagSuggestions[
+                          gbConfidenceTagIndex >= 0 ? gbConfidenceTagIndex : 0
+                        ],
+                      )
+                    : undefined
+                "
+                @keydown.down.prevent="
+                  gbConfidenceTagIndex = Math.min(
+                    gbConfidenceTagIndex + 1,
+                    gbConfidenceTagSuggestions.length - 1,
+                  )
+                "
+                @keydown.up.prevent="
+                  gbConfidenceTagIndex = Math.max(gbConfidenceTagIndex - 1, -1)
+                "
+                @keydown.escape.prevent="gbConfidenceTagSuggestions = []"
+              />
+              <div
+                v-if="gbConfidenceTagSuggestions.length"
+                class="gb-tag-filter-dropdown"
+                :class="{
+                  'gb-tag-filter-dropdown--hover-enabled':
+                    gbConfidenceTagHoverEnabled,
+                }"
+                @mousemove.once="gbConfidenceTagHoverEnabled = true"
+              >
+                <button
+                  v-for="(tag, idx) in gbConfidenceTagSuggestions"
+                  :key="tag"
+                  class="gb-tag-filter-suggestion"
+                  :class="{
+                    'gb-tag-filter-suggestion--active':
+                      idx === gbConfidenceTagIndex,
+                  }"
+                  type="button"
+                  @mousedown.prevent="gbSelectConfidenceTagSuggestion(tag)"
+                  @mousemove="gbConfidenceTagIndex = idx"
+                >
+                  {{ tag }}
+                </button>
+              </div>
+            </div>
+            <div
+              class="tbm-seg"
+              role="group"
+              aria-label="Confidence comparison"
+            >
+              <button
+                class="tbm-seg-btn"
+                :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'above' }"
+                type="button"
+                title="High confidence, not labelled"
+                @click="gbConfidenceMode = 'above'"
+              >
+                ≥
+              </button>
+              <button
+                class="tbm-seg-btn"
+                :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'below' }"
+                type="button"
+                title="Low confidence, labelled"
+                @click="gbConfidenceMode = 'below'"
+              >
+                &lt;
+              </button>
+            </div>
+            <input
+              v-model.number="gbConfidenceThreshold"
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              class="tbm-num"
+            />
+            <button
+              class="tbm-action tbm-action--primary"
+              type="button"
+              :disabled="!gbConfidenceTagInput.trim()"
+              @click="gbAddConfidenceFilter()"
+            >
+              <v-icon size="15">mdi-plus</v-icon>
+              Add
+            </button>
+          </div>
+          <div
+            v-if="
+              gbTagConfidenceAboveFilter.length ||
+              gbTagConfidenceBelowFilter.length
+            "
+            class="gb-tag-chips gb-confidence-chips"
+          >
+            <button
+              v-for="entry in gbTagConfidenceAboveFilter"
+              :key="`ca-${entry}`"
+              class="tag-chip tag-chip--filter tag-chip--confidence-above"
+              type="button"
+              :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
+            >
+              <span class="tag-chip-label"
+                >≥{{ gbConfidenceEntryLabel(entry) }}</span
+              >
+              <v-icon
+                size="11"
+                class="tag-chip-close"
+                @click.stop="gbRemoveConfidenceAboveFilter(entry)"
+                >mdi-close</v-icon
+              >
+            </button>
+            <button
+              v-for="entry in gbTagConfidenceBelowFilter"
+              :key="`cb-${entry}`"
+              class="tag-chip tag-chip--filter tag-chip--confidence-below"
+              type="button"
+              :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
+            >
+              <span class="tag-chip-label"
+                >&lt;{{ gbConfidenceEntryLabel(entry) }}</span
+              >
+              <v-icon
+                size="11"
+                class="tag-chip-close"
+                @click.stop="gbRemoveConfidenceBelowFilter(entry)"
+                >mdi-close</v-icon
+              >
+            </button>
+          </div>
+        </template>
       </div>
-      <template v-if="gbComfyuiModelOptions.length && gbComfyuiFilterExpanded">
-        <div class="gb-comfy-list-head">
-          <span>Models</span>
-          <button
-            v-if="gbComfyuiModelFilter.length"
-            class="tbm-ghost"
-            type="button"
-            @click="gbComfyuiModelFilter = []"
-          >
-            Clear
-          </button>
+
+      <!-- ComfyUI -->
+      <div
+        v-if="gbComfyuiModelOptions.length || gbComfyuiLoraOptions.length"
+        class="tbm-section"
+      >
+        <div
+          class="gb-section-head gb-comfyui-section-header"
+          @click="gbComfyuiFilterExpanded = !gbComfyuiFilterExpanded"
+        >
+          <span class="tbm-label gb-label-inline">ComfyUI</span>
+          <v-icon size="16" class="gb-comfyui-chevron">{{
+            gbComfyuiFilterExpanded ? "mdi-chevron-up" : "mdi-chevron-down"
+          }}</v-icon>
         </div>
-        <div class="gb-comfy-list">
-          <v-checkbox
-            v-for="m in gbComfyuiModelOptions"
-            :key="m"
-            v-model="gbComfyuiModelFilter"
-            :value="m"
-            :label="m.replace(/\.[^/.]+$/, '')"
-            density="compact"
-            hide-details
-            color="primary"
-          />
-        </div>
-      </template>
-      <template v-if="gbComfyuiLoraOptions.length && gbComfyuiFilterExpanded">
-        <div class="gb-comfy-list-head">
-          <span>LoRAs</span>
-          <button
-            v-if="gbComfyuiLoraFilter.length"
-            class="tbm-ghost"
-            type="button"
-            @click="gbComfyuiLoraFilter = []"
-          >
-            Clear
-          </button>
-        </div>
-        <div class="gb-comfy-list">
-          <v-checkbox
-            v-for="l in gbComfyuiLoraOptions"
-            :key="l"
-            v-model="gbComfyuiLoraFilter"
-            :value="l"
-            :label="l.replace(/\.[^/.]+$/, '')"
-            density="compact"
-            hide-details
-            color="primary"
-          />
-        </div>
-      </template>
+        <template
+          v-if="gbComfyuiModelOptions.length && gbComfyuiFilterExpanded"
+        >
+          <div class="gb-comfy-list-head">
+            <span class="tbm-label gb-label-inline">Models</span>
+            <button
+              v-if="gbComfyuiModelFilter.length"
+              class="tbm-ghost"
+              type="button"
+              @click="gbComfyuiModelFilter = []"
+            >
+              Clear
+            </button>
+          </div>
+          <div class="gb-comfy-list">
+            <label
+              v-for="m in gbComfyuiModelOptions"
+              :key="m"
+              class="tbm-check gb-comfy-check"
+              :title="m"
+            >
+              <input
+                type="checkbox"
+                :checked="gbComfyuiModelFilter.includes(m)"
+                @change="gbToggleComfyui('model', m, $event.target.checked)"
+              />
+              <span class="gb-comfy-check-label">{{
+                m.replace(/\.[^/.]+$/, "")
+              }}</span>
+            </label>
+          </div>
+        </template>
+        <template v-if="gbComfyuiLoraOptions.length && gbComfyuiFilterExpanded">
+          <div class="gb-comfy-list-head">
+            <span class="tbm-label gb-label-inline">LoRAs</span>
+            <button
+              v-if="gbComfyuiLoraFilter.length"
+              class="tbm-ghost"
+              type="button"
+              @click="gbComfyuiLoraFilter = []"
+            >
+              Clear
+            </button>
+          </div>
+          <div class="gb-comfy-list">
+            <label
+              v-for="l in gbComfyuiLoraOptions"
+              :key="l"
+              class="tbm-check gb-comfy-check"
+              :title="l"
+            >
+              <input
+                type="checkbox"
+                :checked="gbComfyuiLoraFilter.includes(l)"
+                @change="gbToggleComfyui('lora', l, $event.target.checked)"
+              />
+              <span class="gb-comfy-check-label">{{
+                l.replace(/\.[^/.]+$/, "")
+              }}</span>
+            </label>
+          </div>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -610,6 +662,16 @@ const gbImpossibleSourceOptions = [
     tip: "Tagged 'no humans'/'scenery' but has people tags, no face",
   },
 ];
+
+function gbToggleComfyui(kind, value, checked) {
+  const target = kind === "model" ? gbComfyuiModelFilter : gbComfyuiLoraFilter;
+  const current = Array.isArray(target.value) ? target.value : [];
+  if (checked) {
+    if (!current.includes(value)) target.value = [...current, value];
+  } else {
+    target.value = current.filter((v) => v !== value);
+  }
+}
 
 function gbToggleImpossibleSource(value, checked) {
   const current = Array.isArray(gbImpossibleSources.value)
@@ -849,6 +911,16 @@ const gbComfyuiModelOptions = ref([]);
 const gbComfyuiLoraOptions = ref([]);
 const gbComfyuiFilterExpanded = ref(false);
 
+// Collapsible sections (default collapsed to keep the panel short). The active
+// count on the header keeps an in-use filter discoverable while collapsed.
+const gbImpossibleExpanded = ref(false);
+const gbConfidenceExpanded = ref(false);
+const gbConfidenceActiveCount = computed(
+  () =>
+    gbTagConfidenceAboveFilter.value.length +
+    gbTagConfidenceBelowFilter.value.length,
+);
+
 watch(
   () => props.open,
   async (isOpen) => {
@@ -881,6 +953,10 @@ watch(
       gbTagFilterSuggestions.value = [];
     }
   },
+  // immediate: the menu mounts this panel lazily *already open*, so a plain
+  // (change-only) watch would miss that first true and never load the ComfyUI
+  // model/LoRA options — which is why the models filter wasn't showing.
+  { immediate: true },
 );
 </script>
 
@@ -888,6 +964,15 @@ watch(
 .gb-filter-panel {
   width: 376px;
   max-width: 94vw;
+  /* Cap the panel and scroll its body so the lower sections (ComfyUI models)
+     stay reachable instead of being clipped off the bottom of the viewport. */
+  display: flex;
+  flex-direction: column;
+  max-height: min(80vh, 760px);
+}
+.gb-filter-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* Inline label that sits on a header row with a trailing action. */
@@ -899,6 +984,45 @@ watch(
 }
 .gb-label-inline {
   margin-bottom: 0;
+}
+
+/* ── Media + Face: two icon-only groups sharing one row ───────────────────── */
+.gb-media-face-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.gb-media-face-row .gb-icon-group {
+  flex: 1;
+}
+.gb-icon-btn {
+  /* Icon-only — drop the label's horizontal padding so the glyph centres. */
+  padding: 0;
+  min-height: 32px;
+}
+
+/* ── Collapsible section header (Tag confidence, Impossible tags) ──────────── */
+.gb-collapse-head {
+  cursor: pointer;
+}
+.gb-collapse-head .gb-label-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.gb-collapse-chevron {
+  opacity: 0.6;
+}
+.gb-collapse-count {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-primary));
+  background: rgb(var(--v-theme-primary));
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  min-width: 16px;
+  text-align: center;
+  line-height: 16px;
 }
 
 /* ── Score stars ──────────────────────────────────────────────────────────── */
@@ -1077,13 +1201,17 @@ watch(
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--space-2);
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-panel));
+}
+/* Sub-labels under the ComfyUI section: a notch smaller (75%) than the section
+   labels so "Models"/"LoRAs" read as a level below "ComfyUI". Derived from the
+   ramp floor rather than a raw px so it still tracks the token. */
+.gb-comfy-list-head .tbm-label {
+  font-size: calc(var(--text-2xs) * 0.75);
 }
 
 .gb-comfy-list {
   width: 100%;
-  max-height: 200px;
+  max-height: 180px;
   overflow-y: auto;
   margin-bottom: var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
@@ -1094,5 +1222,18 @@ watch(
 }
 .gb-comfy-list:last-child {
   margin-bottom: 0;
+}
+/* One compact full-width row per model/LoRA — matches the menu's .tbm-check
+   density instead of Vuetify's chunky checkbox rows. */
+.gb-comfy-check {
+  display: flex;
+  width: 100%;
+  padding: var(--space-1) var(--space-1);
+}
+.gb-comfy-check-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 </style>
