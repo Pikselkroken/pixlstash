@@ -157,7 +157,7 @@ body {
   background-color: transparent !important;
 }
 
-@media (min-width: 1000px) {
+@media (min-width: 850px) {
   /* Hide the in-flow sidebar when closed — but not the auto-hide overlay, which
      stays in the DOM (off-screen) so it can slide in. */
   .sidebar-shell:not(.open):not(.sidebar-overlay) {
@@ -176,11 +176,28 @@ body {
   bottom: 0;
   z-index: 150;
   transform: translateX(-100%);
-  transition: transform 0.2s ease;
+  /* Clearly-visible slide for the auto-show/auto-hide drawer; the shadow grows in
+     alongside it so the reveal reads as depth, not just a jump. */
+  transition:
+    transform var(--dur-2) var(--ease-decelerate),
+    box-shadow var(--dur-2) var(--ease-decelerate);
 }
 .sidebar-shell.sidebar-overlay.open {
   transform: translateX(0);
   box-shadow: var(--elevation-4);
+}
+/* Reduced-motion exception. The global reset in design-tokens.css forces every
+   CSS transition-duration to ~0 under prefers-reduced-motion, which snaps this
+   slide. Keep it: the auto-hide slide is *communicative* (it shows the panel
+   entering/leaving from the screen edge it lives on), not decoration — the kind
+   of motion the reduced-motion guidance says you may preserve. Class specificity
+   (0,2,0) beats the universal `*` reset (0,0,0) even though both are !important.
+   The transform/box-shadow properties + easing come from the rule above; we only
+   need to restore the duration the reset zeroed out. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell.sidebar-overlay {
+    transition-duration: var(--dur-2) !important;
+  }
 }
 /* Visible "there's a sidebar here" band shown while the sidebar is auto-hidden;
    hovering (or tapping) it reveals the sidebar. A centered handle with an expand
@@ -188,7 +205,7 @@ body {
 .sidebar-hover-trigger {
   position: fixed;
   left: 0;
-  top: calc(var(--titlebar-h, 0px) + 48px);
+  top: calc(var(--titlebar-h, 0px) + 36px);
   bottom: 0;
   width: 8px;
   z-index: 140;
@@ -224,27 +241,10 @@ body {
   color: rgb(var(--v-theme-on-accent));
 }
 
-@media (max-width: 999px) {
-  .sidebar-shell {
-    position: fixed;
-    left: 0;
-    top: calc(var(--titlebar-h, 0px) + 48px);
-    bottom: 0;
-    z-index: 150;
-    transform: translateX(-100%);
-    transition: transform 0.3s ease;
-  }
-
-  .sidebar-shell.open {
-    transform: translateX(0);
-  }
-}
-
-@media (max-width: 999px) and (hover: none) and (pointer: coarse) {
-  .sidebar-shell {
-    top: calc(var(--titlebar-h, 0px) + 56px);
-  }
-}
+/* Narrow widths reuse the same auto-hide overlay as the unpinned sidebar (the
+   store forces it below the breakpoint), so there is no separate mobile-drawer
+   layout that offsets the sidebar downward — it is always either pinned in-flow
+   or the .sidebar-overlay slide-in above. */
 
 /* Tiny5 — the brand wordmark pixel font (logo). */
 @font-face {

@@ -1797,7 +1797,7 @@ function handleResolutionBarClick(label) {
   .stats-sidebar {
     position: fixed;
     right: 0;
-    top: calc(var(--titlebar-h, 0px) + 48px);
+    top: calc(var(--titlebar-h, 0px) + 36px);
     bottom: 0;
     height: auto;
     z-index: 150;
@@ -1882,7 +1882,10 @@ function handleResolutionBarClick(label) {
   display: flex;
   flex-direction: column;
   margin-bottom: var(--space-2);
-  height: 48px;
+  /* Match the toolbar height so the three column header bands (left tabs,
+     toolbar, stats) line up. The "Stats" title row is flex:1 and absorbs the
+     change; the tabs row keeps its natural height. */
+  height: 36px;
   flex-shrink: 0;
 }
 
