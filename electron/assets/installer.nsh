@@ -280,6 +280,22 @@
 # BUILD_RESOURCES_DIR only exist in the installer build).
 # ---------------------------------------------------------------------------
 !macro customCheckAppRunning
+  # electron-builder's stock CHECK_APP_RUNNING runs !insertmacro
+  # IS_POWERSHELL_AVAILABLE *before* the body it would otherwise insert, but only
+  # in its `!else` (no-customCheckAppRunning) branch. Since we define this macro,
+  # that branch is skipped -- so the FIND_PROCESS / KILL_PROCESS macros below, which
+  # (as of electron-builder 26) gate on `$IsPowerShellAvailable`, would reference a
+  # variable that was never declared (NSIS warning 6000, fatal under
+  # warnings-as-errors). Insert it ourselves to declare AND populate the var,
+  # exactly as the stock path does. (CmdPath / PowerShellPath are still set by the
+  # surrounding CHECK_APP_RUNNING macro, so only this insertion is missing.)
+  # Guarded with !ifmacrodef so this stays a no-op on older electron-builder
+  # releases that predate IS_POWERSHELL_AVAILABLE (there FIND_PROCESS / KILL_PROCESS
+  # do not reference $IsPowerShellAvailable, so nothing is needed).
+  !ifmacrodef IS_POWERSHELL_AVAILABLE
+    !insertmacro IS_POWERSHELL_AVAILABLE
+  !endif
+
   ${GetProcessInfo} 0 $pid $1 $2 $3 $4
   ${if} $3 != "${APP_EXECUTABLE_FILENAME}"
     ${if} ${isUpdated}
