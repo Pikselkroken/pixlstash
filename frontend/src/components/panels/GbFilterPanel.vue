@@ -827,6 +827,9 @@ watch(
       gbTagFilterSuggestions.value = [];
     }
   },
+  // The menu mounts this panel lazily already open, so a change-only watch
+  // misses the first true and never loads the ComfyUI model/LoRA options.
+  { immediate: true },
 );
 </script>
 
@@ -1008,7 +1011,11 @@ watch(
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   overflow: hidden;
-  pointer-events: none;
+  /* Must stay clickable: with pointer-events:none the suggestions can't receive
+     the mousedown, and worse, the dropdown never gets the mousemove that would
+     flip --hover-enabled back on, so the popup is permanently keyboard-only.
+     Clicks then fall through to the control behind the dropdown. */
+  pointer-events: auto;
 }
 
 .gb-tag-filter-dropdown--hover-enabled {
@@ -1037,6 +1044,83 @@ watch(
   flex-wrap: wrap;
   gap: 4px;
   width: 100%;
+}
+
+/* Filter tag pills. The base `.tag-chip` and these `--filter`/`--confidence`
+   variants live here because Vue scoped styles do not cross component
+   boundaries: the chips in this panel can't inherit the `.tag-chip` rule that
+   lives in TbTagPanel's scope, so the pill shape and colours are declared
+   locally. The variants give each chip its fill: green for a confirmed match,
+   red for a rejected (negative) match, success/warning for confidence bounds.
+   Hover previews the opposite state, since clicking a chip toggles it. */
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 12px;
+  padding: 2px 7px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: none;
+}
+
+.tag-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tag-chip-close {
+  opacity: 0.6;
+}
+
+.tag-chip--filter {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border: 1px solid rgba(var(--v-theme-primary), 0.5);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tag-chip--filter:hover {
+  background: rgba(var(--v-theme-error), 0.18);
+  border-color: rgba(var(--v-theme-error), 0.55);
+}
+
+.tag-chip--filter-rejected {
+  background: rgba(var(--v-theme-error), 0.14);
+  border: 1px solid rgba(var(--v-theme-error), 0.5);
+  color: rgb(var(--v-theme-error));
+}
+
+.tag-chip--filter-rejected:hover {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border-color: rgba(var(--v-theme-primary), 0.5);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tag-chip--confidence-above {
+  background: rgba(var(--v-theme-success), 0.14);
+  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  color: rgb(var(--v-theme-success));
+}
+
+.tag-chip--confidence-above:hover {
+  background: rgba(var(--v-theme-error), 0.14);
+  border-color: rgba(var(--v-theme-error), 0.5);
+}
+
+.tag-chip--confidence-below {
+  background: rgba(var(--v-theme-warning), 0.14);
+  border: 1px solid rgba(var(--v-theme-warning), 0.5);
+  color: rgb(var(--v-theme-warning));
+}
+
+.tag-chip--confidence-below:hover {
+  background: rgba(var(--v-theme-error), 0.14);
+  border-color: rgba(var(--v-theme-error), 0.5);
 }
 
 .gb-confidence-filter-row {
