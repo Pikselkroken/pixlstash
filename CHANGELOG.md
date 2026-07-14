@@ -1,3 +1,6 @@
+# [1.6.10] [Security:High]
+- Update transformer version due to arbitrary code execution in transformers < 5.5.0
+
 # [1.6.9]
 - Fix windows electron installer build issue
 
