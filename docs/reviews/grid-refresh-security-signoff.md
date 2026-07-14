@@ -170,3 +170,36 @@ own GitHub issue and its own coverage-matrix pass.
   mutators — medium-severity latent BOLA / defense-in-depth gap, not currently exploitable
   (READ-token write block stops it), file as its own `bug`+`security` issue and fix with
   `enforce_picture_scope` + two-direction tests.
+
+---
+
+## Follow-up: issue #504 resolved (2026-07-14)
+
+The five `tag_predictions.py` mutators finding above (section 2) is now fixed and
+independently signed off.
+
+- **Fix.** `enforce_picture_scope(server, request, pic_id)` added to all five mutators
+  (`confirm_tag_prediction`, `reject_tag_prediction`, `delete_tag_predictions`,
+  `reset_picture_tags`, `reset_picture_description`) immediately after the id parse and
+  before any DB read/branch/return, copying the guarded `get_tag_predictions` sibling.
+  `confirm_tag_prediction` gained a `request: Request` parameter. Every route in the file is
+  now state (a) except `GET /tagger/label-thresholds`, which takes no picture id and returns
+  global tagger config (n/a to picture scope).
+- **Tests.** `tests/test_tag_prediction_scope.py`: both directions for all five (out-of-scope
+  403, in-scope 200, owner/unscoped not over-blocked), plus fail-closed side-effect assertions
+  on the destructive `delete`/`reset_tags` handlers (an out-of-scope seed must survive the 403,
+  catching a future guard-misplacement regression). Authored separately from the route fix.
+- **Independent adversarial sign-off: APPROVE for merge.** A separate CSO-persona reviewer
+  built the coverage matrix (no empty cells), confirmed no bypass return paths, re-confirmed
+  "not currently exploitable" (resource-scoped == READ; middleware blocks the writes upstream;
+  none of the five paths are in `READ_SAFE_POST_PATHS`), and verified `tags.py` / `comfyui.py`
+  / `_crud.py` / `_anomaly.py` / `_thumbnails.py` are clean.
+- **New sibling finding surfaced by that review (file as the NEXT issue, do NOT fold in):**
+  the same latent, not-currently-exploitable, unscoped-by-omission class exists one file over
+  in `tag_suggestions.py`: the per-suggestion mutators `accept`/`reopen`/`fix_twin`/`swap`/
+  `dismiss` are keyed by `suggestion_id` and never resolve the suggestion to its picture(s) to
+  call the chokepoint (note fix-twin/swap also mutate a second `twin_picture_id`). Plus
+  `_misc.py open_picture_location` (low severity, host-local action, no `request`/scope). Same
+  READ-token middleware block holds them closed today. Steer the fix toward the centralised
+  deny-by-default chokepoint (`docs/backend_architecture.md` §16.2), not five more per-handler
+  opt-ins.

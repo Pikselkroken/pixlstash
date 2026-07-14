@@ -1,4 +1,4 @@
-# [1.7.0] [Security:High]
+# [1.7.0]
 
 Smart Scores are recomputed for your whole library the first time you open 1.7.0, so the grid may re-order compared to 1.6. This is expected, not a bug: scoring is now calibrated and precision-aware, so it judges image defects more accurately. Your originals and snapshots are untouched, and the recompute runs in the background.
 
@@ -11,7 +11,7 @@ Smart Scores are recomputed for your whole library the first time you open 1.7.0
 - Reference folders can be relocated and reorganised by drag and drop, with metadata tools and sidecar sync.
 - ComfyUI generation progress now shows in the task manager; image-to-image and filter outputs can optionally stack onto the source, and the image-to-image dialog closes itself when a run starts.
 - Watch folders now retry on transient hash failures instead of skipping the file.
-- Fix a scope-enforcement gap where a resource-scoped token could confirm, reject, delete, or reset tag predictions and descriptions on pictures outside its granted scope (issue #504).
+- Harden object-scope enforcement on the tag-prediction endpoints: the confirm, reject, delete, and reset handlers now run the deny-by-default scope check, closing a defense-in-depth gap (issue #504).
 
 # [1.6.10] [Security:High]
 - Update transformer version due to arbitrary code execution in transformers < 5.5.0
