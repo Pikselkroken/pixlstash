@@ -1,3 +1,18 @@
+# [1.7.0] [Security:High]
+
+Smart Scores are recomputed for your whole library the first time you open 1.7.0, so the grid may re-order compared to 1.6. This is expected, not a bug: scoring is now calibrated and precision-aware, so it judges image defects more accurately. Your originals and snapshots are untouched, and the recompute runs in the background.
+
+- New tag-fix review queue: a ranked queue for cleaning up your tags where you can review, bulk-confirm, or reject tagger suggestions, and teach the tagger from your decisions. Includes bulk clearing of impossible tags with source and object filters, plus review scope filters.
+- Smarter Smart Score: calibrated, precision-aware scoring that uses per-tag confidence instead of all-or-nothing weights, groups related defects so correlated flaws do not double-count, and adds three new full-image checks for compression blockiness, noise, and watermarks.
+- Expanded, recalibrated tagger model shipped with per-tag thresholds and precision weights, so high-confidence tags drive suggestions and scoring more strongly.
+- Object detection via a new Florence-2 backend: a Segment action that finds objects and draws bounding-box overlays in the grid and lightbox, with an option to export the boxes as COCO or Ideogram JSON.
+- Smoother grid updates: live changes now coalesce into a single "click to refresh" pill instead of a hard refresh, your own edits no longer trigger it, and tag-suggestion notifications are batched.
+- Refreshed visual design across the app with consistent type, colour, spacing, and iconography built on a new design-token system.
+- Reference folders can be relocated and reorganised by drag and drop, with metadata tools and sidecar sync.
+- ComfyUI generation progress now shows in the task manager; image-to-image and filter outputs can optionally stack onto the source, and the image-to-image dialog closes itself when a run starts.
+- Watch folders now retry on transient hash failures instead of skipping the file.
+- Fix a scope-enforcement gap where a resource-scoped token could confirm, reject, delete, or reset tag predictions and descriptions on pictures outside its granted scope (issue #504).
+
 # [1.6.10] [Security:High]
 - Update transformer version due to arbitrary code execution in transformers < 5.5.0
 
