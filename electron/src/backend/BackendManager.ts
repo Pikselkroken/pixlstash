@@ -102,6 +102,22 @@ export function buildOverlayPipArgs(
   if (ONNX_PACKAGE[accel] === 'onnxruntime-gpu') {
     args.push(`onnxruntime-gpu==${basePep440(info.onnxruntime)}`);
   }
+  // bitsandbytes (NF4/INT8 quantisation for the JoyCaption tagger) is CUDA-only
+  // and is deliberately NOT bundled in the CPU env — it can only run here, on a
+  // CUDA overlay. Resolved from PyPI via the --extra-index-url, not the torch
+  // index. Pin to the exact version the bundle was built against (recorded in
+  // runtime.json) so this is a bounded install, not a floating PyPI-latest pull;
+  // fall back to unpinned only if the build never recorded one. cu128 is offered
+  // only on Windows/Linux (HardwareDetector gates it on `os !== 'mac'`), so `info`
+  // always comes from a CUDA-capable build whose recorded bitsandbytes has a
+  // matching cu12x wheel — a macOS build's runtime.json never feeds this pin.
+  // ROCm is excluded:
+  // its quantisation path isn't reliable, matching the pre-existing behaviour
+  // where the bundled CUDA-build bitsandbytes was unusable on ROCm anyway. Keep
+  // in sync with GPU_ONLY_DISTS in build_desktop_runtime.py.
+  if (accel === 'cu128') {
+    args.push(info.bitsandbytes ? `bitsandbytes==${info.bitsandbytes}` : 'bitsandbytes');
+  }
   return { args, usedFallback };
 }
 

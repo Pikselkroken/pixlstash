@@ -62,6 +62,15 @@ ONNX_PACKAGE = {
     "metal": "onnxruntime",
 }
 
+# Packages that only do anything on a CUDA GPU and therefore can never run in the
+# bundled CPU/Metal env. bitsandbytes' NF4/INT8 quantisation kernels require CUDA,
+# so it is ~176 MB of pure dead weight in the installer (it also inflates install
+# time — every file is written and AV-scanned individually). The desktop app
+# re-adds bitsandbytes in the CUDA (cu128) overlay, the only place JoyCaption's
+# quantisation can actually run; keep this list in sync with buildOverlayPipArgs
+# in electron/src/backend/BackendManager.ts.
+GPU_ONLY_DISTS = ("bitsandbytes",)
+
 
 def log(msg: str) -> None:
     print(f"[build-runtime] {msg}", flush=True)
@@ -234,17 +243,72 @@ def installed_version(py: Path, dist: str) -> str:
     return out.stdout.strip()
 
 
+def prune_gpu_only(py: Path) -> dict[str, str]:
+    """Uninstall CUDA-only packages that can never run in the bundled env.
+
+    See GPU_ONLY_DISTS. These are re-added on demand by the desktop app's GPU
+    overlay, so dropping them here only shrinks the installer. Returns the
+    ``{dist: version}`` that were actually present and removed, so the caller can
+    record the exact built version in runtime.json — the GPU overlay pins to it
+    instead of floating to whatever PyPI serves at install time.
+    """
+    pruned: dict[str, str] = {}
+    for dist in GPU_ONLY_DISTS:
+        try:
+            version = installed_version(py, dist)
+        except subprocess.CalledProcessError:
+            # Not installed for this platform (e.g. no macOS wheel) — nothing to
+            # prune or record. Not an error.
+            log(f"{dist} not present in bundle; nothing to prune")
+            continue
+        log(f"pruning GPU-only package from bundle: {dist}=={version}")
+        result = subprocess.run(
+            [str(py), "-m", "pip", "uninstall", "-y", dist],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            # Not fatal: the bundle merely ships larger. Log it so a genuine
+            # failure is not silently swallowed, and do not record a pin for a
+            # package we failed to remove.
+            detail = result.stderr.strip() or result.stdout.strip()
+            log(f"pip uninstall {dist} exited {result.returncode}: {detail}")
+        else:
+            pruned[dist] = version
+    return pruned
+
+
 def strip_env(python_dir: Path) -> None:
-    """Drop caches and test trees to shrink the installer."""
-    log("stripping caches/tests")
-    removed = 0
-    for root, dirs, _files in os.walk(python_dir):
+    """Drop caches, tests, type stubs and C++ headers to shrink the installer.
+
+    Fewer files matters as much as fewer bytes on Windows: the NSIS installer
+    writes every file individually and antivirus scans each one, so trimming the
+    ~9.5k-file torch/include header tree (only read when JIT-compiling custom ops
+    via torch.utils.cpp_extension — never at inference) and the per-package test/
+    cache trees measurably cuts install time, not just size. The GPU overlay ships
+    its own complete torch, so the bundled headers are dead weight there too.
+    """
+    log("stripping caches/tests/stubs/headers")
+    removed_dirs = 0
+    removed_files = 0
+    for root, dirs, files in os.walk(python_dir):
         for d in list(dirs):
             if d in {"__pycache__", "tests", "test"}:
                 shutil.rmtree(Path(root) / d, ignore_errors=True)
                 dirs.remove(d)
-                removed += 1
-    log(f"removed {removed} cache/test directories")
+                removed_dirs += 1
+        for f in files:
+            if f.endswith(".pyi"):
+                try:
+                    (Path(root) / f).unlink()
+                    removed_files += 1
+                except OSError as exc:
+                    log(f"could not remove type stub {Path(root) / f}: {exc}")
+    for include_dir in python_dir.rglob("site-packages/torch/include"):
+        if include_dir.is_dir():
+            shutil.rmtree(include_dir, ignore_errors=True)
+            log(f"removed torch C++ headers: {include_dir}")
+    log(f"removed {removed_dirs} cache/test dirs and {removed_files} .pyi stubs")
 
 
 def main() -> int:
@@ -291,12 +355,27 @@ def main() -> int:
     cache_dir = args.cache_dir
     python_dir = out / "python"
 
+    # Exact versions of the GPU-only packages stripped from the bundle, recorded
+    # in runtime.json so the GPU overlay pins to them (see prune_gpu_only).
+    pruned_versions: dict[str, str] = {}
     if args.reuse_env and python_dir.is_dir():
         # Only the app changed: overwrite the pixlstash package in place and keep
         # the (expensive) CPython + torch install. Seconds instead of minutes.
         py = interpreter(python_dir, args.os)
         log("reuse-env: reinstalling only the PixlStash wheel")
         pip_install(py, ["--force-reinstall", "--no-deps", str(args.wheel)], cache_dir)
+        # The env was already pruned by the original full build, so the pins live
+        # only in the existing runtime.json — preserve them across this rewrite.
+        prior = out / "runtime.json"
+        if prior.is_file():
+            try:
+                prior_data = json.loads(prior.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                log(f"could not read prior runtime.json for GPU-only pins: {exc}")
+            else:
+                pruned_versions = {
+                    d: prior_data[d] for d in GPU_ONLY_DISTS if d in prior_data
+                }
     else:
         if args.reuse_env:
             log("reuse-env requested but no existing env — doing a full build")
@@ -307,6 +386,7 @@ def main() -> int:
         python_dir = fetch_standalone_python(triple, out, cache_dir)
         py = interpreter(python_dir, args.os)
         populate_env(py, args.wheel, args.accel, cache_dir)
+        pruned_versions = prune_gpu_only(py)
         strip_env(python_dir)
 
     runtime = {
@@ -314,6 +394,7 @@ def main() -> int:
         "torch": installed_version(py, "torch"),
         "torchvision": installed_version(py, "torchvision"),
         "onnxruntime": installed_version(py, ONNX_PACKAGE[args.accel]),
+        **pruned_versions,
     }
     (out / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
 
