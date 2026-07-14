@@ -21,20 +21,23 @@ export class GridPage {
     this.thumbnailImages = page.locator('.thumbnail-img')
     // Toolbar buttons (titles are stable, verified in Toolbar.vue).
     this.searchButton = page.locator('button[title="Search (F)"]').first()
+    // Sort is a split-button: .bar-split-menu opens the sort popover
+    // (.gb-sort-panel); the in-popover ghost button flips the direction.
     this.sortMenuButton = page.locator('.bar-split-menu').first()
-    this.sortDirectionButton = page.locator('.gb-sort-direction')
+    this.sortDirectionButton = page.locator('.gb-sort-panel .tbm-ghost').first()
     this.viewMenuButton = page.locator('button[title="View options"]').first()
     this.columnsSlider = page.locator('.gb-columns-slider')
+    // Expand/Collapse-all live in the View popover as .tbm-action buttons.
     this.expandAllStacksButton = page
-      .locator('.gb-stack-toggle-btn', { hasText: 'Expand all' })
+      .locator('.tbm-action', { hasText: 'Expand all' })
       .first()
     this.collapseAllStacksButton = page
-      .locator('.gb-stack-toggle-btn', { hasText: 'Collapse all' })
+      .locator('.tbm-action', { hasText: 'Collapse all' })
       .first()
-    // Search overlay.
-    this.searchOverlay = page.locator('.search-overlay')
-    this.searchInput = page.locator('.search-overlay input').first()
-    this.searchHistoryChips = page.locator('.search-history-chip')
+    // Search popover (.gb-search-panel) opened from the toolbar search icon.
+    this.searchOverlay = page.locator('.gb-search-panel')
+    this.searchInput = page.locator('.gb-search-panel input').first()
+    this.searchHistoryChips = page.locator('.gb-recent-row')
     // Right-click context menu (§3.5) — ImageGridContextMenu.vue.
     this.contextMenu = page.locator('.image-ctx-menu')
     // Statistics sidebar — toggled from the toolbar. Its title flips with state
@@ -116,7 +119,9 @@ export class GridPage {
   /** Open the Sort dropdown (the split-button beside the sort label). */
   async openSortMenu() {
     await this.sortMenuButton.click()
-    await expect(this.page.locator('.gb-sort-grid-btn').first()).toBeVisible()
+    await expect(
+      this.page.locator('.gb-sort-panel .tbm-toggle').first(),
+    ).toBeVisible()
   }
 
   /** Open the View-options dropdown (columns slider, stack expand/collapse). */
@@ -126,7 +131,9 @@ export class GridPage {
   }
 
   sortOption(label) {
-    return this.page.locator('.gb-sort-grid-btn', { hasText: label }).first()
+    return this.page
+      .locator('.gb-sort-panel .tbm-toggle', { hasText: label })
+      .first()
   }
 
   /** Right-click a card (first by default) to open the context menu. */

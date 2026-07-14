@@ -34,7 +34,14 @@ test.describe('authentication', () => {
     const description = `e2e release token ${Date.now()}-${Math.random().toString(36).slice(2)}`
     const newRow = settings.tokenRows.filter({ hasText: description })
 
-    await settings.tokenDescription.fill(description)
+    await settings.openCreateTokenDialog()
+    // AppInput is a controlled input (:value + @input); Playwright's fill() sets
+    // the DOM value in one shot and Vue's re-render reverts it, leaving the model
+    // (and the posted description) empty. Real keystrokes drive @input per
+    // character, so the v-model reliably captures the value.
+    await settings.tokenDescription.click()
+    await settings.tokenDescription.pressSequentially(description)
+    await expect(settings.tokenDescription).toHaveValue(description)
     await settings.createTokenButton.click()
 
     // The new token appears in the list (a reveal dialog may overlay it, but

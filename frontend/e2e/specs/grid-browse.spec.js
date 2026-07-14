@@ -18,7 +18,9 @@ test.describe('grid browsing', () => {
     const before = await grid.firstThumbnailSrc()
 
     await grid.openSortMenu()
-    const labels = await page.locator('.gb-sort-grid-label').allInnerTexts()
+    const labels = await page
+      .locator('.gb-sort-panel .tbm-toggle-label')
+      .allInnerTexts()
     expect(labels.length).toBeGreaterThanOrEqual(3)
     expect(labels.some((l) => /date/i.test(l))).toBe(true)
 
