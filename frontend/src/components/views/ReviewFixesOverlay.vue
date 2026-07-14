@@ -8,6 +8,8 @@
         <template #title>Review tags</template>
 
         <template #actions>
+          <span class="rf-divider" aria-hidden="true"></span>
+
           <!-- Custom tag picker over the whole vault tag list, modelled on AddToEntityControl:
                a compact trigger button (current tag + chevron) opens a dropdown panel with an
                autofocused search input above a scrollable, alphabetised list. Typing filters by
@@ -17,15 +19,17 @@
                the topbar's clip and sits above the overlay. The icon-button re-scans the active tag. -->
           <div class="rf-field rf-field--tag">
             <span class="rf-field-label">Tag</span>
-            <label
+            <button
               class="rf-penalised-toggle"
               :class="{ 'rf-penalised-toggle--on': penalisedOnly }"
+              type="button"
+              :aria-pressed="penalisedOnly"
               title="Only list smart-score penalised tags in the picker"
+              @click="penalisedOnly = !penalisedOnly"
             >
-              <input type="checkbox" v-model="penalisedOnly" />
               <v-icon size="13">mdi-alert-octagon-outline</v-icon>
               Penalised only
-            </label>
+            </button>
             <div ref="tagPickRef" class="rf-tag-pick">
               <button
                 class="rf-control rf-tag-trigger"
@@ -39,8 +43,6 @@
                 <span
                   class="rf-tag-trigger-label"
                   :class="{
-                    'rf-tag-anomaly':
-                      store.activeTag && store.isAnomalyTag(store.activeTag),
                     'rf-tag-trigger-label--placeholder': !store.activeTag,
                   }"
                 >
@@ -115,6 +117,8 @@
             store.scanError
           }}</span>
 
+          <span class="rf-spacer" aria-hidden="true"></span>
+
           <!-- Scope filters: narrow the queue to a project / set / character. Each "Any"
                option clears that dimension; changes re-run summary/queue/bulk via setScope. -->
           <label class="rf-field">
@@ -167,61 +171,19 @@
               >{{ store.remainingTotal }} left</span
             >
             <span class="rf-progress-tally">
-              ✗ {{ store.removedCount }} · + {{ store.addedCount }} · ✓
-              {{ store.keptCount }}
+              <span class="rf-tally rf-tally--removed"
+                >✗ {{ store.removedCount }}</span
+              >
+              <span class="rf-tally rf-tally--added"
+                >+ {{ store.addedCount }}</span
+              >
+              <span class="rf-tally rf-tally--kept"
+                >✓ {{ store.keptCount }}</span
+              >
             </span>
           </div>
         </template>
       </OverlayToolbar>
-
-      <!-- Bulk: auto-resolve only pairs where the near-twin vote and the tagger AGREE,
-           so you hand-compare the rest. -->
-      <div class="rf-bulkbar">
-        <label class="rf-bulk-thresh">
-          Auto-resolve when both signals agree ≥
-          <select
-            class="rf-control"
-            :value="store.bulkThreshold"
-            @change="store.setBulkThreshold(Number($event.target.value))"
-          >
-            <option :value="0.99">99%</option>
-            <option :value="0.95">95%</option>
-            <option :value="0.9">90%</option>
-            <option :value="0.8">80%</option>
-          </select>
-        </label>
-        <button
-          class="rf-control rf-bulk-preview"
-          type="button"
-          :disabled="store.bulkCount === 0"
-          title="Spot-check a sample of what would be auto-resolved before applying."
-          @click="store.previewOpen = true"
-        >
-          Preview
-        </button>
-        <button
-          class="rf-bulk-btn"
-          type="button"
-          :disabled="store.bulkCount === 0 || store.bulkBusy"
-          :title="`Apply every pair where the near-twin vote and the tagger agree and both clear the threshold for “${store.activeTag}”, in one go (undoable).`"
-          @click="store.runBulk()"
-        >
-          Resolve {{ store.bulkCount }} agreed one{{
-            store.bulkCount === 1 ? "" : "s"
-          }}
-        </button>
-        <span v-if="store.lastBulk" class="rf-bulk-undo">
-          resolved {{ store.lastBulk.count }} ·
-          <button
-            class="rf-control"
-            type="button"
-            :disabled="store.bulkBusy"
-            @click="store.undoBulk()"
-          >
-            Undo all
-          </button>
-        </span>
-      </div>
 
       <!-- Body -->
       <section class="rf-body">
@@ -258,26 +220,33 @@
         </div>
 
         <div v-else class="rf-review">
+          <!-- Combined prompt + guidance banner: the verdict bucket and the review
+               question are merged into one strip. The bucket's accent colours the
+               icon, the 4px left border, a tint of the fill, and the title pill;
+               with no tagger prediction it falls back to a neutral banner. -->
           <div
-            v-if="currentBucket"
-            class="rf-bucket"
-            :class="`rf-bucket--${currentBucket.key}`"
+            class="rf-banner"
+            :class="
+              currentBucket
+                ? `rf-banner--${currentBucket.key}`
+                : 'rf-banner--neutral'
+            "
           >
-            <v-icon :size="24" class="rf-bucket-icon">{{
-              currentBucket.icon
+            <v-icon :size="26" class="rf-banner-icon">{{
+              currentBucket ? currentBucket.icon : "mdi-help-circle-outline"
             }}</v-icon>
-            <div class="rf-bucket-text">
-              <span class="rf-bucket-title">{{ currentBucket.title }}</span>
-              <span class="rf-bucket-meaning">{{ currentBucket.meaning }}</span>
+            <div class="rf-banner-text">
+              <div class="rf-banner-title">
+                The left is tagged “{{ current.tag }}” — but is it?
+              </div>
+              <div class="rf-banner-meaning">{{ bannerMeaning }}</div>
             </div>
-            <span class="rf-bucket-count"
-              >{{ bucketRemaining }} left in this group</span
-            >
-          </div>
-
-          <div class="rf-question">
-            The left is flagged “{{ current.tag }}” — but is it?
-            <span class="rf-question-sub">{{ verdict.sub }}</span>
+            <div v-if="currentBucket" class="rf-banner-aside">
+              <span class="rf-banner-pill">{{ currentBucket.title }}</span>
+              <span class="rf-banner-count"
+                >{{ bucketRemaining }} left in this group</span
+              >
+            </div>
           </div>
 
           <div class="rf-pair">
@@ -285,22 +254,97 @@
               class="rf-pane rf-pane--flagged"
               :class="{ 'rf-pane--selected': isPaneSelected(taggedSide.id) }"
             >
-              <div class="rf-pane-head">
-                <span class="rf-pane-title">Left · the flagged one</span>
-                <span class="rf-chip rf-chip--has"
-                  >⚑ predicted “{{ current.tag }}”</span
+              <figcaption class="rf-pane-head">
+                <span class="rf-pane-id">#{{ taggedSide.id }}</span>
+                <span class="rf-pane-pred">
+                  <span class="rf-pane-pred-label rf-pane-pred-label--has">
+                    <v-icon size="13">mdi-tag</v-icon>
+                    Predicted “{{ current.tag }}”
+                  </span>
+                  <span class="rf-pane-conf"
+                    >· {{ confText(taggedSide.conf) }}</span
+                  >
+                </span>
+                <!-- Heatmap/box toggle: only when there's a region to show for this card.
+                     Reflects the persisted on/off state; tinted accent when on. -->
+                <button
+                  v-if="hasRegion"
+                  type="button"
+                  class="rf-heatmap-toggle"
+                  :class="{ 'rf-heatmap-toggle--on': store.heatmapEnabled }"
+                  :aria-pressed="store.heatmapEnabled"
+                  :title="
+                    store.heatmapEnabled
+                      ? `Hide the “${current.tag}” heatmap (H)`
+                      : `Show where “${current.tag}” is (H)`
+                  "
+                  @click.stop="store.setHeatmapEnabled(!store.heatmapEnabled)"
                 >
-              </div>
+                  <!-- Locator glyph + label. One glyph for both states; on/off is
+                       carried by the red --on tint, aria-pressed, and the title. -->
+                  <v-icon size="15">mdi-image-filter-center-focus</v-icon>
+                  <span class="rf-heatmap-toggle-label">Tag location</span>
+                </button>
+              </figcaption>
               <div class="rf-img-wrap">
                 <img
+                  ref="flaggedImgRef"
                   class="rf-img"
                   :src="imgSrc(taggedSide.id, taggedSide.ext)"
                   :alt="`picture ${taggedSide.id}`"
                   title="Click to select · scroll to zoom"
                   @click="togglePaneSelection(taggedSide.id)"
                   @wheel.prevent="openZoom(taggedSide.id, taggedSide.ext)"
+                  @load="onFlaggedImgLoad"
                   @error="onImgError($event, taggedSide.id)"
                 />
+                <!-- Anomaly overlay, aligned to the image's RENDERED content box (object-fit:
+                     contain letterboxes the image inside .rf-img, so the layer is positioned
+                     by the computed contain-rect, not the wrapper). The heatmap fills the
+                     rect (pointer-events:none — visual only); the box is a clickable hotspot
+                     that zooms into the region. Hidden in the zoom view (raw image only). -->
+                <div
+                  v-if="regionVisible"
+                  class="rf-region"
+                  :style="regionLayerStyle"
+                >
+                  <img
+                    v-if="taggedRegion.heatmap"
+                    class="rf-region-heatmap"
+                    :src="taggedRegion.heatmap"
+                    alt=""
+                  />
+                  <button
+                    v-for="(b, i) in taggedRegion.boxes"
+                    :key="i"
+                    type="button"
+                    class="rf-region-box"
+                    :style="boxStyle(b)"
+                    :title="`Zoom into this “${current.tag}” region`"
+                    @click.stop="zoomToRegion(b)"
+                  >
+                    <v-icon size="14" class="rf-region-box-icon"
+                      >mdi-magnify-plus-outline</v-icon
+                    >
+                  </button>
+                </div>
+                <!-- Indeterminate "locating" indicator. Shown (after a short delay so
+                     it doesn't flash for fast/cached responses) while the region is
+                     being fetched — the first fetch after the tagger has been idle-
+                     unloaded loads the model server-side, which takes a few seconds. -->
+                <div
+                  v-if="showRegionLoading"
+                  class="rf-region-loading"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span class="rf-region-loading-text">
+                    Locating “{{ current.tag }}”…
+                  </span>
+                  <span class="rf-region-loading-bar" aria-hidden="true">
+                    <span class="rf-region-loading-fill"></span>
+                  </span>
+                </div>
                 <button
                   type="button"
                   class="rf-zoom-btn"
@@ -313,14 +357,11 @@
                   <v-icon size="16">mdi-check-bold</v-icon>
                 </span>
               </div>
-              <figcaption class="rf-pane-foot">
-                <span>#{{ taggedSide.id }}</span>
-                <span class="rf-pane-conf">{{
-                  confLabel(taggedSide.conf)
-                }}</span>
-                <span v-if="voteHint(taggedSide.id)" class="rf-vote-hint">
-                  {{ voteHint(taggedSide.id) }}
-                </span>
+              <figcaption
+                v-if="voteHint(taggedSide.id)"
+                class="rf-pane-foot"
+              >
+                <span class="rf-vote-hint">{{ voteHint(taggedSide.id) }}</span>
               </figcaption>
             </figure>
 
@@ -328,10 +369,15 @@
               class="rf-pane"
               :class="{ 'rf-pane--selected': isPaneSelected(untaggedSide.id) }"
             >
-              <div class="rf-pane-head">
-                <span class="rf-pane-title">Right · its near-twin</span>
-                <span class="rf-chip rf-chip--missing">not flagged</span>
-              </div>
+              <figcaption class="rf-pane-head">
+                <span class="rf-pane-id">#{{ untaggedSide.id }}</span>
+                <span class="rf-pane-pred">
+                  <span class="rf-pane-pred-label">Not tagged</span>
+                  <span class="rf-pane-conf"
+                    >· {{ confText(untaggedSide.conf) }}</span
+                  >
+                </span>
+              </figcaption>
               <div class="rf-img-wrap">
                 <img
                   class="rf-img"
@@ -354,14 +400,11 @@
                   <v-icon size="16">mdi-check-bold</v-icon>
                 </span>
               </div>
-              <figcaption class="rf-pane-foot">
-                <span>#{{ untaggedSide.id }}</span>
-                <span class="rf-pane-conf">{{
-                  confLabel(untaggedSide.conf)
-                }}</span>
-                <span v-if="voteHint(untaggedSide.id)" class="rf-vote-hint">
-                  {{ voteHint(untaggedSide.id) }}
-                </span>
+              <figcaption
+                v-if="voteHint(untaggedSide.id)"
+                class="rf-pane-foot"
+              >
+                <span class="rf-vote-hint">{{ voteHint(untaggedSide.id) }}</span>
               </figcaption>
             </figure>
           </div>
@@ -483,12 +526,6 @@
             </div>
           </div>
 
-          <p class="rf-hint">
-            <kbd>L</kbd> left only · <kbd>B</kbd> both · <kbd>N</kbd> neither ·
-            <kbd>R</kbd> right only (swap) · <kbd>S</kbd> skip ·
-            <kbd>U</kbd> undo · <kbd>T</kbd> tag selected · <kbd>Esc</kbd> close
-          </p>
-
           <!-- Direct tagging of the selected pane(s), independent of the queue
                decision. Anchored bottom-right; the menu opens above the button. -->
           <div ref="tagApplyRef" class="rf-tag-apply">
@@ -521,91 +558,6 @@
       </section>
     </div>
 
-    <!-- Bulk preview: spot-check a sample of what "Resolve" would auto-apply. -->
-    <div
-      v-if="store.previewOpen"
-      class="rf-preview"
-      @click.self="store.previewOpen = false"
-    >
-      <div class="rf-preview-card">
-        <div class="rf-preview-head">
-          <div>
-            Preview — {{ store.bulkCount }} agreed one{{
-              store.bulkCount === 1 ? "" : "s"
-            }}
-            at ≥{{ Math.round(store.bulkThreshold * 100) }}%
-            <span class="rf-preview-sub">
-              showing the {{ store.bulkSample.length }} least tagger-confident
-              (the riskiest)
-            </span>
-          </div>
-          <button
-            class="rf-control rf-preview-x"
-            type="button"
-            @click="store.previewOpen = false"
-          >
-            <v-icon size="18">mdi-close</v-icon>
-          </button>
-        </div>
-
-        <div v-if="!store.bulkSample.length" class="rf-preview-empty">
-          No pair where both signals agree this strongly — lower the bar, or
-          review manually.
-        </div>
-        <div v-else class="rf-preview-grid">
-          <figure
-            v-for="s in store.bulkSample"
-            :key="s.id"
-            class="rf-preview-item"
-          >
-            <div class="rf-preview-imgs">
-              <img
-                class="rf-preview-img rf-preview-img--flagged"
-                :src="imgSrc(sampleLeft(s).id, sampleLeft(s).ext)"
-                :alt="`flagged #${sampleLeft(s).id}`"
-                title="Click to zoom"
-                @click="openZoom(sampleLeft(s).id, sampleLeft(s).ext)"
-                @error="onImgError($event, sampleLeft(s).id)"
-              />
-              <img
-                class="rf-preview-img"
-                :src="imgSrc(sampleRight(s).id, sampleRight(s).ext)"
-                :alt="`twin #${sampleRight(s).id}`"
-                title="Click to zoom"
-                @click="openZoom(sampleRight(s).id, sampleRight(s).ext)"
-                @error="onImgError($event, sampleRight(s).id)"
-              />
-            </div>
-            <figcaption class="rf-preview-verdict">
-              → {{ cornerLabel(s.corner) }} ·
-              {{ Math.round(s.confidence * 100) }}%
-            </figcaption>
-          </figure>
-        </div>
-
-        <div class="rf-preview-foot">
-          <span class="rf-preview-note">
-            Left = flagged · right = its twin. These look right? Resolve them.
-          </span>
-          <button
-            class="rf-action rf-action--skip"
-            type="button"
-            @click="store.previewOpen = false"
-          >
-            Close
-          </button>
-          <button
-            class="rf-bulk-btn"
-            type="button"
-            :disabled="store.bulkCount === 0 || store.bulkBusy"
-            @click="store.runBulk()"
-          >
-            Resolve all {{ store.bulkCount }}
-          </button>
-        </div>
-      </div>
-    </div>
-
     <!-- Full-screen zoom: click an image to inspect detail; scroll to magnify, drag to pan. -->
     <div
       v-if="zoom"
@@ -633,6 +585,17 @@
         {{ Math.round(zoomScale * 100) }}% · scroll to zoom · drag to pan ·
         click or Esc to close · <kbd>←</kbd>/<kbd>→</kbd> still apply
       </div>
+      <!-- Framed-zoom escape: jump back out to the whole image (the box was a hint). -->
+      <button
+        v-if="zoom.box"
+        type="button"
+        class="rf-zoom-fit"
+        title="Show the whole image"
+        @click.stop="fitZoom"
+      >
+        <v-icon size="15">mdi-fit-to-page-outline</v-icon>
+        Whole image
+      </button>
     </div>
   </div>
 </template>
@@ -916,6 +879,26 @@ watch(
   },
 );
 
+// Kick off the anomaly-region fetch for the flagged pane. We only fetch for anomaly
+// (smart-score penalised) tags — those are the ones the model can localise; other tags
+// would just 422. The source includes the anomaly-status of the current tag so we (re)try
+// once the background anomalyTags set lands (it isn't loaded yet when the first card
+// arrives). The store caches per (id, tag) and de-dupes in-flight, so retries are cheap.
+watch(
+  () => [
+    current.value?.picture_id,
+    current.value?.tag ? store.isAnomalyTag(current.value.tag) : false,
+  ],
+  () => {
+    const tag = current.value?.tag;
+    const side = taggedSide.value;
+    if (side?.id != null && tag && store.isAnomalyTag(tag)) {
+      store.fetchAnomalyRegion(side.id, tag);
+    }
+  },
+  { immediate: true },
+);
+
 // Minimal image objects so TbTagPanel can show a thumbnail preview of the panes.
 const selectedSideImages = computed(() => {
   const sides = [taggedSide.value, untaggedSide.value].filter(Boolean);
@@ -1020,36 +1003,34 @@ const bucketRemaining = computed(() => {
   return store.items.filter((it) => store.decision(it).corner === corner).length;
 });
 
-const CORNER_LABELS = {
-  both: "Both",
-  neither: "Neither",
-  leftonly: "Left only",
-  rightonly: "Right only ⇄",
-};
-function cornerLabel(c) {
-  return CORNER_LABELS[c] || c;
-}
-// In a bulk-sample item, left = the flagged image, right = its twin.
-function sampleLeft(s) {
-  return s.direction === "remove"
-    ? { id: s.picture_id, ext: s.picture_ext }
-    : { id: s.twin_picture_id, ext: s.twin_ext };
-}
-function sampleRight(s) {
-  return s.direction === "remove"
-    ? { id: s.twin_picture_id, ext: s.twin_ext }
-    : { id: s.picture_id, ext: s.picture_ext };
-}
+// One guidance line for the merged banner: the bucket's "what to do" meaning, with
+// the tagger-unsure caveat appended when the prediction is weak. With no bucket (no
+// tagger prediction) it falls back to the verdict's own sub-line.
+const bannerMeaning = computed(() => {
+  if (currentBucket.value) {
+    const unsure =
+      verdict.value && !verdict.value.strong
+        ? " · Tagger is unsure here — your call."
+        : "";
+    return currentBucket.value.meaning + unsure;
+  }
+  return verdict.value?.sub ?? "";
+});
 
-function confLabel(conf) {
+// Per-pane confidence phrasing for the pane header. The tagger's raw confidence
+// is P(tag applies), read from each pane's own point of view. State the direction
+// explicitly — "X% sure the tag is present" vs "X% sure the tag is not present" —
+// so a bare "X% sure" can never be read the wrong way (a 97%-sure prediction on an
+// untagged image means the model thinks the tag *is* present, the opposite of what
+// "Not tagged · 97% sure" looks like at a glance).
+function confText(conf) {
   if (conf === null || conf === undefined) return "no tagger prediction";
-  const tag = current.value?.tag ?? "this";
   const pct = Math.round(conf * 100);
-  // The raw confidence is P(tag applies); state which way that points so it's
-  // unambiguous (high = the model thinks it IS the tag, even if it's untagged).
-  return conf >= 0.5
-    ? `tagger: ${pct}% sure it IS “${tag}”`
-    : `tagger: ${100 - pct}% sure it's NOT “${tag}”`;
+  const present = conf >= 0.5;
+  const sure = present ? pct : 100 - pct;
+  return present
+    ? `${sure}% sure the tag is present`
+    : `${sure}% sure the tag is not present`;
 }
 
 // --- Decision dispatch + live consistency guard ----------------------------
@@ -1166,10 +1147,141 @@ function onImgError(event, id) {
   el.src = `${props.backendUrl}/pictures/thumbnails/${id}.webp`;
 }
 
+// --- Anomaly-region overlay (heatmap + box) on the flagged pane -------------
+//
+// The heatmap PNG and the box coords are normalised to the FULL image, but .rf-img uses
+// object-fit: contain, so the image is letterboxed inside its element. We therefore align
+// the overlay layer to the image's RENDERED content rect (the contain-fit rectangle), not
+// the wrapper. renderedRect is recomputed from the flagged image's natural size and its
+// current rendered (client) size, kept live by a ResizeObserver so it follows window/panel
+// resizes. Inside that rect the heatmap fills 100% and the box is placed by percentages.
+const flaggedImgRef = ref(null);
+const flaggedNatW = ref(0);
+const flaggedNatH = ref(0);
+const flaggedBoxW = ref(0); // rendered element width (px)
+const flaggedBoxH = ref(0); // rendered element height (px)
+let flaggedRO = null;
+
+function measureFlagged() {
+  const el = flaggedImgRef.value;
+  if (!el) return;
+  flaggedBoxW.value = el.clientWidth;
+  flaggedBoxH.value = el.clientHeight;
+}
+
+function onFlaggedImgLoad(event) {
+  const img = event.target;
+  flaggedNatW.value = img.naturalWidth || 0;
+  flaggedNatH.value = img.naturalHeight || 0;
+  measureFlagged();
+}
+
+// Observe the flagged image element across cards (the element is reused; only its src
+// changes). Re-observe when the ref swaps (e.g. leaving/entering the review state).
+watch(flaggedImgRef, (el, prev) => {
+  if (flaggedRO && prev) flaggedRO.unobserve(prev);
+  if (el) {
+    if (!flaggedRO) flaggedRO = new ResizeObserver(measureFlagged);
+    flaggedRO.observe(el);
+    measureFlagged();
+  }
+});
+
+// The contain-fit rectangle of the flagged image within its element, in px. Null until we
+// know both the natural and rendered sizes.
+const renderedRect = computed(() => {
+  const nw = flaggedNatW.value;
+  const nh = flaggedNatH.value;
+  const cw = flaggedBoxW.value;
+  const ch = flaggedBoxH.value;
+  if (!nw || !nh || !cw || !ch) return null;
+  const scale = Math.min(cw / nw, ch / nh);
+  const dw = nw * scale;
+  const dh = nh * scale;
+  return { left: (cw - dw) / 2, top: (ch - dh) / 2, width: dw, height: dh };
+});
+
+// The cached region for the flagged pane's (id, tag). Only a SHOWABLE region (a real box,
+// not diffuse) counts — that's what drives the toggle's presence and the overlay.
+const taggedRegion = computed(() => {
+  const side = taggedSide.value;
+  const tag = current.value?.tag;
+  if (!side || !tag) return null;
+  const r = store.anomalyRegionFor(side.id, tag);
+  if (!r || r.diffuse || !Array.isArray(r.boxes) || r.boxes.length === 0) {
+    return null;
+  }
+  return r;
+});
+
+// There's something to show for this card (drives the toggle's visibility).
+const hasRegion = computed(() => !!taggedRegion.value);
+// Actually paint it: there's a region AND the user has the toggle on.
+const regionVisible = computed(() => hasRegion.value && store.heatmapEnabled);
+
+// Is the flagged pane's region fetch in flight? (Only meaningful for anomaly tags.)
+const regionLoadingNow = computed(() => {
+  const side = taggedSide.value;
+  const tag = current.value?.tag;
+  if (!side || !tag || !store.isAnomalyTag(tag)) return false;
+  return store.isRegionLoading(side.id, tag);
+});
+
+// Gate the indicator behind a short delay so it only appears for genuinely slow
+// fetches (a server-side model load), not the fast cached/already-resident case —
+// otherwise it flashes on every card. Cleared if the fetch resolves within the delay.
+const showRegionLoading = ref(false);
+let regionLoadingTimer = null;
+watch(regionLoadingNow, (loading) => {
+  if (regionLoadingTimer) {
+    clearTimeout(regionLoadingTimer);
+    regionLoadingTimer = null;
+  }
+  if (loading) {
+    regionLoadingTimer = setTimeout(() => {
+      showRegionLoading.value = true;
+    }, 350);
+  } else {
+    showRegionLoading.value = false;
+  }
+});
+
+const regionLayerStyle = computed(() => {
+  const r = renderedRect.value;
+  if (!r) return { display: "none" };
+  return {
+    left: `${r.left}px`,
+    top: `${r.top}px`,
+    width: `${r.width}px`,
+    height: `${r.height}px`,
+  };
+});
+
+// Position one box hotspot (normalised [x, y, w, h]) within the rendered-image rect.
+function boxStyle(box) {
+  if (!Array.isArray(box) || box.length !== 4) return {};
+  const [x, y, w, h] = box;
+  return {
+    left: `${x * 100}%`,
+    top: `${y * 100}%`,
+    width: `${w * 100}%`,
+    height: `${h * 100}%`,
+  };
+}
+
+// Click a box → open the zoom framed to that region (no heatmap/box in the zoom view).
+function zoomToRegion(box) {
+  const side = taggedSide.value;
+  const target = box || taggedRegion.value?.boxes?.[0];
+  if (!side || !target) return;
+  openZoom(side.id, side.ext, target);
+}
+
 // --- Zoom: click an image to inspect it full-screen; scroll/buttons magnify, drag-scroll pans.
-const zoom = ref(null); // { src } or null
+const zoom = ref(null); // { src, box } or null
 const zoomScale = ref(1);
 const zoomNaturalW = ref(0);
+const zoomNaturalH = ref(0);
 
 // The hint pill sits at bottom-centre and would otherwise permanently cover that
 // part of the image (native scroll can't pan content out from under a fixed pill).
@@ -1197,8 +1309,11 @@ const zoomStyle = computed(() =>
     : {},
 );
 
-function openZoom(id, ext) {
-  zoom.value = { src: imgSrc(id, ext) };
+// openZoom takes an optional normalised box [x, y, w, h]: when given, onZoomLoad frames the
+// zoom on that region (scale + scroll) instead of fitting the whole image. The zoom view
+// never renders the heatmap/box overlay — it's the raw image, just framed to the region.
+function openZoom(id, ext, box = null) {
+  zoom.value = { src: imgSrc(id, ext), box };
   zoomScale.value = 1;
   zoomNaturalW.value = 0;
   pokeHint();
@@ -1208,13 +1323,55 @@ function closeZoom() {
   clearHintTimer();
 }
 function onZoomLoad(event) {
-  // Start at "fit the viewport height" so detail is already visible, then let the
-  // user magnify further. naturalWidth drives the pixel width we render at.
   const img = event.target;
-  zoomNaturalW.value = img.naturalWidth || 0;
-  const fitByHeight =
-    img.naturalHeight > 0 ? (window.innerHeight * 0.92) / img.naturalHeight : 1;
+  const nw = img.naturalWidth || 0;
+  const nh = img.naturalHeight || 0;
+  zoomNaturalW.value = nw;
+  zoomNaturalH.value = nh;
+  const box = zoom.value?.box || null;
+  const container = img.parentElement; // .rf-zoom (the scroll container)
+  if (box && nw && nh && container) {
+    // Frame the region: scale so the box (nearly) fills the viewport, contained, with a
+    // little breathing room, then scroll so the box centre sits in the viewport centre.
+    const availW = container.clientWidth;
+    const availH = container.clientHeight;
+    const boxW = nw * box[2];
+    const boxH = nh * box[3];
+    const pad = 0.9; // leave a margin around the region so it isn't edge-to-edge
+    const scale = Math.max(
+      0.25,
+      Math.min((availW / boxW) * pad, (availH / boxH) * pad, 12),
+    );
+    zoomScale.value = scale;
+    // Wait for the new width to lay out before reading/setting scroll (clamped by the
+    // browser to the scrollable range, so over-shooting on a small image is harmless).
+    nextTick(() => {
+      const cx = nw * (box[0] + box[2] / 2) * scale;
+      const cy = nh * (box[1] + box[3] / 2) * scale;
+      container.scrollLeft = cx - availW / 2;
+      container.scrollTop = cy - availH / 2;
+    });
+    return;
+  }
+  // Plain zoom: start at "fit the viewport height" so detail is already visible.
+  const fitByHeight = nh > 0 ? (window.innerHeight * 0.92) / nh : 1;
   zoomScale.value = Math.max(0.25, Math.min(fitByHeight, 4));
+}
+// Escape the framed view: reset to fit-the-whole-image and recentre. The box was only a
+// hint, so dropping it here keeps the user in plain-zoom mode afterwards.
+function fitZoom() {
+  const nh = zoomNaturalH.value;
+  const fit = nh > 0 ? (window.innerHeight * 0.92) / nh : 1;
+  zoomScale.value = Math.max(0.25, Math.min(fit, 4));
+  if (zoom.value) zoom.value = { ...zoom.value, box: null };
+  nextTick(() => {
+    const el = document.querySelector(".rf-zoom");
+    if (el) {
+      el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+      el.scrollTop = 0;
+    }
+  });
+  pokeHint();
 }
 function nudgeZoom(factor) {
   zoomScale.value = Math.max(0.1, Math.min(zoomScale.value * factor, 12));
@@ -1295,7 +1452,6 @@ function handleKeyDown(event) {
   if (
     current.value &&
     !pendingDecision.value &&
-    !store.previewOpen &&
     !zoom.value &&
     (event.key === "ArrowLeft" || event.key === "ArrowRight")
   ) {
@@ -1330,24 +1486,18 @@ function handleKeyDown(event) {
     return;
   }
 
-  // Escape unwinds the topmost layer: tag menu → zoom → preview → pane
-  // selection → overlay. A pane selection is cleared before the overlay closes,
-  // so the first Esc drops the selection and the second leaves.
+  // Escape unwinds the topmost layer: tag menu → zoom → pane selection → overlay.
+  // A pane selection is cleared before the overlay closes, so the first Esc drops
+  // the selection and the second leaves.
   if (key === "escape") {
     if (tagApplyOpen.value) closeTagApply();
     else if (zoom.value) closeZoom();
-    else if (store.previewOpen) store.previewOpen = false;
     else if (selectedPaneIds.value.length) selectedPaneIds.value = [];
     else emit("close");
     event.preventDefault();
     event.stopImmediatePropagation();
     return;
   }
-
-  // The preview modal is a read-only spot-check — don't let review keys resolve the
-  // queue underneath it (clicking an image to zoom still works). A zoomed preview
-  // image is fine to keep open; only Esc (above) dismisses it.
-  if (store.previewOpen) return;
 
   let handled = true;
   if (key === "l") {
@@ -1366,6 +1516,10 @@ function handleKeyDown(event) {
     closeZoom();
   } else if (key === "t") {
     openTagApply();
+  } else if (key === "h") {
+    // Toggle the anomaly heatmap/box, only when there's one to show for this card.
+    if (hasRegion.value) store.setHeatmapEnabled(!store.heatmapEnabled);
+    else handled = false;
   } else {
     handled = false;
   }
@@ -1388,6 +1542,9 @@ onUnmounted(() => {
   document.removeEventListener("pointerdown", handleTagOutsideClick, true);
   window.removeEventListener("resize", positionTagMenu);
   clearHintTimer();
+  if (regionLoadingTimer) clearTimeout(regionLoadingTimer);
+  flaggedRO?.disconnect();
+  flaggedRO = null;
 });
 </script>
 
@@ -1431,8 +1588,15 @@ onUnmounted(() => {
 .rf-shell :deep(.overlay-toolbar-actions) {
   gap: var(--space-2);
 }
+/* Title sits next to Close and does NOT grow (the shell default is flex:1, which
+   would shove the tag/scope groups to the right edge); a .rf-spacer pushes the
+   progress block right instead, matching the design. */
 .rf-shell :deep(.overlay-toolbar-title) {
-  font-size: var(--text-xs);
+  flex: 0 0 auto;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 .rf-shell :deep(.overlay-toolbar-close) {
   font-size: var(--text-2xs);
@@ -1447,29 +1611,59 @@ onUnmounted(() => {
 .rf-field-label {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
+
+/* Vertical hairline between toolbar groups (title | tag | scope). */
+.rf-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 24px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.18);
+}
+/* Flexible spacer: separates the left cluster (title + tag controls) from the
+   right cluster (scope filters + progress). */
+.rf-spacer {
+  flex: 1 1 auto;
+  min-width: var(--space-3);
+}
+/* Penalised-only filter as a compact toggle button (not a checkbox + label):
+   neutral pill when off, error-tinted when on. */
 .rf-penalised-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  cursor: pointer;
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
-}
-.rf-penalised-toggle input {
   cursor: pointer;
-  accent-color: rgb(var(--v-theme-error));
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.rf-penalised-toggle:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 .rf-penalised-toggle--on {
+  border-color: rgb(var(--v-theme-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 15%, transparent);
   color: rgb(var(--v-theme-error));
 }
-/* Shared neutral dark control. The ~dozen neutral buttons/selects in this overlay
-   (select, tag trigger, retry, bulk threshold/undo/preview, confirm, preview-close,
-   twin-fix) all wear the same dark-surface skin: faint fill, low-contrast border, sm
-   radius, lift on hover, fade when disabled. Define it once here; each control keeps
-   only its own size/padding/width overrides in its own rule. Semantic-coloured buttons
-   (.rf-bulk-btn, .rf-action--*, .rf-confirm-btn--apply) deliberately do NOT use this. */
+/* Shared neutral dark control. The neutral buttons/selects in this overlay
+   (scope selects, tag trigger, retry, confirm, twin-fix) all wear the same
+   dark-surface skin: faint fill, low-contrast border, sm radius, lift on hover,
+   fade when disabled. Define it once here; each control keeps only its own
+   size/padding/width overrides in its own rule. Semantic-coloured buttons
+   (.rf-action--*, .rf-confirm-btn--apply) deliberately do NOT use this. */
 .rf-control,
 .rf-twin-fix {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
@@ -1490,8 +1684,20 @@ onUnmounted(() => {
 .rf-select {
   height: 32px;
   padding: 0 var(--space-2);
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   max-width: 280px;
+  /* The overlay chrome is always dark (see .rf-shell), but a native <select>'s
+     popup is painted by the OS/browser and defaults to a light background while
+     inheriting our light control text — unreadable. color-scheme:dark switches
+     the native popup to dark; the explicit option colours below are the
+     cross-browser belt-and-braces for engines that paint option backgrounds. */
+  color-scheme: dark;
+}
+/* The dropdown option list, made legible against the dark overlay chrome. */
+.rf-select option {
+  background-color: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 /* Scope filters sit in the same row as the tag picker; keep them compact so the row
    stays tidy and wraps cleanly when narrow. Native <select> clips the value to this width
@@ -1514,7 +1720,7 @@ onUnmounted(() => {
 .rf-tag-pick {
   position: relative;
   width: 150px;
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
 }
 .rf-tag-trigger {
   display: flex;
@@ -1524,7 +1730,8 @@ onUnmounted(() => {
   width: 100%;
   height: 32px;
   padding: 0 var(--space-3);
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
 }
 .rf-tag-trigger-label {
   overflow: hidden;
@@ -1621,58 +1828,34 @@ onUnmounted(() => {
   font-size: var(--text-xs);
 }
 
+/* Progress: a single right-aligned row — "{n} left" then the colour-coded tally. */
 .rf-progress {
-  margin-left: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--space-1);
-}
-.rf-progress-remaining {
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-2xs);
-}
-.rf-progress-tally {
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: var(--text-2xs);
-}
-
-.rf-bulkbar {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  background: rgb(var(--v-theme-dark-surface));
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
-.rf-bulk-thresh select {
-  padding: var(--space-2) var(--space-3);
-  margin-left: var(--space-2);
-}
-.rf-bulk-btn {
-  background: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-  border: 1px solid rgb(var(--v-theme-success));
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-4);
+.rf-progress-remaining {
   font-weight: var(--weight-semibold);
-  cursor: pointer;
+  font-size: var(--text-sm);
 }
-.rf-bulk-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-success), 0.85);
+.rf-progress-tally {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
-.rf-bulk-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.rf-tally {
+  font-weight: var(--weight-regular);
 }
-.rf-bulk-undo {
-  margin-left: auto;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+.rf-tally--removed {
+  color: rgb(var(--v-theme-error));
 }
-.rf-bulk-undo button {
-  padding: var(--space-2) var(--space-3);
+.rf-tally--added {
+  color: rgb(var(--v-theme-primary));
+}
+.rf-tally--kept {
+  color: rgb(var(--v-theme-success));
 }
 
 .rf-body {
@@ -1817,78 +2000,83 @@ onUnmounted(() => {
   text-align: center;
   margin: 0;
 }
-/* Group banner: announces the current verdict bucket and what to do. The
-   left accent + icon are tinted per bucket. */
-.rf-bucket {
+/* Combined prompt + guidance banner: merges the verdict bucket and the review
+   question into one strip. The bucket's accent (set per-corner below) colours the
+   icon, the 4px left border, a tint of the fill, and the title pill; with no
+   tagger prediction the neutral variant leaves the accent var unset. */
+.rf-banner {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-4);
   width: 100%;
-  max-width: 760px;
+  max-width: 1180px;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  border: 1px solid var(--rf-bucket-accent, rgba(var(--v-theme-on-dark-surface), 0.14));
-  border-left-width: 4px;
+  border: 1px solid
+    var(--rf-banner-accent, rgba(var(--v-theme-on-dark-surface), 0.18));
+  border-left: 4px solid
+    var(--rf-banner-accent, rgba(var(--v-theme-on-dark-surface), 0.4));
   background: color-mix(
     in srgb,
-    var(--rf-bucket-accent, rgb(var(--v-theme-on-dark-surface))) 14%,
-    rgba(var(--v-theme-dark-surface), 0.6)
+    var(--rf-banner-accent, rgb(var(--v-theme-on-dark-surface))) 12%,
+    rgb(var(--v-theme-dark-surface))
   );
 }
-.rf-bucket-icon {
-  color: var(--rf-bucket-accent, currentColor);
+.rf-banner-icon {
+  color: var(--rf-banner-accent, currentColor);
   flex-shrink: 0;
 }
-.rf-bucket-text {
+.rf-banner-text {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
+  gap: 2px;
   text-align: left;
 }
-.rf-bucket-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-bold);
+.rf-banner-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-on-dark-surface));
 }
-.rf-bucket-meaning {
+.rf-banner-meaning {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.72);
 }
-.rf-bucket-count {
+.rf-banner-aside {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+.rf-banner-pill {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  color: var(--rf-banner-accent);
+  background: color-mix(in srgb, var(--rf-banner-accent) 22%, transparent);
+}
+.rf-banner-count {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.rf-bucket--neither {
-  --rf-bucket-accent: rgb(var(--v-theme-error));
+.rf-banner--neither {
+  --rf-banner-accent: rgb(var(--v-theme-error));
 }
-.rf-bucket--both {
-  --rf-bucket-accent: rgb(var(--v-theme-success));
+.rf-banner--both {
+  --rf-banner-accent: rgb(var(--v-theme-primary));
 }
-.rf-bucket--leftonly {
-  --rf-bucket-accent: rgb(var(--v-theme-tertiary));
+.rf-banner--leftonly {
+  --rf-banner-accent: rgb(var(--v-theme-accent));
 }
-.rf-bucket--rightonly {
-  --rf-bucket-accent: rgb(var(--v-theme-warning));
-}
-
-.rf-question {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-bold);
-  text-align: center;
-}
-.rf-question-sub {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+.rf-banner--rightonly {
+  --rf-banner-accent: rgb(var(--v-theme-tertiary));
 }
 
 .rf-pair {
@@ -1897,40 +2085,64 @@ onUnmounted(() => {
   display: flex;
   gap: var(--space-5);
   width: 100%;
+  /* Match the banner's cap so the picture frame and the banner above it are the
+     same width (both centred in .rf-review). */
+  max-width: 1180px;
   justify-content: center;
   align-items: stretch;
 }
+/* Each pane is a bordered card: a header strip (id + prediction + confidence)
+   over an image that fills the rest, with an optional vote-hint foot. The flagged
+   (left) pane carries the accent border. */
 .rf-pane {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   min-height: 0;
   flex: 1 1 0;
   max-width: 50%;
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: rgba(var(--v-theme-on-dark-surface), 0.04);
+}
+.rf-pane--flagged {
+  border-color: rgb(var(--v-theme-accent));
+}
+.rf-pane--selected {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: -1px;
 }
 .rf-pane-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
 }
-.rf-pane-title {
-  font-weight: var(--weight-semibold);
-}
-.rf-chip {
+.rf-pane-id {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: var(--text-2xs);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+.rf-pane-pred {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-2xs);
+}
+.rf-pane-pred-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
-.rf-chip--has {
-  background: rgba(var(--v-theme-error), 0.18);
-  color: rgb(var(--v-theme-error));
-}
-.rf-chip--missing {
-  background: rgba(var(--v-theme-success), 0.16);
-  color: rgb(var(--v-theme-success));
+.rf-pane-pred-label--has {
+  color: rgb(var(--v-theme-accent));
 }
 /* Image area wraps the <img> so the magnifier button and selection check can
    be positioned over it. Takes the flex space the <img> used to. */
@@ -1940,6 +2152,7 @@ onUnmounted(() => {
   min-height: 0;
   min-width: 0;
   display: flex;
+  background: rgb(var(--v-theme-dark-surface));
 }
 .rf-img {
   flex: 1;
@@ -1948,7 +2161,6 @@ onUnmounted(() => {
   max-width: 100%;
   object-fit: contain;
   object-position: center;
-  border-radius: var(--radius-md);
   background: rgb(var(--v-theme-dark-surface));
   /* Click selects now; the magnifier button / scroll wheel zoom. */
   cursor: pointer;
@@ -1993,20 +2205,166 @@ onUnmounted(() => {
 .rf-pane--selected .rf-pane-check {
   display: inline-flex;
 }
-.rf-pane--selected .rf-img {
-  outline: 3px solid rgb(var(--v-theme-primary));
-  outline-offset: -3px;
+
+/* Heatmap/box visibility toggle in the flagged pane head. Compact icon button in the
+   neutral dark-control skin; pushed to the right of the head. When ON it wears the pane's
+   key-state accent (the same accent that borders the flagged pane). */
+/* The Tag-location toggle reads as an anomaly control, so it is red (matching the
+   red anomaly tags and the warm heatmap). Faint red when off, a stronger red fill
+   when on; state is also carried by aria-pressed and the title. */
+.rf-heatmap-toggle {
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, rgb(var(--v-theme-error)) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 10%, transparent);
+  color: rgb(var(--v-theme-error));
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+.rf-heatmap-toggle-label {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.rf-heatmap-toggle:hover {
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 18%, transparent);
+}
+.rf-heatmap-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.rf-heatmap-toggle--on {
+  border-color: rgb(var(--v-theme-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 30%, transparent);
+  color: rgb(var(--v-theme-error));
+}
+
+/* Anomaly overlay layer, positioned to the image's rendered content rect (see
+   renderedRect in the script). Visual only — the layer doesn't catch pointer events; the
+   box hotspot inside re-enables them for itself. */
+.rf-region {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+.rf-region-heatmap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  opacity: 0.9;
+  pointer-events: none;
+  animation: rf-region-fade var(--dur-2) var(--ease-decelerate);
+}
+@keyframes rf-region-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.9;
+  }
+}
+/* The bounding box doubles as the click-to-zoom hotspot. Accent border with a scrim ring
+   so it reads on any photo; subtle accent wash + magnifier on hover. */
+.rf-region-box {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: var(--space-1);
+  border: 2px solid rgb(var(--v-theme-accent));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-scrim), 0.5);
+  cursor: zoom-in;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+.rf-region-box:hover {
+  background: color-mix(in srgb, rgb(var(--v-theme-accent)) 16%, transparent);
+}
+.rf-region-box:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.rf-region-box-icon {
+  color: rgb(var(--v-theme-accent));
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-standard);
+}
+.rf-region-box:hover .rf-region-box-icon,
+.rf-region-box:focus-visible .rf-region-box-icon {
+  opacity: 1;
+}
+
+/* "Locating…" indicator while the region is being fetched (model load + Grad-CAM).
+   A small scrim pill over the flagged image with an indeterminate progress bar —
+   the load has no measurable percentage, so the bar conveys activity, not a value. */
+.rf-region-loading {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-scrim), 0.72);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  pointer-events: none;
+}
+.rf-region-loading-bar {
+  position: relative;
+  width: 120px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-dark-surface), 0.2);
+  overflow: hidden;
+}
+.rf-region-loading-fill {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  animation: rf-region-indeterminate 1.1s var(--ease-standard) infinite;
+}
+@keyframes rf-region-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
 }
 .rf-pane-foot {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
   font-size: var(--text-2xs);
 }
 .rf-pane-conf {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  white-space: nowrap;
 }
 .rf-twin-fix {
   display: inline-flex;
@@ -2050,70 +2408,30 @@ onUnmounted(() => {
   padding: 1px var(--space-2);
   font-size: var(--text-2xs);
 }
-.rf-action--remove {
-  background: rgb(var(--v-theme-error));
-  border-color: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-}
-.rf-action--remove:hover {
-  background: rgba(var(--v-theme-error), 0.85);
-}
-.rf-action--add {
-  background: rgb(var(--v-theme-success));
-  border-color: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-}
-.rf-action--add:hover {
-  background: rgba(var(--v-theme-success), 0.85);
-}
-.rf-action--keep-good {
-  background: rgb(var(--v-theme-success));
-  border-color: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-}
-.rf-action--keep-good:hover {
-  background: rgba(var(--v-theme-success), 0.85);
-}
-.rf-action--keep:hover,
-.rf-action--skip:hover,
-.rf-action--undo:hover {
+/* Decisions read as one neutral set; only the tagger's likely call is lifted with
+   an accent border + tint and a "likely" pip, so the eye lands on it without the
+   whole row turning into competing colours. */
+.rf-action:hover:not(:disabled) {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 .rf-action--undo:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.rf-action--leftonly {
-  background: rgb(var(--v-theme-info));
-  border-color: rgb(var(--v-theme-info));
-  color: rgb(var(--v-theme-on-info));
+.rf-action--rec {
+  border-color: rgb(var(--v-theme-accent));
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-accent)) 14%,
+    rgba(var(--v-theme-on-dark-surface), 0.08)
+  );
 }
-.rf-action--leftonly:hover {
-  background: rgba(var(--v-theme-info), 0.85);
-}
-.rf-action--both {
-  background: rgb(var(--v-theme-error));
-  border-color: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-}
-.rf-action--both:hover {
-  background: rgba(var(--v-theme-error), 0.85);
-}
-.rf-action--neither {
-  background: rgb(var(--v-theme-success));
-  border-color: rgb(var(--v-theme-success));
-  color: rgb(var(--v-theme-on-success));
-}
-.rf-action--neither:hover {
-  background: rgba(var(--v-theme-success), 0.85);
-}
-.rf-action--swap {
-  background: rgb(var(--v-theme-warning));
-  border-color: rgb(var(--v-theme-warning));
-  color: rgb(var(--v-theme-on-warning));
-}
-.rf-action--swap:hover {
-  background: rgba(var(--v-theme-warning), 0.85);
+.rf-action--rec:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-accent)) 22%,
+    rgba(var(--v-theme-on-dark-surface), 0.08)
+  );
 }
 .rf-actions-label {
   align-self: center;
@@ -2121,20 +2439,12 @@ onUnmounted(() => {
   font-size: var(--text-xs);
   margin-right: var(--space-1);
 }
-.rf-pane--flagged .rf-img {
-  box-shadow: 0 0 0 2px rgba(var(--v-theme-error), 0.55);
-}
-.rf-action--rec {
-  box-shadow: 0 0 0 2px rgba(var(--v-theme-on-dark-surface), 0.55);
-}
 .rf-rec-pip {
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
-  background: rgba(var(--v-theme-on-dark-surface), 0.22);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-2);
+  color: rgb(var(--v-theme-accent));
 }
 .rf-actions-gap {
   width: 32px;
@@ -2196,117 +2506,6 @@ onUnmounted(() => {
   font-style: italic;
 }
 
-.rf-hint {
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  font-size: var(--text-2xs);
-}
-.rf-hint kbd {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-2);
-}
-
-/* Bulk preview modal */
-.rf-preview {
-  position: fixed;
-  /* Below the title bar (0px in a browser) so it never covers the window
-     controls; the card centres within the reduced box. */
-  inset: var(--titlebar-h) 0 0 0;
-  z-index: 4050;
-  background: rgba(var(--v-theme-scrim), 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-6);
-}
-.rf-preview-card {
-  display: flex;
-  flex-direction: column;
-  width: min(1100px, 95vw);
-  max-height: 90vh;
-  background: rgb(var(--v-theme-dark-surface));
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-.rf-preview-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  font-weight: var(--weight-semibold);
-}
-.rf-preview-sub {
-  display: block;
-  font-weight: var(--weight-regular);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-.rf-preview-x {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
-}
-.rf-preview-empty {
-  padding: 40px;
-  text-align: center;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-.rf-preview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--space-4);
-  padding: var(--space-5) var(--space-5);
-  overflow: auto;
-}
-.rf-preview-item {
-  margin: 0;
-  background: rgba(var(--v-theme-on-dark-surface), 0.04);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-}
-.rf-preview-imgs {
-  display: flex;
-  gap: var(--space-2);
-}
-.rf-preview-img {
-  width: 50%;
-  height: 150px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-dark-surface));
-  cursor: zoom-in;
-}
-.rf-preview-img--flagged {
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-error), 0.7);
-}
-.rf-preview-verdict {
-  margin-top: var(--space-2);
-  text-align: center;
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-}
-.rf-preview-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-}
-.rf-preview-note {
-  margin-right: auto;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  font-size: var(--text-xs);
-}
-.rf-bulk-preview {
-  padding: var(--space-2) var(--space-4);
-}
-
 /* Full-screen zoom layer */
 .rf-zoom {
   position: fixed;
@@ -2352,6 +2551,33 @@ onUnmounted(() => {
 }
 .rf-zoom-hint--hidden {
   opacity: 0;
+}
+/* "Show whole image" escape from a framed (box) zoom. Sits bottom-left, opposite the
+   centred hint pill, in the same pill language but interactive. */
+.rf-zoom-fit {
+  position: fixed;
+  left: var(--space-5);
+  bottom: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: rgba(var(--v-theme-dark-surface), 0.9);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+  color: rgba(var(--v-theme-on-dark-surface), 0.85);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+.rf-zoom-fit:hover {
+  background: rgba(var(--v-theme-dark-surface), 0.98);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+.rf-zoom-fit:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .rf-zoom-hint kbd {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);

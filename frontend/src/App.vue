@@ -37,7 +37,6 @@ import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
-import SearchOverlay from "./components/views/SearchOverlay.vue";
 import ReviewFixesOverlay from "./components/views/ReviewFixesOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import { isInternalImageDrag } from "./utils/media.js";
@@ -121,7 +120,7 @@ const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
 const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 14;
-const SIDEBAR_HIDE_BREAKPOINT = 1000;
+const SIDEBAR_HIDE_BREAKPOINT = 790;
 const STATS_HIDE_BREAKPOINT = 1280;
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
@@ -1153,13 +1152,6 @@ function applyRouteToStores() {
 // Sync route → stores on every navigation (and immediately on mount for deep-linking).
 watch(route, applyRouteToStores, { immediate: true, deep: true });
 
-async function handleUpdateSearchQuery(value) {
-  const nextQuery = typeof value === "string" ? value.trim() : "";
-  searchStore.searchInput = nextQuery;
-  searchStore.searchQuery = nextQuery;
-  searchStore.addToSearchHistory(nextQuery);
-}
-
 // Stateless sidebar tabs: switching the Global ↔ Project mode (or the
 // project picker) must not navigate or change the grid — the route is the
 // single source of truth. These handlers therefore only mirror the value
@@ -1328,6 +1320,9 @@ async function fetchConfig() {
     if (typeof res.data.sidebar_docked === "boolean") {
       sidebarStore.setSidebarDocked(res.data.sidebar_docked);
     }
+    if (typeof res.data.sidebar_pinned === "boolean") {
+      sidebarStore.setSidebarPinned(res.data.sidebar_pinned);
+    }
     if (typeof res.data.date_format === "string" && res.data.date_format) {
       userPrefsStore.dateFormat = res.data.date_format;
     }
@@ -1380,6 +1375,10 @@ async function fetchConfig() {
       typeof res.data.sidebar_docked === "boolean"
         ? res.data.sidebar_docked
         : sidebarStore.sidebarDocked;
+    config.sidebar_pinned =
+      typeof res.data.sidebar_pinned === "boolean"
+        ? res.data.sidebar_pinned
+        : sidebarStore.sidebarPinned;
     config.date_format = userPrefsStore.dateFormat;
     config.theme_mode = userPrefsStore.themeMode;
     config.stack_strictness =
@@ -1435,6 +1434,7 @@ async function fetchConfig() {
       expand_all_stacks: gridStore.showStacks,
       compact_mode: gridStore.compactMode,
       sidebar_docked: sidebarStore.sidebarDocked,
+      sidebar_pinned: sidebarStore.sidebarPinned,
       date_format: userPrefsStore.dateFormat,
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
@@ -1498,6 +1498,9 @@ async function patchConfigUIOptions() {
   if (typeof sidebarStore.sidebarDocked === "boolean") {
     patch.sidebar_docked = sidebarStore.sidebarDocked;
   }
+  if (typeof sidebarStore.sidebarPinned === "boolean") {
+    patch.sidebar_pinned = sidebarStore.sidebarPinned;
+  }
   if (
     typeof userPrefsStore.dateFormat === "string" &&
     userPrefsStore.dateFormat
@@ -1560,7 +1563,7 @@ function handleGlobalKeydown(e) {
   if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (!isEditable) {
       e.preventDefault();
-      openSearchOverlay();
+      searchStore.requestSearchFocus();
     }
   }
   if (
@@ -1672,19 +1675,8 @@ function confirmExportZip() {
   exportStore.exportMenuOpen = false;
 }
 
-// --- Search Overlay ---
-
-function openSearchOverlay() {
-  searchStore.searchOverlayVisible = true;
-}
-
-function closeSearchOverlay() {
-  searchStore.searchOverlayVisible = false;
-}
-
 // --- Review tags overlay ---
-// Visibility lives in the store so the grid toolbar can open it directly,
-// the same way the search button toggles searchStore.searchOverlayVisible.
+// Visibility lives in the store so the grid toolbar can open it directly.
 
 function handleClearSearch() {
   searchStore.searchQuery = "";
@@ -1715,10 +1707,6 @@ function applySearchHistory(query) {
   nextTick(() => {
     blurSearchInput();
   });
-}
-
-function clearSearchHistory() {
-  searchStore.clearSearchHistory();
 }
 
 function commitSearch() {
@@ -1865,6 +1853,14 @@ watch(
 
 watch(
   () => sidebarStore.sidebarDocked,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
+  () => sidebarStore.sidebarPinned,
   () => {
     if (!configLoaded.value) return;
     patchConfigUIOptions();
@@ -2323,8 +2319,10 @@ defineExpose({
                 @update:visible-range-label="
                   gridStore.visibleRangeLabel = $event
                 "
+                @update:match-count="gridStore.matchCount = $event"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
+                @local-import="handleLocalImport"
                 @confirm-export-zip="confirmExportZip"
               />
             </div>
@@ -2432,14 +2430,6 @@ defineExpose({
           </div>
         </main>
       </div>
-      <SearchOverlay
-        v-if="searchStore.searchOverlayVisible"
-        :modelValue="searchStore.searchQuery"
-        :history="searchStore.searchHistory"
-        @search="handleUpdateSearchQuery"
-        @close="closeSearchOverlay"
-        @clear-history="clearSearchHistory"
-      />
       <ReviewFixesOverlay
         v-if="reviewFixesStore.overlayOpen"
         :backendUrl="BACKEND_URL"
@@ -2447,7 +2437,7 @@ defineExpose({
       />
     </div>
     <button
-      v-show="userPrefsStore.showKeyboardHint"
+      v-show="userPrefsStore.showKeyboardHint && !reviewFixesStore.overlayOpen"
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,

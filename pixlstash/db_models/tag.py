@@ -19,12 +19,10 @@ DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     "flux chin": 1,
     "silicone breasts": 0,
     "malformed foot": 4,
-    "pixelated": 2,
     # IQA / signal-degradation tags (added 2026-06-20). Weights are an initial
     # proposal to tune; the tagger detection thresholds come from the post-train gate.
-    "compression artifacts": 3,
+    "blocky": 3,
     "noise": 2,
-    "oversaturation": 2,
     "watermark": 4,
 }
 # Tags that PixlTagger merges into a parent just before training (its tag_remap),

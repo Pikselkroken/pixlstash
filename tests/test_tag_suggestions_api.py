@@ -544,6 +544,19 @@ def _set_embedding(server, pic_id, vec):
     server.vault.db.run_task(upd)
 
 
+def _set_phash(server, pic_id, phash_int):
+    """Store a 64-bit dhash as the 16-char lowercase hex string the worker writes."""
+    hex_str = f"{phash_int:016x}"
+
+    def upd(session):
+        pic = session.get(Picture, pic_id)
+        pic.perceptual_hash = hex_str
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(upd)
+
+
 def test_scan_tag_builds_and_rebuilds_queue():
     from pixlstash.services import tag_scan_service
 
@@ -577,6 +590,50 @@ def test_scan_tag_builds_and_rebuilds_queue():
         assert res2["count"] == res["count"]
         rows2 = client.get("/tag_suggestions").json()
         assert len(rows2) == len(rows)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scan_tag_prefers_perceptual_near_duplicate_twin():
+    """The displayed twin switches to the opposite-labelled perceptual near-duplicate even
+    when a different picture is the CLIP-nearest opposite, and eligibility is unchanged."""
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        # Three pictures. A is the tagged suspect. C is A's CLIP-nearest opposite (highest
+        # cosine). B is the perceptual near-duplicate of A (tiny dhash hamming) but a
+        # LOWER cosine than C — without the override A's twin would be C, with it B wins.
+        a = _upload_picture(client)  # Bad1.png
+        b = _upload_named(client)  # distinct in-memory PNG
+        c = _upload_named(client)  # distinct in-memory PNG
+
+        # A points along axis 0. C is nearly parallel (cosine ~0.9999). B is further off.
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, c, [0.9999, 0.0141] + [0.0] * 510)  # closest to A
+        _set_embedding(server, b, [0.9, 0.4359] + [0.0] * 510)  # opposite, farther
+
+        # A and B are perceptual near-duplicates (2-bit dhash hamming); C is far away.
+        _set_phash(server, a, 0xFFFF_FFFF_FFFF_FFFF)
+        _set_phash(server, b, 0xFFFF_FFFF_FFFF_FFFC)  # 2 bits from A
+        _set_phash(server, c, 0x0000_0000_0000_0000)  # 64 bits from A
+
+        _seed_tag(server, a, "malformed hand")  # only A is tagged
+
+        res = tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)
+        assert res["scanned"] == 3
+
+        rows = client.get("/tag_suggestions").json()
+        # Find the suggestion whose pair involves the tagged suspect A.
+        pair_rows = [r for r in rows if a in {r["picture_id"], r["twin_picture_id"]}]
+        assert pair_rows, "expected a suggestion involving the tagged picture A"
+        row = pair_rows[0]
+        # The displayed twin is the perceptual near-dup B, not the CLIP-nearest C.
+        assert {row["picture_id"], row["twin_picture_id"]} == {a, b}
+        assert c not in {row["picture_id"], row["twin_picture_id"]}
+        assert "dhash hamming" in row["reason"]
     finally:
         server.vault.close()
         temp_dir.cleanup()

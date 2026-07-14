@@ -128,10 +128,11 @@ body {
    (Earlier this remapped the sidebar onto `background` unconditionally, which made
    those token edits no-ops in the desktop shell.) */
 
-/* Give the sidebar's "Library" header band the same height as the toolbar and the
-   stats header so the three columns line up at the top in the desktop shell. */
+/* Give the sidebar's tab header band the same height as the toolbar so the columns
+   line up at the top in the desktop shell. MUST stay in sync with the toolbar
+   height (.selection-bar-overlay) and the grid's --selbar-height. */
 html.is-desktop .sidebar-view-header {
-  min-height: 48px;
+  min-height: 36px;
 }
 
 /* Keep the custom title bar visible (and its drag region + window controls

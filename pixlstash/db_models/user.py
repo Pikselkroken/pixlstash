@@ -33,6 +33,9 @@ class User(SQLModel, table=True):
     compact_mode: Optional[bool] = Field(default=True)
     # Sidebar width preference: False = full sidebar, True = narrow icon dock.
     sidebar_docked: Optional[bool] = Field(default=False)
+    # Sidebar visibility preference: True = pinned open (takes layout space),
+    # False = auto-hide (slides in as an overlay on hover). Set in Settings.
+    sidebar_pinned: Optional[bool] = Field(default=True)
     # Dismissal of the "deleted pictures still in snapshots" warning shown after
     # a permanent purge. True = the user opted out of seeing it again.
     hide_purge_snapshot_warning: Optional[bool] = Field(default=False)

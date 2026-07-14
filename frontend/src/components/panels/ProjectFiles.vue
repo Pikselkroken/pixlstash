@@ -393,14 +393,14 @@ onMounted(() => {
   min-height: 38px;
   cursor: pointer;
   user-select: none;
-  color: rgba(var(--v-theme-sidebar-text), 0.58);
+  color: rgb(var(--v-theme-sidebar-text));
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
 
 .pf-header:hover {
-  color: rgba(var(--v-theme-sidebar-text), 0.85);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .pf-header.pf-drag-active {
@@ -408,7 +408,7 @@ onMounted(() => {
 }
 
 .pf-header-icon {
-  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   margin-right: var(--space-2);
 }
 

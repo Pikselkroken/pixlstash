@@ -88,6 +88,12 @@ BATCH_CHARACTER_LIKENESS_MAX_IDS = 1000
 # batch-likeness cap above (reject over the limit rather than truncate).
 DETECT_MAX_IDS = 1000
 
+# Upper bound on picture_ids per bulk soft-delete request. A scoped token runs one
+# per-id scope DB read, and the delete pass one row fetch per id, so an unbounded
+# list would serialise that much work on the DB queue from a single request.
+# Mirrors the caps above; the frontend chunks larger selections into multiple calls.
+BULK_DELETE_MAX_IDS = 1000
+
 
 class _DetectedFace:
     """Adapter exposing an in-memory face detection as the ``(.id, .features)``
@@ -385,6 +391,15 @@ class PictureDeleteResponse(BaseModel):
 
     status: str
     message: str
+
+
+class BulkPictureDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    # Number of pictures newly soft-deleted by this request (already-deleted or
+    # missing ids are skipped and not counted).
+    deleted_count: int
 
 
 def register_routes(router, server):
@@ -2397,3 +2412,81 @@ def register_routes(router, server):
         return JSONResponse(
             content={"status": "success", "message": f"Picture id={id} deleted."}
         )
+
+    @router.delete(
+        "/pictures",
+        summary="Bulk move pictures to scrapheap",
+        description=(
+            "Soft-deletes multiple pictures in one request by marking them deleted "
+            '(they appear in scrapheap views). Body: {"picture_ids": [int, ...]}. '
+            "Single-round-trip replacement for issuing one DELETE /pictures/{id} per "
+            "id, which floods the client connection pool on large selections."
+        ),
+        response_model=BulkPictureDeleteResponse,
+    )
+    def delete_pictures_bulk(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        maybe_ids = payload.get("picture_ids") if isinstance(payload, dict) else None
+        if not isinstance(maybe_ids, list) or not maybe_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        # Cap the id count so one request can't serialise unbounded per-id scope
+        # reads + row fetches on the DB queue (mirrors DETECT_MAX_IDS et al.).
+        if len(maybe_ids) > BULK_DELETE_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"picture_ids exceeds the maximum of {BULK_DELETE_MAX_IDS} "
+                    "ids per request"
+                ),
+            )
+        try:
+            pic_ids = [int(pid) for pid in maybe_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="picture_ids must contain valid integers"
+            )
+
+        # Scope guard (BOLA): enforce per-picture scope on EVERY id BEFORE any write,
+        # mirroring the single-delete guard in delete_picture. enforce_picture_scope
+        # fails closed (returns only for unscoped/owner tokens; 403s anything a scoped
+        # token can't reach), so a single out-of-scope id aborts the whole request and
+        # no partial soft-delete leaks outside the token's resource.
+        for pic_id in pic_ids:
+            enforce_picture_scope(server, request, pic_id)
+
+        def delete_pics(session, ids):
+            newly_deleted: list[int] = []
+            affected_stacks: set = set()
+            for pid in ids:
+                pic = session.get(Picture, pid)
+                if not pic or pic.deleted:
+                    continue
+                pic.deleted = True
+                session.add(pic)
+                # Soft-deleting a stack member must not strand stack_position 0 (the
+                # whole stack would vanish from the grid). Collect the affected stacks
+                # and normalise each once after every selected member is marked deleted,
+                # so a still-live member is promoted to leader.
+                if pic.stack_id is not None:
+                    affected_stacks.add(pic.stack_id)
+                newly_deleted.append(pid)
+            for stack_id in affected_stacks:
+                normalize_stack_positions(session, stack_id)
+            session.commit()
+            return newly_deleted
+
+        deleted_ids = server.vault.db.run_task(delete_pics, pic_ids)
+        # Soft-delete removes the cards from active grid views. Broadcast a single
+        # ``removed`` event so other tabs drop the stale cards in one update.
+        if deleted_ids:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": deleted_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "removed",
+                },
+            )
+        return {"status": "success", "deleted_count": len(deleted_ids)}
