@@ -33,8 +33,6 @@ from .text_score_task import TextScoreTask
 from .missing_text_score_finder import MissingTextScoreFinder
 from .ensure_gfs_snapshot_finder import EnsureGfsSnapshotFinder
 from .ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
-from .picture_split_assignment_task import PictureSplitAssignmentTask
-from .picture_split_assignment_finder import PictureSplitAssignmentFinder
 from .tag_health_auto_rebuild_task import TagHealthAutoRebuildTask
 from .tag_health_auto_rebuild_finder import TagHealthAutoRebuildFinder
 
@@ -73,8 +71,6 @@ __all__ = [
     "MissingTextScoreFinder",
     "EnsureGfsSnapshotFinder",
     "EnsureGfsSnapshotTask",
-    "PictureSplitAssignmentTask",
-    "PictureSplitAssignmentFinder",
     "TagHealthAutoRebuildTask",
     "TagHealthAutoRebuildFinder",
 ]

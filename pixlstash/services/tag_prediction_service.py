@@ -90,46 +90,6 @@ def load_raw_label_thresholds(meta_path: str | None) -> dict[str, float]:
         return {}
 
 
-def load_label_thresholds_min_precision(
-    meta_path: str | None, default: float = 0.75
-) -> float:
-    """Load the tagger's configured ``label_thresholds_min_precision`` policy value.
-
-    The PixlStash tagger's own threshold-derivation policy (used at training
-    time to pick each label's production threshold): the minimum precision a
-    threshold must clear before it's accepted, falling back to an F1-max
-    threshold otherwise. Read from the same meta JSON as
-    :func:`load_raw_label_thresholds` so a rederived eval threshold (Wave C's
-    tier 3b) uses the tagger's *actual* configured policy value instead of a
-    hardcoded guess.
-
-    Args:
-        meta_path: Path to the tagger meta JSON file, or None.
-        default: Value to fall back to when the file is missing, unreadable,
-            or lacks the field (matches the current meta's own value so this
-            only diverges from the real policy if the tagger changes it and
-            this default isn't updated to match).
-
-    Returns:
-        The configured minimum precision, or ``default``.
-    """
-    if not meta_path:
-        return default
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        value = meta.get("label_thresholds_min_precision")
-        return float(value) if value is not None else default
-    except Exception:
-        logger.warning(
-            "load_label_thresholds_min_precision: failed to read %r; using default %s",
-            meta_path,
-            default,
-            exc_info=True,
-        )
-        return default
-
-
 def get_predictions(
     vault: "Vault", pic_id: int, status: str | None = None
 ) -> list[TagPrediction]:

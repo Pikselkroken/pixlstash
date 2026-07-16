@@ -58,12 +58,6 @@ from pixlstash.routes.tag_suggestions import (
 )
 from pixlstash.routes.reviews import create_router as create_reviews_router
 from pixlstash.routes.tag_health import create_router as create_tag_health_router
-from pixlstash.routes.picture_splits import (
-    create_router as create_picture_splits_router,
-)
-from pixlstash.routes.tag_eval_slices import (
-    create_router as create_tag_eval_slices_router,
-)
 from pixlstash.routes.tagger_runs import (
     create_router as create_tagger_runs_router,
 )
@@ -1133,9 +1127,6 @@ class Server:
             daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
             insightface_model_pack=self._server_config.get(
                 "insightface_model_pack", "buffalo_l"
-            ),
-            picture_split_auto_assign_enabled=self._server_config.get(
-                "picture_split_auto_assign", True
             ),
         )
 
@@ -2501,16 +2492,6 @@ class Server:
             create_tag_health_router(self),
             prefix=API_V1_PREFIX,
             tags=["tag_health"],
-        )
-        self.api.include_router(
-            create_picture_splits_router(self),
-            prefix=API_V1_PREFIX,
-            tags=["picture_splits"],
-        )
-        self.api.include_router(
-            create_tag_eval_slices_router(self),
-            prefix=API_V1_PREFIX,
-            tags=["tag_eval_slices"],
         )
         self.api.include_router(
             create_tagger_runs_router(self),

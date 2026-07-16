@@ -6,7 +6,6 @@ from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import (
     Picture,
-    PictureSplit,
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
@@ -80,15 +79,6 @@ class BulkPictureTagsResponse(BaseModel):
 
     id: int
     tags: list[TagItemResponse] = []
-    split: Optional[str] = Field(
-        default=None,
-        description=(
-            "TRAIN | EVAL | NEITHER, or null when the picture has no "
-            "PictureSplit row yet -- most pictures, since split assignment "
-            "is triggered explicitly via POST /picture_splits/assign, not "
-            "automatically on import."
-        ),
-    )
 
 
 class ClearedTagPair(BaseModel):
@@ -589,25 +579,10 @@ def create_router(server) -> APIRouter:
                 for pic_id, tag_id, tag_val in rows:
                     if tag_val and pic_id in by_pic:
                         by_pic[pic_id].append({"id": tag_id, "tag": tag_val})
-                # `ids` here is the same list already narrowed by the scope
-                # guard above (owner/unscoped: unfiltered `ids`; scoped
-                # token: intersected with scope_allowed before `fetch` was
-                # called) -- this query never sees an id outside that set,
-                # so the additive `split` field introduces no new authz
-                # surface. Most pictures have no PictureSplit row yet
-                # (assignment is explicit via POST /picture_splits/assign),
-                # hence the `.get(pic_id)` default of None.
-                split_rows = session.exec(
-                    select(PictureSplit.picture_id, PictureSplit.split).where(
-                        PictureSplit.picture_id.in_(ids)
-                    )
-                ).all()
-                split_by_id = {int(pid): split for pid, split in split_rows}
                 return [
                     {
                         "id": pic_id,
                         "tags": by_pic[pic_id],
-                        "split": split_by_id.get(pic_id),
                     }
                     for pic_id in ids
                 ]

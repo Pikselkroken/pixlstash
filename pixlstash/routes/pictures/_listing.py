@@ -22,7 +22,6 @@ from pixlstash.db_models import (
     SortMechanism,
 )
 from pixlstash.db_models.guest_score import GuestScore
-from pixlstash.db_models.picture_split import PictureSplit, SplitValue
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.pixl_logging import get_logger
 from pixlstash.picture_scoring import (
@@ -123,12 +122,6 @@ class GridPicture(BaseModel):
     file_path: str | None = Field(
         None,
         description="Path relative to the image root (omitted when grid_lite=true).",
-    )
-    split: str | None = Field(
-        None,
-        description="TRAIN | EVAL | NEITHER, or null when the picture has no "
-        "PictureSplit row yet. Only populated when requested via "
-        "fields=grid or an explicit 'split' field projection.",
     )
 
 
@@ -263,14 +256,6 @@ class PictureListFilters:
         ),
         id: list[str] = Query(
             default=[], description="Restrict to specific picture ids (repeatable)."
-        ),
-        split: str | None = Query(
-            None,
-            description="Restrict to pictures with this train/eval split "
-            "assignment: TRAIN | EVAL | NEITHER (case-insensitive). "
-            "Composes with any scope narrowing already in effect for the "
-            "request's token.",
-            examples=["train"],
         ),
     ):
         # Values are intentionally not stored: the handlers read them from
@@ -542,57 +527,6 @@ def select_pictures_for_listing(
                 ]
             else:
                 query_params["id"] = [str(i) for i in shared_id_set]
-
-    # Train/eval split filter (Wave D, design doc §6): narrows query_params["id"]
-    # the exact same way shared_only/scope_picture_id do above, and runs before
-    # every scope-injection branch below resolves its own candidate ids and
-    # intersects them against query_params["id"]. That ordering is what makes
-    # this compose safely with scope: it can only ever shrink the candidate set
-    # a scoped token's own narrowing later intersects against, never widen it,
-    # and the eventual intersection is symmetric regardless of which filter set
-    # query_params["id"] first. (The CHARACTER_LIKENESS sort branch is a known
-    # pre-existing exception -- it resolves candidates without consulting
-    # query_params["id"] at all, so shared_only is already silently not
-    # applied there today; split shares that limitation rather than
-    # introducing a new one. scope_picture_id is the one exception to the
-    # exception: it is intersected directly into that branch's candidate_ids
-    # further down, since it is the narrowest, cross-principal scope.)
-    split_raw = query_params.pop("split", None)
-    if split_raw:
-        split_normalized = str(split_raw).strip().upper()
-        valid_splits = {v.value for v in SplitValue}
-        if split_normalized not in valid_splits:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid split value {split_raw!r}; expected one of "
-                f"{sorted(valid_splits)}",
-            )
-
-        def _fetch_split_ids(session: Session, value: str) -> list[int]:
-            return list(
-                session.exec(
-                    select(PictureSplit.picture_id).where(PictureSplit.split == value)
-                ).all()
-            )
-
-        split_ids = server.vault.db.run_task(
-            _fetch_split_ids, split_normalized, priority=DBPriority.IMMEDIATE
-        )
-        split_id_set = {int(i) for i in split_ids}
-        existing_ids = query_params.get("id")
-        # `existing_ids` may be `[]` -- a real "nothing matches this token's
-        # scope" result already computed by scope_picture_id/shared_only
-        # above -- which is falsy but distinct from "no id filter was ever
-        # set" (None). `is not None` preserves that distinction; a plain
-        # truthiness check would treat the already-narrowed-to-empty scope as
-        # unset and hand back every split-matching picture in the vault,
-        # discarding the scope narrowing entirely.
-        if existing_ids is not None:
-            query_params["id"] = [i for i in existing_ids if int(i) in split_id_set]
-        else:
-            query_params["id"] = [str(i) for i in split_id_set]
-        if not query_params["id"]:
-            return _empty_result()
 
     def _set_candidate_ids_for_session(session: Session):
         return fetch_set_candidate_ids(
@@ -1263,29 +1197,6 @@ def select_pictures_for_listing(
             d["text_score"] = round(ts, 3) if ts is not None and ts >= 0 else None
     if stack_leaders_only:
         result = _enrich_stack_counts(server, result)
-
-    if "split" in metadata_fields and result:
-        # "split" is not a Picture column (see Picture.grid_fields()'s
-        # docstring) -- it's a separate overlay query against PictureSplit,
-        # scoped to exactly the ids already selected above (which have
-        # already passed every scope/filter narrowing this function applies),
-        # so this adds no new authz surface.
-        result_ids = [d["id"] for d in result if d.get("id") is not None]
-        if result_ids:
-
-            def _fetch_split_map(session: Session, ids: list) -> dict:
-                rows = session.exec(
-                    select(PictureSplit.picture_id, PictureSplit.split).where(
-                        PictureSplit.picture_id.in_(ids)
-                    )
-                ).all()
-                return {int(pid): split for pid, split in rows}
-
-            split_map = server.vault.db.run_task(
-                _fetch_split_map, result_ids, priority=DBPriority.IMMEDIATE
-            )
-            for d in result:
-                d["split"] = split_map.get(d.get("id"))
 
     if guest_session_id and result:
         picture_ids_set = {d["id"] for d in result if "id" in d}

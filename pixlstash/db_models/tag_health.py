@@ -39,50 +39,6 @@ class TagHealth(SQLModel, table=True):
         has_model: the tag has prediction rows for the current model version;
             tags with no predictions at all still get a row with
             ``has_model=False`` (the board shows "no model signal").
-        eval_precision / eval_recall / eval_f1: standard P/R/F1 against the
-            tag's frozen :class:`~pixlstash.db_models.tag_eval_slice.TagEvalSlice`,
-            at the threshold named by ``eval_threshold_source``. Populated only
-            when ``eval_metric_kind == "F1"``.
-        eval_ap: non-interpolated Average Precision against the frozen slice
-            (threshold-free). Populated only when ``eval_metric_kind == "AP"``.
-        eval_ap_ci_low / eval_ap_ci_high: picture-level bootstrap 95% CI bounds
-            for ``eval_ap`` (``eval_n_pos >= 25`` only); both NULL when the
-            slice is too small for a CI, or when >10% of bootstrap resamples
-            were degenerate (zero positives) — see
-            :mod:`pixlstash.services.tag_eval_slice_service`.
-        eval_n / eval_n_pos: size of the frozen slice's live-prediction join
-            for the scored model version, and how many of those are POS —
-            trust in eval_ap/eval_f1 hinges on ``eval_n_pos``, not ``eval_n``,
-            because these tags are typically far-more-NEG-than-POS.
-        eval_metric_kind: ``AP`` | ``F1`` | ``insufficient_data`` | ``none``.
-            **Ranking contract**: AP and F1 are different metric kinds, not
-            different confidence levels of the same number — a board sort/rank
-            must partition by ``eval_metric_kind`` (AP-rows rank only against
-            AP-rows, F1-rows only against F1-rows); ``insufficient_data`` and
-            ``none`` rows are excluded from ranking entirely. This is UI/board
-            *rendering* work (out of this table's scope) — documented here so
-            it isn't left implicit for whoever implements the sort.
-        eval_threshold_source: ``calibrated`` | ``carried_forward`` |
-            ``rederived_disjoint_val`` | ``uncalibrated_fallback`` | ``none``.
-            ``none`` covers both "no threshold was used" (AP rows) and "no
-            eval data at all" (``eval_metric_kind == "none"``) — there is no
-            separate "n/a" state.
-        eval_slice_frozen_at: the tag's ``ACTIVE`` ``TagEvalSlice.created_at``;
-            NULL when the tag has never been frozen (no eval columns
-            populated in that case).
-        eval_candidate_n_pos: "if I froze this tag right now" verified-positive
-            count -- the same candidate-selection query and
-            ``has_train_side_conflict`` exclusion
-            :func:`~pixlstash.services.tag_eval_slice_service.freeze_eval_slice_in_session`
-            uses, via the shared
-            :func:`~pixlstash.services.tag_eval_slice_service.count_eval_slice_candidates_in_session`
-            helper, so this can never silently diverge from what a real
-            freeze would produce. Populated for every tag on every rebuild
-            (unlike the ``eval_*`` fields above, which only populate for a
-            tag with an ACTIVE slice) -- this is the pre-freeze eligibility
-            signal (compare against ``MIN_EVAL_N_POS`` in
-            ``tag_eval_slice_service``), those are the post-freeze scored
-            metrics.
     """
 
     __tablename__ = "tag_health"
@@ -110,23 +66,3 @@ class TagHealth(SQLModel, table=True):
     last_reviewed_at: Optional[datetime] = Field(default=None)
 
     computed_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
-
-    # --- Wave C: frozen eval slice metrics (see class docstring). Populated
-    # only for tags with an ACTIVE TagEvalSlice; NULL otherwise. ---
-    eval_precision: Optional[float] = Field(default=None)
-    eval_recall: Optional[float] = Field(default=None)
-    eval_f1: Optional[float] = Field(default=None)
-    eval_ap: Optional[float] = Field(default=None)
-    eval_ap_ci_low: Optional[float] = Field(default=None)
-    eval_ap_ci_high: Optional[float] = Field(default=None)
-    eval_n: Optional[int] = Field(default=None)
-    eval_n_pos: Optional[int] = Field(default=None)
-    eval_slice_frozen_at: Optional[datetime] = Field(default=None)
-    # AP | F1 | insufficient_data | none
-    eval_metric_kind: Optional[str] = Field(default=None)
-    # calibrated | carried_forward | rederived_disjoint_val | uncalibrated_fallback | none
-    eval_threshold_source: Optional[str] = Field(default=None)
-
-    # Pre-freeze eligibility signal (see class docstring): populated for
-    # every tag, not just already-frozen ones.
-    eval_candidate_n_pos: Optional[int] = Field(default=None)

@@ -2,12 +2,6 @@
 the rebuild endpoint's background/progress reporting, no-model-signal rows,
 and staleness detection / auto-rebuild (Spec B,
 docs/reviews/tag-review-board-redesign-ux-spec.md §4).
-
-`_setup()` disables `PictureSplitAssignmentFinder` (Spec A) because
-`_make_eval_candidates` hand-seeds `PictureSplit` rows directly -- this
-file's scope is tag_health, not split assignment (that finder has its own
-dedicated test in test_picture_splits_api.py), so there is nothing to gain
-and a real race to lose by leaving it on here.
 """
 
 import gc
@@ -26,7 +20,6 @@ from pixlstash.db_models import (
     PictureLikeness,
     PictureSet,
     PictureSetMember,
-    PictureSplit,
     PictureStack,
     Tag,
 )
@@ -34,7 +27,6 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.db_models.tagger_run import TaggerRun
 from pixlstash.server import Server
-from pixlstash.services.tag_eval_slice_service import MIN_EVAL_N_POS
 from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
 from tests.utils import upload_pictures_and_wait
 
@@ -47,7 +39,7 @@ def _setup():
     os.makedirs(image_root, exist_ok=True)
     server_config_path = os.path.join(temp_dir.name, "server-config.json")
     with open(server_config_path, "w") as f:
-        f.write(json.dumps({"port": 8000, "picture_split_auto_assign": False}))
+        f.write(json.dumps({"port": 8000}))
     server = Server(server_config_path)
     client = TestClient(server.api)
     resp = client.post(
@@ -104,33 +96,6 @@ def _rebuild_and_wait(client, timeout_s=30):
             return body
         time.sleep(0.1)
     raise AssertionError("tag_health rebuild did not finish in time")
-
-
-def _make_eval_candidates(client, server, tag, n_pos, n_neg):
-    """n_pos + n_neg human-labeled, EVAL-split candidates for *tag*, each its
-    own singleton near-dup component (no train-side conflicts) — mirrors
-    ``_make_candidates`` in test_tag_eval_slices_api.py, the same shape the
-    freeze action (POST /tag_eval_slices) selects from."""
-    states = (["POS"] * n_pos) + (["NEG"] * n_neg)
-    pids = [_upload_named(client) for _ in states]
-
-    def seed(session):
-        for pid, state in zip(pids, states):
-            session.add(PictureSplit(picture_id=pid, split="EVAL", component_key=pid))
-            session.add(
-                TagPrediction(
-                    picture_id=pid,
-                    tag=tag,
-                    confidence=0.9 if state == "POS" else 0.05,
-                    model_version="v1",
-                    label_state=state,
-                    label_source="human",
-                )
-            )
-        session.commit()
-
-    server.vault.db.run_task(seed)
-    return pids
 
 
 def test_tag_health_aggregates_on_fixture_vault():
@@ -703,129 +668,6 @@ def test_tag_health_est_adj_reflects_precision_discount_and_fallback():
         _teardown(temp_dir, server)
 
 
-def test_tag_health_eval_candidate_n_pos_below_floor_for_never_frozen_tag():
-    """A tag that has never been frozen (no ACTIVE TagEvalSlice) still gets
-    eval_candidate_n_pos populated — the "how close to freezable" signal — and
-    the count reflects only the human-labeled EVAL-side positives, below the
-    MIN_EVAL_N_POS floor here."""
-    temp_dir, client, server = _setup()
-    try:
-        tag = "below_floor_tag"
-        assert MIN_EVAL_N_POS == 10  # fixture below assumes this floor value
-        _make_eval_candidates(client, server, tag, n_pos=6, n_neg=3)
-
-        body = _rebuild_and_wait(client)
-        row = {r["tag"]: r for r in body["rows"]}[tag]
-
-        assert row["eval_candidate_n_pos"] == 6
-        # Never frozen: the post-freeze scored fields stay unpopulated.
-        assert row["eval_slice_frozen_at"] is None
-        assert row["eval_n_pos"] is None
-        assert row["eval_metric_kind"] is None
-
-        # A real freeze attempt agrees: same n_pos, and it's rejected for the
-        # same reason the board's count is below the floor.
-        resp = client.post(f"{API}/tag_eval_slices", json={"tag": tag})
-        assert resp.status_code == 200, resp.text
-        freeze_body = resp.json()
-        assert freeze_body["created"] is False
-        assert freeze_body["reason"] == "insufficient_positives"
-        assert freeze_body["n_pos"] == row["eval_candidate_n_pos"] == 6
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_tag_health_eval_candidate_n_pos_at_floor_matches_real_freeze():
-    """A tag at/above the MIN_EVAL_N_POS floor: eval_candidate_n_pos must
-    match exactly what a real POST /tag_eval_slices freeze call produces for
-    the same fixture — the "don't let the board's count silently diverge
-    from what freezing will actually do" guarantee this field exists for."""
-    temp_dir, client, server = _setup()
-    try:
-        tag = "at_floor_tag"
-        _make_eval_candidates(client, server, tag, n_pos=12, n_neg=4)
-
-        body = _rebuild_and_wait(client)
-        row = {r["tag"]: r for r in body["rows"]}[tag]
-        assert row["eval_candidate_n_pos"] == 12
-        # Not yet frozen at the point the board computed this.
-        assert row["eval_slice_frozen_at"] is None
-
-        resp = client.post(f"{API}/tag_eval_slices", json={"tag": tag})
-        assert resp.status_code == 200, resp.text
-        freeze_body = resp.json()
-        assert freeze_body["created"] is True
-        assert freeze_body["n_pos"] == row["eval_candidate_n_pos"] == 12
-        assert freeze_body["n_total"] == 16
-
-        # After the freeze, a rebuild's eval_candidate_n_pos still reflects
-        # "if I froze right now" (unchanged, since candidates didn't change),
-        # independently of the now-populated post-freeze eval_n_pos.
-        body2 = _rebuild_and_wait(client)
-        row2 = {r["tag"]: r for r in body2["rows"]}[tag]
-        assert row2["eval_candidate_n_pos"] == 12
-        assert row2["eval_slice_frozen_at"] is not None
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_tag_health_scoped_eval_candidate_n_pos_stays_vault_wide():
-    """`GET /tag_health?set_id=` restricts est_wrong/est_missing/mismatch to
-    the scope's pictures (see test_tag_health_scoped_restricts_signals_and_tag_list),
-    but eval_candidate_n_pos and the eval_* metric fields must NOT — freeze
-    (POST /tag_eval_slices) has no scope parameter at all and always pulls
-    every EVAL-split human-labeled picture vault-wide.
-
-    This is the regression the audited inconsistency bug is really about: the
-    displayed 'confirmed examples' count must never contradict what clicking
-    the freeze button actually does, even when the board is scoped down to a
-    subset that would, on its own, fall below the freeze floor."""
-    temp_dir, client, server = _setup()
-    try:
-        tag = "scope_eval_tag"
-        assert MIN_EVAL_N_POS == 10  # fixture below assumes this floor value
-        pids = _make_eval_candidates(client, server, tag, n_pos=12, n_neg=4)
-        pos_pids = pids[:12]
-
-        # Scope a picture set to only 3 of the 12 positives — if
-        # eval_candidate_n_pos were (incorrectly) restricted to the scope
-        # like est_wrong/est_missing are, it would read 3, well below
-        # MIN_EVAL_N_POS, even though the tag is freeze-eligible vault-wide.
-        def seed(session):
-            ps = PictureSet(name="eval_scope_set")
-            session.add(ps)
-            session.commit()
-            session.refresh(ps)
-            for pid in pos_pids[:3]:
-                session.add(PictureSetMember(set_id=ps.id, picture_id=pid))
-            session.commit()
-            return ps.id
-
-        set_id = server.vault.db.run_task(seed)
-
-        scoped = client.get(f"{API}/tag_health", params={"set_id": set_id}).json()
-        assert scoped["scoped"] is True
-        assert scoped["eval_vault_wide"] is True
-        srow = {r["tag"]: r for r in scoped["rows"]}[tag]
-        # Vault-wide count (12), not the scoped-down count (3).
-        assert srow["eval_candidate_n_pos"] == 12
-
-        # The unscoped/cached payload also carries the flag.
-        unscoped = _rebuild_and_wait(client)
-        assert unscoped["eval_vault_wide"] is True
-
-        # A real freeze, issued while the board is scoped down, succeeds
-        # exactly as the (vault-wide) displayed count promised — the display
-        # never lies about what clicking the button does.
-        resp = client.post(f"{API}/tag_eval_slices", json={"tag": tag})
-        assert resp.status_code == 200, resp.text
-        freeze_body = resp.json()
-        assert freeze_body["created"] is True
-        assert freeze_body["n_pos"] == srow["eval_candidate_n_pos"] == 12
-    finally:
-        _teardown(temp_dir, server)
-
-
 # --------------------------------------------------------------------------- #
 # Spec B: staleness detection (docs/reviews/tag-review-board-redesign-ux-spec.md
 # §4). `_latest_health_relevant_change` mirrors review_service's
@@ -980,11 +822,12 @@ def test_tag_health_scoped_response_is_never_stale():
 
 
 def test_tag_health_auto_rebuild_finder_fires_when_stale_and_respects_debounce():
-    """Spec B backend: a periodic finder (same shape as Spec A's
-    PictureSplitAssignmentFinder) dispatches a rebuild through the same
-    idempotent `start_rebuild` path `POST /tag_health/rebuild` uses when the
-    cache is stale, and debounces — it must not requeue every tick even
-    while the cache stays stale (AUTO_REBUILD_CHECK_INTERVAL_S)."""
+    """Spec B backend: a periodic finder (same shape as
+    EnsureGfsSnapshotFinder's monotonic-clock check-interval gate)
+    dispatches a rebuild through the same idempotent `start_rebuild` path
+    `POST /tag_health/rebuild` uses when the cache is stale, and debounces —
+    it must not requeue every tick even while the cache stays stale
+    (AUTO_REBUILD_CHECK_INTERVAL_S)."""
     from pixlstash.tasks.tag_health_auto_rebuild_finder import (
         TagHealthAutoRebuildFinder,
     )

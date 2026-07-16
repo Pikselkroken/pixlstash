@@ -204,7 +204,6 @@ def compute_tag_health_rows(
     session: Session,
     progress_cb: Callable[[int, int], None] | None = None,
     picture_ids: set[int] | None = None,
-    meta_path: str | None = None,
 ) -> list[dict]:
     """Compute the board's per-tag signal rows (pure read; no writes).
 
@@ -216,23 +215,6 @@ def compute_tag_health_rows(
     pictures (the scoped board), and only tags that appear on in-scope
     pictures get rows. An empty set yields no rows. ``None`` = whole vault
     (the cached path).
-
-    ``meta_path`` (the currently active tagger's meta.json path, fetched by
-    the caller via ``vault.get_pixlstash_tagger_meta_path()`` *before*
-    dispatching into the DB worker — this function must stay a pure
-    ``*_in_session`` call) feeds Wave C's eval-slice metric computation for
-    any tag with an ``ACTIVE`` ``TagEvalSlice``: see the ``eval_*`` fields on
-    :class:`~pixlstash.db_models.tag_health.TagHealth` for what gets
-    populated. Tags with no ``ACTIVE`` slice get ``None`` in every ``eval_*``
-    field, same as a row that predates this wave.
-
-    Note: an eval slice is matched to a board row by exact tag identity
-    (``TagEvalSlice.tag == <folded board tag>``), not re-folded through
-    ``DEFAULT_TAG_MERGES`` — freezing is expected to target the
-    board-visible (parent) tag, same as ``Review``/``TagSuggestion`` scoping
-    elsewhere in this codebase. A slice frozen directly on a child tag would
-    not attach to its parent's row; flagged here as a known nuance rather
-    than silently handled.
     """
     current_version = _current_model_version(session)
     tag_precisions = get_latest_tag_precisions(session)
@@ -399,18 +381,6 @@ def compute_tag_health_rows(
     }
     all_tags = sorted(ground_truth_tags | predicted_tags)
 
-    # Local import: tag_eval_slice_service imports _current_model_version from
-    # this module, so a module-level import here would be circular. Permitted
-    # per this repo's import policy (CLAUDE.md: local imports are acceptable
-    # when necessary to avoid circular dependencies).
-    from pixlstash.services.tag_eval_slice_service import (
-        active_slice_tags_in_session,
-        compute_eval_metrics_in_session,
-        count_eval_slice_candidates_in_session,
-    )
-
-    active_slices = active_slice_tags_in_session(session)
-
     now = datetime.utcnow()
     rows: list[dict] = []
     total_tags = len(all_tags)
@@ -423,70 +393,6 @@ def compute_tag_health_rows(
         # normalize the lookup the same way so the discount doesn't silently
         # no-op via always missing and falling back to DEFAULT_TAG_PRECISION.
         precision = tag_precisions.get(tag_value.strip().lower(), DEFAULT_TAG_PRECISION)
-
-        # Wave C: eval-slice metrics, only for tags with an ACTIVE TagEvalSlice.
-        # Uses the default (AP-preferring, non-uncalibrated) computation mode —
-        # the board must never silently render an uncalibrated_fallback F1 (see
-        # the ranking-partition contract on TagHealth's docstring).
-        eval_fields = {
-            "eval_precision": None,
-            "eval_recall": None,
-            "eval_f1": None,
-            "eval_ap": None,
-            "eval_ap_ci_low": None,
-            "eval_ap_ci_high": None,
-            "eval_n": None,
-            "eval_n_pos": None,
-            "eval_slice_frozen_at": None,
-            "eval_metric_kind": None,
-            "eval_threshold_source": None,
-        }
-        slice_id = active_slices.get(tag_value)
-        if slice_id is not None:
-            metrics = compute_eval_metrics_in_session(
-                session, meta_path, slice_id, current_version
-            )
-            if metrics is not None:
-                eval_fields.update(
-                    eval_precision=metrics["eval_precision"],
-                    eval_recall=metrics["eval_recall"],
-                    eval_f1=metrics["eval_f1"],
-                    eval_ap=metrics["eval_ap"],
-                    eval_ap_ci_low=metrics["eval_ap_ci_low"],
-                    eval_ap_ci_high=metrics["eval_ap_ci_high"],
-                    eval_n=metrics["eval_n"],
-                    eval_n_pos=metrics["eval_n_pos"],
-                    eval_slice_frozen_at=metrics["created_at"],
-                    eval_metric_kind=metrics["eval_metric_kind"],
-                    eval_threshold_source=metrics["eval_threshold_source"],
-                )
-
-        # Pre-freeze eligibility signal: "if I froze this tag right now, how
-        # many verified positives would be in the slice" — populated for
-        # EVERY tag (not gated on an ACTIVE slice existing), via the same
-        # candidate-selection query freeze_eval_slice_in_session commits
-        # from, so this can never silently diverge from what an actual
-        # freeze would produce (see count_eval_slice_candidates_in_session).
-        #
-        # Deliberately NOT passed `picture_ids` here, even on the scoped
-        # board path: POST /tag_eval_slices (freeze_eval_slice_in_session /
-        # _select_eval_slice_candidates_in_session) has no scope parameter at
-        # all and always pulls every EVAL-split human-labeled picture
-        # vault-wide — TagEvalSlice is a tag-level object, not a per-scope
-        # one (see docs/reviews/tag-review-tagger-takeover-design.md §1, and
-        # tag_eval_slices.py's module docstring: "no single resolvable
-        # picture_id scope for a freeze ... route"). Scoping this count down
-        # to match the board's current filter would make it lie about what
-        # clicking "Freeze to score" actually does — a user scoped to one
-        # character could see e.g. "3/10 confirmed" here while the tag
-        # already has 15 candidates vault-wide and a click succeeds
-        # immediately. Same reasoning applies to every eval_* metric field
-        # above (they join a frozen, vault-wide TagEvalSlice against a live
-        # model_version — there is no scope concept in that join either).
-        # See the `eval_vault_wide` response field this payload carries.
-        eval_candidate_n_pos = count_eval_slice_candidates_in_session(
-            session, tag_value
-        )["n_pos"]
 
         rows.append(
             {
@@ -503,8 +409,6 @@ def compute_tag_health_rows(
                 "has_model": current > 0,
                 "last_reviewed_at": last_reviewed.get(tag_value),
                 "computed_at": now,
-                "eval_candidate_n_pos": eval_candidate_n_pos,
-                **eval_fields,
             }
         )
         if progress_cb is not None:
@@ -524,13 +428,7 @@ def rebuild_tag_health(vault: "Vault") -> dict:
         with _LOCK:
             state["progress"] = (done / total) if total else 1.0
 
-    # Fetched once, outside the DB worker (get_pixlstash_tagger_meta_path()
-    # touches the in-memory engine, not the DB) so compute_tag_health_rows
-    # stays a pure *_in_session function.
-    meta_path = vault.get_pixlstash_tagger_meta_path()
-    rows = vault.db.run_immediate_read_task(
-        compute_tag_health_rows, _progress, meta_path=meta_path
-    )
+    rows = vault.db.run_immediate_read_task(compute_tag_health_rows, _progress)
 
     def _write(session: Session) -> None:
         # Cache semantics: wholesale replace (this is derived data, not user data).
@@ -672,20 +570,6 @@ def list_tag_health(vault: "Vault") -> dict:
                 if r.last_reviewed_at
                 else None,
                 "computed_at": r.computed_at.isoformat() if r.computed_at else None,
-                "eval_precision": r.eval_precision,
-                "eval_recall": r.eval_recall,
-                "eval_f1": r.eval_f1,
-                "eval_ap": r.eval_ap,
-                "eval_ap_ci_low": r.eval_ap_ci_low,
-                "eval_ap_ci_high": r.eval_ap_ci_high,
-                "eval_n": r.eval_n,
-                "eval_n_pos": r.eval_n_pos,
-                "eval_slice_frozen_at": r.eval_slice_frozen_at.isoformat()
-                if r.eval_slice_frozen_at
-                else None,
-                "eval_metric_kind": r.eval_metric_kind,
-                "eval_threshold_source": r.eval_threshold_source,
-                "eval_candidate_n_pos": r.eval_candidate_n_pos,
             }
             for r in rows
         ],
@@ -693,10 +577,6 @@ def list_tag_health(vault: "Vault") -> dict:
         "progress": status["progress"],
         "computed_at": computed_at.isoformat() if computed_at else None,
         "stale": is_stale(vault),
-        # Always True — see list_tag_health_scoped's docstring for why this
-        # is meaningful there. Present here too so the frontend doesn't need
-        # to special-case which endpoint variant it called.
-        "eval_vault_wide": True,
     }
 
 
@@ -714,22 +594,7 @@ def list_tag_health_scoped(
     progress bar is needed. Rows exist only for tags present on in-scope
     pictures. Same payload shape as :func:`list_tag_health`, plus
     ``scoped=True``; the cache is never read or written.
-
-    **Exception, deliberate:** ``eval_candidate_n_pos`` and every ``eval_*``
-    metric field (``eval_precision``/``eval_f1``/``eval_ap``/…) stay
-    vault-wide even here — ``eval_vault_wide=True`` in the returned payload
-    says so explicitly. ``POST /tag_eval_slices`` (the freeze action) has no
-    scope concept at all: a ``TagEvalSlice`` is a tag-level object, always
-    built from every EVAL-split human-labeled picture in the vault,
-    regardless of what a curator currently has the board filtered to. Scoping
-    those two field families down to the board's current filter would make
-    the displayed "confirmed examples" count and Accuracy column contradict
-    what clicking the freeze button actually does — see the long comment
-    above the ``count_eval_slice_candidates_in_session`` call in
-    :func:`compute_tag_health_rows`.
     """
-
-    meta_path = vault.get_pixlstash_tagger_meta_path()
 
     def _compute(session: Session) -> list[dict]:
         ids = fetch_tag_review_scope_picture_ids(
@@ -741,7 +606,7 @@ def list_tag_health_scoped(
         # None = every dimension was "Any"; treat as unscoped-equivalent by
         # computing over the whole vault (callers normally hit the cached
         # path instead, but this keeps the endpoint honest either way).
-        return compute_tag_health_rows(session, picture_ids=ids, meta_path=meta_path)
+        return compute_tag_health_rows(session, picture_ids=ids)
 
     rows = vault.db.run_immediate_read_task(_compute)
     now = datetime.utcnow()
@@ -753,9 +618,6 @@ def list_tag_health_scoped(
                 if r["last_reviewed_at"]
                 else None,
                 "computed_at": r["computed_at"].isoformat(),
-                "eval_slice_frozen_at": r["eval_slice_frozen_at"].isoformat()
-                if r["eval_slice_frozen_at"]
-                else None,
             }
             for r in rows
         ],
@@ -765,8 +627,4 @@ def list_tag_health_scoped(
         # Computed live, never cached — nothing for it to be stale relative to.
         "stale": False,
         "scoped": True,
-        # eval_candidate_n_pos and the eval_* metric fields are NOT restricted
-        # to this scope — see this function's docstring for why that's
-        # correct rather than an oversight.
-        "eval_vault_wide": True,
     }

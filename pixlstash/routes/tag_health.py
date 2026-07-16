@@ -52,93 +52,6 @@ class TagHealthRowResponse(BaseModel):
     # Latest reviewed_at over the tag's suggestions; null = never reviewed.
     last_reviewed_at: Optional[str] = None
     computed_at: Optional[str] = None
-    eval_precision: Optional[float] = Field(
-        default=None,
-        description=(
-            "Precision against the tag's frozen eval slice at the sourced "
-            "threshold. Only populated when eval_metric_kind == 'F1'."
-        ),
-    )
-    eval_recall: Optional[float] = Field(
-        default=None, description="Recall counterpart of eval_precision."
-    )
-    eval_f1: Optional[float] = Field(
-        default=None, description="F1 counterpart of eval_precision/eval_recall."
-    )
-    eval_ap: Optional[float] = Field(
-        default=None,
-        description=(
-            "Non-interpolated Average Precision against the frozen eval "
-            "slice (threshold-free). Only populated when "
-            "eval_metric_kind == 'AP'."
-        ),
-    )
-    eval_ap_ci_low: Optional[float] = Field(
-        default=None,
-        description=(
-            "Lower bound of a 95% picture-level bootstrap CI for eval_ap. "
-            "Null when eval_n_pos < 25, or when >10% of bootstrap resamples "
-            "were degenerate (zero positives)."
-        ),
-    )
-    eval_ap_ci_high: Optional[float] = Field(
-        default=None, description="Upper bound counterpart of eval_ap_ci_low."
-    )
-    eval_n: Optional[int] = Field(
-        default=None,
-        description=(
-            "Size of the frozen slice's live-prediction join for the scored "
-            "model version."
-        ),
-    )
-    eval_n_pos: Optional[int] = Field(
-        default=None,
-        description=(
-            "POS count within eval_n — trust in eval_ap/eval_f1 hinges on "
-            "this, not eval_n, since these tags are typically "
-            "far-more-NEG-than-POS."
-        ),
-    )
-    eval_slice_frozen_at: Optional[str] = Field(
-        default=None,
-        description="When the tag's ACTIVE TagEvalSlice was frozen; null if never frozen.",
-    )
-    eval_metric_kind: Optional[str] = Field(
-        default=None,
-        description=(
-            "'AP' | 'F1' | 'insufficient_data' | 'none'. AP and F1 are "
-            "different metric kinds, not different confidence levels of the "
-            "same number — a board sort/rank must partition by this field "
-            "(AP-rows only rank against AP-rows, F1-rows only against "
-            "F1-rows); 'insufficient_data'/'none' rows are excluded from "
-            "ranking entirely."
-        ),
-    )
-    eval_threshold_source: Optional[str] = Field(
-        default=None,
-        description=(
-            "'calibrated' | 'carried_forward' | 'rederived_disjoint_val' | "
-            "'uncalibrated_fallback' | 'none'. 'uncalibrated_fallback' MUST "
-            "be flagged in the UI (e.g. an 'uncalibrated @0.5' chip) and "
-            "excluded from ranking against calibrated peers."
-        ),
-    )
-    eval_candidate_n_pos: Optional[int] = Field(
-        default=None,
-        description=(
-            "'If I froze this tag right now' verified-positive count: the "
-            "same candidate-selection query and has_train_side_conflict "
-            "exclusion POST /tag_eval_slices uses, so it never diverges "
-            "from what an actual freeze would produce. Populated for every "
-            "tag (unlike the other eval_* fields, which only populate for a "
-            "tag with an ACTIVE frozen slice) — compare against the "
-            "freeze action's MIN_EVAL_N_POS floor to show a "
-            "freeze-eligibility indicator before the user clicks "
-            "'Freeze to score'. Always vault-wide, even on a scoped "
-            "(project/set/character-filtered) board response — see "
-            "TagHealthResponse.eval_vault_wide."
-        ),
-    )
 
 
 class TagHealthResponse(BaseModel):
@@ -164,23 +77,6 @@ class TagHealthResponse(BaseModel):
     # True when the rows were computed live for a project/set/character scope
     # (never cached); the rebuild state fields then describe nothing.
     scoped: bool = False
-    eval_vault_wide: bool = Field(
-        default=True,
-        description=(
-            "Always true. eval_candidate_n_pos and every eval_* metric "
-            "field (eval_precision/eval_recall/eval_f1/eval_ap/…) are "
-            "computed over the whole vault regardless of any "
-            "project_id/set_id/character_id scope on this request — unlike "
-            "every other column, which restricts to the scope's pictures "
-            "when scoped=true. This mirrors POST /tag_eval_slices (the "
-            "freeze action), which has no scope parameter at all: a "
-            "TagEvalSlice is a tag-level object built from every "
-            "EVAL-split human-labeled picture in the vault. Present so a "
-            "scoped board can label these two field families as "
-            "vault-wide instead of implying they respect the current "
-            "filter."
-        ),
-    )
 
 
 class TagHealthRebuildResponse(BaseModel):
@@ -215,10 +111,7 @@ def create_router(server) -> APIRouter:
             "``project_id`` / ``set_id`` / ``character_id`` is given, the rows "
             "are instead computed live for that scope (``scoped=true`` in the "
             "response) — the same project/set/character semantics as review "
-            "creation, including ``character_id=UNASSIGNED``. Every column "
-            "restricts to the scope's pictures EXCEPT ``eval_candidate_n_pos`` "
-            "and the ``eval_*`` metric fields, which stay vault-wide always "
-            "(see ``eval_vault_wide`` on the response)."
+            "creation, including ``character_id=UNASSIGNED``."
         ),
         response_model=TagHealthResponse,
     )
