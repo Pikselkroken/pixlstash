@@ -27,7 +27,7 @@ import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useSearchStore } from "./stores/useSearchStore";
-import { useReviewFixesStore } from "./stores/useReviewFixesStore";
+import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
@@ -37,7 +37,7 @@ import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
-import ReviewFixesOverlay from "./components/views/ReviewFixesOverlay.vue";
+import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import { isInternalImageDrag } from "./utils/media.js";
 
@@ -57,7 +57,7 @@ const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
-const reviewFixesStore = useReviewFixesStore();
+const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 
@@ -519,18 +519,18 @@ function isExternalFileDragEvent(event) {
 
 function handleWindowDragOver(event) {
   if (!isExternalFileDragEvent(event)) return;
-  // The review-fixes overlay is a modal review surface; dropping files into it
+  // The review overlay is a modal review surface; dropping files into it
   // must never start an import. Skip preventDefault so the drag is not shown as
   // droppable here.
-  if (reviewFixesStore.overlayOpen) return;
+  if (reviewSessionsStore.overlayOpen) return;
   event.preventDefault();
 }
 
 function handleWindowDrop(event) {
   if (!isExternalFileDragEvent(event)) return;
-  // While the review-fixes overlay is open, swallow the drop without importing
+  // While the review overlay is open, swallow the drop without importing
   // (still preventDefault so the browser does not navigate to the dropped file).
-  if (reviewFixesStore.overlayOpen) {
+  if (reviewSessionsStore.overlayOpen) {
     event.preventDefault();
     return;
   }
@@ -1541,9 +1541,9 @@ async function patchConfigUIOptions() {
 }
 
 function handleGlobalKeydown(e) {
-  // The review-fixes overlay is modal and owns its own keyboard handler; don't
+  // The review overlay is modal and owns its own keyboard handler; don't
   // run the app/grid shortcuts (scroll, search, help) behind it.
-  if (reviewFixesStore.overlayOpen) return;
+  if (reviewSessionsStore.overlayOpen) return;
   const tag = document.activeElement?.tagName?.toLowerCase();
   const isEditable =
     tag === "input" ||
@@ -2430,14 +2430,16 @@ defineExpose({
           </div>
         </main>
       </div>
-      <ReviewFixesOverlay
-        v-if="reviewFixesStore.overlayOpen"
+      <ReviewSessionsOverlay
+        v-if="reviewSessionsStore.overlayOpen"
         :backendUrl="BACKEND_URL"
-        @close="reviewFixesStore.overlayOpen = false"
+        @close="reviewSessionsStore.overlayOpen = false"
       />
     </div>
     <button
-      v-show="userPrefsStore.showKeyboardHint && !reviewFixesStore.overlayOpen"
+      v-show="
+        userPrefsStore.showKeyboardHint && !reviewSessionsStore.overlayOpen
+      "
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,

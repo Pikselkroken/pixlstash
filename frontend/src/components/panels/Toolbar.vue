@@ -484,7 +484,7 @@
           type="button"
           :disabled="isReadOnly"
           title="Review and fix tags"
-          @click="reviewFixesStore.overlayOpen = true"
+          @click="reviewSessionsStore.overlayOpen = true"
         >
           <v-icon size="20">mdi-tag-check-outline</v-icon>
         </button>
@@ -535,7 +535,7 @@ import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
-import { useReviewFixesStore } from "../../stores/useReviewFixesStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import GbFilterPanel from "./GbFilterPanel.vue";
@@ -585,7 +585,7 @@ const gridStore = useGridStore();
 const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
-const reviewFixesStore = useReviewFixesStore();
+const reviewSessionsStore = useReviewSessionsStore();
 const tasksStore = useTasksStore();
 const projectStore = useProjectStore();
 
