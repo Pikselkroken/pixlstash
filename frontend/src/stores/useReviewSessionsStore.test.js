@@ -148,6 +148,166 @@ describe("resolveCurrent (via answerBinary)", () => {
   });
 });
 
+// --- Freeze (per-tag eval slice) -----------------------------------------------
+
+describe("freezeEvalSlice", () => {
+  it("POSTs /tag_eval_slices and refetches health on success", async () => {
+    const store = useReviewSessionsStore();
+    apiClient.post.mockImplementation((url) => {
+      if (url === "/tag_eval_slices") {
+        return Promise.resolve({
+          data: { created: true, slice_id: 9, tag: "cat", n_pos: 12, n_total: 40 },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    apiClient.get.mockImplementation((url) => {
+      if (url === "/tag_health") {
+        return Promise.resolve({ data: { rows: [{ tag: "cat", eval_f1: 0.9 }] } });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    const result = await store.freezeEvalSlice("cat");
+
+    expect(apiClient.post).toHaveBeenCalledWith("/tag_eval_slices", { tag: "cat" });
+    expect(result.created).toBe(true);
+    expect(store.freezeErrors.cat).toBeUndefined();
+    expect(store.healthRows).toEqual([{ tag: "cat", eval_f1: 0.9 }]);
+  });
+
+  it("records the deficit reason instead of an error when created is false", async () => {
+    const store = useReviewSessionsStore();
+    apiClient.post.mockResolvedValueOnce({
+      data: { created: false, tag: "cat", n_pos: 4, n_total: 4, reason: "insufficient_positives" },
+    });
+
+    const result = await store.freezeEvalSlice("cat");
+
+    expect(result.created).toBe(false);
+    expect(store.freezeErrors.cat).toEqual({ reason: "insufficient_positives", nPos: 4 });
+    expect(store.error).toBeNull();
+  });
+
+  it("clears a prior deficit message on a fresh attempt and ignores concurrent calls", async () => {
+    const store = useReviewSessionsStore();
+    let resolvePost;
+    apiClient.post.mockReturnValueOnce(
+      new Promise((res) => {
+        resolvePost = res;
+      }),
+    );
+
+    const first = store.freezeEvalSlice("cat");
+    expect(store.freezingTags.has("cat")).toBe(true);
+    // A second call while one is in flight for the same tag is a no-op.
+    const second = await store.freezeEvalSlice("cat");
+    expect(second).toBeNull();
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+
+    resolvePost({ data: { created: true, tag: "cat", n_pos: 11, n_total: 20 } });
+    await first;
+    expect(store.freezingTags.has("cat")).toBe(false);
+  });
+
+  it("surfaces a network failure via freezeErrors, not a thrown error", async () => {
+    const store = useReviewSessionsStore();
+    apiClient.post.mockRejectedValueOnce(new Error("boom"));
+
+    const result = await store.freezeEvalSlice("cat");
+
+    expect(result).toBeNull();
+    expect(store.freezeErrors.cat.reason).toBe("error");
+    expect(store.freezingTags.has("cat")).toBe(false);
+  });
+});
+
+describe("fetchEvalHistory", () => {
+  it("caches the freeze history for a tag", async () => {
+    const store = useReviewSessionsStore();
+    apiClient.get.mockResolvedValueOnce({
+      data: [{ id: 1, tag: "cat", status: "ACTIVE", n_pos: 12, n_total: 40 }],
+    });
+
+    await store.fetchEvalHistory("cat");
+
+    expect(apiClient.get).toHaveBeenCalledWith("/tag_eval_slices", { params: { tag: "cat" } });
+    expect(store.evalHistories.cat).toHaveLength(1);
+  });
+});
+
+// --- Split conflicts ------------------------------------------------------------
+
+describe("fetchConflicts / conflictGroups", () => {
+  it("groups flat conflict rows by component_key", async () => {
+    const store = useReviewSessionsStore();
+    apiClient.get.mockResolvedValueOnce({
+      data: {
+        total: 4,
+        rows: [
+          { picture_id: 1, split: "NEITHER", component_key: 1, conflict_detail: "x" },
+          { picture_id: 2, split: "NEITHER", component_key: 1, conflict_detail: "x" },
+          { picture_id: 3, split: "NEITHER", component_key: 3, conflict_detail: "y" },
+          { picture_id: 4, split: "NEITHER", component_key: 3, conflict_detail: "y" },
+        ],
+      },
+    });
+
+    await store.fetchConflicts();
+
+    expect(store.conflictsTotal).toBe(4);
+    expect(store.conflictGroupCount).toBe(2);
+    expect(store.conflictGroups.map((g) => g.members.length)).toEqual([2, 2]);
+  });
+});
+
+describe("resolveConflict", () => {
+  function seedConflicts(store) {
+    store.conflicts = [
+      { picture_id: 1, split: "NEITHER", component_key: 1 },
+      { picture_id: 2, split: "NEITHER", component_key: 1 },
+      { picture_id: 3, split: "NEITHER", component_key: 3 },
+    ];
+    store.conflictsTotal = 3;
+  }
+
+  it("POSTs the resolve endpoint using the group's first member and drops the group", async () => {
+    const store = useReviewSessionsStore();
+    seedConflicts(store);
+    apiClient.post.mockResolvedValueOnce({ data: { picture_ids: [1, 2], split: "TRAIN" } });
+
+    const result = await store.resolveConflict(1, "TRAIN");
+
+    expect(apiClient.post).toHaveBeenCalledWith("/picture_splits/1/resolve", { split: "TRAIN" });
+    expect(result).toEqual({ picture_ids: [1, 2], split: "TRAIN" });
+    expect(store.conflictGroupCount).toBe(1);
+    expect(store.conflictsTotal).toBe(1);
+    expect(store.conflicts.map((r) => r.picture_id)).toEqual([3]);
+  });
+
+  it("surfaces a failure via `error` and leaves the group in place", async () => {
+    const store = useReviewSessionsStore();
+    seedConflicts(store);
+    apiClient.post.mockRejectedValueOnce(new Error("boom"));
+
+    const result = await store.resolveConflict(1, "NEITHER");
+
+    expect(result).toBeNull();
+    expect(store.error).toBeTruthy();
+    expect(store.conflictGroupCount).toBe(2);
+  });
+
+  it("is a no-op for an unknown component key", async () => {
+    const store = useReviewSessionsStore();
+    seedConflicts(store);
+
+    const result = await store.resolveConflict(999, "TRAIN");
+
+    expect(result).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+});
+
 // --- Sticker vocabulary comes from setAppearance.js (hard requirement) --------
 
 describe("sticker vocabulary", () => {

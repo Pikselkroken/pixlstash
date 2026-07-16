@@ -16,6 +16,7 @@
     <!-- Scrollable middle — navigation keeps priority over the sticker shelf. -->
     <div class="rs-rail-scroll">
       <button
+        ref="boardBtnRef"
         class="rs-rail-item rs-rail-board"
         :class="{ 'rs-rail-item--active': store.view.type === 'board' }"
         type="button"
@@ -24,6 +25,28 @@
         <v-icon size="17" class="rs-rail-board-icon">mdi-heart-pulse</v-icon>
         <span class="rs-rail-board-label">Tag health</span>
       </button>
+
+      <!-- Absent entirely at zero (v-if, not hidden) — copies the board's
+           "model disputes" toggle precedent verbatim (TagHealthBoard.vue's
+           rs-board-disputes): a rare, unplanned, actionable signal, not
+           ongoing background work (so no pulsing-dot idiom). Wrapped in a
+           Transition so the first-ever appearance gets a brief entrance
+           (honours prefers-reduced-motion via the global token-file rule). -->
+      <Transition name="rs-conflicts-pop">
+        <button
+          v-if="store.conflictGroupCount > 0"
+          class="rs-rail-item rs-rail-conflicts"
+          :class="{ 'rs-rail-item--active': store.view.type === 'conflicts' }"
+          type="button"
+          :aria-label="`Needs a decision, ${store.conflictGroupCount} pending`"
+          @click="store.showConflicts()"
+        >
+          <v-icon size="17" class="rs-rail-conflicts-icon">mdi-shuffle-variant</v-icon>
+          <span class="rs-rail-conflicts-label"
+            >Needs a decision · {{ store.conflictGroupCount }}</span
+          >
+        </button>
+      </Transition>
 
       <div class="rs-rail-label">Open reviews</div>
       <!-- Each row is a wrapper DIV so the discard control can be a real
@@ -201,6 +224,16 @@ const store = useReviewSessionsStore();
 
 const abortDialog = ref(null); // { id, tag, changes } | null
 const shelfOpen = ref(true);
+const boardBtnRef = ref(null);
+
+// Focus return when the last conflict resolves (count -> 0): the overlay
+// watches for the conflicts view disappearing out from under the user (same
+// convention as abortSession/archiveSession calling showBoard()) and asks
+// this rail to move focus to "Tag health".
+function focusBoard() {
+  boardBtnRef.value?.focus?.();
+}
+defineExpose({ focusBoard });
 
 function isActive(id) {
   return store.view.type === "session" && store.view.id === id;
@@ -390,6 +423,33 @@ function archivedSummary(a) {
 .rs-rail-board-label {
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+}
+
+/* Warning-tone (data hygiene, not data loss — never .rs-rail-conflicts-icon
+   error-colored). Distinct glyph from the existing alert icons in this app
+   (mdi-alert-octagon-outline = anomaly, mdi-account-alert-outline = model
+   dispute). */
+.rs-rail-conflicts {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.rs-rail-conflicts-icon {
+  color: rgb(var(--v-theme-warning));
+}
+.rs-rail-conflicts-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+.rs-conflicts-pop-enter-active {
+  transition:
+    opacity var(--dur-3) var(--ease-decelerate),
+    transform var(--dur-3) var(--ease-decelerate);
+}
+.rs-conflicts-pop-enter-from {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 .rs-rail-label {

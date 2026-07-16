@@ -160,7 +160,7 @@
           v-for="r in sorted"
           :key="r.tag"
           class="rs-board-row"
-          :class="{ 'rs-board-row--nomodel': r.has_model === false }"
+          :class="{ 'rs-board-row--nomodel': r.has_model === false || isRankSunk(r) }"
         >
           <span
             class="rs-board-tag"
@@ -190,12 +190,16 @@
             </span>
             <span class="rs-board-health-num">{{ corrections(r) }}</span>
           </span>
-          <span class="rs-board-num" :class="numClass(r.est_wrong, 'error')">{{
-            r.est_wrong ?? 0
-          }}</span>
+          <span
+            class="rs-board-num"
+            :class="numClass(r.est_wrong, 'error')"
+            :title="adjTitle(r.est_wrong, r.est_wrong_adj)"
+            >{{ r.est_wrong ?? 0 }}</span
+          >
           <span
             class="rs-board-num"
             :class="numClass(r.est_missing, 'primary')"
+            :title="adjTitle(r.est_missing, r.est_missing_adj)"
             >{{ r.est_missing ?? 0 }}</span
           >
           <span class="rs-board-num" :class="numClass(r.mismatch, 'tertiary')">{{
@@ -207,6 +211,159 @@
           <span class="rs-board-num rs-board-num--muted">{{
             lastLabel(r)
           }}</span>
+          <span class="rs-board-acc">
+            <template v-if="isRankSunk(r)">
+              <!-- Never frozen / no model signal at all: same affordance as
+                   the non-sunk state (freezing is still the actionable next
+                   step, and "not scored" isn't the same claim as "scored on
+                   the other scale"). -->
+              <button
+                v-if="acc(r).state === 'unfrozen'"
+                class="rs-acc-freeze-link"
+                type="button"
+                :disabled="isFreezing(r.tag)"
+                title="Not scored yet. Freeze your confirmed examples to start tracking this tag's accuracy."
+                @click="doFreeze(r.tag)"
+              >
+                {{ isFreezing(r.tag) ? "Freezing…" : "Freeze to score" }}
+              </button>
+              <span v-else-if="acc(r).state === 'none'" class="rs-acc-dash">–</span>
+              <span
+                v-else-if="acc(r).state === 'insufficient'"
+                class="rs-acc-pill"
+                title="Fewer than 10 confirmed examples for this tag — review a few more to unlock scoring."
+                >not enough data yet</span
+              >
+              <span
+                v-else
+                class="rs-acc-sunk"
+                :title="`This tag is scored on the other scale — see the '${
+                  sort.key === 'eval_ap' ? 'Accuracy' : 'Ranking score'
+                }' sort.`"
+                >scored differently</span
+              >
+            </template>
+            <template v-else-if="acc(r).state === 'unfrozen'">
+              <button
+                class="rs-acc-freeze-link"
+                type="button"
+                :disabled="isFreezing(r.tag)"
+                title="Not scored yet. Freeze your confirmed examples to start tracking this tag's accuracy."
+                @click="doFreeze(r.tag)"
+              >
+                <v-icon
+                  v-if="isFreezing(r.tag)"
+                  size="12"
+                  class="mdi-spin"
+                  >mdi-loading</v-icon
+                >
+                {{ isFreezing(r.tag) ? "Freezing…" : "Freeze to score" }}
+              </button>
+              <span v-if="freezeError(r.tag)" class="rs-acc-freeze-fail">{{
+                freezeErrorText(r.tag)
+              }}</span>
+            </template>
+            <template v-else>
+              <span v-if="acc(r).state === 'none'" class="rs-acc-dash">–</span>
+              <span
+                v-else-if="acc(r).state === 'insufficient'"
+                class="rs-acc-pill"
+                title="Fewer than 10 confirmed examples for this tag — review a few more to unlock scoring."
+                >not enough data yet</span
+              >
+              <span
+                v-else-if="acc(r).state === 'f1'"
+                class="rs-acc-f1-wrap"
+              >
+                <span
+                  class="rs-acc-f1"
+                  :class="[f1Tone(acc(r).pct), { 'rs-acc-f1--uncal': acc(r).uncalibrated }]"
+                  :title="f1Tip(r, acc(r))"
+                  >{{ acc(r).uncalibrated ? "~" : "" }}{{ acc(r).pct }}%</span
+                >
+                <v-icon
+                  v-if="acc(r).stale"
+                  size="11"
+                  class="rs-acc-stale"
+                  title="Cutoff not freshly tuned for this tag"
+                  >mdi-clock-outline</v-icon
+                >
+              </span>
+              <span
+                v-else-if="acc(r).state === 'ap'"
+                class="rs-acc-ap"
+                :title="apTip(r, acc(r))"
+              >
+                <span class="rs-acc-dots">
+                  <span
+                    v-for="i in 5"
+                    :key="i"
+                    class="rs-acc-dot"
+                    :class="{ 'rs-acc-dot--on': i <= Math.round(acc(r).value / 20) }"
+                  ></span>
+                </span>
+                {{ acc(r).value }}<span v-if="!acc(r).hasCi">*</span>
+              </span>
+              <span
+                class="rs-acc-refreeze-wrap"
+                @mouseenter="loadHistory(r.tag)"
+                @focusin="loadHistory(r.tag)"
+              >
+                <button
+                  class="rs-acc-refreeze"
+                  type="button"
+                  :disabled="isFreezing(r.tag)"
+                  :title="refreezeTip(r)"
+                  @click="doFreeze(r.tag)"
+                >
+                  <v-icon size="12">mdi-restore</v-icon>
+                </button>
+                <button
+                  class="rs-acc-hist-toggle"
+                  type="button"
+                  :aria-expanded="historyOpen === r.tag"
+                  title="Freeze history"
+                  @click="toggleHistory(r.tag)"
+                >
+                  <v-icon size="12">{{
+                    historyOpen === r.tag ? "mdi-chevron-down" : "mdi-chevron-up"
+                  }}</v-icon>
+                </button>
+                <div
+                  v-if="historyOpen === r.tag"
+                  class="rs-acc-hist-panel"
+                  role="region"
+                  aria-label="Freeze history"
+                >
+                  <div v-if="!store.evalHistories[r.tag]" class="rs-acc-hist-loading">
+                    Loading…
+                  </div>
+                  <template v-else>
+                    <div class="rs-acc-hist-title">
+                      History ({{ store.evalHistories[r.tag].length }} freeze{{
+                        store.evalHistories[r.tag].length === 1 ? "" : "s"
+                      }})
+                    </div>
+                    <ul class="rs-acc-hist-list">
+                      <li
+                        v-for="h in store.evalHistories[r.tag]"
+                        :key="h.id"
+                        class="rs-acc-hist-row"
+                      >
+                        <span class="rs-acc-hist-date">{{ shortDate(h.created_at) }}</span>
+                        <span class="rs-acc-hist-n">{{ h.n_pos }}/{{ h.n_total }}</span>
+                        <span
+                          class="rs-acc-hist-status"
+                          :class="`rs-acc-hist-status--${h.status.toLowerCase()}`"
+                          >{{ h.status === "ACTIVE" ? "Active" : "Superseded" }}</span
+                        >
+                      </li>
+                    </ul>
+                  </template>
+                </div>
+              </span>
+            </template>
+          </span>
           <span class="rs-board-why">{{ whyText(r) }}</span>
           <span class="rs-board-action">
             <button
@@ -237,7 +394,11 @@
         tagged pictures the model is ≤10% sure about · “Est. missing” =
         untagged pictures it is ≥90% sure about · “Mismatch” = near-identical
         shots with different labels · “Verified” = share ever human-reviewed ·
-        “Last review” = when a review for the tag was last archived.
+        “Last review” = when a review for the tag was last archived ·
+        “Accuracy” = how good the model is on a frozen, scored slice, once
+        you’ve frozen one. “Ranking score” and “Accuracy” (the two sort
+        options) are two different kinds of numbers and are never sorted
+        against each other.
       </p>
     </div>
   </div>
@@ -280,7 +441,24 @@ const SORT_OPTS = [
   { label: "Most conflicts", key: "dups", dir: "desc" },
   { label: "Least verified", key: "verified", dir: "asc" },
   { label: "Recently reviewed", key: "last", dir: "asc" },
+  { label: "Ranking score", key: "eval_ap", dir: "desc" },
+  { label: "Accuracy", key: "eval_f1", dir: "desc" },
 ];
+
+// AP and F1 are two different kinds of numbers (an integral over every cutoff
+// vs. a hit rate at one cutoff) — never sorted against each other. Rows of the
+// other kind, plus insufficient_data/none/uncalibrated_fallback rows, sink to
+// the bottom of these two sorts instead of being hidden (see `sorted` below).
+const RANK_KINDS = { eval_ap: "AP", eval_f1: "F1" };
+
+function isRankEligible(r, key) {
+  const kind = RANK_KINDS[key];
+  if (!kind) return true;
+  if (r.eval_metric_kind !== kind) return false;
+  if (kind === "F1" && r.eval_threshold_source === "uncalibrated_fallback")
+    return false;
+  return true;
+}
 
 const SUBTITLE = {
   score: "Sorted by the tags most likely to have tagging mistakes worth fixing.",
@@ -291,6 +469,10 @@ const SUBTITLE = {
   verified:
     "Sorted by how much of each tag you’ve confirmed — least-checked first.",
   last: "Sorted by when each tag was last reviewed — longest ago first.",
+  eval_ap:
+    "Sorted by ranking score — only tags scored that way; everything else sinks to the bottom.",
+  eval_f1:
+    "Sorted by accuracy — only tags with a trustworthy cutoff; everything else sinks to the bottom.",
 };
 
 const subtitle = computed(() => SUBTITLE[sort.value.key] || SUBTITLE.score);
@@ -332,6 +514,14 @@ const headers = [
     center: true,
     tip: "Last reviewed",
   },
+  {
+    icon: "mdi-target-variant",
+    center: true,
+    // No `key`: this column maps to TWO non-comparable sort keys (Ranking
+    // score / Accuracy — see the sort dropdown), so it isn't click-to-sort
+    // like its siblings (that would silently pick one scale for the user).
+    tip: "Accuracy — how good the model is at this tag, from a frozen, scored slice. (Separate from Verified, which only tracks how much you’ve checked.)",
+  },
   { label: "Why it ranks here" },
   { label: "" },
 ];
@@ -340,8 +530,23 @@ const totalDisputes = computed(() =>
   store.healthRows.reduce((sum, r) => sum + (r.model_disputes ?? 0), 0),
 );
 
+// The board's ranking signal uses the reliability-discounted counts when the
+// cache has them (est_wrong_adj/est_missing_adj — precision-weighted, so an
+// unreliable tag doesn't dominate "estimated fixes"), falling back to the raw
+// counts for cache rows that predate the field. The individual "Est. wrong" /
+// "Est. missing" cells keep showing the raw, human-legible counts (see
+// adjTitle) — only the combined ranking number is adjusted.
 function corrections(r) {
-  return (r.est_wrong ?? 0) + (r.est_missing ?? 0) + (r.mismatch ?? 0);
+  const wrong = r.est_wrong_adj ?? r.est_wrong ?? 0;
+  const missing = r.est_missing_adj ?? r.est_missing ?? 0;
+  return Math.round(wrong + missing + (r.mismatch ?? 0));
+}
+
+// Tooltip for the raw Est. wrong/missing cells: surface the reliability
+// discount without replacing the number a user already understands.
+function adjTitle(raw, adj) {
+  if (adj == null || Math.round(adj) === (raw ?? 0)) return undefined;
+  return `~${Math.round(adj)} after discounting for this tag's measured reliability`;
 }
 
 function isAnomaly(r) {
@@ -380,28 +585,55 @@ function keyval(r, key) {
       return r.verified_pct ?? 0;
     case "last":
       return lastValue(r);
+    case "eval_ap":
+      return r.eval_ap ?? 0;
+    case "eval_f1":
+      return r.eval_f1 ?? 0;
     default:
       return 0;
   }
+}
+
+const isRankSort = computed(() => sort.value.key in RANK_KINDS);
+
+// A row sorting to the bottom under the active "Ranking score"/"Accuracy"
+// sort — not hidden (per the acceptance criteria: someone might be looking
+// for exactly one of them), just excluded from the ranked order.
+function isRankSunk(r) {
+  return isRankSort.value && !isRankEligible(r, sort.value.key);
 }
 
 const sorted = computed(() => {
   const dir = sort.value.dir === "asc" ? 1 : -1;
   const key = sort.value.key;
   const needle = filter.value.trim().toLowerCase();
-  return store.healthRows
+  const base = store.healthRows
     .filter((r) => !anomalyOnly.value || isAnomaly(r))
     .filter((r) => !disputesOnly.value || (r.model_disputes ?? 0) > 0)
-    .filter((r) => !needle || r.tag.toLowerCase().includes(needle))
-    .slice()
-    .sort((a, b) => {
-      const av = keyval(a, key);
-      const bv = keyval(b, key);
-      if (typeof av === "string")
-        return av.localeCompare(bv) * dir || a.tag.localeCompare(b.tag);
+    .filter((r) => !needle || r.tag.toLowerCase().includes(needle));
+
+  if (key in RANK_KINDS) {
+    const eligible = [];
+    const sunk = [];
+    for (const r of base) (isRankEligible(r, key) ? eligible : sunk).push(r);
+    eligible.sort((a, b) => {
+      const av = keyval(a, key) ?? 0;
+      const bv = keyval(b, key) ?? 0;
       if (av === bv) return a.tag.localeCompare(b.tag);
       return (av - bv) * dir;
     });
+    sunk.sort((a, b) => a.tag.localeCompare(b.tag));
+    return [...eligible, ...sunk];
+  }
+
+  return base.slice().sort((a, b) => {
+    const av = keyval(a, key);
+    const bv = keyval(b, key);
+    if (typeof av === "string")
+      return av.localeCompare(bv) * dir || a.tag.localeCompare(b.tag);
+    if (av === bv) return a.tag.localeCompare(b.tag);
+    return (av - bv) * dir;
+  });
 });
 
 function defaultDir(key) {
@@ -466,6 +698,130 @@ function whyText(r) {
 
 function openSessionFor(tag) {
   return store.sessions.find((s) => s.tag === tag) ?? null;
+}
+
+// --- Accuracy column ---------------------------------------------------------
+//
+// eval_metric_kind/eval_threshold_source are backend vocabulary and must
+// never render outside a tooltip — see the state table in
+// docs/reviews/tag-review-accuracy-freeze-conflicts-ux-spec.md §3.2.
+function acc(r) {
+  if (!r.eval_slice_frozen_at || !r.eval_metric_kind) return { state: "unfrozen" };
+  if (r.eval_metric_kind === "none") return { state: "none" };
+  if (r.eval_metric_kind === "insufficient_data") {
+    return { state: "insufficient", nPos: r.eval_n_pos ?? 0 };
+  }
+  if (r.eval_metric_kind === "F1") {
+    const source = r.eval_threshold_source;
+    return {
+      state: "f1",
+      pct: Math.round((r.eval_f1 ?? 0) * 100),
+      n: r.eval_n ?? 0,
+      nPos: r.eval_n_pos ?? 0,
+      uncalibrated: source === "uncalibrated_fallback",
+      stale: source === "carried_forward" || source === "rederived_disjoint_val",
+    };
+  }
+  if (r.eval_metric_kind === "AP") {
+    const hasCi = r.eval_ap_ci_low != null && r.eval_ap_ci_high != null;
+    return {
+      state: "ap",
+      value: Math.round((r.eval_ap ?? 0) * 100),
+      nPos: r.eval_n_pos ?? 0,
+      hasCi,
+      ciLow: hasCi ? Math.round(r.eval_ap_ci_low * 100) : null,
+      ciHigh: hasCi ? Math.round(r.eval_ap_ci_high * 100) : null,
+    };
+  }
+  return { state: "unfrozen" };
+}
+
+function f1Tone(pct) {
+  if (pct >= 85) return "rs-acc-f1--good";
+  if (pct >= 60) return "rs-acc-f1--warn";
+  return "rs-acc-f1--bad";
+}
+
+function f1Tip(r, a) {
+  if (a.uncalibrated) {
+    return "Rough estimate only — this tag has no tuned cutoff yet, so this uses a generic 50/50 guess boundary. Not included when sorting by accuracy.";
+  }
+  const source = r.eval_threshold_source;
+  if (source === "carried_forward") {
+    return `${a.pct}% accurate, using the cutoff from an earlier version of the tagger — this tag hasn’t been retuned since the model last changed.`;
+  }
+  if (source === "rederived_disjoint_val") {
+    return `${a.pct}% accurate, using a cutoff estimated from your training examples (no tuned cutoff exists for this tag yet).`;
+  }
+  return `${a.pct}% accurate, based on ${a.n} pictures you’ve confirmed. This tag has a cutoff tuned specifically for it.`;
+}
+
+function apTip(_r, a) {
+  const base = a.hasCi
+    ? `Ranking score: ${a.value} out of 100, from ${a.nPos} confirmed examples (likely range ${a.ciLow}–${a.ciHigh}). Measures how well the model sorts probably-correct pictures ahead of probably-wrong ones — this tag doesn’t have a tuned yes/no cutoff yet, so there’s no single accuracy percentage for it.`
+    : `Ranking score: ${a.value} out of 100. Measures how well the model sorts probably-correct pictures ahead of probably-wrong ones — this tag doesn’t have a tuned yes/no cutoff yet, so there’s no single accuracy percentage for it.`;
+  return a.hasCi ? base : `${base} Only ${a.nPos} confirmed examples — too few yet to show a confidence range.`;
+}
+
+// --- Freeze ------------------------------------------------------------------
+
+function isFreezing(tag) {
+  return store.freezingTags.has(tag);
+}
+
+function freezeError(tag) {
+  return store.freezeErrors[tag] || null;
+}
+
+function freezeErrorText(tag) {
+  const err = freezeError(tag);
+  if (!err) return "";
+  if (err.reason === "insufficient_positives" && err.nPos != null) {
+    return `Not enough confirmed examples yet — needs at least 10, this tag has ${err.nPos}. Review a few more to unlock freezing.`;
+  }
+  return "Not enough confirmed examples yet — review a few more of this tag to unlock freezing.";
+}
+
+const freezeErrorTimers = {};
+
+function doFreeze(tag) {
+  store.freezeEvalSlice(tag).then(() => {
+    if (!store.freezeErrors[tag]) return;
+    clearTimeout(freezeErrorTimers[tag]);
+    freezeErrorTimers[tag] = setTimeout(() => {
+      store.clearFreezeError(tag);
+    }, 5000);
+  });
+}
+
+// --- Freeze history disclosure ------------------------------------------------
+
+const historyOpen = ref(null); // tag currently expanded, or null
+
+function loadHistory(tag) {
+  if (store.evalHistories[tag] !== undefined) return;
+  store.fetchEvalHistory(tag);
+}
+
+function toggleHistory(tag) {
+  historyOpen.value = historyOpen.value === tag ? null : tag;
+  if (historyOpen.value) loadHistory(tag);
+}
+
+// The refreeze tooltip must show the last-frozen date/count BEFORE any click
+// (and before the async history fetch resolves) — the board row already
+// carries eval_slice_frozen_at/eval_n_pos, so this reads synchronously.
+function refreezeTip(r) {
+  if (!r.eval_slice_frozen_at) return "Refreeze this tag’s accuracy snapshot.";
+  const date = shortDate(r.eval_slice_frozen_at);
+  return `Last frozen ${date}, ${r.eval_n_pos ?? 0} confirmed examples. Refreezing replaces this with today’s confirmed set — the old snapshot is kept in history, not deleted.`;
+}
+
+function shortDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 </script>
 
@@ -659,8 +1015,8 @@ function openSessionFor(tag) {
 .rs-board-row {
   display: grid;
   /* Compact density (locked): tag · needs-review · wrong · missing · mismatch ·
-     verified · last · why · action */
-  grid-template-columns: 172px 116px 98px 106px 84px 44px 56px 1fr 116px;
+     verified · last · accuracy · why · action */
+  grid-template-columns: 172px 116px 98px 106px 84px 44px 56px 92px 1fr 116px;
   gap: 10px;
   padding: 7px 14px;
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);
@@ -672,10 +1028,13 @@ function openSessionFor(tag) {
   background: rgba(var(--v-theme-on-dark-surface), 0.06);
 }
 /* Tags outside the tagger vocabulary: mute the SIGNAL cells but keep the
-   action fully interactive (a kNN review still works for them). */
+   action fully interactive (a kNN review still works for them). Sunk rank
+   rows (a row that isn't scored on the currently active Ranking/Accuracy
+   sort) reuse the same treatment. */
 .rs-board-row--nomodel .rs-board-tag,
 .rs-board-row--nomodel .rs-board-health,
 .rs-board-row--nomodel .rs-board-num,
+.rs-board-row--nomodel .rs-board-acc,
 .rs-board-row--nomodel .rs-board-why {
   opacity: 0.55;
 }
@@ -838,5 +1197,244 @@ button.rs-board-hdr {
 }
 .rs-legend-tertiary {
   color: rgb(var(--v-theme-tertiary));
+}
+
+/* --- Accuracy column ------------------------------------------------------ */
+
+.rs-board-acc {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+}
+.rs-acc-dash {
+  color: rgba(var(--v-theme-on-dark-surface), 0.4);
+}
+.rs-acc-sunk {
+  color: rgba(var(--v-theme-on-dark-surface), 0.5);
+  font-style: italic;
+  white-space: nowrap;
+}
+.rs-acc-pill {
+  padding: 1px var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.25);
+}
+
+/* First-time freeze: an always-visible text-link affordance, NOT hover-gated
+   (a first-time action must not be hover-only — see the UX spec §7). Lighter
+   weight than .rs-board-btn since it's secondary to "Start review" in the
+   same row. */
+.rs-acc-freeze-link {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-accent));
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, rgb(var(--v-theme-accent)) 45%, transparent);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+.rs-acc-freeze-link:hover {
+  text-decoration-color: rgb(var(--v-theme-accent));
+}
+.rs-acc-freeze-link:disabled {
+  cursor: default;
+  opacity: 0.7;
+  text-decoration: none;
+}
+.rs-acc-freeze-fail {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: 200px;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, rgb(var(--v-theme-warning)) 55%, transparent);
+  background: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-warning));
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  box-shadow: var(--elevation-3);
+}
+
+.rs-acc-f1-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.rs-acc-f1 {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rs-acc-f1--good {
+  color: rgb(var(--v-theme-tertiary));
+  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 16%, transparent);
+}
+.rs-acc-f1--warn {
+  color: rgb(var(--v-theme-warning));
+  background: color-mix(in srgb, rgb(var(--v-theme-warning)) 16%, transparent);
+}
+.rs-acc-f1--bad {
+  color: rgb(var(--v-theme-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 16%, transparent);
+}
+/* Uncalibrated (fixed 0.5 threshold): faded + dashed underline + "~" prefix —
+   visually distinct from a trusted percentage, never just a tooltip. */
+.rs-acc-f1--uncal {
+  opacity: 0.62;
+  background: none;
+  border-bottom: 1px dashed currentColor;
+  border-radius: 0;
+  padding: 1px 2px;
+}
+.rs-acc-stale {
+  color: rgba(var(--v-theme-on-dark-surface), 0.5);
+}
+
+/* AP: a discrete dot-meter, deliberately NOT a percentage bar — see the UX
+   spec §3.3 for why a continuous percent would misread as a hit rate. */
+.rs-acc-ap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-dark-surface));
+  white-space: nowrap;
+}
+/* Dot glyph size (5px) and gap (1px) are a deliberate new design decision, not
+   an inlined one-off: there is no spacing-scale token for a mark this small
+   (the 4px grid floor would space five dots wide enough to read as separate
+   ticks rather than one meter, undoing the "not a percentage" signal this
+   element exists for). Treat it like the v-icon `size` props elsewhere in
+   this app — a per-widget glyph metric, not a layout gap. */
+.rs-acc-dots {
+  display: inline-flex;
+  gap: 1px;
+}
+.rs-acc-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-dark-surface), 0.22);
+}
+.rs-acc-dot--on {
+  background: rgb(var(--v-theme-tertiary));
+}
+
+/* Refreeze + history: hover/focus-reveal, same technique as .rs-rail-abort
+   (visibility not display, so the row never reflows when it appears). */
+.rs-acc-refreeze-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.rs-acc-refreeze,
+.rs-acc-hist-toggle {
+  visibility: hidden;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  cursor: pointer;
+}
+.rs-board-acc:hover .rs-acc-refreeze,
+.rs-board-acc:hover .rs-acc-hist-toggle,
+.rs-acc-refreeze-wrap:focus-within .rs-acc-refreeze,
+.rs-acc-refreeze-wrap:focus-within .rs-acc-hist-toggle,
+.rs-acc-hist-toggle[aria-expanded="true"] {
+  visibility: visible;
+}
+.rs-acc-refreeze:hover,
+.rs-acc-hist-toggle:hover {
+  color: rgb(var(--v-theme-accent));
+  background: color-mix(in srgb, rgb(var(--v-theme-accent)) 12%, transparent);
+}
+.rs-acc-refreeze:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.rs-acc-hist-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 4;
+  width: 220px;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  background: rgb(var(--v-theme-dark-surface));
+  box-shadow: var(--elevation-3);
+  text-align: left;
+}
+.rs-acc-hist-loading {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+.rs-acc-hist-title {
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  margin-bottom: var(--space-2);
+}
+.rs-acc-hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.rs-acc-hist-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+}
+.rs-acc-hist-date {
+  flex: 1;
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+.rs-acc-hist-n {
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  font-variant-numeric: tabular-nums;
+}
+.rs-acc-hist-status {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+.rs-acc-hist-status--active {
+  color: rgb(var(--v-theme-tertiary));
+  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 16%, transparent);
+}
+.rs-acc-hist-status--superseded {
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
 }
 </style>

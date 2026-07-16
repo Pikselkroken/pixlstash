@@ -1,7 +1,7 @@
 <template>
   <div class="rs-overlay">
     <div class="rs-shell">
-      <ReviewRail @close="emit('close')" @new-review="openNewReview()" />
+      <ReviewRail ref="railRef" @close="emit('close')" @new-review="openNewReview()" />
 
       <ReviewSessionView
         v-if="store.activeSession"
@@ -11,6 +11,10 @@
       <ReviewArchivedReceipt
         v-else-if="archivedReview"
         :review="archivedReview"
+      />
+      <SplitConflictsView
+        v-else-if="store.view.type === 'conflicts'"
+        ref="conflictsRef"
       />
       <TagHealthBoard
         v-else
@@ -97,7 +101,10 @@
         draggable="false"
         @load="onZoomLoad"
       />
-      <div class="rs-zoom-hint">
+      <div
+        class="rs-zoom-hint"
+        :class="{ 'rs-zoom-hint--hidden': !zoomHintVisible }"
+      >
         {{ Math.round(zoomScale * 100) }}% · scroll to zoom · drag to pan ·
         click or Esc to close
       </div>
@@ -126,11 +133,12 @@
 // NOT <select>, which is a fixed-choice control whose type-ahead must not
 // swallow decision keys; selects are blurred after every change). Session keys
 // are delegated to the session view, which owns the consistency guard.
-import { computed, nextTick, onMounted, onUnmounted, provide, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import ReviewRail from "../reviews/ReviewRail.vue";
 import TagHealthBoard from "../reviews/TagHealthBoard.vue";
 import ReviewSessionView from "../reviews/ReviewSessionView.vue";
 import ReviewArchivedReceipt from "../reviews/ReviewArchivedReceipt.vue";
+import SplitConflictsView from "../reviews/SplitConflictsView.vue";
 import NewReviewDialog from "../reviews/NewReviewDialog.vue";
 import TbTagPanel from "../panels/TbTagPanel.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -153,12 +161,26 @@ const projectStore = useProjectStore();
 
 const sessionRef = ref(null);
 const boardRef = ref(null);
+const conflictsRef = ref(null);
+const railRef = ref(null);
 const dialog = ref(null); // { preset, initialScope } | null
 const shortcutsOpen = ref(false);
 const tagApplyOpen = ref(false);
 const tagApplyRef = ref(null);
 
 provide("rs-backend-url", props.backendUrl);
+
+// Focus return: when the conflicts view auto-navigates back to the board
+// (the last conflict just resolved — see SplitConflictsView), move focus to
+// the rail's "Tag health" nav item rather than leaving it stranded.
+watch(
+  () => store.view.type,
+  (type, prevType) => {
+    if (type === "board" && prevType === "conflicts") {
+      nextTick(() => railRef.value?.focusBoard?.());
+    }
+  },
+);
 
 const archivedReview = computed(() =>
   store.view.type === "archived"
@@ -169,8 +191,9 @@ const archivedReview = computed(() =>
 );
 
 const SHORTCUTS = [
-  ["Y / N", "Answer a binary card (yes / no)"],
+  ["Y / N", "Answer a binary card (yes / no) · or a conflict's “same shot?”"],
   ["B / N / L / R", "Answer a pair card (both / neither / left / right)"],
+  ["T / C / O", "A conflict's follow-up: teach the tagger / check its work / leave both out"],
   ["S", "Skip — leaves the queue undecided, no change made"],
   ["U", "Undo the last decision"],
   ["H", "Show / hide the evidence region"],
@@ -241,6 +264,21 @@ const zoomScale = ref(1);
 const zoomNaturalW = ref(0);
 const zoomNaturalH = ref(0);
 
+// The hint pill sits over the bottom of the image — it MUST auto-hide after a
+// few seconds or it covers exactly the detail being inspected (it fades back
+// in on the next zoom open).
+const zoomHintVisible = ref(true);
+let zoomHintTimer = null;
+const ZOOM_HINT_MS = 2500;
+
+function showZoomHint() {
+  zoomHintVisible.value = true;
+  clearTimeout(zoomHintTimer);
+  zoomHintTimer = setTimeout(() => {
+    zoomHintVisible.value = false;
+  }, ZOOM_HINT_MS);
+}
+
 const zoomStyle = computed(() =>
   zoomNaturalW.value
     ? { width: `${Math.round(zoomNaturalW.value * zoomScale.value)}px` }
@@ -252,11 +290,13 @@ function openZoom(src, box = null) {
   zoom.value = { src, box };
   zoomScale.value = 1;
   zoomNaturalW.value = 0;
+  showZoomHint();
 }
 provide("rs-open-zoom", openZoom);
 
 function closeZoom() {
   zoom.value = null;
+  clearTimeout(zoomHintTimer);
 }
 
 function onZoomLoad(event) {
@@ -375,6 +415,8 @@ function handleKeyDown(event) {
     else if (tagApplyOpen.value) tagApplyOpen.value = false;
     else if (sessionRef.value?.handleKey("escape")) {
       // The session consumed it (a pending consistency confirm).
+    } else if (conflictsRef.value?.handleKey("escape")) {
+      // The conflicts view consumed it (step 2 -> step 1).
     } else emit("close");
   } else if (shortcutsOpen.value || dialog.value) {
     // A modal layer is up: swallow nothing else, let it be.
@@ -388,6 +430,8 @@ function handleKeyDown(event) {
   } else if (sessionRef.value) {
     handled = !!sessionRef.value.handleKey(key);
     if (handled) closeZoom();
+  } else if (conflictsRef.value) {
+    handled = !!conflictsRef.value.handleKey(key);
   } else {
     handled = false;
   }
@@ -407,6 +451,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeyDown, true);
+  clearTimeout(zoomHintTimer);
   store.reset(); // stops the health poll + award timers; queues refetch on reopen
 });
 </script>
@@ -551,6 +596,10 @@ onUnmounted(() => {
   font-size: 12px;
   pointer-events: none;
   white-space: nowrap;
+  transition: opacity var(--dur-3) var(--ease-standard);
+}
+.rs-zoom-hint--hidden {
+  opacity: 0;
 }
 .rs-zoom-fit {
   position: fixed;
