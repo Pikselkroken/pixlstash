@@ -66,6 +66,7 @@ from pixlstash.db_models import Picture, PictureLikeness, Tag, TagHealth
 from pixlstash.db_models.tag import DEFAULT_TAG_MERGES, is_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
+from pixlstash.db_models.tagger_run import TaggerRun
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.tagger_run_service import get_latest_tag_precisions
 from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
@@ -405,6 +406,7 @@ def compute_tag_health_rows(
     from pixlstash.services.tag_eval_slice_service import (
         active_slice_tags_in_session,
         compute_eval_metrics_in_session,
+        count_eval_slice_candidates_in_session,
     )
 
     active_slices = active_slice_tags_in_session(session)
@@ -459,6 +461,16 @@ def compute_tag_health_rows(
                     eval_threshold_source=metrics["eval_threshold_source"],
                 )
 
+        # Pre-freeze eligibility signal: "if I froze this tag right now, how
+        # many verified positives would be in the slice" — populated for
+        # EVERY tag (not gated on an ACTIVE slice existing), via the same
+        # candidate-selection query freeze_eval_slice_in_session commits
+        # from, so this can never silently diverge from what an actual
+        # freeze would produce (see count_eval_slice_candidates_in_session).
+        eval_candidate_n_pos = count_eval_slice_candidates_in_session(
+            session, tag_value
+        )["n_pos"]
+
         rows.append(
             {
                 "tag": tag_value,
@@ -474,6 +486,7 @@ def compute_tag_health_rows(
                 "has_model": current > 0,
                 "last_reviewed_at": last_reviewed.get(tag_value),
                 "computed_at": now,
+                "eval_candidate_n_pos": eval_candidate_n_pos,
                 **eval_fields,
             }
         )
@@ -549,12 +562,71 @@ def start_rebuild(vault: "Vault") -> dict:
     return get_status(vault)
 
 
+def _latest_health_relevant_change(session: Session) -> datetime | None:
+    """Newest of the signals that make the cached board rows stale.
+
+    Same shape as ``review_service._latest_vault_change`` (latest picture
+    creation, latest tagger-run ingest), plus the signal that idiom didn't
+    need but the board does: latest ``TagSuggestion.reviewed_at`` — every
+    accept/dismiss/swap changes ``est_wrong``/``est_missing``/``mismatch``/
+    ``overturn_rate`` for its tag, so a review session that touches zero new
+    pictures and triggers zero tagger runs must still be able to mark the
+    board stale.
+
+    **Known gap, deliberately not closed here** (flagged as an open item in
+    the redesign spec, §11): ``Tag`` has no timestamp column, so a manual tag
+    add/remove via ``POST/DELETE /pictures/{id}/tags`` outside the review
+    flow — the routes in ``routes/tags.py``, not
+    ``tag_suggestion_service`` — is invisible to this staleness check. Adding
+    a schema migration + backfill solely to catch that narrower, rarer path
+    was judged disproportionate for a staleness *hint* whose escape hatch is
+    already one click away (the persistent rebuild button, Spec B frontend);
+    the gap means such an edit's board impact surfaces on the next rebuild
+    triggered by *any* of the three tracked signals, or a manual rebuild,
+    rather than immediately.
+    """
+    latest_pic = session.exec(
+        select(func.max(Picture.created_at)).where(Picture.deleted.is_(False))
+    ).one()
+    latest_run = session.exec(select(func.max(TaggerRun.created_at))).one()
+    latest_review = session.exec(
+        select(func.max(TagSuggestion.reviewed_at)).where(
+            TagSuggestion.reviewed_at.is_not(None)
+        )
+    ).one()
+    candidates = [t for t in (latest_pic, latest_run, latest_review) if t is not None]
+    return max(candidates) if candidates else None
+
+
+def is_stale(vault: "Vault") -> bool:
+    """Whether the cached board is stale relative to the latest health-relevant change.
+
+    Cheap: two scalar aggregate queries (``max(TagHealth.computed_at)``,
+    :func:`_latest_health_relevant_change`) — no row hydration, safe to call
+    from a periodic finder. ``stale = latest_change > computed_at`` when both
+    exist, else ``False`` (never built yet, or nothing has changed).
+    """
+
+    def _fetch(session: Session) -> tuple[datetime | None, datetime | None]:
+        computed_at = session.exec(select(func.max(TagHealth.computed_at))).one()
+        return computed_at, _latest_health_relevant_change(session)
+
+    computed_at, latest_change = vault.db.run_immediate_read_task(_fetch)
+    return bool(
+        computed_at is not None
+        and latest_change is not None
+        and latest_change > computed_at
+    )
+
+
 def list_tag_health(vault: "Vault") -> dict:
     """The board payload: cached rows + rebuild state.
 
-    Returns ``{"rows", "building", "progress", "computed_at"}`` where
+    Returns ``{"rows", "building", "progress", "computed_at", "stale"}`` where
     ``computed_at`` is the newest row's timestamp (ISO) or ``None`` when the
-    cache has never been built.
+    cache has never been built, and ``stale`` is top-level (not per-row) since
+    the cache is vault-wide and one rebuild covers every row — see
+    :func:`is_stale`.
     """
 
     def _fetch(session: Session) -> list[TagHealth]:
@@ -596,12 +668,14 @@ def list_tag_health(vault: "Vault") -> dict:
                 else None,
                 "eval_metric_kind": r.eval_metric_kind,
                 "eval_threshold_source": r.eval_threshold_source,
+                "eval_candidate_n_pos": r.eval_candidate_n_pos,
             }
             for r in rows
         ],
         "building": status["building"],
         "progress": status["progress"],
         "computed_at": computed_at.isoformat() if computed_at else None,
+        "stale": is_stale(vault),
     }
 
 
@@ -654,5 +728,7 @@ def list_tag_health_scoped(
         "building": False,
         "progress": 1.0,
         "computed_at": now.isoformat(),
+        # Computed live, never cached — nothing for it to be stale relative to.
+        "stale": False,
         "scoped": True,
     }

@@ -123,6 +123,20 @@ class TagHealthRowResponse(BaseModel):
             "excluded from ranking against calibrated peers."
         ),
     )
+    eval_candidate_n_pos: Optional[int] = Field(
+        default=None,
+        description=(
+            "'If I froze this tag right now' verified-positive count: the "
+            "same candidate-selection query and has_train_side_conflict "
+            "exclusion POST /tag_eval_slices uses, so it never diverges "
+            "from what an actual freeze would produce. Populated for every "
+            "tag (unlike the other eval_* fields, which only populate for a "
+            "tag with an ACTIVE frozen slice) — compare against the "
+            "freeze action's MIN_EVAL_N_POS floor to show a "
+            "freeze-eligibility indicator before the user clicks "
+            "'Freeze to score'."
+        ),
+    )
 
 
 class TagHealthResponse(BaseModel):
@@ -134,6 +148,17 @@ class TagHealthResponse(BaseModel):
     building: bool = False
     progress: float = 0.0
     computed_at: Optional[str] = None
+    stale: bool = Field(
+        default=False,
+        description=(
+            "True when a new picture, a new tagger run, or a reviewed tag "
+            "suggestion has landed since the cache's computed_at — the rows "
+            "are still the last-rebuilt values, but a rebuild is due. "
+            "Top-level, not per-row: the cache is vault-wide and one rebuild "
+            "covers every row. Always False for a scoped response (computed "
+            "live, never cached)."
+        ),
+    )
     # True when the rows were computed live for a project/set/character scope
     # (never cached); the rebuild state fields then describe nothing.
     scoped: bool = False
@@ -163,7 +188,11 @@ def create_router(server) -> APIRouter:
         description=(
             "Returns the cached per-tag health signals plus the rebuild state "
             "(``building`` and tags-processed progress in [0, 1]). "
-            "``computed_at`` is null until the first rebuild. When any of "
+            "``computed_at`` is null until the first rebuild. ``stale=true`` "
+            "means new pictures, tagger runs, or reviewed tag suggestions "
+            "have landed since ``computed_at`` — a background finder rebuilds "
+            "automatically within a few minutes of that, or "
+            "``POST /tag_health/rebuild`` forces it immediately. When any of "
             "``project_id`` / ``set_id`` / ``character_id`` is given, the rows "
             "are instead computed live for that scope (every signal restricted "
             "to the scope's pictures; ``scoped=true`` in the response) — the "

@@ -70,6 +70,19 @@ class TagHealth(SQLModel, table=True):
         eval_slice_frozen_at: the tag's ``ACTIVE`` ``TagEvalSlice.created_at``;
             NULL when the tag has never been frozen (no eval columns
             populated in that case).
+        eval_candidate_n_pos: "if I froze this tag right now" verified-positive
+            count -- the same candidate-selection query and
+            ``has_train_side_conflict`` exclusion
+            :func:`~pixlstash.services.tag_eval_slice_service.freeze_eval_slice_in_session`
+            uses, via the shared
+            :func:`~pixlstash.services.tag_eval_slice_service.count_eval_slice_candidates_in_session`
+            helper, so this can never silently diverge from what a real
+            freeze would produce. Populated for every tag on every rebuild
+            (unlike the ``eval_*`` fields above, which only populate for a
+            tag with an ACTIVE slice) -- this is the pre-freeze eligibility
+            signal (compare against ``MIN_EVAL_N_POS`` in
+            ``tag_eval_slice_service``), those are the post-freeze scored
+            metrics.
     """
 
     __tablename__ = "tag_health"
@@ -113,3 +126,7 @@ class TagHealth(SQLModel, table=True):
     eval_metric_kind: Optional[str] = Field(default=None)
     # calibrated | carried_forward | rederived_disjoint_val | uncalibrated_fallback | none
     eval_threshold_source: Optional[str] = Field(default=None)
+
+    # Pre-freeze eligibility signal (see class docstring): populated for
+    # every tag, not just already-frozen ones.
+    eval_candidate_n_pos: Optional[int] = Field(default=None)

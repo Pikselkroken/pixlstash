@@ -1,5 +1,14 @@
 """Tests for the tag health board: signal aggregates on a small fixture vault,
-the rebuild endpoint's background/progress reporting, and no-model-signal rows."""
+the rebuild endpoint's background/progress reporting, no-model-signal rows,
+and staleness detection / auto-rebuild (Spec B,
+docs/reviews/tag-review-board-redesign-ux-spec.md §4).
+
+`_setup()` disables `PictureSplitAssignmentFinder` (Spec A) because
+`_make_eval_candidates` hand-seeds `PictureSplit` rows directly -- this
+file's scope is tag_health, not split assignment (that finder has its own
+dedicated test in test_picture_splits_api.py), so there is nothing to gain
+and a real race to lose by leaving it on here.
+"""
 
 import gc
 import io
@@ -17,6 +26,7 @@ from pixlstash.db_models import (
     PictureLikeness,
     PictureSet,
     PictureSetMember,
+    PictureSplit,
     PictureStack,
     Tag,
 )
@@ -24,6 +34,7 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.db_models.tagger_run import TaggerRun
 from pixlstash.server import Server
+from pixlstash.services.tag_eval_slice_service import MIN_EVAL_N_POS
 from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
 from tests.utils import upload_pictures_and_wait
 
@@ -36,7 +47,7 @@ def _setup():
     os.makedirs(image_root, exist_ok=True)
     server_config_path = os.path.join(temp_dir.name, "server-config.json")
     with open(server_config_path, "w") as f:
-        f.write(json.dumps({"port": 8000}))
+        f.write(json.dumps({"port": 8000, "picture_split_auto_assign": False}))
     server = Server(server_config_path)
     client = TestClient(server.api)
     resp = client.post(
@@ -66,6 +77,23 @@ def _upload_named(client):
     )["results"][0]["picture_id"]
 
 
+def _seed_tag(server, pid, tag):
+    """Give *pid* one real (non-sentinel) Tag row.
+
+    ``compute_tag_health_rows`` only emits a row for tags that appear in
+    ``tag``/``tag_prediction`` at all -- an untagged picture with no
+    predictions yields zero rows, so ``computed_at`` stays null and
+    ``is_stale`` trivially returns False regardless of anything else. Tests
+    that need a real, non-vacuous ``stale`` transition seed this first.
+    """
+
+    def seed(session):
+        session.add(Tag(picture_id=pid, tag=tag))
+        session.commit()
+
+    server.vault.db.run_task(seed)
+
+
 def _rebuild_and_wait(client, timeout_s=30):
     resp = client.post(f"{API}/tag_health/rebuild")
     assert resp.status_code == 200, resp.text
@@ -76,6 +104,33 @@ def _rebuild_and_wait(client, timeout_s=30):
             return body
         time.sleep(0.1)
     raise AssertionError("tag_health rebuild did not finish in time")
+
+
+def _make_eval_candidates(client, server, tag, n_pos, n_neg):
+    """n_pos + n_neg human-labeled, EVAL-split candidates for *tag*, each its
+    own singleton near-dup component (no train-side conflicts) — mirrors
+    ``_make_candidates`` in test_tag_eval_slices_api.py, the same shape the
+    freeze action (POST /tag_eval_slices) selects from."""
+    states = (["POS"] * n_pos) + (["NEG"] * n_neg)
+    pids = [_upload_named(client) for _ in states]
+
+    def seed(session):
+        for pid, state in zip(pids, states):
+            session.add(PictureSplit(picture_id=pid, split="EVAL", component_key=pid))
+            session.add(
+                TagPrediction(
+                    picture_id=pid,
+                    tag=tag,
+                    confidence=0.9 if state == "POS" else 0.05,
+                    model_version="v1",
+                    label_state=state,
+                    label_source="human",
+                )
+            )
+        session.commit()
+
+    server.vault.db.run_task(seed)
+    return pids
 
 
 def test_tag_health_aggregates_on_fixture_vault():
@@ -644,5 +699,286 @@ def test_tag_health_est_adj_reflects_precision_discount_and_fallback():
         assert unknown["est_missing"] == 1
         assert unknown["est_wrong_adj"] == round(4 * DEFAULT_TAG_PRECISION)
         assert unknown["est_missing_adj"] == round(1 * DEFAULT_TAG_PRECISION)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_eval_candidate_n_pos_below_floor_for_never_frozen_tag():
+    """A tag that has never been frozen (no ACTIVE TagEvalSlice) still gets
+    eval_candidate_n_pos populated — the "how close to freezable" signal — and
+    the count reflects only the human-labeled EVAL-side positives, below the
+    MIN_EVAL_N_POS floor here."""
+    temp_dir, client, server = _setup()
+    try:
+        tag = "below_floor_tag"
+        assert MIN_EVAL_N_POS == 10  # fixture below assumes this floor value
+        _make_eval_candidates(client, server, tag, n_pos=6, n_neg=3)
+
+        body = _rebuild_and_wait(client)
+        row = {r["tag"]: r for r in body["rows"]}[tag]
+
+        assert row["eval_candidate_n_pos"] == 6
+        # Never frozen: the post-freeze scored fields stay unpopulated.
+        assert row["eval_slice_frozen_at"] is None
+        assert row["eval_n_pos"] is None
+        assert row["eval_metric_kind"] is None
+
+        # A real freeze attempt agrees: same n_pos, and it's rejected for the
+        # same reason the board's count is below the floor.
+        resp = client.post(f"{API}/tag_eval_slices", json={"tag": tag})
+        assert resp.status_code == 200, resp.text
+        freeze_body = resp.json()
+        assert freeze_body["created"] is False
+        assert freeze_body["reason"] == "insufficient_positives"
+        assert freeze_body["n_pos"] == row["eval_candidate_n_pos"] == 6
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_eval_candidate_n_pos_at_floor_matches_real_freeze():
+    """A tag at/above the MIN_EVAL_N_POS floor: eval_candidate_n_pos must
+    match exactly what a real POST /tag_eval_slices freeze call produces for
+    the same fixture — the "don't let the board's count silently diverge
+    from what freezing will actually do" guarantee this field exists for."""
+    temp_dir, client, server = _setup()
+    try:
+        tag = "at_floor_tag"
+        _make_eval_candidates(client, server, tag, n_pos=12, n_neg=4)
+
+        body = _rebuild_and_wait(client)
+        row = {r["tag"]: r for r in body["rows"]}[tag]
+        assert row["eval_candidate_n_pos"] == 12
+        # Not yet frozen at the point the board computed this.
+        assert row["eval_slice_frozen_at"] is None
+
+        resp = client.post(f"{API}/tag_eval_slices", json={"tag": tag})
+        assert resp.status_code == 200, resp.text
+        freeze_body = resp.json()
+        assert freeze_body["created"] is True
+        assert freeze_body["n_pos"] == row["eval_candidate_n_pos"] == 12
+        assert freeze_body["n_total"] == 16
+
+        # After the freeze, a rebuild's eval_candidate_n_pos still reflects
+        # "if I froze right now" (unchanged, since candidates didn't change),
+        # independently of the now-populated post-freeze eval_n_pos.
+        body2 = _rebuild_and_wait(client)
+        row2 = {r["tag"]: r for r in body2["rows"]}[tag]
+        assert row2["eval_candidate_n_pos"] == 12
+        assert row2["eval_slice_frozen_at"] is not None
+    finally:
+        _teardown(temp_dir, server)
+
+
+# --------------------------------------------------------------------------- #
+# Spec B: staleness detection (docs/reviews/tag-review-board-redesign-ux-spec.md
+# §4). `_latest_health_relevant_change` mirrors review_service's
+# `_latest_vault_change` (picture + tagger-run) plus the signal that idiom
+# didn't need but the board does: reviewed TagSuggestions.
+# --------------------------------------------------------------------------- #
+
+
+def test_tag_health_stale_false_after_fresh_rebuild():
+    temp_dir, client, server = _setup()
+    try:
+        pid = _upload_named(client)
+        _seed_tag(server, pid, "fresh-tag")
+        body = _rebuild_and_wait(client)
+        assert body["computed_at"] is not None  # a real, non-vacuous build
+        assert body["stale"] is False
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_stale_true_after_new_picture():
+    """A new picture alone (review_service's own `_latest_vault_change`
+    signal) must flip stale, with zero review activity."""
+    temp_dir, client, server = _setup()
+    try:
+        pid = _upload_named(client)
+        _seed_tag(server, pid, "picture-tag")
+        body = _rebuild_and_wait(client)
+        assert body["stale"] is False
+
+        _upload_named(client)  # created_at newer than computed_at
+
+        after = client.get(f"{API}/tag_health").json()
+        assert after["stale"] is True
+        # Rows/computed_at are untouched by a mere staleness check.
+        assert after["computed_at"] == body["computed_at"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_stale_true_after_new_tagger_run():
+    """A new TaggerRun ingest alone must flip stale."""
+    temp_dir, client, server = _setup()
+    try:
+        pid = _upload_named(client)
+        _seed_tag(server, pid, "tagger-run-tag")
+        body = _rebuild_and_wait(client)
+        assert body["stale"] is False
+
+        def seed(session):
+            session.add(TaggerRun(run="run-stale-check", model_version="v2"))
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        assert client.get(f"{API}/tag_health").json()["stale"] is True
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_stale_true_after_reviewed_suggestion():
+    """A reviewed TagSuggestion alone (no new picture, no new TaggerRun) must
+    flip stale — this is Spec B's added signal, beyond what
+    review_service._latest_vault_change already covers, because every
+    accept/dismiss/swap changes a tag's est_wrong/est_missing/mismatch/
+    overturn_rate without necessarily touching Picture or TaggerRun."""
+    temp_dir, client, server = _setup()
+    try:
+        pid = _upload_named(client)
+        _seed_tag(server, pid, "reviewed-tag")
+        body = _rebuild_and_wait(client)
+        assert body["stale"] is False
+
+        def seed(session):
+            session.add(
+                TagSuggestion(
+                    picture_id=pid,
+                    tag="reviewed-tag",
+                    direction="add",
+                    source="scan",
+                    score=1.0,
+                    status="ACCEPTED",
+                    reviewed_at=datetime.utcnow(),
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        after = client.get(f"{API}/tag_health").json()
+        assert after["stale"] is True
+        assert after["computed_at"] == body["computed_at"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_rebuild_clears_staleness():
+    temp_dir, client, server = _setup()
+    try:
+        pid = _upload_named(client)
+        _seed_tag(server, pid, "clears-tag")
+        body = _rebuild_and_wait(client)
+        assert body["stale"] is False
+
+        def seed(session):
+            session.add(
+                TagSuggestion(
+                    picture_id=pid,
+                    tag="clears-tag",
+                    direction="add",
+                    source="scan",
+                    score=1.0,
+                    status="ACCEPTED",
+                    reviewed_at=datetime.utcnow(),
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+        assert client.get(f"{API}/tag_health").json()["stale"] is True
+
+        body2 = _rebuild_and_wait(client)
+        assert body2["stale"] is False
+        assert body2["computed_at"] != body["computed_at"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_scoped_response_is_never_stale():
+    """A scoped board (project/set/character filter) is always computed live,
+    never cached — stale=false regardless of vault activity."""
+    temp_dir, client, server = _setup()
+    try:
+        pid = _upload_named(client)
+        set_id = client.post(f"{API}/picture_sets", json={"name": "Scope"}).json()[
+            "picture_set"
+        ]["id"]
+
+        def add_member(session):
+            session.add(PictureSetMember(set_id=set_id, picture_id=pid))
+            session.commit()
+
+        server.vault.db.run_task(add_member)
+
+        resp = client.get(f"{API}/tag_health", params={"set_id": set_id})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["scoped"] is True
+        assert body["stale"] is False
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_auto_rebuild_finder_fires_when_stale_and_respects_debounce():
+    """Spec B backend: a periodic finder (same shape as Spec A's
+    PictureSplitAssignmentFinder) dispatches a rebuild through the same
+    idempotent `start_rebuild` path `POST /tag_health/rebuild` uses when the
+    cache is stale, and debounces — it must not requeue every tick even
+    while the cache stays stale (AUTO_REBUILD_CHECK_INTERVAL_S)."""
+    from pixlstash.tasks.tag_health_auto_rebuild_finder import (
+        TagHealthAutoRebuildFinder,
+    )
+
+    temp_dir, client, server = _setup()
+    try:
+        pid = _upload_named(client)
+        _seed_tag(server, pid, "auto-rebuild-base-tag")
+        _rebuild_and_wait(client)
+        assert client.get(f"{API}/tag_health").json()["stale"] is False
+
+        def make_stale(session, suggestion_tag):
+            session.add(
+                TagSuggestion(
+                    picture_id=pid,
+                    tag=suggestion_tag,
+                    direction="add",
+                    source="scan",
+                    score=1.0,
+                    status="ACCEPTED",
+                    reviewed_at=datetime.utcnow(),
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(make_stale, "auto-rebuild-tag-1")
+        assert client.get(f"{API}/tag_health").json()["stale"] is True
+
+        # A fresh finder instance: _last_check_at starts at 0.0, so its very
+        # first find_task() call always performs a real check (same shape as
+        # EnsureGfsSnapshotFinder's precedent), independent of whether the
+        # WorkPlanner-owned instance registered on this vault has already
+        # used up its own check window.
+        finder = TagHealthAutoRebuildFinder(server.vault)
+        task = finder.find_task()
+        assert task is not None, "finder did not dispatch a rebuild while stale"
+        task.run()
+
+        deadline = time.time() + 30
+        body = client.get(f"{API}/tag_health").json()
+        while time.time() < deadline and body["building"]:
+            time.sleep(0.1)
+            body = client.get(f"{API}/tag_health").json()
+        assert not body["building"], "auto-dispatched rebuild never finished"
+        assert body["stale"] is False, "auto-rebuild did not clear staleness"
+
+        # Debounce: make it stale again immediately; the SAME finder instance
+        # (still inside its check interval) must not dispatch a second
+        # rebuild on every tick.
+        server.vault.db.run_task(make_stale, "auto-rebuild-tag-2")
+        assert client.get(f"{API}/tag_health").json()["stale"] is True
+        assert finder.find_task() is None, "debounce window did not hold"
     finally:
         _teardown(temp_dir, server)

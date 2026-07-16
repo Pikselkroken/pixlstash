@@ -3,6 +3,15 @@ the write-path conflict guard, picture-set stratification, authz, and the
 read-path `has_train_side_conflict` helper's contract.
 
 See docs/reviews/tag-review-tagger-takeover-design.md §2.
+
+Most tests here hand-control `PictureSplit` rows (via `_set_split`) or call
+`POST /picture_splits/assign` directly to get deterministic, fine-grained
+control over assignment/conflict state. `_setup()` therefore disables
+`PictureSplitAssignmentFinder` (Spec A,
+docs/reviews/tag-review-board-redesign-ux-spec.md §3) by default so its
+background sweep never races those manual writes; the dedicated
+`test_periodic_finder_*` test below re-enables it to prove the automatic
+path works with zero manual endpoint calls.
 """
 
 import gc
@@ -10,13 +19,18 @@ import io
 import json
 import os
 import tempfile
+import time
 
 import numpy as np
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from pixlstash.db_models import Picture, PictureLikeness, PictureSplit
+from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.services.picture_split_service import has_train_side_conflict
+from pixlstash.services.tag_eval_slice_service import (
+    count_eval_slice_candidates_in_session,
+)
 from pixlstash.server import Server
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from tests.utils import upload_pictures_and_wait
@@ -24,13 +38,20 @@ from tests.utils import upload_pictures_and_wait
 API = "/api/v1"
 
 
-def _setup():
+def _setup(picture_split_auto_assign=False):
     temp_dir = tempfile.TemporaryDirectory()
     image_root = os.path.join(temp_dir.name, "images")
     os.makedirs(image_root, exist_ok=True)
     server_config_path = os.path.join(temp_dir.name, "server-config.json")
     with open(server_config_path, "w") as f:
-        f.write(json.dumps({"port": 8000}))
+        f.write(
+            json.dumps(
+                {
+                    "port": 8000,
+                    "picture_split_auto_assign": picture_split_auto_assign,
+                }
+            )
+        )
     server = Server(server_config_path)
     client = TestClient(server.api)
     resp = client.post(
@@ -57,6 +78,30 @@ def _upload_named(client):
     img.save(buf, format="PNG")
     return upload_pictures_and_wait(
         client, [("file", (f"split{n}.png", buf.getvalue(), "image/png"))]
+    )["results"][0]["picture_id"]
+
+
+def _upload_noisy(client, seed):
+    """Upload a random-noise picture -- deliberately NOT a solid-color square.
+
+    ``_upload_named``'s near-solid-color squares have ~zero-gradient dhashes
+    (any two solid colors hash to the same/near-same value) and end up
+    CLIP-similar too, so with real background IMAGE_EMBEDDING/LIKENESS
+    processing given enough time to run (as opposed to the other tests here,
+    which call POST /picture_splits/assign immediately and usually beat that
+    background processing), a batch of them spuriously corroborates into one
+    connected component. Independent per-pixel noise has no such shared
+    structure, so it reliably stays in independent singleton components --
+    needed by tests that wait on the periodic finder for real (long enough
+    for real embeddings to land).
+    """
+    rng = np.random.default_rng(seed)
+    arr = rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8)
+    img = Image.fromarray(arr, mode="RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return upload_pictures_and_wait(
+        client, [("file", (f"noisy{seed}.png", buf.getvalue(), "image/png"))]
     )["results"][0]["picture_id"]
 
 
@@ -449,5 +494,95 @@ def test_has_train_side_conflict_contract():
             return has_train_side_conflict(session, [])
 
         assert server.vault.db.run_immediate_read_task(_check_empty) == set()
+    finally:
+        _teardown(temp_dir, server)
+
+
+# --------------------------------------------------------------------------- #
+# (f) Spec A: PictureSplitAssignmentFinder assigns splits with zero manual
+# endpoint calls, and eval_candidate_n_pos moves as a direct result.
+# --------------------------------------------------------------------------- #
+
+
+def test_periodic_finder_assigns_splits_and_moves_eval_candidate_n_pos():
+    """Acceptance criterion (tag-review-board-redesign-ux-spec.md §10): a
+    fresh vault, pictures reviewed, and `eval_candidate_n_pos` climbs without
+    any manual `POST /picture_splits/assign` call anywhere in this test --
+    the previously-uncalled endpoint that left freeze eligibility stuck at 0
+    however much a tag was reviewed.
+    """
+    # Starts disabled: assign_splits_in_session's 80/20 stratified fill is
+    # computed PER INVOCATION, over whatever is currently unassigned -- if
+    # the finder got a chance to run between individual uploads (a live
+    # WorkPlanner can do this), each small batch's round(0.8 * batch_size)
+    # can independently round to "all TRAIN" (true for any batch of size 1
+    # or 2), so 10 pictures trickling in one at a time could all land TRAIN
+    # even though a single 10-picture batch reliably produces 8/2. Uploading
+    # with auto-assign off and then flipping it on (the runtime toggle Spec A
+    # added, mirroring set_daily_snapshots_enabled) makes the finder's first
+    # real check see all 10 unassigned pictures as one atomic batch, without
+    # ever calling the manual assign endpoint itself.
+    temp_dir, client, server = _setup(picture_split_auto_assign=False)
+    try:
+        tag = "periodic-finder-tag"
+        # 10 unrelated singleton components. Uses _upload_noisy, not
+        # _upload_named: this test waits up to 30s for the real periodic
+        # finder, long enough for real IMAGE_EMBEDDING/LIKENESS background
+        # processing to complete, and _upload_named's near-solid-color
+        # squares corroborate into one connected component under that real
+        # processing (near-zero-gradient dhashes + CLIP-similar) -- which
+        # deterministically lands 100% TRAIN (see _upload_noisy's docstring).
+        # Independent components -> the deterministic 80/20 stratified fill
+        # guarantees round(10 * 0.2) = 2 land EVAL, not just TRAIN.
+        pids = [_upload_noisy(client, seed=i) for i in range(10)]
+        server.vault.set_picture_split_auto_assign_enabled(True)
+
+        def review(session):
+            # Simulates "reviewing" this tag on every picture: a human-
+            # confirmed positive label, the same TagPrediction shape
+            # tag_suggestion_service writes on accept.
+            for pid in pids:
+                session.add(
+                    TagPrediction(
+                        picture_id=pid,
+                        tag=tag,
+                        confidence=0.9,
+                        model_version="v1",
+                        label_state="POS",
+                        label_source="human",
+                    )
+                )
+            session.commit()
+
+        server.vault.db.run_task(review)
+
+        def n_pos() -> int:
+            def _count(session):
+                return count_eval_slice_candidates_in_session(session, tag)["n_pos"]
+
+            return server.vault.db.run_immediate_read_task(_count)
+
+        # No PictureSplit rows yet -> nothing can be EVAL-side -> 0 candidates,
+        # exactly the "reviewing tags does NOTHING to change scoring" bug.
+        assert n_pos() == 0
+
+        # Generous: this is a background-finder poll, not a tight timing
+        # assertion, and can be slower under full-suite load than in isolation.
+        deadline = time.time() + 30
+        while time.time() < deadline and any(
+            _get_split(server, pid) is None for pid in pids
+        ):
+            time.sleep(0.1)
+
+        for pid in pids:
+            assert _get_split(server, pid) is not None, (
+                f"PictureSplitAssignmentFinder never assigned picture {pid} "
+                "in time -- no manual /picture_splits/assign call was made"
+            )
+
+        assert n_pos() > 0, (
+            "eval_candidate_n_pos did not move even though all 10 pictures "
+            "were reviewed and PictureSplitAssignmentFinder assigned splits"
+        )
     finally:
         _teardown(temp_dir, server)

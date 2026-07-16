@@ -78,6 +78,7 @@ class Vault:
         fast_captions: bool = False,
         daily_snapshots_enabled: bool = True,
         insightface_model_pack: str = "buffalo_l",
+        picture_split_auto_assign_enabled: bool = True,
     ):
         """
         Initialize a Vault instance.
@@ -90,6 +91,15 @@ class Vault:
                 WorkPlanner and ReferenceFolderWatcher are not started and
                 no models are ever loaded.  Intended for read-only deployments
                 where all processing is already complete.
+            picture_split_auto_assign_enabled (bool): Master switch for
+                ``PictureSplitAssignmentFinder`` (Spec A,
+                docs/reviews/tag-review-board-redesign-ux-spec.md §3). Defaults
+                to True so split assignment is invisible background
+                maintenance in normal operation. Tests that hand-control
+                ``PictureSplit`` rows to exercise ``assign_splits``/the
+                conflict guard directly set this False to avoid racing the
+                periodic finder; the dedicated finder test sets it True (the
+                default) instead.
         """
         self.image_root = image_root
         logger.debug(f"Image root: {self.image_root}")
@@ -122,6 +132,9 @@ class Vault:
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
         self._daily_snapshots_enabled: bool = daily_snapshots_enabled
+        self._picture_split_auto_assign_enabled: bool = (
+            picture_split_auto_assign_enabled
+        )
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -155,10 +168,26 @@ class Vault:
             image_root=self.image_root,
             path_mapper=path_mapper,
         )
-        from pixlstash.tasks import TaskType, EnsureGfsSnapshotFinder
+        from pixlstash.tasks import (
+            TaskType,
+            EnsureGfsSnapshotFinder,
+            PictureSplitAssignmentFinder,
+            TagHealthAutoRebuildFinder,
+        )
 
         self._planner_work_finders[TaskType.GFS_SNAPSHOT] = EnsureGfsSnapshotFinder(
             vault=self
+        )
+        # Spec A / Spec B of docs/reviews/tag-review-board-redesign-ux-spec.md:
+        # both need a full Vault (not just `database`) to reach their service
+        # layer's vault-facing wrappers (assign_splits / start_rebuild), same
+        # reason GFS_SNAPSHOT is registered here rather than in
+        # WorkPlanner.work_finders().
+        self._planner_work_finders[TaskType.PICTURE_SPLIT_ASSIGNMENT] = (
+            PictureSplitAssignmentFinder(vault=self)
+        )
+        self._planner_work_finders[TaskType.TAG_HEALTH_AUTO_REBUILD] = (
+            TagHealthAutoRebuildFinder(vault=self)
         )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
@@ -456,6 +485,23 @@ class Vault:
     def daily_snapshots_enabled(self) -> bool:
         """Whether automatic (GFS) snapshots are enabled."""
         return self._daily_snapshots_enabled
+
+    def set_picture_split_auto_assign_enabled(self, enabled: bool) -> None:
+        """Enable or disable automatic ``PictureSplit`` assignment at runtime.
+
+        Master switch for ``PictureSplitAssignmentFinder`` (Spec A). Takes
+        effect immediately; the next finder cycle will skip the existence
+        check when ``enabled`` is False.
+
+        Args:
+            enabled: True to allow automatic assignment, False to suppress it.
+        """
+        self._picture_split_auto_assign_enabled = bool(enabled)
+
+    @property
+    def picture_split_auto_assign_enabled(self) -> bool:
+        """Whether automatic ``PictureSplit`` assignment is enabled."""
+        return self._picture_split_auto_assign_enabled
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory

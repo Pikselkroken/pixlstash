@@ -1134,6 +1134,9 @@ class Server:
             insightface_model_pack=self._server_config.get(
                 "insightface_model_pack", "buffalo_l"
             ),
+            picture_split_auto_assign_enabled=self._server_config.get(
+                "picture_split_auto_assign", True
+            ),
         )
 
         self._ws_clients = []

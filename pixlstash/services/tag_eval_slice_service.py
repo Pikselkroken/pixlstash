@@ -99,30 +99,37 @@ THRESHOLD_SOURCE_UNCALIBRATED = "uncalibrated_fallback"
 # --------------------------------------------------------------------------- #
 
 
-def freeze_eval_slice_in_session(session: Session, tag: str) -> dict:
-    """Freeze *tag*'s current EVAL-side human labels into a new ACTIVE slice.
+def _select_eval_slice_candidates_in_session(
+    session: Session, tag: str
+) -> tuple[dict[int, str], set[int]]:
+    """Shared candidate-selection query for *tag*'s eval slice.
 
-    Candidates are every picture with a human-labeled (``label_source ==
-    'human'``, ``label_state in (POS, NEG)``) ``TagPrediction`` row for *tag*
-    whose :class:`~pixlstash.db_models.picture_split.PictureSplit` is
-    ``EVAL``. Before freezing, candidates flagged by
+    Every picture with a human-labeled (``label_source == 'human'``,
+    ``label_state in (POS, NEG)``) ``TagPrediction`` row for *tag* whose
+    :class:`~pixlstash.db_models.picture_split.PictureSplit` is ``EVAL``,
+    minus picture ids flagged by
     :func:`~pixlstash.services.picture_split_service.has_train_side_conflict`
-    (a race between near-dup edge discovery and this freeze) are excluded and
-    logged. If the surviving set's POS count is below :data:`MIN_EVAL_N_POS`,
-    no slice is created. Otherwise a new ``ACTIVE`` slice is created and the
-    tag's prior ``ACTIVE`` slice (if any) is superseded.
+    (a race between near-dup edge discovery and freeze time). This is the
+    exact query :func:`freeze_eval_slice_in_session` commits from and
+    :func:`count_eval_slice_candidates_in_session` counts from -- extracted
+    here so the two can never silently diverge on what a freeze actually
+    includes.
 
     Args:
-        session: Active DB session; caller commits are folded into this call
-            (this function commits internally, matching the vault-task
-            convention used by sibling freeze/assign operations).
-        tag: The literal tag to freeze (not ``DEFAULT_TAG_MERGES``-folded).
+        session: Active DB session.
+        tag: The literal tag to look up candidates for (not
+            ``DEFAULT_TAG_MERGES``-folded).
 
     Returns:
-        ``{"created": bool, "slice_id": Optional[int], "tag": str, "n_pos":
-        int, "n_total": int, "excluded_conflict_ids": list[int], "reason":
-        Optional[str]}``. ``reason`` is ``None`` when ``created`` is True,
-        else one of ``"no_candidates"`` / ``"insufficient_positives"``.
+        ``(candidates, excluded_conflict_ids)``. ``candidates`` is
+        ``{picture_id: label_state}`` for the surviving (post-exclusion) set.
+        Both are empty when *tag* has no human-labeled EVAL-side rows at
+        all; ``excluded_conflict_ids`` is non-empty only when there WERE
+        raw candidates and at least one got excluded (including the edge
+        case where every raw candidate got excluded, leaving ``candidates``
+        empty but ``excluded_conflict_ids`` non-empty) -- callers that need
+        to distinguish "no candidates ever existed" from "all candidates got
+        excluded" can do so on that basis.
     """
     candidate_rows = session.exec(
         select(TagPrediction.picture_id, TagPrediction.label_state)
@@ -136,9 +143,76 @@ def freeze_eval_slice_in_session(session: Session, tag: str) -> dict:
             PictureSplit.split == SplitValue.EVAL.value,
         )
     ).all()
-
     candidates: dict[int, str] = {int(pid): state for pid, state in candidate_rows}
     if not candidates:
+        return candidates, set()
+
+    excluded = has_train_side_conflict(session, candidates.keys())
+    for pid in excluded:
+        candidates.pop(pid, None)
+    return candidates, excluded
+
+
+def count_eval_slice_candidates_in_session(session: Session, tag: str) -> dict:
+    """Candidate summary for *tag* as if freezing were called right now.
+
+    Reuses :func:`_select_eval_slice_candidates_in_session` -- the exact
+    candidate-selection query and ``has_train_side_conflict`` exclusion pass
+    that :func:`freeze_eval_slice_in_session` commits from -- so this can
+    never silently diverge from what an actual freeze would produce. Used by
+    :func:`pixlstash.services.tag_health_service.compute_tag_health_rows` to
+    populate the board's ``eval_candidate_n_pos`` for every tag, including
+    tags that have never been frozen, so the frontend can show a
+    freeze-eligibility indicator before the user clicks "Freeze to score".
+
+    Unlike the freeze action, this never logs a train-side-conflict warning:
+    it runs unconditionally for every tag on every board rebuild, so a
+    routine exclusion here is not itself noteworthy (the freeze action's own
+    warning already covers "this happened during a real freeze").
+
+    Args:
+        session: Active DB session.
+        tag: The literal tag to count candidates for.
+
+    Returns:
+        ``{"n_pos": int, "n_total": int, "excluded_conflict_ids": set[int]}``,
+        all computed after the ``has_train_side_conflict`` exclusion --
+        ``n_total`` counts POS + NEG survivors, matching
+        ``freeze_eval_slice_in_session``'s own ``n_total``.
+    """
+    candidates, excluded = _select_eval_slice_candidates_in_session(session, tag)
+    n_pos = sum(1 for state in candidates.values() if state == POS)
+    return {
+        "n_pos": n_pos,
+        "n_total": len(candidates),
+        "excluded_conflict_ids": excluded,
+    }
+
+
+def freeze_eval_slice_in_session(session: Session, tag: str) -> dict:
+    """Freeze *tag*'s current EVAL-side human labels into a new ACTIVE slice.
+
+    Candidates are selected by
+    :func:`_select_eval_slice_candidates_in_session` (see that function for
+    the exact selection + exclusion rule). If the surviving set's POS count
+    is below :data:`MIN_EVAL_N_POS`, no slice is created. Otherwise a new
+    ``ACTIVE`` slice is created and the tag's prior ``ACTIVE`` slice (if any)
+    is superseded.
+
+    Args:
+        session: Active DB session; caller commits are folded into this call
+            (this function commits internally, matching the vault-task
+            convention used by sibling freeze/assign operations).
+        tag: The literal tag to freeze (not ``DEFAULT_TAG_MERGES``-folded).
+
+    Returns:
+        ``{"created": bool, "slice_id": Optional[int], "tag": str, "n_pos":
+        int, "n_total": int, "excluded_conflict_ids": list[int], "reason":
+        Optional[str]}``. ``reason`` is ``None`` when ``created`` is True,
+        else one of ``"no_candidates"`` / ``"insufficient_positives"``.
+    """
+    candidates, excluded = _select_eval_slice_candidates_in_session(session, tag)
+    if not candidates and not excluded:
         return {
             "created": False,
             "slice_id": None,
@@ -149,7 +223,6 @@ def freeze_eval_slice_in_session(session: Session, tag: str) -> dict:
             "reason": "no_candidates",
         }
 
-    excluded = has_train_side_conflict(session, candidates.keys())
     if excluded:
         logger.warning(
             "tag_eval_slice freeze(tag=%r): excluding %d candidate(s) with a "
@@ -159,8 +232,6 @@ def freeze_eval_slice_in_session(session: Session, tag: str) -> dict:
             len(excluded),
             sorted(excluded),
         )
-        for pid in excluded:
-            candidates.pop(pid, None)
 
     n_pos = sum(1 for state in candidates.values() if state == POS)
     if n_pos < MIN_EVAL_N_POS:
