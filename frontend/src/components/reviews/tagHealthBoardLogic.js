@@ -15,6 +15,29 @@ export function corrections(r) {
   return Math.round(wrong + missing + (r.mismatch ?? 0));
 }
 
+// Tie-break signal for the default "Suggested (health)" sort (see `sorted` in
+// TagHealthBoard.vue, key === "score"). Two tags routinely round to the same
+// displayed Priority number in a lightly-reviewed vault, and without a
+// deterministic secondary key `Array.prototype.sort` falls through to
+// whichever order the row happened to arrive in — which reads as alphabetical
+// because `sorted()`'s final fallback is `tag.localeCompare`. That fallback
+// firing on the PRIMARY signal (not as a last-resort for genuine ties) makes
+// the board's "prioritized by likely-wrongness" promise false for every tied
+// pair.
+//
+// Fix: always use the raw, un-rounded, un-precision-discounted
+// `est_wrong + est_missing + mismatch` as the secondary key. This is the same
+// underlying signal `corrections()` summarises (not an unrelated axis like
+// recency) at full precision — two tags that tie once rounded to an integer
+// and once discounted by reliability can still differ in raw disagreement
+// volume, and that's the more specific, still-explicable story for why one
+// outranks the other ("mostly missing"/"mostly wrong" in `whyText()` already
+// reads directly off these same raw counts). Never used for the *displayed*
+// Priority number — `corrections()` remains that number unchanged.
+export function rawCorrections(r) {
+  return (r.est_wrong ?? 0) + (r.est_missing ?? 0) + (r.mismatch ?? 0);
+}
+
 // "Why it ranks here": computed client-side from fields already on the row
 // (there is no `why` field from the backend — see the Spec E design note in
 // docs/reviews/tag-review-board-redesign-ux-spec.md §7c). Priority order: a

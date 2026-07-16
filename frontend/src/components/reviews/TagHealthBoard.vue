@@ -478,7 +478,12 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { relativeDate } from "../../utils/snapshots";
 // Pure ranking/explanation logic, split out for direct-import unit testing —
 // see tagHealthBoardLogic.js's module doc for why.
-import { corrections, whyText, boostedScore } from "./tagHealthBoardLogic";
+import {
+  corrections,
+  whyText,
+  boostedScore,
+  rawCorrections,
+} from "./tagHealthBoardLogic";
 
 const emit = defineEmits(["start-review"]);
 const store = useReviewSessionsStore();
@@ -696,12 +701,23 @@ const sorted = computed(() => {
   // The default "Suggested (health)" sort (key === "score") orders by the
   // accuracy-boosted score (Spec F) instead of the raw one — every other
   // sort keeps ranking strictly by keyval(), unaffected by the boost.
+  //
+  // Two tags routinely round to the same boostedScore in a lightly-reviewed
+  // vault (corrections() rounds, and un-boosted rows share boostFactor 1), so
+  // a tag-name fallback here would decide the PRIMARY ranking, not just a
+  // rare genuine tie — that's the bug this tie-break closes. rawCorrections()
+  // (the un-rounded, un-discounted est_wrong + est_missing + mismatch) breaks
+  // the tie with the same underlying signal at full precision before falling
+  // back to tag name for a genuine, full tie.
   if (key === "score") {
     return base.slice().sort((a, b) => {
       const av = boostedScore(a);
       const bv = boostedScore(b);
-      if (av === bv) return a.tag.localeCompare(b.tag);
-      return (av - bv) * dir;
+      if (av !== bv) return (av - bv) * dir;
+      const ar = rawCorrections(a);
+      const br = rawCorrections(b);
+      if (ar !== br) return (ar - br) * dir;
+      return a.tag.localeCompare(b.tag);
     });
   }
 
