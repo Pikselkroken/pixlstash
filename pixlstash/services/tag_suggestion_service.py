@@ -331,6 +331,7 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     ACCEPTED touched the suspect; TWIN_FIXED touched the twin; SWAPPED touched both;
     DISMISSED touched only the ledger. Each path also clears the human ledger entry the
     forward review wrote, so reopening is fully symmetric (no orphan POS/NEG left behind).
+    SKIPPED wrote nothing anywhere, so it matches no branch and just re-pends.
     """
     tag_value = suggestion.tag
     if suggestion.status == "ACCEPTED":
@@ -530,6 +531,7 @@ def bulk_accept(
     direction: str | None = None,
     dry_run: bool = False,
     picture_ids: set[int] | None = None,
+    review_id: int | None = None,
 ) -> dict:
     """Auto-resolve every PENDING pair for ``tag`` where two *independent* signals agree.
 
@@ -554,6 +556,10 @@ def bulk_accept(
     in the set are counted or resolved, so the dry-run count and the apply both
     respect the same scope and out-of-scope suggestions are never bulk-resolved.
     An empty set resolves nothing; ``None`` is today's unrestricted behaviour.
+
+    ``review_id`` optionally restricts to one review session's rows
+    (``TagSuggestion.review_id``), so a review's "N obvious pairs —
+    auto-resolve?" receipt and its apply act on exactly that review's queue.
     """
 
     def _bulk(session: Session) -> dict:
@@ -564,6 +570,8 @@ def bulk_accept(
             q = q.where(TagSuggestion.direction == direction)
         if picture_ids is not None:
             q = q.where(TagSuggestion.picture_id.in_(picture_ids))
+        if review_id is not None:
+            q = q.where(TagSuggestion.review_id == review_id)
         rows = list(session.exec(q).all())
 
         ids: set[int] = set()
@@ -638,15 +646,37 @@ def bulk_accept(
     return vault.db.run_task(_bulk)
 
 
-def bulk_reopen(vault: "Vault", ids: list[int]) -> dict:
-    """Reopen many suggestions at once (batch undo of a bulk-accept). See _reverse_review."""
+def bulk_reopen(vault: "Vault", ids: list[int], review_id: int | None = None) -> dict:
+    """Reopen many suggestions at once (batch undo of a bulk-accept). See _reverse_review.
+
+    ``review_id`` optionally restricts the undo to one review session's rows:
+    ids whose suggestion belongs to a different (or no) review are skipped, so
+    a review-scoped batch undo can never touch another session's decisions.
+    With ``review_id`` set and ``ids`` empty, ALL of that review's decided rows
+    are reopened (the "Undo N changes" abort flow). SKIPPED rows are always
+    left as-is in review-scoped mode — they made no changes to undo.
+    """
 
     def _bulk(session: Session) -> dict:
+        target_ids = list(ids)
+        if review_id is not None and not target_ids:
+            target_ids = list(
+                session.exec(
+                    select(TagSuggestion.id).where(
+                        TagSuggestion.review_id == review_id,
+                        TagSuggestion.status.notin_(["PENDING", "SKIPPED"]),
+                    )
+                ).all()
+            )
         pic_ids: set[int] = set()
         count = 0
-        for sid in ids:
+        for sid in target_ids:
             suggestion = session.get(TagSuggestion, sid)
             if suggestion is None:
+                continue
+            if review_id is not None and suggestion.review_id != review_id:
+                continue
+            if review_id is not None and suggestion.status == "SKIPPED":
                 continue
             _reverse_review(session, suggestion)
             pic_ids.add(suggestion.picture_id)
@@ -746,6 +776,42 @@ def swap_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         return result
 
     return vault.db.run_task(_swap)
+
+
+def skip_suggestion(vault: "Vault", suggestion_id: int) -> dict:
+    """Mark a suggestion SKIPPED — the reviewer cannot decide, so the item
+    leaves the queue with NO decision made.
+
+    Unlike dismiss (which affirms the current label and writes the human
+    ledger), skip writes nothing: no Tag change, no ledger entry. Reopening a
+    SKIPPED row simply sets it back to PENDING (there is nothing to reverse).
+
+    Args:
+        vault: Application vault, used for DB task dispatch.
+        suggestion_id: Primary key of the TagSuggestion to skip.
+
+    Returns:
+        ``{"picture_id", "tag", "direction"}`` describing the skipped suggestion.
+
+    Raises:
+        KeyError: If no suggestion with that id exists.
+    """
+
+    def _skip(session: Session) -> dict:
+        suggestion = session.get(TagSuggestion, suggestion_id)
+        if suggestion is None:
+            raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
+        suggestion.status = "SKIPPED"
+        suggestion.reviewed_at = datetime.utcnow()
+        result = {
+            "picture_id": suggestion.picture_id,
+            "tag": suggestion.tag,
+            "direction": suggestion.direction,
+        }
+        session.commit()
+        return result
+
+    return vault.db.run_task(_skip)
 
 
 def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:

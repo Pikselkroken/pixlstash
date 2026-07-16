@@ -82,12 +82,21 @@ class BulkAcceptRequest(BaseModel):
     project_id: Optional[int] = None
     set_id: Optional[int] = None
     character_id: Optional[str] = None
+    # Optional review-session narrowing: only rows with this TagSuggestion.review_id
+    # are counted/resolved (the review creation receipt's "auto-resolve?" path).
+    review_id: Optional[int] = None
 
 
 class BulkReopenRequest(BaseModel):
-    """Batch-undo: reopen the given suggestion ids."""
+    """Batch-undo: reopen the given suggestion ids.
+
+    With ``review_id`` set and ``ids`` empty, reopens ALL of that review's
+    decided rows (SKIPPED rows made no changes and are left as-is).
+    """
 
     ids: list[int] = []
+    # When set, ids belonging to a different (or no) review are skipped.
+    review_id: Optional[int] = None
 
 
 class ScanRequest(BaseModel):
@@ -465,6 +474,7 @@ def create_router(server) -> APIRouter:
             payload.direction,
             payload.dry_run,
             picture_ids=picture_ids,
+            review_id=payload.review_id,
         )
         if payload.dry_run and result.get("sample"):
             ids: list[int | None] = []
@@ -488,9 +498,29 @@ def create_router(server) -> APIRouter:
     )
     def bulk_reopen_tag_suggestions(payload: BulkReopenRequest, request: Request):
         origin_client_id = getattr(request.state, "origin_client_id", None)
-        result = tag_suggestion_service.bulk_reopen(server.vault, payload.ids)
+        result = tag_suggestion_service.bulk_reopen(
+            server.vault, payload.ids, review_id=payload.review_id
+        )
         _notify_changed(server, result["picture_ids"], origin_client_id)
         return result
+
+    @router.post(
+        "/tag_suggestions/{suggestion_id}/skip",
+        summary="Skip a tag-fix suggestion (no decision)",
+        description=(
+            "The reviewer cannot decide: marks the suggestion SKIPPED and "
+            "removes it from the queue with no decision recorded — the Tag "
+            "table and the human-label ledger are untouched (unlike dismiss, "
+            "which affirms the current label). Reopen re-pends it."
+        ),
+        response_model=ReviewSuggestionResponse,
+    )
+    def skip_tag_suggestion(suggestion_id: int):
+        try:
+            result = tag_suggestion_service.skip_suggestion(server.vault, suggestion_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        return {"status": "skipped", **result}
 
     @router.post(
         "/tag_suggestions/{suggestion_id}/dismiss",
