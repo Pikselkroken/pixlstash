@@ -440,3 +440,87 @@ runs with `disable_background_workers: true`, so it cannot exercise this path).
 - [ ] Open a **private/incognito window** (or a browser with `sessionStorage` blocked) and log in
 - [ ] Make an **own** change (add a tag or change a rating), then **reload immediately**
 - [ ] ⚠️ **Known narrow limitation:** in storage-denied mode the per-tab `clientId` regenerates on every reload, so an in-flight echo for the pre-reload mutation can be misclassified as external and wrongly raise a pill. Observe whether a pill appears right after reload; this is the documented edge case, not a regression of #499.
+
+---
+
+## 20. Review Sessions (tag-review redesign)
+
+New in this release: a tag-health board, first-class review sessions in a rail,
+and binary/pair decision cards (replaces the old "Review tags" overlay). Spec:
+`docs/reviews/2026-07-review-sessions-redesign-draft.md` (Rulings + Decisions,
+2026-07-15). The board is automated (`review-board.spec.js`, 7 cases). The
+session loop is automated but **currently `fixme`-guarded** behind the blocker
+below.
+
+> 🚫 **RELEASE BLOCKER — BUG-RS-1 (session card never renders).** Opening any
+> review shows the session header + rail correctly, then the card area is stuck
+> on **"Loading…"** forever. The browser throws
+> `TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
+> `patchBlockChildren` the instant the suggestions queue loads. Reproduced in the
+> production, unminified, and dev builds against the committed fixture vault. The
+> **entire session loop (§20.3–§20.8) is unusable** until this is fixed. Do not
+> ship the session loop with this open. The board (§20.1) is unaffected.
+
+### 20.1 Tag-health board — AUTOMATED (`review-board.spec.js`)
+
+- [ ] Toolbar **Review and fix tags** opens the overlay to the board "Which tags need review?"
+- [ ] The board lists tags with columns Tag / Est. fixes / Est. wrong / Est. missing / Mismatch / verified / last-reviewed / "Why it ranks here"
+- [ ] Filter input narrows rows (and `/` focuses it); no-match shows "No tags match…"
+- [ ] Sort dropdown and sortable headers re-order without emptying the board
+- [ ] Anomalies-only toggle flips (fixture has no anomaly tags → may show empty; the toggle state must still flip)
+- [ ] A tag with a mismatch signal offers **Start review**; a tag with an open review offers **Open →** (greyed for creation — one open review per tag)
+
+### 20.2 Board signals not exercisable on the committed fixture — MANUAL
+
+The `test-data` vault produces mismatch signals but not the others. Verify these
+on a **real vault** (or a seeded fixture):
+
+- [ ] **Est. wrong / Est. missing** non-zero: a tag with tagged pictures whose prediction ≤0.1 (wrong) and high-confidence (≥0.9) predictions with no tag row (missing)
+- [ ] **"no model signal"** row state for a tag outside the tagger vocabulary (kNN review still offered)
+- [ ] **Model-disputes** banner ("The current model disputes N of your earlier calls") when a human label contradicts a confident current-model prediction
+- [ ] **Build-progress bar** shows while the cache (re)builds on a large vault (on the small fixture the rebuild is synchronous and the bar does not visibly fill)
+
+### 20.3 Create a review — BLOCKED past the dialog by BUG-RS-1
+
+- [ ] **New review** → pick a tag (open tags greyed / jump to their session) → optional scope (project/set/character) → **Scan & create**
+- [ ] The session cover-sheet receipt reads "Scanned N pictures · N suspects · N handled earlier"
+- [ ] Creating a **second** review for the same tag is refused (one-open-per-tag): the chip shows "· open" and jumps to the existing session (backend returns 409)
+- [ ] "Include previously reviewed" toggle (default off) re-parents earlier-handled suspects into the new review
+- [ ] Auto-resolve line ("N obvious suspects — Auto-resolve") appears when neighbour vote + tagger agree ≥90% (needs aligned predictions; 0 on the current fixture)
+
+### 20.4 Session loop — binary — BLOCKED by BUG-RS-1
+
+- [ ] One image, one question; **Yes / No / Skip / Undo** with `Y / N / S / U` keys
+- [ ] Direction mapping: **probably-wrong** card → No removes the tag, Yes keeps it; **probably-missing** card → Yes adds the tag, No leaves it untagged
+- [ ] Focus advances card→card (the card container re-keys and takes focus); decision-bar buttons hold constant positions; an Undo button is always shown
+- [ ] Undo is disabled when the stack is empty, enabled after a decision; XP/streak **decrement** on undo (net counters); celebrations never fire on undo
+- [ ] Neighbour strip shows "N of M similar images have '<tag>'" with per-thumb tag/no-tag badges
+
+### 20.5 Session loop — pair cards — BLOCKED by BUG-RS-1
+
+- [ ] For same-stack or dhash-near pairs a pair card appears with **Both / Neither / Left only / Right only** (`B / N / L / R`); Right-only performs the swap
+- [ ] LEFT pane = tagged side, RIGHT pane = untagged side
+
+### 20.6 Skip / refresh / staleness — BLOCKED by BUG-RS-1
+
+- [ ] Skip removes the item with **no** decision written (nothing to tags/ledger); rail shows "N skipped"; completion offers "Reopen N skipped"
+- [ ] After a vault change, the staleness hint ("Vault changed since scan → Refresh") appears; **Refresh appends** newly-found suspects with a **NEW — from refresh** badge and never resurrects decided cards
+
+### 20.7 Abort / archive — BLOCKED by BUG-RS-1
+
+- [ ] Abort with decisions made shows a dialog: **Keep N changes** (decisions stand) / **Undo N changes** (review-scoped bulk-reopen) / Cancel
+- [ ] Working through the queue reaches an explicit completion state; **Archive** produces a receipt ("N reviewed — N removed, N added, N kept, N skipped")
+
+### 20.8 Manual tag / evidence region / gamification — BLOCKED by BUG-RS-1
+
+- [ ] Manual-tag escape hatch: bottom-left **Apply tags** button on the card + `T` shortcut opens the tag panel
+- [ ] Evidence region: `H` toggles the Grad-CAM heatmap + boxes on cards that have a region; preference persists
+- [ ] Gamification opt-in ("Pretend this is fun"): XP pill appears, counters climb on decisions, stickers land in the capped sticker shelf and persist; celebrations fire on a decision, never on undo; rewards are never clawed back
+
+### 20.9 Acceptance criteria (release gate)
+
+- [ ] Board (§20.1) passes automated + manual
+- [ ] **BUG-RS-1 fixed**, the six `review-session.spec.js` cases un-`fixme`'d and green
+- [ ] Binary + pair decision mapping verified against the backend receipt (accept/dismiss/swap/skip written correctly; skip writes nothing)
+- [ ] One-open-per-tag (409), abort keep-vs-undo, and archive receipt verified
+- [ ] Regressions in the old review overlay's replacement confirmed (no orphaned `TagSuggestion` rows; existing per-item accept/dismiss/reopen still work)
