@@ -109,21 +109,6 @@ test.describe('review sessions — tag health board', () => {
     expect(await reviews.boardRows.count()).toBeGreaterThan(0)
   })
 
-  test('the unfrozen pending pill states the ~5x EVAL-reservation ratio (Spec D)', async ({
-    reviews,
-  }) => {
-    // Every tag in the fixture is unfrozen (eval_candidate_n_pos stays 0
-    // until reviews land pictures on the EVAL split), so every row's Accuracy
-    // cell renders the pending "{n}/10" pill.
-    const pill = reviews.page.locator('.rs-acc-pill--pending').first()
-    await expect(pill).toBeVisible()
-    const title = await pill.getAttribute('title')
-    expect(title).toMatch(/EVAL-side/i)
-    expect(title).toMatch(/fifth/i)
-    const ariaLabel = await pill.getAttribute('aria-label')
-    expect(ariaLabel).toMatch(/one in five/i)
-  })
-
   test('a row with a mismatch signal shows Start review', async ({ reviews }) => {
     // The fixture's PictureLikeness / stack pairs give several tags a mismatch
     // count; "shirt" is one. Its row exposes a "Start review" action.

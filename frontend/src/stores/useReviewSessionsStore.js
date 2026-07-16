@@ -25,6 +25,7 @@ const PAGE_SIZE = 200;
 // so the user's evidence-region preference carries over.
 const STICKERS_KEY = "pixlstash:reviewStickers";
 const HEATMAP_PREF_KEY = "pixlstash:reviewHeatmap";
+const GAMIFY_PREF_KEY = "pixlstash:reviewGamify";
 
 // A decision that contradicts a CONFIDENT prior call this session (the user has
 // only ever said the opposite, at least this many times) is held for confirm.
@@ -168,6 +169,14 @@ function readHeatmapPref() {
   }
 }
 
+function readGamifyPref() {
+  try {
+    return window.localStorage.getItem(GAMIFY_PREF_KEY) === "1";
+  } catch {
+    return false; // gamification defaults off
+  }
+}
+
 export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const overlayOpen = ref(false);
   // What the main area shows: the board, one open session, or an archived
@@ -202,13 +211,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // catches up; this just powers the persistent control's stale tint/tooltip
   // in the meantime). Always false for a scoped (live-computed) response.
   const healthStale = ref(false);
-  // TagHealthResponse.eval_vault_wide (see pixlstash/routes/tag_health.py):
-  // true means eval_candidate_n_pos and every eval_* metric field on
-  // healthRows are computed over the whole vault, ignoring the current
-  // project/set/character scope — unlike every other column. Backend always
-  // sends true today; kept as a real field (not a hardcoded true) so a future
-  // backend change that scopes eval fields is honoured automatically.
-  const healthEvalVaultWide = ref(true);
   let healthPollTimer = null;
   // Board scope (project/set/character). When any dimension is set the rows
   // are computed live server-side for that scope instead of read from the
@@ -218,41 +220,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     const s = healthScope.value;
     return s.projectId != null || s.setId != null || s.characterId != null;
   });
-
-  // --- Per-tag frozen eval slices (accuracy freeze) ---------------------------
-  // A freeze is a manual, per-tag, single-click curator action (mirrors the
-  // board's "Build now"): POST /tag_eval_slices always answers 200 with
-  // `created: true|false` (never a 4xx for "not enough examples yet" — that's
-  // an expected, common outcome, not an error).
-  const freezingTags = ref(new Set()); // tags with a freeze POST in flight
-  const freezeErrors = ref({}); // { [tag]: { reason, n_pos? } } transient failure
-  const evalHistories = ref({}); // { [tag]: EvalSliceSummaryResponse[] | undefined }
-  const evalHistoryLoading = ref({}); // { [tag]: bool }
-
-  // --- Split conflicts (train/eval leakage guard queue) -----------------------
-  // GET /picture_splits/conflicts returns flat picture rows; pictures sharing
-  // a component_key are one pending decision (POST .../resolve always acts on
-  // the whole component), so the client groups rows into components — the
-  // group count, not the row count, is "how many decisions are pending".
-  const CONFLICTS_FETCH_LIMIT = 500;
-  const conflicts = ref([]); // flat rows from GET /picture_splits/conflicts
-  const conflictsTotal = ref(0); // total ROWS server-side (unpaginated)
-  const conflictsLoading = ref(false);
-  const conflictResolving = ref({}); // { [componentKey]: bool }
-
-  const conflictGroups = computed(() => {
-    const byKey = new Map();
-    for (const row of conflicts.value) {
-      const key = row.component_key;
-      if (!byKey.has(key)) byKey.set(key, []);
-      byKey.get(key).push(row);
-    }
-    return Array.from(byKey.entries()).map(([key, members]) => ({
-      componentKey: key,
-      members,
-    }));
-  });
-  const conflictGroupCount = computed(() => conflictGroups.value.length);
 
   // --- New-review creation ----------------------------------------------------
   const creating = ref(false);
@@ -281,7 +248,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const tagVotes = ref({});
 
   // --- Gamification -----------------------------------------------------------
-  const gamify = ref(false);
+  const gamify = ref(readGamifyPref()); // persisted — survives reload/reopen
   const stickers = ref(readStickers()); // the shelf — persists across sessions
   const activeAward = ref(null); // sticker mid pop→fly animation, or null
   // NET decision count: XP/level/streak derive from it and Undo decrements it.
@@ -458,7 +425,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       healthProgress.value = p > 1 ? Math.min(1, p / 100) : Math.max(0, p);
       healthComputedAt.value = data.computed_at ?? null;
       healthStale.value = !!data.stale;
-      healthEvalVaultWide.value = data.eval_vault_wide !== false;
       scheduleHealthPoll();
     } catch (e) {
       error.value = e?.message || "Failed to load tag health";
@@ -497,133 +463,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       scheduleHealthPoll();
     } catch (e) {
       error.value = e?.message || "Failed to start the health rebuild";
-    }
-  }
-
-  // --- Freeze / eval-slice history ---------------------------------------------
-
-  // Freeze (or refreeze) tag's EVAL-side verified labels into a new ACTIVE
-  // slice. Always resolves — POST /tag_eval_slices answers 200 with
-  // `created: false` + `reason` for the expected "not enough examples yet"
-  // case, never a 4xx for it. On success the board's Accuracy cell repopulates
-  // from the next /tag_health fetch (same "numbers change in place" idiom as
-  // rebuildHealth()); on the deficit case the caller reads `freezeErrors`.
-  async function freezeEvalSlice(tag) {
-    if (!tag || freezingTags.value.has(tag)) return null;
-    freezingTags.value = new Set(freezingTags.value).add(tag);
-    if (tag in freezeErrors.value) {
-      const next = { ...freezeErrors.value };
-      delete next[tag];
-      freezeErrors.value = next;
-    }
-    try {
-      const res = await apiClient.post("/tag_eval_slices", { tag });
-      const data = res.data ?? {};
-      if (data.created) {
-        // The old history (if any was loaded) is now stale — drop it so the
-        // next disclosure open refetches.
-        if (tag in evalHistories.value) {
-          const next = { ...evalHistories.value };
-          delete next[tag];
-          evalHistories.value = next;
-        }
-        await fetchHealth();
-      } else {
-        freezeErrors.value = {
-          ...freezeErrors.value,
-          [tag]: { reason: data.reason || "insufficient_positives", nPos: data.n_pos ?? null },
-        };
-      }
-      return data;
-    } catch (e) {
-      freezeErrors.value = {
-        ...freezeErrors.value,
-        [tag]: { reason: "error", message: e?.message || "Failed to freeze" },
-      };
-      return null;
-    } finally {
-      const next = new Set(freezingTags.value);
-      next.delete(tag);
-      freezingTags.value = next;
-    }
-  }
-
-  // Manually dismiss a lingering freeze-failure message (the board auto-clears
-  // it after a few seconds; this covers an explicit retry click too).
-  function clearFreezeError(tag) {
-    if (!(tag in freezeErrors.value)) return;
-    const next = { ...freezeErrors.value };
-    delete next[tag];
-    freezeErrors.value = next;
-  }
-
-  // Freeze history (ACTIVE + SUPERSEDED) for a tag, loaded lazily when the
-  // board's "History" disclosure is first opened/hovered.
-  async function fetchEvalHistory(tag) {
-    if (!tag) return;
-    evalHistoryLoading.value = { ...evalHistoryLoading.value, [tag]: true };
-    try {
-      const res = await apiClient.get("/tag_eval_slices", { params: { tag } });
-      evalHistories.value = {
-        ...evalHistories.value,
-        [tag]: Array.isArray(res.data) ? res.data : [],
-      };
-    } catch {
-      evalHistories.value = { ...evalHistories.value, [tag]: [] };
-    } finally {
-      const next = { ...evalHistoryLoading.value };
-      delete next[tag];
-      evalHistoryLoading.value = next;
-    }
-  }
-
-  // --- Split conflicts ----------------------------------------------------------
-
-  async function fetchConflicts() {
-    conflictsLoading.value = true;
-    try {
-      const res = await apiClient.get("/picture_splits/conflicts", {
-        params: { limit: CONFLICTS_FETCH_LIMIT, offset: 0 },
-      });
-      const data = res.data ?? {};
-      conflicts.value = Array.isArray(data.rows) ? data.rows : [];
-      conflictsTotal.value = data.total ?? conflicts.value.length;
-    } catch {
-      // Rare, owner-only surface; degrade to "no conflicts" rather than
-      // surfacing a load error for a nav row most users never look at.
-      conflicts.value = [];
-      conflictsTotal.value = 0;
-    } finally {
-      conflictsLoading.value = false;
-    }
-  }
-
-  function showConflicts() {
-    view.value = { type: "conflicts" };
-    fetchConflicts();
-  }
-
-  // Resolve an entire conflicted component (the API's unit of resolution) to
-  // one of TRAIN/EVAL/NEITHER. Any member's picture_id works as the anchor.
-  async function resolveConflict(componentKey, split) {
-    const group = conflictGroups.value.find((g) => g.componentKey === componentKey);
-    const pictureId = group?.members?.[0]?.picture_id;
-    if (pictureId == null || conflictResolving.value[componentKey]) return null;
-    conflictResolving.value = { ...conflictResolving.value, [componentKey]: true };
-    try {
-      const res = await apiClient.post(`/picture_splits/${pictureId}/resolve`, { split });
-      const data = res.data ?? {};
-      const resolvedIds = new Set(data.picture_ids ?? []);
-      conflicts.value = conflicts.value.filter((r) => !resolvedIds.has(r.picture_id));
-      conflictsTotal.value = Math.max(0, conflictsTotal.value - resolvedIds.size);
-      return data;
-    } catch (e) {
-      error.value = e?.message || "Failed to resolve";
-      return null;
-    } finally {
-      const next = { ...conflictResolving.value };
-      delete next[componentKey];
-      conflictResolving.value = next;
     }
   }
 
@@ -816,7 +655,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     fetchArchived();
     fetchAnomalyTags();
     fetchScopeOptions();
-    fetchConflicts(); // gates the rail's "Needs a decision" nav row
     await fetchSessions();
   }
 
@@ -851,12 +689,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     anomalyRegions.value = {};
     regionLoading.value = {};
     tagVotes.value = {};
-    freezeErrors.value = {};
-    evalHistories.value = {};
-    evalHistoryLoading.value = {};
-    conflicts.value = [];
-    conflictsTotal.value = 0;
-    conflictResolving.value = {};
     // Queues/undo stacks are per-review server state + session bookkeeping;
     // drop them so a reopen refetches fresh queues.
     queues.value = {};
@@ -1161,6 +993,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   function setGamify(v) {
     gamify.value = !!v;
+    try {
+      window.localStorage.setItem(GAMIFY_PREF_KEY, gamify.value ? "1" : "0");
+    } catch {
+      // Best-effort; the in-memory toggle still works this session.
+    }
     if (gamify.value) {
       // Instant gratification: the FIRST decision after enabling always awards.
       awardState.since = 0;
@@ -1233,19 +1070,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     healthComputedAt,
     healthLoading,
     healthStale,
-    healthEvalVaultWide,
     healthScope,
     healthScoped,
-    freezingTags,
-    freezeErrors,
-    evalHistories,
-    evalHistoryLoading,
-    conflicts,
-    conflictsTotal,
-    conflictsLoading,
-    conflictResolving,
-    conflictGroups,
-    conflictGroupCount,
     creating,
     createError,
     projects,
@@ -1278,12 +1104,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     fetchHealth,
     setHealthScope,
     rebuildHealth,
-    freezeEvalSlice,
-    clearFreezeError,
-    fetchEvalHistory,
-    fetchConflicts,
-    showConflicts,
-    resolveConflict,
     fetchAnomalyTags,
     fetchScopeOptions,
     anomalyRegionFor,

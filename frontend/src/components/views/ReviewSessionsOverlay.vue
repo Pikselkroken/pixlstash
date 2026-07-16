@@ -1,7 +1,7 @@
 <template>
   <div class="rs-overlay">
     <div class="rs-shell">
-      <ReviewRail ref="railRef" @close="emit('close')" @new-review="openNewReview()" />
+      <ReviewRail @close="emit('close')" @new-review="openNewReview()" />
 
       <ReviewSessionView
         v-if="store.activeSession"
@@ -11,10 +11,6 @@
       <ReviewArchivedReceipt
         v-else-if="archivedReview"
         :review="archivedReview"
-      />
-      <SplitConflictsView
-        v-else-if="store.view.type === 'conflicts'"
-        ref="conflictsRef"
       />
       <TagHealthBoard
         v-else
@@ -128,12 +124,11 @@
 // NOT <select>, which is a fixed-choice control whose type-ahead must not
 // swallow decision keys; selects are blurred after every change). Session keys
 // are delegated to the session view, which owns the consistency guard.
-import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, provide, ref } from "vue";
 import ReviewRail from "../reviews/ReviewRail.vue";
 import TagHealthBoard from "../reviews/TagHealthBoard.vue";
 import ReviewSessionView from "../reviews/ReviewSessionView.vue";
 import ReviewArchivedReceipt from "../reviews/ReviewArchivedReceipt.vue";
-import SplitConflictsView from "../reviews/SplitConflictsView.vue";
 import NewReviewDialog from "../reviews/NewReviewDialog.vue";
 import TbTagPanel from "../panels/TbTagPanel.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -156,26 +151,12 @@ const projectStore = useProjectStore();
 
 const sessionRef = ref(null);
 const boardRef = ref(null);
-const conflictsRef = ref(null);
-const railRef = ref(null);
 const dialog = ref(null); // { preset, initialScope } | null
 const shortcutsOpen = ref(false);
 const tagApplyOpen = ref(false);
 const tagApplyRef = ref(null);
 
 provide("rs-backend-url", props.backendUrl);
-
-// Focus return: when the conflicts view auto-navigates back to the board
-// (the last conflict just resolved — see SplitConflictsView), move focus to
-// the rail's "Tag health" nav item rather than leaving it stranded.
-watch(
-  () => store.view.type,
-  (type, prevType) => {
-    if (type === "board" && prevType === "conflicts") {
-      nextTick(() => railRef.value?.focusBoard?.());
-    }
-  },
-);
 
 const archivedReview = computed(() =>
   store.view.type === "archived"
@@ -186,9 +167,8 @@ const archivedReview = computed(() =>
 );
 
 const SHORTCUTS = [
-  ["Y / N", "Answer a binary card (yes / no) · or a conflict's “same shot?”"],
+  ["Y / N", "Answer a binary card (yes / no)"],
   ["B / N / L / R", "Answer a pair card (both / neither / left / right)"],
-  ["T / C / O", "A conflict's follow-up: teach the tagger / check its work / leave both out"],
   ["S", "Skip — leaves the queue undecided, no change made"],
   ["U", "Undo the last decision"],
   ["H", "Show / hide the evidence region"],
@@ -410,8 +390,6 @@ function handleKeyDown(event) {
     else if (tagApplyOpen.value) tagApplyOpen.value = false;
     else if (sessionRef.value?.handleKey("escape")) {
       // The session consumed it (a pending consistency confirm).
-    } else if (conflictsRef.value?.handleKey("escape")) {
-      // The conflicts view consumed it (step 2 -> step 1).
     } else if (store.activeSession) {
       // A review is open with nothing pending inside it: close just the
       // review, back to the tag health board underneath — not the whole
@@ -430,8 +408,6 @@ function handleKeyDown(event) {
   } else if (sessionRef.value) {
     handled = !!sessionRef.value.handleKey(key);
     if (handled) closeZoom();
-  } else if (conflictsRef.value) {
-    handled = !!conflictsRef.value.handleKey(key);
   } else {
     handled = false;
   }

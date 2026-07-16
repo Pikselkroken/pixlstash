@@ -4,16 +4,7 @@
 // functions directly instead of mounting the SFC.
 
 import { describe, it, expect } from "vitest";
-import {
-  corrections,
-  rawCorrections,
-  whyText,
-  F1_BOOST_THRESHOLD,
-  F1_BOOST_MAX,
-  isBoostEligible,
-  boostFactor,
-  boostedScore,
-} from "./tagHealthBoardLogic";
+import { corrections, rawCorrections, whyText } from "./tagHealthBoardLogic";
 
 function row(overrides = {}) {
   return {
@@ -24,9 +15,6 @@ function row(overrides = {}) {
     model_disputes: 0,
     overturn_rate: null,
     has_model: true,
-    eval_metric_kind: null,
-    eval_threshold_source: null,
-    eval_f1: null,
     ...overrides,
   };
 }
@@ -135,68 +123,5 @@ describe("rawCorrections", () => {
     const b = row({ est_wrong_adj: 8, est_missing_adj: 0, mismatch: 0, est_wrong: 8, est_missing: 0 });
     expect(corrections(a)).toBe(corrections(b));
     expect(rawCorrections(a)).toBeGreaterThan(rawCorrections(b));
-  });
-});
-
-describe("Spec F accuracy tie-breaker", () => {
-  function frozenF1Row(f1, overrides = {}) {
-    return row({
-      eval_metric_kind: "F1",
-      eval_threshold_source: "calibrated",
-      eval_f1: f1,
-      est_wrong: 5,
-      ...overrides,
-    });
-  }
-
-  it("is eligible only for a frozen, calibrated F1 row below the threshold", () => {
-    expect(isBoostEligible(frozenF1Row(0.5))).toBe(true);
-    expect(isBoostEligible(frozenF1Row(F1_BOOST_THRESHOLD))).toBe(false); // at threshold: no boost
-    expect(isBoostEligible(frozenF1Row(0.9))).toBe(false);
-  });
-
-  it("is never eligible for an AP-kind row, regardless of value", () => {
-    const r = row({ eval_metric_kind: "AP", eval_threshold_source: "calibrated", eval_f1: 0.1 });
-    expect(isBoostEligible(r)).toBe(false);
-  });
-
-  it("is never eligible for an unfrozen row (no eval_metric_kind)", () => {
-    const r = row({ eval_metric_kind: null, eval_f1: 0.1 });
-    expect(isBoostEligible(r)).toBe(false);
-  });
-
-  it("is never eligible for an uncalibrated_fallback threshold", () => {
-    const r = frozenF1Row(0.2, { eval_threshold_source: "uncalibrated_fallback" });
-    expect(isBoostEligible(r)).toBe(false);
-  });
-
-  it("boostFactor is 1 (no-op) for an ineligible row", () => {
-    expect(boostFactor(row())).toBe(1);
-  });
-
-  it("boostFactor is capped at F1_BOOST_MAX when eval_f1 is 0", () => {
-    expect(boostFactor(frozenF1Row(0))).toBeCloseTo(F1_BOOST_MAX);
-  });
-
-  it("boostFactor grows continuously as eval_f1 falls further below the threshold", () => {
-    const weak = boostFactor(frozenF1Row(0.6));
-    const weaker = boostFactor(frozenF1Row(0.3));
-    const weakest = boostFactor(frozenF1Row(0));
-    expect(weak).toBeGreaterThan(1);
-    expect(weak).toBeLessThan(weaker);
-    expect(weaker).toBeLessThan(weakest);
-    expect(weakest).toBeLessThanOrEqual(F1_BOOST_MAX);
-  });
-
-  it("boostedScore multiplies corrections() by the boost factor, never altering corrections() itself", () => {
-    const r = frozenF1Row(0, { est_wrong: 4, est_missing: 4, mismatch: 2 });
-    expect(corrections(r)).toBe(10);
-    expect(boostedScore(r)).toBeCloseTo(10 * F1_BOOST_MAX);
-  });
-
-  it("a small boosted score can never leapfrog a much larger unboosted one (continuous+capped, not a band)", () => {
-    const weakLowPriority = frozenF1Row(0, { est_wrong: 1, est_missing: 0, mismatch: 0 }); // corrections=1
-    const strongHighPriority = row({ est_wrong: 40, est_missing: 0, mismatch: 0 }); // corrections=40, ineligible
-    expect(boostedScore(weakLowPriority)).toBeLessThan(boostedScore(strongHighPriority));
   });
 });

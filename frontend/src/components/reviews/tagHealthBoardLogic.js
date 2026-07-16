@@ -1,9 +1,9 @@
 // Pure, unit-testable logic for TagHealthBoard.vue's ranking/explanation
 // columns. Split out of the <script setup> SFC — which can't be imported by
-// name without mounting it — so `whyText()` and the Spec F accuracy
-// tie-breaker boost can be exercised by direct import, mirroring the store's
-// existing pattern of exporting pure decision-mapping functions
-// (binaryAction/pairAction in useReviewSessionsStore.js) for the same reason.
+// name without mounting it — so `whyText()` can be exercised by direct
+// import, mirroring the store's existing pattern of exporting pure
+// decision-mapping functions (binaryAction/pairAction in
+// useReviewSessionsStore.js) for the same reason.
 
 // The board's ranking signal uses the reliability-discounted counts when the
 // cache has them (est_wrong_adj/est_missing_adj — precision-weighted, so an
@@ -69,34 +69,4 @@ export function whyText(r) {
     { label: "mostly wrong — tagged but model disagrees", v: wrong },
     { label: "near-identical shots disagree on this tag", v: mismatch },
   ].sort((a, b) => b.v - a.v)[0].label;
-}
-
-// --- Accuracy tie-breaker (Spec F) -------------------------------------------
-//
-// Continuous, capped multiplier applied ONLY to the default "Suggested
-// (health)" sort's key (TagHealthBoard.vue's `sorted` computed, key ===
-// "score") — never to "Most wrong"/"Most missing"/"Ranking score"/"Accuracy",
-// which keep their own single-number or partitioned-scale (RANK_KINDS)
-// contracts intact. Never changes the DISPLAYED Priority number
-// (corrections(r) above) — only where a row lands in that one sort.
-export const F1_BOOST_THRESHOLD = 0.7; // eval_f1 at/above this: no boost
-export const F1_BOOST_MAX = 1.3; // eval_f1 = 0: full 1.3x cap
-
-export function isBoostEligible(r) {
-  return (
-    r.eval_metric_kind === "F1" &&
-    r.eval_threshold_source != null &&
-    r.eval_threshold_source !== "uncalibrated_fallback" &&
-    (r.eval_f1 ?? 1) < F1_BOOST_THRESHOLD
-  );
-}
-
-export function boostFactor(r) {
-  if (!isBoostEligible(r)) return 1;
-  const deficit = (F1_BOOST_THRESHOLD - r.eval_f1) / F1_BOOST_THRESHOLD; // (0,1]
-  return 1 + (F1_BOOST_MAX - 1) * Math.min(1, deficit);
-}
-
-export function boostedScore(r) {
-  return corrections(r) * boostFactor(r); // sort key only — never the displayed number
 }
