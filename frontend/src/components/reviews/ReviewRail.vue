@@ -57,19 +57,25 @@
               :style="{ width: `${progressPct(s)}%` }"
             ></span>
           </span>
+        </button>
+        <!-- Scope + abort share the card's bottom row. Abort is a real sibling
+             button (never nested inside the session button above) so it stays
+             a valid, independently focusable control; revealed on hover /
+             focus-within of the wrap. The row itself also opens the session
+             (matching the rest of the card) — only the abort button, which
+             stops its click from bubbling here, behaves differently. -->
+        <div class="rs-rail-session-meta" @click="store.openSession(s.id)">
           <span class="rs-rail-session-scope">{{ scopeLabel(s) }}</span>
-        </button>
-        <!-- Abort: opens a dialog offering to keep or undo the review's
-             changes before discarding the session. -->
-        <button
-          class="rs-rail-abort"
-          type="button"
-          title="Abort this review"
-          @click="openAbortDialog(s.id)"
-        >
-          <v-icon size="13">mdi-close-circle-outline</v-icon>
-          Abort
-        </button>
+          <button
+            class="rs-rail-abort"
+            type="button"
+            title="Abort this review"
+            @click.stop="openAbortDialog(s.id)"
+          >
+            <v-icon size="13">mdi-close-circle-outline</v-icon>
+            Abort
+          </button>
+        </div>
       </div>
       <div v-if="!store.sessions.length" class="rs-rail-none">None open</div>
 
@@ -395,11 +401,21 @@ function archivedSummary(a) {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
+/* The wrap itself carries the card surface (hover / active) so it extends
+   under the abort row below — otherwise the shaded background stops at the
+   session button and abort reads as floating outside the card. */
 .rs-rail-session-wrap {
   border-radius: var(--radius-sm);
 }
-.rs-rail-session-wrap--active .rs-rail-session {
+.rs-rail-session-wrap:hover,
+.rs-rail-session-wrap:focus-within,
+.rs-rail-session-wrap--active {
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
+}
+.rs-rail-session-wrap:hover .rs-rail-session,
+.rs-rail-session-wrap:focus-within .rs-rail-session,
+.rs-rail-session-wrap--active .rs-rail-session {
+  background: transparent;
 }
 
 .rs-rail-session-row {
@@ -436,7 +452,19 @@ function archivedSummary(a) {
   background: rgb(var(--v-theme-accent));
   transition: width 0.2s;
 }
+/* Bottom row of the card: scope label + abort share one line. Also opens the
+   session on click (like the rest of the card) — cursor says so too. */
+.rs-rail-session-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
+  cursor: pointer;
+}
 .rs-rail-session-scope {
+  flex: 1;
+  min-width: 0;
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   overflow: hidden;
@@ -444,13 +472,17 @@ function archivedSummary(a) {
   white-space: nowrap;
 }
 
-/* Abort control: a real sibling button, hidden until the row is hovered or
-   anything in it has focus (focus-within keeps it keyboard-reachable). */
+/* Abort control: a real sibling button, invisible until the row is hovered or
+   anything in it has focus (focus-within keeps it keyboard-reachable).
+   `visibility` (not `display`) so its box stays reserved in the meta row at
+   all times — otherwise the row (and the whole card) grows taller the moment
+   the button appears, since it's taller than the scope label beside it. */
 .rs-rail-abort {
-  display: none;
+  visibility: hidden;
+  display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 4px;
-  margin: 2px var(--space-3) 4px;
   padding: 2px 6px;
   border: none;
   border-radius: var(--radius-sm);
@@ -462,7 +494,7 @@ function archivedSummary(a) {
 }
 .rs-rail-session-wrap:hover .rs-rail-abort,
 .rs-rail-session-wrap:focus-within .rs-rail-abort {
-  display: inline-flex;
+  visibility: visible;
 }
 .rs-rail-abort:hover {
   background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);

@@ -62,6 +62,13 @@ SOURCE = "near_neighbor"
 # time and the read-time "pair" kind derivation (same shot, altered copy).
 DEFAULT_MAX_TWIN_HAMMING = 8
 
+# Floor on the displayed twin's actual CLIP cosine similarity for the dhash
+# override below to take effect. dhash proximity alone is not reliable enough:
+# 64-bit hash collisions between visually unrelated pictures happen, and
+# without this floor the UI could label a ~55%-similar pair "versions of the
+# same shot", which reads as contradictory nonsense to the user.
+MIN_DISPLAY_TWIN_SIM = 0.9
+
 
 def scan_tag(
     vault: "Vault",
@@ -74,6 +81,7 @@ def scan_tag(
     remove_threshold: float = 0.45,
     min_twin_sim: float = 0.85,
     max_twin_hamming: int = DEFAULT_MAX_TWIN_HAMMING,
+    min_display_twin_sim: float = MIN_DISPLAY_TWIN_SIM,
     review_id: int | None = None,
     include_reviewed: bool = False,
 ) -> dict:
@@ -95,6 +103,12 @@ def scan_tag(
             near-duplicate within this many bits (~<=8 ≈ near-identical), that
             near-duplicate is shown as the twin instead of the CLIP-nearest one. This
             changes only which comparison is displayed, never which pictures are flagged.
+        min_display_twin_sim: floor on the candidate override twin's actual CLIP cosine
+            similarity to the suspect. dhash proximity alone is a noisy signal — a
+            close Hamming distance can still be a hash collision between unrelated
+            pictures — so the override is only applied when it's also corroborated by
+            embedding similarity. Below this floor, the CLIP-nearest twin (and its
+            similarity) from ``min_twin_sim`` above is kept instead.
         review_id: When set, write the suspects into this review session (see the
             module docstring for the diff-insert / re-parent semantics).
         include_reviewed: Only meaningful with ``review_id``: re-parent suspects
@@ -217,15 +231,18 @@ def scan_tag(
             phash_ints, valid_mask, has_concept, i, max_twin_hamming, twin_sim
         )
         if j >= 0 and j != ti:
-            d = hamming_distance(int(phash_values[i]), int(phash_values[j]))
-            display_twin_id = int(ids[j])
-            # Recompute similarity for the actually-shown twin so the stored value
-            # describes it, not the (now discarded) CLIP-nearest twin.
-            display_twin_sim = round(float(emb[i] @ emb[j]), 4)
-            reason = (
-                f"near-duplicate twin {display_twin_id} (dhash hamming {d}); "
-                f"{float(pos_frac[i]):.0%} of nearest neighbours have the tag"
-            )
+            # Recompute similarity for the candidate override twin so the gate below
+            # (and the stored value, if it's applied) describes this specific pair,
+            # not the (possibly discarded) CLIP-nearest twin.
+            candidate_sim = round(float(emb[i] @ emb[j]), 4)
+            if candidate_sim >= min_display_twin_sim:
+                d = hamming_distance(int(phash_values[i]), int(phash_values[j]))
+                display_twin_id = int(ids[j])
+                display_twin_sim = candidate_sim
+                reason = (
+                    f"near-duplicate twin {display_twin_id} (dhash hamming {d}); "
+                    f"{float(pos_frac[i]):.0%} of nearest neighbours have the tag"
+                )
 
         # The neighbourhood evidence the vote used, most-similar first, with each
         # neighbour's merged-concept "has the tag" flag — frozen at scan time.

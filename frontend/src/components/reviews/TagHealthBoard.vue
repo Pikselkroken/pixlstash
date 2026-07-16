@@ -428,8 +428,9 @@ function openSessionFor(tag) {
   outline-offset: 1px;
 }
 .rs-board-inner {
-  max-width: 1248px; /* "wide" table width — locked */
-  margin: 0 auto;
+  /* Fills the frame (sidebar excluded — that's `.rs-board`'s sibling), with
+     the surrounding margin coming from `.rs-board`'s own padding. */
+  width: 100%;
 }
 .rs-board-heading {
   display: flex;
@@ -661,6 +662,11 @@ button.rs-board-hdr {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Flex items default to min-width: auto (their content's natural width),
+     which blocks shrinking and defeats the ellipsis above — without this,
+     a long tag name pushes past the column and crowds out sibling badges
+     like the "no model signal" chip instead of truncating. */
+  min-width: 0;
 }
 .rs-board-tag-flag {
   flex-shrink: 0;
@@ -670,6 +676,8 @@ button.rs-board-hdr {
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
   font-weight: var(--weight-semibold);
   letter-spacing: 0.03em;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);

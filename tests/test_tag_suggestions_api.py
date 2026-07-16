@@ -640,6 +640,53 @@ def test_scan_tag_prefers_perceptual_near_duplicate_twin():
         gc.collect()
 
 
+def test_scan_tag_rejects_low_similarity_perceptual_override():
+    """A dhash-near "perceptual duplicate" whose actual CLIP similarity is low is a likely
+    hash collision, not a real "same shot" pair — the override must not fire, and the
+    CLIP-nearest twin (with its higher, corroborated similarity) stays displayed."""
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        # Three pictures. A is the tagged suspect. C is A's CLIP-nearest opposite (cosine
+        # 0.95, comfortably above both min_twin_sim and min_display_twin_sim). B has a
+        # tiny dhash hamming distance to A (would trigger the perceptual-twin override)
+        # but only a 0.55 cosine similarity to A — too low to trust as "same shot", so the
+        # override must be rejected and C must stay the displayed twin.
+        a = _upload_picture(client)  # Bad1.png
+        b = _upload_named(client)  # distinct in-memory PNG
+        c = _upload_named(client)  # distinct in-memory PNG
+
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, c, [0.95, 0.312249] + [0.0] * 510)  # cosine ~0.95
+        _set_embedding(server, b, [0.55, 0.835165] + [0.0] * 510)  # cosine ~0.55
+
+        # A and B are perceptual near-duplicates (2-bit dhash hamming); C is far away.
+        _set_phash(server, a, 0xFFFF_FFFF_FFFF_FFFF)
+        _set_phash(server, b, 0xFFFF_FFFF_FFFF_FFFC)  # 2 bits from A
+        _set_phash(server, c, 0x0000_0000_0000_0000)  # 64 bits from A
+
+        _seed_tag(server, a, "malformed hand")  # only A is tagged
+
+        res = tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)
+        assert res["scanned"] == 3
+
+        rows = client.get("/tag_suggestions").json()
+        pair_rows = [r for r in rows if a in {r["picture_id"], r["twin_picture_id"]}]
+        assert pair_rows, "expected a suggestion involving the tagged picture A"
+        row = pair_rows[0]
+        # The displayed twin stays the CLIP-nearest C — the low-similarity perceptual
+        # "near-duplicate" B is rejected despite its tiny dhash hamming distance.
+        assert {row["picture_id"], row["twin_picture_id"]} == {a, c}
+        assert b not in {row["picture_id"], row["twin_picture_id"]}
+        assert row["twin_sim"] >= 0.9
+        assert "dhash hamming" not in row["reason"]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_accept_missing_suggestion_returns_404():
     temp_dir, client, server = _setup()
     try:
