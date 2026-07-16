@@ -20,6 +20,9 @@ from pixlstash.db_models.picture_likeness import (
     PictureLikeness,
     PictureLikenessQueue,
 )
+from pixlstash.services.picture_split_service import (
+    check_split_conflicts_for_new_edges,
+)
 
 logger = get_logger(__name__)
 
@@ -416,6 +419,18 @@ class LikenessUtils:
         processed_as = list({pl.picture_id_a for pl in likeness_results})
         if processed_as:
             PictureLikeness.bulk_prune_below_top_k(session, processed_as, top_k)
+        # Wave B leakage guard (picture_split_service): the near-dup graph is
+        # discovered incrementally right here, so this is the cheap place to
+        # catch a newly-corroborated edge connecting two pictures whose
+        # existing train/eval splits disagree. Runs in the same transaction
+        # as the edges that triggered it.
+        check_split_conflicts_for_new_edges(
+            session,
+            (
+                (pl.picture_id_a, pl.picture_id_b, pl.likeness)
+                for pl in likeness_results
+            ),
+        )
         session.commit()
 
     @staticmethod
