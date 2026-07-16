@@ -17,6 +17,8 @@ import {
   pairDelta,
   sortQueue,
   STICKER_ICONS,
+  AWARD_GAP_MIN,
+  AWARD_GAP_MAX,
 } from "./useReviewSessionsStore";
 import { SET_ICONS, SET_COLORS } from "../utils/setAppearance";
 
@@ -197,39 +199,43 @@ describe("award scheduling", () => {
     expect(store.decisionTick).toBe(tickAfterDecision); // no celebration on undo
   });
 
-  it("then awards again after 2-5 decisions (variable ratio)", () => {
+  it("then awards again after AWARD_GAP_MIN..MAX decisions (variable ratio)", () => {
     const store = useReviewSessionsStore();
-    // Deterministic randomness: next gap = 2 + floor(0 * 4) = 2.
+    // Deterministic randomness: next gap = AWARD_GAP_MIN + floor(0 * range).
     vi.spyOn(Math, "random").mockReturnValue(0);
     store.setGamify(true);
     expect(store.noteDecision("cat")).not.toBeNull(); // first always awards
-    expect(store.noteDecision("cat")).toBeNull(); // 1 of 2
-    expect(store.noteDecision("cat")).not.toBeNull(); // 2 of 2 → award
+    for (let i = 1; i < AWARD_GAP_MIN; i += 1) {
+      expect(store.noteDecision("cat")).toBeNull(); // i of AWARD_GAP_MIN
+    }
+    expect(store.noteDecision("cat")).not.toBeNull(); // gap reached → award
   });
 
-  it("keeps the gap within 2..5 for any random value", () => {
+  it("caps the gap at AWARD_GAP_MAX for any random value", () => {
     const store = useReviewSessionsStore();
     vi.spyOn(Math, "random").mockReturnValue(0.999999);
     store.setGamify(true);
-    store.noteDecision("cat"); // first award; re-arms with gap 2+floor(~1*4)=5
+    store.noteDecision("cat"); // first award; re-arms with the max gap
     let gap = 0;
     let sticker = null;
-    while (sticker === null && gap < 10) {
+    while (sticker === null && gap < AWARD_GAP_MAX * 2) {
       sticker = store.noteDecision("cat");
       gap += 1;
     }
-    expect(gap).toBe(5);
+    expect(gap).toBe(AWARD_GAP_MAX);
   });
 
   it("never hands out the same sticker icon twice in a row", () => {
     const store = useReviewSessionsStore();
-    // random 0 → gap 2, icon idx 0 every time; the schedule must bump a repeat
-    // to a different icon.
+    // random 0 → minimum gap, icon idx 0 every time; the schedule must bump a
+    // repeat to a different icon.
     vi.spyOn(Math, "random").mockReturnValue(0);
     store.setGamify(true);
     const first = store.noteDecision("cat");
-    store.noteDecision("cat");
-    const second = store.noteDecision("cat");
+    let second = null;
+    for (let i = 0; second === null && i < AWARD_GAP_MAX * 2; i += 1) {
+      second = store.noteDecision("cat");
+    }
     expect(first.icon).toBe(STICKER_ICONS[0].icon);
     expect(second.icon).toBe(STICKER_ICONS[7].icon);
     expect(second.icon).not.toBe(first.icon);
@@ -275,7 +281,7 @@ describe("award scheduling", () => {
     const store = useReviewSessionsStore();
     vi.spyOn(Math, "random").mockReturnValue(0);
     store.setGamify(true);
-    store.noteDecision("cat"); // award; gap re-armed to 2
+    store.noteDecision("cat"); // award; gap re-armed to AWARD_GAP_MIN
     seedSession(store, {
       id: 9,
       picture_id: 2,
@@ -284,8 +290,11 @@ describe("award scheduling", () => {
       kind: "binary",
     });
     await store.skip(); // leaves the queue undecided; NOT an award step
-    expect(store.noteDecision("cat")).toBeNull(); // still 1 of 2
-    expect(store.noteDecision("cat")).not.toBeNull(); // 2 of 2
+    // Had skip advanced the counter, the award would land one decision early.
+    for (let i = 1; i < AWARD_GAP_MIN; i += 1) {
+      expect(store.noteDecision("cat")).toBeNull(); // i of AWARD_GAP_MIN
+    }
+    expect(store.noteDecision("cat")).not.toBeNull(); // gap reached → award
   });
 });
 

@@ -31,6 +31,12 @@ const GAMIFY_PREF_KEY = "pixlstash:reviewGamify";
 // only ever said the opposite, at least this many times) is held for confirm.
 const CONFLICT_MIN_OPPOSITE = 2;
 
+// Variable-ratio sticker schedule: after an award, the next one lands a uniform
+// random 40–100 decisions later (mean 70). Originally 2–5 (mean 3.5), which
+// rained stickers during any real review session — scaled 20× down.
+export const AWARD_GAP_MIN = 40;
+export const AWARD_GAP_MAX = 100;
+
 // Sticker vocabulary: the Picture Set icon + colour palette, restyled by the
 // components as die-cut stickers. Reusing the module is a hard requirement —
 // the arrays are derived, never copied.
@@ -257,7 +263,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const decisionsCount = ref(0);
   const decisionTick = ref(0); // bumps on every real decision (explicit event)
   // Variable-ratio schedule: first decision after enabling always awards, then
-  // every 2–5. `lastIcon` prevents the same sticker twice in a row.
+  // every AWARD_GAP_MIN–AWARD_GAP_MAX. `lastIcon` prevents the same sticker
+  // twice in a row.
   const awardState = { since: 0, next: 1, lastIcon: -1 };
   let awardTimer = null;
 
@@ -1017,13 +1024,15 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     return maybeAward(tag);
   }
 
-  // Variable-ratio schedule: award, then re-arm for 2–5 decisions ahead. Never
-  // the same sticker icon twice in a row.
+  // Variable-ratio schedule: award, then re-arm for AWARD_GAP_MIN..MAX
+  // decisions ahead. Never the same sticker icon twice in a row.
   function maybeAward(tag) {
     awardState.since += 1;
     if (awardState.since < awardState.next) return null;
     awardState.since = 0;
-    awardState.next = 2 + Math.floor(Math.random() * 4); // 2..5
+    awardState.next =
+      AWARD_GAP_MIN +
+      Math.floor(Math.random() * (AWARD_GAP_MAX - AWARD_GAP_MIN + 1));
     let idx = Math.floor(Math.random() * STICKER_ICONS.length);
     if (idx === awardState.lastIcon) idx = (idx + 7) % STICKER_ICONS.length;
     awardState.lastIcon = idx;
