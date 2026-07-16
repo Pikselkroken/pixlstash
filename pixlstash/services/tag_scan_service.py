@@ -126,9 +126,56 @@ MIN_GROUND_TRUTH_FOR_VOTE = 1
 # untagged groups; see the PR/session notes for the full measurement. The
 # fix's proven, unconditional win is eliminating the *unbounded* pure-base-
 # rate skew and the near-zero-base-rate "0.55 can never be met" failure mode.
+#
+# CORRECTED after a confirmed majority-tag regression: the naive symmetric
+# `p ± margin` shifts *every* tag uniformly by its own base rate, regardless
+# of whether the legacy fixed defaults were already serving that tag well.
+# The permutation experiment above that justified margin=0.15 only measured
+# minority base rates (5%-48%) — it never validated the formula for p > 0.5.
+# Reproduced against the vault.db e2e fixture (111 pictures) for "man"
+# (p=68/111=0.6126): the legacy 0.55/0.45 pair finds 1 add suspect; the
+# uncapped symmetric formula computes add_threshold=p+0.15=0.7626 — *stricter*
+# than the legacy 0.55 — and finds 0. This was never the population the fix
+# targeted (see the "minority defect/quality tags" framing above); a majority
+# tag being shifted stricter than the legacy default is a pure regression,
+# not a base-rate correction.
+#
+# The fix is a one-directional cap: each threshold is bounded by its own
+# legacy fixed default in whichever direction is *stricter* for its role, so
+# the shift can only make a threshold at least as reachable as the legacy
+# behaviour, never less. Note the two thresholds are stricter in opposite
+# directions — add_threshold is stricter the *higher* it is (harder to add),
+# remove_threshold is stricter the *lower* it is (harder to remove) — so the
+# cap is `min()` for add against the legacy add ceiling (0.55), and `min()`
+# for remove against the legacy remove ceiling (0.45) applied to the raw
+# `p - margin` value (which itself is floored, not capped, at the absolute
+# clamp below): the base-rate shift may only push add_threshold *down* from
+# 0.55 or remove_threshold *down* from 0.45, matching the direction that
+# relaxes eligibility toward the tag's own p and never past the legacy value.
+#
+# This preserves the minority-tag win intact: for p < 0.60 the caps never
+# engage (`p + margin < 0.55` and `p - margin < 0.45` hold automatically), so
+# minority tags see exactly the pre-existing centered thresholds — including
+# the deliberate remove-threshold *tightening* below 0.45 that produced the
+# measured skew reduction (that tightening is not a "regression" needing a
+# floor at 0.45; it is Fix 2's actual contribution and a `max(0.45, ...)`
+# floor would silently erase it for essentially every minority tag). For
+# p >= 0.60 both caps engage and clamp the pair back to exactly the legacy
+# 0.55/0.45 defaults, matching "man" and — by the same mechanism — preventing
+# an unverified, symmetric-but-opposite regression at the other extreme (an
+# uncapped remove_threshold at p=0.95 would be 0.80, a huge and untested
+# expansion of remove-eligibility for majority tags; the cap keeps it at the
+# legacy 0.45).
 BASE_RATE_THRESHOLD_MARGIN = 0.15
 _BASE_RATE_CLAMP_LOW = 0.05
 _BASE_RATE_CLAMP_HIGH = 0.95
+
+# Legacy fixed-threshold pair (see CLI default in
+# scripts/near_neighbor_label_disagreement.py) — the ceiling each base-rate-
+# relative default is capped against so the shift can only relax eligibility
+# relative to old behaviour, never tighten it. See the "CORRECTED" note above.
+_LEGACY_ADD_THRESHOLD = 0.55
+_LEGACY_REMOVE_THRESHOLD = 0.45
 
 
 def scan_tag(
@@ -161,11 +208,15 @@ def scan_tag(
             default) computes both relative to the tag's own base rate
             ``p = has_concept.sum() / len(ids)`` — ``p + BASE_RATE_THRESHOLD_MARGIN``
             / ``p - BASE_RATE_THRESHOLD_MARGIN``, clamped to
-            ``[_BASE_RATE_CLAMP_LOW, _BASE_RATE_CLAMP_HIGH]`` — instead of the old
-            fixed 0.55/0.45 pair (see the module-level constants' comments for why).
-            Passing an explicit float bypasses the base-rate computation entirely,
-            for callers (tests, future CLI wiring) that want the old fixed-threshold
-            behaviour.
+            ``[_BASE_RATE_CLAMP_LOW, _BASE_RATE_CLAMP_HIGH]`` and then each capped
+            at its own legacy default (``_LEGACY_ADD_THRESHOLD`` /
+            ``_LEGACY_REMOVE_THRESHOLD``, the old fixed 0.55/0.45 pair) so the
+            base-rate shift can only relax eligibility relative to the legacy
+            pair, never tighten it (see the module-level constants' comments
+            for why, including the majority-tag regression this capping
+            fixes). Passing an explicit float bypasses the base-rate
+            computation entirely, for callers (tests, future CLI wiring) that
+            want the old fixed-threshold behaviour.
         min_twin_sim: scan knob (CLI default 0.85) gating eligibility on the CLIP
             twin's similarity; unaffected by the perceptual-hash twin override
             below. Not applied to the near-zero-ground-truth confidence fallback
@@ -365,18 +416,29 @@ def scan_tag(
     else:
         # Fix 2: default thresholds relative to the tag's own base rate rather
         # than the fixed 0.55/0.45 pair (see BASE_RATE_THRESHOLD_MARGIN above)
-        # — only when the caller didn't explicitly override.
+        # — only when the caller didn't explicitly override. Each is also
+        # capped at its own legacy default (min() for both — see the
+        # "CORRECTED" comment above for why add and remove need the same
+        # min() shape despite being stricter in opposite directions) so the
+        # base-rate shift can only relax eligibility relative to the legacy
+        # 0.55/0.45 pair, never tighten it.
         p = n_ground_truth / len(ids)
         p_clamped = min(_BASE_RATE_CLAMP_HIGH, max(_BASE_RATE_CLAMP_LOW, p))
         effective_add_threshold = (
             add_threshold
             if add_threshold is not None
-            else min(_BASE_RATE_CLAMP_HIGH, p_clamped + BASE_RATE_THRESHOLD_MARGIN)
+            else min(
+                _LEGACY_ADD_THRESHOLD,
+                min(_BASE_RATE_CLAMP_HIGH, p_clamped + BASE_RATE_THRESHOLD_MARGIN),
+            )
         )
         effective_remove_threshold = (
             remove_threshold
             if remove_threshold is not None
-            else max(_BASE_RATE_CLAMP_LOW, p_clamped - BASE_RATE_THRESHOLD_MARGIN)
+            else min(
+                _LEGACY_REMOVE_THRESHOLD,
+                max(_BASE_RATE_CLAMP_LOW, p_clamped - BASE_RATE_THRESHOLD_MARGIN),
+            )
         )
 
         pos_frac, twin_idx, twin_sim, neighbor_idx = knn_disagreement_with_neighbors(

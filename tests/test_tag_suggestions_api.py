@@ -914,6 +914,128 @@ def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
         gc.collect()
 
 
+def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
+    """Fix 2 majority-tag regression: the naive symmetric ``p ± margin`` formula
+    shifts *every* tag uniformly by its own base rate, which helps minority
+    tags (the population Fix 2 targeted) but actively hurts a majority tag —
+    it raises add_threshold *above* the legacy fixed 0.55, making add
+    *stricter* than before for no reason (majority tags were never the
+    population this fix was meant to help).
+
+    Twenty pictures, base rate p=12/20=0.6 (mirrors the real-vault
+    reproduction: tag "man" at p=68/111=0.6126). One probe picture (``u``)
+    has kNN-vote positive fraction 0.6498 and a twin (``p1``) at cosine
+    similarity 0.9535 — clearing both the twin-similarity gate (>=0.85) and
+    the legacy fixed add_threshold (0.55, so the legacy code catches it) —
+    but BELOW the *uncapped* base-rate default (p + 0.15 = 0.75), so the
+    regressed formula misses it entirely (verified against the real kernel
+    directly before being transcribed here — see the PR notes). The
+    corrected default caps add_threshold at the legacy 0.55 ceiling (never
+    stricter than the legacy default), so it catches ``u`` again, matching
+    the legacy behaviour.
+    """
+    import io
+
+    from PIL import Image
+
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        names = (
+            ["u"]
+            + [f"p{i}" for i in range(1, 9)]
+            + [f"q{i}" for i in range(1, 5)]
+            + [f"d{i}" for i in range(1, 5)]
+            + [f"x{i}" for i in range(1, 4)]
+        )
+        assert len(names) == 20
+        files = []
+        for n_idx, name in enumerate(names):
+            img = Image.new("RGB", (16, 16), color=(n_idx * 11 % 256, 40, 80))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            files.append(("file", (f"{name}.png", buf.getvalue(), "image/png")))
+        result = upload_pictures_and_wait(client, files)
+        assert result["status"] == "completed"
+        ids = {n: r["picture_id"] for n, r in zip(names, result["results"])}
+
+        tag = "man"
+        # p1..p8 (near-u clique) + d1..d4 (isolated clique) = 12 tagged of 20 -> p=0.6
+        for i in range(1, 9):
+            _seed_tag(server, ids[f"p{i}"], tag)
+        for i in range(1, 5):
+            _seed_tag(server, ids[f"d{i}"], tag)
+
+        # 512-dim orthogonal-axis construction, same technique as the minority-tag
+        # test above. Verified against pixlstash.utils.near_neighbor.
+        # knn_disagreement_with_neighbors directly before being transcribed here.
+        AXIS_HUB = 0  # u <-> q1..q4 (weak — dilutes u's vote toward "no tag")
+        AXIS_PGROUP = 1  # shared among p1..p8 — dominates their own vote (all tagged)
+        AXIS_QGROUP = 2  # shared among q1..q4 — dominates their own vote (all untagged)
+        AXIS_DGROUP = 3  # shared among d1..d4 — isolated from u, all tagged
+        AXIS_TWIN = 4  # u <-> p1 only — strong, clears the min_twin_sim gate
+
+        def vec(components):
+            v = [0.0] * 512
+            for axis, val in components.items():
+                v[axis] = val
+            return v
+
+        HUB_U, TWIN_U = 1.0, 5.0
+        HUB_Q, Q_GROUP = 1.04, 1.2
+        P_GROUP, TWIN_P1 = 1.2, 5.0
+        D_GROUP = 1.0
+
+        _set_embedding(server, ids["u"], vec({AXIS_HUB: HUB_U, AXIS_TWIN: TWIN_U}))
+        _set_embedding(
+            server,
+            ids["p1"],
+            vec({AXIS_PGROUP: P_GROUP, AXIS_TWIN: TWIN_P1}),
+        )
+        for i in range(2, 9):
+            _set_embedding(server, ids[f"p{i}"], vec({AXIS_PGROUP: P_GROUP}))
+        for i in range(1, 5):
+            _set_embedding(
+                server,
+                ids[f"q{i}"],
+                vec({AXIS_HUB: HUB_Q, AXIS_QGROUP: Q_GROUP}),
+            )
+        for i in range(1, 5):
+            _set_embedding(server, ids[f"d{i}"], vec({AXIS_DGROUP: D_GROUP}))
+        for i in range(1, 4):
+            _set_embedding(server, ids[f"x{i}"], vec({10 + i: 1.0}))
+
+        # --- Run 1: default (base-rate-relative, now capped) thresholds ---
+        res_default = tag_scan_service.scan_tag(server.vault, tag, project=None)
+        assert res_default["scanned"] == 20
+        assert res_default["added"] == 1
+        assert res_default["removed"] == 0
+
+        rows = client.get("/tag_suggestions").json()
+        assert len(rows) == 1
+        assert rows[0]["picture_id"] == ids["u"]
+        assert rows[0]["direction"] == "add"
+
+        # --- Run 2: the regressed, uncapped symmetric formula's thresholds ---
+        # (p=0.6 -> add_threshold=p+0.15=0.75, remove_threshold=p-0.15=0.45).
+        # u's pos_frac (0.6498) clears the legacy/corrected 0.55 but not this
+        # uncapped 0.75 — reproducing the confirmed "man" regression directly.
+        res_regressed = tag_scan_service.scan_tag(
+            server.vault,
+            tag,
+            project=None,
+            add_threshold=0.75,
+            remove_threshold=0.45,
+        )
+        assert res_regressed["added"] == 0
+        assert res_regressed["removed"] == 0
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_accept_missing_suggestion_returns_404():
     temp_dir, client, server = _setup()
     try:
