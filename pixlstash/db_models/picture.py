@@ -931,6 +931,15 @@ class Picture(SQLModel, table=True):
     def grid_fields(cls):
         """
         Return a minimal set of fields for grid listing.
+
+        "split" is not a Picture column (it lives on the separate
+        PictureSplit table, Wave B of the tag-review takeover design) --
+        it's included here as a request signal only. `Picture.find`'s
+        select_fields machinery intersects this set against actual scalar
+        columns, so an unknown name like "split" is silently dropped from
+        the SQL projection; `_listing.select_pictures_for_listing` is what
+        actually notices "split" in metadata_fields and overlays it via a
+        separate PictureSplit query after the Picture rows are fetched.
         """
         return {
             "id",
@@ -948,6 +957,7 @@ class Picture(SQLModel, table=True):
             "text_score",
             "reference_folder_id",
             "file_path",
+            "split",
         }
 
     @classmethod

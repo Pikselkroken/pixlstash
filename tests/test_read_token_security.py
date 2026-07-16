@@ -26,8 +26,9 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import pixlstash.routes.pictures._crud as crud_module
+import pixlstash.routes.pictures._listing as listing_module
 import pixlstash.utils.rate_limiter as rl_module
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, PictureSplit
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -46,6 +47,19 @@ def _make_png_bytes(width: int = 32, height: int = 32) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _set_split(server, picture_id: int, split: str) -> None:
+    """Directly write a PictureSplit row, bypassing the assignment sweep for
+    full control over exactly which picture lands on which side."""
+
+    def ins(session):
+        session.add(
+            PictureSplit(picture_id=picture_id, split=split, component_key=picture_id)
+        )
+        session.commit()
+
+    server.vault.db.run_task(ins)
 
 
 def _good_picture_files() -> list[tuple[str, bytes, str]]:
@@ -774,6 +788,90 @@ class TestResourceScopedReadTokenIsolation:
             finally:
                 server.__exit__(None, None, None)
 
+    def test_picture_scoped_token_cannot_widen_via_character_likeness_sort(self):
+        """CVE-class regression: sort=CHARACTER_LIKENESS resolves candidates
+        without ever consulting query_params["id"] (see the "CHARACTER_LIKENESS
+        sort branch is a known pre-existing exception" comment in
+        select_pictures_for_listing, pixlstash/routes/pictures/_listing.py). A
+        single-picture share token narrows scope only by mutating
+        query_params["id"] (scope_picture_id), so this sort mode is a total
+        bypass of that scope -- the same BOLA class as
+        test_picture_scoped_token_cannot_list_whole_library above, on a sort
+        mode that test didn't cover.
+
+        find_pictures_by_character_likeness_sql is stubbed (no GPU/face
+        pipeline needed, same technique as
+        test_character_likeness_query_respects_project_filter in
+        test_server.py) to simply echo back whatever candidate_ids it was
+        given by _listing.py, so this test isolates exactly the wiring
+        question: does the picture-scope narrowing ever reach that call.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                r = owner_client.post(f"{API}/characters", json={"name": "Ref"})
+                assert r.status_code == 200, r.text
+                ref_char_id = r.json()["character"]["id"]
+
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={
+                        "description": "single picture token",
+                        "scope": "READ",
+                        "resource_type": "picture",
+                        "resource_id": pic_a,
+                    },
+                )
+                assert r.status_code == 200, r.text
+                pic_token = r.json()["token"]
+
+                def fake_find_pictures_by_character_likeness_sql(
+                    _server,
+                    _character_id,
+                    _reference_character_id,
+                    _offset,
+                    _limit,
+                    _descending,
+                    candidate_ids=None,
+                    deleted_only=False,
+                    stack_leaders_only=False,
+                ):
+                    # Mirrors the real function's contract: candidate_ids is
+                    # None (no restriction) unless a set/character/project
+                    # scope narrowed it upstream. Echo both known pictures
+                    # when unrestricted, exactly like an unfiltered
+                    # Face-join query would.
+                    ids = (
+                        sorted(set(candidate_ids)) if candidate_ids else [pic_a, pic_b]
+                    )
+                    return [{"id": pid, "character_likeness": 0.0} for pid in ids]
+
+                client = TestClient(server.api)
+                hdr = {"Authorization": f"Bearer {pic_token}"}
+                with patch.object(
+                    listing_module,
+                    "find_pictures_by_character_likeness_sql",
+                    fake_find_pictures_by_character_likeness_sql,
+                ):
+                    r = client.get(
+                        f"{API}/pictures",
+                        params={
+                            "sort": "CHARACTER_LIKENESS",
+                            "reference_character_id": str(ref_char_id),
+                        },
+                        headers=hdr,
+                    )
+                assert r.status_code == 200, r.text
+                ids = {p["id"] for p in r.json()}
+                assert ids <= {pic_a}, (
+                    "Single-picture token leaked other pictures via "
+                    f"sort=CHARACTER_LIKENESS: {ids}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
     def test_scoped_token_cannot_read_other_picture_tags(self):
         """Set-A token must not read tags/predictions of a set-B picture, but
         must still read its own (no over-blocking)."""
@@ -907,6 +1005,195 @@ class TestResourceScopedReadTokenIsolation:
                 )
                 assert returned_ids <= {pic_a}, (
                     f"bulk_fetch tags returned unexpected ids {returned_ids}"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_bulk_fetch_tags_includes_split_field(self):
+        """Wave D item 1: an optional `split` field, additive to an
+        already-scoped response. A picture with a PictureSplit row reports
+        it; a picture without one reports null (most pictures, since
+        assignment is explicit via POST /picture_splits/assign)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                _set_split(server, pic_a, "TRAIN")
+                # pic_b intentionally left without a PictureSplit row.
+
+                r = owner_client.post(
+                    f"{API}/pictures/tags/bulk_fetch",
+                    json={"picture_ids": [pic_a, pic_b]},
+                )
+                assert r.status_code == 200, r.text
+                by_id = {entry["id"]: entry for entry in r.json()}
+                assert by_id[pic_a]["split"] == "TRAIN"
+                assert by_id[pic_b]["split"] is None
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_bulk_fetch_tags_split_field_scoped_to_allowed_ids(self):
+        """Wave D item 1's authz requirement: the split lookup must be
+        scoped to exactly the ids the authz filter above already narrowed
+        to -- a scoped token must never receive split data (or any data) for
+        an out-of-scope picture, even indirectly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                _set_split(server, pic_a, "TRAIN")
+                _set_split(server, pic_b, "EVAL")
+
+                r = TestClient(server.api).post(
+                    f"{API}/pictures/tags/bulk_fetch",
+                    json={"picture_ids": [pic_a, pic_b]},
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                entries = r.json()
+                returned_ids = {entry["id"] for entry in entries}
+                # pic_b (out of scope) must not appear at all -- confirms
+                # the pre-existing bulk_fetch_tags scope guard still holds
+                # with the new field present.
+                assert pic_b not in returned_ids
+                by_id = {entry["id"]: entry for entry in entries}
+                assert by_id[pic_a]["split"] == "TRAIN"
+                # Belt-and-braces: pic_b's EVAL value must not leak into the
+                # response body anywhere (e.g. via a stray extra key).
+                assert "EVAL" not in r.text
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_pictures_split_filter_returns_only_matching_split(self):
+        """Wave D item 2: GET /pictures?split=train enumerates train-side
+        pictures directly (case-insensitive input, normalized to the
+        stored enum casing on output)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                _set_split(server, pic_a, "TRAIN")
+                _set_split(server, pic_b, "EVAL")
+
+                r = owner_client.get(f"{API}/pictures", params={"split": "train"})
+                assert r.status_code == 200, r.text
+                ids = {p["id"] for p in r.json()}
+                assert ids == {pic_a}
+
+                r = owner_client.get(f"{API}/pictures", params={"split": "EVAL"})
+                assert r.status_code == 200, r.text
+                ids = {p["id"] for p in r.json()}
+                assert ids == {pic_b}
+
+                # fields=grid surfaces the split value on each row.
+                r = owner_client.get(
+                    f"{API}/pictures",
+                    params={"split": "train", "fields": "grid"},
+                )
+                assert r.status_code == 200, r.text
+                rows = r.json()
+                assert len(rows) == 1
+                assert rows[0]["split"] == "TRAIN"
+
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_pictures_split_filter_composes_with_scoped_token(self):
+        """Wave D item 2's authz requirement: ?split= must never widen a
+        scoped token's result set. Fixture: pic_a (in scope, Set A) is
+        TRAIN; pic_b (OUT of scope, Set B) is also TRAIN. A set-A token
+        querying ?split=train must see only pic_a, never pic_b."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                _set_split(server, pic_a, "TRAIN")
+                _set_split(server, pic_b, "TRAIN")  # out-of-scope TRAIN picture
+
+                scoped = TestClient(server.api)
+                r = scoped.get(
+                    f"{API}/pictures",
+                    params={"split": "train"},
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert r.status_code == 200, r.text
+                ids = {p["id"] for p in r.json()}
+                assert ids == {pic_a}, (
+                    f"scoped token's ?split=train result {ids} included an "
+                    "out-of-scope picture; the split filter must intersect "
+                    "with, not replace, the token's existing scope narrowing"
+                )
+
+                # Without the split filter, the same scoped token still only
+                # ever sees pic_a -- confirms the scope itself (not the
+                # split filter) is what's doing the narrowing baseline.
+                r2 = scoped.get(
+                    f"{API}/pictures",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
+                assert {p["id"] for p in r2.json()} == {pic_a}
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_pictures_split_filter_empty_id_intersection_does_not_widen_scope(self):
+        """Regression for an empty-list-is-falsy trap in the split filter's
+        composition with scope_picture_id (a `picture`-scoped share token).
+
+        scope_picture_id's own block (see the comment directly above the
+        split-filter block in _listing.py, "it can only ever shrink the
+        candidate set... never widen it") narrows query_params["id"] to
+        `[]` -- not None -- whenever the caller's own `?id=` doesn't match
+        the token's single allowed picture. The split filter then reads
+        `existing_ids = query_params.get("id")`; an empty *list* is falsy
+        in Python, so `if existing_ids:` is False and the code falls to the
+        `else` branch that treats "no id filter yet" as the state, handing
+        back every picture with the requested split -- discarding the
+        scope narrowing that was already correctly computed as empty
+        instead of intersecting with it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                # Mint a token scoped to a single picture (pic_a only).
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={
+                        "description": "single picture token",
+                        "scope": "READ",
+                        "resource_type": "picture",
+                        "resource_id": pic_a,
+                    },
+                )
+                assert r.status_code == 200, r.text
+                pic_token = r.json()["token"]
+
+                # pic_b (out of scope for pic_token) is TRAIN-split.
+                _set_split(server, pic_b, "TRAIN")
+
+                scoped = TestClient(server.api)
+                # The caller supplies an `id` that is NOT the token's own
+                # scoped picture, so scope_picture_id's own narrowing
+                # produces query_params["id"] == [] (a legitimate "nothing
+                # matches" result, not an absent filter).
+                r = scoped.get(
+                    f"{API}/pictures",
+                    params={"id": str(pic_b), "split": "train"},
+                    headers={"Authorization": f"Bearer {pic_token}"},
+                )
+                assert r.status_code == 200, r.text
+                ids = {p["id"] for p in r.json()}
+                assert ids == set(), (
+                    "single-picture token's ?id=<out-of-scope>&split=train "
+                    f"request returned {ids}; the split filter's empty-list "
+                    "fallthrough widened the result back to every "
+                    "TRAIN-split picture in the vault instead of composing "
+                    "with the already-empty scope intersection"
                 )
             finally:
                 server.__exit__(None, None, None)
