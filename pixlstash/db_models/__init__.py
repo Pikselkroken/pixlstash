@@ -7,6 +7,7 @@ from .picture_project import PictureProjectMember  # noqa: F401
 from .picture_set import PictureSet, PictureSetMember  # noqa: F401
 from .picture_stack import PictureStack  # noqa: F401
 from .picture_likeness import PictureLikeness, PictureLikenessQueue  # noqa: F401
+from .picture_split import PictureSplit, SplitValue  # noqa: F401
 from .project import Project, ProjectAttachment  # noqa: F401
 from .quality import Quality  # noqa: F401
 from .metadata import MetaData  # noqa: F401

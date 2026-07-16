@@ -131,6 +131,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
+        "pixlstash/services/picture_split_service.py",  # vault-injection pattern; thin wrappers around *_in_session split assignment/resolution
     }
 
     violations = []
