@@ -95,6 +95,23 @@ test.describe('review sessions — session loop', () => {
     expect(detail.receipt.kept).toBe(1)
   })
 
+  test('Escape closes the review first (back to tag health); a second Escape closes the overlay', async ({ reviews, page }) => {
+    await reviews.createReview('woman')
+    await expect(reviews.session).toBeVisible()
+    await expect(reviews.board).toBeHidden()
+
+    // First Esc: closes just the review, back to the board underneath — the
+    // overlay itself stays open.
+    await page.keyboard.press('Escape')
+    await expect(reviews.session).toBeHidden()
+    await expect(reviews.board).toBeVisible()
+    await expect(reviews.overlay).toBeVisible()
+
+    // Second Esc, with no active review: closes the whole overlay.
+    await page.keyboard.press('Escape')
+    await expect(reviews.overlay).toBeHidden()
+  })
+
   // FIXME (not BUG-RS-1): 'beard' has a single suspect, so one decision empties
   // the queue and shows the completion state, where the decision bar (and its
   // Undo button) is `v-if="current"` and therefore gone — the click at line 98

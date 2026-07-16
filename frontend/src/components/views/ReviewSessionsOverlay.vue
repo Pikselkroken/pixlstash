@@ -403,7 +403,7 @@ function handleKeyDown(event) {
     shortcutsOpen.value = !shortcutsOpen.value;
   } else if (key === "escape") {
     // Unwind the topmost layer: cheat-sheet → dialog → zoom → tag panel →
-    // pending confirm → overlay.
+    // pending confirm → review (back to tag health) → overlay.
     if (shortcutsOpen.value) shortcutsOpen.value = false;
     else if (dialog.value) dialog.value = null;
     else if (zoom.value) closeZoom();
@@ -412,6 +412,11 @@ function handleKeyDown(event) {
       // The session consumed it (a pending consistency confirm).
     } else if (conflictsRef.value?.handleKey("escape")) {
       // The conflicts view consumed it (step 2 -> step 1).
+    } else if (store.activeSession) {
+      // A review is open with nothing pending inside it: close just the
+      // review, back to the tag health board underneath — not the whole
+      // overlay. A second Esc (no active review) falls through to close.
+      store.showBoard();
     } else emit("close");
   } else if (shortcutsOpen.value || dialog.value) {
     // A modal layer is up: swallow nothing else, let it be.
