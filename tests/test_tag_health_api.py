@@ -769,6 +769,63 @@ def test_tag_health_eval_candidate_n_pos_at_floor_matches_real_freeze():
         _teardown(temp_dir, server)
 
 
+def test_tag_health_scoped_eval_candidate_n_pos_stays_vault_wide():
+    """`GET /tag_health?set_id=` restricts est_wrong/est_missing/mismatch to
+    the scope's pictures (see test_tag_health_scoped_restricts_signals_and_tag_list),
+    but eval_candidate_n_pos and the eval_* metric fields must NOT — freeze
+    (POST /tag_eval_slices) has no scope parameter at all and always pulls
+    every EVAL-split human-labeled picture vault-wide.
+
+    This is the regression the audited inconsistency bug is really about: the
+    displayed 'confirmed examples' count must never contradict what clicking
+    the freeze button actually does, even when the board is scoped down to a
+    subset that would, on its own, fall below the freeze floor."""
+    temp_dir, client, server = _setup()
+    try:
+        tag = "scope_eval_tag"
+        assert MIN_EVAL_N_POS == 10  # fixture below assumes this floor value
+        pids = _make_eval_candidates(client, server, tag, n_pos=12, n_neg=4)
+        pos_pids = pids[:12]
+
+        # Scope a picture set to only 3 of the 12 positives — if
+        # eval_candidate_n_pos were (incorrectly) restricted to the scope
+        # like est_wrong/est_missing are, it would read 3, well below
+        # MIN_EVAL_N_POS, even though the tag is freeze-eligible vault-wide.
+        def seed(session):
+            ps = PictureSet(name="eval_scope_set")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            for pid in pos_pids[:3]:
+                session.add(PictureSetMember(set_id=ps.id, picture_id=pid))
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        scoped = client.get(f"{API}/tag_health", params={"set_id": set_id}).json()
+        assert scoped["scoped"] is True
+        assert scoped["eval_vault_wide"] is True
+        srow = {r["tag"]: r for r in scoped["rows"]}[tag]
+        # Vault-wide count (12), not the scoped-down count (3).
+        assert srow["eval_candidate_n_pos"] == 12
+
+        # The unscoped/cached payload also carries the flag.
+        unscoped = _rebuild_and_wait(client)
+        assert unscoped["eval_vault_wide"] is True
+
+        # A real freeze, issued while the board is scoped down, succeeds
+        # exactly as the (vault-wide) displayed count promised — the display
+        # never lies about what clicking the button does.
+        resp = client.post(f"{API}/tag_eval_slices", json={"tag": tag})
+        assert resp.status_code == 200, resp.text
+        freeze_body = resp.json()
+        assert freeze_body["created"] is True
+        assert freeze_body["n_pos"] == srow["eval_candidate_n_pos"] == 12
+    finally:
+        _teardown(temp_dir, server)
+
+
 # --------------------------------------------------------------------------- #
 # Spec B: staleness detection (docs/reviews/tag-review-board-redesign-ux-spec.md
 # §4). `_latest_health_relevant_change` mirrors review_service's

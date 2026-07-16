@@ -33,8 +33,13 @@ def _setup():
     image_root = os.path.join(temp_dir.name, "images")
     os.makedirs(image_root, exist_ok=True)
     server_config_path = os.path.join(temp_dir.name, "server-config.json")
+    # Disable PictureSplitAssignmentFinder: this file's tests (_set_split)
+    # hand-seed PictureSplit rows directly, and leaving the background
+    # finder on races it for the same picture_id -> UNIQUE constraint
+    # failures on picture_split.picture_id. Same fix already applied in
+    # test_tag_health_api.py's _setup() for the identical reason.
     with open(server_config_path, "w") as f:
-        f.write(json.dumps({"port": 8000}))
+        f.write(json.dumps({"port": 8000, "picture_split_auto_assign": False}))
     server = Server(server_config_path)
     client = TestClient(server.api)
     resp = client.post(

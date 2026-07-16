@@ -562,7 +562,10 @@ const SUBTITLE = {
 
 const subtitle = computed(() => SUBTITLE[sort.value.key] || SUBTITLE.score);
 
-const headers = [
+// headers is a computed (not a plain const) solely so the Accuracy column's
+// tip can append vaultWideNote() reactively when the board's scope changes —
+// every other header's tip is static.
+const headers = computed(() => [
   { label: "Tag", key: "tag" },
   {
     label: "Priority",
@@ -600,11 +603,11 @@ const headers = [
     // No `key`: this column maps to TWO non-comparable sort keys (Ranking
     // score / Accuracy — see the sort dropdown), so it isn't click-to-sort
     // like its siblings (that would silently pick one scale for the user).
-    tip: "Accuracy — how good the model is at this tag, measured on a separate frozen, scored slice. Not a count of pictures needing review — that’s Est. wrong / Est. missing / Ranking score to the left, which update live. This number only changes when the tag is (re)frozen.",
+    tip: `Accuracy — how good the model is at this tag, measured on a separate frozen, scored slice. Not a count of pictures needing review — that’s Est. wrong / Est. missing / Ranking score to the left, which update live. This number only changes when the tag is (re)frozen.${vaultWideNote()}`,
   },
   { label: "Why it ranks here" },
   { label: "" },
-];
+]);
 
 const totalDisputes = computed(() =>
   store.healthRows.reduce((sum, r) => sum + (r.model_disputes ?? 0), 0),
@@ -871,11 +874,25 @@ function acc(r) {
   return { state: "none" };
 }
 
+// Freeze eligibility (eval_candidate_n_pos) and every eval_* metric field are
+// always vault-wide (TagHealthResponse.eval_vault_wide — see
+// pixlstash/routes/tag_health.py) even when the board itself is scoped to a
+// project/set/character, because freezing a TagEvalSlice has no scope concept
+// (POST /tag_eval_slices takes no scope parameter either). Appended to the
+// freeze pill/button and Accuracy header tooltips so their numbers don't
+// silently imply they respect the current scope the way every other column
+// does. Empty string when unscoped, or in the (currently unreachable, kept
+// for forward-compatibility) case the backend ever scopes eval fields.
+function vaultWideNote() {
+  if (!store.healthScoped || !store.healthEvalVaultWide) return "";
+  return " (reflects every eligible picture vault-wide, not just your current scope)";
+}
+
 // Never-frozen, eligible-to-freeze tooltip: names the confirmed count so the
 // user knows the freeze click is expected to succeed (the pending pill below
 // is what shows when it wouldn't).
 function freezeReadyTip(nPos) {
-  return `Not scored yet — ${nPos} confirmed examples ready. Freeze to start tracking this tag's accuracy.`;
+  return `Not scored yet — ${nPos} confirmed examples ready. Freeze to start tracking this tag's accuracy.${vaultWideNote()}`;
 }
 
 // Never-frozen, below-the-floor tooltip/aria-label for the non-interactive
@@ -891,11 +908,11 @@ function freezeReadyTip(nPos) {
 // instead — noted as an open item in the redesign spec, not required yet).
 function pendingTip(nPos) {
   const remaining = FREEZE_MIN_N_POS - nPos;
-  return `${nPos}/${FREEZE_MIN_N_POS} confirmed EVAL-side examples — freezing needs at least ${FREEZE_MIN_N_POS}. PixlStash reserves most reviewed pictures for training and only keeps a fifth for scoring, so this climbs slower than your review count — reviewing more of this tag is still the way to unlock it, just not 1-for-1. Review ${remaining} more EVAL-side examples (roughly ${remaining * 5} reviews of this tag) to unlock scoring.`;
+  return `${nPos}/${FREEZE_MIN_N_POS} confirmed EVAL-side examples — freezing needs at least ${FREEZE_MIN_N_POS}. PixlStash reserves most reviewed pictures for training and only keeps a fifth for scoring, so this climbs slower than your review count — reviewing more of this tag is still the way to unlock it, just not 1-for-1. Review ${remaining} more EVAL-side examples (roughly ${remaining * 5} reviews of this tag) to unlock scoring.${vaultWideNote()}`;
 }
 
 function pendingAriaLabel(nPos) {
-  return `${nPos} of ${FREEZE_MIN_N_POS} EVAL-side confirmed examples needed to freeze this tag's accuracy score. Only about one in five reviewed pictures counts toward this number.`;
+  return `${nPos} of ${FREEZE_MIN_N_POS} EVAL-side confirmed examples needed to freeze this tag's accuracy score. Only about one in five reviewed pictures counts toward this number.${vaultWideNote()}`;
 }
 
 function f1Tone(pct) {

@@ -216,6 +216,68 @@ describe("TagHealthBoard: accuracy tie-breaker boost (Spec F)", () => {
     expect(wrapper.findAll(".rs-board-boost-chip").length).toBe(0);
   });
 });
+
+describe("TagHealthBoard: vault-wide Accuracy note when scoped (eval_vault_wide)", () => {
+  // eval_candidate_n_pos / eval_* fields are always vault-wide (see
+  // TagHealthResponse.eval_vault_wide in pixlstash/routes/tag_health.py) even
+  // when the board itself is scoped, because freezing a TagEvalSlice has no
+  // scope concept. The freeze pill/button and Accuracy header should say so —
+  // but only while the board is actually scoped.
+  const NOTE = /vault-wide, not just your current scope/;
+
+  it("unscoped board: no vault-wide note on the pending pill or Accuracy header", () => {
+    store.healthRows = [healthRow({ eval_candidate_n_pos: 3 })];
+    const wrapper = mount(TagHealthBoard, { global: globalOpts });
+
+    const pill = wrapper.find(".rs-acc-pill--pending");
+    expect(pill.attributes("title")).not.toMatch(NOTE);
+    expect(pill.attributes("aria-label")).not.toMatch(NOTE);
+
+    const accHeader = wrapper
+      .findAll(".rs-board-hdr")
+      .find((h) => h.text().includes("Accuracy"));
+    expect(accHeader.attributes("title")).not.toMatch(NOTE);
+  });
+
+  it("scoped board, eval_vault_wide true (the backend's actual behavior): note appears on the pending pill, freeze-ready button, and Accuracy header", () => {
+    store.healthScope = { projectId: 5, setId: null, characterId: null };
+    store.healthEvalVaultWide = true;
+    store.healthRows = [
+      healthRow({ tag: "pending", eval_candidate_n_pos: 3 }),
+      healthRow({ tag: "ready", eval_candidate_n_pos: 12 }),
+    ];
+    const wrapper = mount(TagHealthBoard, { global: globalOpts });
+
+    const pill = wrapper.find(".rs-acc-pill--pending");
+    expect(pill.attributes("title")).toMatch(NOTE);
+    expect(pill.attributes("aria-label")).toMatch(NOTE);
+
+    const freezeBtn = wrapper.find(".rs-acc-freeze-link");
+    expect(freezeBtn.attributes("title")).toMatch(NOTE);
+
+    const accHeader = wrapper
+      .findAll(".rs-board-hdr")
+      .find((h) => h.text().includes("Accuracy"));
+    expect(accHeader.attributes("title")).toMatch(NOTE);
+  });
+
+  it("scoped board, eval_vault_wide false (hypothetical forward-compat case): no note, even though scoped", () => {
+    store.healthScope = { projectId: 5, setId: null, characterId: null };
+    store.healthEvalVaultWide = false;
+    store.healthRows = [healthRow({ eval_candidate_n_pos: 3 })];
+    const wrapper = mount(TagHealthBoard, { global: globalOpts });
+
+    const pill = wrapper.find(".rs-acc-pill--pending");
+    expect(pill.attributes("title")).not.toMatch(NOTE);
+    expect(pill.attributes("aria-label")).not.toMatch(NOTE);
+
+    const accHeader = wrapper
+      .findAll(".rs-board-hdr")
+      .find((h) => h.text().includes("Accuracy"));
+    expect(accHeader.attributes("title")).not.toMatch(NOTE);
+  });
+});
+
 describe("TagHealthBoard: default sort tie-break (rawCorrections, not alphabetical)", () => {
   it("breaks a tied rounded Priority by raw disagreement volume, not tag name", () => {
     // Both round to a Priority of 8 (corrections() uses the discounted _adj

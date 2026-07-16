@@ -202,6 +202,13 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // catches up; this just powers the persistent control's stale tint/tooltip
   // in the meantime). Always false for a scoped (live-computed) response.
   const healthStale = ref(false);
+  // TagHealthResponse.eval_vault_wide (see pixlstash/routes/tag_health.py):
+  // true means eval_candidate_n_pos and every eval_* metric field on
+  // healthRows are computed over the whole vault, ignoring the current
+  // project/set/character scope — unlike every other column. Backend always
+  // sends true today; kept as a real field (not a hardcoded true) so a future
+  // backend change that scopes eval fields is honoured automatically.
+  const healthEvalVaultWide = ref(true);
   let healthPollTimer = null;
   // Board scope (project/set/character). When any dimension is set the rows
   // are computed live server-side for that scope instead of read from the
@@ -451,6 +458,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       healthProgress.value = p > 1 ? Math.min(1, p / 100) : Math.max(0, p);
       healthComputedAt.value = data.computed_at ?? null;
       healthStale.value = !!data.stale;
+      healthEvalVaultWide.value = data.eval_vault_wide !== false;
       scheduleHealthPoll();
     } catch (e) {
       error.value = e?.message || "Failed to load tag health";
@@ -1225,6 +1233,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     healthComputedAt,
     healthLoading,
     healthStale,
+    healthEvalVaultWide,
     healthScope,
     healthScoped,
     freezingTags,

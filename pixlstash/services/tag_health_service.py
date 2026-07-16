@@ -467,6 +467,23 @@ def compute_tag_health_rows(
         # candidate-selection query freeze_eval_slice_in_session commits
         # from, so this can never silently diverge from what an actual
         # freeze would produce (see count_eval_slice_candidates_in_session).
+        #
+        # Deliberately NOT passed `picture_ids` here, even on the scoped
+        # board path: POST /tag_eval_slices (freeze_eval_slice_in_session /
+        # _select_eval_slice_candidates_in_session) has no scope parameter at
+        # all and always pulls every EVAL-split human-labeled picture
+        # vault-wide — TagEvalSlice is a tag-level object, not a per-scope
+        # one (see docs/reviews/tag-review-tagger-takeover-design.md §1, and
+        # tag_eval_slices.py's module docstring: "no single resolvable
+        # picture_id scope for a freeze ... route"). Scoping this count down
+        # to match the board's current filter would make it lie about what
+        # clicking "Freeze to score" actually does — a user scoped to one
+        # character could see e.g. "3/10 confirmed" here while the tag
+        # already has 15 candidates vault-wide and a click succeeds
+        # immediately. Same reasoning applies to every eval_* metric field
+        # above (they join a frozen, vault-wide TagEvalSlice against a live
+        # model_version — there is no scope concept in that join either).
+        # See the `eval_vault_wide` response field this payload carries.
         eval_candidate_n_pos = count_eval_slice_candidates_in_session(
             session, tag_value
         )["n_pos"]
@@ -676,6 +693,10 @@ def list_tag_health(vault: "Vault") -> dict:
         "progress": status["progress"],
         "computed_at": computed_at.isoformat() if computed_at else None,
         "stale": is_stale(vault),
+        # Always True — see list_tag_health_scoped's docstring for why this
+        # is meaningful there. Present here too so the frontend doesn't need
+        # to special-case which endpoint variant it called.
+        "eval_vault_wide": True,
     }
 
 
@@ -693,6 +714,19 @@ def list_tag_health_scoped(
     progress bar is needed. Rows exist only for tags present on in-scope
     pictures. Same payload shape as :func:`list_tag_health`, plus
     ``scoped=True``; the cache is never read or written.
+
+    **Exception, deliberate:** ``eval_candidate_n_pos`` and every ``eval_*``
+    metric field (``eval_precision``/``eval_f1``/``eval_ap``/…) stay
+    vault-wide even here — ``eval_vault_wide=True`` in the returned payload
+    says so explicitly. ``POST /tag_eval_slices`` (the freeze action) has no
+    scope concept at all: a ``TagEvalSlice`` is a tag-level object, always
+    built from every EVAL-split human-labeled picture in the vault,
+    regardless of what a curator currently has the board filtered to. Scoping
+    those two field families down to the board's current filter would make
+    the displayed "confirmed examples" count and Accuracy column contradict
+    what clicking the freeze button actually does — see the long comment
+    above the ``count_eval_slice_candidates_in_session`` call in
+    :func:`compute_tag_health_rows`.
     """
 
     meta_path = vault.get_pixlstash_tagger_meta_path()
@@ -731,4 +765,8 @@ def list_tag_health_scoped(
         # Computed live, never cached — nothing for it to be stale relative to.
         "stale": False,
         "scoped": True,
+        # eval_candidate_n_pos and the eval_* metric fields are NOT restricted
+        # to this scope — see this function's docstring for why that's
+        # correct rather than an oversight.
+        "eval_vault_wide": True,
     }
