@@ -36,12 +36,15 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
+from sqlalchemy import and_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, Project, Tag
 from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
+from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.tag_health_service import EST_MISSING_MIN_CONF
 from pixlstash.utils.near_neighbor import (
     EMBEDDING_BYTES,
     EMBEDDING_DIM,
@@ -69,6 +72,64 @@ DEFAULT_MAX_TWIN_HAMMING = 8
 # same shot", which reads as contradictory nonsense to the user.
 MIN_DISPLAY_TWIN_SIM = 0.9
 
+# --- Fix 1: near-zero-ground-truth fallback -------------------------------
+#
+# Below this many concept-positive Tag rows (within the scan's scope), the kNN
+# vote is statistically vacuous, not just weak: knn_disagreement_with_neighbors
+# votes each picture's k nearest neighbours against `has_concept`, so if that
+# mask has ZERO True entries, pos_frac is identically 0.0 for every picture
+# regardless of true prevalence — add_threshold can then mathematically never
+# be met. Confirmed empirically against the real vault: a brand-new tag
+# ("compression artifacts", 0 Tag rows, 36,318 embeddings) produced pos_frac
+# == 0.0 vault-wide.
+#
+# The floor is 1 (i.e. the fallback fires only at exactly zero ground truth),
+# not the investigation's suggested "<5" — deliberately more conservative.
+# Zero is the only count that is *provably* vacuous for every picture
+# unconditionally; at n_ground_truth >= 1 the vote is no longer guaranteed
+# meaningless (a picture whose neighbourhood happens to include that one
+# positive gets a real, non-zero vote), so a same-scope 1-in-N tag is exactly
+# as valid a case for the vote as it always was. A fixed floor above 1 also
+# doesn't generalise: scan_tag is used both vault-wide (thousands of
+# pictures, where "few" ground truth really is thin) and scoped to a small
+# review picture set (picture_ids) or project, where 1-4 tagged pictures out
+# of a small pool is completely normal and the vote is still well-founded —
+# an absolute floor can't tell those apart, and this repo's own test suite
+# exercises exactly that small-scope, few-ground-truth case. Raise this only
+# alongside evidence that a specific higher floor doesn't break legitimate
+# small-scope scans.
+MIN_GROUND_TRUTH_FOR_VOTE = 1
+
+# --- Fix 2: base-rate-relative default thresholds -------------------------
+#
+# The fixed 0.55/0.45 pair implicitly assumes a ~50% base rate. For a tag
+# whose real prevalence sits far from 50% (this vault's minority defect/
+# quality tags run 5-25%), E[pos_frac] tracks the tag's own base rate for any
+# picture uncorrelated with neighbour structure, so a threshold centered on
+# 50% instead of the tag's own p skews eligibility hard toward whichever
+# direction is on the base rate's side of 0.5 — confirmed via a permutation
+# experiment (real embeddings, shuffled labels to isolate the pure base-rate
+# effect): up to 58x remove:add skew at a 20% base rate with zero real
+# signal, vs. effectively unreachable add-eligibility at low base rates
+# (an unmet 0.55 floor is exactly the "compression artifacts" mechanism above
+# once any ground truth exists at all). Centering the thresholds on the tag's
+# own p = has_concept.sum() / len(ids) removes that artifact.
+#
+# margin=0.15 was chosen empirically, verified against the real vault
+# (36,318 embeddings) with a permutation experiment (shuffled labels, same
+# embeddings, isolates the pure base-rate effect): across base rates 5%-48%
+# it brings the remove:add ratio from up to 58x / undefined down to 0.2-1.3x.
+# Real tags with strong genuine embedding separation (this vault's
+# "malformed hand", "waxy skin") still land off of 1.0 after this fix — a
+# single symmetric margin around p cannot fully cancel a real-signal-driven
+# population-size asymmetry between the (minority) tagged and (majority)
+# untagged groups; see the PR/session notes for the full measurement. The
+# fix's proven, unconditional win is eliminating the *unbounded* pure-base-
+# rate skew and the near-zero-base-rate "0.55 can never be met" failure mode.
+BASE_RATE_THRESHOLD_MARGIN = 0.15
+_BASE_RATE_CLAMP_LOW = 0.05
+_BASE_RATE_CLAMP_HIGH = 0.95
+
 
 def scan_tag(
     vault: "Vault",
@@ -77,8 +138,8 @@ def scan_tag(
     project: str | None = "PixlTagger",
     picture_ids: set[int] | None = None,
     k: int = 12,
-    add_threshold: float = 0.55,
-    remove_threshold: float = 0.45,
+    add_threshold: float | None = None,
+    remove_threshold: float | None = None,
     min_twin_sim: float = 0.85,
     max_twin_hamming: int = DEFAULT_MAX_TWIN_HAMMING,
     min_display_twin_sim: float = MIN_DISPLAY_TWIN_SIM,
@@ -95,9 +156,22 @@ def scan_tag(
             ``picture_ids`` is provided (the review path resolves scope itself).
         picture_ids: Optional explicit scope — only these picture ids are scanned.
             An empty set scans nothing. ``None`` = no explicit scope (use ``project``).
-        k, add_threshold, remove_threshold, min_twin_sim: scan knobs (CLI defaults).
-            ``min_twin_sim`` gates eligibility on the CLIP twin's similarity and is
-            unaffected by the perceptual-hash twin override below.
+        k: neighbours per image for the kNN vote.
+        add_threshold, remove_threshold: explicit override knobs. ``None`` (the
+            default) computes both relative to the tag's own base rate
+            ``p = has_concept.sum() / len(ids)`` — ``p + BASE_RATE_THRESHOLD_MARGIN``
+            / ``p - BASE_RATE_THRESHOLD_MARGIN``, clamped to
+            ``[_BASE_RATE_CLAMP_LOW, _BASE_RATE_CLAMP_HIGH]`` — instead of the old
+            fixed 0.55/0.45 pair (see the module-level constants' comments for why).
+            Passing an explicit float bypasses the base-rate computation entirely,
+            for callers (tests, future CLI wiring) that want the old fixed-threshold
+            behaviour.
+        min_twin_sim: scan knob (CLI default 0.85) gating eligibility on the CLIP
+            twin's similarity; unaffected by the perceptual-hash twin override
+            below. Not applied to the near-zero-ground-truth confidence fallback
+            (see ``MIN_GROUND_TRUTH_FOR_VOTE``) — that path has no neighbour vote
+            to corroborate against, so it demands direct model confidence instead
+            of neighbour corroboration.
         max_twin_hamming: max 64-bit dhash Hamming distance for the *displayed* twin
             override. When an eligible suspect has an opposite-labelled perceptual
             near-duplicate within this many bits (~<=8 ≈ near-identical), that
@@ -146,6 +220,55 @@ def scan_tag(
             session.exec(select(Tag.picture_id).where(Tag.tag.in_(sorted(equiv)))).all()
         )
         return emb_rows, literal, concept
+
+    def _load_confidence_fallback(session: Session) -> list[tuple[int, float]]:
+        """Fix 1's bootstrap candidates: literal-tag ``TagPrediction`` rows at or
+        above ``EST_MISSING_MIN_CONF``, pinned to the current (non-``manual``)
+        model version, for pictures with no existing literal ``Tag`` row.
+
+        Mirrors ``tag_health_service.compute_tag_health_rows``'s ``est_missing``
+        query one-for-one (same threshold constant, same model-version pin, same
+        outer-join-on-Tag shape) so this fallback and the board's "estimated
+        missing" count can never silently diverge. Deliberately literal (not
+        ``equiv``-merged like the vote path's ``has_concept``) to match that
+        query exactly rather than inventing new merge semantics here.
+        """
+        pid = None
+        if project and picture_ids is None:
+            pid = session.exec(
+                select(Project.id).where(Project.name == project)
+            ).first()
+        current_version = session.exec(
+            select(TagPrediction.model_version)
+            .where(TagPrediction.model_version != "manual")
+            .order_by(TagPrediction.predicted_at.desc())
+            .limit(1)
+        ).first()
+        if current_version is None:
+            return []
+        q = (
+            select(TagPrediction.picture_id, TagPrediction.confidence)
+            .join(Picture, Picture.id == TagPrediction.picture_id)
+            .outerjoin(
+                Tag,
+                and_(
+                    Tag.picture_id == TagPrediction.picture_id,
+                    Tag.tag == TagPrediction.tag,
+                ),
+            )
+            .where(
+                Picture.deleted.is_(False),
+                TagPrediction.tag == tag,
+                TagPrediction.confidence >= EST_MISSING_MIN_CONF,
+                TagPrediction.model_version == current_version,
+                Tag.picture_id.is_(None),
+            )
+        )
+        if picture_ids is not None:
+            q = q.where(TagPrediction.picture_id.in_(picture_ids))
+        elif pid is not None:
+            q = q.where(Picture.project_id == pid)
+        return session.exec(q).all()
 
     emb_rows, literal, concept = vault.db.run_immediate_read_task(_load)
 
@@ -201,69 +324,125 @@ def scan_tag(
 
     has_literal = np.array([pid in literal for pid in ids], dtype=bool)
     has_concept = np.array([pid in concept for pid in ids], dtype=bool)
-    pos_frac, twin_idx, twin_sim, neighbor_idx = knn_disagreement_with_neighbors(
-        emb, has_concept, k
-    )
+    n_ground_truth = int(has_concept.sum())
 
     suspects: list[dict] = []
-    for i in range(len(ids)):
-        # ADD eligibility uses the merged concept; REMOVE uses the literal tag.
-        if not has_concept[i] and pos_frac[i] >= add_threshold:
-            direction, score = "add", float(pos_frac[i])
-        elif has_literal[i] and pos_frac[i] <= remove_threshold:
-            direction, score = "remove", float(1.0 - pos_frac[i])
-        else:
-            continue
-        if twin_sim[i] < min_twin_sim:
-            continue
-        # Eligibility above is unchanged. Below, only the *displayed* twin may switch: if
-        # this suspect has an opposite-labelled perceptual near-duplicate (an altered copy
-        # of itself), show that as the twin instead of the CLIP-nearest one.
-        ti = int(twin_idx[i])
-        display_twin_id = int(ids[ti]) if ti >= 0 else None
-        display_twin_sim = round(float(twin_sim[i]), 4)
-        reason = (
-            f"near-twin {display_twin_id} (sim {display_twin_sim:.3f}) disagrees; "
-            f"{float(pos_frac[i]):.0%} of nearest neighbours have the tag"
+    if n_ground_truth < MIN_GROUND_TRUTH_FOR_VOTE:
+        # Fix 1: the kNN vote below would be statistically vacuous with this
+        # little ground truth — has_concept is all/near-all False, so pos_frac
+        # is ~0.0 for every picture and add_threshold could never be met (the
+        # confirmed "compression artifacts" bug). Bootstrap from direct model
+        # confidence instead (mirrors tag_health_service's est_missing query;
+        # see _load_confidence_fallback). Deliberately bypasses min_twin_sim:
+        # there is no neighbour vote here to corroborate against, so demanding
+        # direct confidence evidence is the honest substitute for "no ground
+        # truth to vote against", not a gate this signal was ever meant to
+        # clear.
+        logger.info(
+            "scan_tag(%r): only %d ground-truth positive(s) (< floor %d); using "
+            "the confidence-based fallback instead of the kNN vote",
+            tag,
+            n_ground_truth,
+            MIN_GROUND_TRUTH_FOR_VOTE,
+        )
+        fallback_rows = vault.db.run_immediate_read_task(_load_confidence_fallback)
+        for pic_id, confidence in fallback_rows:
+            conf = float(confidence)
+            suspects.append(
+                {
+                    "picture_id": int(pic_id),
+                    "direction": "add",
+                    "score": round(conf, 4),
+                    "twin_picture_id": None,
+                    "twin_sim": None,
+                    "reason": (
+                        f"model is confident ({conf:.0%}) but this tag has no "
+                        "confirmed examples yet"
+                    ),
+                    "neighbors": [],
+                }
+            )
+    else:
+        # Fix 2: default thresholds relative to the tag's own base rate rather
+        # than the fixed 0.55/0.45 pair (see BASE_RATE_THRESHOLD_MARGIN above)
+        # — only when the caller didn't explicitly override.
+        p = n_ground_truth / len(ids)
+        p_clamped = min(_BASE_RATE_CLAMP_HIGH, max(_BASE_RATE_CLAMP_LOW, p))
+        effective_add_threshold = (
+            add_threshold
+            if add_threshold is not None
+            else min(_BASE_RATE_CLAMP_HIGH, p_clamped + BASE_RATE_THRESHOLD_MARGIN)
+        )
+        effective_remove_threshold = (
+            remove_threshold
+            if remove_threshold is not None
+            else max(_BASE_RATE_CLAMP_LOW, p_clamped - BASE_RATE_THRESHOLD_MARGIN)
         )
 
-        j = nearest_opposite_by_hamming(
-            phash_ints, valid_mask, has_concept, i, max_twin_hamming, twin_sim
+        pos_frac, twin_idx, twin_sim, neighbor_idx = knn_disagreement_with_neighbors(
+            emb, has_concept, k
         )
-        if j >= 0 and j != ti:
-            # Recompute similarity for the candidate override twin so the gate below
-            # (and the stored value, if it's applied) describes this specific pair,
-            # not the (possibly discarded) CLIP-nearest twin.
-            candidate_sim = round(float(emb[i] @ emb[j]), 4)
-            if candidate_sim >= min_display_twin_sim:
-                d = hamming_distance(int(phash_values[i]), int(phash_values[j]))
-                display_twin_id = int(ids[j])
-                display_twin_sim = candidate_sim
-                reason = (
-                    f"near-duplicate twin {display_twin_id} (dhash hamming {d}); "
-                    f"{float(pos_frac[i]):.0%} of nearest neighbours have the tag"
-                )
 
-        # The neighbourhood evidence the vote used, most-similar first, with each
-        # neighbour's merged-concept "has the tag" flag — frozen at scan time.
-        neighbors = [
-            {"picture_id": int(ids[m]), "has": bool(has_concept[m])}
-            for m in neighbor_idx[i]
-            if m >= 0
-        ]
+        for i in range(len(ids)):
+            # ADD eligibility uses the merged concept; REMOVE uses the literal tag.
+            if not has_concept[i] and pos_frac[i] >= effective_add_threshold:
+                direction, score = "add", float(pos_frac[i])
+            elif has_literal[i] and pos_frac[i] <= effective_remove_threshold:
+                direction, score = "remove", float(1.0 - pos_frac[i])
+            else:
+                continue
+            if twin_sim[i] < min_twin_sim:
+                continue
+            # Eligibility above is unchanged. Below, only the *displayed* twin may
+            # switch: if this suspect has an opposite-labelled perceptual
+            # near-duplicate (an altered copy of itself), show that as the twin
+            # instead of the CLIP-nearest one.
+            ti = int(twin_idx[i])
+            display_twin_id = int(ids[ti]) if ti >= 0 else None
+            display_twin_sim = round(float(twin_sim[i]), 4)
+            reason = (
+                f"near-twin {display_twin_id} (sim {display_twin_sim:.3f}) disagrees; "
+                f"{float(pos_frac[i]):.0%} of nearest neighbours have the tag"
+            )
 
-        suspects.append(
-            {
-                "picture_id": int(ids[i]),
-                "direction": direction,
-                "score": round(score, 4),
-                "twin_picture_id": display_twin_id,
-                "twin_sim": display_twin_sim,
-                "pos_frac": round(float(pos_frac[i]), 4),
-                "reason": reason,
-                "neighbors": neighbors,
-            }
-        )
+            j = nearest_opposite_by_hamming(
+                phash_ints, valid_mask, has_concept, i, max_twin_hamming, twin_sim
+            )
+            if j >= 0 and j != ti:
+                # Recompute similarity for the candidate override twin so the gate
+                # below (and the stored value, if it's applied) describes this
+                # specific pair, not the (possibly discarded) CLIP-nearest twin.
+                candidate_sim = round(float(emb[i] @ emb[j]), 4)
+                if candidate_sim >= min_display_twin_sim:
+                    d = hamming_distance(int(phash_values[i]), int(phash_values[j]))
+                    display_twin_id = int(ids[j])
+                    display_twin_sim = candidate_sim
+                    reason = (
+                        f"near-duplicate twin {display_twin_id} (dhash hamming {d}); "
+                        f"{float(pos_frac[i]):.0%} of nearest neighbours have the tag"
+                    )
+
+            # The neighbourhood evidence the vote used, most-similar first, with
+            # each neighbour's merged-concept "has the tag" flag — frozen at scan
+            # time.
+            neighbors = [
+                {"picture_id": int(ids[m]), "has": bool(has_concept[m])}
+                for m in neighbor_idx[i]
+                if m >= 0
+            ]
+
+            suspects.append(
+                {
+                    "picture_id": int(ids[i]),
+                    "direction": direction,
+                    "score": round(score, 4),
+                    "twin_picture_id": display_twin_id,
+                    "twin_sim": display_twin_sim,
+                    "pos_frac": round(float(pos_frac[i]), 4),
+                    "reason": reason,
+                    "neighbors": neighbors,
+                }
+            )
 
     # A mutually-disagreeing pair yields both a remove and an add suspect that are the
     # same review — keep one per pair so the queue doesn't show it twice.

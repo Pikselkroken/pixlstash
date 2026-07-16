@@ -687,6 +687,233 @@ def test_scan_tag_rejects_low_similarity_perceptual_override():
         gc.collect()
 
 
+# ---------------------------------------------------------------------------
+# Fix 1 (confidence fallback) / Fix 2 (base-rate-relative thresholds)
+# regression coverage — see docs/reviews and tag_scan_service.py's module
+# constants for the bug reports and empirical tuning these guard against.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_tag_confidence_fallback_for_new_tag():
+    """Fix 1 regression: the exact reported bug. A brand-new tag with zero
+    ``Tag`` rows produced ZERO suspects (not just few) because the kNN vote's
+    ``has_concept`` mask is all-False, making pos_frac identically 0.0 for
+    every picture vault-wide — add_threshold could never be met no matter how
+    confident the model is. Below MIN_GROUND_TRUTH_FOR_VOTE ground-truth
+    positives, scan_tag must fall back to TagPrediction confidence directly.
+    """
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)  # Bad1.png
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]
+        # Embeddings are only needed to clear scan_tag's len(ids) < 2 guard —
+        # the fallback path doesn't vote on them.
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, b, [0.0, 1.0] + [0.0] * 510)
+
+        # Zero Tag rows for this tag anywhere in the vault, but the model is
+        # confident on picture A.
+        _seed_prediction(server, a, "compression artifacts", 0.93)
+
+        res = tag_scan_service.scan_tag(
+            server.vault, "compression artifacts", project=None
+        )
+        assert res["added"] == 1
+        assert res["removed"] == 0
+        assert res["count"] == 1
+
+        rows = client.get("/tag_suggestions").json()
+        assert len(rows) == 1
+        assert rows[0]["picture_id"] == a
+        assert rows[0]["direction"] == "add"
+        assert rows[0]["score"] == 0.93
+        assert "no confirmed examples yet" in rows[0]["reason"]
+        assert "93%" in rows[0]["reason"]
+        assert rows[0]["twin_picture_id"] is None
+        assert rows[0]["twin_sim"] is None
+
+        # B has no prediction at all, so it must not be surfaced.
+        assert b not in {r["picture_id"] for r in rows}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scan_tag_confidence_fallback_ignores_stale_model_version():
+    """The fallback pins to the current (most recent non-"manual") model
+    version, exactly like tag_health_service's est_missing — a confident
+    prediction from a superseded model version must not produce a suspect."""
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, b, [0.0, 1.0] + [0.0] * 510)
+
+        def insert_stale(session):
+            session.add(
+                TagPrediction(
+                    picture_id=a,
+                    tag="compression artifacts",
+                    confidence=0.99,
+                    model_version="old-v0",
+                    status="PENDING",
+                    predicted_at=datetime(2020, 1, 1),
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(insert_stale)
+        # A newer prediction (any tag) establishes "test-v1" as current.
+        _seed_prediction(server, b, "some other tag", 0.5)
+
+        res = tag_scan_service.scan_tag(
+            server.vault, "compression artifacts", project=None
+        )
+        assert res["added"] == 0
+        assert res["count"] == 0
+        assert client.get("/tag_suggestions").json() == []
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
+    """Fix 2 regression: a minority-base-rate tag (p=0.25, well above the
+    Fix-1 floor of 5 ground-truth positives) at whose true prevalence the old
+    fixed 0.55/0.45 pair structurally favours 'remove' over 'add' (a
+    threshold centered on 50% is systematically wrong for a 25% base rate).
+
+    Twenty pictures, hand-constructed embeddings with exactly known pairwise
+    cosine similarities (verified against the real kernel before being
+    transcribed here — see the PR notes): one probe picture (``u``) whose
+    kNN-vote positive fraction is 0.4722 — below the OLD fixed add_threshold
+    (0.55) so the old code could never flag it, but above the NEW base-rate
+    default (p + 0.15 = 0.40) so it should. A second picture (``t1``) is
+    tagged with pos_frac 0.259 — above the NEW default remove_threshold
+    (p - 0.15 = 0.10, so NOT flagged) but below the OLD fixed 0.45 (so an
+    explicit legacy-threshold caller WOULD flag it) — exercising acceptance
+    criterion (c): explicit overrides bypass the base-rate computation.
+    """
+    import io
+
+    from PIL import Image
+
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        names = (
+            ["u"]
+            + [f"t{i}" for i in range(1, 6)]
+            + [f"d{i}" for i in range(1, 6)]
+            + [f"f{i}" for i in range(1, 10)]
+        )
+        assert len(names) == 20
+        files = []
+        for n_idx, name in enumerate(names):
+            img = Image.new("RGB", (16, 16), color=(n_idx * 11 % 256, 40, 80))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            files.append(("file", (f"{name}.png", buf.getvalue(), "image/png")))
+        result = upload_pictures_and_wait(client, files)
+        assert result["status"] == "completed"
+        ids = {n: r["picture_id"] for n, r in zip(names, result["results"])}
+
+        tag = "compression artifacts"
+        for i in range(1, 6):
+            _seed_tag(server, ids[f"t{i}"], tag)
+
+        # 512-dim orthogonal-axis construction: every picture's vector uses a
+        # small set of dedicated axes so each pairwise cosine similarity is
+        # exactly controlled, and anything not explicitly connected is exactly
+        # orthogonal (similarity 0 -> zero weight in the kNN vote). Verified
+        # against pixlstash.utils.near_neighbor.knn_disagreement_with_neighbors
+        # directly before being transcribed here.
+        AXIS_TWIN = 0  # shared between u and t1
+        AXIS_T1T2 = 1  # shared between t1 and t2
+        AXIS_D = {i: 1 + i for i in range(1, 6)}  # u <-> d{i}, 2..6
+        T1_PRIV = 50
+        D_PRIV_BASE = 60  # t3,t4,t5 -> 60,61,62 (isolated)
+        F_PRIV_BASE = 90  # f1..f9 -> 90..98 (isolated)
+
+        def vec(components):
+            v = [0.0] * 512
+            for axis, val in components.items():
+                v[axis] = val
+            return v
+
+        u1, b_dilution = 0.8947, 0.19
+        _set_embedding(
+            server,
+            ids["u"],
+            vec({AXIS_TWIN: u1, **{AXIS_D[i]: b_dilution for i in range(1, 6)}}),
+        )
+
+        t1_comp, t1t2_comp = 0.95, 0.3
+        leftover = (1 - t1_comp**2 - t1t2_comp**2) ** 0.5
+        _set_embedding(
+            server,
+            ids["t1"],
+            vec({AXIS_TWIN: t1_comp, AXIS_T1T2: t1t2_comp, T1_PRIV: leftover}),
+        )
+        _set_embedding(server, ids["t2"], vec({AXIS_T1T2: 1.0}))
+        for k, i in enumerate([3, 4, 5]):
+            _set_embedding(server, ids[f"t{i}"], vec({D_PRIV_BASE + k: 1.0}))
+        for i in range(1, 6):
+            _set_embedding(server, ids[f"d{i}"], vec({AXIS_D[i]: 1.0}))
+        for k, i in enumerate(range(1, 10)):
+            _set_embedding(server, ids[f"f{i}"], vec({F_PRIV_BASE + k: 1.0}))
+
+        # --- Run 1: default (base-rate-relative) thresholds ---
+        res_default = tag_scan_service.scan_tag(server.vault, tag, project=None)
+        assert res_default["scanned"] == 20
+        assert res_default["added"] == 1
+        assert res_default["removed"] == 0
+
+        rows = client.get("/tag_suggestions").json()
+        assert len(rows) == 1
+        assert rows[0]["picture_id"] == ids["u"]
+        assert rows[0]["direction"] == "add"
+
+        # --- Run 2: explicit legacy fixed thresholds (override, same tag) ---
+        res_old = tag_scan_service.scan_tag(
+            server.vault,
+            tag,
+            project=None,
+            add_threshold=0.55,
+            remove_threshold=0.45,
+        )
+        # u no longer qualifies (pos_frac 0.4722 < 0.55); t1 newly does
+        # (pos_frac 0.259 <= 0.45), demonstrating the override bypasses the
+        # base-rate computation and reproduces the old skew.
+        assert res_old["added"] == 0
+        assert res_old["removed"] == 1
+
+        rows_after = {r["picture_id"]: r for r in client.get("/tag_suggestions").json()}
+        assert set(rows_after) == {ids["u"], ids["t1"]}
+        assert rows_after[ids["u"]]["direction"] == "add"
+        assert rows_after[ids["t1"]]["direction"] == "remove"
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_accept_missing_suggestion_returns_404():
     temp_dir, client, server = _setup()
     try:
