@@ -206,7 +206,12 @@ function initialScopeFromSelection() {
 
 function openNewReview(preset = "") {
   store.createError = null;
-  dialog.value = { preset, initialScope: initialScopeFromSelection() };
+  // A scope chosen on the health board is the user's explicit working scope —
+  // it wins over the app-selection prefill.
+  const initialScope = store.healthScoped
+    ? { ...store.healthScope }
+    : initialScopeFromSelection();
+  dialog.value = { preset, initialScope };
 }
 
 // Minimal image objects for TbTagPanel: the current card's picture(s).

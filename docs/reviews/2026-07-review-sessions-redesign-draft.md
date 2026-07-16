@@ -63,6 +63,16 @@ Each row shows a plain-language reason ("41 high-confidence predictions lack thi
 **Start review** button. Smart-score penalised tags keep their red flag. A tag with an open
 review shows **Open →** instead (greyed for creation — one open review per tag).
 
+**Board scope (added 2026-07-16).** The board carries the same project/set/character scope
+selects as the New-review dialog. Scoped rows are computed live per request
+(`GET /tag_health?project_id=&set_id=&character_id=`, resolved through
+`fetch_tag_review_scope_picture_ids` — the identical semantics review creation uses, including
+`character_id=UNASSIGNED`): every signal counts only in-scope pictures, and tags that never
+appear on an in-scope picture drop off the board. The vault-wide cache is untouched — only
+unscoped requests read it, and only the explicit rebuild writes it. A review started from a
+scoped board prefills the dialog with that scope (the board scope wins over the app-selection
+prefill).
+
 ### 2. Reviews are first-class sessions
 
 A **Review** = one tag + optional scope + one scan's results, **frozen at creation**.

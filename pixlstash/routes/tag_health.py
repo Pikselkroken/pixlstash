@@ -49,6 +49,9 @@ class TagHealthResponse(BaseModel):
     building: bool = False
     progress: float = 0.0
     computed_at: Optional[str] = None
+    # True when the rows were computed live for a project/set/character scope
+    # (never cached); the rebuild state fields then describe nothing.
+    scoped: bool = False
 
 
 class TagHealthRebuildResponse(BaseModel):
@@ -75,12 +78,29 @@ def create_router(server) -> APIRouter:
         description=(
             "Returns the cached per-tag health signals plus the rebuild state "
             "(``building`` and tags-processed progress in [0, 1]). "
-            "``computed_at`` is null until the first rebuild."
+            "``computed_at`` is null until the first rebuild. When any of "
+            "``project_id`` / ``set_id`` / ``character_id`` is given, the rows "
+            "are instead computed live for that scope (every signal restricted "
+            "to the scope's pictures; ``scoped=true`` in the response) — the "
+            "same project/set/character semantics as review creation, "
+            "including ``character_id=UNASSIGNED``."
         ),
         response_model=TagHealthResponse,
     )
-    def get_tag_health(request: Request):
+    def get_tag_health(
+        request: Request,
+        project_id: Optional[int] = None,
+        set_id: Optional[int] = None,
+        character_id: Optional[str] = None,
+    ):
         _reject_scoped_tokens(request)
+        if project_id is not None or set_id is not None or character_id:
+            return tag_health_service.list_tag_health_scoped(
+                server.vault,
+                project_id=project_id,
+                set_id=set_id,
+                character_id=character_id,
+            )
         return tag_health_service.list_tag_health(server.vault)
 
     @router.post(

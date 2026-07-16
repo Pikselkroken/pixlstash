@@ -15,6 +15,8 @@ from PIL import Image
 from pixlstash.db_models import (
     Picture,
     PictureLikeness,
+    PictureSet,
+    PictureSetMember,
     PictureStack,
     Tag,
 )
@@ -215,6 +217,79 @@ def test_tag_health_same_stack_mismatch_and_no_double_count():
         rows = {r["tag"]: r for r in body["rows"]}
         assert rows["t"]["mismatch"] == 2
         assert rows["t"]["has_model"] is False  # no predictions at all
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_scoped_restricts_signals_and_tag_list():
+    """`GET /tag_health?set_id=` computes live rows restricted to the scope:
+    counts include only in-scope pictures, and tags that never appear on an
+    in-scope picture get no row at all. The vault-wide cache is untouched."""
+    temp_dir, client, server = _setup()
+    try:
+        p_in = _upload_named(client)  # in the set:  tagged "t", conf 0.05
+        p_out = _upload_named(client)  # outside:     untagged "t", conf 0.95
+        p_other = _upload_named(client)  # outside:     tagged "only_out"
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            ps = PictureSet(name="scope_set")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            session.add(PictureSetMember(set_id=ps.id, picture_id=p_in))
+            session.add(Tag(picture_id=p_in, tag="t"))
+            session.add(Tag(picture_id=p_other, tag="only_out"))
+            # In-scope est_wrong for "t"; out-of-scope est_missing for "t".
+            session.add(
+                TagPrediction(
+                    picture_id=p_in,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_out,
+                    tag="t",
+                    confidence=0.95,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        # Vault-wide (cached) rows see both pictures and both tags.
+        body = _rebuild_and_wait(client)
+        rows = {r["tag"]: r for r in body["rows"]}
+        assert rows["t"]["est_wrong"] == 1
+        assert rows["t"]["est_missing"] == 1
+        assert "only_out" in rows
+
+        # Scoped to the set: only the in-scope picture's signals, and the
+        # out-of-scope-only tag disappears from the board entirely.
+        scoped = client.get(f"{API}/tag_health", params={"set_id": set_id}).json()
+        assert scoped["scoped"] is True
+        assert scoped["building"] is False
+        srows = {r["tag"]: r for r in scoped["rows"]}
+        assert srows["t"]["est_wrong"] == 1
+        assert srows["t"]["est_missing"] == 0  # p_out is outside the scope
+        assert "only_out" not in srows
+
+        # An unknown scope id is a valid empty scope — no rows, not an error.
+        empty = client.get(f"{API}/tag_health", params={"set_id": 99999}).json()
+        assert empty["scoped"] is True
+        assert empty["rows"] == []
+
+        # The unscoped cache is untouched by scoped reads.
+        body2 = client.get(f"{API}/tag_health").json()
+        assert {r["tag"] for r in body2["rows"]} == {"t", "only_out"}
     finally:
         _teardown(temp_dir, server)
 

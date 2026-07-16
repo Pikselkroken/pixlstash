@@ -45,6 +45,7 @@ from pixlstash.db_models.tag import is_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.filter_helpers import fetch_tag_review_scope_picture_ids
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
@@ -90,16 +91,22 @@ def _current_model_version(session: Session) -> str | None:
     ).first()
 
 
-def _mismatch_counts(session: Session) -> dict[str, int]:
+def _mismatch_counts(
+    session: Session, picture_ids: set[int] | None = None
+) -> dict[str, int]:
     """Per-tag count of near-duplicate pairs that disagree on the tag.
 
     Same-stack pairs first, then stored high-likeness pairs; a likeness pair
-    whose two pictures share a stack is skipped (already counted).
+    whose two pictures share a stack is skipped (already counted). When
+    ``picture_ids`` is provided, only pairs whose BOTH pictures are in scope
+    count (membership in ``alive``/``stack_of`` enforces this downstream).
     """
     alive = {
         int(r)
         for r in session.exec(select(Picture.id).where(Picture.deleted.is_(False)))
     }
+    if picture_ids is not None:
+        alive &= picture_ids
     stack_of: dict[int, int] = {
         int(pid): int(sid)
         for pid, sid in session.exec(
@@ -107,6 +114,7 @@ def _mismatch_counts(session: Session) -> dict[str, int]:
                 Picture.stack_id.is_not(None), Picture.deleted.is_(False)
             )
         )
+        if int(pid) in alive
     }
     tags_of: dict[int, set[str]] = defaultdict(set)
     for pid, tag_value in session.exec(select(Tag.picture_id, Tag.tag)):
@@ -152,76 +160,97 @@ def _mismatch_counts(session: Session) -> dict[str, int]:
 def compute_tag_health_rows(
     session: Session,
     progress_cb: Callable[[int, int], None] | None = None,
+    picture_ids: set[int] | None = None,
 ) -> list[dict]:
     """Compute the board's per-tag signal rows (pure read; no writes).
 
     Every non-sentinel tag that appears in either ``tag`` or ``tag_prediction``
     gets a row; tags with no predictions get zeros and ``has_model=False``.
     ``progress_cb(processed, total)`` is called as tags are assembled.
+
+    When ``picture_ids`` is provided every signal is restricted to those
+    pictures (the scoped board), and only tags that appear on in-scope
+    pictures get rows. An empty set yields no rows. ``None`` = whole vault
+    (the cached path).
     """
     current_version = _current_model_version(session)
+
+    def _scoped(query, column):
+        """Restrict a query to the scope pictures (no-op when unscoped)."""
+        if picture_ids is None:
+            return query
+        return query.where(column.in_(picture_ids))
 
     # est_wrong: tagged + confidently-negative prediction.
     est_wrong = dict(
         session.exec(
-            select(TagPrediction.tag, func.count())
-            .join(
-                Tag,
-                and_(
-                    Tag.picture_id == TagPrediction.picture_id,
-                    Tag.tag == TagPrediction.tag,
+            _scoped(
+                select(TagPrediction.tag, func.count())
+                .join(
+                    Tag,
+                    and_(
+                        Tag.picture_id == TagPrediction.picture_id,
+                        Tag.tag == TagPrediction.tag,
+                    ),
+                )
+                .join(Picture, Picture.id == TagPrediction.picture_id)
+                .where(
+                    Picture.deleted.is_(False),
+                    TagPrediction.confidence <= EST_WRONG_MAX_CONF,
                 ),
-            )
-            .join(Picture, Picture.id == TagPrediction.picture_id)
-            .where(
-                Picture.deleted.is_(False),
-                TagPrediction.confidence <= EST_WRONG_MAX_CONF,
-            )
-            .group_by(TagPrediction.tag)
+                TagPrediction.picture_id,
+            ).group_by(TagPrediction.tag)
         ).all()
     )
 
     # est_missing: confidently-positive prediction with no Tag row.
     est_missing = dict(
         session.exec(
-            select(TagPrediction.tag, func.count())
-            .join(Picture, Picture.id == TagPrediction.picture_id)
-            .outerjoin(
-                Tag,
-                and_(
-                    Tag.picture_id == TagPrediction.picture_id,
-                    Tag.tag == TagPrediction.tag,
+            _scoped(
+                select(TagPrediction.tag, func.count())
+                .join(Picture, Picture.id == TagPrediction.picture_id)
+                .outerjoin(
+                    Tag,
+                    and_(
+                        Tag.picture_id == TagPrediction.picture_id,
+                        Tag.tag == TagPrediction.tag,
+                    ),
+                )
+                .where(
+                    Picture.deleted.is_(False),
+                    TagPrediction.confidence >= EST_MISSING_MIN_CONF,
+                    Tag.picture_id.is_(None),
                 ),
-            )
-            .where(
-                Picture.deleted.is_(False),
-                TagPrediction.confidence >= EST_MISSING_MIN_CONF,
-                Tag.picture_id.is_(None),
-            )
-            .group_by(TagPrediction.tag)
+                TagPrediction.picture_id,
+            ).group_by(TagPrediction.tag)
         ).all()
     )
 
     # One grouped pass over tag_prediction: totals, verified, boundary, has_model.
     pred_agg: dict[str, tuple[int, int, int, int]] = {}
     for tag_value, total, verified, boundary, current in session.exec(
-        select(
-            TagPrediction.tag,
-            func.count(),
-            func.sum(case((TagPrediction.label_state != "UNKNOWN", 1), else_=0)),
-            func.sum(
-                case(
-                    (
-                        TagPrediction.confidence.between(BOUNDARY_LOW, BOUNDARY_HIGH),
-                        1,
-                    ),
-                    else_=0,
-                )
+        _scoped(
+            select(
+                TagPrediction.tag,
+                func.count(),
+                func.sum(case((TagPrediction.label_state != "UNKNOWN", 1), else_=0)),
+                func.sum(
+                    case(
+                        (
+                            TagPrediction.confidence.between(
+                                BOUNDARY_LOW, BOUNDARY_HIGH
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                # current_version None renders as IS NULL → matches nothing → 0.
+                func.sum(
+                    case((TagPrediction.model_version == current_version, 1), else_=0)
+                ),
             ),
-            # current_version None renders as IS NULL → matches nothing → 0.
-            func.sum(
-                case((TagPrediction.model_version == current_version, 1), else_=0)
-            ),
+            TagPrediction.picture_id,
         ).group_by(TagPrediction.tag)
     ).all():
         pred_agg[tag_value] = (
@@ -234,30 +263,34 @@ def compute_tag_health_rows(
     # model_disputes: human-frozen label strongly contradicted by the live prediction.
     disputes = dict(
         session.exec(
-            select(TagPrediction.tag, func.count())
-            .where(
-                TagPrediction.label_source == "human",
-                or_(
-                    and_(
-                        TagPrediction.label_state == "POS",
-                        TagPrediction.confidence <= EST_WRONG_MAX_CONF,
-                    ),
-                    and_(
-                        TagPrediction.label_state == "NEG",
-                        TagPrediction.confidence >= EST_MISSING_MIN_CONF,
+            _scoped(
+                select(TagPrediction.tag, func.count()).where(
+                    TagPrediction.label_source == "human",
+                    or_(
+                        and_(
+                            TagPrediction.label_state == "POS",
+                            TagPrediction.confidence <= EST_WRONG_MAX_CONF,
+                        ),
+                        and_(
+                            TagPrediction.label_state == "NEG",
+                            TagPrediction.confidence >= EST_MISSING_MIN_CONF,
+                        ),
                     ),
                 ),
-            )
-            .group_by(TagPrediction.tag)
+                TagPrediction.picture_id,
+            ).group_by(TagPrediction.tag)
         ).all()
     )
 
     # "Last review": the newest reviewed_at over the tag's suggestions.
     last_reviewed: dict[str, datetime] = dict(
         session.exec(
-            select(TagSuggestion.tag, func.max(TagSuggestion.reviewed_at))
-            .where(TagSuggestion.reviewed_at.is_not(None))
-            .group_by(TagSuggestion.tag)
+            _scoped(
+                select(TagSuggestion.tag, func.max(TagSuggestion.reviewed_at)).where(
+                    TagSuggestion.reviewed_at.is_not(None)
+                ),
+                TagSuggestion.picture_id,
+            ).group_by(TagSuggestion.tag)
         ).all()
     )
 
@@ -265,23 +298,30 @@ def compute_tag_health_rows(
     accepted: dict[str, int] = defaultdict(int)
     dismissed: dict[str, int] = defaultdict(int)
     for tag_value, status, n in session.exec(
-        select(TagSuggestion.tag, TagSuggestion.status, func.count())
-        .where(TagSuggestion.status.in_(["ACCEPTED", "DISMISSED"]))
-        .group_by(TagSuggestion.tag, TagSuggestion.status)
+        _scoped(
+            select(TagSuggestion.tag, TagSuggestion.status, func.count()).where(
+                TagSuggestion.status.in_(["ACCEPTED", "DISMISSED"])
+            ),
+            TagSuggestion.picture_id,
+        ).group_by(TagSuggestion.tag, TagSuggestion.status)
     ).all():
         if status == "ACCEPTED":
             accepted[tag_value] += n
         else:
             dismissed[tag_value] += n
 
-    mismatch = _mismatch_counts(session)
+    mismatch = _mismatch_counts(session, picture_ids)
 
     ground_truth_tags = {
-        t for t in session.exec(select(Tag.tag).distinct()) if not is_tag_sentinel(t)
+        t
+        for t in session.exec(_scoped(select(Tag.tag), Tag.picture_id).distinct())
+        if not is_tag_sentinel(t)
     }
     predicted_tags = {
         t
-        for t in session.exec(select(TagPrediction.tag).distinct())
+        for t in session.exec(
+            _scoped(select(TagPrediction.tag), TagPrediction.picture_id).distinct()
+        )
         if not is_tag_sentinel(t)
     }
     all_tags = sorted(ground_truth_tags | predicted_tags)
@@ -411,4 +451,52 @@ def list_tag_health(vault: "Vault") -> dict:
         "building": status["building"],
         "progress": status["progress"],
         "computed_at": computed_at.isoformat() if computed_at else None,
+    }
+
+
+def list_tag_health_scoped(
+    vault: "Vault",
+    *,
+    project_id: int | None = None,
+    set_id: int | None = None,
+    character_id: str | None = None,
+) -> dict:
+    """The board payload restricted to a project/set/character scope.
+
+    Computed live per request (the cache only holds vault-wide rows); the
+    grouped aggregates over a scope subset are cheap enough that no cache or
+    progress bar is needed. Rows exist only for tags present on in-scope
+    pictures. Same payload shape as :func:`list_tag_health`, plus
+    ``scoped=True``; the cache is never read or written.
+    """
+
+    def _compute(session: Session) -> list[dict]:
+        ids = fetch_tag_review_scope_picture_ids(
+            session,
+            project_id=project_id,
+            set_id=set_id,
+            character_id=character_id,
+        )
+        # None = every dimension was "Any"; treat as unscoped-equivalent by
+        # computing over the whole vault (callers normally hit the cached
+        # path instead, but this keeps the endpoint honest either way).
+        return compute_tag_health_rows(session, picture_ids=ids)
+
+    rows = vault.db.run_immediate_read_task(_compute)
+    now = datetime.utcnow()
+    return {
+        "rows": [
+            {
+                **r,
+                "last_reviewed_at": r["last_reviewed_at"].isoformat()
+                if r["last_reviewed_at"]
+                else None,
+                "computed_at": r["computed_at"].isoformat(),
+            }
+            for r in rows
+        ],
+        "building": False,
+        "progress": 1.0,
+        "computed_at": now.isoformat(),
+        "scoped": True,
     }

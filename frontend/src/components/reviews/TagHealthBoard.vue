@@ -20,6 +20,43 @@
           The current model disputes {{ totalDisputes }} of your earlier calls
         </button>
         <span class="rs-board-controls-spacer"></span>
+        <select
+          class="rs-board-scope"
+          :class="{ 'rs-board-scope--set': scope.projectId != null }"
+          :value="scope.projectId ?? ''"
+          title="Only count pictures in this project"
+          @change="pickScope('projectId', $event)"
+        >
+          <option value="">Project: Any</option>
+          <option v-for="p in store.projects" :key="p.id" :value="p.id">
+            {{ p.name || `Project ${p.id}` }}
+          </option>
+        </select>
+        <select
+          class="rs-board-scope"
+          :class="{ 'rs-board-scope--set': scope.setId != null }"
+          :value="scope.setId ?? ''"
+          title="Only count pictures in this set"
+          @change="pickScope('setId', $event)"
+        >
+          <option value="">Set: Any</option>
+          <option v-for="s in store.sets" :key="s.id" :value="s.id">
+            {{ s.name || `Set ${s.id}` }}
+          </option>
+        </select>
+        <select
+          class="rs-board-scope"
+          :class="{ 'rs-board-scope--set': scope.characterId != null }"
+          :value="scope.characterId ?? ''"
+          title="Only count pictures of this character"
+          @change="pickScope('characterId', $event)"
+        >
+          <option value="">Character: Any</option>
+          <option value="UNASSIGNED">Unassigned</option>
+          <option v-for="c in store.characters" :key="c.id" :value="c.id">
+            {{ c.name || `Character ${c.id}` }}
+          </option>
+        </select>
         <div class="rs-board-filter">
           <v-icon size="15" class="rs-board-filter-icon">mdi-magnify</v-icon>
           <input
@@ -74,6 +111,9 @@
       >
         <template v-if="store.healthRows.length">
           No tags match the current filters.
+        </template>
+        <template v-else-if="store.healthScoped">
+          No tags on any picture in this scope.
         </template>
         <template v-else>
           No tag health data yet.
@@ -384,6 +424,19 @@ function pickSort(key, event) {
   event?.target?.blur();
 }
 
+// Board scope (project/set/character): server-side — every signal column is
+// recomputed for the chosen pictures, and out-of-scope-only tags drop off.
+const scope = computed(() => store.healthScope);
+
+function pickScope(dim, event) {
+  const raw = event.target.value;
+  let value = raw === "" ? null : raw;
+  // Project/set ids are numeric; character stays a string ("UNASSIGNED" or id).
+  if (value !== null && dim !== "characterId") value = Number(value);
+  store.setHealthScope({ ...scope.value, [dim]: value });
+  event.target.blur();
+}
+
 // Heat-coloured "Needs review" bar. The absolute count is printed beside the
 // bar; the bar length is scaled absolutely (a fixed "50 corrections = full
 // bar" scale), not normalised to the worst tag, so two vaults read alike.
@@ -518,7 +571,8 @@ function openSessionFor(tag) {
   background: color-mix(in srgb, rgb(var(--v-theme-error)) 15%, transparent);
   color: rgb(var(--v-theme-error));
 }
-.rs-board-sort {
+.rs-board-sort,
+.rs-board-scope {
   height: 30px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
@@ -530,9 +584,19 @@ function openSessionFor(tag) {
   cursor: pointer;
   color-scheme: dark;
 }
-.rs-board-sort option {
+.rs-board-sort option,
+.rs-board-scope option {
   background-color: rgb(var(--v-theme-dark-surface));
   color: rgb(var(--v-theme-on-dark-surface));
+}
+/* A scope dimension that is actively narrowing the board reads as "on". */
+.rs-board-scope--set {
+  border-color: color-mix(in srgb, rgb(var(--v-theme-accent)) 60%, transparent);
+  color: rgb(var(--v-theme-accent));
+}
+.rs-board-scope {
+  max-width: 150px;
+  text-overflow: ellipsis;
 }
 
 .rs-board-building {

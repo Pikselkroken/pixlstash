@@ -203,6 +203,14 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const healthComputedAt = ref(null);
   const healthLoading = ref(false);
   let healthPollTimer = null;
+  // Board scope (project/set/character). When any dimension is set the rows
+  // are computed live server-side for that scope instead of read from the
+  // vault-wide cache; the same scope prefills the New-review dialog.
+  const healthScope = ref({ projectId: null, setId: null, characterId: null });
+  const healthScoped = computed(() => {
+    const s = healthScope.value;
+    return s.projectId != null || s.setId != null || s.characterId != null;
+  });
 
   // --- New-review creation ----------------------------------------------------
   const creating = ref(false);
@@ -398,7 +406,15 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   async function fetchHealth() {
     healthLoading.value = true;
     try {
-      const res = await apiClient.get("/tag_health");
+      const s = healthScope.value;
+      const params = {};
+      if (s.projectId != null) params.project_id = s.projectId;
+      if (s.setId != null) params.set_id = s.setId;
+      if (s.characterId != null) params.character_id = s.characterId;
+      const res = await apiClient.get("/tag_health", { params });
+      // A stale response for a scope the user has already navigated away
+      // from must not clobber the current scope's rows.
+      if (healthScope.value !== s) return;
       const data = res.data ?? {};
       healthRows.value = Array.isArray(data.rows) ? data.rows : [];
       healthBuilding.value = !!data.building;
@@ -411,6 +427,16 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     } finally {
       healthLoading.value = false;
     }
+  }
+
+  // Replace the board scope and refetch. Pass all-null to clear.
+  function setHealthScope(scope) {
+    healthScope.value = {
+      projectId: scope?.projectId ?? null,
+      setId: scope?.setId ?? null,
+      characterId: scope?.characterId ?? null,
+    };
+    fetchHealth();
   }
 
   // Poll /tag_health only while the cache is (re)building, so the progress bar
@@ -1117,6 +1143,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     healthProgress,
     healthComputedAt,
     healthLoading,
+    healthScope,
+    healthScoped,
     creating,
     createError,
     projects,
@@ -1151,6 +1179,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     fetchDetail,
     fetchQueue,
     fetchHealth,
+    setHealthScope,
     rebuildHealth,
     fetchAnomalyTags,
     fetchScopeOptions,
