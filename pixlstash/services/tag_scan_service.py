@@ -70,7 +70,10 @@ DEFAULT_MAX_TWIN_HAMMING = 8
 # 64-bit hash collisions between visually unrelated pictures happen, and
 # without this floor the UI could label a ~55%-similar pair "versions of the
 # same shot", which reads as contradictory nonsense to the user.
-MIN_DISPLAY_TWIN_SIM = 0.9
+# Tuning: 0.9 proved too strict — genuinely near-identical altered copies
+# (recolour, watermark, heavy filter) can land in the 0.8–0.9 CLIP band, while
+# the collisions this floor exists to kill sit far lower (~0.5–0.6).
+MIN_DISPLAY_TWIN_SIM = 0.85
 
 # --- Fix 1: near-zero-ground-truth fallback -------------------------------
 #

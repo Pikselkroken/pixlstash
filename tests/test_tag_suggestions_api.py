@@ -610,10 +610,13 @@ def test_scan_tag_prefers_perceptual_near_duplicate_twin():
         b = _upload_named(client)  # distinct in-memory PNG
         c = _upload_named(client)  # distinct in-memory PNG
 
-        # A points along axis 0. C is nearly parallel (cosine ~0.9999). B is further off.
+        # A points along axis 0. C is nearly parallel (cosine ~0.9999). B is further
+        # off at cosine ~0.85 — deliberately BETWEEN the current 0.8 display floor
+        # and the old, too-strict 0.9 one, pinning the eased threshold: a heavily
+        # edited copy in this band must still be shown as the perceptual twin.
         _set_embedding(server, a, [1.0] + [0.0] * 511)
         _set_embedding(server, c, [0.9999, 0.0141] + [0.0] * 510)  # closest to A
-        _set_embedding(server, b, [0.9, 0.4359] + [0.0] * 510)  # opposite, farther
+        _set_embedding(server, b, [0.85, 0.526783] + [0.0] * 510)  # opposite, farther
 
         # A and B are perceptual near-duplicates (2-bit dhash hamming); C is far away.
         _set_phash(server, a, 0xFFFF_FFFF_FFFF_FFFF)
@@ -679,7 +682,7 @@ def test_scan_tag_rejects_low_similarity_perceptual_override():
         # "near-duplicate" B is rejected despite its tiny dhash hamming distance.
         assert {row["picture_id"], row["twin_picture_id"]} == {a, c}
         assert b not in {row["picture_id"], row["twin_picture_id"]}
-        assert row["twin_sim"] >= 0.9
+        assert row["twin_sim"] >= tag_scan_service.MIN_DISPLAY_TWIN_SIM
         assert "dhash hamming" not in row["reason"]
     finally:
         server.vault.close()
