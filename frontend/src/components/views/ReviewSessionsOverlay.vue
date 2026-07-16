@@ -31,7 +31,12 @@
     />
 
     <!-- Direct tagging of the current card's picture(s), independent of the
-         queue decision (T). Anchored bottom-right, like the old overlay. -->
+         queue decision. Opened via T or a card's bottom-left "Tag manually"
+         button (`rs-manual-tag` in ReviewBinaryCard/ReviewPairCard, through
+         the `rs-open-tag-apply` provide below) — that button is the one
+         surviving entry point; this used to also render a second, redundant
+         bottom-right "Apply tags" button, removed as a duplicate. Anchored
+         bottom-right so the panel still opens in the same place. -->
     <div v-if="store.current" ref="tagApplyRef" class="rs-tag-apply">
       <TbTagPanel
         v-if="tagApplyOpen"
@@ -44,16 +49,6 @@
         @tags-applied="onTagsApplied"
         @close="tagApplyOpen = false"
       />
-      <button
-        type="button"
-        class="rs-tag-apply-btn"
-        :class="{ 'rs-tag-apply-btn--open': tagApplyOpen }"
-        title="Apply tags to the pictured image(s) (T)"
-        @click="tagApplyOpen = !tagApplyOpen"
-      >
-        <v-icon size="16">mdi-tag-plus-outline</v-icon>
-        Apply tags
-      </button>
     </div>
 
     <!-- Keyboard cheat-sheet (?) -->
@@ -475,6 +470,10 @@ onUnmounted(() => {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
+/* Positioning anchor only now — the visible bottom-right "Apply tags" button
+   that used to live here was removed as a duplicate of each card's
+   bottom-left `.rs-manual-tag` button (the surviving entry point); the panel
+   itself still opens fixed bottom-right via this wrapper. */
 .rs-tag-apply {
   position: fixed;
   right: 18px;
@@ -484,28 +483,6 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
-}
-.rs-tag-apply-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 32px;
-  padding: 0 12px;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  background: rgb(var(--v-theme-dark-surface));
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-.rs-tag-apply-btn--open,
-.rs-tag-apply-btn:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-}
-.rs-tag-apply-btn:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
 }
 
 .rs-keys-backdrop {
