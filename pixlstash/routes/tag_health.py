@@ -12,7 +12,7 @@ See :mod:`pixlstash.services.tag_health_service` for signal definitions.
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_health_service
@@ -29,6 +29,20 @@ class TagHealthRowResponse(BaseModel):
     tag: str
     est_wrong: int = 0
     est_missing: int = 0
+    est_wrong_adj: Optional[float] = Field(
+        default=None,
+        description=(
+            "est_wrong discounted by the tag's measured precision from the latest "
+            "ingested TaggerRun report (falls back to DEFAULT_TAG_PRECISION when no "
+            "report covers the tag), so an unreliable tag doesn't dominate the "
+            "board's 'estimated fixes' ranking. Null on a row that predates this "
+            "field, until the next rebuild."
+        ),
+    )
+    est_missing_adj: Optional[float] = Field(
+        default=None,
+        description="est_missing, same precision discount as est_wrong_adj.",
+    )
     mismatch: int = 0
     verified_pct: float = 0.0
     boundary_pct: float = 0.0
@@ -38,6 +52,77 @@ class TagHealthRowResponse(BaseModel):
     # Latest reviewed_at over the tag's suggestions; null = never reviewed.
     last_reviewed_at: Optional[str] = None
     computed_at: Optional[str] = None
+    eval_precision: Optional[float] = Field(
+        default=None,
+        description=(
+            "Precision against the tag's frozen eval slice at the sourced "
+            "threshold. Only populated when eval_metric_kind == 'F1'."
+        ),
+    )
+    eval_recall: Optional[float] = Field(
+        default=None, description="Recall counterpart of eval_precision."
+    )
+    eval_f1: Optional[float] = Field(
+        default=None, description="F1 counterpart of eval_precision/eval_recall."
+    )
+    eval_ap: Optional[float] = Field(
+        default=None,
+        description=(
+            "Non-interpolated Average Precision against the frozen eval "
+            "slice (threshold-free). Only populated when "
+            "eval_metric_kind == 'AP'."
+        ),
+    )
+    eval_ap_ci_low: Optional[float] = Field(
+        default=None,
+        description=(
+            "Lower bound of a 95% picture-level bootstrap CI for eval_ap. "
+            "Null when eval_n_pos < 25, or when >10% of bootstrap resamples "
+            "were degenerate (zero positives)."
+        ),
+    )
+    eval_ap_ci_high: Optional[float] = Field(
+        default=None, description="Upper bound counterpart of eval_ap_ci_low."
+    )
+    eval_n: Optional[int] = Field(
+        default=None,
+        description=(
+            "Size of the frozen slice's live-prediction join for the scored "
+            "model version."
+        ),
+    )
+    eval_n_pos: Optional[int] = Field(
+        default=None,
+        description=(
+            "POS count within eval_n — trust in eval_ap/eval_f1 hinges on "
+            "this, not eval_n, since these tags are typically "
+            "far-more-NEG-than-POS."
+        ),
+    )
+    eval_slice_frozen_at: Optional[str] = Field(
+        default=None,
+        description="When the tag's ACTIVE TagEvalSlice was frozen; null if never frozen.",
+    )
+    eval_metric_kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "'AP' | 'F1' | 'insufficient_data' | 'none'. AP and F1 are "
+            "different metric kinds, not different confidence levels of the "
+            "same number — a board sort/rank must partition by this field "
+            "(AP-rows only rank against AP-rows, F1-rows only against "
+            "F1-rows); 'insufficient_data'/'none' rows are excluded from "
+            "ranking entirely."
+        ),
+    )
+    eval_threshold_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "'calibrated' | 'carried_forward' | 'rederived_disjoint_val' | "
+            "'uncalibrated_fallback' | 'none'. 'uncalibrated_fallback' MUST "
+            "be flagged in the UI (e.g. an 'uncalibrated @0.5' chip) and "
+            "excluded from ranking against calibrated peers."
+        ),
+    )
 
 
 class TagHealthResponse(BaseModel):

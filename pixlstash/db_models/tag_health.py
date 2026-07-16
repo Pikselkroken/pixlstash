@@ -11,11 +11,21 @@ class TagHealth(SQLModel, table=True):
     :mod:`pixlstash.services.tag_health_service` (indexed SQL over
     ``tag_prediction`` / ``tag`` / ``tag_suggestion`` / ``picture``; no
     embeddings, no kNN). A cache, not user data: rows are wholesale replaced
-    on every rebuild.
+    on every rebuild. ``tag`` is the DEFAULT_TAG_MERGES-folded identity (a
+    child tag such as "extra digit" has no row of its own; its signal is
+    folded into "malformed hand"'s row).
 
     Signals (see the redesign doc for definitions and thresholds):
-        est_wrong: tagged pictures whose prediction confidence is very low.
-        est_missing: untagged pictures whose prediction confidence is very high.
+        est_wrong: tagged pictures whose prediction confidence is very low, on
+            the current model version only.
+        est_missing: untagged pictures whose prediction confidence is very
+            high, on the current model version only.
+        est_wrong_adj: est_wrong discounted by the tag's measured precision
+            (from the latest TaggerRun report), so an unreliable tag doesn't
+            dominate the "estimated fixes" ranking; falls back to
+            DEFAULT_TAG_PRECISION when no report covers the tag.
+        est_missing_adj: est_missing, same precision discount as
+            est_wrong_adj.
         mismatch: same-stack pairs + stored high-likeness pairs disagreeing on
             the tag (never a live O(N²) sweep).
         verified_pct: share of the tag's prediction rows with a non-UNKNOWN
@@ -29,6 +39,37 @@ class TagHealth(SQLModel, table=True):
         has_model: the tag has prediction rows for the current model version;
             tags with no predictions at all still get a row with
             ``has_model=False`` (the board shows "no model signal").
+        eval_precision / eval_recall / eval_f1: standard P/R/F1 against the
+            tag's frozen :class:`~pixlstash.db_models.tag_eval_slice.TagEvalSlice`,
+            at the threshold named by ``eval_threshold_source``. Populated only
+            when ``eval_metric_kind == "F1"``.
+        eval_ap: non-interpolated Average Precision against the frozen slice
+            (threshold-free). Populated only when ``eval_metric_kind == "AP"``.
+        eval_ap_ci_low / eval_ap_ci_high: picture-level bootstrap 95% CI bounds
+            for ``eval_ap`` (``eval_n_pos >= 25`` only); both NULL when the
+            slice is too small for a CI, or when >10% of bootstrap resamples
+            were degenerate (zero positives) — see
+            :mod:`pixlstash.services.tag_eval_slice_service`.
+        eval_n / eval_n_pos: size of the frozen slice's live-prediction join
+            for the scored model version, and how many of those are POS —
+            trust in eval_ap/eval_f1 hinges on ``eval_n_pos``, not ``eval_n``,
+            because these tags are typically far-more-NEG-than-POS.
+        eval_metric_kind: ``AP`` | ``F1`` | ``insufficient_data`` | ``none``.
+            **Ranking contract**: AP and F1 are different metric kinds, not
+            different confidence levels of the same number — a board sort/rank
+            must partition by ``eval_metric_kind`` (AP-rows rank only against
+            AP-rows, F1-rows only against F1-rows); ``insufficient_data`` and
+            ``none`` rows are excluded from ranking entirely. This is UI/board
+            *rendering* work (out of this table's scope) — documented here so
+            it isn't left implicit for whoever implements the sort.
+        eval_threshold_source: ``calibrated`` | ``carried_forward`` |
+            ``rederived_disjoint_val`` | ``uncalibrated_fallback`` | ``none``.
+            ``none`` covers both "no threshold was used" (AP rows) and "no
+            eval data at all" (``eval_metric_kind == "none"``) — there is no
+            separate "n/a" state.
+        eval_slice_frozen_at: the tag's ``ACTIVE`` ``TagEvalSlice.created_at``;
+            NULL when the tag has never been frozen (no eval columns
+            populated in that case).
     """
 
     __tablename__ = "tag_health"
@@ -39,6 +80,11 @@ class TagHealth(SQLModel, table=True):
 
     est_wrong: int = Field(default=0)
     est_missing: int = Field(default=0)
+    # Precision-discounted counterparts of the two fields above (see class
+    # docstring). Nullable: existing rows keep NULL until the next rebuild
+    # recomputes them.
+    est_wrong_adj: Optional[float] = Field(default=None)
+    est_missing_adj: Optional[float] = Field(default=None)
     mismatch: int = Field(default=0)
     verified_pct: float = Field(default=0.0)
     boundary_pct: float = Field(default=0.0)
@@ -51,3 +97,19 @@ class TagHealth(SQLModel, table=True):
     last_reviewed_at: Optional[datetime] = Field(default=None)
 
     computed_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+
+    # --- Wave C: frozen eval slice metrics (see class docstring). Populated
+    # only for tags with an ACTIVE TagEvalSlice; NULL otherwise. ---
+    eval_precision: Optional[float] = Field(default=None)
+    eval_recall: Optional[float] = Field(default=None)
+    eval_f1: Optional[float] = Field(default=None)
+    eval_ap: Optional[float] = Field(default=None)
+    eval_ap_ci_low: Optional[float] = Field(default=None)
+    eval_ap_ci_high: Optional[float] = Field(default=None)
+    eval_n: Optional[int] = Field(default=None)
+    eval_n_pos: Optional[int] = Field(default=None)
+    eval_slice_frozen_at: Optional[datetime] = Field(default=None)
+    # AP | F1 | insufficient_data | none
+    eval_metric_kind: Optional[str] = Field(default=None)
+    # calibrated | carried_forward | rederived_disjoint_val | uncalibrated_fallback | none
+    eval_threshold_source: Optional[str] = Field(default=None)

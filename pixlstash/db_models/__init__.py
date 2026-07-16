@@ -32,6 +32,12 @@ from .tag import (  # noqa: F401
     parse_engine_from_description_sentinel,
 )
 from .review import Review  # noqa: F401
+from .tag_eval_slice import (  # noqa: F401
+    TagEvalSlice,
+    TagEvalSliceItem,
+    EVAL_SLICE_ACTIVE,
+    EVAL_SLICE_SUPERSEDED,
+)
 from .tag_health import TagHealth  # noqa: F401
 from .tag_prediction import TagPrediction  # noqa: F401
 from .tag_suggestion import TagSuggestion  # noqa: F401

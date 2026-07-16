@@ -22,7 +22,9 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
+from pixlstash.db_models.tagger_run import TaggerRun
 from pixlstash.server import Server
+from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
@@ -318,5 +320,329 @@ def test_tag_health_empty_vault_and_rebuild_idempotence():
         assert [r["tag"] for r in body["rows"]] == ["t"]
         body = _rebuild_and_wait(client)
         assert [r["tag"] for r in body["rows"]] == ["t"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_est_wrong_missing_pinned_to_current_model_version():
+    """5a: est_wrong/est_missing must only count predictions from the current
+    model version — a stale generation's rows must not leak in, even though
+    the same tag also has current-version rows."""
+    temp_dir, client, server = _setup()
+    try:
+        p_old = _upload_named(client)  # tagged "t", old-gen conf 0.05
+        p_new_wrong = _upload_named(client)  # tagged "t", current-gen conf 0.05
+        p_new_missing = _upload_named(client)  # untagged, current-gen conf 0.95
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            session.add(Tag(picture_id=p_old, tag="t"))
+            session.add(Tag(picture_id=p_new_wrong, tag="t"))
+            # Old generation: would count as est_wrong under the pre-fix (unpinned)
+            # query, but must be excluded now that a newer generation exists.
+            session.add(
+                TagPrediction(
+                    picture_id=p_old,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v_old",
+                    predicted_at=now - timedelta(days=2),
+                )
+            )
+            # Current generation: the only rows that should be counted.
+            session.add(
+                TagPrediction(
+                    picture_id=p_new_wrong,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v_new",
+                    predicted_at=now,
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_new_missing,
+                    tag="t",
+                    confidence=0.95,
+                    model_version="v_new",
+                    predicted_at=now,
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        t = {r["tag"]: r for r in body["rows"]}["t"]
+        assert t["est_wrong"] == 1  # only p_new_wrong, not p_old
+        assert t["est_missing"] == 1  # only p_new_missing
+        assert t["has_model"] is True  # current-version predictions exist
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_default_tag_merges_folds_across_all_signals():
+    """5b: a DEFAULT_TAG_MERGES child ("extra digit") must fold into its
+    parent's ("malformed hand") board row across every signal — not just
+    est_wrong/est_missing — and must not get a row of its own."""
+    temp_dir, client, server = _setup()
+    try:
+        # est_wrong: one parent-literal hit, one child-literal hit.
+        p_a = _upload_named(client)  # tagged "malformed hand", conf 0.05
+        p_b = _upload_named(client)  # tagged "extra digit", conf 0.05
+        # est_missing: one parent-literal hit, one child-literal hit.
+        p_c = _upload_named(client)  # untagged, "malformed hand" conf 0.95
+        p_d = _upload_named(client)  # untagged, "extra digit" conf 0.95
+        # verified + boundary: one parent-literal, one child-literal.
+        p_e = _upload_named(client)  # tagged "malformed hand", human POS @ 0.5
+        p_f = _upload_named(client)  # tagged "extra digit", human POS @ 0.5
+        # model_disputes: one parent-literal, one child-literal.
+        p_g = _upload_named(client)  # "malformed hand" human POS @ 0.05
+        p_h = _upload_named(client)  # "extra digit" human POS @ 0.05
+        # overturn_rate / last_reviewed_at: one parent-literal, one child-literal.
+        p_i = _upload_named(client)  # suggestion "malformed hand", ACCEPTED
+        p_j = _upload_named(client)  # suggestion "extra digit", DISMISSED
+        # mismatch: a parent/child pair must NOT mismatch (same folded identity);
+        # a parent/untagged pair must still mismatch.
+        p_k = _upload_named(client)  # tagged "malformed hand"
+        p_l = _upload_named(client)  # tagged "extra digit"
+        p_m = _upload_named(client)  # tagged "malformed hand"
+        p_n = _upload_named(client)  # untagged
+
+        t1 = datetime.utcnow()
+        t2 = t1 + timedelta(minutes=5)
+
+        def seed(session):
+            session.add(Tag(picture_id=p_a, tag="malformed hand"))
+            session.add(Tag(picture_id=p_b, tag="extra digit"))
+            session.add(Tag(picture_id=p_e, tag="malformed hand"))
+            session.add(Tag(picture_id=p_f, tag="extra digit"))
+            session.add(Tag(picture_id=p_k, tag="malformed hand"))
+            session.add(Tag(picture_id=p_l, tag="extra digit"))
+            session.add(Tag(picture_id=p_m, tag="malformed hand"))
+
+            session.add(
+                TagPrediction(
+                    picture_id=p_a,
+                    tag="malformed hand",
+                    confidence=0.05,
+                    model_version="v1",
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_b,
+                    tag="extra digit",
+                    confidence=0.05,
+                    model_version="v1",
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_c,
+                    tag="malformed hand",
+                    confidence=0.95,
+                    model_version="v1",
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_d,
+                    tag="extra digit",
+                    confidence=0.95,
+                    model_version="v1",
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_e,
+                    tag="malformed hand",
+                    confidence=0.5,
+                    model_version="v1",
+                    label_state="POS",
+                    label_source="human",
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_f,
+                    tag="extra digit",
+                    confidence=0.5,
+                    model_version="v1",
+                    label_state="POS",
+                    label_source="human",
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_g,
+                    tag="malformed hand",
+                    confidence=0.05,
+                    model_version="v1",
+                    label_state="POS",
+                    label_source="human",
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_h,
+                    tag="extra digit",
+                    confidence=0.05,
+                    model_version="v1",
+                    label_state="POS",
+                    label_source="human",
+                )
+            )
+
+            session.add(
+                TagSuggestion(
+                    picture_id=p_i,
+                    tag="malformed hand",
+                    direction="add",
+                    source="model",
+                    score=1.0,
+                    status="ACCEPTED",
+                    reviewed_at=t1,
+                )
+            )
+            session.add(
+                TagSuggestion(
+                    picture_id=p_j,
+                    tag="extra digit",
+                    direction="add",
+                    source="model",
+                    score=1.0,
+                    status="DISMISSED",
+                    reviewed_at=t2,
+                )
+            )
+
+            a, b = PictureLikeness.canon_pair(p_k, p_l)
+            session.add(
+                PictureLikeness(
+                    picture_id_a=a, picture_id_b=b, likeness=0.99, metric="cosine"
+                )
+            )
+            a2, b2 = PictureLikeness.canon_pair(p_m, p_n)
+            session.add(
+                PictureLikeness(
+                    picture_id_a=a2, picture_id_b=b2, likeness=0.99, metric="cosine"
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        rows = {r["tag"]: r for r in body["rows"]}
+
+        # The child never gets a row of its own.
+        assert "extra digit" not in rows
+        mh = rows["malformed hand"]
+
+        assert mh["est_wrong"] == 2  # p_a (parent) + p_b (child, folded)
+        assert mh["est_missing"] == 2  # p_c (parent) + p_d (child, folded)
+
+        # pred_agg: 8 total predictions (p_a, p_c, p_e, p_g on the parent literal;
+        # p_b, p_d, p_f, p_h on the child literal), 4 verified (p_e/p_f/p_g/p_h),
+        # 2 in the boundary band (p_e/p_f @ 0.5), all 8 on the current version.
+        assert abs(mh["verified_pct"] - 4 / 8) < 1e-9
+        assert abs(mh["boundary_pct"] - 2 / 8) < 1e-9
+        assert mh["has_model"] is True
+
+        # model_disputes: p_g (parent) + p_h (child, folded).
+        assert mh["model_disputes"] == 2
+
+        # overturn_rate/last_reviewed_at fold the child's suggestion in too, and
+        # the later (child's) reviewed_at wins.
+        assert mh["overturn_rate"] == 0.5
+        assert mh["last_reviewed_at"] == t2.isoformat()
+
+        # mismatch: parent/child pair folds to the same identity (no mismatch);
+        # parent/untagged pair still mismatches.
+        assert mh["mismatch"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_est_adj_reflects_precision_discount_and_fallback():
+    """3: est_wrong_adj/est_missing_adj discount by the tag's measured precision
+    (from the latest TaggerRun report), falling back to DEFAULT_TAG_PRECISION
+    for a tag no report covers."""
+    temp_dir, client, server = _setup()
+    try:
+        # "known_tag": precision 0.7 from the pushed TaggerRun report.
+        known_wrong = [_upload_named(client) for _ in range(3)]  # est_wrong = 3
+        known_missing = [_upload_named(client) for _ in range(2)]  # est_missing = 2
+        # "unknown_tag": no report entry -> DEFAULT_TAG_PRECISION fallback.
+        unknown_wrong = [_upload_named(client) for _ in range(4)]  # est_wrong = 4
+        unknown_missing = [_upload_named(client)]  # est_missing = 1
+
+        def seed(session):
+            session.add(
+                TaggerRun(
+                    run="run-1",
+                    report={
+                        "payload": {"per_tag": [{"tag": "known_tag", "precision": 0.7}]}
+                    },
+                )
+            )
+            for pid in known_wrong:
+                session.add(Tag(picture_id=pid, tag="known_tag"))
+                session.add(
+                    TagPrediction(
+                        picture_id=pid,
+                        tag="known_tag",
+                        confidence=0.05,
+                        model_version="v1",
+                    )
+                )
+            for pid in known_missing:
+                session.add(
+                    TagPrediction(
+                        picture_id=pid,
+                        tag="known_tag",
+                        confidence=0.95,
+                        model_version="v1",
+                    )
+                )
+            for pid in unknown_wrong:
+                session.add(Tag(picture_id=pid, tag="unknown_tag"))
+                session.add(
+                    TagPrediction(
+                        picture_id=pid,
+                        tag="unknown_tag",
+                        confidence=0.05,
+                        model_version="v1",
+                    )
+                )
+            for pid in unknown_missing:
+                session.add(
+                    TagPrediction(
+                        picture_id=pid,
+                        tag="unknown_tag",
+                        confidence=0.95,
+                        model_version="v1",
+                    )
+                )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        rows = {r["tag"]: r for r in body["rows"]}
+
+        known = rows["known_tag"]
+        assert known["est_wrong"] == 3
+        assert known["est_missing"] == 2
+        assert known["est_wrong_adj"] == round(3 * 0.7)
+        assert known["est_missing_adj"] == round(2 * 0.7)
+
+        unknown = rows["unknown_tag"]
+        assert unknown["est_wrong"] == 4
+        assert unknown["est_missing"] == 1
+        assert unknown["est_wrong_adj"] == round(4 * DEFAULT_TAG_PRECISION)
+        assert unknown["est_missing_adj"] == round(1 * DEFAULT_TAG_PRECISION)
     finally:
         _teardown(temp_dir, server)
