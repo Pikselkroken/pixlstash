@@ -197,6 +197,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const healthProgress = ref(0); // normalised 0..1
   const healthComputedAt = ref(null);
   const healthLoading = ref(false);
+  // True when a new picture, tagger run, or reviewed suggestion has landed
+  // since computed_at — a rebuild is due (an auto-rebuild finder eventually
+  // catches up; this just powers the persistent control's stale tint/tooltip
+  // in the meantime). Always false for a scoped (live-computed) response.
+  const healthStale = ref(false);
   let healthPollTimer = null;
   // Board scope (project/set/character). When any dimension is set the rows
   // are computed live server-side for that scope instead of read from the
@@ -445,6 +450,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       const p = Number(data.progress ?? 0);
       healthProgress.value = p > 1 ? Math.min(1, p / 100) : Math.max(0, p);
       healthComputedAt.value = data.computed_at ?? null;
+      healthStale.value = !!data.stale;
       scheduleHealthPoll();
     } catch (e) {
       error.value = e?.message || "Failed to load tag health";
@@ -1218,6 +1224,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     healthProgress,
     healthComputedAt,
     healthLoading,
+    healthStale,
     healthScope,
     healthScoped,
     freezingTags,

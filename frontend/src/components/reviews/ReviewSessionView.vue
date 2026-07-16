@@ -67,6 +67,11 @@
           Scanned {{ scanned.toLocaleString() }} pictures ·
           {{ session.stats?.prev_reviewed ?? 0 }} handled in earlier reviews.
         </p>
+        <p class="rs-state-sub rs-state-sub--muted">
+          The board's Priority number is a fast estimate — the review scan is
+          more selective, so finding fewer (or none) here doesn't mean that
+          number was wrong.
+        </p>
         <div class="rs-state-actions">
           <button
             ref="archiveBtnRef"
@@ -594,6 +599,13 @@ defineExpose({ handleKey });
   color: rgba(var(--v-theme-on-dark-surface), 0.65);
   display: flex;
   gap: 10px;
+}
+/* The emptyScan reassurance line (Spec C item 4) is a secondary clarification,
+   not the primary receipt line above it — quieter size and tone. */
+.rs-state-sub--muted {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.5);
+  max-width: 420px;
 }
 .rs-state-actions {
   display: flex;

@@ -4,6 +4,25 @@
       <div class="rs-board-heading">
         <h2 class="rs-board-title">Which tags need review?</h2>
         <span class="rs-board-subtitle">{{ subtitle }}</span>
+        <span class="rs-board-heading-spacer"></span>
+        <button
+          class="rs-board-rebuild-persistent"
+          :class="{
+            'rs-board-rebuild-persistent--stale':
+              store.healthStale && !store.healthBuilding,
+          }"
+          type="button"
+          :disabled="store.healthBuilding"
+          :title="rebuildTitle"
+          @click="store.rebuildHealth()"
+        >
+          <v-icon size="14" :class="{ 'mdi-spin': store.healthBuilding }">{{
+            store.healthStale && !store.healthBuilding
+              ? "mdi-clock-alert-outline"
+              : "mdi-refresh"
+          }}</v-icon>
+          {{ store.healthComputedAt ? `Updated ${relativeComputedAt}` : "Never built" }}
+        </button>
       </div>
 
       <div class="rs-board-controls">
@@ -91,16 +110,29 @@
         </select>
       </div>
 
-      <!-- Cache (re)build in progress: show the bar, keep any stale rows below. -->
-      <div v-if="store.healthBuilding" class="rs-board-building">
+      <!-- Cache (re)build in progress, OR a board-scope refetch in flight: show
+           the bar, keep any stale rows below (undimmed — this is a refresh, not
+           an error state). Rebuild has real processed/total progress
+           (determinate fill); a scope refetch does not, so it gets an
+           indeterminate sliding fill instead (ProgressOverlay's technique). -->
+      <div v-if="store.healthBuilding || store.healthLoading" class="rs-board-building">
         <span class="rs-board-building-label">
           <v-icon size="15" class="mdi-spin">mdi-loading</v-icon>
-          Building tag health signals…
+          {{
+            store.healthBuilding
+              ? "Building tag health signals…"
+              : "Updating for this scope…"
+          }}
         </span>
         <span class="rs-board-building-bar">
           <span
             class="rs-board-building-fill"
-            :style="{ width: `${Math.round(store.healthProgress * 100)}%` }"
+            :class="{ 'rs-board-building-fill--indeterminate': !store.healthBuilding }"
+            :style="
+              store.healthBuilding
+                ? { width: `${Math.round(store.healthProgress * 100)}%` }
+                : undefined
+            "
           ></span>
         </span>
       </div>
@@ -137,6 +169,7 @@
             :class="{
               'rs-board-hdr--center': h.center,
               'rs-board-hdr--active': h.key && sort.key === h.key,
+              'rs-board-hdr--divider': h.dividerBefore,
             }"
             :type="h.key ? 'button' : undefined"
             :title="h.tip || undefined"
@@ -189,6 +222,15 @@
               ></span>
             </span>
             <span class="rs-board-health-num">{{ corrections(r) }}</span>
+            <span
+              v-if="sort.key === 'score' && wasBoosted(r)"
+              class="rs-board-boost-chip"
+              tabindex="0"
+              :aria-label="`Ranked higher than its raw priority — weak accuracy, ${Math.round((r.eval_f1 ?? 0) * 100)} percent F1`"
+              :title="`Ranked above its raw Priority score — this tag's measured accuracy is low (${Math.round((r.eval_f1 ?? 0) * 100)}% F1), so fixing it is worth more per review.`"
+            >
+              <v-icon size="11">mdi-arrow-up-bold</v-icon>
+            </span>
           </span>
           <span
             class="rs-board-num"
@@ -205,9 +247,6 @@
           <span class="rs-board-num" :class="numClass(r.mismatch, 'tertiary')">{{
             r.mismatch ?? 0
           }}</span>
-          <span class="rs-board-num rs-board-num--muted"
-            >{{ Math.round(r.verified_pct ?? 0) }}%</span
-          >
           <span class="rs-board-num rs-board-num--muted">{{
             lastLabel(r)
           }}</span>
@@ -218,15 +257,23 @@
                    step, and "not scored" isn't the same claim as "scored on
                    the other scale"). -->
               <button
-                v-if="acc(r).state === 'unfrozen'"
+                v-if="acc(r).state === 'unfrozen_ready'"
                 class="rs-acc-freeze-link"
                 type="button"
                 :disabled="isFreezing(r.tag)"
-                title="Not scored yet. Freeze your confirmed examples to start tracking this tag's accuracy."
+                :title="freezeReadyTip(acc(r).nPos)"
                 @click="doFreeze(r.tag)"
               >
                 {{ isFreezing(r.tag) ? "Freezing…" : "Freeze to score" }}
               </button>
+              <span
+                v-else-if="acc(r).state === 'unfrozen_pending'"
+                class="rs-acc-pill rs-acc-pill--pending"
+                tabindex="0"
+                :aria-label="pendingAriaLabel(acc(r).nPos)"
+                :title="pendingTip(acc(r).nPos)"
+                >{{ acc(r).nPos }}/{{ FREEZE_MIN_N_POS }}</span
+              >
               <span v-else-if="acc(r).state === 'none'" class="rs-acc-dash">–</span>
               <span
                 v-else-if="acc(r).state === 'insufficient'"
@@ -243,12 +290,12 @@
                 >scored differently</span
               >
             </template>
-            <template v-else-if="acc(r).state === 'unfrozen'">
+            <template v-else-if="acc(r).state === 'unfrozen_ready'">
               <button
                 class="rs-acc-freeze-link"
                 type="button"
                 :disabled="isFreezing(r.tag)"
-                title="Not scored yet. Freeze your confirmed examples to start tracking this tag's accuracy."
+                :title="freezeReadyTip(acc(r).nPos)"
                 @click="doFreeze(r.tag)"
               >
                 <v-icon
@@ -262,6 +309,15 @@
               <span v-if="freezeError(r.tag)" class="rs-acc-freeze-fail">{{
                 freezeErrorText(r.tag)
               }}</span>
+            </template>
+            <template v-else-if="acc(r).state === 'unfrozen_pending'">
+              <span
+                class="rs-acc-pill rs-acc-pill--pending"
+                tabindex="0"
+                :aria-label="pendingAriaLabel(acc(r).nPos)"
+                :title="pendingTip(acc(r).nPos)"
+                >{{ acc(r).nPos }}/{{ FREEZE_MIN_N_POS }}</span
+              >
             </template>
             <template v-else>
               <span v-if="acc(r).state === 'none'" class="rs-acc-dash">–</span>
@@ -364,7 +420,7 @@
               </span>
             </template>
           </span>
-          <span class="rs-board-why">{{ whyText(r) }}</span>
+          <span class="rs-board-why" :title="whyText(r)">{{ whyText(r) }}</span>
           <span class="rs-board-action">
             <button
               v-if="openSessionFor(r.tag)"
@@ -387,18 +443,21 @@
       </div>
 
       <p v-if="sorted.length" class="rs-board-legend">
-        “Est. fixes” = est. wrong + est. missing + mismatches (bar colour:
+        “Priority” = a fast ranking estimate (est. wrong + est. missing +
+        mismatches) for sorting tags — not the number of cards a review
+        session will contain, which comes from a separate, slower scan (bar
+        colour:
         <span class="rs-legend-error">red</span> = worst tags,
         <span class="rs-legend-warning">amber</span> = notable,
         <span class="rs-legend-tertiary">teal</span> = minor) · “Est. wrong” =
         tagged pictures the model is ≤10% sure about · “Est. missing” =
         untagged pictures it is ≥90% sure about · “Mismatch” = near-identical
-        shots with different labels · “Verified” = share ever human-reviewed ·
-        “Last review” = when a review for the tag was last archived ·
-        “Accuracy” = how good the model is on a frozen, scored slice, once
-        you’ve frozen one. “Ranking score” and “Accuracy” (the two sort
-        options) are two different kinds of numbers and are never sorted
-        against each other.
+        shots with different labels · “Last review” = when a review for the
+        tag was last archived · “Accuracy” = how good the model is on a
+        frozen, scored slice (only about 1 in 5 reviewed pictures counts
+        toward it — most are reserved for training), once you’ve frozen one.
+        “Ranking score” and “Accuracy” (the two sort options) are two
+        different kinds of numbers and are never sorted against each other.
       </p>
     </div>
   </div>
@@ -412,6 +471,14 @@
 // "no model signal" chip.
 import { computed, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+// relativeDate already solves the "naive ISO string = UTC" quirk backend
+// timestamps carry (computed_at is the same shape as the snapshot timestamps
+// this helper was written for) — reuse it rather than re-deriving the same
+// fix here.
+import { relativeDate } from "../../utils/snapshots";
+// Pure ranking/explanation logic, split out for direct-import unit testing —
+// see tagHealthBoardLogic.js's module doc for why.
+import { corrections, whyText, boostedScore } from "./tagHealthBoardLogic";
 
 const emit = defineEmits(["start-review"]);
 const store = useReviewSessionsStore();
@@ -421,6 +488,21 @@ const disputesOnly = ref(false);
 const filter = ref("");
 const filterRef = ref(null);
 const sort = ref({ key: "score", dir: "desc" });
+
+// POST /tag_eval_slices requires this many verified-positive EVAL-split
+// labels before a freeze can succeed — see freezeErrorText() for the
+// server-side failure message this mirrors client-side.
+const FREEZE_MIN_N_POS = 10;
+
+// --- Persistent rebuild control (Spec B) ------------------------------------
+
+const relativeComputedAt = computed(() => relativeDate(store.healthComputedAt));
+const rebuildTitle = computed(() => {
+  if (store.healthBuilding) return "Rebuilding…";
+  if (store.healthStale)
+    return "Tag health hasn't been recomputed since new activity — rebuild now, or it'll catch up automatically shortly.";
+  return "Recompute tag health signals from the current data";
+});
 
 // The overlay routes the `/` shortcut here.
 function focusFilter() {
@@ -439,7 +521,6 @@ const SORT_OPTS = [
   { label: "Most wrong", key: "wrong", dir: "desc" },
   { label: "Most missing", key: "missing", dir: "desc" },
   { label: "Most conflicts", key: "dups", dir: "desc" },
-  { label: "Least verified", key: "verified", dir: "asc" },
   { label: "Recently reviewed", key: "last", dir: "asc" },
   { label: "Ranking score", key: "eval_ap", dir: "desc" },
   { label: "Accuracy", key: "eval_f1", dir: "desc" },
@@ -461,13 +542,12 @@ function isRankEligible(r, key) {
 }
 
 const SUBTITLE = {
-  score: "Sorted by the tags most likely to have tagging mistakes worth fixing.",
+  score:
+    "Sorted by how worth reviewing each tag looks — a fast estimate, not a review-session size.",
   tag: "Sorted alphabetically by tag name.",
   wrong: "Sorted by how many pictures probably have this tag by mistake.",
   missing: "Sorted by how many pictures are probably missing this tag.",
   dups: "Sorted by how many near-identical shots disagree on this tag.",
-  verified:
-    "Sorted by how much of each tag you’ve confirmed — least-checked first.",
   last: "Sorted by when each tag was last reviewed — longest ago first.",
   eval_ap:
     "Sorted by ranking score — only tags scored that way; everything else sinks to the bottom.",
@@ -480,9 +560,9 @@ const subtitle = computed(() => SUBTITLE[sort.value.key] || SUBTITLE.score);
 const headers = [
   { label: "Tag", key: "tag" },
   {
-    label: "Est. fixes",
+    label: "Priority",
     key: "score",
-    tip: "Estimated fixable labels — est. wrong + est. missing + mismatches",
+    tip: "A fast ranking estimate (est. wrong + est. missing + mismatches), used to sort tags by how worth reviewing they look. Not a forecast of how many cards a review session will contain — Start review runs a separate, slower scan (nearest-neighbour comparison) that usually finds a smaller, different set of pictures.",
   },
   {
     label: "Est. wrong",
@@ -503,24 +583,19 @@ const headers = [
     tip: "Near-identical images (duplicates or burst shots) that disagree on this tag — one has it, the other doesn’t",
   },
   {
-    icon: "mdi-check-decagram-outline",
-    key: "verified",
-    center: true,
-    tip: "Verified — share of this tag’s images you’ve already confirmed",
-  },
-  {
     icon: "mdi-clock-outline",
     key: "last",
     center: true,
     tip: "Last reviewed",
   },
   {
-    icon: "mdi-target-variant",
+    label: "Accuracy",
     center: true,
+    dividerBefore: true,
     // No `key`: this column maps to TWO non-comparable sort keys (Ranking
     // score / Accuracy — see the sort dropdown), so it isn't click-to-sort
     // like its siblings (that would silently pick one scale for the user).
-    tip: "Accuracy — how good the model is at this tag, from a frozen, scored slice. (Separate from Verified, which only tracks how much you’ve checked.)",
+    tip: "Accuracy — how good the model is at this tag, measured on a separate frozen, scored slice. Not a count of pictures needing review — that’s Est. wrong / Est. missing / Ranking score to the left, which update live. This number only changes when the tag is (re)frozen.",
   },
   { label: "Why it ranks here" },
   { label: "" },
@@ -529,18 +604,6 @@ const headers = [
 const totalDisputes = computed(() =>
   store.healthRows.reduce((sum, r) => sum + (r.model_disputes ?? 0), 0),
 );
-
-// The board's ranking signal uses the reliability-discounted counts when the
-// cache has them (est_wrong_adj/est_missing_adj — precision-weighted, so an
-// unreliable tag doesn't dominate "estimated fixes"), falling back to the raw
-// counts for cache rows that predate the field. The individual "Est. wrong" /
-// "Est. missing" cells keep showing the raw, human-legible counts (see
-// adjTitle) — only the combined ranking number is adjusted.
-function corrections(r) {
-  const wrong = r.est_wrong_adj ?? r.est_wrong ?? 0;
-  const missing = r.est_missing_adj ?? r.est_missing ?? 0;
-  return Math.round(wrong + missing + (r.mismatch ?? 0));
-}
 
 // Tooltip for the raw Est. wrong/missing cells: surface the reliability
 // discount without replacing the number a user already understands.
@@ -581,8 +644,6 @@ function keyval(r, key) {
       return r.est_missing ?? 0;
     case "dups":
       return r.mismatch ?? 0;
-    case "verified":
-      return r.verified_pct ?? 0;
     case "last":
       return lastValue(r);
     case "eval_ap":
@@ -603,14 +664,20 @@ function isRankSunk(r) {
   return isRankSort.value && !isRankEligible(r, sort.value.key);
 }
 
-const sorted = computed(() => {
-  const dir = sort.value.dir === "asc" ? 1 : -1;
-  const key = sort.value.key;
+// The filtered-but-unsorted row set — shared by `sorted` and the boost badge
+// (`boostInfo`) below so the two never drift out of sync with each other.
+const filteredRows = computed(() => {
   const needle = filter.value.trim().toLowerCase();
-  const base = store.healthRows
+  return store.healthRows
     .filter((r) => !anomalyOnly.value || isAnomaly(r))
     .filter((r) => !disputesOnly.value || (r.model_disputes ?? 0) > 0)
     .filter((r) => !needle || r.tag.toLowerCase().includes(needle));
+});
+
+const sorted = computed(() => {
+  const dir = sort.value.dir === "asc" ? 1 : -1;
+  const key = sort.value.key;
+  const base = filteredRows.value;
 
   if (key in RANK_KINDS) {
     const eligible = [];
@@ -626,6 +693,18 @@ const sorted = computed(() => {
     return [...eligible, ...sunk];
   }
 
+  // The default "Suggested (health)" sort (key === "score") orders by the
+  // accuracy-boosted score (Spec F) instead of the raw one — every other
+  // sort keeps ranking strictly by keyval(), unaffected by the boost.
+  if (key === "score") {
+    return base.slice().sort((a, b) => {
+      const av = boostedScore(a);
+      const bv = boostedScore(b);
+      if (av === bv) return a.tag.localeCompare(b.tag);
+      return (av - bv) * dir;
+    });
+  }
+
   return base.slice().sort((a, b) => {
     const av = keyval(a, key);
     const bv = keyval(b, key);
@@ -636,8 +715,38 @@ const sorted = computed(() => {
   });
 });
 
+// --- Accuracy tie-breaker (Spec F) -------------------------------------------
+//
+// isBoostEligible/boostFactor/boostedScore live in tagHealthBoardLogic.js
+// (imported above) — continuous, capped multiplier on the "Suggested
+// (health)" sort's key ONLY, never on "Most wrong"/"Most missing"/"Ranking
+// score"/"Accuracy" (those keep their own single-number or partitioned-scale
+// contracts intact, see RANK_KINDS above). Never changes the DISPLAYED
+// Priority number (`corrections(r)`), only where a row lands in this one
+// sort — surfaced via the `wasBoosted` badge so the reorder is never silent.
+
+// Rows the boost actually moved up, relative to the unboosted "score" order —
+// only meaningful (and only computed) while that sort is active.
+const boostInfo = computed(() => {
+  if (sort.value.key !== "score") return null;
+  const base = filteredRows.value;
+  const rawOrder = base
+    .slice()
+    .sort((a, b) => keyval(b, "score") - keyval(a, "score"));
+  const boostedOrder = base.slice().sort((a, b) => boostedScore(b) - boostedScore(a));
+  const rawIndex = new Map(rawOrder.map((r, i) => [r.tag, i]));
+  const boostedIndex = new Map(boostedOrder.map((r, i) => [r.tag, i]));
+  return { rawIndex, boostedIndex };
+});
+
+function wasBoosted(r) {
+  const info = boostInfo.value;
+  if (!info) return false;
+  return (info.boostedIndex.get(r.tag) ?? 0) < (info.rawIndex.get(r.tag) ?? 0);
+}
+
 function defaultDir(key) {
-  return key === "tag" || key === "verified" || key === "last" ? "asc" : "desc";
+  return key === "tag" || key === "last" ? "asc" : "desc";
 }
 
 function toggleSort(key) {
@@ -690,11 +799,8 @@ function numClass(v, tone) {
   return (v ?? 0) > 0 ? `rs-board-num--${tone}` : "rs-board-num--zero";
 }
 
-function whyText(r) {
-  if (r.has_model === false)
-    return "not in the tagger's vocabulary — similarity review still works";
-  return r.why || "";
-}
+// whyText() lives in tagHealthBoardLogic.js (imported above) so it's
+// unit-testable by direct import.
 
 function openSessionFor(tag) {
   return store.sessions.find((s) => s.tag === tag) ?? null;
@@ -706,7 +812,17 @@ function openSessionFor(tag) {
 // never render outside a tooltip — see the state table in
 // docs/reviews/tag-review-accuracy-freeze-conflicts-ux-spec.md §3.2.
 function acc(r) {
-  if (!r.eval_slice_frozen_at || !r.eval_metric_kind) return { state: "unfrozen" };
+  if (!r.eval_slice_frozen_at || !r.eval_metric_kind) {
+    // Freeze eligibility is otherwise invisible until a failed click (the
+    // user only learns the real count via the 5s freezeError tooltip). Split
+    // "never frozen" into a clickable button when there's already enough to
+    // succeed vs. a non-interactive progress pill when there isn't — a click
+    // below the floor is a deterministic, client-computable failure.
+    const nPos = r.eval_candidate_n_pos ?? 0;
+    return nPos >= FREEZE_MIN_N_POS
+      ? { state: "unfrozen_ready", nPos }
+      : { state: "unfrozen_pending", nPos };
+  }
   if (r.eval_metric_kind === "none") return { state: "none" };
   if (r.eval_metric_kind === "insufficient_data") {
     return { state: "insufficient", nPos: r.eval_n_pos ?? 0 };
@@ -733,7 +849,37 @@ function acc(r) {
       ciHigh: hasCi ? Math.round(r.eval_ap_ci_high * 100) : null,
     };
   }
-  return { state: "unfrozen" };
+  // Defensive fallback: eval_metric_kind was truthy but not a recognised
+  // value (frozen but no matching branch above) — never reachable with the
+  // current backend contract, but rendering "–" beats rendering nothing.
+  return { state: "none" };
+}
+
+// Never-frozen, eligible-to-freeze tooltip: names the confirmed count so the
+// user knows the freeze click is expected to succeed (the pending pill below
+// is what shows when it wouldn't).
+function freezeReadyTip(nPos) {
+  return `Not scored yet — ${nPos} confirmed examples ready. Freeze to start tracking this tag's accuracy.`;
+}
+
+// Never-frozen, below-the-floor tooltip/aria-label for the non-interactive
+// `{n}/10` pill — the primary answer to "why can't I freeze this," so it must
+// be keyboard-discoverable (tabindex + aria-label), not hover-only.
+//
+// The "roughly N*5 reviews" figure is a copy-level approximation of
+// 1 / (1 - TRAIN_RATIO), tied to TRAIN_RATIO = 0.8 in
+// pixlstash/services/picture_split_service.py by convention, not a computed
+// guarantee — only ~1 in 5 reviewed pictures lands on the EVAL side that
+// counts toward eval_candidate_n_pos. If TRAIN_RATIO ever changes, update the
+// "5" here (a fully robust version would expose the ratio via the API
+// instead — noted as an open item in the redesign spec, not required yet).
+function pendingTip(nPos) {
+  const remaining = FREEZE_MIN_N_POS - nPos;
+  return `${nPos}/${FREEZE_MIN_N_POS} confirmed EVAL-side examples — freezing needs at least ${FREEZE_MIN_N_POS}. PixlStash reserves most reviewed pictures for training and only keeps a fifth for scoring, so this climbs slower than your review count — reviewing more of this tag is still the way to unlock it, just not 1-for-1. Review ${remaining} more EVAL-side examples (roughly ${remaining * 5} reviews of this tag) to unlock scoring.`;
+}
+
+function pendingAriaLabel(nPos) {
+  return `${nPos} of ${FREEZE_MIN_N_POS} EVAL-side confirmed examples needed to freeze this tag's accuracy score. Only about one in five reviewed pictures counts toward this number.`;
 }
 
 function f1Tone(pct) {
@@ -777,7 +923,7 @@ function freezeErrorText(tag) {
   const err = freezeError(tag);
   if (!err) return "";
   if (err.reason === "insufficient_positives" && err.nPos != null) {
-    return `Not enough confirmed examples yet — needs at least 10, this tag has ${err.nPos}. Review a few more to unlock freezing.`;
+    return `Not enough confirmed examples yet — needs at least ${FREEZE_MIN_N_POS}, this tag has ${err.nPos}. Review a few more to unlock freezing.`;
   }
   return "Not enough confirmed examples yet — review a few more of this tag to unlock freezing.";
 }
@@ -855,6 +1001,43 @@ function shortDate(iso) {
 .rs-board-subtitle {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+.rs-board-heading-spacer {
+  flex: 1;
+  min-width: var(--space-3);
+}
+/* Always rendered (row count 0, 1, or many) — the escape hatch stays visible
+   even after the board has been built once, unlike the empty-state's
+   one-time-only .rs-board-rebuild button below. Quieter, ambient copy since
+   it's on screen at all times. */
+.rs-board-rebuild-persistent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
+  background: rgba(var(--v-theme-on-dark-surface), 0.05);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rs-board-rebuild-persistent:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+}
+.rs-board-rebuild-persistent:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+/* stale = new activity landed since the cache's computed_at — same icon as
+   the review-session staleness chip (mdi-clock-alert-outline) for visual
+   consistency across the two features. */
+.rs-board-rebuild-persistent--stale {
+  border-color: color-mix(in srgb, rgb(var(--v-theme-warning)) 55%, transparent);
+  background: color-mix(in srgb, rgb(var(--v-theme-warning)) 12%, transparent);
+  color: rgb(var(--v-theme-warning));
 }
 
 .rs-board-controls {
@@ -985,6 +1168,25 @@ function shortDate(iso) {
   background: rgb(var(--v-theme-accent));
   transition: width 0.4s;
 }
+/* A board-scope refetch has no processed/total to report, so it gets an
+   indeterminate sliding fill instead of the rebuild bar's determinate width —
+   same technique as ProgressOverlay.vue's `.progress-overlay__fill--indeterminate`. */
+.rs-board-building-fill--indeterminate {
+  width: 38% !important;
+  animation: rs-board-building-indeterminate 1.2s ease-in-out infinite;
+  transition: none;
+}
+@keyframes rs-board-building-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  50% {
+    transform: translateX(90%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
 
 .rs-board-empty {
   display: flex;
@@ -1015,8 +1217,8 @@ function shortDate(iso) {
 .rs-board-row {
   display: grid;
   /* Compact density (locked): tag · needs-review · wrong · missing · mismatch ·
-     verified · last · accuracy · why · action */
-  grid-template-columns: 172px 116px 98px 106px 84px 44px 56px 92px 1fr 116px;
+     last · accuracy · why · action (Verified column cut — see Spec E) */
+  grid-template-columns: 172px 116px 98px 106px 84px 56px 92px 1fr 116px;
   gap: 10px;
   padding: 7px 14px;
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);
@@ -1059,6 +1261,15 @@ button.rs-board-hdr {
 }
 .rs-board-hdr--center {
   justify-content: center;
+}
+/* Accuracy reads from a frozen, point-in-time slice — everything to its left
+   is a live count over current unscored data. A quiet vertical rule states
+   that boundary without implying severity (this app's existing tint
+   vocabulary means "flagged/problem", so a background tint here would
+   misread as an issue). */
+.rs-board-hdr--divider {
+  border-left: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
+  padding-left: var(--space-3);
 }
 .rs-board-hdr--active {
   color: rgb(var(--v-theme-accent));
@@ -1128,6 +1339,23 @@ button.rs-board-hdr {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: rgba(var(--v-theme-on-dark-surface), 0.75);
+}
+/* Spec F boost badge: reuses the existing warning-tone vocabulary already
+   defined for low-F1 cells (.rs-acc-f1--warn/--bad) rather than inventing a
+   new color. tabindex="0" + aria-label for the same reason the
+   unfrozen_pending pill has them — a non-<button> element carrying a
+   decision-relevant explanation must be keyboard-discoverable. */
+.rs-board-boost-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 3px;
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-warning));
+  background: color-mix(in srgb, rgb(var(--v-theme-warning)) 16%, transparent);
+}
+.rs-board-boost-chip:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-focus));
+  outline-offset: 1px;
 }
 
 .rs-board-num {
@@ -1208,6 +1436,11 @@ button.rs-board-hdr {
   justify-content: center;
   gap: var(--space-2);
   font-size: var(--text-2xs);
+  /* Same divider as the header above it — carries the "different kind of
+     number" boundary into every data row, including --nomodel/opacity-faded
+     ones (opacity applies to the whole cell, border included). */
+  border-left: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
+  padding-left: var(--space-3);
 }
 .rs-acc-dash {
   color: rgba(var(--v-theme-on-dark-surface), 0.4);
@@ -1225,6 +1458,14 @@ button.rs-board-hdr {
   white-space: nowrap;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.25);
+}
+/* The pre-freeze pending pill (tabindex="0") isn't a <button>/<input>/<select>,
+   so it falls outside .rs-board's blanket focus-visible selector — it needs
+   its own, since it's now the primary, keyboard-discoverable answer to "why
+   can't I freeze this yet." */
+.rs-acc-pill--pending:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-focus));
+  outline-offset: 1px;
 }
 
 /* First-time freeze: an always-visible text-link affordance, NOT hover-gated

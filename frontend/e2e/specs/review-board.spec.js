@@ -22,15 +22,44 @@ test.describe('review sessions — tag health board', () => {
   test('opens from the toolbar and renders the ranked board', async ({ reviews }) => {
     await expect(reviews.board).toBeVisible()
     await expect(reviews.boardTitle).toHaveText('Which tags need review?')
-    // The header row carries the redesigned column labels.
+    // The header row carries the redesigned column labels — "Priority", not
+    // the old "Est. fixes" (docs/reviews/tag-review-board-redesign-ux-spec.md
+    // Spec C), and no "Verified" column (Spec E 7a).
     await expect(reviews.boardHeadRow).toContainText('Tag')
-    await expect(reviews.boardHeadRow).toContainText('Est. fixes')
+    await expect(reviews.boardHeadRow).toContainText('Priority')
+    await expect(reviews.boardHeadRow).not.toContainText('Est. fixes')
+    await expect(reviews.boardHeadRow).not.toContainText('Verified')
     await expect(reviews.boardHeadRow).toContainText('Est. wrong')
     await expect(reviews.boardHeadRow).toContainText('Est. missing')
     await expect(reviews.boardHeadRow).toContainText('Mismatch')
     await expect(reviews.boardHeadRow).toContainText('Why it ranks here')
     // At least one tag row rendered.
     expect(await reviews.boardRows.count()).toBeGreaterThan(0)
+  })
+
+  test('the persistent rebuild control is visible in the header (Spec B)', async ({
+    reviews,
+  }) => {
+    // Not gated behind the empty-state branch — visible with rows already
+    // populated (the beforeEach builds the cache and waits for a row).
+    await expect(reviews.persistentRebuildButton).toBeVisible()
+    await expect(reviews.persistentRebuildButton).toContainText('Updated')
+    await expect(reviews.persistentRebuildButton).toBeEnabled()
+  })
+
+  test('the Why column is never blank for a row with a ranking signal', async ({
+    reviews,
+  }) => {
+    // "shirt" carries est_wrong/est_missing/mismatch signal in the fixture
+    // (per the mismatch-signal test below), so its Why cell must have text.
+    const row = reviews.boardRow('shirt')
+    await expect(row).toBeVisible()
+    const why = row.locator('.rs-board-why')
+    await expect(why).toBeVisible()
+    const text = (await why.textContent())?.trim() ?? ''
+    expect(text.length).toBeGreaterThan(0)
+    // The title attribute mirrors the (possibly truncated) text.
+    await expect(why).toHaveAttribute('title', text)
   })
 
   test('the filter input narrows the visible rows', async ({ reviews }) => {
@@ -78,6 +107,21 @@ test.describe('review sessions — tag health board', () => {
     expect(await reviews.boardRows.count()).toBeGreaterThan(0)
     await reviews.sortSelect.selectOption('missing')
     expect(await reviews.boardRows.count()).toBeGreaterThan(0)
+  })
+
+  test('the unfrozen pending pill states the ~5x EVAL-reservation ratio (Spec D)', async ({
+    reviews,
+  }) => {
+    // Every tag in the fixture is unfrozen (eval_candidate_n_pos stays 0
+    // until reviews land pictures on the EVAL split), so every row's Accuracy
+    // cell renders the pending "{n}/10" pill.
+    const pill = reviews.page.locator('.rs-acc-pill--pending').first()
+    await expect(pill).toBeVisible()
+    const title = await pill.getAttribute('title')
+    expect(title).toMatch(/EVAL-side/i)
+    expect(title).toMatch(/fifth/i)
+    const ariaLabel = await pill.getAttribute('aria-label')
+    expect(ariaLabel).toMatch(/one in five/i)
   })
 
   test('a row with a mismatch signal shows Start review', async ({ reviews }) => {

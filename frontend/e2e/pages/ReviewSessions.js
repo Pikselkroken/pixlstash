@@ -36,6 +36,7 @@ export class ReviewSessions {
     this.sortSelect = page.locator('select.rs-board-sort')
     this.buildingBar = page.locator('.rs-board-building')
     this.rebuildButton = page.locator('.rs-board-rebuild')
+    this.persistentRebuildButton = page.locator('.rs-board-rebuild-persistent')
     this.boardEmpty = page.locator('.rs-board-empty')
 
     // New-review dialog
