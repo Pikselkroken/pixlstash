@@ -216,3 +216,62 @@ describe("TagHealthBoard: accuracy tie-breaker boost (Spec F)", () => {
     expect(wrapper.findAll(".rs-board-boost-chip").length).toBe(0);
   });
 });
+describe("TagHealthBoard: default sort tie-break (rawCorrections, not alphabetical)", () => {
+  it("breaks a tied rounded Priority by raw disagreement volume, not tag name", () => {
+    // Both round to a Priority of 8 (corrections() uses the discounted _adj
+    // fields), but "zebra"'s raw est_wrong + est_missing (15) is well above
+    // "apple"'s (8). Alphabetically "apple" sorts first — proving a fix that
+    // still reads as A-Z order is wrong; the correct order is "zebra" first.
+    const zebra = healthRow({
+      tag: "zebra",
+      est_wrong: 12,
+      est_missing: 3,
+      mismatch: 0,
+      est_wrong_adj: 8.4,
+      est_missing_adj: 0,
+    });
+    const apple = healthRow({
+      tag: "apple",
+      est_wrong: 8,
+      est_missing: 0,
+      mismatch: 0,
+      est_wrong_adj: 8,
+      est_missing_adj: 0,
+    });
+    store.healthRows = [apple, zebra];
+    const wrapper = mount(TagHealthBoard, { global: globalOpts });
+
+    const rows = wrapper.findAll(".rs-board-row:not(.rs-board-row--head)");
+    // Displayed Priority number is genuinely tied...
+    expect(rows.map((r) => r.find(".rs-board-health-num").text())).toEqual(["8", "8"]);
+    // ...but the order is decided by raw volume, not the alphabet.
+    expect(rows[0].find(".rs-board-tag-name").text()).toBe("zebra");
+    expect(rows[1].find(".rs-board-tag-name").text()).toBe("apple");
+  });
+
+  it("falls back to tag name for a genuine full tie, and stays stable regardless of input order", () => {
+    function tiedRow(tag) {
+      return healthRow({ tag, est_wrong: 5, est_missing: 0, mismatch: 0 });
+    }
+    const alpha = tiedRow("alpha");
+    const beta = tiedRow("beta");
+    const gamma = tiedRow("gamma");
+
+    store.healthRows = [gamma, alpha, beta];
+    const wrapperA = mount(TagHealthBoard, { global: globalOpts });
+    const orderA = wrapperA
+      .findAll(".rs-board-row:not(.rs-board-row--head) .rs-board-tag-name")
+      .map((n) => n.text());
+
+    store.healthRows = [beta, gamma, alpha];
+    const wrapperB = mount(TagHealthBoard, { global: globalOpts });
+    const orderB = wrapperB
+      .findAll(".rs-board-row:not(.rs-board-row--head) .rs-board-tag-name")
+      .map((n) => n.text());
+
+    // Same three rows, two different input orders: the rendered order must
+    // not flap between renders.
+    expect(orderA).toEqual(["alpha", "beta", "gamma"]);
+    expect(orderB).toEqual(["alpha", "beta", "gamma"]);
+  });
+});
