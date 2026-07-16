@@ -30,11 +30,6 @@ const HEATMAP_PREF_KEY = "pixlstash:reviewHeatmap";
 // only ever said the opposite, at least this many times) is held for confirm.
 const CONFLICT_MIN_OPPOSITE = 2;
 
-// Floor BOTH the near-twin vote and the tagger margin must clear — and they
-// must agree on the fix — for a suggestion to be auto-resolvable (same
-// threshold the old overlay used for its bulk accept).
-const BULK_THRESHOLD = 0.9;
-
 // Sticker vocabulary: the Picture Set icon + colour palette, restyled by the
 // components as die-cut stickers. Reusing the module is a hard requirement —
 // the arrays are derived, never copied.
@@ -272,12 +267,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // { [tag]: { [pid]: { has, not } } } — how many times this session the user
   // asserted a picture HAS / does NOT have the tag. Backs the conflict guard.
   const tagVotes = ref({});
-
-  // --- Bulk auto-resolve (for the active session's receipt line) ---------------
-  const bulkCount = ref(0);
-  const bulkSample = ref([]);
-  const bulkBusy = ref(false);
-  const lastBulk = ref(null); // { ids, count } of the most recent bulk-accept
 
   // --- Gamification -----------------------------------------------------------
   const gamify = ref(false);
@@ -825,7 +814,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     view.value = { type: "session", id };
     if (!queues.value[id]) fetchQueue(id);
     if (!(id in details.value)) fetchDetail(id);
-    refreshBulk(id);
   }
 
   function openArchived(id) {
@@ -849,7 +837,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     anomalyRegions.value = {};
     regionLoading.value = {};
     tagVotes.value = {};
-    lastBulk.value = null;
     freezeErrors.value = {};
     evalHistories.value = {};
     evalHistoryLoading.value = {};
@@ -918,7 +905,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
         fetchDetail(id),
         fetchQueue(id, { markNewFrom: prevIds }),
       ]);
-      refreshBulk(id);
     } catch (e) {
       error.value = e?.message || "Refresh failed";
     }
@@ -1157,86 +1143,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     setQueue(s.id, { items: [last.item, ...queueFor(s.id).items] });
   }
 
-  // --- Bulk auto-resolve ("N obvious suspects — auto-resolve?") ------------------
-  //
-  // Ports the old overlay's bulk accept against the session's frozen scope:
-  // dry-run for the receipt count + least-confident sample, real run + undo.
-
-  function bulkParams(session, extra = {}) {
-    const scope = session?.scope || {};
-    const p = {
-      tag: session.tag,
-      min_combined: BULK_THRESHOLD,
-      ...extra,
-    };
-    if (scope.project_id != null) p.project_id = scope.project_id;
-    if (scope.set_id != null) p.set_id = scope.set_id;
-    if (scope.character_id != null && scope.character_id !== "")
-      p.character_id = String(scope.character_id);
-    return p;
-  }
-
-  async function refreshBulk(id) {
-    const session = sessions.value.find((x) => x.id === id);
-    if (!session) {
-      bulkCount.value = 0;
-      bulkSample.value = [];
-      return;
-    }
-    // Prefer the server's receipt count when the detail carries one.
-    const d = details.value[id];
-    try {
-      const res = await apiClient.post(
-        "/tag_suggestions/bulk-accept",
-        bulkParams(session, { dry_run: true }),
-      );
-      bulkCount.value = res.data?.count ?? d?.stats?.auto_resolvable ?? 0;
-      bulkSample.value = res.data?.sample ?? [];
-    } catch {
-      bulkCount.value = d?.stats?.auto_resolvable ?? 0;
-      bulkSample.value = [];
-    }
-  }
-
-  async function runBulk(id) {
-    const session = sessions.value.find((x) => x.id === id);
-    if (!session || bulkBusy.value) return;
-    bulkBusy.value = true;
-    try {
-      const res = await apiClient.post(
-        "/tag_suggestions/bulk-accept",
-        bulkParams(session),
-      );
-      lastBulk.value = {
-        ids: res.data?.accepted_ids ?? [],
-        count: res.data?.count ?? 0,
-      };
-      await Promise.all([fetchSessions(), fetchDetail(id), fetchQueue(id)]);
-      bulkCount.value = 0;
-      bulkSample.value = [];
-    } catch (e) {
-      error.value = e?.message || "Auto-resolve failed";
-    } finally {
-      bulkBusy.value = false;
-    }
-  }
-
-  async function undoBulk(id) {
-    const last = lastBulk.value;
-    if (!last || !last.ids.length || bulkBusy.value) return;
-    bulkBusy.value = true;
-    try {
-      await apiClient.post("/tag_suggestions/bulk-reopen", { ids: last.ids });
-      lastBulk.value = null;
-      await Promise.all([fetchSessions(), fetchDetail(id), fetchQueue(id)]);
-      refreshBulk(id);
-    } catch (e) {
-      error.value = e?.message || "Undo failed";
-    } finally {
-      bulkBusy.value = false;
-    }
-  }
-
   // --- Gamification ----------------------------------------------------------------
 
   function setGamify(v) {
@@ -1333,10 +1239,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     heatmapEnabled,
     anomalyRegions,
     tagVotes,
-    bulkCount,
-    bulkSample,
-    bulkBusy,
-    lastBulk,
     gamify,
     stickers,
     activeAward,
@@ -1390,9 +1292,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     skip,
     reopenSkipped,
     undo,
-    refreshBulk,
-    runBulk,
-    undoBulk,
     setGamify,
     noteDecision,
     commitAward,

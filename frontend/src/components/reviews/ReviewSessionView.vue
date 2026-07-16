@@ -42,66 +42,6 @@
       </span>
     </div>
 
-    <!-- Bulk auto-resolve receipt line: the obvious suspects, offered once with
-         a least-confident preview and an undo. -->
-    <div v-if="store.bulkCount > 0 && current" class="rs-bulk">
-      <v-icon size="16" class="rs-bulk-icon">mdi-flash-outline</v-icon>
-      <span class="rs-bulk-text"
-        >{{ store.bulkCount }} obvious suspect{{
-          store.bulkCount === 1 ? "" : "s"
-        }}
-        — the neighbour vote and the tagger agree (≥90%).</span
-      >
-      <button
-        v-if="store.bulkSample.length"
-        class="rs-bulk-btn"
-        type="button"
-        :aria-expanded="bulkPreviewOpen"
-        @click="bulkPreviewOpen = !bulkPreviewOpen"
-      >
-        {{ bulkPreviewOpen ? "Hide preview" : "Preview" }}
-      </button>
-      <button
-        class="rs-bulk-btn rs-bulk-btn--go"
-        type="button"
-        :disabled="store.bulkBusy"
-        @click="store.runBulk(session.id)"
-      >
-        Auto-resolve {{ store.bulkCount }}
-      </button>
-    </div>
-    <div v-if="bulkPreviewOpen && store.bulkSample.length" class="rs-bulk-sample">
-      <span class="rs-bulk-sample-label">Least confident of the batch:</span>
-      <img
-        v-for="s in store.bulkSample"
-        :key="s.id ?? s.picture_id"
-        class="rs-bulk-thumb"
-        :src="thumbSrc(s.picture_id)"
-        :alt="`picture ${s.picture_id}`"
-        loading="lazy"
-      />
-    </div>
-    <div v-if="store.lastBulk" class="rs-bulk rs-bulk--done">
-      <v-icon size="15">mdi-check</v-icon>
-      Auto-resolved {{ store.lastBulk.count }}.
-      <button
-        class="rs-bulk-btn"
-        type="button"
-        :disabled="store.bulkBusy"
-        @click="store.undoBulk(session.id)"
-      >
-        Undo
-      </button>
-      <button
-        class="rs-bulk-dismiss"
-        type="button"
-        title="Dismiss"
-        @click="store.lastBulk = null"
-      >
-        <v-icon size="14">mdi-close</v-icon>
-      </button>
-    </div>
-
     <section class="rs-session-body">
       <div v-if="queueError" class="rs-state rs-state--error">
         {{ queueError }}
@@ -256,7 +196,7 @@
 </template>
 
 <script setup>
-import { computed, inject, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import ReviewBinaryCard from "./ReviewBinaryCard.vue";
 import ReviewPairCard from "./ReviewPairCard.vue";
@@ -268,7 +208,6 @@ const props = defineProps({
 });
 
 const store = useReviewSessionsStore();
-const backendUrl = inject("rs-backend-url", "");
 
 const current = computed(() => store.current);
 const tally = computed(() => store.activeTally);
@@ -285,8 +224,6 @@ const queueError = computed(
 const loadingEmpty = computed(
   () => store.activeQueueLoading && !store.activeQueue.length,
 );
-
-const bulkPreviewOpen = ref(false);
 
 // XP/level/streak: monotonic counters of decisions made — Undo never
 // decrements them.
@@ -313,10 +250,6 @@ function formatWhen(iso) {
     })}`;
   }
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function thumbSrc(id) {
-  return backendUrl ? `${backendUrl}/pictures/thumbnails/${id}.webp` : "";
 }
 
 const questionLabel = computed(() => {
@@ -590,76 +523,6 @@ defineExpose({ handleKey });
 }
 .rs-tally-skipped {
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
-}
-
-.rs-bulk {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 24px 8px;
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
-  background: rgba(var(--v-theme-on-dark-surface), 0.05);
-  font-size: var(--text-2xs);
-}
-.rs-bulk--done {
-  color: rgb(var(--v-theme-success));
-}
-.rs-bulk-icon {
-  color: rgb(var(--v-theme-accent));
-}
-.rs-bulk-text {
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
-}
-.rs-bulk-btn {
-  padding: 3px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  cursor: pointer;
-}
-.rs-bulk-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.rs-bulk-btn--go {
-  border-color: color-mix(in srgb, rgb(var(--v-theme-accent)) 60%, transparent);
-  background: color-mix(in srgb, rgb(var(--v-theme-accent)) 16%, transparent);
-  color: rgb(var(--v-theme-accent));
-}
-.rs-bulk-dismiss {
-  display: inline-flex;
-  margin-left: auto;
-  padding: 2px;
-  border: none;
-  background: none;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  cursor: pointer;
-}
-.rs-bulk-sample {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 24px 8px;
-  overflow-x: auto;
-}
-.rs-bulk-sample-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  white-space: nowrap;
-}
-.rs-bulk-thumb {
-  width: 48px;
-  height: 48px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 
 .rs-session-body {
