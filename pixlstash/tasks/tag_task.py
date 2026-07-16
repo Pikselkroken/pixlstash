@@ -892,18 +892,29 @@ class TagTask(BaseTask):
                         )
                     )
                     written += 1
-                # Never clobber a human-labeled row: its status/confidence is
-                # durable POS/NEG supervision (mirrors the delete-guard above and
-                # not_human_labeled()). Auto-flipping it here is what dropped an
-                # accepted tag into the rejected pile on re-tag.
-                elif existing.label_source != "human" and (
-                    existing.status != status or existing.confidence != confidence
-                ):
-                    existing.confidence = confidence
-                    existing.model_version = model_version
-                    existing.status = status
-                    existing.predicted_at = now
-                    written += 1
+                else:
+                    row_changed = False
+                    # confidence/model_version are live on every row, including
+                    # human-labeled ones (see TagPrediction's class docstring:
+                    # only label_model_version/label_confidence in the human
+                    # ledger are frozen, not these).
+                    if (
+                        existing.confidence != confidence
+                        or existing.model_version != model_version
+                    ):
+                        existing.confidence = confidence
+                        existing.model_version = model_version
+                        row_changed = True
+                    # Never clobber a human-labeled row's status: it's durable
+                    # POS/NEG supervision (mirrors the delete-guard above and
+                    # not_human_labeled()). Auto-flipping it here is what dropped
+                    # an accepted tag into the rejected pile on re-tag.
+                    if existing.label_source != "human" and existing.status != status:
+                        existing.status = status
+                        row_changed = True
+                    if row_changed:
+                        existing.predicted_at = now
+                        written += 1
 
             # Ensure every applied tag has a prediction row even if the model
             # didn't score it (confidence=0.0 so the UI can still show a tooltip
