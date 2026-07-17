@@ -316,6 +316,59 @@ def test_tag_health_scoped_restricts_signals_and_tag_list():
         _teardown(temp_dir, server)
 
 
+def test_tag_health_scoped_mismatch_excludes_out_of_scope_pairs():
+    """Scoped mismatch counts only stored likeness pairs whose BOTH endpoints are
+    in scope. Regression guard for pushing the scope into the pairs query: a pair
+    with one endpoint outside the set must not be counted, and the result must
+    match the pre-refactor Python-filtered behaviour (vault-wide sees both pairs).
+    """
+    temp_dir, client, server = _setup()
+    try:
+        p_a = _upload_named(client)  # in set, tagged "t"
+        p_b = _upload_named(client)  # in set, untagged
+        p_out = _upload_named(client)  # outside set, tagged "t"
+
+        def seed(session):
+            ps = PictureSet(name="scope_set")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            session.add(PictureSetMember(set_id=ps.id, picture_id=p_a))
+            session.add(PictureSetMember(set_id=ps.id, picture_id=p_b))
+            session.add(Tag(picture_id=p_a, tag="t"))
+            session.add(Tag(picture_id=p_out, tag="t"))
+            # In-scope disagreeing pair (counts in both scoped and vault-wide).
+            a1, b1 = PictureLikeness.canon_pair(p_a, p_b)
+            session.add(
+                PictureLikeness(
+                    picture_id_a=a1, picture_id_b=b1, likeness=0.99, metric="cosine"
+                )
+            )
+            # Cross-scope disagreeing pair (vault-wide only; p_out is out of scope).
+            a2, b2 = PictureLikeness.canon_pair(p_b, p_out)
+            session.add(
+                PictureLikeness(
+                    picture_id_a=a2, picture_id_b=b2, likeness=0.99, metric="cosine"
+                )
+            )
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        # Vault-wide: both disagreeing pairs count.
+        body = _rebuild_and_wait(client)
+        rows = {r["tag"]: r for r in body["rows"]}
+        assert rows["t"]["mismatch"] == 2
+
+        # Scoped: only the in-scope pair counts; the cross-scope pair is excluded.
+        scoped = client.get(f"{API}/tag_health", params={"set_id": set_id}).json()
+        srows = {r["tag"]: r for r in scoped["rows"]}
+        assert srows["t"]["mismatch"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_tag_health_empty_vault_and_rebuild_idempotence():
     temp_dir, client, server = _setup()
     try:

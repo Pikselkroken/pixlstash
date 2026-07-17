@@ -409,6 +409,11 @@ def scan_tag(
                     "score": round(conf, 4),
                     "twin_picture_id": None,
                     "twin_sim": None,
+                    # None, not the confidence: pos_frac is the kNN neighbour
+                    # vote fraction, a different quantity, and this fallback runs
+                    # precisely because there is no vote to compute one from.
+                    # Kept present so both paths emit structurally identical dicts.
+                    "pos_frac": None,
                     "reason": (
                         f"model is confident ({conf:.0%}) but this tag has no "
                         "confirmed examples yet"

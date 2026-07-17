@@ -592,6 +592,13 @@ def bulk_accept(
             "picture_ids": sorted(pic_ids),
         }
 
+    # dry_run performs no writes (it returns before any session.commit above), so
+    # dispatch it on the immediate read path instead of the serialized writer
+    # queue — otherwise a plain GET (review_service.get_review / create_review
+    # call this with dry_run=True to count) stalls behind pending writes just to
+    # re-run the scan+confidence-map. The real apply path keeps run_task.
+    if dry_run:
+        return vault.db.run_immediate_read_task(_bulk)
     return vault.db.run_task(_bulk)
 
 

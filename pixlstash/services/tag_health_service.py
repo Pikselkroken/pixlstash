@@ -155,7 +155,20 @@ def _mismatch_counts(
         if int(pid) in alive
     }
     tags_of: dict[int, set[str]] = defaultdict(set)
-    for pid, tag_value in session.exec(select(Tag.picture_id, Tag.tag)):
+    # Scoped board: read only in-scope tag rows rather than the whole Tag table
+    # (``alive`` is already narrowed to the scope above). An empty scope means no
+    # rows — skip the query so an empty ``.in_(())`` never runs. Unscoped, ``alive``
+    # is ~every non-deleted picture, so the whole-table scan is kept (and the
+    # ``pid in alive`` guard still drops tags on deleted pictures).
+    tag_query = select(Tag.picture_id, Tag.tag)
+    if picture_ids is not None:
+        if not alive:
+            tag_rows: list = []
+        else:
+            tag_rows = session.exec(tag_query.where(Tag.picture_id.in_(alive)))
+    else:
+        tag_rows = session.exec(tag_query)
+    for pid, tag_value in tag_rows:
         if pid in alive and not is_tag_sentinel(tag_value):
             # Remap at the set-membership level (not a post-hoc sum): a
             # picture tagged with a child ("extra digit") must be treated as
@@ -182,11 +195,24 @@ def _mismatch_counts(
             mismatch[t] += tagged * (len(members) - tagged)
 
     # Stored high-likeness pairs (canonical a < b, so each pair appears once).
-    pairs = session.exec(
-        select(PictureLikeness.picture_id_a, PictureLikeness.picture_id_b).where(
-            PictureLikeness.likeness >= MISMATCH_LIKENESS_THRESHOLD
-        )
-    ).all()
+    # Scoped board: both endpoints must be in scope (the Python guard below drops
+    # any pair with an endpoint outside ``alive``), so push that into SQL to avoid
+    # scanning every stored pair. Empty scope → no pairs. Unscoped keeps the full
+    # scan (``alive`` is ~the whole table there).
+    pair_query = select(
+        PictureLikeness.picture_id_a, PictureLikeness.picture_id_b
+    ).where(PictureLikeness.likeness >= MISMATCH_LIKENESS_THRESHOLD)
+    if picture_ids is not None:
+        if not alive:
+            pairs: list = []
+        else:
+            pair_query = pair_query.where(
+                PictureLikeness.picture_id_a.in_(alive),
+                PictureLikeness.picture_id_b.in_(alive),
+            )
+            pairs = session.exec(pair_query).all()
+    else:
+        pairs = session.exec(pair_query).all()
     for a, b in pairs:
         a, b = int(a), int(b)
         if a not in alive or b not in alive:

@@ -427,6 +427,49 @@ def test_bulk_accept_resolves_when_signals_agree():
         gc.collect()
 
 
+def test_bulk_accept_dry_run_counts_without_writing():
+    """dry_run returns the would-resolve count but mutates nothing.
+
+    Regression guard for the read-path dispatch: because the dry_run branch
+    performs no writes it is dispatched via run_immediate_read_task, so it must
+    return the correct count AND leave every suggestion PENDING and every tag in
+    place. A count that changed, or any write leaking through, would break both
+    the counting contract and the read-path assumption.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        suspect, twin, sid = _seed_pair(client, server, "malformed hand", "remove")
+        _seed_prediction(server, suspect, "malformed hand", 0.05)
+        _seed_prediction(server, twin, "malformed hand", 0.03)
+
+        dry = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9, "dry_run": True},
+        ).json()
+        assert dry["count"] == 1
+        assert dry["accepted_ids"] == []  # dry_run resolves nothing
+
+        # Nothing was written: the suggestion is still PENDING and the tag remains.
+        def _status(session):
+            return session.get(TagSuggestion, sid).status
+
+        assert server.vault.db.run_immediate_read_task(_status) == "PENDING"
+        assert _has_tag(client, suspect, "malformed hand")
+
+        # The real apply still resolves the same single pair.
+        applied = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9},
+        ).json()
+        assert applied["count"] == 1
+        assert applied["accepted_ids"] == [sid]
+        assert not _has_tag(client, suspect, "malformed hand")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_bulk_accept_skips_when_tagger_contradicts_neighbour():
     """remove + tagger says BOTH have it → the two signals disagree, so bulk leaves it.
 
