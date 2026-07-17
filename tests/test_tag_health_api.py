@@ -16,7 +16,9 @@ from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import event as sa_event
+from sqlalchemy import func
 from sqlalchemy import insert as sa_insert
+from sqlmodel import delete, select
 
 from pixlstash.db_models import (
     Picture,
@@ -26,6 +28,7 @@ from pixlstash.db_models import (
     PictureStack,
     Tag,
 )
+from pixlstash.db_models.picture_likeness import PictureLikenessQueue
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.db_models.tagger_run import TaggerRun
@@ -121,6 +124,81 @@ def _rebuild_and_wait(client, timeout_s=30):
     raise AssertionError("tag_health rebuild did not finish in time")
 
 
+def _wait_likeness_settled(server, timeout_s=30):
+    """Block until the background likeness pipeline has fully processed every
+    uploaded picture, so a manually-seeded ``PictureLikeness`` fixture will not
+    be clobbered underneath the board's ``mismatch`` read.
+
+    Uploading real pictures runs two background stages that mutate the
+    ``picturelikeness`` table: the likeness-parameter pass calls
+    ``LikenessParameterUtils.reset_likeness_for_pictures`` (which DELETEs every
+    pair touching a picture and re-queues it), then ``LikenessTask`` recomputes
+    real pairs. Both race with the tag-health reads and would delete/replace a
+    seeded near-duplicate pair, making ``mismatch`` non-deterministic (the value
+    even flips across test order because the recomputed real likeness straddles
+    ``MISMATCH_LIKENESS_THRESHOLD`` and depends on image size). Once every
+    picture is fully processed (embedding + likeness_parameters + perceptual_hash
+    all set), the queue is drained, and the pair table is stable across two
+    polls, the pipeline is quiescent: a subsequent atomic reseed (see
+    ``_seed_stable``) then stays put because the finder has no further work
+    (queue empty + pairs present).
+    """
+
+    def _snapshot(session):
+        total = int(session.exec(select(func.count()).select_from(Picture)).one())
+        ready = int(
+            session.exec(
+                select(func.count())
+                .select_from(Picture)
+                .where(
+                    Picture.image_embedding.is_not(None),
+                    Picture.likeness_parameters.is_not(None),
+                    Picture.perceptual_hash.is_not(None),
+                )
+            ).one()
+        )
+        queued = int(
+            session.exec(select(func.count()).select_from(PictureLikenessQueue)).one()
+        )
+        pairs = int(
+            session.exec(select(func.count()).select_from(PictureLikeness)).one()
+        )
+        return total, ready, queued, pairs
+
+    start = time.time()
+    prev_pairs = None
+    while time.time() - start < timeout_s:
+        total, ready, queued, pairs = server.vault.db.run_immediate_read_task(_snapshot)
+        # Quiescent only when every picture is fully processed and the queue is
+        # empty; stable across two polls confirms the last recompute wrote.
+        if total > 0 and ready == total and queued == 0 and pairs == prev_pairs:
+            return
+        prev_pairs = pairs
+        time.sleep(0.25)
+    raise AssertionError("likeness pipeline did not settle in time")
+
+
+def _seed_stable(server, seed_fn):
+    """Wait for the likeness pipeline to quiesce, then seed with a clean
+    ``picturelikeness`` slate in one atomic transaction.
+
+    Deletes any pipeline-computed pairs and drains the queue *inside* the seed
+    transaction so no observer ever sees an empty-table/empty-queue state (which
+    would re-trigger ``LikenessUtils.seed_queue``). After commit the queue is
+    empty and the seeded pairs are present, so ``MissingLikenessFinder`` has no
+    further work and the fixture stays authoritative. Returns whatever
+    ``seed_fn`` returns.
+    """
+    _wait_likeness_settled(server)
+
+    def _wrapped(session):
+        session.exec(delete(PictureLikeness))
+        session.exec(delete(PictureLikenessQueue))
+        return seed_fn(session)
+
+    return server.vault.db.run_task(_wrapped)
+
+
 def test_tag_health_aggregates_on_fixture_vault():
     temp_dir, client, server = _setup()
     try:
@@ -197,7 +275,10 @@ def test_tag_health_aggregates_on_fixture_vault():
             )
             session.commit()
 
-        server.vault.db.run_task(seed)
+        # Seed with a stable likeness slate: the background likeness pipeline
+        # would otherwise delete/recompute the seeded near-duplicate pair and
+        # make `mismatch` non-deterministic (see _seed_stable).
+        _seed_stable(server, seed)
 
         body = _rebuild_and_wait(client)
         assert body["computed_at"] is not None
@@ -256,7 +337,7 @@ def test_tag_health_same_stack_mismatch_and_no_double_count():
             )
             session.commit()
 
-        server.vault.db.run_task(seed)
+        _seed_stable(server, seed)
 
         body = _rebuild_and_wait(client)
         rows = {r["tag"]: r for r in body["rows"]}
@@ -377,7 +458,7 @@ def test_tag_health_scoped_mismatch_excludes_out_of_scope_pairs():
             session.commit()
             return ps.id
 
-        set_id = server.vault.db.run_task(seed)
+        set_id = _seed_stable(server, seed)
 
         # Vault-wide: both disagreeing pairs count.
         body = _rebuild_and_wait(client)
@@ -696,7 +777,7 @@ def test_tag_health_default_tag_merges_folds_across_all_signals():
             )
             session.commit()
 
-        server.vault.db.run_task(seed)
+        _seed_stable(server, seed)
 
         body = _rebuild_and_wait(client)
         rows = {r["tag"]: r for r in body["rows"]}
@@ -901,6 +982,67 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
         assert unscoped["overturn_rate"] == 0.5
         # The later deleted reviews must not win "last reviewed".
         assert unscoped["last_reviewed_at"] == t_live.isoformat()
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_deleted_only_tag_excluded_from_unscoped_board():
+    """A tag that exists ONLY on soft-deleted pictures must not appear as a row
+    on the UNSCOPED board.
+
+    The `all_tags` universe (ground_truth_tags / predicted_tags) joins Picture
+    and filters `deleted.is_(False)`, matching every signal query, so a tag
+    reachable only through deleted pictures — via a `Tag` row or a
+    `TagPrediction` row — produces no board row at all (rather than a spurious
+    all-zero one). A tag on a live picture still gets its row.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        live = _upload_named(client)  # tag "live_tag" (ground truth)
+        live_pred = _upload_named(client)  # prediction "live_pred_tag"
+        d_gt = _upload_named(client)  # deleted, tag "deleted_gt_only"
+        d_pred = _upload_named(client)  # deleted, prediction "deleted_pred_only"
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            session.add(Tag(picture_id=live, tag="live_tag"))
+            session.add(
+                TagPrediction(
+                    picture_id=live_pred,
+                    tag="live_pred_tag",
+                    confidence=0.5,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            # Soft-deleted pictures carrying a tag / prediction no live picture has.
+            for pid in (d_gt, d_pred):
+                pic = session.get(Picture, pid)
+                pic.deleted = True
+                session.add(pic)
+            session.add(Tag(picture_id=d_gt, tag="deleted_gt_only"))
+            session.add(
+                TagPrediction(
+                    picture_id=d_pred,
+                    tag="deleted_pred_only",
+                    confidence=0.5,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        tags = {r["tag"] for r in body["rows"]}
+        # Live-picture tags still appear.
+        assert "live_tag" in tags
+        assert "live_pred_tag" in tags
+        # Deleted-only tags must not appear at all — not even as an all-zero row.
+        assert "deleted_gt_only" not in tags
+        assert "deleted_pred_only" not in tags
     finally:
         _teardown(temp_dir, server)
 

@@ -444,15 +444,33 @@ def compute_tag_health_rows(
 
     mismatch = _mismatch_counts(session, picture_ids)
 
+    # Exclude soft-deleted pictures from the tag universe so a tag that exists
+    # ONLY on deleted pictures does not produce a spurious all-zero board row
+    # (every signal already joins+filters deleted). Mirrors est_wrong/est_missing.
+    # The scoped path already excludes deleted via its scope helper
+    # (fetch_tag_review_scope_picture_ids); the redundant filter there is
+    # harmless and keeps this consistent with the other signals' join+_scoped.
     ground_truth_tags = {
         DEFAULT_TAG_MERGES.get(t, t)
-        for t in session.exec(_scoped(select(Tag.tag), Tag.picture_id).distinct())
+        for t in session.exec(
+            _scoped(
+                select(Tag.tag)
+                .join(Picture, Picture.id == Tag.picture_id)
+                .where(Picture.deleted.is_(False)),
+                Tag.picture_id,
+            ).distinct()
+        )
         if not is_tag_sentinel(t)
     }
     predicted_tags = {
         DEFAULT_TAG_MERGES.get(t, t)
         for t in session.exec(
-            _scoped(select(TagPrediction.tag), TagPrediction.picture_id).distinct()
+            _scoped(
+                select(TagPrediction.tag)
+                .join(Picture, Picture.id == TagPrediction.picture_id)
+                .where(Picture.deleted.is_(False)),
+                TagPrediction.picture_id,
+            ).distinct()
         )
         if not is_tag_sentinel(t)
     }
