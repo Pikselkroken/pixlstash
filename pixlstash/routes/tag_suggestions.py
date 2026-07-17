@@ -48,17 +48,6 @@ class TagSuggestionItemResponse(BaseModel):
     twin_tagger_confidence: Optional[float] = None
 
 
-class TagSuggestionSummaryItem(BaseModel):
-    """Pending-suggestion counts for one tag."""
-
-    model_config = ConfigDict(extra="allow")
-
-    tag: str
-    add: int = 0
-    remove: int = 0
-    total: int = 0
-
-
 class ReviewSuggestionResponse(BaseModel):
     """Result of accepting or dismissing a suggestion."""
 
@@ -293,32 +282,6 @@ def create_router(server) -> APIRouter:
             item["twin_tagger_confidence"] = confs.get((s.twin_picture_id, s.tag))
             out.append(item)
         return out
-
-    @router.get(
-        "/tag_suggestions/summary",
-        summary="Per-tag suggestion counts",
-        description=(
-            "Returns pending-suggestion counts grouped by tag (with add/remove "
-            "breakdown), busiest tag first. Drives the queue's tag picker and progress. "
-            "Optionally narrow to a ``project_id``, ``set_id``, and/or ``character_id`` "
-            "(numeric id, or the literal ``UNASSIGNED``); these AND together and match "
-            "the suspect picture only."
-        ),
-        response_model=list[TagSuggestionSummaryItem],
-    )
-    def tag_suggestions_summary(
-        request: Request,
-        status: str = "PENDING",
-        project_id: int | None = None,
-        set_id: int | None = None,
-        character_id: str | None = None,
-    ):
-        picture_ids = _resolve_review_picture_ids(
-            server, request, project_id, set_id, character_id
-        )
-        return tag_suggestion_service.summary_by_tag(
-            server.vault, status=status, picture_ids=picture_ids
-        )
 
     @router.post(
         "/tag_suggestions/{suggestion_id}/accept",

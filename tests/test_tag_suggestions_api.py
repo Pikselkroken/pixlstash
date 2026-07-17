@@ -1,4 +1,4 @@
-"""Tests for the Tag Suggestions API: list, summary, accept (writeback), dismiss."""
+"""Tests for the Tag Suggestions API: list, accept (writeback), dismiss."""
 
 import gc
 import json
@@ -305,29 +305,6 @@ def test_dismiss_leaves_tag_untouched():
             "/tag_suggestions", params={"status": "DISMISSED"}
         ).json()
         assert any(r["id"] == sid for r in dismissed)
-    finally:
-        server.vault.close()
-        temp_dir.cleanup()
-        gc.collect()
-
-
-def test_summary_counts_by_tag_and_direction():
-    temp_dir, client, server = _setup()
-    try:
-        pic_id = _upload_picture(client)
-        # Two sources for the same (picture, tag) so the unique constraint holds;
-        # the summary should aggregate both directions across sources.
-        _seed_suggestion(
-            server, pic_id, "malformed hand", "remove", source="near_neighbor"
-        )
-        _seed_suggestion(server, pic_id, "malformed hand", "add", source="model")
-
-        resp = client.get("/tag_suggestions/summary")
-        assert resp.status_code == 200
-        summary = {row["tag"]: row for row in resp.json()}
-        assert summary["malformed hand"]["remove"] == 1
-        assert summary["malformed hand"]["add"] == 1
-        assert summary["malformed hand"]["total"] == 2
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -1246,31 +1223,6 @@ def test_empty_scope_yields_no_rows_not_error():
         gc.collect()
 
 
-def test_summary_respects_filter():
-    temp_dir, client, server = _setup()
-    try:
-        in_pic = _upload_picture(client)
-        out_pic = _upload_named(client)
-        _seed_suggestion(server, in_pic, "malformed hand", "remove")
-        _seed_suggestion(server, out_pic, "bad anatomy", "add")
-        r = client.post(f"{API}/picture_sets", json={"name": "Set"})
-        set_id = r.json()["picture_set"]["id"]
-        _add_to_set(server, in_pic, set_id)
-
-        summary = client.get(
-            "/tag_suggestions/summary", params={"set_id": set_id}
-        ).json()
-        tags = {row["tag"] for row in summary}
-        assert tags == {"malformed hand"}  # out-of-scope tag excluded
-        # Unfiltered summary sees both.
-        all_tags = {row["tag"] for row in client.get("/tag_suggestions/summary").json()}
-        assert all_tags == {"malformed hand", "bad anatomy"}
-    finally:
-        server.vault.close()
-        temp_dir.cleanup()
-        gc.collect()
-
-
 def test_bulk_accept_respects_filter_dry_run_and_apply():
     temp_dir, client, server = _setup()
     try:
@@ -1407,9 +1359,6 @@ def test_scoped_token_list_only_sees_its_own_suspects():
         # No filter: scoped token still only sees Set A's suspect, NOT pic_b.
         rows = bearer.get(f"{API}/tag_suggestions", headers=headers).json()
         assert {r["picture_id"] for r in rows} == {pic_a}
-        # Summary is likewise scoped: only Set A's tag.
-        summary = bearer.get(f"{API}/tag_suggestions/summary", headers=headers).json()
-        assert {row["tag"] for row in summary} == {"malformed hand"}
     finally:
         server.vault.close()
         temp_dir.cleanup()

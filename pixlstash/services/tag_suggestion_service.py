@@ -20,7 +20,6 @@ Mirrors the vault-task conventions in :mod:`pixlstash.services.tag_prediction_se
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, Tag
@@ -220,56 +219,6 @@ def get_tagger_confidences(
             ):
                 best[key] = (conf, predicted_at)
         return {k: v[0] for k, v in best.items()}
-
-    return vault.db.run_immediate_read_task(_fetch)
-
-
-def summary_by_tag(
-    vault: "Vault",
-    status: str = "PENDING",
-    picture_ids: set[int] | None = None,
-    source: str | None = None,
-) -> list[dict]:
-    """Return per-tag counts of suggestions, for the queue's tag picker and progress.
-
-    Args:
-        vault: Application vault, used for DB task dispatch.
-        status: Status to count (default ``PENDING``).
-        picture_ids: Optional set of in-scope suspect picture ids; when not
-            ``None`` only suggestions whose ``picture_id`` is in the set are
-            counted (the suspect, never the twin). An empty set yields no counts.
-            When ``None`` the picture scope is unrestricted (today's behaviour).
-        source: Optional exact ``source`` filter (e.g. ``"near_neighbor"`` or
-            ``"impossible_tag"``), so the two review tabs stay isolated.
-
-    Returns:
-        List of ``{"tag", "add", "remove", "total"}`` dicts, busiest tag first.
-    """
-
-    def _fetch(session: Session) -> list[dict]:
-        q = (
-            select(
-                TagSuggestion.tag,
-                TagSuggestion.direction,
-                func.count().label("n"),
-            )
-            .where(TagSuggestion.status == status.upper())
-            .group_by(TagSuggestion.tag, TagSuggestion.direction)
-        )
-        if source:
-            q = q.where(TagSuggestion.source == source)
-        if picture_ids is not None:
-            q = q.where(TagSuggestion.picture_id.in_(picture_ids))
-        rows = session.exec(q).all()
-        by_tag: dict[str, dict] = {}
-        for tag, direction, n in rows:
-            entry = by_tag.setdefault(
-                tag, {"tag": tag, "add": 0, "remove": 0, "total": 0}
-            )
-            if direction in ("add", "remove"):
-                entry[direction] += n
-            entry["total"] += n
-        return sorted(by_tag.values(), key=lambda e: e["total"], reverse=True)
 
     return vault.db.run_immediate_read_task(_fetch)
 
