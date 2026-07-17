@@ -605,3 +605,133 @@ def test_preview_reports_scope_and_prev_reviewed():
         )
     finally:
         _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
+# Security: /reviews is an owner-only, vault-wide curation surface. Every
+# write/preview endpoint must reject a resource-scoped READ token (403) while
+# still serving the owner (cookie) session — same policy the read endpoints
+# already enforce. These use the versioned /api/v1 paths + a Bearer token so
+# the auth middleware sets request.state.token_scope.
+# ---------------------------------------------------------------------------
+
+
+def _scoped_token_env():
+    """Owner session + a READ token scoped to a picture set holding one pair.
+
+    Returns ``(temp_dir, owner_client, server, set_id, token)``. The owner_client
+    carries the cookie session; ``token`` is a Bearer value for a READ token
+    scoped to ``set_id``.
+    """
+    temp_dir, client, server = _setup()
+    in_a, in_b = _make_pair(client, server)
+    set_id = client.post(f"{API}/picture_sets", json={"name": "Scope"}).json()[
+        "picture_set"
+    ]["id"]
+
+    def add_members(session):
+        session.add(PictureSetMember(set_id=set_id, picture_id=in_a))
+        session.add(PictureSetMember(set_id=set_id, picture_id=in_b))
+        session.commit()
+
+    server.vault.db.run_task(add_members)
+
+    r = client.post(
+        f"{API}/users/me/token",
+        json={
+            "description": "set read",
+            "scope": "READ",
+            "resource_type": "picture_set",
+            "resource_id": set_id,
+        },
+    )
+    assert r.status_code == 200, r.text
+    return temp_dir, client, server, set_id, r.json()["token"]
+
+
+def test_scoped_token_cannot_create_review():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (
+            bearer.post(
+                f"{API}/reviews", json={"tag": TAG}, headers=headers
+            ).status_code
+            == 403
+        )
+        # Owner (cookie) still creates fine — no over-blocking regression.
+        assert client.post(f"{API}/reviews", json={"tag": TAG}).status_code == 200
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_preview_review():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (
+            bearer.get(
+                f"{API}/reviews/preview", params={"tag": TAG}, headers=headers
+            ).status_code
+            == 403
+        )
+        assert (
+            client.get(f"{API}/reviews/preview", params={"tag": TAG}).status_code == 200
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_refresh_review():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (
+            bearer.post(f"{API}/reviews/{rid}/refresh", headers=headers).status_code
+            == 403
+        )
+        # Owner refresh still works.
+        assert client.post(f"{API}/reviews/{rid}/refresh").status_code == 200
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_archive_review():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (
+            bearer.post(f"{API}/reviews/{rid}/archive", headers=headers).status_code
+            == 403
+        )
+        # The rejected call must not have closed the session.
+        assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
+        # Owner archives fine.
+        assert (
+            client.post(f"{API}/reviews/{rid}/archive").json()["status"] == "ARCHIVED"
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_abort_review():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (
+            bearer.post(f"{API}/reviews/{rid}/abort", headers=headers).status_code
+            == 403
+        )
+        assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
+        # Owner aborts fine.
+        assert client.post(f"{API}/reviews/{rid}/abort").json()["status"] == "ABORTED"
+    finally:
+        _teardown(temp_dir, server)

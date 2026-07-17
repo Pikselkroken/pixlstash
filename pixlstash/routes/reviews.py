@@ -153,6 +153,12 @@ def create_router(server) -> APIRouter:
         response_model=ReviewResponse,
     )
     def create_review(payload: CreateReviewRequest, request: Request):
+        # Reviews are an owner-only, vault-wide curation surface: creating one
+        # runs a cross-vault scan and reveals aggregate counts. A resource-scoped
+        # share token is READ-only and must not open one (same policy as the
+        # /reviews reads).
+        if _token_scope_ids(server, request) is not None:
+            raise HTTPException(status_code=403, detail="Not available to this token")
         tag = (payload.tag or "").strip()
         if not tag:
             raise HTTPException(status_code=400, detail="tag is required")
@@ -164,7 +170,6 @@ def create_router(server) -> APIRouter:
                 set_id=payload.set_id,
                 character_id=payload.character_id,
                 include_reviewed=payload.include_reviewed,
-                token_scope_ids=_token_scope_ids(server, request),
             )
         except ReviewConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
@@ -212,6 +217,10 @@ def create_router(server) -> APIRouter:
         set_id: int | None = None,
         character_id: str | None = None,
     ):
+        # Owner-only surface (see create_review / the /reviews reads): a scoped
+        # share token cannot preview a vault-wide coverage count.
+        if _token_scope_ids(server, request) is not None:
+            raise HTTPException(status_code=403, detail="Not available to this token")
         tag = (tag or "").strip()
         if not tag:
             raise HTTPException(status_code=400, detail="tag is required")
@@ -221,7 +230,6 @@ def create_router(server) -> APIRouter:
             project_id=project_id,
             set_id=set_id,
             character_id=character_id,
-            token_scope_ids=_token_scope_ids(server, request),
         )
 
     @router.get(
@@ -252,11 +260,14 @@ def create_router(server) -> APIRouter:
         response_model=RefreshReviewResponse,
     )
     def refresh_review(review_id: int, request: Request):
+        # Owner-only surface (see create_review / the /reviews reads): a scoped
+        # share token is READ-only and must not mutate a review's queue.
+        if _token_scope_ids(server, request) is not None:
+            raise HTTPException(status_code=403, detail="Not available to this token")
         try:
             return review_service.refresh_review(
                 server.vault,
                 review_id,
-                token_scope_ids=_token_scope_ids(server, request),
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Review not found")
@@ -272,7 +283,11 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ReviewResponse,
     )
-    def archive_review(review_id: int):
+    def archive_review(review_id: int, request: Request):
+        # Owner-only surface (see the /reviews reads): a scoped share token is
+        # READ-only and must not close a review session.
+        if _token_scope_ids(server, request) is not None:
+            raise HTTPException(status_code=403, detail="Not available to this token")
         return _close(review_id, review_service.ARCHIVED)
 
     @router.post(
@@ -284,7 +299,11 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ReviewResponse,
     )
-    def abort_review(review_id: int):
+    def abort_review(review_id: int, request: Request):
+        # Owner-only surface (see the /reviews reads): a scoped share token is
+        # READ-only and must not close a review session.
+        if _token_scope_ids(server, request) is not None:
+            raise HTTPException(status_code=403, detail="Not available to this token")
         return _close(review_id, review_service.ABORTED)
 
     def _close(review_id: int, status: str):
