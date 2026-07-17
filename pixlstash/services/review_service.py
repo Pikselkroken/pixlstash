@@ -412,7 +412,7 @@ def refresh_review(
 
     Only inserts suspects not already in the review; the review's decided rows
     are never resurrected (see :func:`tag_scan_service.scan_tag`). Updates
-    ``refreshed_at``, ``scanned`` and ``found``.
+    ``refreshed_at``, ``scanned``, ``found`` and ``prev_reviewed``.
 
     Returns ``{"new_count", "found", "refreshed_at"}``.
 
@@ -448,6 +448,7 @@ def refresh_review(
         row = session.get(Review, review_id)
         row.refreshed_at = datetime.utcnow()
         row.scanned = scan["scanned"]
+        row.prev_reviewed = scan["prev_reviewed"]
         # found = everything currently in the review's queue (all statuses).
         total = session.exec(
             select(func.count())
