@@ -4,7 +4,13 @@
 // functions directly instead of mounting the SFC.
 
 import { describe, it, expect } from "vitest";
-import { corrections, rawCorrections, whyText } from "./tagHealthBoardLogic";
+import {
+  corrections,
+  rawCorrections,
+  whyText,
+  estDisplay,
+  estRawTitle,
+} from "./tagHealthBoardLogic";
 
 function row(overrides = {}) {
   return {
@@ -123,5 +129,43 @@ describe("rawCorrections", () => {
     const b = row({ est_wrong_adj: 8, est_missing_adj: 0, mismatch: 0, est_wrong: 8, est_missing: 0 });
     expect(corrections(a)).toBe(corrections(b));
     expect(rawCorrections(a)).toBeGreaterThan(rawCorrections(b));
+  });
+});
+
+describe("estDisplay", () => {
+  it("shows the rounded precision-adjusted estimate when present", () => {
+    expect(estDisplay(61, 41.6)).toBe(42);
+  });
+
+  it("falls back to the raw count when no _adj value exists", () => {
+    expect(estDisplay(7, undefined)).toBe(7);
+    expect(estDisplay(7, null)).toBe(7);
+  });
+
+  it("treats a missing raw count as 0", () => {
+    expect(estDisplay(undefined, undefined)).toBe(0);
+  });
+
+  it("can round a non-zero raw count's estimate down to 0 (unreliable tag)", () => {
+    // A tag whose precision is so low the estimate rounds to zero shows 0,
+    // even though the model flagged some pictures (surfaced in the tooltip).
+    expect(estDisplay(3, 0.4)).toBe(0);
+  });
+});
+
+describe("estRawTitle", () => {
+  it("names the raw model-flag count when the estimate is discounted", () => {
+    expect(estRawTitle(61, 41.6)).toMatch(/^61 flagged by the model/);
+  });
+
+  it("returns undefined (no tooltip) when there is no _adj value", () => {
+    expect(estRawTitle(7, undefined)).toBeUndefined();
+    expect(estRawTitle(7, null)).toBeUndefined();
+  });
+
+  it("returns undefined when the discounted number equals the raw count", () => {
+    // precision ~1.0 → nothing to explain.
+    expect(estRawTitle(5, 5)).toBeUndefined();
+    expect(estRawTitle(5, 4.7)).toBeUndefined(); // rounds back to 5
   });
 });

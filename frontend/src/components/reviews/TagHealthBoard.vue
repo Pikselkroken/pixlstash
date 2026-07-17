@@ -211,15 +211,17 @@
           </span>
           <span
             class="rs-board-num"
-            :class="numClass(r.est_wrong, 'error')"
-            :title="adjTitle(r.est_wrong, r.est_wrong_adj)"
-            >{{ r.est_wrong ?? 0 }}</span
+            :class="numClass(estDisplay(r.est_wrong, r.est_wrong_adj), 'error')"
+            :title="estRawTitle(r.est_wrong, r.est_wrong_adj)"
+            >{{ estDisplay(r.est_wrong, r.est_wrong_adj) }}</span
           >
           <span
             class="rs-board-num"
-            :class="numClass(r.est_missing, 'primary')"
-            :title="adjTitle(r.est_missing, r.est_missing_adj)"
-            >{{ r.est_missing ?? 0 }}</span
+            :class="
+              numClass(estDisplay(r.est_missing, r.est_missing_adj), 'primary')
+            "
+            :title="estRawTitle(r.est_missing, r.est_missing_adj)"
+            >{{ estDisplay(r.est_missing, r.est_missing_adj) }}</span
           >
           <span class="rs-board-num" :class="numClass(r.mismatch, 'tertiary')">{{
             r.mismatch ?? 0
@@ -258,9 +260,11 @@
         <span class="rs-legend-warning">amber</span> = notable,
         <span class="rs-legend-tertiary">teal</span> = minor) · “Est. wrong” =
         tagged pictures the model is ≤10% sure about · “Est. missing” =
-        untagged pictures it is ≥90% sure about · “Mismatch” = near-identical
-        shots with different labels · “Last review” = when a review for the
-        tag was last archived.
+        untagged pictures it is ≥90% sure about — both discounted by the tag’s
+        measured reliability, so the estimate reflects likely genuine fixes,
+        not raw model flags (hover for the raw count) · “Mismatch” =
+        near-identical shots with different labels · “Last review” = when a
+        review for the tag was last archived.
       </p>
     </div>
   </div>
@@ -281,7 +285,13 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { relativeDate } from "../../utils/snapshots";
 // Pure ranking/explanation logic, split out for direct-import unit testing —
 // see tagHealthBoardLogic.js's module doc for why.
-import { corrections, whyText, rawCorrections } from "./tagHealthBoardLogic";
+import {
+  corrections,
+  whyText,
+  rawCorrections,
+  estDisplay,
+  estRawTitle,
+} from "./tagHealthBoardLogic";
 
 const emit = defineEmits(["start-review"]);
 const store = useReviewSessionsStore();
@@ -368,13 +378,6 @@ const headers = [
   { label: "" },
 ];
 
-// Tooltip for the raw Est. wrong/missing cells: surface the reliability
-// discount without replacing the number a user already understands.
-function adjTitle(raw, adj) {
-  if (adj == null || Math.round(adj) === (raw ?? 0)) return undefined;
-  return `~${Math.round(adj)} after discounting for this tag's measured reliability`;
-}
-
 function isAnomaly(r) {
   return store.isAnomalyTag(r.tag);
 }
@@ -401,10 +404,12 @@ function keyval(r, key) {
       return r.tag;
     case "score":
       return corrections(r);
+    // Sort on the displayed (precision-adjusted) estimate so the "Most
+    // wrong"/"Most missing" orderings match the numbers on screen.
     case "wrong":
-      return r.est_wrong ?? 0;
+      return estDisplay(r.est_wrong, r.est_wrong_adj);
     case "missing":
-      return r.est_missing ?? 0;
+      return estDisplay(r.est_missing, r.est_missing_adj);
     case "dups":
       return r.mismatch ?? 0;
     case "last":

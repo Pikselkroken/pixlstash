@@ -15,6 +15,25 @@ export function corrections(r) {
   return Math.round(wrong + missing + (r.mismatch ?? 0));
 }
 
+// Displayed value for an "Est. wrong"/"Est. missing" cell: the
+// precision-adjusted estimate (rounded) when the cache has it, else the raw
+// count. The column header already reads "Est." — the number IS the estimate
+// of genuine fixes, discounted by the tag's measured reliability, not the raw
+// model-flag count (which moves to the tooltip, see `estRawTitle`).
+export function estDisplay(raw, adj) {
+  return Math.round(adj ?? raw ?? 0);
+}
+
+// Tooltip for an estimate cell: names the raw model-flag count behind the
+// discounted number. Returns `undefined` (no tooltip) when there's no discount
+// to explain — either the cache predates the `_adj` field, or precision was
+// ~1.0 so the raw and adjusted numbers coincide.
+export function estRawTitle(raw, adj) {
+  const r = raw ?? 0;
+  if (adj == null || Math.round(adj) === r) return undefined;
+  return `${r} flagged by the model; shown discounted by this tag's measured reliability`;
+}
+
 // Tie-break signal for the default "Suggested (health)" sort (see `sorted` in
 // TagHealthBoard.vue, key === "score"). Two tags routinely round to the same
 // displayed Priority number in a lightly-reviewed vault, and without a
