@@ -71,6 +71,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.tagger_run_service import get_latest_tag_precisions
 from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
 from pixlstash.utils.service.filter_helpers import fetch_tag_review_scope_picture_ids
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
@@ -160,12 +161,26 @@ def _mismatch_counts(
     # rows — skip the query so an empty ``.in_(())`` never runs. Unscoped, ``alive``
     # is ~every non-deleted picture, so the whole-table scan is kept (and the
     # ``pid in alive`` guard still drops tags on deleted pictures).
+    # When scoped, materialise ``alive`` into a per-connection temp table once
+    # and filter via ``IN (SELECT ...)`` rather than binding one SQL parameter
+    # per id — a large scope (tens of thousands of pictures) would otherwise
+    # exceed SQLite's bound-parameter ceiling and raise OperationalError. The
+    # subquery is result-identical to ``.in_(alive)`` and is reused for the
+    # likeness-pairs query below (which binds ``alive`` at both endpoints). A
+    # distinct table name keeps this from clobbering the caller's own scope
+    # table (see ``compute_tag_health_rows``).
+    scope_subq = None
+    if picture_ids is not None and alive:
+        scope_subq = scope_id_subquery(
+            session, alive, name="_pixlstash_scope_ids_mismatch"
+        )
+
     tag_query = select(Tag.picture_id, Tag.tag)
     if picture_ids is not None:
         if not alive:
             tag_rows: list = []
         else:
-            tag_rows = session.exec(tag_query.where(Tag.picture_id.in_(alive)))
+            tag_rows = session.exec(tag_query.where(Tag.picture_id.in_(scope_subq)))
     else:
         tag_rows = session.exec(tag_query)
     for pid, tag_value in tag_rows:
@@ -206,9 +221,12 @@ def _mismatch_counts(
         if not alive:
             pairs: list = []
         else:
+            # Both endpoints filtered via the shared temp-table subquery — this
+            # pair binds ``alive`` twice, so a plain ``.in_(alive)`` would hit
+            # the parameter ceiling at half the scope size.
             pair_query = pair_query.where(
-                PictureLikeness.picture_id_a.in_(alive),
-                PictureLikeness.picture_id_b.in_(alive),
+                PictureLikeness.picture_id_a.in_(scope_subq),
+                PictureLikeness.picture_id_b.in_(scope_subq),
             )
             pairs = session.exec(pair_query).all()
     else:
@@ -245,11 +263,24 @@ def compute_tag_health_rows(
     current_version = _current_model_version(session)
     tag_precisions = get_latest_tag_precisions(session)
 
+    # Materialise the scope once into a per-connection temp table and filter
+    # every scoped aggregate via ``IN (SELECT ...)`` — binding one SQL parameter
+    # per id (``.in_(picture_ids)``) would exceed SQLite's bound-parameter
+    # ceiling for a large scope (tens of thousands of pictures) and raise
+    # OperationalError. Result-identical to the set ``.in_()``. The default
+    # table name is deliberately distinct from ``_mismatch_counts``' table, so
+    # the ``_mismatch_counts(session, picture_ids)`` call below (which runs
+    # between the early aggregates and the ``ground_truth``/``predicted`` reads)
+    # cannot overwrite this table's ids.
+    scope_subq = None
+    if picture_ids is not None:
+        scope_subq = scope_id_subquery(session, picture_ids)
+
     def _scoped(query, column):
         """Restrict a query to the scope pictures (no-op when unscoped)."""
         if picture_ids is None:
             return query
-        return query.where(column.in_(picture_ids))
+        return query.where(column.in_(scope_subq))
 
     # est_wrong: tagged + confidently-negative prediction, current model version only
     # (5a — an unpinned join here previously blended every model generation ever run).

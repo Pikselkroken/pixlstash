@@ -3,6 +3,7 @@
 import gc
 import json
 import os
+import sqlite3
 import tempfile
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,9 @@ from fastapi.testclient import TestClient
 from datetime import datetime
 
 import numpy as np
+from sqlalchemy import event as sa_event
+from sqlalchemy import insert as sa_insert
+from sqlalchemy import update as sa_update
 from sqlmodel import select
 
 from pixlstash.db_models import Picture, Tag
@@ -1424,6 +1428,102 @@ def test_scoped_token_filter_cannot_widen_to_other_set():
         ).json()
         assert rows == []
         assert all(r["picture_id"] != pic_b for r in rows)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _force_variable_limit(server, limit=999):
+    """Pin every DB connection's ``SQLITE_LIMIT_VARIABLE_NUMBER`` to *limit*.
+
+    Registers a ``connect`` listener on the vault engine and disposes the pool
+    so subsequent connections are recreated with the lowered ceiling. Used to
+    reproduce the historical 999-variable ceiling regardless of the running
+    SQLite build's much higher default, so a large ``picture_ids`` scope
+    filtered by a plain ``.in_(ids)`` would raise ``OperationalError``. Call
+    AFTER seeding.
+    """
+    engine = server.vault.db._engine
+
+    def _set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+
+    sa_event.listen(engine, "connect", _set_limit)
+    engine.dispose()
+
+
+def test_scan_tag_survives_large_picture_ids_scope():
+    """A ~1500-picture explicit scope must scan without tripping SQLite's
+    bound-parameter ceiling. Regression guard for the scale refactor: with the
+    variable limit pinned to the historical 999 floor, the pre-refactor
+    ``.in_(picture_ids)`` in ``_load`` (site 3) and ``_load_confidence_fallback``
+    (site 4) would raise ``OperationalError: too many SQL variables``. The
+    temp-table scope path keeps both alive and result-identical: three
+    confidently-predicted, zero-ground-truth pictures still surface as ``add``
+    suspects via the confidence fallback.
+    """
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        n = 1500
+        embedded = [1, 2, 3]  # get valid embeddings + confident predictions
+
+        def seed(session):
+            session.execute(
+                sa_insert(Picture),
+                [
+                    {"id": i, "deleted": False, "file_path": f"/x/{i}.png"}
+                    for i in range(1, n + 1)
+                ],
+            )
+            # A handful of pictures carry a valid 512-d embedding (clears the
+            # len(ids) < 2 guard so the scan reaches the fallback) and a
+            # confident current-version prediction for the scanned tag, with NO
+            # Tag row (zero ground truth → confidence fallback path).
+            for i in embedded:
+                blob = np.random.rand(512).astype(np.float32).tobytes()
+                session.execute(
+                    sa_update(Picture)
+                    .where(Picture.id == i)
+                    .values(image_embedding=blob)
+                )
+            session.execute(
+                sa_insert(TagPrediction),
+                [
+                    {
+                        "picture_id": i,
+                        "tag": "scantag",
+                        "confidence": 0.95,
+                        "model_version": "v1",
+                        "status": "PENDING",
+                        "predicted_at": datetime.utcnow(),
+                    }
+                    for i in embedded
+                ],
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        # Pin the ceiling to 999 now that seeding is done under the default.
+        _force_variable_limit(server, 999)
+
+        scope = set(range(1, n + 1))
+        res = tag_scan_service.scan_tag(
+            server.vault, "scantag", project=None, picture_ids=scope
+        )
+        # Both _load and _load_confidence_fallback ran over the 1500-id scope
+        # without OperationalError, and the three confident pictures surfaced.
+        assert res["scanned"] == len(embedded)
+        assert res["added"] == len(embedded)
+        assert res["removed"] == 0
+        assert res["count"] == len(embedded)
+
+        rows = client.get("/tag_suggestions").json()
+        assert {r["picture_id"] for r in rows} == set(embedded)
+        assert all(r["direction"] == "add" for r in rows)
     finally:
         server.vault.close()
         temp_dir.cleanup()

@@ -8,12 +8,15 @@ import gc
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import time
 from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import event as sa_event
+from sqlalchemy import insert as sa_insert
 
 from pixlstash.db_models import (
     Picture,
@@ -84,6 +87,26 @@ def _seed_tag(server, pid, tag):
         session.commit()
 
     server.vault.db.run_task(seed)
+
+
+def _force_variable_limit(server, limit=999):
+    """Pin every DB connection's ``SQLITE_LIMIT_VARIABLE_NUMBER`` to *limit*.
+
+    Registers a ``connect`` listener on the vault engine and disposes the pool
+    so subsequent connections are recreated with the lowered ceiling. Used to
+    reproduce the historical 999-variable ceiling regardless of the running
+    SQLite build's much higher default, so a large scope filtered by a plain
+    ``.in_(ids)`` would raise ``OperationalError`` — proving the temp-table
+    scope path is what keeps the query alive. Call AFTER seeding (an ORM bulk
+    insert may itself batch many parameters).
+    """
+    engine = server.vault.db._engine
+
+    def _set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+
+    sa_event.listen(engine, "connect", _set_limit)
+    engine.dispose()
 
 
 def _rebuild_and_wait(client, timeout_s=30):
@@ -365,6 +388,74 @@ def test_tag_health_scoped_mismatch_excludes_out_of_scope_pairs():
         scoped = client.get(f"{API}/tag_health", params={"set_id": set_id}).json()
         srows = {r["tag"]: r for r in scoped["rows"]}
         assert srows["t"]["mismatch"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_scoped_survives_large_scope():
+    """A scope of ~1500 pictures must compute without tripping SQLite's
+    bound-parameter ceiling. Regression guard for the scale refactor: with the
+    variable limit pinned to the historical 999 floor, the pre-refactor
+    ``.in_(picture_ids)`` in ``compute_tag_health_rows._scoped`` and
+    ``_mismatch_counts`` (tag + likeness-pairs queries) would raise
+    ``OperationalError: too many SQL variables``; the temp-table scope path
+    keeps them alive and result-identical.
+    """
+    from pixlstash.services.tag_health_service import _mismatch_counts
+
+    temp_dir, client, server = _setup()
+    try:
+        n = 1500
+
+        def seed(session):
+            # Core bulk insert bypasses the per-picture metadata-hash ORM hooks
+            # (fast for 1500 rows). ``deleted`` is set explicitly — the model's
+            # Python default is not applied by a Core insert.
+            session.execute(
+                sa_insert(Picture),
+                [
+                    {"id": i, "deleted": False, "file_path": f"/x/{i}.png"}
+                    for i in range(1, n + 1)
+                ],
+            )
+            ps = PictureSet(name="big_scope")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            session.execute(
+                sa_insert(PictureSetMember),
+                [{"set_id": ps.id, "picture_id": i} for i in range(1, n + 1)],
+            )
+            # Plant exactly one mismatch: picture 1 tagged "bigtag", picture 2
+            # untagged, a high-likeness pair between them (both in scope).
+            session.add(Tag(picture_id=1, tag="bigtag"))
+            a, b = PictureLikeness.canon_pair(1, 2)
+            session.add(
+                PictureLikeness(
+                    picture_id_a=a, picture_id_b=b, likeness=0.99, metric="cosine"
+                )
+            )
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        # Pin the ceiling to 999 now that seeding is done under the default.
+        _force_variable_limit(server, 999)
+
+        # Endpoint path exercises _scoped (many scoped aggregates) AND
+        # _mismatch_counts, all over the 1500-id scope.
+        resp = client.get(f"{API}/tag_health", params={"set_id": set_id})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["scoped"] is True
+        rows = {r["tag"]: r for r in body["rows"]}
+        assert rows["bigtag"]["mismatch"] == 1
+
+        # Direct _mismatch_counts call with the same large scope.
+        scope = set(range(1, n + 1))
+        mm = server.vault.db.run_immediate_read_task(_mismatch_counts, scope)
+        assert mm.get("bigtag") == 1
     finally:
         _teardown(temp_dir, server)
 

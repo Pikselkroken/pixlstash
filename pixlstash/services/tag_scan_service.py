@@ -45,6 +45,7 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.tag_health_service import EST_MISSING_MIN_CONF
+from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.near_neighbor import (
     EMBEDDING_BYTES,
     EMBEDDING_DIM,
@@ -265,7 +266,11 @@ def scan_tag(
             Picture.image_embedding.is_not(None), Picture.deleted.is_(False)
         )
         if picture_ids is not None:
-            q = q.where(Picture.id.in_(picture_ids))
+            # Filter via a temp-table subquery instead of one bound parameter
+            # per id: a large explicit scope (tens of thousands of pictures)
+            # would otherwise exceed SQLite's bound-parameter ceiling and raise
+            # OperationalError. Result-identical to ``.in_(picture_ids)``.
+            q = q.where(Picture.id.in_(scope_id_subquery(session, picture_ids)))
         elif pid is not None:
             q = q.where(Picture.project_id == pid)
         emb_rows = session.exec(q).all()
@@ -319,7 +324,12 @@ def scan_tag(
             )
         )
         if picture_ids is not None:
-            q = q.where(TagPrediction.picture_id.in_(picture_ids))
+            # Temp-table subquery, not one bound parameter per id — a large
+            # scope would otherwise exceed SQLite's bound-parameter ceiling.
+            # Result-identical to ``.in_(picture_ids)``.
+            q = q.where(
+                TagPrediction.picture_id.in_(scope_id_subquery(session, picture_ids))
+            )
         elif pid is not None:
             q = q.where(Picture.project_id == pid)
         return session.exec(q).all()
