@@ -113,6 +113,34 @@ describe("ReviewBinaryCard", () => {
     expect(w.find(".rs-bin-banner--add").exists()).toBe(true);
   });
 
+  it("shows the reason (not a 0/0 vote) for a zero-ground-truth fallback card", () => {
+    const w = mount(ReviewBinaryCard, {
+      props: {
+        item: binaryItem({
+          neighbors: [],
+          reason: "model is confident (91%) and there is nothing to compare to",
+        }),
+      },
+      global: globalOpts,
+    });
+    // The free-text reason renders...
+    expect(w.text()).toContain("model is confident (91%)");
+    // ...and no fabricated "0 of 0" neighbour vote or Similar column.
+    expect(w.text()).not.toContain("0 of 0");
+    expect(w.text()).not.toContain("similar images have it");
+    expect(w.find(".rs-similar-closed").exists()).toBe(false);
+    expect(w.find(".rs-similar").exists()).toBe(false);
+  });
+
+  it("still shows the neighbour vote when neighbours are present", () => {
+    const w = mount(ReviewBinaryCard, {
+      props: { item: binaryItem({ reason: "ignored when neighbours exist" }) },
+      global: globalOpts,
+    });
+    expect(w.text()).toContain("2 of 3");
+    expect(w.text()).not.toContain("ignored when neighbours exist");
+  });
+
   it("survives an item update and a heatmap toggle without throwing", async () => {
     const store = useReviewSessionsStore();
     const w = mount(ReviewBinaryCard, { props: { item: binaryItem() }, global: globalOpts });

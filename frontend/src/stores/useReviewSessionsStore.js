@@ -201,10 +201,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const queues = ref({}); // { [id]: { items: [], loading, error } }
   const tallies = ref({}); // { [id]: { removed, added, kept, skipped } }
   const undoStacks = ref({}); // { [id]: [{ item, action, delta, votes }] }
-  // Skip calls that 404ed (interim testing before the backend ships
-  // POST /tag_suggestions/{id}/skip): the client-side removal stands and the
-  // call is retried opportunistically.
-  const pendingSkips = [];
+  // Open-review ids whose pre-session server receipt has already been folded
+  // into `tallies` once (see seedTallyFromReceipt). Non-reactive: it only gates
+  // the one-time seed so a mid-review refresh can't fold the same decisions in
+  // a second time. Cleared by reset() so a reopen re-seeds from a fresh fetch.
+  const seededReceipts = new Set();
 
   // --- Tag health board ------------------------------------------------------
   const healthRows = ref([]);
@@ -320,19 +321,31 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     return r.removed + r.added + r.kept;
   }
 
-  // The session receipt for the completion state: prefer the server's receipt
-  // (covers decisions made in earlier app sessions), fall back to this
-  // client's tally.
+  // The session receipt for the completion state / abort dialog. It has ONE
+  // authoritative source per review state — never server + tally summed:
+  //
+  //   * OPEN review  → the live local `tallies[id]`. It is seeded ONCE from the
+  //     server's pre-session receipt at open (seedTallyFromReceipt) and then
+  //     bumped per decision, so it counts prior-session AND this-session
+  //     decisions. Crucially it NEVER re-reads the live server receipt, so a
+  //     mid-review refresh (refreshSession → fetchDetail overwrites details[id]
+  //     with a LIVE receipt that already counts this session's decisions) cannot
+  //     double-count. Summing details + tally was exactly that double-count bug.
+  //   * ARCHIVED/closed review → the backend's frozen snapshot receipt from
+  //     details[id]. This app session never decided these, so there is no tally.
   function receiptFor(id) {
-    const d = details.value[id];
-    const r = d?.receipt || d?.stats?.receipt;
-    if (r && (r.removed != null || r.added != null || r.kept != null)) {
-      return {
-        removed: r.removed ?? 0,
-        added: r.added ?? 0,
-        kept: r.kept ?? 0,
-        skipped: r.skipped ?? tallies.value[id]?.skipped ?? 0,
-      };
+    const isOpen = sessions.value.some((s) => s.id === id);
+    if (!isOpen) {
+      const d = details.value[id];
+      const r = d?.receipt || d?.stats?.receipt;
+      if (r && (r.removed != null || r.added != null || r.kept != null)) {
+        return {
+          removed: r.removed ?? 0,
+          added: r.added ?? 0,
+          kept: r.kept ?? 0,
+          skipped: r.skipped ?? 0,
+        };
+      }
     }
     return { ...EMPTY_TALLY, ...(tallies.value[id] || {}) };
   }
@@ -371,9 +384,35 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   async function fetchDetail(id) {
     try {
       const res = await apiClient.get(`/reviews/${id}`);
-      details.value = { ...details.value, [id]: res.data ?? null };
+      const data = res.data ?? null;
+      details.value = { ...details.value, [id]: data };
+      seedTallyFromReceipt(id, data);
     } catch {
       // Detail is enrichment (receipt stats); the list row carries the basics.
+    }
+  }
+
+  // Fold an OPEN review's pre-session server receipt into the local tally EXACTLY
+  // once, so the receipt/decided-count includes decisions made in earlier
+  // sittings while still deriving from a single source (the tally). The one-shot
+  // guard means a later fetchDetail (refreshSession refetches the now-live
+  // receipt, which already counts this session's decisions) cannot fold those
+  // same decisions in again. Archived reviews are never seeded — their receipt
+  // reads the frozen server snapshot directly.
+  function seedTallyFromReceipt(id, data) {
+    if (seededReceipts.has(id)) return;
+    if (!sessions.value.some((s) => s.id === id)) return; // OPEN reviews only
+    const r = data?.receipt || data?.stats?.receipt;
+    if (!r) return;
+    seededReceipts.add(id);
+    const base = {
+      removed: r.removed ?? 0,
+      added: r.added ?? 0,
+      kept: r.kept ?? 0,
+      skipped: r.skipped ?? 0,
+    };
+    if (base.removed || base.added || base.kept || base.skipped) {
+      bumpTally(id, base);
     }
   }
 
@@ -697,9 +736,16 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     regionLoading.value = {};
     tagVotes.value = {};
     // Queues/undo stacks are per-review server state + session bookkeeping;
-    // drop them so a reopen refetches fresh queues.
+    // drop them so a reopen refetches fresh queues. `details` (the per-session
+    // receipt snapshot) must go too — otherwise a stale open-time receipt
+    // survives the reopen and re-poisons the completion/abort views. `tallies`
+    // and the seed guard reset together so a reopen re-seeds the tally cleanly
+    // from a fresh server receipt instead of stacking on last session's counts.
     queues.value = {};
     undoStacks.value = {};
+    details.value = {};
+    tallies.value = {};
+    seededReceipts.clear();
   }
 
   // --- Session lifecycle ----------------------------------------------------------
@@ -887,9 +933,13 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   // Skip: the reviewer can't decide, so the card leaves the queue PERMANENTLY
   // with no decision (status → SKIPPED server-side; no tag/ledger writes, no
-  // award progress). Undo covers it (reopen works on SKIPPED rows). While the
-  // backend endpoint hasn't landed, a 404 degrades gracefully: the client-side
-  // removal stands and the call is queued for a later retry.
+  // award progress). Undo covers it (reopen works on SKIPPED rows).
+  //
+  // The skip endpoint ships in this package, so a 404 is never "not implemented
+  // yet" — it means the suggestion is already gone (a dead/reopened id). In that
+  // case the optimistic removal stands, but there is nothing to reopen: we must
+  // NOT record a reversible skip entry, or a later undo()/reopenSkipped() would
+  // POST /reopen on a dead id (another 404) and could block reopening the rest.
   async function skip() {
     const s = activeSession.value;
     const item = current.value;
@@ -899,7 +949,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     setQueue(id, { items: queueFor(id).items.slice(1) });
     bumpTally(id, { skipped: 1 });
     bumpProgress(id, { pending: -1 });
-    flushPendingSkips();
     try {
       await apiClient.post(`/tag_suggestions/${item.id}/skip`);
       undoStacks.value = {
@@ -911,16 +960,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       };
     } catch (e) {
       if (e?.response?.status === 404) {
-        // Interim: endpoint not shipped yet. Keep the removal, retry later,
-        // and still allow undo (reopen no-ops harmlessly on a PENDING row).
-        pendingSkips.push(item.id);
-        undoStacks.value = {
-          ...undoStacks.value,
-          [id]: [
-            ...(undoStacks.value[id] || []),
-            { item, action: "skip", delta: { skipped: 1 }, votes: [] },
-          ],
-        };
+        // Already gone server-side — the card stays out of the queue, but it is
+        // not reopenable, so no undo entry is recorded.
         return;
       }
       // Real failure: put the card back, nothing silently lost.
@@ -931,40 +972,52 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     }
   }
 
-  // Retry skip calls that 404ed earlier (fires opportunistically).
-  function flushPendingSkips() {
-    while (pendingSkips.length) {
-      const sid = pendingSkips.pop();
-      apiClient.post(`/tag_suggestions/${sid}/skip`).catch(() => {
-        // Still not there — give up quietly; the backend scan state will
-        // reconcile once the endpoint lands.
-      });
-    }
-  }
-
   // Reopen every card skipped in THIS client session (their ids live on the
   // undo stack) and put them back in the queue.
   async function reopenSkipped(id) {
     const stack = undoStacks.value[id] || [];
     const skips = stack.filter((e) => e.action === "skip");
     if (!skips.length) return;
-    try {
-      await Promise.all(
-        skips.map((e) => apiClient.post(`/tag_suggestions/${e.item.id}/reopen`)),
-      );
-    } catch (e) {
-      error.value = e?.message || "Failed to reopen the skipped cards";
-      return;
+    // Settle every reopen independently — one dead/already-gone id must not
+    // block reopening the rest (a single rejection in Promise.all did exactly
+    // that). Fulfilled ids return to the queue; a 404 (already gone) just
+    // leaves the skip stack; a hard failure keeps its entry so it can be
+    // retried.
+    const results = await Promise.allSettled(
+      skips.map((e) => apiClient.post(`/tag_suggestions/${e.item.id}/reopen`)),
+    );
+    const reopened = []; // fulfilled → put back in the queue
+    const settled = new Set(); // reopened OR already-gone (404) → drop from stack
+    let hardError = null;
+    results.forEach((res, i) => {
+      const entry = skips[i];
+      if (res.status === "fulfilled") {
+        reopened.push(entry);
+        settled.add(entry);
+      } else if (res.reason?.response?.status === 404) {
+        settled.add(entry); // already gone — nothing to reopen, stop tracking it
+      } else {
+        hardError = res.reason;
+      }
+    });
+    if (hardError) {
+      error.value = hardError?.message || "Failed to reopen the skipped cards";
     }
+    if (!settled.size) return;
     undoStacks.value = {
       ...undoStacks.value,
-      [id]: stack.filter((e) => e.action !== "skip"),
+      [id]: stack.filter((e) => !settled.has(e)),
     };
-    bumpTally(id, { skipped: skips.length }, -1);
-    bumpProgress(id, { pending: skips.length });
-    setQueue(id, {
-      items: sortQueue([...skips.map((e) => e.item), ...queueFor(id).items]),
-    });
+    bumpTally(id, { skipped: settled.size }, -1);
+    bumpProgress(id, { pending: reopened.length });
+    if (reopened.length) {
+      setQueue(id, {
+        items: sortQueue([
+          ...reopened.map((e) => e.item),
+          ...queueFor(id).items,
+        ]),
+      });
+    }
   }
 
   // Undo the most recent decision OR skip in the active session: reopen

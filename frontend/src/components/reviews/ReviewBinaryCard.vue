@@ -10,15 +10,22 @@
         isRemove ? "mdi-tag-remove-outline" : "mdi-tag-plus-outline"
       }}</v-icon>
       <span class="rs-bin-banner-text">
-        <template v-if="isRemove"
-          >Tagged “{{ item.tag }}” — but only {{ nHas }} of
-          {{ nTot }} similar images have it.</template
-        >
-        <template v-else
-          >Not tagged “{{ item.tag }}” — but {{ nHas }} of
-          {{ nTot }} similar images have it.</template
-        >
-        <span class="rs-bin-banner-conf"> · {{ taggerText }}</span>
+        <!-- With neighbours, state the neighbour vote. With none (the zero-
+             ground-truth fallback the backend flags with an empty `neighbors`
+             list), a "0 of 0 similar images" sentence would be fabricated —
+             show the backend's free-text `reason` instead. -->
+        <template v-if="hasNeighbors">
+          <template v-if="isRemove"
+            >Tagged “{{ item.tag }}” — but only {{ nHas }} of
+            {{ nTot }} similar images have it.</template
+          >
+          <template v-else
+            >Not tagged “{{ item.tag }}” — but {{ nHas }} of
+            {{ nTot }} similar images have it.</template
+          >
+          <span class="rs-bin-banner-conf"> · {{ taggerText }}</span>
+        </template>
+        <template v-else>{{ reasonText }}</template>
       </span>
       <strong class="rs-bin-question"
         >Should this have the tag “{{ item.tag }}”?</strong
@@ -95,7 +102,7 @@
       <!-- Collapsible neighbour column: the scan's evidence, made visible.
            Thumbs are zoomable context only — they never demand a verdict. -->
       <button
-        v-if="!similarOpen"
+        v-if="hasNeighbors && !similarOpen"
         class="rs-similar-closed"
         type="button"
         title="Show similar images"
@@ -107,7 +114,7 @@
         >
         <v-icon size="16">mdi-image-multiple-outline</v-icon>
       </button>
-      <div v-else class="rs-similar">
+      <div v-else-if="hasNeighbors" class="rs-similar">
         <div class="rs-similar-head">
           <span class="rs-similar-title">Similar images</span>
           <button
@@ -199,6 +206,15 @@ const neighbors = computed(() =>
 );
 const nHas = computed(() => neighbors.value.filter((n) => n.has).length);
 const nTot = computed(() => neighbors.value.length);
+const hasNeighbors = computed(() => neighbors.value.length > 0);
+
+// The backend's free-text explanation for a zero-ground-truth fallback card
+// (empty `neighbors`), e.g. "model is confident (NN%)…". Shown in place of the
+// neighbour-vote sentence when there are no neighbours to vote.
+const reasonText = computed(() => {
+  const r = props.item.reason;
+  return typeof r === "string" && r.trim() ? r.trim() : "";
+});
 
 // The tagger's confidence about the suspect picture, stated in plain text as a
 // SEPARATE signal from the neighbour vote.

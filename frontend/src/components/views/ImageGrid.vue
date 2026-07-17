@@ -926,6 +926,7 @@ import {
 import { useRoute, useRouter } from "vue-router";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
@@ -2725,6 +2726,13 @@ const visibleRangeLabel = computed(() => {
 
 const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
+const reviewSessionsStore = useReviewSessionsStore();
+// Live "is the Review Sessions overlay up" signal. It stays mounted over the
+// grid as a modal review surface with its own keyboard/drag handling, so the
+// grid's keyboard shortcuts and native drag must go inert while it is open.
+// Authoritative source: the store ref the Toolbar sets true and App.vue's
+// close handler sets false (NOT the retired local reviewOverlayOpen ref).
+const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
 // The trail logic lives in useBreadcrumb, shared with the desktop title bar.
@@ -4132,6 +4140,7 @@ const {
     thumbnailRefs,
     dragPreviewRefs,
     prefetchFullImage,
+    reviewOverlayOpen,
   },
   props,
 );
@@ -4354,6 +4363,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     rowHeight,
     visibleStart,
     overlayOpen,
+    reviewOverlayOpen,
     showSelectionBar,
     selectedImageIds,
     lastSelectedImageId,

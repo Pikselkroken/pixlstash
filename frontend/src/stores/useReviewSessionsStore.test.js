@@ -349,18 +349,21 @@ describe("skip", () => {
     expect(store.undoStacks[1][0].action).toBe("skip");
   });
 
-  it("degrades gracefully when the endpoint 404s (interim testing)", async () => {
+  it("treats a 404 as already-gone: drops the card, no reversible skip entry", async () => {
     const store = useReviewSessionsStore();
     seedSession(store, item);
     apiClient.post.mockRejectedValueOnce({ response: { status: 404 } });
 
     await store.skip();
 
-    // The client-side removal stands; no error surfaced; undo still possible.
+    // The card stays out of the queue and counts as skipped, but a 404 means the
+    // suggestion is already gone — so NO undo entry is recorded (a bogus entry
+    // would later POST /reopen on a dead id and 404 again).
     expect(store.queues[1].items).toHaveLength(0);
     expect(store.tallies[1].skipped).toBe(1);
     expect(store.error).toBeNull();
-    expect(store.undoStacks[1]).toHaveLength(1);
+    expect(store.undoStacks[1] || []).toHaveLength(0);
+    expect(store.reopenableSkipsFor(1)).toBe(0);
   });
 
   it("rolls back on a real failure", async () => {
@@ -405,6 +408,51 @@ describe("skip", () => {
     expect(store.tallies[1].skipped).toBe(0);
     expect(store.reopenableSkipsFor(1)).toBe(0);
   });
+
+  it("reopenSkipped reopens the good ids even when one id 404s", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item);
+    // Two skipped cards on the undo stack; the queue is otherwise empty and
+    // pending starts drained (both cards already left as skips).
+    store.sessions[0].progress = { done: 0, pending: 0 };
+    store.queues = { 1: { items: [], loading: false, error: null } };
+    store.undoStacks = {
+      1: [
+        {
+          item: { id: 41, tag: "cat", kind: "binary" },
+          action: "skip",
+          delta: { skipped: 1 },
+          votes: [],
+        },
+        {
+          item: { id: 42, tag: "cat", kind: "binary" },
+          action: "skip",
+          delta: { skipped: 1 },
+          votes: [],
+        },
+      ],
+    };
+    store.tallies = { 1: { removed: 0, added: 0, kept: 0, skipped: 2 } };
+    // 41 reopens fine; 42 is already gone (404). One dead id must not block the
+    // other from being reopened (the old Promise.all aborted the whole batch).
+    apiClient.post.mockImplementation((url) =>
+      url === "/tag_suggestions/42/reopen"
+        ? Promise.reject({ response: { status: 404 } })
+        : Promise.resolve({ data: {} }),
+    );
+
+    await store.reopenSkipped(1);
+
+    expect(apiClient.post).toHaveBeenCalledWith("/tag_suggestions/41/reopen");
+    expect(apiClient.post).toHaveBeenCalledWith("/tag_suggestions/42/reopen");
+    // The good id is back in the queue; the dead id is dropped, not re-queued.
+    expect(store.queues[1].items.map((i) => i.id)).toEqual([41]);
+    // Both left the skip stack; skipped tally drained for both.
+    expect(store.reopenableSkipsFor(1)).toBe(0);
+    expect(store.tallies[1].skipped).toBe(0);
+    // Only the reopened card adds back to pending.
+    expect(store.sessions[0].progress.pending).toBe(1);
+  });
 });
 
 // --- Abort dialog plumbing -------------------------------------------------------
@@ -440,5 +488,124 @@ describe("undoChangesAndAbort", () => {
     });
     await store.skip();
     expect(store.decidedCountFor(1)).toBe(0);
+  });
+});
+
+// --- Receipt stays live after decisions (F3) ------------------------------------
+
+describe("receiptFor / decidedCountFor stay live after decisions", () => {
+  const item = {
+    id: 55,
+    picture_id: 20,
+    tag: "cat",
+    direction: "remove",
+    kind: "binary",
+  };
+
+  it("reflects a decision made after open (not a stale zero)", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item);
+    // Open: seed the tally from the pre-decision server receipt (all zeros).
+    apiClient.get.mockResolvedValueOnce({
+      data: { receipt: { removed: 0, added: 0, kept: 0 } },
+    });
+    await store.fetchDetail(1);
+    expect(store.receiptFor(1).removed).toBe(0);
+
+    // Decide the card (remove + No → the tag was wrong → removed).
+    await store.answerBinary("no");
+
+    // The completion receipt reflects the decision; the abort dialog now offers
+    // Undo because the decided count is non-zero.
+    expect(store.receiptFor(1)).toMatchObject({ removed: 1, added: 0, kept: 0 });
+    expect(store.decidedCountFor(1)).toBe(1);
+  });
+
+  it("does NOT double-count after a mid-session refresh (QA regression)", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item);
+    // Open: seed from the pre-decision receipt (zeros) — this also marks the id
+    // as seeded so a later refetch can't fold decisions in again.
+    apiClient.get.mockResolvedValueOnce({
+      data: { receipt: { removed: 0, added: 0, kept: 0 } },
+    });
+    await store.fetchDetail(1);
+
+    // Decide one card → receipt shows 1.
+    await store.answerBinary("no");
+    expect(store.receiptFor(1).removed).toBe(1);
+
+    // Click Refresh mid-review. The LIVE server receipt now already counts that
+    // decision (removed: 1). The old server+tally sum returned 2 here.
+    apiClient.get.mockImplementation((url) => {
+      if (url === "/reviews/1")
+        return Promise.resolve({
+          data: { receipt: { removed: 1, added: 0, kept: 0 } },
+        });
+      if (url === "/reviews")
+        return Promise.resolve({ data: [store.sessions[0]] });
+      return Promise.resolve({ data: { items: [] } });
+    });
+    await store.refreshSession(1);
+
+    // Still 1 — the live receipt was not folded into the already-counted tally.
+    expect(store.receiptFor(1).removed).toBe(1);
+    expect(store.decidedCountFor(1)).toBe(1);
+  });
+
+  it("seeds prior-session decisions from the server receipt at open, exactly once", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item);
+    // Reopened review: the server receipt already reflects 2 removals from an
+    // earlier sitting. Folded into the tally once at open.
+    apiClient.get.mockResolvedValueOnce({
+      data: { receipt: { removed: 2, added: 0, kept: 0 } },
+    });
+    await store.fetchDetail(1);
+    expect(store.receiptFor(1).removed).toBe(2);
+    expect(store.decidedCountFor(1)).toBe(2);
+
+    // A new decision this session adds on top.
+    await store.answerBinary("no");
+    expect(store.receiptFor(1).removed).toBe(3);
+
+    // A second fetchDetail (e.g. a refresh) must NOT re-seed the same 2.
+    apiClient.get.mockResolvedValueOnce({
+      data: { receipt: { removed: 3, added: 0, kept: 0 } },
+    });
+    await store.fetchDetail(1);
+    expect(store.receiptFor(1).removed).toBe(3);
+  });
+
+  it("archived reviews read the frozen server snapshot (no local tally)", () => {
+    const store = useReviewSessionsStore();
+    // Not an open session — an archived review's frozen receipt is authoritative.
+    store.archived = [{ id: 3 }];
+    store.details = { 3: { receipt: { removed: 4, added: 1, kept: 2 } } };
+    expect(store.receiptFor(3)).toMatchObject({ removed: 4, added: 1, kept: 2 });
+    expect(store.decidedCountFor(3)).toBe(7);
+  });
+
+  it("reset() clears details, tallies, and the seed guard", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item);
+    apiClient.get.mockResolvedValueOnce({
+      data: { receipt: { removed: 9, added: 0, kept: 0 } },
+    });
+    await store.fetchDetail(1);
+    expect(store.receiptFor(1).removed).toBe(9);
+
+    store.reset();
+    expect(store.details).toEqual({});
+    expect(store.tallies).toEqual({});
+
+    // Seed guard cleared: reopening re-seeds cleanly from a fresh receipt
+    // instead of skipping (which would leave a reopened review reading zero).
+    seedSession(store, item);
+    apiClient.get.mockResolvedValueOnce({
+      data: { receipt: { removed: 5, added: 0, kept: 0 } },
+    });
+    await store.fetchDetail(1);
+    expect(store.receiptFor(1).removed).toBe(5);
   });
 });
