@@ -1062,6 +1062,18 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     writeStickers(stickers.value);
   }
 
+  // Empty the shelf (and its persisted copy). Also cancels an award mid-fly —
+  // otherwise its pending commit would land one sticker right after the clear.
+  function clearStickers() {
+    if (awardTimer) {
+      clearTimeout(awardTimer);
+      awardTimer = null;
+    }
+    activeAward.value = null;
+    stickers.value = [];
+    writeStickers(stickers.value);
+  }
+
   return {
     overlayOpen,
     view,
@@ -1140,5 +1152,6 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     setGamify,
     noteDecision,
     commitAward,
+    clearStickers,
   };
 });

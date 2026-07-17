@@ -267,6 +267,30 @@ describe("award scheduling", () => {
     expect(store.stickers).toHaveLength(1);
   });
 
+  it("clearStickers empties the shelf, its persisted copy, and an award mid-fly", () => {
+    vi.useFakeTimers();
+    const store = useReviewSessionsStore();
+    store.setGamify(true);
+    // One landed sticker...
+    store.noteDecision("cat");
+    vi.advanceTimersByTime(1500);
+    expect(store.stickers).toHaveLength(1);
+    // ...and one mid-fly (commit still pending).
+    store.commitAward({ id: "landed-2", icon: "mdi-star", label: "Star" });
+    expect(store.stickers).toHaveLength(2);
+    store.activeAward = { id: "flying", icon: "mdi-star", label: "Star" };
+
+    store.clearStickers();
+    expect(store.stickers).toHaveLength(0);
+    expect(store.activeAward).toBeNull();
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:reviewStickers")),
+    ).toEqual([]);
+    // The cancelled fly must not land a sticker after the clear.
+    vi.advanceTimersByTime(5000);
+    expect(store.stickers).toHaveLength(0);
+  });
+
   it("re-enabling resets the schedule so the next decision awards again", () => {
     const store = useReviewSessionsStore();
     vi.spyOn(Math, "random").mockReturnValue(0.5);

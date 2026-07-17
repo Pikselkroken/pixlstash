@@ -165,6 +165,23 @@
         Stickers
         <span class="rs-shelf-count">· {{ store.stickers.length }}</span>
         <span class="rs-shelf-spacer"></span>
+        <!-- Clearing is permanent (the collection is not recoverable), so it
+             takes two clicks: the first arms a "Sure?" state that auto-reverts
+             after a few seconds, the second wipes the shelf. -->
+        <button
+          class="rs-shelf-clear"
+          :class="{ 'rs-shelf-clear--armed': clearArmed }"
+          type="button"
+          :title="
+            clearArmed
+              ? 'Click again to clear every sticker — this cannot be undone'
+              : 'Clear all stickers'
+          "
+          @click="onClearClick"
+        >
+          <v-icon size="14">mdi-trash-can-outline</v-icon>
+          <span v-if="clearArmed">Sure?</span>
+        </button>
         <button
           class="rs-shelf-toggle"
           type="button"
@@ -194,7 +211,7 @@
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { onUnmounted, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import ReviewSticker from "./ReviewSticker.vue";
 
@@ -203,6 +220,26 @@ const store = useReviewSessionsStore();
 
 const abortDialog = ref(null); // { id, tag, changes } | null
 const shelfOpen = ref(true);
+
+// Two-step sticker clear: first click arms, second (within the window) wipes.
+const clearArmed = ref(false);
+let clearArmTimer = null;
+const CLEAR_ARM_MS = 3000;
+
+function onClearClick() {
+  clearTimeout(clearArmTimer);
+  if (!clearArmed.value) {
+    clearArmed.value = true;
+    clearArmTimer = setTimeout(() => {
+      clearArmed.value = false;
+    }, CLEAR_ARM_MS);
+    return;
+  }
+  clearArmed.value = false;
+  store.clearStickers();
+}
+
+onUnmounted(() => clearTimeout(clearArmTimer));
 
 function isActive(id) {
   return store.view.type === "session" && store.view.id === id;
@@ -641,6 +678,26 @@ function archivedSummary(a) {
   background: none;
   cursor: pointer;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+.rs-shelf-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+.rs-shelf-clear:hover {
+  color: rgb(var(--v-theme-error));
+}
+.rs-shelf-clear--armed {
+  color: rgb(var(--v-theme-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
 }
 .rs-shelf-grid {
   min-height: 0;
