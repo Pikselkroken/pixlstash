@@ -75,32 +75,26 @@ def _resolve_scope_ids(
     project_id: int | None,
     set_id: int | None,
     character_id: str | None,
-    token_scope_ids: set[int] | None,
 ) -> set[int] | None:
-    """Intersect the review's frozen scope filters with the caller's token scope.
+    """Resolve the review's frozen scope filters to picture ids.
 
-    ``None`` means unrestricted (owner token, no filters). An empty set is a
-    valid "nothing in scope" result. The token scope can only ever narrow,
-    never widen — same contract as the tag-suggestions routes.
+    ``None`` means unrestricted (no filters — whole vault). An empty set is a
+    valid "nothing in scope" result. The ``/reviews`` surface is owner-only
+    (scoped share tokens are rejected at the route boundary), so there is no
+    token scope to intersect here.
     """
-    filter_ids: set[int] | None = None
-    if project_id is not None or set_id is not None or character_id:
+    if project_id is None and set_id is None and not character_id:
+        return None
 
-        def _fetch(session: Session) -> set[int] | None:
-            return fetch_tag_review_scope_picture_ids(
-                session,
-                project_id=project_id,
-                set_id=set_id,
-                character_id=character_id,
-            )
+    def _fetch(session: Session) -> set[int] | None:
+        return fetch_tag_review_scope_picture_ids(
+            session,
+            project_id=project_id,
+            set_id=set_id,
+            character_id=character_id,
+        )
 
-        filter_ids = vault.db.run_immediate_read_task(_fetch)
-
-    if token_scope_ids is None:
-        return filter_ids
-    if filter_ids is None:
-        return token_scope_ids
-    return token_scope_ids & filter_ids
+    return vault.db.run_immediate_read_task(_fetch)
 
 
 def _auto_resolvable_count(vault: "Vault", review: Review) -> int:
@@ -129,14 +123,12 @@ def create_review(
     set_id: int | None = None,
     character_id: str | None = None,
     include_reviewed: bool = False,
-    token_scope_ids: set[int] | None = None,
 ) -> dict:
     """Create a review for ``tag``, run its scan, and return the receipt.
 
     The scope (project/set/character) is frozen onto the review row; the scan
-    is restricted to the resolved scope picture ids intersected with the
-    caller's token scope. At most one OPEN review may exist per tag (enforced
-    both here and by the partial unique index).
+    is restricted to the resolved scope picture ids. At most one OPEN review
+    may exist per tag (enforced both here and by the partial unique index).
 
     Returns the serialized review incl. ``stats`` (scanned/found/prev_reviewed/
     auto_resolvable).
@@ -173,7 +165,6 @@ def create_review(
         project_id=project_id,
         set_id=set_id,
         character_id=character_id,
-        token_scope_ids=token_scope_ids,
     )
 
     try:
@@ -218,7 +209,6 @@ def preview_review(
     project_id: int | None = None,
     set_id: int | None = None,
     character_id: str | None = None,
-    token_scope_ids: set[int] | None = None,
 ) -> dict:
     """What a review with this tag+scope would cover, before creating it.
 
@@ -232,7 +222,6 @@ def preview_review(
         project_id=project_id,
         set_id=set_id,
         character_id=character_id,
-        token_scope_ids=token_scope_ids,
     )
 
     def _fetch(session: Session) -> dict:
@@ -405,8 +394,6 @@ def get_review(vault: "Vault", review_id: int) -> dict:
 def refresh_review(
     vault: "Vault",
     review_id: int,
-    *,
-    token_scope_ids: set[int] | None = None,
 ) -> dict:
     """Re-run the review's scan append-only (same tag, same frozen scope).
 
@@ -433,7 +420,6 @@ def refresh_review(
         project_id=review.project_id,
         set_id=review.set_id,
         character_id=review.character_id,
-        token_scope_ids=token_scope_ids,
     )
     scan = tag_scan_service.scan_tag(
         vault,

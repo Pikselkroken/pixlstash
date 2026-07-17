@@ -235,6 +235,53 @@ def test_refresh_diff_inserts_and_never_resurrects_decided_rows():
         _teardown(temp_dir, server)
 
 
+def test_refresh_recomputes_prev_reviewed_receipt():
+    # Regression: a refresh must recompute prev_reviewed, not freeze the
+    # create-time count. Suspects decided in an earlier (foreign) review only
+    # become visible after a re-scan, so the refreshed receipt must reflect them.
+    from pixlstash.services.tag_scan_service import SOURCE
+
+    temp_dir, client, server = _setup()
+    try:
+        # Open review over pair P0 (pending). Nothing decided yet → the create
+        # receipt reports prev_reviewed == 0.
+        _make_pair(client, server, axis=0)
+        created = client.post(f"{API}/reviews", json={"tag": TAG}).json()
+        rid = created["id"]
+        assert created["stats"]["prev_reviewed"] == 0
+
+        # A second suspect pair whose BOTH endpoints were already decided in a
+        # different review (review_id=None models the legacy/foreign queue).
+        # Injecting both sides means whichever survives pair-dedup is decided.
+        p_a, p_b = _make_pair(client, server, axis=1)
+
+        def _inject_decided(session):
+            for pid in (p_a, p_b):
+                session.add(
+                    TagSuggestion(
+                        picture_id=pid,
+                        tag=TAG,
+                        direction="remove",
+                        source=SOURCE,
+                        score=0.9,
+                        status="DISMISSED",
+                        review_id=None,
+                    )
+                )
+            session.commit()
+
+        server.vault.db.run_task(_inject_decided)
+
+        # Refresh: P0 is this review's own pending row (never counted); the P1
+        # suspect is decided-elsewhere, so the recomputed receipt is now 1.
+        refreshed = client.post(f"{API}/reviews/{rid}/refresh").json()
+        assert refreshed["new_count"] == 0
+        detail = client.get(f"{API}/reviews/{rid}").json()
+        assert detail["stats"]["prev_reviewed"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_include_reviewed_reparents_decided_rows():
     temp_dir, client, server = _setup()
     try:
