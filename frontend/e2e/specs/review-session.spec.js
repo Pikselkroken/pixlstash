@@ -4,9 +4,14 @@ import { ReviewSessions } from '../pages/ReviewSessions.js'
 // Review Sessions — the session loop against the real backend. Each test uses a
 // DISTINCT tag: the backend enforces one open review per tag, and the suite runs
 // single-worker against one shared, mutable backend, so two tests creating the
-// same tag would 409. The fixture vault's real CLIP embeddings produce these
-// suspect counts (probed live): shirt/smile 3 (remove), man/beard/closed eyes 1
-// (remove), grin 2 (remove). Assertions are relative where counts could shift.
+// same tag would 409. The fixture vault's real CLIP embeddings + the base-rate-
+// relative scan thresholds produce these whole-vault suspect counts (probed live
+// 2026-07-17 via scan_tag on test-data/images/vault.db): black hair 2 (remove),
+// smile 2 (remove), man 1 (add), beard / closed eyes / grin / woman 1 (remove).
+// 'shirt' now yields 0 suspects — the base-rate-relative threshold work
+// (6c79e6de / 02fe21c2) moved it below eligibility — so it can no longer back a
+// session test; do NOT reintroduce it here. Assertions are relative where counts
+// could shift; the binary test needs a pure-remove tag with >=2 suspects.
 
 // Read a tally span's integer (e.g. "✗ 2" -> 2). Missing span -> 0.
 async function tallyNum(locator) {
@@ -44,6 +49,19 @@ async function openReviewId(apiContext, tag) {
 // the per-test notes. Un-fixme each as its behaviour is settled.
 test.describe('review sessions — session loop', () => {
   test.beforeEach(async ({ grid, reviews, apiContext }) => {
+    // Isolation: abort any leftover OPEN review before each attempt. A prior
+    // test — or a failed FIRST attempt of this same test — can leave an open
+    // review for a tag. createReview() would then find the tag chip "open" and
+    // jump straight into that session instead of showing the Create button
+    // (.rs-dialog-btn--go), so a retry fails with a confusing dialog error that
+    // masks the real cause. One open review per tag is a backend invariant, so
+    // clearing them all restores a clean slate on this single-worker backend.
+    const openReviews = await (
+      await apiContext.get('/api/v1/reviews?status=OPEN')
+    ).json()
+    for (const r of openReviews) {
+      await apiContext.post(`/api/v1/reviews/${r.id}/abort`)
+    }
     await grid.goto()
     await ReviewSessions.ensureHealthBuilt(apiContext)
     await reviews.open()
@@ -68,11 +86,14 @@ test.describe('review sessions — session loop', () => {
   })
 
   test('binary Yes/No map to keep/remove and the tally + backend receipt track it', async ({ reviews, apiContext }) => {
-    await reviews.createReview('shirt')
-    const rid = await openReviewId(apiContext, 'shirt')
+    await reviews.createReview('black hair')
+    const rid = await openReviewId(apiContext, 'black hair')
     expect(rid).not.toBeNull()
 
-    // "shirt" suspects are remove-direction: banner frames removing the tag.
+    // "black hair" has 2 pure remove-direction suspects (no add-direction ones),
+    // and the queue orders remove-direction cards first, so the first two cards
+    // are both removes — enough to exercise No→remove then Yes→keep. The banner
+    // renders for every suspect card and frames removing the tag.
     await expect(reviews.binBanner.first()).toBeVisible()
 
     // No on a remove card = accept = remove the tag -> "removed" tally + focus advances.
