@@ -49,17 +49,28 @@ async function openReviewId(apiContext, tag) {
 // the per-test notes. Un-fixme each as its behaviour is settled.
 test.describe('review sessions — session loop', () => {
   test.beforeEach(async ({ grid, reviews, apiContext }) => {
-    // Isolation: abort any leftover OPEN review before each attempt. A prior
-    // test — or a failed FIRST attempt of this same test — can leave an open
-    // review for a tag. createReview() would then find the tag chip "open" and
-    // jump straight into that session instead of showing the Create button
-    // (.rs-dialog-btn--go), so a retry fails with a confusing dialog error that
-    // masks the real cause. One open review per tag is a backend invariant, so
-    // clearing them all restores a clean slate on this single-worker backend.
+    // Isolation: fully reset any leftover OPEN review before each attempt so a
+    // prior test — or a failed FIRST attempt of this same test — cannot poison
+    // the next run. Two things must be undone, in order, per open review:
+    //   1. bulk-reopen its DECIDED rows (review-scoped, ids=[] = all of them;
+    //      SKIPPED rows are left as-is). scan_tag runs with
+    //      include_reviewed=False, so any ACCEPTED/DISMISSED suspect would
+    //      otherwise be suppressed on the next create — starving a retry of
+    //      suspects (the mutating 'black hair' test needs both of its 2 removes,
+    //      so one leftover decision would drop the retry to a 1- or 0-suspect
+    //      scan and it would die at binBanner / the empty done-state instead of
+    //      recovering). Reopening flips them back to PENDING so the next scan
+    //      re-adopts them. Mirrors the store's own undoChangesAndAbort flow.
+    //   2. abort the review, freeing the tag's one-open-review slot so
+    //      createReview() shows the Create button (.rs-dialog-btn--go) instead
+    //      of jumping into the still-open session.
     const openReviews = await (
       await apiContext.get('/api/v1/reviews?status=OPEN')
     ).json()
     for (const r of openReviews) {
+      await apiContext.post('/api/v1/tag_suggestions/bulk-reopen', {
+        data: { review_id: r.id },
+      })
       await apiContext.post(`/api/v1/reviews/${r.id}/abort`)
     }
     await grid.goto()
