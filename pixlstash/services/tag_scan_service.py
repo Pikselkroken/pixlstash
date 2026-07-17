@@ -4,21 +4,31 @@ The in-app equivalent of ``scripts/near_neighbor_label_disagreement.py``: it reu
 shared :func:`pixlstash.utils.near_neighbor.knn_disagreement_with_neighbors` kernel so
 the CLI and the UI can't drift, and is merge-aware via :data:`DEFAULT_TAG_MERGES`.
 
-The write path is **diff-insert, never delete-and-rebuild**: a scan only inserts
-suspects that don't already have a row for (tag, source), and never deletes or
-resurrects rows. When a ``review_id`` is given the scan writes into that review
-session (see :class:`pixlstash.db_models.review.Review`):
+The write path is **diff-insert / refresh-in-place, never delete-and-rebuild**:
+a scan only inserts suspects that don't already have a row for (tag, source),
+refreshes the stored evidence on rows that do, and never deletes or resurrects
+rows. When a ``review_id`` is given the scan writes into that review session
+(see :class:`pixlstash.db_models.review.Review`):
 
 * new suspects are inserted with ``review_id`` and their neighbourhood evidence
   captured into ``TagSuggestion.neighbors``;
-* still-undecided rows from the legacy queue or a closed review are adopted into
-  the review (they were never decided, so this resurrects nothing);
+* still-**undecided** rows (``PENDING`` *or* ``SKIPPED`` — a skip records no
+  decision) from the legacy queue or a closed review are adopted into the
+  review with fresh evidence and counted as ``new`` (a re-parented ``SKIPPED``
+  row is re-pended so it re-appears in the queue); they were never decided, so
+  this resurrects nothing;
 * rows already **decided** in an earlier review are skipped and counted as
   ``prev_reviewed`` — unless ``include_reviewed=True``, which re-parents them
   into the new review with ``status`` back to ``PENDING`` (the row is kept, so
-  UNIQUE(picture_id, tag, source) and the audit trail both survive);
+  UNIQUE(picture_id, tag, source) and the audit trail both survive; the
+  overwritten decision is snapshotted into ``prior_*`` so undo can restore it);
 * rows already belonging to *this* review are never touched — a refresh cannot
-  resurrect the review's own decided rows.
+  resurrect the review's own decided rows nor re-pend its own skips.
+
+Without a ``review_id`` (the legacy ``POST /tag_suggestions/scan`` path) a
+re-scan refreshes the evidence on existing ``PENDING`` rows **in place** — it is
+deliberately a diff/refresh, **not** a delete-and-rebuild purge, so the row's
+identity and history survive a re-scan.
 
 Suppression of previously-reviewed suspects is therefore **per-review** (the
 explicit ``include_reviewed`` toggle), not the old permanent ``reviewed_pids``
@@ -574,24 +584,51 @@ def scan_tag(
                 new_count += 1
                 continue
             if review_id is not None and row.review_id == review_id:
-                # Already part of this review — pending or decided. Never touch
-                # it: a refresh must not resurrect this review's own decisions.
+                # Already part of this review — pending, skipped, or decided.
+                # Never touch it: a refresh must not resurrect this review's own
+                # decisions, nor re-pend a row it deliberately skipped.
                 continue
-            if row.status == "PENDING":
-                # Undecided row from the legacy global queue or a closed review:
-                # adopt it into this review with fresh scan evidence. Nobody
-                # decided it, so this resurrects nothing.
+            if row.status in ("PENDING", "SKIPPED"):
+                # Undecided (PENDING or SKIPPED — no decision was ever made) row
+                # from the legacy global queue or a closed/legacy review. SKIPPED
+                # adopts exactly like PENDING and is NOT prev_reviewed; only
+                # genuinely decided rows are (see the branch below).
                 if review_id is not None:
+                    # Adopt it into this review with fresh scan evidence,
+                    # re-pending a SKIPPED row so it re-appears in the queue.
+                    # Nobody decided it, so this resurrects nothing.
                     row.review_id = review_id
+                    row.status = "PENDING"
+                    row.reviewed_at = None
                     _refresh_scan_fields(row, r)
                     new_count += 1
+                elif row.status == "PENDING":
+                    # Legacy scan (review_id=None): no review to adopt into, so
+                    # refresh the stale evidence in place on the existing PENDING
+                    # row. DELIBERATE no-purge decision — this is what replaces
+                    # the old delete-and-rebuild "rebuild" path: a re-scan
+                    # UPDATES direction/score/reason/twin/neighbours and never
+                    # deletes or recreates the row, so UNIQUE(picture_id, tag,
+                    # source) and the audit trail both survive. Nothing is ever
+                    # deleted here. (SKIPPED legacy rows have no review to adopt
+                    # into and are left untouched.)
+                    _refresh_scan_fields(row, r)
                 continue
-            # Decided in an earlier review (or the legacy queue).
+            # Genuinely DECIDED in an earlier review (or the legacy queue):
+            # ACCEPTED / DISMISSED / SWAPPED / TWIN_FIXED. Only these are
+            # prev_reviewed.
             prev_reviewed += 1
             if include_reviewed and review_id is not None:
                 # Explicit re-surfacing: re-parent the decided row into this
                 # review and reopen it. The row (and its history in the ledger)
-                # is kept — UNIQUE(picture_id, tag, source) stays intact.
+                # is kept — UNIQUE(picture_id, tag, source) stays intact. Capture
+                # the decision being overwritten (its review_id/status/
+                # reviewed_at) into prior_* FIRST, so undo can restore it —
+                # re-exposing the original decision for a normal reversal
+                # instead of silently erasing it.
+                row.prior_review_id = row.review_id
+                row.prior_status = row.status
+                row.prior_reviewed_at = row.reviewed_at
                 row.review_id = review_id
                 row.status = "PENDING"
                 row.reviewed_at = None

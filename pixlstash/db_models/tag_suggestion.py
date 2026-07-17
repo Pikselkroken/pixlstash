@@ -92,6 +92,18 @@ class TagSuggestion(SQLModel, table=True):
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
     reviewed_at: Optional[datetime] = Field(default=None)
 
+    # Prior-decision snapshot for the include_reviewed re-parent. When a scan
+    # re-parents an already-DECIDED row into a new review (reopening it), the
+    # decision being overwritten — its (review_id, status, reviewed_at) — is
+    # captured here first, so undo can RESTORE that tuple (re-exposing the
+    # original decision for a normal reversal) instead of silently erasing it.
+    # NULL for rows that were never re-parented over a decision. prior_review_id
+    # is a plain id (not an FK): it is a historical pointer used only to restore
+    # review_id on undo, and reviews are archived rather than deleted.
+    prior_review_id: Optional[int] = Field(default=None)
+    prior_status: Optional[str] = Field(default=None)
+    prior_reviewed_at: Optional[datetime] = Field(default=None)
+
     __table_args__ = (
         UniqueConstraint("picture_id", "tag", "source"),
         # Drives the ranked review queue: WHERE status='PENDING' [AND tag=?] ORDER BY score DESC.

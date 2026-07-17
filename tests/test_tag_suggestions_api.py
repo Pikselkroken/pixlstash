@@ -1528,3 +1528,127 @@ def test_scan_tag_survives_large_picture_ids_scope():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# F2: legacy-scan refresh-in-place (no purge) + accept guards (stale evidence).
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_scan_refreshes_stale_pending_in_place():
+    """F2(i): a legacy re-scan (review_id=None) must REFRESH the stored evidence
+    on an existing PENDING row in place — same row id, fresh evidence, no delete
+    and no duplicate. This is the no-purge replacement for the old rebuild."""
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)  # Bad1.png
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]
+        vec = [1.0] + [0.0] * 511
+        _set_embedding(server, a, vec)
+        _set_embedding(server, b, vec)
+        _seed_tag(server, a, "malformed hand")
+
+        assert (
+            tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)[
+                "count"
+            ]
+            == 1
+        )
+        row = server.vault.db.run_immediate_read_task(
+            lambda s: s.exec(
+                select(TagSuggestion).where(TagSuggestion.tag == "malformed hand")
+            ).first()
+        )
+        sid, orig_reason = row.id, row.reason
+
+        # Corrupt the stored evidence to simulate staleness.
+        def _corrupt(session):
+            r = session.get(TagSuggestion, sid)
+            r.reason, r.score, r.neighbors = "STALE", 0.0, None
+            session.commit()
+
+        server.vault.db.run_task(_corrupt)
+
+        # Legacy re-scan refreshes in place (same row, no purge, no duplicate).
+        assert (
+            tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)[
+                "count"
+            ]
+            == 1
+        )
+        refreshed = server.vault.db.run_immediate_read_task(
+            lambda s: s.get(TagSuggestion, sid)
+        )
+        assert refreshed is not None  # same row, not deleted/recreated
+        assert refreshed.reason == orig_reason and refreshed.reason != "STALE"
+        assert refreshed.score > 0.0 and refreshed.neighbors is not None
+        assert (
+            server.vault.db.run_immediate_read_task(
+                lambda s: len(
+                    s.exec(
+                        select(TagSuggestion).where(
+                            TagSuggestion.tag == "malformed hand"
+                        )
+                    ).all()
+                )
+            )
+            == 1
+        )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_accept_refuses_when_a_manual_fix_contradicts_the_suggestion():
+    """F2(ii): a human recorded the opposite label after the suggestion was
+    raised (a manual fix). Accepting the stale suggestion would reverse it, so
+    accept must refuse (loudly) and leave both the label and the row untouched."""
+    import pytest
+
+    from pixlstash.services.tag_suggestion_service import (
+        SuggestionConflictError,
+        accept_suggestion,
+    )
+    from pixlstash.utils.service.label_ledger import POS, record_human_label
+
+    temp_dir, client, server = _setup()
+    try:
+        pic = _upload_picture(client)
+        _seed_tag(server, pic, "malformed hand")
+        sid = _seed_suggestion(server, pic, "malformed hand", "remove")
+
+        # A human manually affirms the tag belongs (POS) — the manual fix a
+        # stale "remove" suggestion would otherwise reverse.
+        def _manual_pos(session):
+            record_human_label(session, pic, "malformed hand", POS)
+            session.commit()
+
+        server.vault.db.run_task(_manual_pos)
+
+        with pytest.raises(SuggestionConflictError):
+            accept_suggestion(server.vault, sid)
+
+        assert _has_tag(client, pic, "malformed hand")  # manual fix intact
+        assert (
+            server.vault.db.run_immediate_read_task(
+                lambda s: s.get(TagSuggestion, sid).status
+            )
+            == "PENDING"
+        )  # not flipped to ACCEPTED
+
+        # A non-contradicting suggestion (add, matching the human POS; distinct
+        # source so it doesn't collide on UNIQUE(picture_id, tag, source)) still
+        # accepts — the guard is not over-blocking.
+        add_sid = _seed_suggestion(server, pic, "malformed hand", "add", source="model")
+        assert accept_suggestion(server.vault, add_sid)["direction"] == "add"
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()

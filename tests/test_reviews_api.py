@@ -655,6 +655,239 @@ def test_preview_reports_scope_and_prev_reviewed():
 
 
 # ---------------------------------------------------------------------------
+# F4 (SKIPPED adopts, not prev_reviewed) / F9 (freeze-on-close + undo survives
+# re-parent) / F2 (soft-deleted card gone + unacceptable) / F5 (large-scope
+# preview) regression coverage — see the tag-review-rewrite brief.
+# ---------------------------------------------------------------------------
+
+
+def test_skipped_row_readopts_without_dragging_decided_rows():
+    # F4: a skipped-then-archived suspect must re-appear (adopted, PENDING) in a
+    # new review and count as `found`, NOT prev_reviewed — while a genuinely
+    # decided suspect stays suppressed and counts as prev_reviewed.
+    temp_dir, client, server = _setup()
+    try:
+        _make_pair(client, server, axis=0)
+        _make_pair(client, server, axis=1)
+        r1 = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        rows = client.get(f"{API}/reviews/{r1}/suggestions").json()
+        assert len(rows) == 2
+        skipped_sid, dismissed_sid = rows[0]["id"], rows[1]["id"]
+        assert client.post(f"/tag_suggestions/{skipped_sid}/skip").status_code == 200
+        assert (
+            client.post(f"/tag_suggestions/{dismissed_sid}/dismiss").status_code == 200
+        )
+        assert client.post(f"{API}/reviews/{r1}/archive").status_code == 200
+
+        # Default (include_reviewed=False): the SKIPPED suspect is re-adopted
+        # (PENDING again, counted as found); the DISMISSED suspect is not.
+        r2_body = client.post(f"{API}/reviews", json={"tag": TAG}).json()
+        r2 = r2_body["id"]
+        assert r2_body["stats"]["found"] == 1
+        assert r2_body["stats"]["prev_reviewed"] == 1
+        rows2 = client.get(f"{API}/reviews/{r2}/suggestions").json()
+        assert [r["id"] for r in rows2] == [skipped_sid]  # same row, re-parented
+        assert rows2[0]["status"] == "PENDING"
+
+        srow = _get_suggestion(server, skipped_sid)
+        assert srow.review_id == r2 and srow.status == "PENDING"
+        # The decided row was never dragged out of its archived review.
+        drow = _get_suggestion(server, dismissed_sid)
+        assert drow.review_id == r1 and drow.status == "DISMISSED"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_archived_receipt_is_frozen_against_reparenting_scan():
+    # F9a: a closed review's receipt/progress aggregate LIVE over its rows; a
+    # later include_reviewed scan re-parents those rows into a new review, which
+    # would shrink the receipt if it were still live. Freezing on close keeps the
+    # archived session's cover sheet immutable. (A dismiss leaves the pair still
+    # disagreeing, so it is re-detectable and thus re-parentable — an accept
+    # would RESOLVE the disagreement, so the scan could not re-detect it.)
+    temp_dir, client, server = _setup()
+    try:
+        _make_pair(client, server)
+        r1 = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        sid = client.get(f"{API}/reviews/{r1}/suggestions").json()[0]["id"]
+        assert client.post(f"/tag_suggestions/{sid}/dismiss").status_code == 200
+
+        receipt_before = client.get(f"{API}/reviews/{r1}").json()["receipt"]
+        assert receipt_before == {"removed": 0, "added": 0, "kept": 1, "skipped": 0}
+        assert client.post(f"{API}/reviews/{r1}/archive").status_code == 200
+        # Freezing preserved the receipt/progress at close.
+        detail = client.get(f"{API}/reviews/{r1}").json()
+        assert detail["receipt"] == receipt_before
+        assert detail["progress"]["done"] == 1
+
+        # A new review re-parents A's dismissed row into itself.
+        r2 = client.post(
+            f"{API}/reviews", json={"tag": TAG, "include_reviewed": True}
+        ).json()["id"]
+        assert [
+            r["id"] for r in client.get(f"{API}/reviews/{r2}/suggestions").json()
+        ] == [sid]
+
+        # A's frozen receipt/progress are UNCHANGED despite the row leaving.
+        after = client.get(f"{API}/reviews/{r1}").json()
+        assert after["receipt"] == receipt_before  # not shrunk to kept=0
+        assert after["progress"]["done"] == 1
+        # And the list surface serves the same frozen progress.
+        listed = {r["id"]: r for r in client.get(f"{API}/reviews").json()}
+        assert listed[r1]["progress"]["done"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undo_survives_reparent_and_restores_prior_decision():
+    # F9b: a DISMISS in A leaves the pair still disagreeing, so include_reviewed
+    # re-parents the SAME row into B and re-pends it, capturing A's decision in
+    # prior_*. Undo peels the re-parent back to A's decision (its ledger entry
+    # still standing); a second undo reverses that decision through the normal
+    # flow. (A resolving decision — accept/twin-fix — would remove the
+    # disagreement, so the scan would not re-detect the pair and there would be
+    # nothing to re-parent; only a still-disagreeing decision is re-surfaced.)
+    temp_dir, client, server = _setup()
+    try:
+        _make_pair(client, server)
+        r1 = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        row0 = client.get(f"{API}/reviews/{r1}/suggestions").json()[0]
+        sid, suspect = row0["id"], row0["picture_id"]
+        assert client.post(f"/tag_suggestions/{sid}/dismiss").status_code == 200
+
+        def _human_label():
+            pred = server.vault.db.run_immediate_read_task(
+                lambda s: s.exec(
+                    select(TagPrediction).where(
+                        TagPrediction.picture_id == suspect,
+                        TagPrediction.tag == TAG,
+                    )
+                ).first()
+            )
+            return None if pred is None else (pred.label_source, pred.label_state)
+
+        # Dismiss recorded a human label (POS for a remove / NEG for an add).
+        src, state = _human_label()
+        assert src == "human" and state in ("POS", "NEG")
+        assert client.post(f"{API}/reviews/{r1}/archive").status_code == 200
+
+        # include_reviewed re-parents the SAME row and captures A's decision.
+        r2 = client.post(
+            f"{API}/reviews", json={"tag": TAG, "include_reviewed": True}
+        ).json()["id"]
+        assert [
+            r["id"] for r in client.get(f"{API}/reviews/{r2}/suggestions").json()
+        ] == [sid]
+        row = _get_suggestion(server, sid)
+        assert row.review_id == r2 and row.status == "PENDING"
+        assert row.prior_review_id == r1 and row.prior_status == "DISMISSED"
+        # A's decision (its ledger entry) is untouched by the re-parent.
+        assert _human_label() == (src, state)
+
+        # Undo #1: peel the re-parent — back to A's prior decided state, prior_*
+        # cleared, A's decision still standing.
+        assert client.post(f"/tag_suggestions/{sid}/reopen").status_code == 200
+        row = _get_suggestion(server, sid)
+        assert row.review_id == r1 and row.status == "DISMISSED"
+        assert row.reviewed_at is not None
+        assert row.prior_review_id is None and row.prior_status is None
+        assert _human_label() == (src, state)
+
+        # Undo #2 (normal reversal, now re-exposed): A's decision is reversed —
+        # the ledger entry it wrote is cleared and the row re-pends under A.
+        assert client.post(f"/tag_suggestions/{sid}/reopen").status_code == 200
+        row = _get_suggestion(server, sid)
+        assert row.review_id == r1 and row.status == "PENDING"
+        src2, state2 = _human_label()
+        assert src2 != "human" or state2 == "UNKNOWN"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_soft_deleted_suspect_absent_from_queue_and_unacceptable():
+    # F2: a soft-deleted picture's card must not be listed, and accept must
+    # refuse (not silently) to write a Tag onto it.
+    import pytest
+
+    from pixlstash.services.tag_suggestion_service import (
+        SuggestionConflictError,
+        accept_suggestion,
+    )
+
+    temp_dir, client, server = _setup()
+    try:
+        _make_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        row = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]
+        sid, suspect = row["id"], row["picture_id"]
+
+        def _soft_delete(session):
+            session.get(Picture, suspect).deleted = True
+            session.commit()
+
+        server.vault.db.run_task(_soft_delete)
+
+        assert client.get(f"{API}/reviews/{rid}/suggestions").json() == []
+        with pytest.raises(SuggestionConflictError):
+            accept_suggestion(server.vault, sid)
+        assert _get_suggestion(server, sid).status == "PENDING"  # not accepted
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_preview_review_survives_large_scope():
+    # F5: a >1000-id scope must not trip SQLite's bound-parameter ceiling. Pin
+    # the ceiling to the historical 999 floor; the temp-table scope path keeps
+    # preview a 200 (a plain .in_(scope_ids) would raise OperationalError → 500).
+    import sqlite3
+
+    from sqlalchemy import event as sa_event
+    from sqlalchemy import insert as sa_insert
+
+    from pixlstash.db_models import PictureSetMember
+
+    temp_dir, client, server = _setup()
+    try:
+        n = 1500
+        set_id = client.post(f"{API}/picture_sets", json={"name": "Big"}).json()[
+            "picture_set"
+        ]["id"]
+
+        def seed(session):
+            session.execute(
+                sa_insert(Picture),
+                [
+                    {"id": i, "deleted": False, "file_path": f"/x/{i}.png"}
+                    for i in range(1, n + 1)
+                ],
+            )
+            session.execute(
+                sa_insert(PictureSetMember),
+                [{"set_id": set_id, "picture_id": i} for i in range(1, n + 1)],
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        # Pin every new connection's variable limit to the historical 999 floor.
+        engine = server.vault.db._engine
+
+        def _set_limit(dbapi_conn, _record):
+            dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+
+        sa_event.listen(engine, "connect", _set_limit)
+        engine.dispose()
+
+        resp = client.get(
+            f"{API}/reviews/preview", params={"tag": TAG, "set_id": set_id}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"in_scope": n, "prev_reviewed": 0}
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
 # Security: /reviews is an owner-only, vault-wide curation surface. Every
 # write/preview endpoint must reject a resource-scoped READ token (403) while
 # still serving the owner (cookie) session — same policy the read endpoints

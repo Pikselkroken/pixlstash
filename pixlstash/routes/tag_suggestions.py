@@ -300,6 +300,11 @@ def create_router(server) -> APIRouter:
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Suggestion not found")
+        except tag_suggestion_service.SuggestionConflictError as exc:
+            # The suspect picture was soft-deleted, or a human ledger label now
+            # contradicts the suggestion's direction — refuse rather than write a
+            # stale/harmful edit (see accept_suggestion's guards).
+            raise HTTPException(status_code=409, detail=str(exc))
         pic_id = result["picture_id"]
         server.vault.notify(
             EventType.CHANGED_TAGS,

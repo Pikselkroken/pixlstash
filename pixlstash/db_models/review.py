@@ -46,6 +46,17 @@ class Review(SQLModel, table=True):
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
     refreshed_at: Optional[datetime] = Field(default=None)
 
+    # Frozen ``{"receipt": {...}, "progress": {...}}`` JSON, written when the
+    # review is closed (ARCHIVED/ABORTED). A closed review's receipt/progress
+    # otherwise aggregate LIVE over its suggestion rows, so a later scan that
+    # re-parents those rows into a new review would shrink this review's
+    # historical cover sheet. Freezing on close makes it immutable. NULL for
+    # OPEN reviews (served live) and for reviews closed before this column
+    # existed (served live as a back-compat fallback).
+    receipt_snapshot: Optional[str] = Field(
+        default=None, sa_column=sa.Column(sa.Text(), nullable=True)
+    )
+
     __table_args__ = (
         # One OPEN review per tag; archived/aborted history is unlimited.
         sa.Index(

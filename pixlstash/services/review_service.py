@@ -27,6 +27,7 @@ from pixlstash.utils.near_neighbor import hamming_distance
 from pixlstash.utils.service.filter_helpers import (
     fetch_tag_review_scope_picture_ids,
 )
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
@@ -228,19 +229,27 @@ def preview_review(
         in_scope_q = (
             select(func.count()).select_from(Picture).where(Picture.deleted.is_(False))
         )
-        if scope_ids is not None:
-            in_scope_q = in_scope_q.where(Picture.id.in_(scope_ids))
         prev_q = (
             select(func.count())
             .select_from(TagSuggestion)
             .where(
                 TagSuggestion.tag == tag,
                 TagSuggestion.source == tag_scan_service.SOURCE,
-                TagSuggestion.status != "PENDING",
+                # Only genuinely DECIDED rows are "previously reviewed"; a
+                # SKIPPED row carries no decision, matching scan_tag's
+                # prev_reviewed (which also excludes SKIPPED).
+                TagSuggestion.status.notin_(["PENDING", "SKIPPED"]),
             )
         )
         if scope_ids is not None:
-            prev_q = prev_q.where(TagSuggestion.picture_id.in_(scope_ids))
+            # Filter via a temp-table subquery instead of one bound parameter
+            # per id: a large scope (tens of thousands of pictures) would
+            # otherwise exceed SQLite's bound-parameter ceiling and raise
+            # OperationalError (a 500). One materialised table, referenced by
+            # both membership tests. Result-identical to ``.in_(scope_ids)``.
+            sub = scope_id_subquery(session, scope_ids)
+            in_scope_q = in_scope_q.where(Picture.id.in_(sub))
+            prev_q = prev_q.where(TagSuggestion.picture_id.in_(sub))
         return {
             "in_scope": int(session.exec(in_scope_q).one()),
             "prev_reviewed": int(session.exec(prev_q).one()),
@@ -317,6 +326,28 @@ def _receipt(session: Session, review_id: int) -> dict:
     return {"removed": removed, "added": added, "kept": kept, "skipped": skipped}
 
 
+def _frozen_snapshot(review: Review) -> dict | None:
+    """The stored ``{"receipt", "progress"}`` for a closed review, or ``None``.
+
+    A closed review's receipt/progress are frozen onto ``receipt_snapshot`` when
+    it is archived/aborted (see :func:`set_review_status`), so a later scan that
+    re-parents its rows into a new review cannot shrink its historical cover
+    sheet. Returns ``None`` for OPEN reviews and for closed reviews with no
+    snapshot (closed before the column existed) — both fall back to live
+    aggregation at the call site.
+    """
+    if review.status != OPEN and review.receipt_snapshot:
+        try:
+            return json.loads(review.receipt_snapshot)
+        except (ValueError, TypeError):
+            logger.warning(
+                "review %s has unparseable receipt_snapshot; falling back to "
+                "live receipt/progress aggregation",
+                review.id,
+            )
+    return None
+
+
 def _latest_vault_change(session: Session) -> datetime | None:
     """The newest of (latest picture created_at, latest tagger-run completion)."""
     latest_pic = session.exec(
@@ -348,12 +379,23 @@ def list_reviews(vault: "Vault", status: str | None = None) -> list[dict]:
         if status:
             q = q.where(Review.status == status.upper())
         reviews = list(session.exec(q).all())
-        progress = _progress_map(session, [r.id for r in reviews])
+        # Live-aggregate progress only for reviews without a frozen snapshot
+        # (OPEN, or closed before the snapshot column existed); closed reviews
+        # serve their frozen progress so a later re-parenting scan can't shrink
+        # it.
+        live_ids = [r.id for r in reviews if _frozen_snapshot(r) is None]
+        progress = _progress_map(session, live_ids)
         latest_change = _latest_vault_change(session)
         out = []
         for r in reviews:
             item = _serialize(r)
-            item["progress"] = progress.get(r.id, {"done": 0, "pending": 0})
+            snap = _frozen_snapshot(r)
+            if snap is not None:
+                item["progress"] = snap["progress"]
+            else:
+                item["progress"] = progress.get(
+                    r.id, {"done": 0, "pending": 0, "skipped": 0}
+                )
             item["stale"] = _is_stale(r, latest_change)
             out.append(item)
         return out
@@ -374,9 +416,16 @@ def get_review(vault: "Vault", review_id: int) -> dict:
         if review is None:
             raise KeyError(f"Review not found: id={review_id}")
         item = _serialize(review)
-        item["progress"] = _progress_map(session, [review.id])[review.id]
         item["stale"] = _is_stale(review, _latest_vault_change(session))
-        item["receipt"] = _receipt(session, review.id)
+        snap = _frozen_snapshot(review)
+        if snap is not None:
+            # Closed review: serve the frozen receipt/progress so a later scan
+            # re-parenting its rows can't change this session's cover sheet.
+            item["progress"] = snap["progress"]
+            item["receipt"] = snap["receipt"]
+        else:
+            item["progress"] = _progress_map(session, [review.id])[review.id]
+            item["receipt"] = _receipt(session, review.id)
         return item
 
     item = vault.db.run_immediate_read_task(_fetch)
@@ -477,6 +526,17 @@ def set_review_status(vault: "Vault", review_id: int, status: str) -> dict:
                 f"Review {review_id} is {review.status}; cannot set {status}"
             )
         review.status = status
+        # Freeze the receipt/progress on close: both aggregate LIVE over this
+        # review's suggestion rows, so a later scan that re-parents those rows
+        # into a new review would otherwise shrink this closed session's
+        # historical cover sheet. Once frozen, get_review/list_reviews serve the
+        # snapshot for this review instead of re-aggregating.
+        review.receipt_snapshot = json.dumps(
+            {
+                "receipt": _receipt(session, review.id),
+                "progress": _progress_map(session, [review.id])[review.id],
+            }
+        )
         session.commit()
         session.refresh(review)
         return review
@@ -544,7 +604,16 @@ def list_review_suggestions(
     def _fetch(session: Session) -> list[TagSuggestion]:
         if session.get(Review, review_id) is None:
             raise KeyError(f"Review not found: id={review_id}")
-        q = select(TagSuggestion).where(TagSuggestion.review_id == review_id)
+        # Join Picture and exclude soft-deleted suspects: a deleted picture's
+        # card must never be listed in the review queue.
+        q = (
+            select(TagSuggestion)
+            .join(Picture, Picture.id == TagSuggestion.picture_id)
+            .where(
+                TagSuggestion.review_id == review_id,
+                Picture.deleted.is_(False),
+            )
+        )
         if status:
             q = q.where(TagSuggestion.status == status.upper())
         if picture_ids is not None:

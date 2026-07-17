@@ -31,6 +31,7 @@ from pixlstash.utils.service.filter_helpers import (
     fetch_tag_review_scope_picture_ids,
 )
 from pixlstash.utils.service.label_ledger import (
+    HUMAN,
     NEG,
     POS,
     clear_human_label,
@@ -44,6 +45,17 @@ if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
+
+
+class SuggestionConflictError(Exception):
+    """Accepting a suggestion is refused because the world moved under it.
+
+    Raised (not silently swallowed) when applying a suggestion's writeback would
+    act on stale evidence — the suspect picture is soft-deleted, or a human has
+    since recorded the opposite label — so accepting it would reverse a manual
+    fix or tag a deleted picture. The caller sees an explicit failure instead of
+    a silent, harmful no-op.
+    """
 
 
 def resolve_filter_picture_ids(
@@ -254,12 +266,71 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 
     Raises:
         KeyError: If no suggestion with that id exists.
+        SuggestionConflictError: If the suspect picture is soft-deleted, or a
+            human has recorded the opposite label since the suggestion was
+            raised (accepting would tag a deleted picture / reverse a manual
+            fix).
     """
 
     def _accept(session: Session) -> dict:
         suggestion = session.get(TagSuggestion, suggestion_id)
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
+
+        # F2 guard 1: never write a Tag onto a soft-deleted (or missing)
+        # picture. Its card is filtered out of the review queue, so accepting
+        # one is always acting on a stale card — refuse loudly rather than
+        # silently tagging a deleted picture.
+        picture = session.get(Picture, suggestion.picture_id)
+        if picture is None or picture.deleted:
+            logger.warning(
+                "accept_suggestion refused: suggestion %s targets picture %s "
+                "which is %s; not writing tag %r (direction=%s)",
+                suggestion_id,
+                suggestion.picture_id,
+                "missing" if picture is None else "soft-deleted",
+                suggestion.tag,
+                suggestion.direction,
+            )
+            raise SuggestionConflictError(
+                f"picture {suggestion.picture_id} is deleted; refusing to "
+                f"accept suggestion {suggestion_id}"
+            )
+
+        # F2 guard 2: refuse when a human has recorded the OPPOSITE label since
+        # this suggestion was raised, so accepting stale evidence can't reverse
+        # a manual fix. Only fires for a still-PENDING suggestion that was not
+        # itself re-parented over its own prior decision (prior_status set):
+        # dismiss-then-accept (status != PENDING) and re-review of a re-parented
+        # row (prior_status set) legitimately carry a contradicting label from
+        # their OWN history and must stay acceptable.
+        if suggestion.status == "PENDING" and suggestion.prior_status is None:
+            human = session.exec(
+                select(TagPrediction).where(
+                    TagPrediction.picture_id == suggestion.picture_id,
+                    TagPrediction.tag == suggestion.tag,
+                    TagPrediction.label_source == HUMAN,
+                )
+            ).first()
+            if human is not None and human.label_state in (POS, NEG):
+                wants = POS if suggestion.direction == "add" else NEG
+                if human.label_state != wants:
+                    logger.warning(
+                        "accept_suggestion refused: suggestion %s (picture %s, "
+                        "tag %r, direction=%s) is contradicted by a human %s "
+                        "label recorded since it was raised; refusing to "
+                        "reverse the manual fix",
+                        suggestion_id,
+                        suggestion.picture_id,
+                        suggestion.tag,
+                        suggestion.direction,
+                        human.label_state,
+                    )
+                    raise SuggestionConflictError(
+                        f"suggestion {suggestion_id} is contradicted by a human "
+                        f"{human.label_state} label; refusing to reverse it"
+                    )
+
         _apply_writeback(session, suggestion)
         suggestion.status = "ACCEPTED"
         suggestion.reviewed_at = datetime.utcnow()
@@ -281,6 +352,16 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     DISMISSED touched only the ledger. Each path also clears the human ledger entry the
     forward review wrote, so reopening is fully symmetric (no orphan POS/NEG left behind).
     SKIPPED wrote nothing anywhere, so it matches no branch and just re-pends.
+
+    F9b: a PENDING/SKIPPED row that was re-parented over a prior decision
+    (``include_reviewed`` reopened a decided row into a new review) carries that
+    decision in ``prior_*``. Reversing such a row makes no label change here;
+    instead it peels the re-parent back — restoring the row to its prior
+    review/status/reviewed_at, re-exposing the original decision for a normal
+    reversal, then clearing ``prior_*``. The prior decision's own label write is
+    left standing until that re-exposed row is itself reversed. (A row decided
+    anew in the new review reverses that decision first and re-pends, leaving
+    ``prior_*`` intact for a second reopen to peel.)
     """
     tag_value = suggestion.tag
     if suggestion.status == "ACCEPTED":
@@ -327,6 +408,19 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     elif suggestion.status == "DISMISSED":
         # Dismiss recorded a NEG (add) / POS (remove) on the suspect; clear it.
         clear_human_label(session, suggestion.picture_id, tag_value)
+    elif suggestion.prior_status is not None:
+        # F9b: an undecided (PENDING/SKIPPED) row re-parented over a prior
+        # decision. No label change was made in THIS review, so peel the
+        # re-parent back — restore the captured prior tuple (review/status/
+        # reviewed_at), re-exposing the original decision for a normal reversal,
+        # then clear prior_*. The prior decision's label write is untouched.
+        suggestion.review_id = suggestion.prior_review_id
+        suggestion.status = suggestion.prior_status
+        suggestion.reviewed_at = suggestion.prior_reviewed_at
+        suggestion.prior_review_id = None
+        suggestion.prior_status = None
+        suggestion.prior_reviewed_at = None
+        return
     suggestion.status = "PENDING"
     suggestion.reviewed_at = None
 
