@@ -356,7 +356,12 @@ def compute_tag_health_rows(
                 func.sum(
                     case((TagPrediction.model_version == current_version, 1), else_=0)
                 ),
-            ),
+            )
+            # Exclude soft-deleted pictures so verified_pct/boundary_pct/has_model
+            # match est_wrong/est_missing above (which already join+filter deleted);
+            # otherwise a deleted picture's predictions inflate the unscoped board.
+            .join(Picture, Picture.id == TagPrediction.picture_id)
+            .where(Picture.deleted.is_(False)),
             TagPrediction.picture_id,
         ).group_by(TagPrediction.tag)
     ).all():
@@ -370,7 +375,12 @@ def compute_tag_health_rows(
     disputes = _fold_counts(
         session.exec(
             _scoped(
-                select(TagPrediction.tag, func.count()).where(
+                select(TagPrediction.tag, func.count())
+                # Soft-deleted pictures must not inflate model_disputes; join+filter
+                # deleted to match est_wrong/est_missing.
+                .join(Picture, Picture.id == TagPrediction.picture_id)
+                .where(
+                    Picture.deleted.is_(False),
                     TagPrediction.label_source == "human",
                     or_(
                         and_(
@@ -393,8 +403,13 @@ def compute_tag_health_rows(
     last_reviewed: dict[str, datetime] = {}
     for tag_value, reviewed_at in session.exec(
         _scoped(
-            select(TagSuggestion.tag, func.max(TagSuggestion.reviewed_at)).where(
-                TagSuggestion.reviewed_at.is_not(None)
+            select(TagSuggestion.tag, func.max(TagSuggestion.reviewed_at))
+            # Exclude suggestions on soft-deleted pictures so last_reviewed matches
+            # the deleted-excluding est_wrong/est_missing signals.
+            .join(Picture, Picture.id == TagSuggestion.picture_id)
+            .where(
+                Picture.deleted.is_(False),
+                TagSuggestion.reviewed_at.is_not(None),
             ),
             TagSuggestion.picture_id,
         ).group_by(TagSuggestion.tag)
@@ -410,8 +425,13 @@ def compute_tag_health_rows(
     dismissed: dict[str, int] = defaultdict(int)
     for tag_value, status, n in session.exec(
         _scoped(
-            select(TagSuggestion.tag, TagSuggestion.status, func.count()).where(
-                TagSuggestion.status.in_(["ACCEPTED", "DISMISSED"])
+            select(TagSuggestion.tag, TagSuggestion.status, func.count())
+            # Exclude soft-deleted pictures so the overturn_rate numerator/denominator
+            # match the deleted-excluding est_wrong/est_missing signals.
+            .join(Picture, Picture.id == TagSuggestion.picture_id)
+            .where(
+                Picture.deleted.is_(False),
+                TagSuggestion.status.in_(["ACCEPTED", "DISMISSED"]),
             ),
             TagSuggestion.picture_id,
         ).group_by(TagSuggestion.tag, TagSuggestion.status)

@@ -730,6 +730,181 @@ def test_tag_health_default_tag_merges_folds_across_all_signals():
         _teardown(temp_dir, server)
 
 
+def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
+    """Soft-deleted pictures must not pollute the UNSCOPED cached board.
+
+    The unscoped pred_agg / model_disputes / last_reviewed / overturn queries
+    join Picture and filter `deleted.is_(False)` just like est_wrong/est_missing,
+    so a deleted picture's predictions and suggestions never inflate
+    verified_pct/boundary_pct/has_model/model_disputes/overturn_rate/
+    last_reviewed_at. The unscoped board must therefore agree, tag-for-tag, with
+    a board scoped to exactly the live pictures (the scope helper already
+    excludes deleted).
+    """
+    temp_dir, client, server = _setup()
+    try:
+        # Live pictures for tag "t".
+        l_wrong = _upload_named(client)  # tagged "t", conf 0.05, human POS
+        l_missing = _upload_named(client)  # untagged, conf 0.95
+        l_boundary = _upload_named(client)  # conf 0.50 (boundary mass)
+        # Deleted pictures that would inflate every fixed signal if counted.
+        d1 = _upload_named(client)
+        d2 = _upload_named(client)
+        d3 = _upload_named(client)
+
+        now = datetime.utcnow()
+        t_live = now - timedelta(minutes=10)
+        t_later = now  # strictly later than the live review timestamp
+
+        def seed(session):
+            session.add(Tag(picture_id=l_wrong, tag="t"))
+            # est_wrong + model_disputes + verified.
+            session.add(
+                TagPrediction(
+                    picture_id=l_wrong,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v1",
+                    predicted_at=now,
+                    label_state="POS",
+                    label_source="human",
+                )
+            )
+            # est_missing.
+            session.add(
+                TagPrediction(
+                    picture_id=l_missing,
+                    tag="t",
+                    confidence=0.95,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            # boundary mass.
+            session.add(
+                TagPrediction(
+                    picture_id=l_boundary,
+                    tag="t",
+                    confidence=0.50,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            # Live reviewed history: 1 ACCEPTED + 1 DISMISSED → overturn 0.5.
+            session.add(
+                TagSuggestion(
+                    picture_id=l_wrong,
+                    tag="t",
+                    direction="remove",
+                    source="near_neighbor",
+                    score=1.0,
+                    status="ACCEPTED",
+                    reviewed_at=t_live,
+                )
+            )
+            session.add(
+                TagSuggestion(
+                    picture_id=l_missing,
+                    tag="t",
+                    direction="add",
+                    source="model",
+                    score=1.0,
+                    status="DISMISSED",
+                    reviewed_at=t_live,
+                )
+            )
+
+            # --- Deleted pictures: mark soft-deleted, then hang skewing signals
+            # off them. If any of the four fixed queries fails to exclude
+            # deleted, the asserted ratios/counts below shift. ---
+            for pid in (d1, d2, d3):
+                pic = session.get(Picture, pid)
+                pic.deleted = True
+                session.add(pic)
+                session.add(Tag(picture_id=pid, tag="t"))
+                # Each: verified, non-boundary, human-disputed prediction on "t".
+                session.add(
+                    TagPrediction(
+                        picture_id=pid,
+                        tag="t",
+                        confidence=0.05,
+                        model_version="v1",
+                        predicted_at=now,
+                        label_state="POS",
+                        label_source="human",
+                    )
+                )
+                # Two ACCEPTED reviewed later than the live ones — would push
+                # overturn to 3/4 and last_reviewed to t_later if counted.
+                session.add(
+                    TagSuggestion(
+                        picture_id=pid,
+                        tag="t",
+                        direction="remove",
+                        source="near_neighbor",
+                        score=1.0,
+                        status="ACCEPTED",
+                        reviewed_at=t_later,
+                    )
+                )
+            session.commit()
+
+            # Scope = exactly the live pictures.
+            ps = PictureSet(name="all_live")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            for pid in (l_wrong, l_missing, l_boundary):
+                session.add(PictureSetMember(set_id=ps.id, picture_id=pid))
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        # Unscoped cached board (the path the fix corrects).
+        body = _rebuild_and_wait(client)
+        unscoped = {r["tag"]: r for r in body["rows"]}["t"]
+
+        # Board scoped to exactly the live pictures.
+        scoped_resp = client.get(f"{API}/tag_health", params={"set_id": set_id})
+        assert scoped_resp.status_code == 200, scoped_resp.text
+        scoped = {r["tag"]: r for r in scoped_resp.json()["rows"]}["t"]
+
+        # Expected values — live pictures only (3 predictions: 1 verified/disputed,
+        # 1 plain, 1 boundary; overturn 1/1; last review at t_live).
+        signal_keys = [
+            "est_wrong",
+            "est_missing",
+            "verified_pct",
+            "boundary_pct",
+            "has_model",
+            "model_disputes",
+            "overturn_rate",
+            "last_reviewed_at",
+        ]
+        for key in signal_keys:
+            assert unscoped[key] == scoped[key], (
+                f"unscoped/scoped disagree on {key}: "
+                f"{unscoped[key]!r} != {scoped[key]!r}"
+            )
+
+        assert unscoped["est_wrong"] == 1
+        assert unscoped["est_missing"] == 1
+        # pred_agg over 3 live predictions: 1 verified, 1 boundary. Deleted rows
+        # (all verified, non-boundary) would skew these to 4/6 and 1/6.
+        assert abs(unscoped["verified_pct"] - 1 / 3) < 1e-9
+        assert abs(unscoped["boundary_pct"] - 1 / 3) < 1e-9
+        assert unscoped["has_model"] is True
+        # Only l_wrong disputes; the 3 deleted human POS @0.05 rows must not add.
+        assert unscoped["model_disputes"] == 1
+        # 1 ACCEPTED / 1 DISMISSED live; deleted ACCEPTED rows must not shift it.
+        assert unscoped["overturn_rate"] == 0.5
+        # The later deleted reviews must not win "last reviewed".
+        assert unscoped["last_reviewed_at"] == t_live.isoformat()
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_tag_health_est_adj_reflects_precision_discount_and_fallback():
     """3: est_wrong_adj/est_missing_adj discount by the tag's measured precision
     (from the latest TaggerRun report), falling back to DEFAULT_TAG_PRECISION

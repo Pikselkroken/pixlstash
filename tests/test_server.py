@@ -1258,6 +1258,75 @@ def test_all_picture_query_respects_project_filter():
     log_resources("END test_all_picture_query_respects_project_filter")
 
 
+def test_unassigned_project_filter_with_id_returns_matching_picture():
+    """Regression: `?id=<pic>&project_id=UNASSIGNED` must return the matching
+    unassigned picture, not an empty list.
+
+    The `id` filter arrives as a string query param while the UNASSIGNED branch
+    builds an int id list from `select(Picture.id)`; intersecting the two
+    without normalising types silently yielded an empty set (`{'5'} & {5}`), so
+    the endpoint returned nothing instead of the picture."""
+
+    log_resources(
+        "START test_unassigned_project_filter_with_id_returns_matching_picture"
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            unassigned_import = upload_pictures_and_wait(
+                client,
+                [("file", ("id-unassigned.png", random_images[14], "image/png"))],
+            )
+            assigned_import = upload_pictures_and_wait(
+                client,
+                [("file", ("id-assigned.png", random_images[15], "image/png"))],
+            )
+
+            pic_unassigned = unassigned_import["results"][0]["picture_id"]
+            pic_assigned = assigned_import["results"][0]["picture_id"]
+
+            project_resp = client.post(
+                "/projects",
+                json={"name": "Id Unassigned Filter Project"},
+            )
+            assert project_resp.status_code == 200
+            project_id = project_resp.json()["id"]
+
+            set_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_assigned], "project_id": project_id},
+            )
+            assert set_resp.status_code == 200
+
+            # The core regression: filtering by the unassigned picture's own id
+            # while scoping to UNASSIGNED must return it, not an empty list.
+            resp = client.get(
+                "/pictures",
+                params={"id": str(pic_unassigned), "project_id": "UNASSIGNED"},
+            )
+            assert resp.status_code == 200
+            returned_ids = {item.get("id") for item in resp.json()}
+            assert pic_unassigned in returned_ids
+
+            # An assigned picture's id under UNASSIGNED scope stays excluded.
+            resp_assigned = client.get(
+                "/pictures",
+                params={"id": str(pic_assigned), "project_id": "UNASSIGNED"},
+            )
+            assert resp_assigned.status_code == 200
+            assert pic_assigned not in {item.get("id") for item in resp_assigned.json()}
+
+    gc.collect()
+    log_resources("END test_unassigned_project_filter_with_id_returns_matching_picture")
+
+
 def test_stack_query_respects_project_filter():
     """Stack endpoint should honor project_id filters when building candidates."""
 

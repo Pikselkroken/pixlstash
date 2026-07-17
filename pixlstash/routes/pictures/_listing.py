@@ -1136,7 +1136,17 @@ def select_pictures_for_listing(
                 # "nothing matches this token's scope" result), which is
                 # falsy but distinct from "no id filter was ever set" (None).
                 if existing_ids is not None:
-                    query_params["id"] = list(set(existing_ids) & set(project_pic_ids))
+                    # existing_ids may be a list of strings (query params, or
+                    # ids populated by an earlier filter such as
+                    # scope_picture_id, shared_only, or split -- all of which
+                    # stringify their ids), while project_pic_ids is always
+                    # list[int] (from select(Pic.id)). Intersecting the two
+                    # directly with mismatched types silently yields an empty
+                    # set every time, so `?id=5&project_id=UNASSIGNED` returned
+                    # nothing instead of the matching picture. Normalize to int
+                    # first, mirroring the set_filter_ids / character branches.
+                    existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
+                    query_params["id"] = list(existing_id_set & set(project_pic_ids))
                 else:
                     query_params["id"] = project_pic_ids
             else:
