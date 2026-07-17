@@ -1,6 +1,6 @@
 // useReviewSessionsStore.js — state for the "Review sessions" overlay.
 //
-// Replaces useReviewFixesStore's hidden queue with first-class review sessions:
+// Models tag review as first-class review sessions:
 // a tag-health board (landing view), a rail of open reviews (each = one tag +
 // frozen scope + one scan's results), and a per-session queue of binary/pair
 // cards. Decisions still write through the existing per-item /tag_suggestions

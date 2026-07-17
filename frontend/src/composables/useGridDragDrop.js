@@ -28,7 +28,6 @@ export function useGridDragDrop(
     thumbnailRefs,
     dragPreviewRefs,
     prefetchFullImage,
-    reviewOverlayOpen,
   },
   props,
 ) {
@@ -271,12 +270,6 @@ export function useGridDragDrop(
   }
 
   function handleThumbnailNativeDragStart(img, event) {
-    // No grid drag-and-drop while the review-fixes overlay is up (it sits over
-    // the grid as a modal review surface).
-    if (reviewOverlayOpen?.value) {
-      event.preventDefault();
-      return;
-    }
     if (touchSelectMode.value) {
       event.preventDefault();
       return;
@@ -306,10 +299,6 @@ export function useGridDragDrop(
 
   function handleContainerDragStart(img, event) {
     if (!img || !event?.dataTransfer) return;
-    if (reviewOverlayOpen?.value) {
-      event.preventDefault();
-      return;
-    }
     if (touchSelectMode.value) {
       event.preventDefault();
       return;
