@@ -378,6 +378,25 @@ def test_add_remove_tag_to_picture():
         gc.collect()
 
 
+def test_patch_picture_with_tags_key_does_not_500():
+    # Regression: PATCH /pictures/{id} carrying a `tags` key used to 500 for
+    # everyone — hasattr(pic, "tags") lazy-loaded the tags relationship on a
+    # session-detached Picture (DetachedInstanceError) before any handler ran.
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+
+        resp = client.patch(f"/pictures/{pic_id}", json={"tags": ["alpha", "beta"]})
+        assert resp.status_code == 200, resp.text
+
+        tags = client.get(f"/pictures/{pic_id}/tags").json().get("tags", [])
+        assert {t["tag"] for t in tags} == {"alpha", "beta"}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_get_all_tags_with_counts():
     temp_dir, client, server = _setup()
     try:
