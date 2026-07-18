@@ -19,6 +19,7 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Face, Picture, Tag
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.service.label_ledger import (
     NEG,
     clear_human_label,
@@ -56,6 +57,18 @@ def clear_in_session(
     Returns the removed ``(picture_id, tag)`` pairs (for the undo / a toast). Commits.
     """
     if not picture_ids or not filters:
+        return []
+    # Pictures frozen by a locked set are read-only: drop them from the clear so a
+    # bulk cleanup never mutates a frozen set's labels (the rest still clear).
+    locked = locked_picture_ids(session, picture_ids)
+    if locked:
+        logger.info(
+            "Impossible-tag clear: skipping %d locked picture(s) %s",
+            len(locked),
+            sorted(locked),
+        )
+        picture_ids = [pid for pid in picture_ids if pid not in locked]
+    if not picture_ids:
         return []
     removed: list[tuple[int, str]] = []
     for chunk in _chunks(list(picture_ids)):
@@ -101,6 +114,16 @@ def clear_in_session(
 
 def restore_in_session(session: Session, pairs: list[tuple[int, str]]) -> list[int]:
     """Re-add removed tags and clear their ledger entries (undo). Returns touched pids."""
+    # Skip any picture that has since become frozen by a locked set — restoring a
+    # tag onto it would mutate the frozen set's labels.
+    locked = locked_picture_ids(session, [pid for pid, _tag in pairs])
+    if locked:
+        logger.info(
+            "Impossible-tag restore: skipping %d locked picture(s) %s",
+            len(locked),
+            sorted(locked),
+        )
+        pairs = [(pid, tag) for pid, tag in pairs if pid not in locked]
     touched: set[int] = set()
     for pid, tag in pairs:
         existing = session.exec(
@@ -120,21 +143,45 @@ def restore_in_session(session: Session, pairs: list[tuple[int, str]]) -> list[i
 def clear_impossible_tags(
     vault: "Vault", picture_ids: list[int], filters: list[str]
 ) -> dict:
-    """Vault wrapper for :func:`clear_in_session`. Returns the removed pairs + count."""
-    removed = vault.db.run_task(clear_in_session, list(picture_ids), list(filters))
+    """Vault wrapper for :func:`clear_in_session`. Returns the removed pairs, count,
+    and any ids skipped because a locked set freezes them."""
+
+    def _run(session, ids, active_filters):
+        skipped = sorted(locked_picture_ids(session, ids))
+        removed = clear_in_session(session, ids, active_filters)
+        return removed, skipped
+
+    removed, skipped_locked = vault.db.run_task(_run, list(picture_ids), list(filters))
     logger.info(
-        "Impossible-tag clear: removed %d tags across %d pictures (filters=%s)",
+        "Impossible-tag clear: removed %d tags across %d pictures (filters=%s), "
+        "skipped %d locked",
         len(removed),
         len({p for p, _t in removed}),
         filters,
+        len(skipped_locked),
     )
     return {
         "removed": [{"picture_id": p, "tag": t} for p, t in removed],
         "count": len(removed),
+        "skipped_locked": skipped_locked,
     }
 
 
 def restore_cleared_tags(vault: "Vault", pairs: list[tuple[int, str]]) -> dict:
-    """Vault wrapper for :func:`restore_in_session` (undo)."""
-    touched = vault.db.run_task(restore_in_session, list(pairs))
-    return {"restored": len(pairs), "picture_ids": touched}
+    """Vault wrapper for :func:`restore_in_session` (undo).
+
+    ``restored`` counts the pairs actually re-added (locked pictures are skipped),
+    and ``skipped_locked`` lists any picture ids frozen by a locked set."""
+
+    def _run(session, restore_pairs):
+        skipped_set = locked_picture_ids(session, [p for p, _t in restore_pairs])
+        touched = restore_in_session(session, restore_pairs)
+        restored_pairs = [p for p, _t in restore_pairs if p not in skipped_set]
+        return touched, sorted(skipped_set), len(restored_pairs)
+
+    touched, skipped_locked, restored_count = vault.db.run_task(_run, list(pairs))
+    return {
+        "restored": restored_count,
+        "picture_ids": touched,
+        "skipped_locked": skipped_locked,
+    }

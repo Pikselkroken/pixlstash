@@ -85,15 +85,77 @@
             </option>
           </select>
         </label>
-        <label class="rs-dialog-scope">
-          <span class="rs-dialog-label">Set</span>
-          <select v-model="setId" @change="$event.target.blur()">
-            <option :value="null">Any</option>
-            <option v-for="s in store.sets" :key="s.id" :value="s.id">
-              {{ s.name || `Set ${s.id}` }}
-            </option>
-          </select>
-        </label>
+        <!-- Set scope is a custom listbox (not a native <select>) because a
+             <select>'s <option>s can't render the lock icon a locked set needs.
+             Locked sets render greyed, with mdi-lock-outline, and are not
+             selectable (their pictures are read-only, so they can't be reviewed
+             — the backend also 423s a locked set_id as a backstop). -->
+        <div class="rs-dialog-scope">
+          <span id="rs-set-label" class="rs-dialog-label">Set</span>
+          <div
+            ref="setBoxRef"
+            class="rs-listbox"
+            @focusout="onSetFocusOut"
+            @keydown.escape.stop.prevent="closeSetMenu(true)"
+          >
+            <button
+              ref="setTriggerRef"
+              type="button"
+              class="rs-listbox-trigger"
+              role="combobox"
+              aria-haspopup="listbox"
+              aria-labelledby="rs-set-label"
+              :aria-expanded="setMenuOpen"
+              @click="toggleSetMenu"
+              @keydown="onTriggerKeydown"
+            >
+              <span class="rs-listbox-value">{{ selectedSetLabel }}</span>
+              <v-icon size="16" class="rs-listbox-caret">mdi-chevron-down</v-icon>
+            </button>
+            <ul
+              v-if="setMenuOpen"
+              ref="setListRef"
+              class="rs-listbox-menu"
+              role="listbox"
+              tabindex="-1"
+              aria-labelledby="rs-set-label"
+              :aria-activedescendant="`rs-set-opt-${activeSetIndex}`"
+              @keydown="onListKeydown"
+            >
+              <li
+                v-for="(opt, i) in setOptions"
+                :id="`rs-set-opt-${i}`"
+                :key="opt.id ?? 'any'"
+                class="rs-listbox-option"
+                :class="{
+                  'rs-listbox-option--active': i === activeSetIndex,
+                  'rs-listbox-option--selected': opt.id === setId,
+                  'rs-listbox-option--locked': opt.locked,
+                }"
+                role="option"
+                :aria-selected="opt.id === setId"
+                :aria-disabled="opt.locked || undefined"
+                :title="opt.locked ? lockedOptionTitle(opt.name) : undefined"
+                @click="selectSet(opt)"
+                @mousemove="activeSetIndex = i"
+              >
+                <v-icon
+                  v-if="opt.locked"
+                  size="14"
+                  class="rs-listbox-lock"
+                  >mdi-lock-outline</v-icon
+                >
+                <span class="rs-listbox-option-label">{{ opt.name }}</span>
+                <v-icon
+                  v-if="opt.id === setId"
+                  size="14"
+                  class="rs-listbox-check"
+                  >mdi-check</v-icon
+                >
+              </li>
+            </ul>
+          </div>
+        </div>
         <label class="rs-dialog-scope">
           <span class="rs-dialog-label">Character</span>
           <select v-model="characterId" @change="$event.target.blur()">
@@ -157,7 +219,7 @@
 <script setup>
 // New-review dialog: explicit creation. Open tags stay ENABLED — clicking one
 // jumps to the open session instead of dead-ending on a disabled chip.
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 
 const props = defineProps({
@@ -202,6 +264,110 @@ const visible = computed(() => {
         : corrections(b) - corrections(a) || a.tag.localeCompare(b.tag),
     );
 });
+
+// --- Set-scope listbox --------------------------------------------------------
+//
+// A custom listbox (rather than a native <select>) so a locked set can render a
+// lock icon and a greyed, non-selectable row. `store.sets` carries `locked`
+// straight from the API (PictureSetResponse.locked via safe_model_dict), so the
+// dialog reads set-level lock state directly — no extra lookup store needed.
+const setMenuOpen = ref(false);
+const activeSetIndex = ref(0);
+const setBoxRef = ref(null);
+const setTriggerRef = ref(null);
+const setListRef = ref(null);
+
+// "Any" + every set, each tagged with its lock state.
+const setOptions = computed(() => [
+  { id: null, name: "Any", locked: false },
+  ...store.sets.map((s) => ({
+    id: s.id,
+    name: s.name || `Set ${s.id}`,
+    locked: !!s.locked,
+  })),
+]);
+
+const selectedSetLabel = computed(
+  () => setOptions.value.find((o) => o.id === setId.value)?.name ?? "Any",
+);
+
+function lockedOptionTitle(name) {
+  return `'${name}' is locked — its pictures are read-only. Unlock it to review its tags.`;
+}
+
+function firstSelectableFrom(start, dir) {
+  const opts = setOptions.value;
+  for (let step = 0; step < opts.length; step += 1) {
+    const i = (start + dir * step + opts.length) % opts.length;
+    if (!opts[i].locked) return i;
+  }
+  return -1;
+}
+
+function openSetMenu() {
+  if (setMenuOpen.value) return;
+  // Land on the current selection if it's selectable, else the first open row.
+  const sel = setOptions.value.findIndex((o) => o.id === setId.value);
+  activeSetIndex.value =
+    sel >= 0 && !setOptions.value[sel].locked
+      ? sel
+      : firstSelectableFrom(0, 1);
+  setMenuOpen.value = true;
+  nextTick(() => setListRef.value?.focus());
+}
+
+function closeSetMenu(returnFocus = false) {
+  if (!setMenuOpen.value) return;
+  setMenuOpen.value = false;
+  if (returnFocus) nextTick(() => setTriggerRef.value?.focus());
+}
+
+function toggleSetMenu() {
+  if (setMenuOpen.value) closeSetMenu();
+  else openSetMenu();
+}
+
+function selectSet(opt) {
+  if (opt.locked) return; // Locked sets are not selectable.
+  setId.value = opt.id;
+  closeSetMenu(true);
+}
+
+function onTriggerKeydown(event) {
+  if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+    event.preventDefault();
+    openSetMenu();
+  }
+}
+
+function onListKeydown(event) {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    const next = firstSelectableFrom(activeSetIndex.value + 1, 1);
+    if (next >= 0) activeSetIndex.value = next;
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    const prev = firstSelectableFrom(activeSetIndex.value - 1, -1);
+    if (prev >= 0) activeSetIndex.value = prev;
+  } else if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    selectSet(setOptions.value[activeSetIndex.value]);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    activeSetIndex.value = firstSelectableFrom(0, 1);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    activeSetIndex.value = firstSelectableFrom(setOptions.value.length - 1, -1);
+  }
+}
+
+// Close on focus leaving the whole control (click-outside or tab-away). Escape
+// is handled separately so it can also return focus to the trigger.
+function onSetFocusOut(event) {
+  const next = event.relatedTarget;
+  if (next && setBoxRef.value?.contains(next)) return;
+  closeSetMenu();
+}
 
 function pickTag(t) {
   const open = store.sessions.find((s) => s.tag === t);
@@ -392,6 +558,98 @@ async function create() {
 .rs-dialog-scope option {
   background-color: rgb(var(--v-theme-dark-surface));
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* Set-scope listbox — trigger mirrors the sibling native <select>s so the three
+   scope controls line up; the menu adds the lock affordance a <select> can't. */
+.rs-listbox {
+  position: relative;
+}
+.rs-listbox-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-xs);
+  cursor: pointer;
+  text-align: left;
+}
+.rs-listbox-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rs-listbox-caret {
+  flex-shrink: 0;
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+}
+.rs-listbox-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  background: rgb(var(--v-theme-dark-surface));
+  box-shadow: var(--elevation-2);
+}
+.rs-listbox-menu:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-focus));
+  outline-offset: 1px;
+}
+.rs-listbox-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: pointer;
+}
+.rs-listbox-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rs-listbox-option--active {
+  background: rgba(var(--v-theme-on-dark-surface), 0.12);
+}
+.rs-listbox-option--selected {
+  color: rgb(var(--v-theme-accent));
+}
+.rs-listbox-check {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-accent));
+}
+/* Locked sets: greyed, non-interactive cursor, lock glyph. Kept legible enough
+   to read the name (why it's disabled), per the disabled-state token guidance. */
+.rs-listbox-option--locked {
+  color: rgba(var(--v-theme-on-dark-surface), 0.38);
+  cursor: not-allowed;
+}
+.rs-listbox-option--locked.rs-listbox-option--active {
+  background: transparent;
+}
+.rs-listbox-lock {
+  flex-shrink: 0;
+  color: rgba(var(--v-theme-on-dark-surface), 0.38);
 }
 .rs-dialog-frozen {
   font-size: 11.5px;

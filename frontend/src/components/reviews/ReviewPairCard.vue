@@ -48,6 +48,16 @@
             @click="openZoom(pane.id, pane.ext)"
             @error="onImgError($event, pane.id)"
           />
+          <!-- Reference-only lock: this pane's picture is in a locked set (only
+               ever the twin — suspects in locked sets are excluded by the scan).
+               It carries no controls; the badge says why. -->
+          <span
+            v-if="lockedSetsStore.isLocked(pane.id)"
+            class="rs-lock-badge"
+            :title="referenceTitle(pane.id)"
+          >
+            <v-icon size="14">mdi-lock-outline</v-icon>
+          </span>
           <button
             v-if="pane.tagged"
             class="rs-manual-tag"
@@ -70,14 +80,23 @@
 // convention as the old overlay and the store's pairSides()).
 import { computed, inject } from "vue";
 import { pairSides } from "../../stores/useReviewSessionsStore";
+import {
+  useLockedSetsStore,
+  buildReferenceReason,
+} from "../../stores/useLockedSetsStore";
 
 const props = defineProps({
   item: { type: Object, required: true },
 });
 
+const lockedSetsStore = useLockedSetsStore();
 const backendUrl = inject("rs-backend-url", "");
 const openZoomInject = inject("rs-open-zoom", () => {});
 const openTagApply = inject("rs-open-tag-apply", () => {});
+
+function referenceTitle(id) {
+  return buildReferenceReason(lockedSetsStore.lockedSetNames(id));
+}
 
 const panes = computed(() => {
   const item = props.item;
@@ -253,6 +272,24 @@ function openZoom(id, ext) {
   height: 100%;
   object-fit: contain;
   cursor: zoom-in;
+}
+
+/* Reference-only lock badge — translucent corner chip. Uses the shared
+   `--scrim-photo` token (dark scrim over the photo) matching this card's tag
+   chips, so mdi-lock-outline reads on any image. */
+.rs-lock-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  pointer-events: auto;
 }
 
 /* Visible manual-tag affordance (same flow as the T shortcut); applies to

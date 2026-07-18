@@ -74,6 +74,7 @@
             type="button"
             role="menuitem"
             :disabled="isItemDisabled(item)"
+            :title="isItemLocked(item) ? 'This set is locked' : undefined"
             @click.stop="toggleItem(item)"
           >
             <v-icon size="16" class="ate-item-check">
@@ -87,8 +88,11 @@
             </v-icon>
             <span class="ate-item-name">{{ item.name }}</span>
             <span v-if="isSet" class="ate-item-meta">
+              <v-icon v-if="isItemLocked(item)" size="14" class="ate-item-lock"
+                >mdi-lock-outline</v-icon
+              >
               <span
-                v-if="isLastUsedItem(item)"
+                v-else-if="isLastUsedItem(item)"
                 class="ate-item-shortcut"
                 title="Press A to add to this set"
                 >A</span
@@ -129,6 +133,9 @@ const props = defineProps({
   expandStacks: { type: Boolean, default: true },
   placement: { type: String, default: "bottom" },
   forceDark: { type: Boolean, default: false },
+  // Ids of locked sets. A locked set can't take or drop members, so its row is
+  // greyed and unselectable here (membership in *unlocked* sets is unaffected).
+  lockedSetIds: { type: Object, default: () => new Set() },
 });
 
 const emit = defineEmits(["added", "removed", "selected"]);
@@ -241,9 +248,15 @@ const filteredItems = computed(() => {
 });
 
 // --- Item state helpers ---
+// A set frozen by the lock cannot gain or lose members.
+function isItemLocked(item) {
+  return isSet.value && !!props.lockedSetIds?.has?.(item.id);
+}
+
 function isItemDisabled(item) {
   if (props.readonly) return true;
   if (!normalisedPictureIds.value.length) return true;
+  if (isItemLocked(item)) return true;
   if (isCharacter.value) return false;
   return !membersById.value?.[item.key];
 }
@@ -938,6 +951,10 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
 .ate-item-count {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.ate-item-lock {
+  color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
 .ate-item-shortcut {

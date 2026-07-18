@@ -370,6 +370,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                |
 | GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                     |
 | POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                    |
+| GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures            |
 | POST   | /api/v1/picture_sets/membership                                               | picture_sets    | Batch set membership lookup                           |
 | GET    | /api/v1/picture_sets/{id}                                                     | picture_sets    | Get picture set                                       |
 | PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets    | Update picture set                                    |

@@ -45,6 +45,24 @@
           </span>
         </div>
         <div class="overlay-top-actions">
+          <v-tooltip
+            v-if="image && isCurrentLocked"
+            location="bottom"
+            :text="currentLockReason"
+          >
+            <template #activator="{ props: lockTipProps }">
+              <div
+                v-bind="lockTipProps"
+                class="overlay-lock-chip"
+                :class="{ hidden: chromeHidden }"
+                role="img"
+                :aria-label="currentLockReason"
+              >
+                <v-icon size="16">mdi-lock-outline</v-icon>
+                <span class="overlay-lock-chip-text">Locked</span>
+              </div>
+            </template>
+          </v-tooltip>
           <v-menu
             v-if="!isReadOnly"
             v-model="pluginMenuOpen"
@@ -240,6 +258,7 @@
             :force-dark="true"
             :disabled="!!stackGroupingLockReason"
             :title="stackGroupingLockReason || undefined"
+            :locked-set-ids="lockedSetsStore.lockedSetIds"
             :class="{ hidden: chromeHidden }"
             @added="(payload) => emit('added-to-set', payload)"
           />
@@ -260,6 +279,7 @@
             v-if="image && !isMobile"
             :class="{ hidden: chromeHidden }"
             :score="isReadOnly ? guestScore || 0 : image?.score || 0"
+            :readonly="!isReadOnly && isCurrentLocked"
             icon-size="large"
             @set-score="setScore"
           />
@@ -610,6 +630,8 @@
             ref="descriptionPanelRef"
             :image="image"
             :backend-url="backendUrl"
+            :locked="isCurrentLocked"
+            :lock-note="currentLockReason"
             @update-description="handleDescriptionUpdate"
           />
 
@@ -689,6 +711,8 @@
             :backend-url="backendUrl"
             :hidden-tags="hiddenTags"
             :apply-tag-filter="applyTagFilter"
+            :locked="isCurrentLocked"
+            :lock-note="currentLockReason"
             @update-tags="handleTagsUpdate"
             @overlay-change="(payload) => emit('overlay-change', payload)"
             @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
@@ -729,6 +753,7 @@ import {
 } from "../../utils/media.js";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { copyText } from "../../utils/clipboard";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
@@ -1015,6 +1040,16 @@ const comfyuiRunError = ref("");
 const comfyuiRunSuccess = ref("");
 const overlaySelectedPluginName = ref("");
 const overlayPluginParameters = ref({});
+
+// Lock state for the currently displayed picture: drives the toolbar chip, the
+// score/tags/description gating, and the panel lock notes.
+const lockedSetsStore = useLockedSetsStore();
+const isCurrentLocked = computed(() =>
+  lockedSetsStore.isLocked(image.value?.id),
+);
+const currentLockReason = computed(() =>
+  lockedSetsStore.lockReason(image.value?.id),
+);
 
 // Remembered "stack outputs with originals" prefs (persisted in localStorage).
 const genStackPrefs = useGenStackPrefsStore();
@@ -1913,6 +1948,8 @@ function setScore(n) {
     emit("set-guest-score", image.value, n);
     return;
   }
+  // Score is label/curation data: a locked picture can't be re-scored.
+  if (isCurrentLocked.value) return;
   image.value.score = toggleScore(image.value.score, n);
   emit("apply-score", image.value, image.value.score);
 }
@@ -3767,6 +3804,21 @@ function resetOverlayCopyState() {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+/* Persistent translucent lock chip — signals the picture is frozen by a locked
+   set. Same warm-shadow translucency the overlay chrome uses elsewhere. */
+.overlay-lock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-shadow), 0.4);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
 }
 
 .overlay-top-actions .star-overlay {

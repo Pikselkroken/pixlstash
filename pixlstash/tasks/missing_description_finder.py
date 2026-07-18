@@ -5,6 +5,8 @@ from sqlalchemy import or_
 
 from pixlstash.db_models import (
     Picture,
+    PictureSet,
+    PictureSetMember,
     DESCRIPTION_SENTINEL_LIKE_PATTERN,
     DESCRIPTION_SENTINEL_ESCAPE_CHAR,
     parse_engine_from_description_sentinel,
@@ -89,6 +91,15 @@ class MissingDescriptionFinder(BaseTaskFinder):
 
     @staticmethod
     def _fetch_missing_descriptions(session: Session, limit: int):
+        # A picture frozen by a locked set has a read-only description (rule 3):
+        # never re-queue it for machine (re)description. Parity with the tagger's
+        # MissingTagFinder exclusion; the description_task write-side also skips
+        # locked pics as defense in depth.
+        not_locked = ~Picture.id.in_(
+            select(PictureSetMember.picture_id)
+            .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
+            .where(PictureSet.locked.is_(True))
+        )
         return session.exec(
             select(Picture)
             .where(
@@ -98,7 +109,8 @@ class MissingDescriptionFinder(BaseTaskFinder):
                         DESCRIPTION_SENTINEL_LIKE_PATTERN,
                         escape=DESCRIPTION_SENTINEL_ESCAPE_CHAR,
                     ),
-                )
+                ),
+                not_locked,
             )
             .order_by(Picture.id)
             .limit(limit)

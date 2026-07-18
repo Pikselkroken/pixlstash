@@ -44,6 +44,7 @@ from . import worker_config
 
 from pixlstash.event_types import EventType
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore_service import RestoreService
 
@@ -634,6 +635,11 @@ class Vault:
             pic = session.get(Picture, picture_id)
             if pic is None:
                 return False
+            # Resetting the description overwrites frozen label/curation data with
+            # a redescribe sentinel — refuse on a picture in a locked set.
+            enforce_pictures_not_locked(
+                session, [picture_id], "reset the description of a locked picture"
+            )
             pic.description = sentinel
             session.commit()
             return True

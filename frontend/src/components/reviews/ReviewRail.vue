@@ -66,6 +66,13 @@
              stops its click from bubbling here, behaves differently. -->
         <div class="rs-rail-session-meta" @click="store.openSession(s.id)">
           <span class="rs-rail-session-scope">{{ scopeLabel(s) }}</span>
+          <v-icon
+            v-if="scopeSetLocked(s)"
+            size="12"
+            class="rs-rail-scope-lock"
+            :title="scopeSetLockTitle(s)"
+            >mdi-lock-outline</v-icon
+          >
           <button
             class="rs-rail-abort"
             type="button"
@@ -319,6 +326,25 @@ function scopeLabel(s) {
   return parts.length ? parts.join(" · ") : "Whole vault";
 }
 
+// A session whose frozen scope is a set that is now locked: flag it in the rail
+// so the user sees why its cards are reference-frozen (the scan already excludes
+// locked suspects; this is the at-a-glance marker on the session row).
+function scopeSet(s) {
+  const setId = s.scope?.set_id;
+  if (setId == null) return null;
+  return store.sets.find((x) => x.id === setId) || null;
+}
+
+function scopeSetLocked(s) {
+  return !!scopeSet(s)?.locked;
+}
+
+function scopeSetLockTitle(s) {
+  const set = scopeSet(s);
+  const name = set?.name ?? s.scope?.set_id;
+  return `'${name}' is locked — its pictures are read-only.`;
+}
+
 function shortDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -509,6 +535,10 @@ function archivedSummary(a) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.rs-rail-scope-lock {
+  flex-shrink: 0;
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 /* Abort control: a real sibling button, invisible until the row is hovered or

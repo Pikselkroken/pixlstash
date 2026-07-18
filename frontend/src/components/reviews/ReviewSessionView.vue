@@ -190,6 +190,8 @@
         :can-undo="store.canUndo"
         :gamify="store.gamify"
         :hold="holdActive"
+        :locked="suspectLocked"
+        :lock-reason="suspectLockReason"
         @answer="attemptBinary"
         @corner="attemptPair"
         @skip="doSkip"
@@ -203,6 +205,7 @@
 <script setup>
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import ReviewBinaryCard from "./ReviewBinaryCard.vue";
 import ReviewPairCard from "./ReviewPairCard.vue";
 import ReviewDecisionBar from "./ReviewDecisionBar.vue";
@@ -213,8 +216,21 @@ const props = defineProps({
 });
 
 const store = useReviewSessionsStore();
+const lockedSetsStore = useLockedSetsStore();
 
 const current = computed(() => store.current);
+
+// The suspect (the editable picture) can become locked mid-session if its set
+// was locked after this review opened — the scan excludes locked suspects on
+// refresh, but an already-materialised card can still surface one. Deciding it
+// would write the frozen label ledger and 423, so decisions are gated here (in
+// addition to the decision bar's disabled buttons) and the keyboard path below.
+const suspectLocked = computed(
+  () => !!current.value && lockedSetsStore.isLocked(current.value.picture_id),
+);
+const suspectLockReason = computed(() =>
+  current.value ? lockedSetsStore.lockReason(current.value.picture_id) : "",
+);
 const tally = computed(() => store.activeTally);
 const found = computed(() => props.session.stats?.found ?? 0);
 const scanned = computed(() => props.session.stats?.scanned ?? 0);
@@ -314,7 +330,7 @@ onUnmounted(() => {
 const pendingDecision = ref(null); // { kind, decision, conflict } or null
 
 function attemptBinary(answer) {
-  if (holdActive.value || !current.value) return;
+  if (holdActive.value || !current.value || suspectLocked.value) return;
   const conflict = store.decisionConflict(current.value, "binary", answer);
   if (conflict) {
     pendingDecision.value = { kind: "binary", decision: answer, conflict };
@@ -324,7 +340,7 @@ function attemptBinary(answer) {
 }
 
 function attemptPair(corner) {
-  if (holdActive.value || !current.value) return;
+  if (holdActive.value || !current.value || suspectLocked.value) return;
   const conflict = store.decisionConflict(current.value, "pair", corner);
   if (conflict) {
     pendingDecision.value = { kind: "pair", decision: corner, conflict };

@@ -30,6 +30,7 @@ import { useSearchStore } from "./stores/useSearchStore";
 import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
+import { useLockedSetsStore } from "./stores/useLockedSetsStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -60,6 +61,7 @@ const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
+const lockedSetsStore = useLockedSetsStore();
 
 // --- Router ---
 const route = useRoute();
@@ -456,6 +458,11 @@ function onRestoreConfirmed() {
 
 function refreshSidebar(options = {}) {
   sidebarRef.value?.refreshSidebar(options);
+  // The locked-sets store shares the sidebar's refresh triggers (manual emits,
+  // characters_changed, and pictures_changed via the debounced pictures path,
+  // which also fires on a lock/unlock PATCH's CHANGED_PICTURES event). The store
+  // coalesces overlapping fetches, so calling it here on every refresh is cheap.
+  lockedSetsStore.fetch();
 }
 
 function refreshSidebarDebounced() {

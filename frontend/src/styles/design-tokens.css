@@ -80,6 +80,17 @@
   --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
 
   /* ---------------------------------------------------------------------------
+     SCRIMS — translucent legibility backings for corner badges/chips that sit
+     over imagery. Both are theme-token based; never a raw rgba(0,0,0,…) one-off.
+     `--scrim-surface`: a light warm chip over the bright grid/sidebar canvas
+     (dark glyph on it). `--scrim-photo`: a dark chip over an arbitrary photo
+     (light glyph on it), on the theme `scrim` token so it stays reliably dark in
+     both themes for guaranteed contrast on any image.
+     --------------------------------------------------------------------------- */
+  --scrim-surface: rgba(var(--v-theme-surface), 0.55);
+  --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+
+  /* ---------------------------------------------------------------------------
      MOTION — three durations, one easing. Motion is feedback, not decoration.
      --------------------------------------------------------------------------- */
   --dur-1: 150ms;

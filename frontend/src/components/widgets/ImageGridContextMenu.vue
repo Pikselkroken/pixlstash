@@ -47,6 +47,7 @@
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
+          :locked-set-ids="lockedSetIds"
           @added="onAction('added-to-set', $event)"
         />
         <div class="ctx-sep" />
@@ -101,8 +102,8 @@
       <template v-if="!isScrapheapView">
         <button
           class="ctx-item"
-          title="Tag selected (T)"
-          :disabled="!selectedImageIds.length || isReadOnly"
+          :title="lockReason || 'Tag selected (T)'"
+          :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
           @click="delegate('open-tag-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
@@ -116,7 +117,8 @@
         >
           <button
             class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly"
+            :title="lockReason || undefined"
+            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
           >
             <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
             Tag automatically
@@ -127,7 +129,8 @@
               v-for="plugin in taggerPlugins"
               :key="plugin.name"
               class="ctx-item"
-              :disabled="!selectedImageIds.length || isReadOnly"
+              :title="lockReason || undefined"
+              :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
               @click="onAction('auto-tag', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
@@ -146,7 +149,8 @@
         >
           <button
             class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly"
+            :title="lockReason || undefined"
+            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
           >
             <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
             Generate description
@@ -157,7 +161,8 @@
               v-for="plugin in captionerPlugins"
               :key="plugin.name"
               class="ctx-item"
-              :disabled="!selectedImageIds.length || isReadOnly"
+              :title="lockReason || undefined"
+              :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
               @click="onAction('generate-description', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
@@ -342,8 +347,8 @@
       </button>
       <button
         class="ctx-item ctx-item--danger"
-        :disabled="!selectedImageIds.length || isReadOnly"
-        title="Delete selected items (DEL)"
+        :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+        :title="lockReason || 'Delete selected items (DEL)'"
         @click="onAction('delete-selected')"
       >
         <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
@@ -388,6 +393,12 @@ const props = defineProps({
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
   groupingLockReason: { type: String, default: null },
+  // Reason string when at least one selected picture is frozen by a locked set;
+  // gates the label-data actions (tag / auto-tag / description / delete) and is
+  // shown as their tooltip. Null when nothing in the selection is locked.
+  lockReason: { type: String, default: null },
+  // Ids of all locked sets, so the add-to-set control can grey them out.
+  lockedSetIds: { type: Object, default: () => new Set() },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
   captionerPlugins: { type: Array, default: () => [] },

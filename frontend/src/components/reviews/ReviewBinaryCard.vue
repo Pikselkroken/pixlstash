@@ -149,6 +149,13 @@
               :alt="`picture ${n.picture_id}`"
               loading="lazy"
             />
+            <span
+              v-if="lockedSetsStore.isLocked(n.picture_id)"
+              class="rs-thumb-lock"
+              :title="referenceTitle(n.picture_id)"
+            >
+              <v-icon size="11">mdi-lock-outline</v-icon>
+            </span>
             <span class="rs-thumb-badge" :class="{ 'rs-thumb-badge--has': n.has }">
               <v-icon size="11">{{
                 n.has ? "mdi-tag" : "mdi-tag-off-outline"
@@ -168,15 +175,24 @@
 // and persisted (same preference key as the old overlay).
 import { computed, inject, onUnmounted, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import {
+  useLockedSetsStore,
+  buildReferenceReason,
+} from "../../stores/useLockedSetsStore";
 
 const props = defineProps({
   item: { type: Object, required: true },
 });
 
 const store = useReviewSessionsStore();
+const lockedSetsStore = useLockedSetsStore();
 const backendUrl = inject("rs-backend-url", "");
 const openZoomInject = inject("rs-open-zoom", () => {});
 const openTagApply = inject("rs-open-tag-apply", () => {});
+
+function referenceTitle(id) {
+  return buildReferenceReason(lockedSetsStore.lockedSetNames(id));
+}
 
 const SIMILAR_PREF_KEY = "pixlstash:reviewSimilarOpen";
 
@@ -632,6 +648,21 @@ function zoomToRegion(box) {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* Reference-only lock on a neighbour that lives in a locked set — small corner
+   chip using the shared `--scrim-photo` token, matching this card's tag chips. */
+.rs-thumb-lock {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 17px;
+  height: 17px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-thumb-badge {
   position: absolute;

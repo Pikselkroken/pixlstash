@@ -14,6 +14,7 @@ from pixlstash.db_models import Tag
 from pixlstash.db_models.tag import make_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.utils.service.caption_utils import sanitise_tag
 from pixlstash.utils.service.label_ledger import (
     NEG,
@@ -127,6 +128,11 @@ def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
     """
 
     def _confirm(session: Session) -> None:
+        # Confirming promotes a prediction to a Tag and writes a human POS — label
+        # data frozen when the picture is in a locked set.
+        enforce_pictures_not_locked(
+            session, [pic_id], "confirm a tag on a locked picture"
+        )
         prediction = session.exec(
             select(TagPrediction).where(
                 TagPrediction.picture_id == pic_id,
@@ -163,6 +169,11 @@ def reject_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
     """
 
     def _reject(session: Session) -> None:
+        # Rejecting writes a human NEG onto the picture — label data frozen when
+        # the picture is in a locked set.
+        enforce_pictures_not_locked(
+            session, [pic_id], "reject a tag on a locked picture"
+        )
         # Record the human rejection as durable NEG supervision (snapshotting the
         # tagger version/confidence overruled). Creates a synthetic 'manual' row if
         # the tag was added manually, so the reject persists through fetches.
@@ -214,6 +225,9 @@ def reset_picture_tags(
     """
 
     def _reset(session: Session) -> None:
+        # Reset deletes ALL confirmed Tag rows and drops a retag sentinel — a
+        # destructive rewrite of frozen label data. Refuse on a locked picture.
+        enforce_pictures_not_locked(session, [pic_id], "reset tags on a locked picture")
         session.exec(
             delete(TagPrediction)
             .where(TagPrediction.picture_id == pic_id)

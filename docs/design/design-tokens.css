@@ -102,6 +102,18 @@
   --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
 
   /* ---------------------------------------------------------------------------
+     SCRIMS — translucent legibility backings for corner badges/chips that sit on
+     top of imagery (lock badges, tag chips). Both are theme-token based; the
+     audit's raw `rgba(0,0,0,…)` chip scrims collapse to these. Two contexts:
+     `--scrim-surface` is a light warm chip over the bright grid/sidebar canvas
+     (dark glyph on it); `--scrim-photo` is a dark chip over an arbitrary photo
+     (light glyph on it), on the theme `scrim` token so it stays reliably dark in
+     both themes and clears contrast on any image underneath.
+     --------------------------------------------------------------------------- */
+  --scrim-surface: rgba(var(--v-theme-surface), 0.55);
+  --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+
+  /* ---------------------------------------------------------------------------
      MOTION — three durations, one easing. Motion confirms what happened; it is
      feedback, not decoration. Anything slower than --dur-3 on a routine
      interaction feels sluggish in a bulk-work tool.
