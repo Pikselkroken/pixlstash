@@ -125,10 +125,15 @@ def _rebuild_and_wait(client, timeout_s=30):
     raise AssertionError("tag_health rebuild did not finish in time")
 
 
-def _wait_likeness_settled(server, timeout_s=30):
+def _wait_likeness_settled(server, timeout_s=180):
     """Block until the background likeness pipeline has fully processed every
     uploaded picture, so a manually-seeded ``PictureLikeness`` fixture will not
     be clobbered underneath the board's ``mismatch`` read.
+
+    ``timeout_s`` is generous (CPU embeddings + likeness recompute for the
+    uploaded fixtures can take well over 30s on a loaded CI runner); the poll
+    returns as soon as the pipeline is quiescent, so a large cap costs nothing
+    on a fast machine and only avoids a spurious timeout under contention.
 
     Uploading real pictures runs two background stages that mutate the
     ``picturelikeness`` table: the likeness-parameter pass calls
