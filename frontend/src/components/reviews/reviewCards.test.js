@@ -31,6 +31,14 @@ import ReviewPairCard from "./ReviewPairCard.vue";
 import ReviewDecisionBar from "./ReviewDecisionBar.vue";
 import ReviewSessionView from "./ReviewSessionView.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+
+// Mark the given picture ids as locked by a set (drives lockedSetsStore lookups
+// the review cards use for their lock markers / decision gating).
+function lockPictures(name, pictureIds) {
+  const s = useLockedSetsStore();
+  s.sets = [{ id: 99, name, picture_ids: pictureIds }];
+}
 
 // jsdom has no ResizeObserver; ReviewBinaryCard observes its <img>.
 globalThis.ResizeObserver = class {
@@ -141,6 +149,22 @@ describe("ReviewBinaryCard", () => {
     expect(w.text()).not.toContain("ignored when neighbours exist");
   });
 
+  it("marks a locked neighbour thumb with a reference-only lock", () => {
+    // Neighbour 12 is in a locked set; the suspect (10) and other neighbours
+    // are not — exactly one thumb lock should appear.
+    lockPictures("Frozen eval", [12]);
+    const w = mount(ReviewBinaryCard, { props: { item: binaryItem() }, global: globalOpts });
+    const locks = w.findAll(".rs-thumb-lock");
+    expect(locks).toHaveLength(1);
+    expect(locks[0].attributes("title")).toContain("Reference only");
+    expect(locks[0].attributes("title")).toContain("Frozen eval");
+  });
+
+  it("shows no thumb lock when no neighbour is locked", () => {
+    const w = mount(ReviewBinaryCard, { props: { item: binaryItem() }, global: globalOpts });
+    expect(w.find(".rs-thumb-lock").exists()).toBe(false);
+  });
+
   it("survives an item update and a heatmap toggle without throwing", async () => {
     const store = useReviewSessionsStore();
     const w = mount(ReviewBinaryCard, { props: { item: binaryItem() }, global: globalOpts });
@@ -165,6 +189,21 @@ describe("ReviewPairCard", () => {
     await w.setProps({ item: pairItem({ direction: "add" }) });
     await nextTick();
     expect(w.findAll(".rs-pair-pane")).toHaveLength(2);
+  });
+
+  it("shows a reference-only lock on a locked twin pane", () => {
+    // twin_picture_id 21 lives in a locked set; the suspect (20) does not.
+    lockPictures("Frozen eval", [21]);
+    const w = mount(ReviewPairCard, { props: { item: pairItem() }, global: globalOpts });
+    const badges = w.findAll(".rs-lock-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0].attributes("title")).toContain("Reference only");
+    expect(badges[0].attributes("title")).toContain("Frozen eval");
+  });
+
+  it("shows no lock badge when neither pane is locked", () => {
+    const w = mount(ReviewPairCard, { props: { item: pairItem() }, global: globalOpts });
+    expect(w.find(".rs-lock-badge").exists()).toBe(false);
   });
 });
 
@@ -198,6 +237,35 @@ describe("ReviewDecisionBar", () => {
     });
     await w.find(".rs-decide-btn--yes").trigger("click");
     expect(w.emitted("answer")?.[0]).toEqual(["yes"]);
+  });
+
+  it("disables the decision buttons (Skip stays live) when the suspect is locked", () => {
+    const reason = "Locked — this picture is in the locked set 'Frozen eval'.";
+    const w = mount(ReviewDecisionBar, {
+      props: {
+        kind: "binary",
+        direction: "remove",
+        canUndo: false,
+        gamify: false,
+        hold: false,
+        locked: true,
+        lockReason: reason,
+      },
+      global: globalOpts,
+    });
+    const yes = w.find(".rs-decide-btn--yes");
+    const no = w.find(".rs-decide-btn--no");
+    expect(yes.attributes("disabled")).toBeDefined();
+    expect(no.attributes("disabled")).toBeDefined();
+    expect(yes.attributes("title")).toBe(reason);
+    // The lock note is visible so the reason doesn't rely on a disabled-button
+    // tooltip.
+    expect(w.find(".rs-decide-lock").exists()).toBe(true);
+    // Skip must stay enabled — it makes no backend change and is the only way
+    // past a locked card.
+    const skip = w.findAll(".rs-decide-btn").find((b) => b.text().includes("Skip"));
+    expect(skip).toBeTruthy();
+    expect(skip.attributes("disabled")).toBeUndefined();
   });
 });
 
@@ -257,6 +325,19 @@ describe("ReviewSessionView", () => {
 
     expect(w.find(".rs-pair").exists()).toBe(true);
     expect(w.findAll(".rs-pair-pane")).toHaveLength(2);
+  });
+
+  it("disables decisions when the current suspect is in a locked set", async () => {
+    const store = useReviewSessionsStore();
+    seed(store, { items: [binaryItem({ id: 1, picture_id: 10 })], loading: false, error: null });
+    // Lock the suspect picture (10) after the session materialised.
+    lockPictures("Frozen eval", [10]);
+    const w = mount(ReviewSessionView, { props: { session }, global: globalOpts });
+    await nextTick();
+    expect(w.find(".rs-bin").exists()).toBe(true);
+    expect(w.find(".rs-decide-btn--yes").attributes("disabled")).toBeDefined();
+    expect(w.find(".rs-decide-btn--no").attributes("disabled")).toBeDefined();
+    expect(w.find(".rs-decide-lock").exists()).toBe(true);
   });
 
   it("shows the completion state when the queue empties", async () => {

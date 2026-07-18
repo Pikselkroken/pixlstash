@@ -3,11 +3,21 @@
        button slots per kind, Undo ALWAYS rendered (disabled when the history
        is empty), no wrapping — the buttons never move mid-loop. -->
   <div class="rs-decide" role="toolbar" aria-label="Decision">
+    <!-- Locked suspect (a pre-lock open session can still hold one): decisions
+         write the frozen label ledger, so they're disabled here rather than
+         letting the click hit the backend and surface a raw 423. Skip/Undo stay
+         live so the reviewer can move past the card. -->
+    <span v-if="locked" class="rs-decide-lock" :title="lockReason">
+      <v-icon size="15">mdi-lock-outline</v-icon>
+      <span>Locked — Skip to move on</span>
+    </span>
+
     <template v-if="kind === 'binary'">
       <button
         class="rs-decide-btn rs-decide-btn--yes"
         type="button"
-        :disabled="hold"
+        :disabled="hold || locked"
+        :title="locked ? lockReason : undefined"
         @click="emit('answer', 'yes')"
       >
         <kbd>Y</kbd>
@@ -19,7 +29,8 @@
       <button
         class="rs-decide-btn rs-decide-btn--no"
         type="button"
-        :disabled="hold"
+        :disabled="hold || locked"
+        :title="locked ? lockReason : undefined"
         @click="emit('answer', 'no')"
       >
         <kbd>N</kbd>
@@ -34,7 +45,8 @@
       <button
         class="rs-decide-btn rs-decide-btn--yes"
         type="button"
-        :disabled="hold"
+        :disabled="hold || locked"
+        :title="locked ? lockReason : undefined"
         @click="emit('corner', 'both')"
       >
         <kbd>B</kbd>
@@ -44,7 +56,8 @@
       <button
         class="rs-decide-btn rs-decide-btn--no"
         type="button"
-        :disabled="hold"
+        :disabled="hold || locked"
+        :title="locked ? lockReason : undefined"
         @click="emit('corner', 'neither')"
       >
         <kbd>N</kbd>
@@ -54,7 +67,8 @@
       <button
         class="rs-decide-btn"
         type="button"
-        :disabled="hold"
+        :disabled="hold || locked"
+        :title="locked ? lockReason : undefined"
         @click="emit('corner', 'left')"
       >
         <kbd>L</kbd>
@@ -64,7 +78,8 @@
       <button
         class="rs-decide-btn"
         type="button"
-        :disabled="hold"
+        :disabled="hold || locked"
+        :title="locked ? lockReason : undefined"
         @click="emit('corner', 'right')"
       >
         <kbd>R</kbd>
@@ -122,6 +137,10 @@ defineProps({
   // Key-slip guard: right after the card TYPE changes, decisions are briefly
   // disabled so a rapid-keyed N can't fire "Neither" unseen.
   hold: { type: Boolean, default: false },
+  // Suspect picture is in a locked set: disable the decision buttons (Skip/Undo
+  // stay live). `lockReason` is the tooltip explaining why / how to unlock.
+  locked: { type: Boolean, default: false },
+  lockReason: { type: String, default: "" },
 });
 
 const emit = defineEmits(["answer", "corner", "skip", "undo", "gamify-toggle"]);
@@ -162,6 +181,20 @@ const emit = defineEmits(["answer", "corner", "skip", "undo", "gamify-toggle"]);
 .rs-decide-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Locked-suspect note, anchored left so the decision buttons stay right. */
+.rs-decide-lock {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+}
+.rs-decide-lock .v-icon {
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
 .rs-decide-btn kbd {
   font-family: var(--font-mono, monospace);

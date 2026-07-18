@@ -34,6 +34,19 @@ export function buildLockReason(setNames) {
   );
 }
 
+// Tooltip copy for a picture shown only as a *reference* (a review twin /
+// neighbour) that happens to be in a locked set. It explains why the reference
+// carries no controls — distinct from `buildLockReason`, which tells the user
+// how to unlock an editable-but-frozen picture. Single-sourced so the review
+// cards never re-word it. Multiple locking sets are joined with commas.
+export function buildReferenceReason(setNames) {
+  const names = (Array.isArray(setNames) ? setNames : [])
+    .filter((n) => n != null && String(n).length > 0)
+    .map((n) => String(n));
+  if (!names.length) return "";
+  return `Reference only — this image is in the locked set '${names.join(", ")}'.`;
+}
+
 export const useLockedSetsStore = defineStore("lockedSets", () => {
   // Raw payload: [{ id, name, picture_ids: [...] }] for every locked set.
   const sets = ref([]);
