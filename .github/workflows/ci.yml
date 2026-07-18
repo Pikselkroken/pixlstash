@@ -172,6 +172,14 @@ jobs:
       # afford on every run.
       - name: Test authz/scope/BOLA & label-ledger surface (BLOCKING gate)
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_label_ledger.py tests/test_read_token_security.py tests/test_scope_table.py tests/test_websocket_auth.py tests/test_anomaly_region_scope.py tests/test_batch_character_likeness_scope.py tests/test_detections_scope.py tests/test_picture_mutation_scope.py tests/test_tag_prediction_scope.py tests/test_impossible_clear_authz.py
+      # Picture-set locking — the data-freeze guard surface. Same class as the
+      # authz gate above (per-object mutation enforcement) and just as cheap
+      # (tiny synthetic uploads + import wait, no ML pipeline), so it runs on
+      # EVERY PR as a BLOCKING gate. The guardrail test (in test_architecture_
+      # guardrails.py, already gated above) pins each mutation handler to a lock
+      # guard so a future unguarded path fails here too.
+      - name: Test picture-set locking (BLOCKING gate)
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_set_locking.py
 
       # RELEASE-PREP ONLY — slow 1.7.0 headline-API integration surface.
       # Unlike the authz set above, these files drive the full likeness/tagger
