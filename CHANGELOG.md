@@ -1,4 +1,4 @@
-# [1.6.11] [Security:Medium]
+# [1.6.11] [Security:Moderate]
 - Update torch and pillow due to memory corruption and heap out-of-bounds bugs.
 
 # [1.6.10] [Security:High]
