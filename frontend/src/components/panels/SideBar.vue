@@ -2089,6 +2089,12 @@ async function toggleSetLock(set) {
 const SET_LOCK_REASON =
   "This set is locked. Unlock it first (Unlock set) to delete it.";
 
+// Tooltip on the lock indicator shown on a locked set row (expanded row icon and
+// the collapsed-dock/flyout variants). Single-sourced so every set-row surface
+// reads identically.
+const SET_LOCKED_ROW_TITLE =
+  "Locked — this set is read-only. Right-click and choose Unlock set to edit it.";
+
 async function shareResource(resourceType, resourceId, label) {
   closeSidebarCtxMenu();
   shareDialogPending.value = { resourceType, resourceId, label };
@@ -4414,6 +4420,13 @@ defineExpose({
                 <v-icon v-else :color="pset.set_color || undefined"
                   >mdi-image-album</v-icon
                 >
+                <v-icon
+                  v-if="pset.locked"
+                  class="sidebar-collapsed-lock"
+                  size="10"
+                  :title="SET_LOCKED_ROW_TITLE"
+                  >mdi-lock-outline</v-icon
+                >
               </div>
             </div>
             <div v-if="!isReadOnly" class="sidebar-collapsed-row">
@@ -4501,6 +4514,13 @@ defineExpose({
                 >
               </template>
               <v-icon v-else>mdi-image-album</v-icon>
+              <v-icon
+                v-if="selectedSetObj && selectedSetObj.locked"
+                class="sidebar-collapsed-lock"
+                size="10"
+                :title="SET_LOCKED_ROW_TITLE"
+                >mdi-lock-outline</v-icon
+              >
             </div>
           </div>
           <Teleport to="body">
@@ -4569,6 +4589,13 @@ defineExpose({
                   <span class="sidebar-collapsed-flyout-label">{{
                     pset.name || "Picture Set"
                   }}</span>
+                  <v-icon
+                    v-if="pset.locked"
+                    class="sidebar-lock-icon"
+                    size="12"
+                    :title="SET_LOCKED_ROW_TITLE"
+                    >mdi-lock-outline</v-icon
+                  >
                   <div
                     v-if="!isReadOnly"
                     class="sidebar-collapsed-flyout-item-actions"
@@ -5326,7 +5353,7 @@ defineExpose({
                       v-if="pset.locked"
                       class="sidebar-lock-icon"
                       size="11"
-                      title="Locked — this set is read-only. Right-click and choose Unlock set to edit it."
+                      :title="SET_LOCKED_ROW_TITLE"
                       >mdi-lock-outline</v-icon
                     >
                     <v-icon
@@ -8236,6 +8263,25 @@ defineExpose({
   flex-shrink: 0;
   /* Keep pointer events so the lock-reason title shows on hover. */
   pointer-events: auto;
+}
+
+/* Corner lock overlay for the collapsed/dock set icon (and the collapsed
+   flyout button). Mirrors the grid lock badge's translucent-surface backing
+   (ImageGrid .thumbnail-lock-badge) so a locked set reads as locked in the
+   collapsed sidebar without a redesign. Sits over the square set icon. */
+.sidebar-collapsed-lock {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-surface), 0.55);
+  color: rgba(var(--v-theme-on-surface), 0.85);
+  /* Keep pointer events so the lock-reason title shows on hover. */
+  pointer-events: auto;
+  z-index: 2;
 }
 
 .sidebar-shared-icon--inline {
