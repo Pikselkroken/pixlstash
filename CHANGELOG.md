@@ -1,3 +1,6 @@
+# [1.6.12]
+- Synced versions to frontend and ensure all builds succeed
+
 # [1.6.11] [Security:Moderate]
 - Update torch and pillow due to memory corruption and heap out-of-bounds bugs.
 
