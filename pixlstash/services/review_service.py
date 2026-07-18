@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture, Review, TaggerRun
+from pixlstash.db_models import Picture, PictureSet, Review, TaggerRun
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_scan_service, tag_suggestion_service
@@ -46,6 +46,27 @@ VALID_STATUSES = (OPEN, ARCHIVED, ABORTED)
 
 class ReviewConflictError(Exception):
     """Raised when the requested transition/creation conflicts with review state."""
+
+
+class ReviewLockedError(Exception):
+    """Raised when a review's scope set is locked (its pictures are read-only)."""
+
+
+def _assert_set_scope_not_locked(session: Session, set_id: int | None) -> None:
+    """Backstop for the create/preview scope: a locked set can't be reviewed (its
+    pictures are frozen). No-op for a None/unknown set.
+
+    Kept local (raises :class:`ReviewLockedError`, not ``HTTPException``) so the
+    service stays transport-agnostic; the route maps it to 423.
+    """
+    if set_id is None:
+        return
+    picture_set = session.get(PictureSet, set_id)
+    if picture_set is not None and getattr(picture_set, "locked", False):
+        raise ReviewLockedError(
+            f"Picture set {picture_set.name!r} is locked; its pictures are "
+            "read-only, so it cannot be used as a review scope. Unlock it first."
+        )
 
 
 def _serialize(review: Review) -> dict:
@@ -139,6 +160,7 @@ def create_review(
     """
 
     def _create(session: Session) -> Review:
+        _assert_set_scope_not_locked(session, set_id)
         open_existing = session.exec(
             select(Review).where(Review.tag == tag, Review.status == OPEN)
         ).first()
@@ -226,6 +248,7 @@ def preview_review(
     )
 
     def _fetch(session: Session) -> dict:
+        _assert_set_scope_not_locked(session, set_id)
         in_scope_q = (
             select(func.count()).select_from(Picture).where(Picture.deleted.is_(False))
         )

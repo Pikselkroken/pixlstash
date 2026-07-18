@@ -116,6 +116,9 @@ class BulkResultResponse(BaseModel):
     accepted_ids: list[int] = []
     picture_ids: list[int] = []
     sample: list[dict] = []
+    # Picture ids skipped because a locked set freezes their labels (bulk
+    # accept/reopen skip locked suspects/twins rather than 423-ing the batch).
+    skipped_locked: list[int] = []
 
 
 def _notify_changed(server, picture_ids, origin_client_id: str | None = None) -> None:

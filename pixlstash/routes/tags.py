@@ -27,6 +27,7 @@ from pixlstash.utils.service.tag_prediction_utils import (
 )
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 from pixlstash.routes.pictures._helpers import enforce_picture_scope
+from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.impossible_tag_clear_service import (
     VALID_FILTERS,
     clear_impossible_tags,
@@ -108,6 +109,13 @@ class ClearImpossibleTagsResponse(BaseModel):
     removed: list[ClearedTagPair] = Field(
         default=[], description="The removed pairs, to pass back to /restore for undo."
     )
+    skipped_locked: list[int] = Field(
+        default=[],
+        description=(
+            "Picture ids skipped because a locked set freezes their labels; "
+            "unlock the set to clear them."
+        ),
+    )
 
 
 class RestoreClearedTagsRequest(BaseModel):
@@ -123,6 +131,13 @@ class RestoreClearedTagsResponse(BaseModel):
 
     status: str
     restored: int = Field(..., description="Number of pairs re-added.")
+    skipped_locked: list[int] = Field(
+        default=[],
+        description=(
+            "Picture ids skipped because a locked set freezes their labels; "
+            "unlock the set to restore them."
+        ),
+    )
 
 
 def _sync_sidecar(server, pic_id: int) -> list[dict]:
@@ -169,6 +184,10 @@ def create_router(server) -> APIRouter:
             if existing is None:
 
                 def update_picture(session, pic_id, tag):
+                    # A picture frozen by a locked set has read-only label data.
+                    enforce_pictures_not_locked(
+                        session, [pic_id], "add a tag to a locked picture"
+                    )
                     pic = Picture.find(
                         session,
                         id=pic_id,
@@ -272,6 +291,10 @@ def create_router(server) -> APIRouter:
             tag_id_int = int(tag_id)
 
             def update_picture(session, pic_id, tag_id_value):
+                # A picture frozen by a locked set has read-only label data.
+                enforce_pictures_not_locked(
+                    session, [pic_id], "remove a tag from a locked picture"
+                )
                 pic = Picture.find(
                     session,
                     id=pic_id,
@@ -340,6 +363,10 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Tag is required")
 
         def update_picture(session: Session, pic_id: str, tag_value: str):
+            # A picture frozen by a locked set has read-only label data.
+            enforce_pictures_not_locked(
+                session, [pic_id], "remove a tag from a locked picture"
+            )
             pic_list = Picture.find(
                 session,
                 id=pic_id,
@@ -392,6 +419,10 @@ def create_router(server) -> APIRouter:
         enforce_picture_scope(server, request, pic_id)
 
         def do_clear(session: Session, pic_id: int):
+            # A picture frozen by a locked set has read-only label data.
+            enforce_pictures_not_locked(
+                session, [pic_id], "clear tags on a locked picture"
+            )
             pic_list = Picture.find(
                 session,
                 id=pic_id,

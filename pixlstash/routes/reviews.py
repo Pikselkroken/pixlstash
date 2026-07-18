@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import review_service
-from pixlstash.services.review_service import ReviewConflictError
+from pixlstash.services.review_service import ReviewConflictError, ReviewLockedError
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
@@ -173,6 +173,10 @@ def create_router(server) -> APIRouter:
             )
         except ReviewConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
+        except ReviewLockedError as exc:
+            # Backstop: the scoped set is locked, so it can't be a review scope
+            # (the UI already greys it out). 423 mirrors the mutation guards.
+            raise HTTPException(status_code=423, detail=str(exc))
 
     @router.get(
         "/reviews",
@@ -224,13 +228,17 @@ def create_router(server) -> APIRouter:
         tag = (tag or "").strip()
         if not tag:
             raise HTTPException(status_code=400, detail="tag is required")
-        return review_service.preview_review(
-            server.vault,
-            tag,
-            project_id=project_id,
-            set_id=set_id,
-            character_id=character_id,
-        )
+        try:
+            return review_service.preview_review(
+                server.vault,
+                tag,
+                project_id=project_id,
+                set_id=set_id,
+                character_id=character_id,
+            )
+        except ReviewLockedError as exc:
+            # Backstop: a locked set can't be a review scope (UI greys it out).
+            raise HTTPException(status_code=423, detail=str(exc))
 
     @router.get(
         "/reviews/{review_id}",

@@ -14,6 +14,7 @@ from pixlstash.db_models.deleted_file_log import DeletedFileLog
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL, is_tag_sentinel
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.utils.caption_file_utils import (
     DEFAULT_DESCRIPTION_SUFFIX,
@@ -315,7 +316,19 @@ class ReferenceFolderScanTask(BaseTask):
                 session: Session,
                 updates: list[dict],
             ) -> None:
+                # A sidecar re-sync writes confirmed tags/description onto EXISTING
+                # pictures; a picture frozen by a locked set is read-only, so skip
+                # it (background task — skip-and-log rather than raising 423).
+                locked = locked_picture_ids(session, [u["pic_id"] for u in updates])
+                if locked:
+                    logger.info(
+                        "Reference-folder sync: skipping %d locked picture(s) %s",
+                        len(locked),
+                        sorted(locked),
+                    )
                 for u in updates:
+                    if u["pic_id"] in locked:
+                        continue
                     pic_db = session.get(Picture, u["pic_id"])
                     if pic_db is None:
                         continue

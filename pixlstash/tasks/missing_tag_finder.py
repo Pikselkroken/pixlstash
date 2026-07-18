@@ -5,6 +5,8 @@ from sqlalchemy.orm import selectinload
 
 from pixlstash.db_models import (
     Picture,
+    PictureSet,
+    PictureSetMember,
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
@@ -105,9 +107,18 @@ class MissingTagFinder(BaseTaskFinder):
         has_sentinel = Tag.tag.like(
             TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
         )
+        # A picture frozen by a locked set keeps its confirmed tags: never re-queue
+        # it for tagging (the write-side skip in TagTask is the belt; this is the
+        # braces, and it avoids re-queuing a locked picture that still carries a
+        # stray retag sentinel on every finder pass).
+        locked_member = ~Picture.id.in_(
+            select(PictureSetMember.picture_id)
+            .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
+            .where(PictureSet.locked.is_(True))
+        )
         return session.exec(
             select(Picture)
-            .where(Picture.tags.any(has_sentinel))
+            .where(Picture.tags.any(has_sentinel), locked_member)
             .options(
                 selectinload(Picture.tags),
             )

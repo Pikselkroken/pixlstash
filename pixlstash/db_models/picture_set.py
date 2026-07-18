@@ -49,6 +49,10 @@ class PictureSet(SQLModel, table=True):
     )
     set_icon: Optional[str] = Field(default=None)
     set_color: Optional[str] = Field(default=None)
+    # When True the set is a hard, whole-set freeze: neither the set's own fields
+    # nor the label data of any member picture may be mutated until it is unlocked
+    # (mirrors the boolean `deleted` flag pattern on Picture).
+    locked: bool = Field(default=False)
 
     # Relationships
     members: List["Picture"] = Relationship(

@@ -29,6 +29,7 @@ from pixlstash.tagger_plugins.pixlstash_tagger import (
     QUALITY_CROP_TAG_WHITELIST,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 
@@ -336,6 +337,24 @@ class TagTask(BaseTask):
                 continue
 
             pics_to_update.append((pic_id, effective_tags))
+
+        # A locked set freezes a picture's CONFIRMED tags (the Tag table, not just
+        # predictions), so the background tagger must never rewrite them — even if
+        # a retag sentinel somehow landed on a locked picture (e.g. a reset that
+        # slipped through). Skip locked pictures from the confirmed-Tag rewrite;
+        # MissingTagFinder also excludes them so they are not re-queued.
+        if pics_to_update:
+            locked = locked_picture_ids(session, [pid for pid, _ in pics_to_update])
+            if locked:
+                logger.info(
+                    "Tagger: preserving frozen confirmed tags — skipping "
+                    "rewrite for %d locked picture(s) %s",
+                    len(locked),
+                    sorted(locked),
+                )
+                pics_to_update = [
+                    (pid, t) for pid, t in pics_to_update if pid not in locked
+                ]
 
         if not pics_to_update:
             return updated_ids

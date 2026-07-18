@@ -49,7 +49,13 @@ import numpy as np
 from sqlalchemy import and_
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture, Project, Tag
+from pixlstash.db_models import (
+    Picture,
+    PictureSet,
+    PictureSetMember,
+    Project,
+    Tag,
+)
 from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
@@ -288,7 +294,17 @@ def scan_tag(
         concept = set(
             session.exec(select(Tag.picture_id).where(Tag.tag.in_(sorted(equiv)))).all()
         )
-        return emb_rows, literal, concept
+        # Pictures frozen by a locked set are excluded from being SUSPECTS (the
+        # editable item) below — but stay in the pool so they can still serve as
+        # twins/neighbour guides (which write nothing). See the suspect loops.
+        locked = set(
+            session.exec(
+                select(PictureSetMember.picture_id)
+                .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
+                .where(PictureSet.locked.is_(True))
+            ).all()
+        )
+        return emb_rows, literal, concept, locked
 
     def _load_confidence_fallback(session: Session) -> list[tuple[int, float]]:
         """Fix 1's bootstrap candidates: literal-tag ``TagPrediction`` rows at or
@@ -344,7 +360,7 @@ def scan_tag(
             q = q.where(Picture.project_id == pid)
         return session.exec(q).all()
 
-    emb_rows, literal, concept = vault.db.run_immediate_read_task(_load)
+    emb_rows, literal, concept, locked_ids = vault.db.run_immediate_read_task(_load)
 
     ids: list[int] = []
     blobs: list[bytes] = []
@@ -421,6 +437,9 @@ def scan_tag(
         )
         fallback_rows = vault.db.run_immediate_read_task(_load_confidence_fallback)
         for pic_id, confidence in fallback_rows:
+            # A picture frozen by a locked set is never surfaced as a suspect.
+            if int(pic_id) in locked_ids:
+                continue
             conf = float(confidence)
             suspects.append(
                 {
@@ -474,6 +493,10 @@ def scan_tag(
         )
 
         for i in range(len(ids)):
+            # A picture frozen by a locked set is never surfaced as a suspect, but
+            # it remains in `ids`/`emb` above so it can still be a twin/neighbour.
+            if int(ids[i]) in locked_ids:
+                continue
             # ADD eligibility uses the merged concept; REMOVE uses the literal tag.
             if not has_concept[i] and pos_frac[i] >= effective_add_threshold:
                 direction, score = "add", float(pos_frac[i])

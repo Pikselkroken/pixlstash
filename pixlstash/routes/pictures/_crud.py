@@ -46,6 +46,11 @@ from pixlstash.db_models import (
 from pixlstash.db_models.user import User
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import (
+    enforce_pictures_not_locked,
+    locked_by_sets_for_picture,
+    locked_picture_ids,
+)
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
@@ -93,6 +98,11 @@ DETECT_MAX_IDS = 1000
 # list would serialise that much work on the DB queue from a single request.
 # Mirrors the caps above; the frontend chunks larger selections into multiple calls.
 BULK_DELETE_MAX_IDS = 1000
+
+# Picture PATCH fields that are label/curation data and therefore frozen when the
+# picture belongs to a locked set. Organisation fields (e.g. project_id) are not
+# listed — they stay editable per the lock semantics.
+_LOCK_SENSITIVE_PATCH_FIELDS = frozenset({"description", "score"})
 
 
 class _DetectedFace:
@@ -166,6 +176,7 @@ class PictureFullMetadataResponse(BaseModel):
     tags: Optional[list] = None
     smartScore: Optional[float] = None
     metadata: Optional[dict] = None
+    locked_by_sets: list[dict] = []
 
 
 class PictureFaceResponse(BaseModel):
@@ -400,6 +411,9 @@ class BulkPictureDeleteResponse(BaseModel):
     # Number of pictures newly soft-deleted by this request (already-deleted or
     # missing ids are skipped and not counted).
     deleted_count: int
+    # Picture ids skipped because a locked set freezes them (not deleted); unlock
+    # the set to delete them.
+    skipped_locked: list[int] = []
 
 
 def register_routes(router, server):
@@ -1077,6 +1091,11 @@ def register_routes(router, server):
         )
         pic_dict = safe_model_dict(pic)
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
+        # Locked sets freezing this picture, so the overlay can show the reason
+        # without a second request.
+        pic_dict["locked_by_sets"] = server.vault.db.run_immediate_read_task(
+            locked_by_sets_for_picture, pic.id
+        )
 
         if smart_score:
             pic_dict["smartScore"] = pic.smart_score  # already stored in DB
@@ -2033,6 +2052,10 @@ def register_routes(router, server):
                         pid: int,
                         new_tags: list[str],
                     ) -> None:
+                        # Tag replacement is label data — frozen on a locked pic.
+                        enforce_pictures_not_locked(
+                            session, [pid], "replace tags on a locked picture"
+                        )
                         session.exec(delete(Tag).where(Tag.picture_id == pid))
                         session.add_all([Tag(picture_id=pid, tag=t) for t in new_tags])
                         session.commit()
@@ -2061,6 +2084,14 @@ def register_routes(router, server):
                 pic_db = session.get(Picture, picture_id)
                 if pic_db is None:
                     raise KeyError("Picture not found")
+                # description and score are label/curation data — frozen on a
+                # picture in a locked set. Project assignment and other org fields
+                # remain editable, so only guard when a locked-sensitive field is
+                # actually being written.
+                if any(f in _LOCK_SENSITIVE_PATCH_FIELDS for f in fields):
+                    enforce_pictures_not_locked(
+                        session, [picture_id], "edit a locked picture"
+                    )
                 for field_name, field_value in fields.items():
                     setattr(pic_db, field_name, field_value)
                 session.add(pic_db)
@@ -2376,6 +2407,8 @@ def register_routes(router, server):
             pic = session.get(Picture, id)
             if not pic:
                 return False
+            # Soft-deleting a member would silently mutate a frozen set — refuse.
+            enforce_pictures_not_locked(session, [pic.id], "delete a locked picture")
             if pic.deleted:
                 return True
             pic.deleted = True
@@ -2457,9 +2490,14 @@ def register_routes(router, server):
             enforce_picture_scope(server, request, pic_id)
 
         def delete_pics(session, ids):
+            # Pictures frozen by a locked set are read-only: skip them (reporting
+            # which) rather than failing the whole batch, so the rest still delete.
+            locked = locked_picture_ids(session, ids)
             newly_deleted: list[int] = []
             affected_stacks: set = set()
             for pid in ids:
+                if pid in locked:
+                    continue
                 pic = session.get(Picture, pid)
                 if not pic or pic.deleted:
                     continue
@@ -2475,9 +2513,9 @@ def register_routes(router, server):
             for stack_id in affected_stacks:
                 normalize_stack_positions(session, stack_id)
             session.commit()
-            return newly_deleted
+            return newly_deleted, sorted(locked)
 
-        deleted_ids = server.vault.db.run_task(delete_pics, pic_ids)
+        deleted_ids, skipped_locked = server.vault.db.run_task(delete_pics, pic_ids)
         # Soft-delete removes the cards from active grid views. Broadcast a single
         # ``removed`` event so other tabs drop the stale cards in one update.
         if deleted_ids:
@@ -2489,4 +2527,8 @@ def register_routes(router, server):
                     "change_kind": "removed",
                 },
             )
-        return {"status": "success", "deleted_count": len(deleted_ids)}
+        return {
+            "status": "success",
+            "deleted_count": len(deleted_ids),
+            "skipped_locked": skipped_locked,
+        }

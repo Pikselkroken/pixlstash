@@ -39,6 +39,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -723,13 +724,24 @@ def create_router(server) -> APIRouter:
                             session.add(pic)
                         local_project_membership_updated = bool(picture_ids)
 
-                    # Clear text embeddings for all pictures of this character
-                    for face in session.exec(
-                        select(Face).where(Face.character_id == id)
-                    ).all():
-                        pic = session.get(Picture, face.picture_id)
+                    # Invalidate machine-derived fields for this character's
+                    # pictures so they are re-derived after the change. The text
+                    # embedding is machine-derived (rule 4) and always cleared, but
+                    # the description is frozen on a locked picture (rule 3): skip
+                    # clearing it there. Character reassignment itself stays allowed.
+                    character_pic_ids = [
+                        face.picture_id
+                        for face in session.exec(
+                            select(Face).where(Face.character_id == id)
+                        ).all()
+                        if face.picture_id is not None
+                    ]
+                    locked_pics = locked_picture_ids(session, character_pic_ids)
+                    for pic_id in character_pic_ids:
+                        pic = session.get(Picture, pic_id)
                         if pic:
-                            pic.description = None
+                            if pic.id not in locked_pics:
+                                pic.description = None
                             pic.text_embedding = None
                             session.add(pic)
 

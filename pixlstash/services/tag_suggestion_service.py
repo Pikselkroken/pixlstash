@@ -27,6 +27,10 @@ from pixlstash.db_models.tag import is_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import (
+    enforce_pictures_not_locked,
+    locked_picture_ids,
+)
 from pixlstash.utils.service.filter_helpers import (
     fetch_tag_review_scope_picture_ids,
 )
@@ -277,6 +281,12 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
 
+        # Lock guard: accepting writes the POS/NEG label ledger onto the suspect —
+        # exactly the data a locked set freezes. Refuse when the suspect is locked.
+        enforce_pictures_not_locked(
+            session, [suggestion.picture_id], "accept a suggestion on a locked picture"
+        )
+
         # F2 guard 1: never write a Tag onto a soft-deleted (or missing)
         # picture. Its card is filtered out of the review queue, so accepting
         # one is always acting on a stale card — refuse loudly rather than
@@ -469,6 +479,14 @@ def reopen_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         suggestion = session.get(TagSuggestion, suggestion_id)
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
+        # Reopen reverses a decision's label change — re-adding/deleting Tag rows
+        # and clearing the ledger on the suspect and/or twin. Frozen when either
+        # is in a locked set.
+        enforce_pictures_not_locked(
+            session,
+            [suggestion.picture_id, suggestion.twin_picture_id],
+            "reopen a suggestion touching a locked picture",
+        )
         _reverse_review(session, suggestion)
         result = {
             "picture_id": suggestion.picture_id,
@@ -655,9 +673,22 @@ def bulk_accept(
             if r.twin_picture_id is not None:
                 ids.add(r.twin_picture_id)
         conf_map = _confidence_map(session, sorted(ids), tag)
+        # A row whose suspect OR twin is frozen by a locked set is skipped (and
+        # reported), not applied — resolving writes Tag + ledger on both. Computed
+        # once for the whole batch; used by dry-run and apply alike so their
+        # counts agree.
+        locked = locked_picture_ids(session, sorted(ids))
+        skipped_locked: set[int] = set()
 
         chosen: list[tuple[TagSuggestion, str, float]] = []
         for r in rows:
+            if r.picture_id in locked or (
+                r.twin_picture_id is not None and r.twin_picture_id in locked
+            ):
+                skipped_locked.add(r.picture_id)
+                if r.twin_picture_id is not None and r.twin_picture_id in locked:
+                    skipped_locked.add(r.twin_picture_id)
+                continue
             tagged_id = r.picture_id if r.direction == "remove" else r.twin_picture_id
             untagged_id = r.twin_picture_id if r.direction == "remove" else r.picture_id
             corner, confidence = _decision(
@@ -700,6 +731,7 @@ def bulk_accept(
                 "sample": sample,
                 "accepted_ids": [],
                 "picture_ids": [],
+                "skipped_locked": sorted(skipped_locked),
             }
 
         accepted_ids: list[int] = []
@@ -716,6 +748,7 @@ def bulk_accept(
             "sample": [],
             "accepted_ids": accepted_ids,
             "picture_ids": sorted(pic_ids),
+            "skipped_locked": sorted(skipped_locked),
         }
 
     # dry_run performs no writes (it returns before any session.commit above), so
@@ -751,6 +784,7 @@ def bulk_reopen(vault: "Vault", ids: list[int], review_id: int | None = None) ->
                 ).all()
             )
         pic_ids: set[int] = set()
+        skipped_locked: set[int] = set()
         count = 0
         for sid in target_ids:
             suggestion = session.get(TagSuggestion, sid)
@@ -760,13 +794,26 @@ def bulk_reopen(vault: "Vault", ids: list[int], review_id: int | None = None) ->
                 continue
             if review_id is not None and suggestion.status == "SKIPPED":
                 continue
+            # A batch undo skips rows whose suspect or twin is frozen by a locked
+            # set (reversing would re-add/delete Tag rows on frozen data), rather
+            # than failing the whole batch.
+            locked = locked_picture_ids(
+                session, [suggestion.picture_id, suggestion.twin_picture_id]
+            )
+            if locked:
+                skipped_locked.update(locked)
+                continue
             _reverse_review(session, suggestion)
             pic_ids.add(suggestion.picture_id)
             if suggestion.twin_picture_id:
                 pic_ids.add(suggestion.twin_picture_id)
             count += 1
         session.commit()
-        return {"count": count, "picture_ids": sorted(pic_ids)}
+        return {
+            "count": count,
+            "picture_ids": sorted(pic_ids),
+            "skipped_locked": sorted(skipped_locked),
+        }
 
     return vault.db.run_task(_bulk)
 
@@ -800,6 +847,12 @@ def fix_twin_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         twin_id = suggestion.twin_picture_id
         if twin_id is None:
             raise ValueError("suggestion has no twin to fix")
+        # fix-twin writes the Tag + ledger onto the TWIN. The plan lets a locked
+        # picture appear as a read-only twin, so this is exactly where a write
+        # could reach frozen data — refuse when the twin is locked.
+        enforce_pictures_not_locked(
+            session, [twin_id], "fix a suggestion's locked twin"
+        )
         # The twin's label is what the human is deciding here: a remove-suggestion means
         # the untagged twin actually has the tag (POS); an add-suggestion means the
         # tagged twin actually lacks it (NEG). _set_tag records that on the twin.
@@ -834,6 +887,13 @@ def swap_suggestion(vault: "Vault", suggestion_id: int) -> dict:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
         if suggestion.twin_picture_id is None:
             raise ValueError("suggestion has no twin to swap")
+        # swap writes Tag + ledger on BOTH the suspect and its twin — refuse when
+        # either is frozen by a locked set.
+        enforce_pictures_not_locked(
+            session,
+            [suggestion.picture_id, suggestion.twin_picture_id],
+            "swap a pair touching a locked picture",
+        )
         tagged_id = (
             suggestion.picture_id
             if suggestion.direction == "remove"
@@ -921,6 +981,13 @@ def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         suggestion = session.get(TagSuggestion, suggestion_id)
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
+        # Lock guard: dismiss affirms the current label (writes the human ledger)
+        # on the suspect — frozen when the suspect is in a locked set.
+        enforce_pictures_not_locked(
+            session,
+            [suggestion.picture_id],
+            "dismiss a suggestion on a locked picture",
+        )
         record_human_label(
             session,
             suggestion.picture_id,

@@ -17,6 +17,7 @@ from pixlstash.db_models.tag import TAG_PENDING_SENTINEL, Tag, is_tag_sentinel
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
@@ -1366,7 +1367,23 @@ def create_router(server) -> APIRouter:
             tags_count = 0
             descriptions_count = 0
             skipped_count = 0
+            # A sidecar import deletes+rewrites confirmed Tag rows and overwrites
+            # the description on EXISTING pictures — frozen for anything in a
+            # locked set. Skip those (counted as skipped) instead of overwriting.
+            locked = locked_picture_ids(
+                session, [pic.id for pic in pictures if pic.id is not None]
+            )
+            if locked:
+                logger.info(
+                    "Reference-folder metadata import: skipping %d locked "
+                    "picture(s) %s",
+                    len(locked),
+                    sorted(locked),
+                )
             for pic in pictures:
+                if pic.id in locked:
+                    skipped_count += 1
+                    continue
                 if not pic.file_path or not os.path.isfile(pic.file_path):
                     skipped_count += 1
                     continue
