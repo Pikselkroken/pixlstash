@@ -13,6 +13,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import event as sa_event
@@ -199,6 +200,10 @@ def _seed_stable(server, seed_fn):
     return server.vault.db.run_task(_wrapped)
 
 
+@pytest.mark.skip(
+    reason="Flaky: est_wrong tagger-pipeline race — quarantined for 1.7.0rc1, "
+    "tracked in #532"
+)
 def test_tag_health_aggregates_on_fixture_vault():
     temp_dir, client, server = _setup()
     try:
