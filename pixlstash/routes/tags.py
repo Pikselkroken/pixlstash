@@ -579,7 +579,13 @@ def create_router(server) -> APIRouter:
                 for pic_id, tag_id, tag_val in rows:
                     if tag_val and pic_id in by_pic:
                         by_pic[pic_id].append({"id": tag_id, "tag": tag_val})
-                return [{"id": pic_id, "tags": by_pic[pic_id]} for pic_id in ids]
+                return [
+                    {
+                        "id": pic_id,
+                        "tags": by_pic[pic_id],
+                    }
+                    for pic_id in ids
+                ]
 
             return server.vault.db.run_task(fetch, ids)
         except HTTPException:

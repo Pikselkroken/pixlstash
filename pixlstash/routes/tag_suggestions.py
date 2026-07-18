@@ -48,17 +48,6 @@ class TagSuggestionItemResponse(BaseModel):
     twin_tagger_confidence: Optional[float] = None
 
 
-class TagSuggestionSummaryItem(BaseModel):
-    """Pending-suggestion counts for one tag."""
-
-    model_config = ConfigDict(extra="allow")
-
-    tag: str
-    add: int = 0
-    remove: int = 0
-    total: int = 0
-
-
 class ReviewSuggestionResponse(BaseModel):
     """Result of accepting or dismissing a suggestion."""
 
@@ -82,12 +71,21 @@ class BulkAcceptRequest(BaseModel):
     project_id: Optional[int] = None
     set_id: Optional[int] = None
     character_id: Optional[str] = None
+    # Optional review-session narrowing: only rows with this TagSuggestion.review_id
+    # are counted/resolved (the review creation receipt's "auto-resolve?" path).
+    review_id: Optional[int] = None
 
 
 class BulkReopenRequest(BaseModel):
-    """Batch-undo: reopen the given suggestion ids."""
+    """Batch-undo: reopen the given suggestion ids.
+
+    With ``review_id`` set and ``ids`` empty, reopens ALL of that review's
+    decided rows (SKIPPED rows made no changes and are left as-is).
+    """
 
     ids: list[int] = []
+    # When set, ids belonging to a different (or no) review are skipped.
+    review_id: Optional[int] = None
 
 
 class ScanRequest(BaseModel):
@@ -285,32 +283,6 @@ def create_router(server) -> APIRouter:
             out.append(item)
         return out
 
-    @router.get(
-        "/tag_suggestions/summary",
-        summary="Per-tag suggestion counts",
-        description=(
-            "Returns pending-suggestion counts grouped by tag (with add/remove "
-            "breakdown), busiest tag first. Drives the queue's tag picker and progress. "
-            "Optionally narrow to a ``project_id``, ``set_id``, and/or ``character_id`` "
-            "(numeric id, or the literal ``UNASSIGNED``); these AND together and match "
-            "the suspect picture only."
-        ),
-        response_model=list[TagSuggestionSummaryItem],
-    )
-    def tag_suggestions_summary(
-        request: Request,
-        status: str = "PENDING",
-        project_id: int | None = None,
-        set_id: int | None = None,
-        character_id: str | None = None,
-    ):
-        picture_ids = _resolve_review_picture_ids(
-            server, request, project_id, set_id, character_id
-        )
-        return tag_suggestion_service.summary_by_tag(
-            server.vault, status=status, picture_ids=picture_ids
-        )
-
     @router.post(
         "/tag_suggestions/{suggestion_id}/accept",
         summary="Accept a tag-fix suggestion",
@@ -328,6 +300,11 @@ def create_router(server) -> APIRouter:
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Suggestion not found")
+        except tag_suggestion_service.SuggestionConflictError as exc:
+            # The suspect picture was soft-deleted, or a human ledger label now
+            # contradicts the suggestion's direction — refuse rather than write a
+            # stale/harmful edit (see accept_suggestion's guards).
+            raise HTTPException(status_code=409, detail=str(exc))
         pic_id = result["picture_id"]
         server.vault.notify(
             EventType.CHANGED_TAGS,
@@ -465,6 +442,7 @@ def create_router(server) -> APIRouter:
             payload.direction,
             payload.dry_run,
             picture_ids=picture_ids,
+            review_id=payload.review_id,
         )
         if payload.dry_run and result.get("sample"):
             ids: list[int | None] = []
@@ -488,9 +466,29 @@ def create_router(server) -> APIRouter:
     )
     def bulk_reopen_tag_suggestions(payload: BulkReopenRequest, request: Request):
         origin_client_id = getattr(request.state, "origin_client_id", None)
-        result = tag_suggestion_service.bulk_reopen(server.vault, payload.ids)
+        result = tag_suggestion_service.bulk_reopen(
+            server.vault, payload.ids, review_id=payload.review_id
+        )
         _notify_changed(server, result["picture_ids"], origin_client_id)
         return result
+
+    @router.post(
+        "/tag_suggestions/{suggestion_id}/skip",
+        summary="Skip a tag-fix suggestion (no decision)",
+        description=(
+            "The reviewer cannot decide: marks the suggestion SKIPPED and "
+            "removes it from the queue with no decision recorded — the Tag "
+            "table and the human-label ledger are untouched (unlike dismiss, "
+            "which affirms the current label). Reopen re-pends it."
+        ),
+        response_model=ReviewSuggestionResponse,
+    )
+    def skip_tag_suggestion(suggestion_id: int):
+        try:
+            result = tag_suggestion_service.skip_suggestion(server.vault, suggestion_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        return {"status": "skipped", **result}
 
     @router.post(
         "/tag_suggestions/{suggestion_id}/dismiss",

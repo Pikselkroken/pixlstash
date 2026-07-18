@@ -45,13 +45,43 @@ def knn_disagreement(emb: np.ndarray, has_tag: np.ndarray, k: int, block: int = 
         twin_idx  – row index of nearest opposite-labelled neighbour (-1 if none)
         twin_sim  – cosine similarity of that twin (0.0 if none)
     """
+    pos_frac, twin_idx, twin_sim, _neighbor_idx = knn_disagreement_with_neighbors(
+        emb, has_tag, k, block
+    )
+    return pos_frac, twin_idx, twin_sim
+
+
+def knn_disagreement_with_neighbors(
+    emb: np.ndarray, has_tag: np.ndarray, k: int, block: int = 1024
+):
+    """:func:`knn_disagreement` plus each row's top-k neighbour indices.
+
+    Same computation and identical first three return values; the extra array
+    lets the scan capture the neighbourhood evidence ("2 of 12 similar images
+    have the tag") without recomputing similarities.
+
+    Args:
+        emb: (n, dim) unit-norm embeddings (cosine == dot product).
+        has_tag: (n,) bool mask — whether each image carries the (merged) tag.
+        k: neighbours per image.
+        block: rows per similarity block (memory/speed trade-off).
+
+    Returns arrays aligned to the input rows:
+        pos_frac     – sim-weighted fraction of neighbours carrying the tag
+        twin_idx     – row index of nearest opposite-labelled neighbour (-1 if none)
+        twin_sim     – cosine similarity of that twin (0.0 if none)
+        neighbor_idx – (n, min(k, n-1)) int64 row indices of each row's nearest
+                       neighbours, sorted by descending similarity; shape
+                       (n, 0) when n <= 1.
+    """
     n = emb.shape[0]
     pos_frac = np.zeros(n, dtype=np.float32)
     twin_idx = np.full(n, -1, dtype=np.int64)
     twin_sim = np.zeros(n, dtype=np.float32)
     if n <= 1:
-        return pos_frac, twin_idx, twin_sim
+        return pos_frac, twin_idx, twin_sim, np.empty((n, 0), dtype=np.int64)
     k = min(k, n - 1)  # can't have more neighbours than other images
+    neighbor_idx = np.full((n, k), -1, dtype=np.int64)
     y = has_tag.astype(np.float32)
 
     for start in range(0, n, block):
@@ -72,6 +102,10 @@ def knn_disagreement(emb: np.ndarray, has_tag: np.ndarray, k: int, block: int = 
             yn = y[nbr]
             pos_frac[glob] = float((w * yn).sum() / wsum) if wsum > 0 else 0.0
 
+            # The same k neighbours the vote used, most-similar first.
+            order = np.argsort(-sims[local, nbr], kind="stable")
+            neighbor_idx[glob] = nbr[order]
+
             # Nearest opposite-labelled neighbour ("twin").
             opp = nbr[has_tag[nbr] != has_tag[glob]]
             if opp.size:
@@ -80,7 +114,7 @@ def knn_disagreement(emb: np.ndarray, has_tag: np.ndarray, k: int, block: int = 
                 twin_idx[glob] = best
                 twin_sim[glob] = float(sims[local, best])
 
-    return pos_frac, twin_idx, twin_sim
+    return pos_frac, twin_idx, twin_sim, neighbor_idx
 
 
 def _popcount_u64(values: np.ndarray) -> np.ndarray:

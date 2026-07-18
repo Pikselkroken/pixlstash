@@ -23,6 +23,7 @@ class TaskType(str, Enum):
     SMART_SCORE = "SmartScoreTask"
     TEXT_SCORE = "TextScoreTask"
     GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
+    TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
 
     @staticmethod
     def all():

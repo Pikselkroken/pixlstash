@@ -432,6 +432,14 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/projects/{project_id}/summary                                         | projects        | Get project picture count                             |
 | GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters      | Get character by project name and character name      |
 | GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets    | Get picture set by project name and set name          |
+| POST   | /api/v1/reviews                                                               | reviews         | Create a review session for one tag                   |
+| GET    | /api/v1/reviews                                                               | reviews         | List review sessions                                  |
+| GET    | /api/v1/reviews/preview                                                       | reviews         | Preview a review's coverage before creating it        |
+| GET    | /api/v1/reviews/{review_id}                                                   | reviews         | Get one review's detail                               |
+| POST   | /api/v1/reviews/{review_id}/abort                                             | reviews         | Abort a review (discard the session)                  |
+| POST   | /api/v1/reviews/{review_id}/archive                                           | reviews         | Archive a review (completed)                          |
+| POST   | /api/v1/reviews/{review_id}/refresh                                           | reviews         | Re-scan a review append-only                          |
+| GET    | /api/v1/reviews/{review_id}/suggestions                                       | reviews         | List a review's ranked queue                          |
 | GET    | /api/v1/snapshots                                                             | snapshots       | List Snapshots                                        |
 | POST   | /api/v1/snapshots                                                             | snapshots       | Create Snapshot                                       |
 | GET    | /api/v1/snapshots/status                                                      | snapshots       | Snapshots Status                                      |
@@ -452,15 +460,17 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                   |
 | PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                         |
 | GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                |
+| GET    | /api/v1/tag_health                                                            | tag_health      | Tag health board rows                                 |
+| POST   | /api/v1/tag_health/rebuild                                                    | tag_health      | Rebuild the tag health cache                          |
 | GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                       |
 | POST   | /api/v1/tag_suggestions/bulk-accept                                           | tag_suggestions | Resolve all confident suggestions for a tag           |
 | POST   | /api/v1/tag_suggestions/bulk-reopen                                           | tag_suggestions | Batch-undo a bulk accept                              |
 | POST   | /api/v1/tag_suggestions/scan                                                  | tag_suggestions | Scan a tag for near-neighbour label disagreements     |
-| GET    | /api/v1/tag_suggestions/summary                                               | tag_suggestions | Per-tag suggestion counts                             |
 | POST   | /api/v1/tag_suggestions/{suggestion_id}/accept                                | tag_suggestions | Accept a tag-fix suggestion                           |
 | POST   | /api/v1/tag_suggestions/{suggestion_id}/dismiss                               | tag_suggestions | Dismiss a tag-fix suggestion                          |
 | POST   | /api/v1/tag_suggestions/{suggestion_id}/fix-twin                              | tag_suggestions | Resolve a suggestion in the twin's favour             |
 | POST   | /api/v1/tag_suggestions/{suggestion_id}/reopen                                | tag_suggestions | Reopen (undo) a reviewed suggestion                   |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/skip                                  | tag_suggestions | Skip a tag-fix suggestion (no decision)               |
 | POST   | /api/v1/tag_suggestions/{suggestion_id}/swap                                  | tag_suggestions | Swap a pair's labels (both were wrong, opposite ways) |
 | POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger        |
 | GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)              |
@@ -581,6 +591,8 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | `MISSING_FILE_PURGE` | CPU | `MissingFilePurgeFinder` | Remove records for vanished files |
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
 | `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
+| `PICTURE_SPLIT_ASSIGNMENT` | CPU | `PictureSplitAssignmentFinder` | Periodic existence check for pictures with no `PictureSplit` row; queues `picture_split_service.assign_splits` (idempotent — only unassigned pictures are targeted). Replaces the previously-uncalled `POST /picture_splits/assign` as the sole trigger, so freeze eligibility (`eval_candidate_n_pos`) moves without manual action. No `depends_on()` ordering on `IMAGE_EMBEDDING`/`LIKENESS` — deliberately soft (see the finder's module docstring): hard-blocking on those risks starving split assignment during active review, the exact bug this finder fixes. |
+| `TAG_HEALTH_AUTO_REBUILD` | CPU | `TagHealthAutoRebuildFinder` | Checks `tag_health_service.is_stale` at most every 5 minutes (`AUTO_REBUILD_CHECK_INTERVAL_S`); when stale and no rebuild is running, dispatches through the same idempotent `start_rebuild` path `POST /tag_health/rebuild` uses. Closes the loop so `GET /tag_health`'s `stale` flag (new pictures / `TaggerRun`s / reviewed `TagSuggestion`s since the cache's `computed_at`) self-heals without a manual click. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
 

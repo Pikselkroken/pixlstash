@@ -129,3 +129,66 @@ def test_full_64bit_range_no_overflow():
 
     j = nearest_opposite_by_hamming(phash, valid, has_tag, i=0, max_hamming=8)
     assert j == 1
+
+
+# ---------------------------------------------------------------------------
+# knn_disagreement_with_neighbors: the neighbour-capture variant of the kernel.
+# ---------------------------------------------------------------------------
+
+
+def _unit_rows(vectors):
+    emb = np.asarray(vectors, dtype=np.float32)
+    norms = np.linalg.norm(emb, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return emb / norms
+
+
+def test_with_neighbors_matches_plain_kernel_and_orders_by_similarity():
+    from pixlstash.utils.near_neighbor import (
+        knn_disagreement,
+        knn_disagreement_with_neighbors,
+    )
+
+    # Four points on two axes: 0 and 1 nearly parallel, 2 and 3 nearly parallel.
+    emb = _unit_rows(
+        [
+            [1.0, 0.0, 0.0],
+            [0.999, 0.01, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.01, 0.999, 0.0],
+        ]
+    )
+    has_tag = np.array([True, False, True, False])
+
+    pf1, ti1, ts1 = knn_disagreement(emb, has_tag, k=2)
+    pf2, ti2, ts2, nbr = knn_disagreement_with_neighbors(emb, has_tag, k=2)
+    np.testing.assert_allclose(pf1, pf2)
+    np.testing.assert_array_equal(ti1, ti2)
+    np.testing.assert_allclose(ts1, ts2)
+
+    # Shape: one row per input, k columns; no self-references; descending sim.
+    assert nbr.shape == (4, 2)
+    for i in range(4):
+        assert i not in nbr[i]
+        sims = emb[i] @ emb[nbr[i]].T
+        assert sims[0] >= sims[1]
+    # Row 0's nearest neighbour is its near-parallel partner, row 1.
+    assert nbr[0][0] == 1
+    assert nbr[2][0] == 3
+
+
+def test_with_neighbors_degenerate_sizes():
+    from pixlstash.utils.near_neighbor import knn_disagreement_with_neighbors
+
+    # n == 1: empty neighbour matrix, no crash.
+    emb = _unit_rows([[1.0, 0.0]])
+    pf, ti, ts, nbr = knn_disagreement_with_neighbors(emb, np.array([True]), k=5)
+    assert nbr.shape == (1, 0)
+
+    # k larger than n-1 clamps to n-1 columns.
+    emb = _unit_rows([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]])
+    pf, ti, ts, nbr = knn_disagreement_with_neighbors(
+        emb, np.array([True, False, False]), k=10
+    )
+    assert nbr.shape == (3, 2)
+    assert (nbr >= 0).all()

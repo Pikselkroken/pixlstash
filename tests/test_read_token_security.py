@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import pixlstash.routes.pictures._crud as crud_module
+import pixlstash.routes.pictures._listing as listing_module
 import pixlstash.utils.rate_limiter as rl_module
 from pixlstash.db_models import Picture
 from pixlstash.server import Server
@@ -770,6 +771,90 @@ class TestResourceScopedReadTokenIsolation:
                 assert r.json().get("count") in (0, 1), (
                     f"Single-picture token saw count={r.json().get('count')}; "
                     "out-of-scope pictures leaked into /pictures/count"
+                )
+            finally:
+                server.__exit__(None, None, None)
+
+    def test_picture_scoped_token_cannot_widen_via_character_likeness_sort(self):
+        """CVE-class regression: sort=CHARACTER_LIKENESS resolves candidates
+        without ever consulting query_params["id"] (see the "CHARACTER_LIKENESS
+        sort branch is a known pre-existing exception" comment in
+        select_pictures_for_listing, pixlstash/routes/pictures/_listing.py). A
+        single-picture share token narrows scope only by mutating
+        query_params["id"] (scope_picture_id), so this sort mode is a total
+        bypass of that scope -- the same BOLA class as
+        test_picture_scoped_token_cannot_list_whole_library above, on a sort
+        mode that test didn't cover.
+
+        find_pictures_by_character_likeness_sql is stubbed (no GPU/face
+        pipeline needed, same technique as
+        test_character_likeness_query_respects_project_filter in
+        test_server.py) to simply echo back whatever candidate_ids it was
+        given by _listing.py, so this test isolates exactly the wiring
+        question: does the picture-scope narrowing ever reach that call.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            server, owner_client, set_a, set_b, pic_a, pic_b, token_a = (
+                self._setup_two_picture_sets(tmp)
+            )
+            try:
+                r = owner_client.post(f"{API}/characters", json={"name": "Ref"})
+                assert r.status_code == 200, r.text
+                ref_char_id = r.json()["character"]["id"]
+
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={
+                        "description": "single picture token",
+                        "scope": "READ",
+                        "resource_type": "picture",
+                        "resource_id": pic_a,
+                    },
+                )
+                assert r.status_code == 200, r.text
+                pic_token = r.json()["token"]
+
+                def fake_find_pictures_by_character_likeness_sql(
+                    _server,
+                    _character_id,
+                    _reference_character_id,
+                    _offset,
+                    _limit,
+                    _descending,
+                    candidate_ids=None,
+                    deleted_only=False,
+                    stack_leaders_only=False,
+                ):
+                    # Mirrors the real function's contract: candidate_ids is
+                    # None (no restriction) unless a set/character/project
+                    # scope narrowed it upstream. Echo both known pictures
+                    # when unrestricted, exactly like an unfiltered
+                    # Face-join query would.
+                    ids = (
+                        sorted(set(candidate_ids)) if candidate_ids else [pic_a, pic_b]
+                    )
+                    return [{"id": pid, "character_likeness": 0.0} for pid in ids]
+
+                client = TestClient(server.api)
+                hdr = {"Authorization": f"Bearer {pic_token}"}
+                with patch.object(
+                    listing_module,
+                    "find_pictures_by_character_likeness_sql",
+                    fake_find_pictures_by_character_likeness_sql,
+                ):
+                    r = client.get(
+                        f"{API}/pictures",
+                        params={
+                            "sort": "CHARACTER_LIKENESS",
+                            "reference_character_id": str(ref_char_id),
+                        },
+                        headers=hdr,
+                    )
+                assert r.status_code == 200, r.text
+                ids = {p["id"] for p in r.json()}
+                assert ids <= {pic_a}, (
+                    "Single-picture token leaked other pictures via "
+                    f"sort=CHARACTER_LIKENESS: {ids}"
                 )
             finally:
                 server.__exit__(None, None, None)

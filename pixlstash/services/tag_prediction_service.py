@@ -57,6 +57,11 @@ def load_label_thresholds(meta_path: str | None, bias: float = 0.0) -> dict[str,
             sanitise_tag(k) or k: max(0.01, float(v) + bias) for k, v in raw.items()
         }
     except Exception:
+        logger.warning(
+            "load_label_thresholds: failed to read %r; returning no thresholds",
+            meta_path,
+            exc_info=True,
+        )
         return {}
 
 
@@ -77,6 +82,11 @@ def load_raw_label_thresholds(meta_path: str | None) -> dict[str, float]:
         raw = meta.get("label_thresholds", {})
         return {sanitise_tag(k) or k: float(v) for k, v in raw.items()}
     except Exception:
+        logger.warning(
+            "load_raw_label_thresholds: failed to read %r; returning no thresholds",
+            meta_path,
+            exc_info=True,
+        )
         return {}
 
 

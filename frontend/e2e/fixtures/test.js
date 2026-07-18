@@ -7,6 +7,7 @@ import { ImageOverlay } from '../pages/ImageOverlay.js'
 import { SettingsDialog } from '../pages/SettingsDialog.js'
 import { SideBar } from '../pages/SideBar.js'
 import { ShareDialog } from '../pages/ShareDialog.js'
+import { ReviewSessions } from '../pages/ReviewSessions.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TOKEN_PATH = resolve(__dirname, '../.auth/token.json')
@@ -156,6 +157,9 @@ export const test = base.extend({
   },
   shareDialog: async ({ page }, use) => {
     await use(new ShareDialog(page))
+  },
+  reviews: async ({ page }, use) => {
+    await use(new ReviewSessions(page))
   },
 })
 

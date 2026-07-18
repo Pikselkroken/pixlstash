@@ -1,8 +1,9 @@
-"""Tests for the Tag Suggestions API: list, summary, accept (writeback), dismiss."""
+"""Tests for the Tag Suggestions API: list, accept (writeback), dismiss."""
 
 import gc
 import json
 import os
+import sqlite3
 import tempfile
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,9 @@ from fastapi.testclient import TestClient
 from datetime import datetime
 
 import numpy as np
+from sqlalchemy import event as sa_event
+from sqlalchemy import insert as sa_insert
+from sqlalchemy import update as sa_update
 from sqlmodel import select
 
 from pixlstash.db_models import Picture, Tag
@@ -311,29 +315,6 @@ def test_dismiss_leaves_tag_untouched():
         gc.collect()
 
 
-def test_summary_counts_by_tag_and_direction():
-    temp_dir, client, server = _setup()
-    try:
-        pic_id = _upload_picture(client)
-        # Two sources for the same (picture, tag) so the unique constraint holds;
-        # the summary should aggregate both directions across sources.
-        _seed_suggestion(
-            server, pic_id, "malformed hand", "remove", source="near_neighbor"
-        )
-        _seed_suggestion(server, pic_id, "malformed hand", "add", source="model")
-
-        resp = client.get("/tag_suggestions/summary")
-        assert resp.status_code == 200
-        summary = {row["tag"]: row for row in resp.json()}
-        assert summary["malformed hand"]["remove"] == 1
-        assert summary["malformed hand"]["add"] == 1
-        assert summary["malformed hand"]["total"] == 2
-    finally:
-        server.vault.close()
-        temp_dir.cleanup()
-        gc.collect()
-
-
 def test_list_includes_tagger_confidence():
     temp_dir, client, server = _setup()
     try:
@@ -444,6 +425,49 @@ def test_bulk_accept_resolves_when_signals_agree():
         ).json()
         assert reopened["count"] == 1
         assert _has_tag(client, suspect, "malformed hand")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_bulk_accept_dry_run_counts_without_writing():
+    """dry_run returns the would-resolve count but mutates nothing.
+
+    Regression guard for the read-path dispatch: because the dry_run branch
+    performs no writes it is dispatched via run_immediate_read_task, so it must
+    return the correct count AND leave every suggestion PENDING and every tag in
+    place. A count that changed, or any write leaking through, would break both
+    the counting contract and the read-path assumption.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        suspect, twin, sid = _seed_pair(client, server, "malformed hand", "remove")
+        _seed_prediction(server, suspect, "malformed hand", 0.05)
+        _seed_prediction(server, twin, "malformed hand", 0.03)
+
+        dry = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9, "dry_run": True},
+        ).json()
+        assert dry["count"] == 1
+        assert dry["accepted_ids"] == []  # dry_run resolves nothing
+
+        # Nothing was written: the suggestion is still PENDING and the tag remains.
+        def _status(session):
+            return session.get(TagSuggestion, sid).status
+
+        assert server.vault.db.run_immediate_read_task(_status) == "PENDING"
+        assert _has_tag(client, suspect, "malformed hand")
+
+        # The real apply still resolves the same single pair.
+        applied = client.post(
+            "/tag_suggestions/bulk-accept",
+            json={"tag": "malformed hand", "min_combined": 0.9},
+        ).json()
+        assert applied["count"] == 1
+        assert applied["accepted_ids"] == [sid]
+        assert not _has_tag(client, suspect, "malformed hand")
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -610,10 +634,13 @@ def test_scan_tag_prefers_perceptual_near_duplicate_twin():
         b = _upload_named(client)  # distinct in-memory PNG
         c = _upload_named(client)  # distinct in-memory PNG
 
-        # A points along axis 0. C is nearly parallel (cosine ~0.9999). B is further off.
+        # A points along axis 0. C is nearly parallel (cosine ~0.9999). B is further
+        # off at cosine ~0.85 — deliberately BETWEEN the current 0.8 display floor
+        # and the old, too-strict 0.9 one, pinning the eased threshold: a heavily
+        # edited copy in this band must still be shown as the perceptual twin.
         _set_embedding(server, a, [1.0] + [0.0] * 511)
         _set_embedding(server, c, [0.9999, 0.0141] + [0.0] * 510)  # closest to A
-        _set_embedding(server, b, [0.9, 0.4359] + [0.0] * 510)  # opposite, farther
+        _set_embedding(server, b, [0.85, 0.526783] + [0.0] * 510)  # opposite, farther
 
         # A and B are perceptual near-duplicates (2-bit dhash hamming); C is far away.
         _set_phash(server, a, 0xFFFF_FFFF_FFFF_FFFF)
@@ -634,6 +661,402 @@ def test_scan_tag_prefers_perceptual_near_duplicate_twin():
         assert {row["picture_id"], row["twin_picture_id"]} == {a, b}
         assert c not in {row["picture_id"], row["twin_picture_id"]}
         assert "dhash hamming" in row["reason"]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scan_tag_rejects_low_similarity_perceptual_override():
+    """A dhash-near "perceptual duplicate" whose actual CLIP similarity is low is a likely
+    hash collision, not a real "same shot" pair — the override must not fire, and the
+    CLIP-nearest twin (with its higher, corroborated similarity) stays displayed."""
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        # Three pictures. A is the tagged suspect. C is A's CLIP-nearest opposite (cosine
+        # 0.95, comfortably above both min_twin_sim and min_display_twin_sim). B has a
+        # tiny dhash hamming distance to A (would trigger the perceptual-twin override)
+        # but only a 0.55 cosine similarity to A — too low to trust as "same shot", so the
+        # override must be rejected and C must stay the displayed twin.
+        a = _upload_picture(client)  # Bad1.png
+        b = _upload_named(client)  # distinct in-memory PNG
+        c = _upload_named(client)  # distinct in-memory PNG
+
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, c, [0.95, 0.312249] + [0.0] * 510)  # cosine ~0.95
+        _set_embedding(server, b, [0.55, 0.835165] + [0.0] * 510)  # cosine ~0.55
+
+        # A and B are perceptual near-duplicates (2-bit dhash hamming); C is far away.
+        _set_phash(server, a, 0xFFFF_FFFF_FFFF_FFFF)
+        _set_phash(server, b, 0xFFFF_FFFF_FFFF_FFFC)  # 2 bits from A
+        _set_phash(server, c, 0x0000_0000_0000_0000)  # 64 bits from A
+
+        _seed_tag(server, a, "malformed hand")  # only A is tagged
+
+        res = tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)
+        assert res["scanned"] == 3
+
+        rows = client.get("/tag_suggestions").json()
+        pair_rows = [r for r in rows if a in {r["picture_id"], r["twin_picture_id"]}]
+        assert pair_rows, "expected a suggestion involving the tagged picture A"
+        row = pair_rows[0]
+        # The displayed twin stays the CLIP-nearest C — the low-similarity perceptual
+        # "near-duplicate" B is rejected despite its tiny dhash hamming distance.
+        assert {row["picture_id"], row["twin_picture_id"]} == {a, c}
+        assert b not in {row["picture_id"], row["twin_picture_id"]}
+        assert row["twin_sim"] >= tag_scan_service.MIN_DISPLAY_TWIN_SIM
+        assert "dhash hamming" not in row["reason"]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 (confidence fallback) / Fix 2 (base-rate-relative thresholds)
+# regression coverage — see docs/reviews and tag_scan_service.py's module
+# constants for the bug reports and empirical tuning these guard against.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_tag_confidence_fallback_for_new_tag():
+    """Fix 1 regression: the exact reported bug. A brand-new tag with zero
+    ``Tag`` rows produced ZERO suspects (not just few) because the kNN vote's
+    ``has_concept`` mask is all-False, making pos_frac identically 0.0 for
+    every picture vault-wide — add_threshold could never be met no matter how
+    confident the model is. Below MIN_GROUND_TRUTH_FOR_VOTE ground-truth
+    positives, scan_tag must fall back to TagPrediction confidence directly.
+    """
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)  # Bad1.png
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]
+        # Embeddings are only needed to clear scan_tag's len(ids) < 2 guard —
+        # the fallback path doesn't vote on them.
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, b, [0.0, 1.0] + [0.0] * 510)
+
+        # Zero Tag rows for this tag anywhere in the vault, but the model is
+        # confident on picture A.
+        _seed_prediction(server, a, "compression artifacts", 0.93)
+
+        res = tag_scan_service.scan_tag(
+            server.vault, "compression artifacts", project=None
+        )
+        assert res["added"] == 1
+        assert res["removed"] == 0
+        assert res["count"] == 1
+
+        rows = client.get("/tag_suggestions").json()
+        assert len(rows) == 1
+        assert rows[0]["picture_id"] == a
+        assert rows[0]["direction"] == "add"
+        assert rows[0]["score"] == 0.93
+        assert "no confirmed examples yet" in rows[0]["reason"]
+        assert "93%" in rows[0]["reason"]
+        assert rows[0]["twin_picture_id"] is None
+        assert rows[0]["twin_sim"] is None
+
+        # B has no prediction at all, so it must not be surfaced.
+        assert b not in {r["picture_id"] for r in rows}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scan_tag_confidence_fallback_ignores_stale_model_version():
+    """The fallback pins to the current (most recent non-"manual") model
+    version, exactly like tag_health_service's est_missing — a confident
+    prediction from a superseded model version must not produce a suspect."""
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, b, [0.0, 1.0] + [0.0] * 510)
+
+        def insert_stale(session):
+            session.add(
+                TagPrediction(
+                    picture_id=a,
+                    tag="compression artifacts",
+                    confidence=0.99,
+                    model_version="old-v0",
+                    status="PENDING",
+                    predicted_at=datetime(2020, 1, 1),
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(insert_stale)
+        # A newer prediction (any tag) establishes "test-v1" as current.
+        _seed_prediction(server, b, "some other tag", 0.5)
+
+        res = tag_scan_service.scan_tag(
+            server.vault, "compression artifacts", project=None
+        )
+        assert res["added"] == 0
+        assert res["count"] == 0
+        assert client.get("/tag_suggestions").json() == []
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
+    """Fix 2 regression: a minority-base-rate tag (p=0.25, well above the
+    Fix-1 floor of 5 ground-truth positives) at whose true prevalence the old
+    fixed 0.55/0.45 pair structurally favours 'remove' over 'add' (a
+    threshold centered on 50% is systematically wrong for a 25% base rate).
+
+    Twenty pictures, hand-constructed embeddings with exactly known pairwise
+    cosine similarities (verified against the real kernel before being
+    transcribed here — see the PR notes): one probe picture (``u``) whose
+    kNN-vote positive fraction is 0.4722 — below the OLD fixed add_threshold
+    (0.55) so the old code could never flag it, but above the NEW base-rate
+    default (p + 0.15 = 0.40) so it should. A second picture (``t1``) is
+    tagged with pos_frac 0.259 — above the NEW default remove_threshold
+    (p - 0.15 = 0.10, so NOT flagged) but below the OLD fixed 0.45 (so an
+    explicit legacy-threshold caller WOULD flag it) — exercising acceptance
+    criterion (c): explicit overrides bypass the base-rate computation.
+    """
+    import io
+
+    from PIL import Image
+
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        names = (
+            ["u"]
+            + [f"t{i}" for i in range(1, 6)]
+            + [f"d{i}" for i in range(1, 6)]
+            + [f"f{i}" for i in range(1, 10)]
+        )
+        assert len(names) == 20
+        files = []
+        for n_idx, name in enumerate(names):
+            img = Image.new("RGB", (16, 16), color=(n_idx * 11 % 256, 40, 80))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            files.append(("file", (f"{name}.png", buf.getvalue(), "image/png")))
+        result = upload_pictures_and_wait(client, files)
+        assert result["status"] == "completed"
+        ids = {n: r["picture_id"] for n, r in zip(names, result["results"])}
+
+        tag = "compression artifacts"
+        for i in range(1, 6):
+            _seed_tag(server, ids[f"t{i}"], tag)
+
+        # 512-dim orthogonal-axis construction: every picture's vector uses a
+        # small set of dedicated axes so each pairwise cosine similarity is
+        # exactly controlled, and anything not explicitly connected is exactly
+        # orthogonal (similarity 0 -> zero weight in the kNN vote). Verified
+        # against pixlstash.utils.near_neighbor.knn_disagreement_with_neighbors
+        # directly before being transcribed here.
+        AXIS_TWIN = 0  # shared between u and t1
+        AXIS_T1T2 = 1  # shared between t1 and t2
+        AXIS_D = {i: 1 + i for i in range(1, 6)}  # u <-> d{i}, 2..6
+        T1_PRIV = 50
+        D_PRIV_BASE = 60  # t3,t4,t5 -> 60,61,62 (isolated)
+        F_PRIV_BASE = 90  # f1..f9 -> 90..98 (isolated)
+
+        def vec(components):
+            v = [0.0] * 512
+            for axis, val in components.items():
+                v[axis] = val
+            return v
+
+        u1, b_dilution = 0.8947, 0.19
+        _set_embedding(
+            server,
+            ids["u"],
+            vec({AXIS_TWIN: u1, **{AXIS_D[i]: b_dilution for i in range(1, 6)}}),
+        )
+
+        t1_comp, t1t2_comp = 0.95, 0.3
+        leftover = (1 - t1_comp**2 - t1t2_comp**2) ** 0.5
+        _set_embedding(
+            server,
+            ids["t1"],
+            vec({AXIS_TWIN: t1_comp, AXIS_T1T2: t1t2_comp, T1_PRIV: leftover}),
+        )
+        _set_embedding(server, ids["t2"], vec({AXIS_T1T2: 1.0}))
+        for k, i in enumerate([3, 4, 5]):
+            _set_embedding(server, ids[f"t{i}"], vec({D_PRIV_BASE + k: 1.0}))
+        for i in range(1, 6):
+            _set_embedding(server, ids[f"d{i}"], vec({AXIS_D[i]: 1.0}))
+        for k, i in enumerate(range(1, 10)):
+            _set_embedding(server, ids[f"f{i}"], vec({F_PRIV_BASE + k: 1.0}))
+
+        # --- Run 1: default (base-rate-relative) thresholds ---
+        res_default = tag_scan_service.scan_tag(server.vault, tag, project=None)
+        assert res_default["scanned"] == 20
+        assert res_default["added"] == 1
+        assert res_default["removed"] == 0
+
+        rows = client.get("/tag_suggestions").json()
+        assert len(rows) == 1
+        assert rows[0]["picture_id"] == ids["u"]
+        assert rows[0]["direction"] == "add"
+
+        # --- Run 2: explicit legacy fixed thresholds (override, same tag) ---
+        res_old = tag_scan_service.scan_tag(
+            server.vault,
+            tag,
+            project=None,
+            add_threshold=0.55,
+            remove_threshold=0.45,
+        )
+        # u no longer qualifies (pos_frac 0.4722 < 0.55); t1 newly does
+        # (pos_frac 0.259 <= 0.45), demonstrating the override bypasses the
+        # base-rate computation and reproduces the old skew.
+        assert res_old["added"] == 0
+        assert res_old["removed"] == 1
+
+        rows_after = {r["picture_id"]: r for r in client.get("/tag_suggestions").json()}
+        assert set(rows_after) == {ids["u"], ids["t1"]}
+        assert rows_after[ids["u"]]["direction"] == "add"
+        assert rows_after[ids["t1"]]["direction"] == "remove"
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
+    """Fix 2 majority-tag regression: the naive symmetric ``p ± margin`` formula
+    shifts *every* tag uniformly by its own base rate, which helps minority
+    tags (the population Fix 2 targeted) but actively hurts a majority tag —
+    it raises add_threshold *above* the legacy fixed 0.55, making add
+    *stricter* than before for no reason (majority tags were never the
+    population this fix was meant to help).
+
+    Twenty pictures, base rate p=12/20=0.6 (mirrors the real-vault
+    reproduction: tag "man" at p=68/111=0.6126). One probe picture (``u``)
+    has kNN-vote positive fraction 0.6498 and a twin (``p1``) at cosine
+    similarity 0.9535 — clearing both the twin-similarity gate (>=0.85) and
+    the legacy fixed add_threshold (0.55, so the legacy code catches it) —
+    but BELOW the *uncapped* base-rate default (p + 0.15 = 0.75), so the
+    regressed formula misses it entirely (verified against the real kernel
+    directly before being transcribed here — see the PR notes). The
+    corrected default caps add_threshold at the legacy 0.55 ceiling (never
+    stricter than the legacy default), so it catches ``u`` again, matching
+    the legacy behaviour.
+    """
+    import io
+
+    from PIL import Image
+
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        names = (
+            ["u"]
+            + [f"p{i}" for i in range(1, 9)]
+            + [f"q{i}" for i in range(1, 5)]
+            + [f"d{i}" for i in range(1, 5)]
+            + [f"x{i}" for i in range(1, 4)]
+        )
+        assert len(names) == 20
+        files = []
+        for n_idx, name in enumerate(names):
+            img = Image.new("RGB", (16, 16), color=(n_idx * 11 % 256, 40, 80))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            files.append(("file", (f"{name}.png", buf.getvalue(), "image/png")))
+        result = upload_pictures_and_wait(client, files)
+        assert result["status"] == "completed"
+        ids = {n: r["picture_id"] for n, r in zip(names, result["results"])}
+
+        tag = "man"
+        # p1..p8 (near-u clique) + d1..d4 (isolated clique) = 12 tagged of 20 -> p=0.6
+        for i in range(1, 9):
+            _seed_tag(server, ids[f"p{i}"], tag)
+        for i in range(1, 5):
+            _seed_tag(server, ids[f"d{i}"], tag)
+
+        # 512-dim orthogonal-axis construction, same technique as the minority-tag
+        # test above. Verified against pixlstash.utils.near_neighbor.
+        # knn_disagreement_with_neighbors directly before being transcribed here.
+        AXIS_HUB = 0  # u <-> q1..q4 (weak — dilutes u's vote toward "no tag")
+        AXIS_PGROUP = 1  # shared among p1..p8 — dominates their own vote (all tagged)
+        AXIS_QGROUP = 2  # shared among q1..q4 — dominates their own vote (all untagged)
+        AXIS_DGROUP = 3  # shared among d1..d4 — isolated from u, all tagged
+        AXIS_TWIN = 4  # u <-> p1 only — strong, clears the min_twin_sim gate
+
+        def vec(components):
+            v = [0.0] * 512
+            for axis, val in components.items():
+                v[axis] = val
+            return v
+
+        HUB_U, TWIN_U = 1.0, 5.0
+        HUB_Q, Q_GROUP = 1.04, 1.2
+        P_GROUP, TWIN_P1 = 1.2, 5.0
+        D_GROUP = 1.0
+
+        _set_embedding(server, ids["u"], vec({AXIS_HUB: HUB_U, AXIS_TWIN: TWIN_U}))
+        _set_embedding(
+            server,
+            ids["p1"],
+            vec({AXIS_PGROUP: P_GROUP, AXIS_TWIN: TWIN_P1}),
+        )
+        for i in range(2, 9):
+            _set_embedding(server, ids[f"p{i}"], vec({AXIS_PGROUP: P_GROUP}))
+        for i in range(1, 5):
+            _set_embedding(
+                server,
+                ids[f"q{i}"],
+                vec({AXIS_HUB: HUB_Q, AXIS_QGROUP: Q_GROUP}),
+            )
+        for i in range(1, 5):
+            _set_embedding(server, ids[f"d{i}"], vec({AXIS_DGROUP: D_GROUP}))
+        for i in range(1, 4):
+            _set_embedding(server, ids[f"x{i}"], vec({10 + i: 1.0}))
+
+        # --- Run 1: default (base-rate-relative, now capped) thresholds ---
+        res_default = tag_scan_service.scan_tag(server.vault, tag, project=None)
+        assert res_default["scanned"] == 20
+        assert res_default["added"] == 1
+        assert res_default["removed"] == 0
+
+        rows = client.get("/tag_suggestions").json()
+        assert len(rows) == 1
+        assert rows[0]["picture_id"] == ids["u"]
+        assert rows[0]["direction"] == "add"
+
+        # --- Run 2: the regressed, uncapped symmetric formula's thresholds ---
+        # (p=0.6 -> add_threshold=p+0.15=0.75, remove_threshold=p-0.15=0.45).
+        # u's pos_frac (0.6498) clears the legacy/corrected 0.55 but not this
+        # uncapped 0.75 — reproducing the confirmed "man" regression directly.
+        res_regressed = tag_scan_service.scan_tag(
+            server.vault,
+            tag,
+            project=None,
+            add_threshold=0.75,
+            remove_threshold=0.45,
+        )
+        assert res_regressed["added"] == 0
+        assert res_regressed["removed"] == 0
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -847,31 +1270,6 @@ def test_empty_scope_yields_no_rows_not_error():
         gc.collect()
 
 
-def test_summary_respects_filter():
-    temp_dir, client, server = _setup()
-    try:
-        in_pic = _upload_picture(client)
-        out_pic = _upload_named(client)
-        _seed_suggestion(server, in_pic, "malformed hand", "remove")
-        _seed_suggestion(server, out_pic, "bad anatomy", "add")
-        r = client.post(f"{API}/picture_sets", json={"name": "Set"})
-        set_id = r.json()["picture_set"]["id"]
-        _add_to_set(server, in_pic, set_id)
-
-        summary = client.get(
-            "/tag_suggestions/summary", params={"set_id": set_id}
-        ).json()
-        tags = {row["tag"] for row in summary}
-        assert tags == {"malformed hand"}  # out-of-scope tag excluded
-        # Unfiltered summary sees both.
-        all_tags = {row["tag"] for row in client.get("/tag_suggestions/summary").json()}
-        assert all_tags == {"malformed hand", "bad anatomy"}
-    finally:
-        server.vault.close()
-        temp_dir.cleanup()
-        gc.collect()
-
-
 def test_bulk_accept_respects_filter_dry_run_and_apply():
     temp_dir, client, server = _setup()
     try:
@@ -1008,9 +1406,6 @@ def test_scoped_token_list_only_sees_its_own_suspects():
         # No filter: scoped token still only sees Set A's suspect, NOT pic_b.
         rows = bearer.get(f"{API}/tag_suggestions", headers=headers).json()
         assert {r["picture_id"] for r in rows} == {pic_a}
-        # Summary is likewise scoped: only Set A's tag.
-        summary = bearer.get(f"{API}/tag_suggestions/summary", headers=headers).json()
-        assert {row["tag"] for row in summary} == {"malformed hand"}
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -1033,6 +1428,226 @@ def test_scoped_token_filter_cannot_widen_to_other_set():
         ).json()
         assert rows == []
         assert all(r["picture_id"] != pic_b for r in rows)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _force_variable_limit(server, limit=999):
+    """Pin every DB connection's ``SQLITE_LIMIT_VARIABLE_NUMBER`` to *limit*.
+
+    Registers a ``connect`` listener on the vault engine and disposes the pool
+    so subsequent connections are recreated with the lowered ceiling. Used to
+    reproduce the historical 999-variable ceiling regardless of the running
+    SQLite build's much higher default, so a large ``picture_ids`` scope
+    filtered by a plain ``.in_(ids)`` would raise ``OperationalError``. Call
+    AFTER seeding.
+    """
+    engine = server.vault.db._engine
+
+    def _set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+
+    sa_event.listen(engine, "connect", _set_limit)
+    engine.dispose()
+
+
+def test_scan_tag_survives_large_picture_ids_scope():
+    """A ~1500-picture explicit scope must scan without tripping SQLite's
+    bound-parameter ceiling. Regression guard for the scale refactor: with the
+    variable limit pinned to the historical 999 floor, the pre-refactor
+    ``.in_(picture_ids)`` in ``_load`` (site 3) and ``_load_confidence_fallback``
+    (site 4) would raise ``OperationalError: too many SQL variables``. The
+    temp-table scope path keeps both alive and result-identical: three
+    confidently-predicted, zero-ground-truth pictures still surface as ``add``
+    suspects via the confidence fallback.
+    """
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        n = 1500
+        embedded = [1, 2, 3]  # get valid embeddings + confident predictions
+
+        def seed(session):
+            session.execute(
+                sa_insert(Picture),
+                [
+                    {"id": i, "deleted": False, "file_path": f"/x/{i}.png"}
+                    for i in range(1, n + 1)
+                ],
+            )
+            # A handful of pictures carry a valid 512-d embedding (clears the
+            # len(ids) < 2 guard so the scan reaches the fallback) and a
+            # confident current-version prediction for the scanned tag, with NO
+            # Tag row (zero ground truth → confidence fallback path).
+            for i in embedded:
+                blob = np.random.rand(512).astype(np.float32).tobytes()
+                session.execute(
+                    sa_update(Picture)
+                    .where(Picture.id == i)
+                    .values(image_embedding=blob)
+                )
+            session.execute(
+                sa_insert(TagPrediction),
+                [
+                    {
+                        "picture_id": i,
+                        "tag": "scantag",
+                        "confidence": 0.95,
+                        "model_version": "v1",
+                        "status": "PENDING",
+                        "predicted_at": datetime.utcnow(),
+                    }
+                    for i in embedded
+                ],
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        # Pin the ceiling to 999 now that seeding is done under the default.
+        _force_variable_limit(server, 999)
+
+        scope = set(range(1, n + 1))
+        res = tag_scan_service.scan_tag(
+            server.vault, "scantag", project=None, picture_ids=scope
+        )
+        # Both _load and _load_confidence_fallback ran over the 1500-id scope
+        # without OperationalError, and the three confident pictures surfaced.
+        assert res["scanned"] == len(embedded)
+        assert res["added"] == len(embedded)
+        assert res["removed"] == 0
+        assert res["count"] == len(embedded)
+
+        rows = client.get("/tag_suggestions").json()
+        assert {r["picture_id"] for r in rows} == set(embedded)
+        assert all(r["direction"] == "add" for r in rows)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# F2: legacy-scan refresh-in-place (no purge) + accept guards (stale evidence).
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_scan_refreshes_stale_pending_in_place():
+    """F2(i): a legacy re-scan (review_id=None) must REFRESH the stored evidence
+    on an existing PENDING row in place — same row id, fresh evidence, no delete
+    and no duplicate. This is the no-purge replacement for the old rebuild."""
+    from pixlstash.services import tag_scan_service
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)  # Bad1.png
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]
+        vec = [1.0] + [0.0] * 511
+        _set_embedding(server, a, vec)
+        _set_embedding(server, b, vec)
+        _seed_tag(server, a, "malformed hand")
+
+        assert (
+            tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)[
+                "count"
+            ]
+            == 1
+        )
+        row = server.vault.db.run_immediate_read_task(
+            lambda s: s.exec(
+                select(TagSuggestion).where(TagSuggestion.tag == "malformed hand")
+            ).first()
+        )
+        sid, orig_reason = row.id, row.reason
+
+        # Corrupt the stored evidence to simulate staleness.
+        def _corrupt(session):
+            r = session.get(TagSuggestion, sid)
+            r.reason, r.score, r.neighbors = "STALE", 0.0, None
+            session.commit()
+
+        server.vault.db.run_task(_corrupt)
+
+        # Legacy re-scan refreshes in place (same row, no purge, no duplicate).
+        assert (
+            tag_scan_service.scan_tag(server.vault, "malformed hand", project=None)[
+                "count"
+            ]
+            == 1
+        )
+        refreshed = server.vault.db.run_immediate_read_task(
+            lambda s: s.get(TagSuggestion, sid)
+        )
+        assert refreshed is not None  # same row, not deleted/recreated
+        assert refreshed.reason == orig_reason and refreshed.reason != "STALE"
+        assert refreshed.score > 0.0 and refreshed.neighbors is not None
+        assert (
+            server.vault.db.run_immediate_read_task(
+                lambda s: len(
+                    s.exec(
+                        select(TagSuggestion).where(
+                            TagSuggestion.tag == "malformed hand"
+                        )
+                    ).all()
+                )
+            )
+            == 1
+        )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_accept_refuses_when_a_manual_fix_contradicts_the_suggestion():
+    """F2(ii): a human recorded the opposite label after the suggestion was
+    raised (a manual fix). Accepting the stale suggestion would reverse it, so
+    accept must refuse (loudly) and leave both the label and the row untouched."""
+    import pytest
+
+    from pixlstash.services.tag_suggestion_service import (
+        SuggestionConflictError,
+        accept_suggestion,
+    )
+    from pixlstash.utils.service.label_ledger import POS, record_human_label
+
+    temp_dir, client, server = _setup()
+    try:
+        pic = _upload_picture(client)
+        _seed_tag(server, pic, "malformed hand")
+        sid = _seed_suggestion(server, pic, "malformed hand", "remove")
+
+        # A human manually affirms the tag belongs (POS) — the manual fix a
+        # stale "remove" suggestion would otherwise reverse.
+        def _manual_pos(session):
+            record_human_label(session, pic, "malformed hand", POS)
+            session.commit()
+
+        server.vault.db.run_task(_manual_pos)
+
+        with pytest.raises(SuggestionConflictError):
+            accept_suggestion(server.vault, sid)
+
+        assert _has_tag(client, pic, "malformed hand")  # manual fix intact
+        assert (
+            server.vault.db.run_immediate_read_task(
+                lambda s: s.get(TagSuggestion, sid).status
+            )
+            == "PENDING"
+        )  # not flipped to ACCEPTED
+
+        # A non-contradicting suggestion (add, matching the human POS; distinct
+        # source so it doesn't collide on UNIQUE(picture_id, tag, source)) still
+        # accepts — the guard is not over-blocking.
+        add_sid = _seed_suggestion(server, pic, "malformed hand", "add", source="model")
+        assert accept_suggestion(server.vault, add_sid)["direction"] == "add"
     finally:
         server.vault.close()
         temp_dir.cleanup()

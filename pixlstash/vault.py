@@ -155,10 +155,21 @@ class Vault:
             image_root=self.image_root,
             path_mapper=path_mapper,
         )
-        from pixlstash.tasks import TaskType, EnsureGfsSnapshotFinder
+        from pixlstash.tasks import (
+            TaskType,
+            EnsureGfsSnapshotFinder,
+            TagHealthAutoRebuildFinder,
+        )
 
         self._planner_work_finders[TaskType.GFS_SNAPSHOT] = EnsureGfsSnapshotFinder(
             vault=self
+        )
+        # Needs a full Vault (not just `database`) to reach its service
+        # layer's vault-facing wrapper (start_rebuild), same reason
+        # GFS_SNAPSHOT is registered here rather than in
+        # WorkPlanner.work_finders().
+        self._planner_work_finders[TaskType.TAG_HEALTH_AUTO_REBUILD] = (
+            TagHealthAutoRebuildFinder(vault=self)
         )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,

@@ -64,9 +64,45 @@ class TagSuggestion(SQLModel, table=True):
     # Producing model for model/version sources; null for embedding-only signals.
     model_version: Optional[str] = Field(default=None)
 
-    status: str = Field(default="PENDING", index=True)  # PENDING | ACCEPTED | DISMISSED
+    # The review session whose scan produced (or re-adopted) this row; NULL for
+    # rows from the legacy global queue. ON DELETE SET NULL: deleting a review
+    # never deletes the audit history its decisions left behind.
+    review_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("review.id", ondelete="SET NULL"),
+            index=True,
+            nullable=True,
+        ),
+    )
+
+    # JSON list of the suspect's k nearest neighbours captured at scan time:
+    # [{"picture_id": int, "has": bool}, ...] ordered by descending similarity,
+    # where "has" is the merged-concept "carries the tag" flag used in the vote.
+    # Frozen evidence — never recomputed after the scan that wrote it.
+    neighbors: Optional[str] = Field(
+        default=None, sa_column=Column(sa.Text(), nullable=True)
+    )
+
+    # PENDING | ACCEPTED | DISMISSED | TWIN_FIXED | SWAPPED | SKIPPED.
+    # SKIPPED = the reviewer could not decide: the row leaves the queue with no
+    # decision made — no Tag write, no ledger write (reopen simply re-pends it).
+    status: str = Field(default="PENDING", index=True)
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
     reviewed_at: Optional[datetime] = Field(default=None)
+
+    # Prior-decision snapshot for the include_reviewed re-parent. When a scan
+    # re-parents an already-DECIDED row into a new review (reopening it), the
+    # decision being overwritten — its (review_id, status, reviewed_at) — is
+    # captured here first, so undo can RESTORE that tuple (re-exposing the
+    # original decision for a normal reversal) instead of silently erasing it.
+    # NULL for rows that were never re-parented over a decision. prior_review_id
+    # is a plain id (not an FK): it is a historical pointer used only to restore
+    # review_id on undo, and reviews are archived rather than deleted.
+    prior_review_id: Optional[int] = Field(default=None)
+    prior_status: Optional[str] = Field(default=None)
+    prior_reviewed_at: Optional[datetime] = Field(default=None)
 
     __table_args__ = (
         UniqueConstraint("picture_id", "tag", "source"),

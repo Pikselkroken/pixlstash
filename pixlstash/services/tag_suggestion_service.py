@@ -20,7 +20,6 @@ Mirrors the vault-task conventions in :mod:`pixlstash.services.tag_prediction_se
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, Tag
@@ -32,6 +31,7 @@ from pixlstash.utils.service.filter_helpers import (
     fetch_tag_review_scope_picture_ids,
 )
 from pixlstash.utils.service.label_ledger import (
+    HUMAN,
     NEG,
     POS,
     clear_human_label,
@@ -45,6 +45,17 @@ if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
+
+
+class SuggestionConflictError(Exception):
+    """Accepting a suggestion is refused because the world moved under it.
+
+    Raised (not silently swallowed) when applying a suggestion's writeback would
+    act on stale evidence — the suspect picture is soft-deleted, or a human has
+    since recorded the opposite label — so accepting it would reverse a manual
+    fix or tag a deleted picture. The caller sees an explicit failure instead of
+    a silent, harmful no-op.
+    """
 
 
 def resolve_filter_picture_ids(
@@ -224,56 +235,6 @@ def get_tagger_confidences(
     return vault.db.run_immediate_read_task(_fetch)
 
 
-def summary_by_tag(
-    vault: "Vault",
-    status: str = "PENDING",
-    picture_ids: set[int] | None = None,
-    source: str | None = None,
-) -> list[dict]:
-    """Return per-tag counts of suggestions, for the queue's tag picker and progress.
-
-    Args:
-        vault: Application vault, used for DB task dispatch.
-        status: Status to count (default ``PENDING``).
-        picture_ids: Optional set of in-scope suspect picture ids; when not
-            ``None`` only suggestions whose ``picture_id`` is in the set are
-            counted (the suspect, never the twin). An empty set yields no counts.
-            When ``None`` the picture scope is unrestricted (today's behaviour).
-        source: Optional exact ``source`` filter (e.g. ``"near_neighbor"`` or
-            ``"impossible_tag"``), so the two review tabs stay isolated.
-
-    Returns:
-        List of ``{"tag", "add", "remove", "total"}`` dicts, busiest tag first.
-    """
-
-    def _fetch(session: Session) -> list[dict]:
-        q = (
-            select(
-                TagSuggestion.tag,
-                TagSuggestion.direction,
-                func.count().label("n"),
-            )
-            .where(TagSuggestion.status == status.upper())
-            .group_by(TagSuggestion.tag, TagSuggestion.direction)
-        )
-        if source:
-            q = q.where(TagSuggestion.source == source)
-        if picture_ids is not None:
-            q = q.where(TagSuggestion.picture_id.in_(picture_ids))
-        rows = session.exec(q).all()
-        by_tag: dict[str, dict] = {}
-        for tag, direction, n in rows:
-            entry = by_tag.setdefault(
-                tag, {"tag": tag, "add": 0, "remove": 0, "total": 0}
-            )
-            if direction in ("add", "remove"):
-                entry[direction] += n
-            entry["total"] += n
-        return sorted(by_tag.values(), key=lambda e: e["total"], reverse=True)
-
-    return vault.db.run_immediate_read_task(_fetch)
-
-
 def _apply_writeback(session: Session, suggestion: TagSuggestion) -> None:
     """Write a suggestion's label change through to the Tag table (idempotent).
 
@@ -305,12 +266,71 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 
     Raises:
         KeyError: If no suggestion with that id exists.
+        SuggestionConflictError: If the suspect picture is soft-deleted, or a
+            human has recorded the opposite label since the suggestion was
+            raised (accepting would tag a deleted picture / reverse a manual
+            fix).
     """
 
     def _accept(session: Session) -> dict:
         suggestion = session.get(TagSuggestion, suggestion_id)
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
+
+        # F2 guard 1: never write a Tag onto a soft-deleted (or missing)
+        # picture. Its card is filtered out of the review queue, so accepting
+        # one is always acting on a stale card — refuse loudly rather than
+        # silently tagging a deleted picture.
+        picture = session.get(Picture, suggestion.picture_id)
+        if picture is None or picture.deleted:
+            logger.warning(
+                "accept_suggestion refused: suggestion %s targets picture %s "
+                "which is %s; not writing tag %r (direction=%s)",
+                suggestion_id,
+                suggestion.picture_id,
+                "missing" if picture is None else "soft-deleted",
+                suggestion.tag,
+                suggestion.direction,
+            )
+            raise SuggestionConflictError(
+                f"picture {suggestion.picture_id} is deleted; refusing to "
+                f"accept suggestion {suggestion_id}"
+            )
+
+        # F2 guard 2: refuse when a human has recorded the OPPOSITE label since
+        # this suggestion was raised, so accepting stale evidence can't reverse
+        # a manual fix. Only fires for a still-PENDING suggestion that was not
+        # itself re-parented over its own prior decision (prior_status set):
+        # dismiss-then-accept (status != PENDING) and re-review of a re-parented
+        # row (prior_status set) legitimately carry a contradicting label from
+        # their OWN history and must stay acceptable.
+        if suggestion.status == "PENDING" and suggestion.prior_status is None:
+            human = session.exec(
+                select(TagPrediction).where(
+                    TagPrediction.picture_id == suggestion.picture_id,
+                    TagPrediction.tag == suggestion.tag,
+                    TagPrediction.label_source == HUMAN,
+                )
+            ).first()
+            if human is not None and human.label_state in (POS, NEG):
+                wants = POS if suggestion.direction == "add" else NEG
+                if human.label_state != wants:
+                    logger.warning(
+                        "accept_suggestion refused: suggestion %s (picture %s, "
+                        "tag %r, direction=%s) is contradicted by a human %s "
+                        "label recorded since it was raised; refusing to "
+                        "reverse the manual fix",
+                        suggestion_id,
+                        suggestion.picture_id,
+                        suggestion.tag,
+                        suggestion.direction,
+                        human.label_state,
+                    )
+                    raise SuggestionConflictError(
+                        f"suggestion {suggestion_id} is contradicted by a human "
+                        f"{human.label_state} label; refusing to reverse it"
+                    )
+
         _apply_writeback(session, suggestion)
         suggestion.status = "ACCEPTED"
         suggestion.reviewed_at = datetime.utcnow()
@@ -331,6 +351,17 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     ACCEPTED touched the suspect; TWIN_FIXED touched the twin; SWAPPED touched both;
     DISMISSED touched only the ledger. Each path also clears the human ledger entry the
     forward review wrote, so reopening is fully symmetric (no orphan POS/NEG left behind).
+    SKIPPED wrote nothing anywhere, so it matches no branch and just re-pends.
+
+    F9b: a PENDING/SKIPPED row that was re-parented over a prior decision
+    (``include_reviewed`` reopened a decided row into a new review) carries that
+    decision in ``prior_*``. Reversing such a row makes no label change here;
+    instead it peels the re-parent back — restoring the row to its prior
+    review/status/reviewed_at, re-exposing the original decision for a normal
+    reversal, then clearing ``prior_*``. The prior decision's own label write is
+    left standing until that re-exposed row is itself reversed. (A row decided
+    anew in the new review reverses that decision first and re-pends, leaving
+    ``prior_*`` intact for a second reopen to peel.)
     """
     tag_value = suggestion.tag
     if suggestion.status == "ACCEPTED":
@@ -377,6 +408,19 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     elif suggestion.status == "DISMISSED":
         # Dismiss recorded a NEG (add) / POS (remove) on the suspect; clear it.
         clear_human_label(session, suggestion.picture_id, tag_value)
+    elif suggestion.prior_status is not None:
+        # F9b: an undecided (PENDING/SKIPPED) row re-parented over a prior
+        # decision. No label change was made in THIS review, so peel the
+        # re-parent back — restore the captured prior tuple (review/status/
+        # reviewed_at), re-exposing the original decision for a normal reversal,
+        # then clear prior_*. The prior decision's label write is untouched.
+        suggestion.review_id = suggestion.prior_review_id
+        suggestion.status = suggestion.prior_status
+        suggestion.reviewed_at = suggestion.prior_reviewed_at
+        suggestion.prior_review_id = None
+        suggestion.prior_status = None
+        suggestion.prior_reviewed_at = None
+        return
     suggestion.status = "PENDING"
     suggestion.reviewed_at = None
 
@@ -530,6 +574,7 @@ def bulk_accept(
     direction: str | None = None,
     dry_run: bool = False,
     picture_ids: set[int] | None = None,
+    review_id: int | None = None,
 ) -> dict:
     """Auto-resolve every PENDING pair for ``tag`` where two *independent* signals agree.
 
@@ -554,6 +599,10 @@ def bulk_accept(
     in the set are counted or resolved, so the dry-run count and the apply both
     respect the same scope and out-of-scope suggestions are never bulk-resolved.
     An empty set resolves nothing; ``None`` is today's unrestricted behaviour.
+
+    ``review_id`` optionally restricts to one review session's rows
+    (``TagSuggestion.review_id``), so a review's "N obvious pairs —
+    auto-resolve?" receipt and its apply act on exactly that review's queue.
     """
 
     def _bulk(session: Session) -> dict:
@@ -564,6 +613,8 @@ def bulk_accept(
             q = q.where(TagSuggestion.direction == direction)
         if picture_ids is not None:
             q = q.where(TagSuggestion.picture_id.in_(picture_ids))
+        if review_id is not None:
+            q = q.where(TagSuggestion.review_id == review_id)
         rows = list(session.exec(q).all())
 
         ids: set[int] = set()
@@ -635,18 +686,47 @@ def bulk_accept(
             "picture_ids": sorted(pic_ids),
         }
 
+    # dry_run performs no writes (it returns before any session.commit above), so
+    # dispatch it on the immediate read path instead of the serialized writer
+    # queue — otherwise a plain GET (review_service.get_review / create_review
+    # call this with dry_run=True to count) stalls behind pending writes just to
+    # re-run the scan+confidence-map. The real apply path keeps run_task.
+    if dry_run:
+        return vault.db.run_immediate_read_task(_bulk)
     return vault.db.run_task(_bulk)
 
 
-def bulk_reopen(vault: "Vault", ids: list[int]) -> dict:
-    """Reopen many suggestions at once (batch undo of a bulk-accept). See _reverse_review."""
+def bulk_reopen(vault: "Vault", ids: list[int], review_id: int | None = None) -> dict:
+    """Reopen many suggestions at once (batch undo of a bulk-accept). See _reverse_review.
+
+    ``review_id`` optionally restricts the undo to one review session's rows:
+    ids whose suggestion belongs to a different (or no) review are skipped, so
+    a review-scoped batch undo can never touch another session's decisions.
+    With ``review_id`` set and ``ids`` empty, ALL of that review's decided rows
+    are reopened (the "Undo N changes" abort flow). SKIPPED rows are always
+    left as-is in review-scoped mode — they made no changes to undo.
+    """
 
     def _bulk(session: Session) -> dict:
+        target_ids = list(ids)
+        if review_id is not None and not target_ids:
+            target_ids = list(
+                session.exec(
+                    select(TagSuggestion.id).where(
+                        TagSuggestion.review_id == review_id,
+                        TagSuggestion.status.notin_(["PENDING", "SKIPPED"]),
+                    )
+                ).all()
+            )
         pic_ids: set[int] = set()
         count = 0
-        for sid in ids:
+        for sid in target_ids:
             suggestion = session.get(TagSuggestion, sid)
             if suggestion is None:
+                continue
+            if review_id is not None and suggestion.review_id != review_id:
+                continue
+            if review_id is not None and suggestion.status == "SKIPPED":
                 continue
             _reverse_review(session, suggestion)
             pic_ids.add(suggestion.picture_id)
@@ -746,6 +826,42 @@ def swap_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         return result
 
     return vault.db.run_task(_swap)
+
+
+def skip_suggestion(vault: "Vault", suggestion_id: int) -> dict:
+    """Mark a suggestion SKIPPED — the reviewer cannot decide, so the item
+    leaves the queue with NO decision made.
+
+    Unlike dismiss (which affirms the current label and writes the human
+    ledger), skip writes nothing: no Tag change, no ledger entry. Reopening a
+    SKIPPED row simply sets it back to PENDING (there is nothing to reverse).
+
+    Args:
+        vault: Application vault, used for DB task dispatch.
+        suggestion_id: Primary key of the TagSuggestion to skip.
+
+    Returns:
+        ``{"picture_id", "tag", "direction"}`` describing the skipped suggestion.
+
+    Raises:
+        KeyError: If no suggestion with that id exists.
+    """
+
+    def _skip(session: Session) -> dict:
+        suggestion = session.get(TagSuggestion, suggestion_id)
+        if suggestion is None:
+            raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
+        suggestion.status = "SKIPPED"
+        suggestion.reviewed_at = datetime.utcnow()
+        result = {
+            "picture_id": suggestion.picture_id,
+            "tag": suggestion.tag,
+            "direction": suggestion.direction,
+        }
+        session.commit()
+        return result
+
+    return vault.db.run_task(_skip)
 
 
 def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:

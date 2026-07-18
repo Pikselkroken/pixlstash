@@ -271,8 +271,8 @@ export function useGridDragDrop(
   }
 
   function handleThumbnailNativeDragStart(img, event) {
-    // No grid drag-and-drop while the review-fixes overlay is up (it sits over
-    // the grid as a modal review surface).
+    // No grid drag-and-drop while the Review Sessions overlay is up (it stays
+    // mounted over the grid as a modal review surface).
     if (reviewOverlayOpen?.value) {
       event.preventDefault();
       return;

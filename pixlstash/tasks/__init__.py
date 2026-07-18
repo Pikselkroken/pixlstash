@@ -33,6 +33,8 @@ from .text_score_task import TextScoreTask
 from .missing_text_score_finder import MissingTextScoreFinder
 from .ensure_gfs_snapshot_finder import EnsureGfsSnapshotFinder
 from .ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
+from .tag_health_auto_rebuild_task import TagHealthAutoRebuildTask
+from .tag_health_auto_rebuild_finder import TagHealthAutoRebuildFinder
 
 __all__ = [
     "TaskType",
@@ -69,4 +71,6 @@ __all__ = [
     "MissingTextScoreFinder",
     "EnsureGfsSnapshotFinder",
     "EnsureGfsSnapshotTask",
+    "TagHealthAutoRebuildTask",
+    "TagHealthAutoRebuildFinder",
 ]

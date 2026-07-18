@@ -336,3 +336,90 @@ def test_retag_status_flip_preserves_accepted_human_label():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def _confidence_and_model_version(server, pic_id, tag):
+    def _fetch(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == pic_id, TagPrediction.tag == tag
+            )
+        ).first()
+        return (row.confidence, row.model_version) if row else None
+
+    return server.vault.db.run_immediate_read_task(_fetch)
+
+
+def test_retag_updates_live_confidence_on_confirmed_human_row():
+    """confidence/model_version stay live on a human-CONFIRMED row; only
+    status (and the human ledger) is frozen.
+
+    Regression for the over-broad freeze: the status-flip guard added for
+    test_retag_status_flip_preserves_accepted_human_label also froze
+    confidence/model_version, even though TagPrediction's class docstring
+    documents those as live, unlike the frozen label_model_version.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, "malformed hand", 0.88, "epoch-50")
+        tag_prediction_service.confirm_tag_prediction(
+            server.vault, pic_id, "malformed hand"
+        )
+        assert _status(server, pic_id, "malformed hand") == "CONFIRMED"
+        ledger_before = _ledger(server, pic_id, "malformed hand")
+
+        # Fresh tagger pass at a new model_version; tag stays applied so
+        # status is recomputed as CONFIRMED regardless.
+        server.vault.db.run_task(
+            TagTask._write_predictions_from_tags,
+            {pic_id: {"malformed hand": 0.5}},
+            {pic_id: {"malformed hand"}},
+            "epoch-99",
+        )
+
+        assert _status(server, pic_id, "malformed hand") == "CONFIRMED"
+        assert _confidence_and_model_version(server, pic_id, "malformed hand") == (
+            0.5,
+            "epoch-99",
+        )
+        # The frozen human-label ledger is untouched.
+        assert _ledger(server, pic_id, "malformed hand") == ledger_before
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_retag_updates_live_confidence_on_rejected_human_row():
+    """Same decoupling for a human-REJECTED row: confidence/model_version
+    update live, status stays REJECTED and the human ledger is untouched."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, "malformed hand", 0.92, "epoch-50")
+        tag_prediction_service.reject_tag_prediction(
+            server.vault, pic_id, "malformed hand"
+        )
+        assert _status(server, pic_id, "malformed hand") == "REJECTED"
+        ledger_before = _ledger(server, pic_id, "malformed hand")
+
+        # Fresh tagger pass at a new model_version; tag stays absent from the
+        # applied set so status is recomputed as REJECTED regardless.
+        server.vault.db.run_task(
+            TagTask._write_predictions_from_tags,
+            {pic_id: {"malformed hand": 0.15}},
+            {pic_id: set()},
+            "epoch-99",
+        )
+
+        assert _status(server, pic_id, "malformed hand") == "REJECTED"
+        assert _confidence_and_model_version(server, pic_id, "malformed hand") == (
+            0.15,
+            "epoch-99",
+        )
+        assert _ledger(server, pic_id, "malformed hand") == ledger_before
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()

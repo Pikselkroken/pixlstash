@@ -46,6 +46,8 @@ checklist shrinks as e2e coverage grows.
 | §4 Picture detail | [`overlay.spec.js`](../frontend/e2e/specs/overlay.spec.js) | Overlay open/close, arrow-key next/prev, Escape close |
 | §10 Faces | [`faces.spec.js`](../frontend/e2e/specs/faces.spec.js) | Face crops in the side panel + bounding-box overlay toggle |
 | §11 Stacks | [`stacks.spec.js`](../frontend/e2e/specs/stacks.spec.js) | Expand-all / collapse-all from the View menu |
+| §20 Review Sessions | [`review-board.spec.js`](../frontend/e2e/specs/review-board.spec.js) | Tag-health board: open, render columns, filter, sort, anomalies toggle, Start-review row (drives the real `tag_health` cache) |
+| §20 Review Sessions | [`review-session.spec.js`](../frontend/e2e/specs/review-session.spec.js) | Session loop: create → binary Yes/No mapping, tally + backend receipt, focus advance, Undo, Skip, keyboard, archive. **`fixme`-guarded — blocked by the session card render crash (BUG-RS-1); see docs/regular-tests.md §Review Sessions** |
 
 Still manual (candidates for future specs): §5 Tags, §6 Star rating / quality
 score, §7 Picture sets, §8 Projects, §9 Characters, §14 Tag predictions,
