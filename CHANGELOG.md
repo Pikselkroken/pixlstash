@@ -13,6 +13,12 @@ Smart Scores are recomputed for your whole library the first time you open 1.7.0
 - Watch folders now retry on transient hash failures instead of skipping the file.
 - Harden object-scope enforcement on the tag-prediction endpoints: the confirm, reject, delete, and reset handlers now run the deny-by-default scope check, closing a defense-in-depth gap (issue #504).
 
+# [1.6.12]
+- Synced versions to frontend and ensure all builds succeed
+
+# [1.6.11] [Security:Moderate]
+- Update torch and pillow due to memory corruption and heap out-of-bounds bugs.
+
 # [1.6.10] [Security:High]
 - Update transformer version due to arbitrary code execution in transformers < 5.5.0
 
