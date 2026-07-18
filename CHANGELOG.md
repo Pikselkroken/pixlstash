@@ -1,3 +1,9 @@
+# [1.6.12]
+- Synced versions to frontend and ensure all builds succeed
+
+# [1.6.11] [Security:Moderate]
+- Update torch and pillow due to memory corruption and heap out-of-bounds bugs.
+
 # [1.6.10] [Security:High]
 - Update transformer version due to arbitrary code execution in transformers < 5.5.0
 
