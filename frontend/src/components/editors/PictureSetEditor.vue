@@ -12,6 +12,8 @@
         label="Name *"
         placeholder="Picture set name"
         icon="layers-triple-outline"
+        :disabled="isLockedSet"
+        :title="isLockedSet ? LOCK_REASON : undefined"
         @enter="save"
       />
       <AppTextarea
@@ -19,15 +21,41 @@
         label="Description"
         placeholder="Optional description…"
         :rows="2"
+        :disabled="isLockedSet"
+        :title="isLockedSet ? LOCK_REASON : undefined"
       />
       <AppSelect
         v-model="projectSelection"
         label="Project"
         :options="projectOptions"
+        :disabled="isLockedSet"
+        :title="isLockedSet ? LOCK_REASON : undefined"
       />
 
+      <!-- Locked toggle: the only control that stays active while the set is
+           locked, so unticking + Save is the unlock path. -->
+      <label class="lock-row">
+        <input
+          type="checkbox"
+          class="lock-row__checkbox"
+          :checked="localSet.locked"
+          @change="localSet.locked = $event.target.checked"
+        />
+        <span class="lock-row__body">
+          <span class="lock-row__title">Locked</span>
+          <span class="lock-row__help">
+            Locked sets are read-only: no edits to the set, its pictures' tags,
+            or descriptions until unlocked.
+          </span>
+        </span>
+      </label>
+
       <!-- Appearance row -->
-      <div class="appearance-row">
+      <div
+        class="appearance-row"
+        :class="{ 'appearance-row--locked': isLockedSet }"
+        :title="isLockedSet ? LOCK_REASON : undefined"
+      >
         <FieldLabel>Choose icon or thumbnail &amp; color</FieldLabel>
         <div class="appearance-sections">
           <div class="icon-thumb-box">
@@ -44,6 +72,7 @@
                     class="icon-btn"
                     :class="{ selected: localSet.set_icon === ic.value }"
                     :title="ic.label"
+                    :disabled="isLockedSet"
                     @click="localSet.set_icon = ic.value"
                   >
                     <v-icon
@@ -69,6 +98,7 @@
                 class="icon-btn--cards-large"
                 :class="{ selected: localSet.set_icon === ICON_CARDS }"
                 title="Thumbnail"
+                :disabled="isLockedSet"
                 @click="localSet.set_icon = ICON_CARDS"
               >
                 <img
@@ -98,6 +128,7 @@
                 :class="{ selected: localSet.set_color === col.value }"
                 :style="{ background: col.value }"
                 :title="col.label"
+                :disabled="isLockedSet"
                 @click="localSet.set_color = col.value"
               />
             </div>
@@ -161,6 +192,12 @@ const projectSelection = computed({
 
 const emit = defineEmits(["close", "saved", "refresh-sidebar"]);
 
+// Tooltip on every field disabled by the lock. The set editor is set-scoped, so
+// this reason is about the set (the store's picture-scoped lockReason is for
+// the grid/overlay surfaces).
+const LOCK_REASON =
+  "This set is locked. Untick Locked and save to unlock it, then edit.";
+
 const localSet = ref({
   id: null,
   name: "",
@@ -168,7 +205,13 @@ const localSet = ref({
   project_id: null,
   set_icon: ICON_CARDS,
   set_color: SET_COLORS[0].value,
+  locked: false,
 });
+
+// The set's persisted locked state gates the fields. Editing the checkbox does
+// not flip this — a set only becomes editable after an unlock PATCH round-trips
+// and the dialog reopens with the fresh set.
+const isLockedSet = computed(() => !!props.set?.locked);
 
 const nameInputRef = ref(null);
 
@@ -199,6 +242,7 @@ watch(
         project_id: newSet.project_id ?? null,
         set_icon: newSet.set_icon ?? ICON_CARDS,
         set_color: newSet.set_color ?? SET_COLORS[0].value,
+        locked: !!newSet.locked,
       };
     } else {
       localSet.value = {
@@ -208,6 +252,7 @@ watch(
         project_id: null,
         set_icon: ICON_CARDS,
         set_color: SET_COLORS[0].value,
+        locked: false,
       };
     }
   },
@@ -216,6 +261,14 @@ watch(
 
 function save() {
   if (!isValid.value) return;
+  // A locked set only accepts an unlock: sending the other (unchanged, but
+  // disabled) fields would 423 server-side. Send just id + locked so unticking
+  // Locked and saving is the unlock path, and saving without unticking is a
+  // no-op the server allows.
+  if (isLockedSet.value) {
+    saveSetFromEditor({ id: localSet.value.id, locked: localSet.value.locked });
+    return;
+  }
   saveSetFromEditor({ ...localSet.value });
 }
 
@@ -266,10 +319,86 @@ watch(
   gap: var(--space-5);
 }
 
+/* Locked toggle row */
+.lock-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  cursor: pointer;
+}
+
+.lock-row__checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  margin-top: var(--space-1);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard);
+}
+
+.lock-row__checkbox:checked {
+  background: rgb(var(--v-theme-accent));
+  border-color: rgb(var(--v-theme-accent));
+}
+
+.lock-row__checkbox:checked::after {
+  content: "";
+  width: 5px;
+  height: 9px;
+  margin-top: -2px;
+  border: solid rgb(var(--v-theme-on-accent));
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.lock-row__checkbox:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.lock-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.lock-row__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-surface));
+  line-height: var(--leading-snug);
+}
+
+.lock-row__help {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  line-height: var(--leading-body);
+}
+
 /* Appearance pickers */
 .appearance-row {
   display: flex;
   flex-direction: column;
+}
+
+/* Disabled look while the set is locked (mirrors the 38%-opacity disabled rule
+   from the visual language). The individual buttons carry their own :disabled,
+   so clicks are already blocked; we keep pointer events on the container so its
+   lock-reason title still shows on hover. */
+.appearance-row--locked {
+  opacity: 0.55;
 }
 
 .appearance-sections {

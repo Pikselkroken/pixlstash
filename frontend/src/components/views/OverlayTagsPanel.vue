@@ -10,7 +10,7 @@
       <span>Tags</span>
       <span class="section-meta-group">
         <button
-          v-if="props.image && !isReadOnly"
+          v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
           title="Reset and regenerate tags — deletes all tags and predictions for this picture and requeues it for re-tagging"
@@ -20,7 +20,7 @@
           <v-icon size="16">mdi-refresh</v-icon>
         </button>
         <v-menu
-          v-if="props.image && !isReadOnly"
+          v-if="props.image && !readOnly"
           v-model="tagPluginMenuOpen"
           :close-on-content-click="true"
           location="bottom end"
@@ -57,7 +57,7 @@
           </v-list>
         </v-menu>
         <button
-          v-if="props.image && !isReadOnly"
+          v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
           title="Add tag (T)"
@@ -72,6 +72,14 @@
     </div>
     <template v-if="!tagsCollapsed">
       <div class="tag-list" ref="tagListRef">
+        <div
+          v-if="locked && lockNote"
+          class="overlay-lock-note"
+          :title="lockNote"
+        >
+          <v-icon size="12">mdi-lock-outline</v-icon>
+          <span>Locked — read-only. Unlock the set to edit.</span>
+        </div>
         <div v-if="isTagsRefreshing" class="tag-refresh-indicator">
           <v-progress-circular
             indeterminate
@@ -102,7 +110,7 @@
               ]"
               :style="predictionStyleForTag(tagLabel(tag))"
               :title="predictionTitleForTag(tagLabel(tag))"
-              draggable="true"
+              :draggable="!readOnly"
               @dragstart="
                 startTagDrag(tagLabel(tag), 'unassigned', null, $event)
               "
@@ -110,7 +118,7 @@
             >
               {{ formatSentinelTag(tagLabel(tag)) }}
               <button
-                v-if="!isReadOnly"
+                v-if="!readOnly"
                 class="tag-delete-btn"
                 @click.stop="removeAllTag(tag)"
                 title="Remove tag"
@@ -122,7 +130,7 @@
               Drop tags here
             </div>
             <input
-              v-if="addingTag && !isReadOnly"
+              v-if="addingTag && !readOnly"
               ref="tagInputRef"
               v-model="newTag"
               @keydown.enter.prevent="confirmAddTag"
@@ -170,7 +178,7 @@
         ]"
         :style="{ '--pred-confidence': pred.confidence }"
         :title="rejectedTagTitle(pred)"
-        draggable="true"
+        :draggable="!readOnly"
         @dragstart="startTagDrag(pred.tag, 'rejected', null, $event)"
         @dragend="clearTagDrag"
       >
@@ -179,7 +187,7 @@
           >{{ (pred.confidence * 100).toFixed(0) }}%</span
         >
         <button
-          v-if="!isReadOnly"
+          v-if="!readOnly"
           class="tag-pred-btn tag-pred-btn--confirm"
           title="Confirm prediction (add as tag)"
           @click.stop="confirmPrediction(pred.tag)"
@@ -262,7 +270,15 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
+  // True when the picture is frozen by a locked set: render tags read-only.
+  locked: { type: Boolean, default: false },
+  // Lock-reason tooltip copy (single source from useLockedSetsStore).
+  lockNote: { type: String, default: "" },
 });
+
+// Compose the app-wide read-only (token capability) with the data-state lock.
+// Either makes tag editing (add / remove / confirm / drag) unavailable.
+const readOnly = computed(() => isReadOnly.value || props.locked);
 
 const emit = defineEmits([
   "update-tags",
@@ -747,6 +763,7 @@ function handleDropOnAllTags() {
   const draggedTag = dragState.tag;
   const sourceType = dragState.sourceType;
   clearTagDrag();
+  if (readOnly.value) return; // locked / read-only: drops never mutate labels
   if (!draggedTag || sourceType !== "rejected") return;
   confirmPrediction(draggedTag);
 }
@@ -755,6 +772,7 @@ async function handleDropOnRejectedTags() {
   const draggedTag = dragState.tag;
   const sourceType = dragState.sourceType;
   clearTagDrag();
+  if (readOnly.value) return; // locked / read-only: drops never mutate labels
   if (!draggedTag || sourceType !== "unassigned") return;
   const key = String(draggedTag).trim().toLowerCase();
   const tagObj = allImageTags.value.find(
@@ -992,6 +1010,14 @@ defineExpose({
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+.overlay-lock-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .tag-refresh-indicator {

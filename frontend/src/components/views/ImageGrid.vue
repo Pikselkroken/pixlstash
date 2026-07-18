@@ -112,6 +112,8 @@
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :grouping-lock-reason="partialStackGroupingReason"
+      :lock-reason="selectionLockReason"
+      :locked-set-ids="lockedSetsStore.lockedSetIds"
       :available-plugins="availablePlugins"
       :tagger-plugins="taggerPlugins"
       :captioner-plugins="captionerPlugins"
@@ -504,13 +506,14 @@
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
             >
-              <!-- Top-left permanent badges (top→bottom): problem, reference folder, share -->
+              <!-- Top-left permanent badges (top→bottom): problem, reference folder, lock, share -->
               <div
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
                   ((props.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
+                    lockedSetsStore.isLocked(img.id) ||
                     (!isReadOnly && sharedPictureIds.has(img.id)))
                 "
                 class="thumbnail-top-left-badges"
@@ -539,6 +542,15 @@
                   @click.stop="openReferenceLocation(img.id)"
                 >
                   <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
+                </div>
+                <div
+                  v-if="lockedSetsStore.isLocked(img.id)"
+                  class="thumbnail-lock-badge thumbnail-badge"
+                  :title="lockedSetsStore.lockReason(img.id)"
+                >
+                  <v-icon :size="badgeIconSizes.penalised"
+                    >mdi-lock-outline</v-icon
+                  >
                 </div>
                 <div
                   v-if="!isReadOnly && sharedPictureIds.has(img.id)"
@@ -927,6 +939,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
@@ -2727,6 +2740,7 @@ const visibleRangeLabel = computed(() => {
 const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
+const lockedSetsStore = useLockedSetsStore();
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
 // grid's keyboard shortcuts and native drag must go inert while it is open.
@@ -3489,6 +3503,31 @@ const partialStackGroupingReason = computed(() => {
     if (!allSelected) return PARTIAL_STACK_GROUPING_MESSAGE;
   }
   return null;
+});
+
+// Lock reason for the current selection: non-null when at least one selected
+// picture is frozen by a locked set. The label-data mutations in the context
+// menu (tag, auto-tag, description, delete) would 423 for the whole batch, so we
+// disable them and surface this as the tooltip. Naming the count + set(s) tells
+// the user exactly why and how to unlock. A single locked picture is enough.
+const selectionLockReason = computed(() => {
+  const ids = (selectedImageIds.value || [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return null;
+  const lockedIds = ids.filter((id) => lockedSetsStore.isLocked(id));
+  if (!lockedIds.length) return null;
+  const names = new Set();
+  for (const id of lockedIds) {
+    for (const name of lockedSetsStore.lockedSetNames(id)) names.add(name);
+  }
+  const joined = [...names].join(", ");
+  const noun = lockedIds.length === 1 ? "picture is" : "pictures are";
+  return (
+    `Locked — ${lockedIds.length} selected ${noun} in the locked set ` +
+    `'${joined}'. Unlock the set to edit: right-click it in the sidebar and ` +
+    `choose Unlock.`
+  );
 });
 
 const selectedExpandedCount = computed(() => {
@@ -6522,6 +6561,15 @@ function handleEmptyStateReset() {
 
 .thumbnail-share-badge .v-icon {
   color: rgb(var(--v-theme-accent)) !important;
+}
+
+/* Lock badge: keep the standard .thumbnail-badge chrome but drop the surface to
+   a reduced opacity for the requested translucent look. Same warm-surface token
+   as the base badge, just composited lighter so the photo reads through. */
+.thumbnail-lock-badge {
+  background: rgba(var(--v-theme-surface), 0.55);
+  display: flex;
+  align-items: center;
 }
 
 .thumbnail-share-badge {

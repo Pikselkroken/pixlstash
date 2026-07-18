@@ -34,12 +34,14 @@ import {
 } from "../../utils/setAppearance.js";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
 const entityNames = useEntityNamesStore();
 const sidebarStore = useSidebarStore();
+const lockedSetsStore = useLockedSetsStore();
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
 // bar, so the sidebar copies below are gated on !isDesktop.
@@ -2063,6 +2065,29 @@ async function applySetAppearance(setId, icon, color) {
   }
   closeSidebarCtxMenu();
 }
+
+// Lock/unlock a set. Locking freezes the set and every picture in it; the only
+// PATCH a locked set accepts is this toggle back to unlocked. After it commits
+// we refresh the sidebar (row icon + set objects) and the locked-sets store
+// (grid/overlay badges); the backend also fires CHANGED_PICTURES for members.
+async function toggleSetLock(set) {
+  closeSidebarCtxMenu();
+  if (!set?.id) return;
+  try {
+    await apiClient.patch(`${props.backendUrl}/picture_sets/${set.id}`, {
+      locked: !set.locked,
+    });
+    refreshSidebar();
+    lockedSetsStore.fetch();
+  } catch (e) {
+    console.error("Failed to toggle set lock", e);
+  }
+}
+
+// Tooltip on the Delete entry when a set is locked (set-scoped; the store's
+// lockReason is picture-scoped for the grid/overlay).
+const SET_LOCK_REASON =
+  "This set is locked. Unlock it first (Unlock set) to delete it.";
 
 async function shareResource(resourceType, resourceId, label) {
   closeSidebarCtxMenu();
@@ -5298,6 +5323,13 @@ defineExpose({
                       </v-tooltip>
                     </span>
                     <v-icon
+                      v-if="pset.locked"
+                      class="sidebar-lock-icon"
+                      size="11"
+                      title="Locked — this set is read-only. Right-click and choose Unlock set to edit it."
+                      >mdi-lock-outline</v-icon
+                    >
+                    <v-icon
                       v-if="sharedSetIds.has(pset.id)"
                       class="sidebar-shared-icon"
                       size="11"
@@ -6171,8 +6203,21 @@ defineExpose({
           Remove all shares
         </button>
         <button
-          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          class="sidebar-ctx-item"
           :disabled="isReadOnly"
+          @click="toggleSetLock(sidebarCtxSet)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            sidebarCtxSet.locked
+              ? "mdi-lock-open-variant-outline"
+              : "mdi-lock-outline"
+          }}</v-icon>
+          {{ sidebarCtxSet.locked ? "Unlock set" : "Lock set" }}
+        </button>
+        <button
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly || sidebarCtxSet.locked"
+          :title="sidebarCtxSet.locked ? SET_LOCK_REASON : undefined"
           @click="
             deleteSetById(sidebarCtxSet.id);
             closeSidebarCtxMenu();
@@ -8184,6 +8229,13 @@ defineExpose({
   color: rgb(var(--v-theme-primary));
   flex-shrink: 0;
   pointer-events: none;
+}
+
+.sidebar-lock-icon {
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  flex-shrink: 0;
+  /* Keep pointer events so the lock-reason title shows on hover. */
+  pointer-events: auto;
 }
 
 .sidebar-shared-icon--inline {

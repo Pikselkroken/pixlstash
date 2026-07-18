@@ -425,6 +425,19 @@ const pictureInfoEntries = computed(() => {
     });
   }
 
+  // Locked-by row: names the set(s) freezing this picture's label data. Fed by
+  // locked_by_sets from GET /pictures/{id}/metadata.
+  const lockedBy = Array.isArray(props.image.locked_by_sets)
+    ? props.image.locked_by_sets
+    : [];
+  if (lockedBy.length) {
+    entries.push({
+      label: "Locked by",
+      value: lockedBy.map((s) => s?.name).filter(Boolean).join(", "),
+      fullWidth: true,
+    });
+  }
+
   return entries;
 });
 
