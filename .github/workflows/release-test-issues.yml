@@ -1,15 +1,17 @@
 name: Create release test issues
 
-# Fires automatically on the first release candidate tag, e.g. v1.2.0-rc1
+# Fires automatically on the first release candidate tag, e.g. v1.7.0rc1.
+# Tags use PEP 440 (no hyphen: v1.5.0rc1, v1.6.0rc5), so the previous 'v*-rc1'
+# glob never matched and this workflow never auto-fired.
 # Can also be triggered manually for any tag (e.g. a special rc4 re-run)
 on:
   push:
     tags:
-      - 'v*-rc1'
+      - 'v*rc1'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to use as the release version label (e.g. v1.0.0-rc4)'
+        description: 'Tag to use as the release version label (e.g. v1.7.0rc4)'
         required: true
 
 jobs:

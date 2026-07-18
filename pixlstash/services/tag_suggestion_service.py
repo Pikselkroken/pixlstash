@@ -315,21 +315,53 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
             if human is not None and human.label_state in (POS, NEG):
                 wants = POS if suggestion.direction == "add" else NEG
                 if human.label_state != wants:
-                    logger.warning(
-                        "accept_suggestion refused: suggestion %s (picture %s, "
-                        "tag %r, direction=%s) is contradicted by a human %s "
-                        "label recorded since it was raised; refusing to "
-                        "reverse the manual fix",
-                        suggestion_id,
-                        suggestion.picture_id,
-                        suggestion.tag,
-                        suggestion.direction,
-                        human.label_state,
-                    )
-                    raise SuggestionConflictError(
-                        f"suggestion {suggestion_id} is contradicted by a human "
-                        f"{human.label_state} label; refusing to reverse it"
-                    )
+                    # The docstring's intent: refuse only when the contradicting
+                    # human label was recorded *since* the suggestion was raised
+                    # (labeled_at strictly newer than created_at). A human label
+                    # that PREDATES the suggestion is not a manual fix the accept
+                    # would reverse — the sibling manual-remove path flips such a
+                    # POS→NEG with no guard — so it must stay acceptable (B1).
+                    labeled_at = human.labeled_at
+                    created_at = suggestion.created_at
+                    if labeled_at is None or created_at is None:
+                        # Missing timestamp shouldn't happen in practice; we
+                        # cannot establish staleness, so do NOT refuse (allow the
+                        # accept) — but log the anomaly with full context rather
+                        # than swallow it silently.
+                        logger.warning(
+                            "accept_suggestion: suggestion %s (picture %s, tag "
+                            "%r, direction=%s) is contradicted by a human %s "
+                            "label with a missing timestamp (labeled_at=%s, "
+                            "suggestion.created_at=%s); allowing the accept "
+                            "because staleness cannot be established",
+                            suggestion_id,
+                            suggestion.picture_id,
+                            suggestion.tag,
+                            suggestion.direction,
+                            human.label_state,
+                            labeled_at,
+                            created_at,
+                        )
+                    elif labeled_at > created_at:
+                        logger.warning(
+                            "accept_suggestion refused: suggestion %s (picture "
+                            "%s, tag %r, direction=%s) is contradicted by a "
+                            "human %s label recorded since it was raised "
+                            "(labeled_at=%s > created_at=%s); refusing to "
+                            "reverse the manual fix",
+                            suggestion_id,
+                            suggestion.picture_id,
+                            suggestion.tag,
+                            suggestion.direction,
+                            human.label_state,
+                            labeled_at,
+                            created_at,
+                        )
+                        raise SuggestionConflictError(
+                            f"suggestion {suggestion_id} is contradicted by a "
+                            f"human {human.label_state} label recorded since it "
+                            f"was raised; refusing to reverse it"
+                        )
 
         _apply_writeback(session, suggestion)
         suggestion.status = "ACCEPTED"

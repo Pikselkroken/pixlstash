@@ -7,6 +7,9 @@ permissions:
 on:
   push:
   pull_request:
+  # Lets release-prep force the heavy backend gate on demand (the slow
+  # headline-API + informational full-suite steps below key off this event).
+  workflow_dispatch:
 
 jobs:
   build:
@@ -159,6 +162,41 @@ jobs:
       # invocation to share interpreter startup rather than paying it per file.
       - name: Test Snapshots, Restore, Migrations & API Schema
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_migrations.py tests/test_snapshots.py tests/test_restore.py tests/test_snapshots_auth.py tests/test_metadata_hash.py tests/test_architecture_guardrails.py tests/test_openapi_response_schemas.py tests/test_find_orphaned_files.py tests/test_ssl_generation.py
+      # Authz / scope / BOLA + label-ledger guard — runs on EVERY PR and push
+      # as a BLOCKING gate. These are auth/logic tests: they upload only a
+      # handful of tiny synthetic images and wait for the import task, never the
+      # ML likeness/tagger pipeline, so the whole set is cheap (no 30s+ per-
+      # fixture pipeline waits). Keeping them on every PR is deliberate — they
+      # guard the recurring BOLA/scope regression class (readiness review M2)
+      # that must never merge green again, and they are inexpensive enough to
+      # afford on every run.
+      - name: Test authz/scope/BOLA & label-ledger surface (BLOCKING gate)
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_label_ledger.py tests/test_read_token_security.py tests/test_scope_table.py tests/test_websocket_auth.py tests/test_anomaly_region_scope.py tests/test_batch_character_likeness_scope.py tests/test_detections_scope.py tests/test_picture_mutation_scope.py tests/test_tag_prediction_scope.py tests/test_impossible_clear_authz.py
+
+      # RELEASE-PREP ONLY — slow 1.7.0 headline-API integration surface.
+      # Unlike the authz set above, these files drive the full likeness/tagger
+      # pipeline (embedding + likeness_parameters + perceptual_hash) and block
+      # until every uploaded fixture is fully processed — "well over 30s on a
+      # loaded CI runner" per test_tag_health_api. Together with the
+      # informational full run below they push wall-clock to ~40 min, too slow
+      # for every PR. They stay a BLOCKING gate, but only in a release-prep
+      # context (see the `if:` — rc-prep-*/release-* branch, v* release tag, or
+      # manual workflow_dispatch). Regular feature PRs skip them.
+      - name: Test 1.7.0 headline API surface (BLOCKING gate, release-prep only)
+        if: startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_tag_health_api.py tests/test_reviews_api.py tests/test_tag_predictions_api.py tests/test_tag_suggestions_api.py tests/test_tagger_runs_api.py
+
+      # RELEASE-PREP ONLY — informational full-suite run: execute the ENTIRE
+      # tests/ directory so the ~50 files that no explicit step gates are still
+      # VISIBLE (readiness review M2, principal addendum: "widen the lens, not
+      # just the gate"). continue-on-error keeps it non-blocking — a red here is
+      # a triage signal, not a gate failure. It is the slowest step, so it too
+      # is reserved for release-prep (same `if:` as the headline step); regular
+      # PRs stay fast on the authz gate plus the per-file steps above.
+      - name: backend-full (informational, non-blocking, release-prep only)
+        if: startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/
 
   e2e:
     # Playwright UI tests drive the real SPA against a backend booted on a
