@@ -300,11 +300,9 @@ def test_cross_set_picture_label_freeze_and_membership_allowed():
         _assert_locked(client.delete(f"/pictures/{pic}/tags"))
         _assert_locked(client.patch(f"/pictures/{pic}", json={"description": "x"}))
         _assert_locked(client.patch(f"/pictures/{pic}", json={"score": 5}))
-        # NB: PATCH /pictures/{id} with a `tags` key is a pre-existing broken path
-        # (hasattr(pic, "tags") lazy-loads a detached relationship and 500s before
-        # any handler logic, locking-independent), so it is not exercised here. The
-        # _replace_tags lock guard is still present for when that path is repaired;
-        # user-facing tag edits go through the /pictures/{id}/tags routes above.
+        # PATCH /pictures/{id} with a `tags` key (the DetachedInstance 500 is now
+        # fixed) is frozen on a locked picture via the _replace_tags guard.
+        _assert_locked(client.patch(f"/pictures/{pic}", json={"tags": ["x"]}))
         _assert_locked(client.delete(f"/pictures/{pic}"))
 
         # But membership of that same picture in an UNLOCKED set is allowed.
@@ -320,6 +318,11 @@ def test_cross_set_picture_label_freeze_and_membership_allowed():
         assert client.patch(f"/pictures/{pic}", json={"score": 3}).status_code == 200
         assert (
             client.post(f"/pictures/{pic}/tags", json={"tag": "fine"}).status_code
+            == 200
+        )
+        # PATCH tags succeeds once unlocked (regression: it used to 500 for all).
+        assert (
+            client.patch(f"/pictures/{pic}", json={"tags": ["fine2"]}).status_code
             == 200
         )
         assert client.delete(f"/pictures/{pic}").status_code == 200

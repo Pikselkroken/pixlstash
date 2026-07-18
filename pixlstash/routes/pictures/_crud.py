@@ -2024,7 +2024,11 @@ def register_routes(router, server):
         updated = False
         updated_fields = {}
         for key, value in params.items():
-            if not hasattr(pic, key):
+            # Validate the key against the mapped CLASS, not the instance:
+            # hasattr(pic, "tags") lazy-loads the tags relationship, which raises
+            # DetachedInstanceError (a 500) when pic is detached from its session.
+            # The class exposes the same mapped attributes without a DB access.
+            if not hasattr(type(pic), key):
                 logger.warning(
                     f"Picture does not have key '{key}' in PATCH request. Ignoring."
                 )
