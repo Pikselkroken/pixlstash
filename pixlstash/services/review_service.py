@@ -568,8 +568,16 @@ def derive_kind(
         try:
             if hamming_distance(int(s_hash, 16), int(t_hash, 16)) <= max_twin_hamming:
                 return "pair"
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as exc:
+            # A malformed/non-hex perceptual hash can't be compared; fall back to
+            # "binary" instead of silently swallowing it (no-silent-pass rule).
+            logger.debug(
+                "derive_kind: unparseable perceptual hash (suspect=%r, twin=%r): "
+                "%s; classifying pair as binary",
+                s_hash,
+                t_hash,
+                exc,
+            )
     return "binary"
 
 
