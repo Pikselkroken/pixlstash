@@ -6564,10 +6564,11 @@ function handleEmptyStateReset() {
 }
 
 /* Lock badge: keep the standard .thumbnail-badge chrome but drop the surface to
-   a reduced opacity for the requested translucent look. Same warm-surface token
-   as the base badge, just composited lighter so the photo reads through. */
+   a reduced opacity for the requested translucent look. Uses the shared
+   `--scrim-surface` token (warm surface, composited lighter so the photo reads
+   through) — the light-canvas half of the badge-scrim family. */
 .thumbnail-lock-badge {
-  background: rgba(var(--v-theme-surface), 0.55);
+  background: var(--scrim-surface);
   display: flex;
   align-items: center;
 }

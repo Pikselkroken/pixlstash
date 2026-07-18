@@ -650,19 +650,19 @@ function zoomToRegion(box) {
   display: block;
 }
 /* Reference-only lock on a neighbour that lives in a locked set — small corner
-   chip, same scrim look as the grid lock badge. */
+   chip using the shared `--scrim-photo` token, matching this card's tag chips. */
 .rs-thumb-lock {
   position: absolute;
   top: 3px;
   left: 3px;
   width: 17px;
   height: 17px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-thumb-badge {
   position: absolute;

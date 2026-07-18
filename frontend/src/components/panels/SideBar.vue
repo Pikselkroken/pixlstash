@@ -8267,8 +8267,8 @@ defineExpose({
 
 /* Corner lock overlay for the collapsed/dock set icon (and the collapsed
    flyout button). Mirrors the grid lock badge's translucent-surface backing
-   (ImageGrid .thumbnail-lock-badge) so a locked set reads as locked in the
-   collapsed sidebar without a redesign. Sits over the square set icon. */
+   (ImageGrid .thumbnail-lock-badge) via the shared `--scrim-surface` token so a
+   locked set reads as locked in the collapsed sidebar. Sits over the set icon. */
 .sidebar-collapsed-lock {
   position: absolute;
   right: 1px;
@@ -8277,7 +8277,7 @@ defineExpose({
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-surface), 0.55);
+  background: var(--scrim-surface);
   color: rgba(var(--v-theme-on-surface), 0.85);
   /* Keep pointer events so the lock-reason title shows on hover. */
   pointer-events: auto;

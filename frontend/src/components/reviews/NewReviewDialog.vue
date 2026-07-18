@@ -576,7 +576,7 @@ async function create() {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 12px;
+  font-size: var(--text-xs);
   cursor: pointer;
   text-align: left;
 }
@@ -617,7 +617,7 @@ async function create() {
   gap: 6px;
   padding: 5px 8px;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-dark-surface));
   cursor: pointer;
 }

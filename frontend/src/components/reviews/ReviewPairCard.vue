@@ -274,8 +274,9 @@ function openZoom(id, ext) {
   cursor: zoom-in;
 }
 
-/* Reference-only lock badge — translucent corner chip matching the grid lock
-   badge (mdi-lock-outline over a scrim so it reads on any photo). */
+/* Reference-only lock badge — translucent corner chip. Uses the shared
+   `--scrim-photo` token (dark scrim over the photo) matching this card's tag
+   chips, so mdi-lock-outline reads on any image. */
 .rs-lock-badge {
   position: absolute;
   top: 8px;
@@ -286,8 +287,8 @@ function openZoom(id, ext) {
   width: 26px;
   height: 26px;
   border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
   pointer-events: auto;
 }
 

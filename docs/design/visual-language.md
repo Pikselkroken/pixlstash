@@ -235,6 +235,22 @@ In **dark mode**, lean on lightness for elevation and keep shadows subtle; a hea
 shadow on a dark surface just muddies. In **light mode**, the warm shadow does the
 lifting.
 
+### Scrims (badges over imagery)
+
+A corner badge or chip that sits on top of a photo needs a translucent backing so
+its glyph stays legible over unknown content. Two tokens cover it, and neither is a
+raw `rgba(0,0,0,…)`:
+
+| Token | Use |
+|---|---|
+| `--scrim-surface` | Light warm chip over the **bright grid/sidebar canvas** (dark glyph). Matches the other grid badges. |
+| `--scrim-photo` | Dark chip **directly over an arbitrary photo** (light glyph, `on-dark-surface`). On the theme `scrim` token so it stays reliably dark in both themes. |
+
+Pick by what the chip sits on, and match the sibling chips already on that surface
+(a lock badge on a review card matches that card's tag chips; a lock badge on the
+grid matches the grid badges). Full-screen backdrops still use `rgba(var(--v-theme-scrim), …)`
+directly at their own tuned opacity; these two tokens are for the corner-chip case.
+
 ---
 
 ## 8. Iconography

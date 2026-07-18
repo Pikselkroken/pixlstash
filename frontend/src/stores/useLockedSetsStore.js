@@ -44,7 +44,7 @@ export function buildReferenceReason(setNames) {
     .filter((n) => n != null && String(n).length > 0)
     .map((n) => String(n));
   if (!names.length) return "";
-  return `Reference only — this image is in the locked set '${names.join(", ")}'.`;
+  return `Reference only — this picture is in the locked set '${names.join(", ")}'.`;
 }
 
 export const useLockedSetsStore = defineStore("lockedSets", () => {

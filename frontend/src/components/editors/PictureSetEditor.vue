@@ -393,10 +393,11 @@ watch(
   flex-direction: column;
 }
 
-/* Disabled look while the set is locked (mirrors the 38%-opacity disabled rule
-   from the visual language). The individual buttons carry their own :disabled,
-   so clicks are already blocked; we keep pointer events on the container so its
-   lock-reason title still shows on hover. */
+/* Dim the whole appearance block while the set is locked. The individual buttons
+   already carry their own :disabled state (per the visual-language disabled
+   rule), so this is a lighter wash on top of that — enough to read as inactive
+   without dropping the block below legibility. Pointer events stay on the
+   container so its lock-reason title still shows on hover. */
 .appearance-row--locked {
   opacity: 0.55;
 }
