@@ -10,6 +10,9 @@ import {
   whyText,
   estDisplay,
   estRawTitle,
+  zeroYieldReason,
+  zeroTailStart,
+  ZERO_YIELD_TITLE,
 } from "./tagHealthBoardLogic";
 
 function row(overrides = {}) {
@@ -39,7 +42,7 @@ describe("whyText", () => {
   it("has_model === false short-circuits before any other signal", () => {
     const r = row({ has_model: false, model_disputes: 4 });
     expect(whyText(r)).toBe(
-      "not in the tagger's vocabulary — similarity review still works",
+      "not in the tagger's vocabulary, similarity review still works",
     );
   });
 
@@ -88,6 +91,96 @@ describe("whyText", () => {
   it("is empty when there is no signal at all", () => {
     const r = row();
     expect(whyText(r)).toBe("");
+  });
+});
+
+describe("zeroYieldReason", () => {
+  it("fires only when ground_truth === 0 AND est_missing === 0", () => {
+    expect(zeroYieldReason(row({ ground_truth: 0, est_missing: 0 }))).toBe(
+      ZERO_YIELD_TITLE,
+    );
+  });
+
+  it("names both the cause and the remedy, never a bare 'unavailable'", () => {
+    // Same convention as lockedSetCopy.js: cause, then what to do about it.
+    expect(ZERO_YIELD_TITLE).toMatch(/nothing to compare/i);
+    expect(ZERO_YIELD_TITLE).toMatch(/confirm this tag on a few pictures/i);
+    expect(ZERO_YIELD_TITLE).toMatch(/re-run the tagger/i);
+    expect(ZERO_YIELD_TITLE).not.toMatch(/unavailable/i);
+  });
+
+  it("does NOT fire when the tag has confirmed examples (ground_truth > 0)", () => {
+    // The false-negative case the gate exists to avoid: no flagged pictures at
+    // all, but real confirmed examples, so the kNN scan has a seed to work
+    // from and a review can absolutely find cards.
+    const r = row({
+      ground_truth: 12,
+      est_wrong: 0,
+      est_missing: 0,
+      mismatch: 0,
+    });
+    expect(corrections(r)).toBe(0); // Priority 0 …
+    expect(zeroYieldReason(r)).toBeNull(); // … but NOT provably empty.
+  });
+
+  it("does NOT fire when there are confident predictions but no ground truth", () => {
+    expect(
+      zeroYieldReason(row({ ground_truth: 0, est_missing: 4 })),
+    ).toBeNull();
+  });
+
+  it("reads the RAW est_missing, never the precision-discounted _adj value", () => {
+    // The exact false negative the gate must not reintroduce: 3 raw confident
+    // predictions discounted to 0.4, which estDisplay() renders as "0".
+    // Gating on the displayed/adjusted number would disable a button on a tag
+    // that has genuine work.
+    const r = row({ ground_truth: 0, est_missing: 3, est_missing_adj: 0.4 });
+    expect(estDisplay(r.est_missing, r.est_missing_adj)).toBe(0); // displays 0…
+    expect(zeroYieldReason(r)).toBeNull(); // …and the gate still stays open.
+  });
+
+  it("does not fire on a row that predates the ground_truth field", () => {
+    // undefined is not evidence of emptiness — the button stays enabled.
+    const r = row({ est_missing: 0 });
+    expect(r.ground_truth).toBeUndefined();
+    expect(zeroYieldReason(r)).toBeNull();
+  });
+
+  it("ignores est_wrong and mismatch entirely", () => {
+    // Neither can seed a review on its own once both sides are empty, so
+    // neither widens or narrows the gate.
+    expect(
+      zeroYieldReason(
+        row({ ground_truth: 0, est_missing: 0, est_wrong: 9, mismatch: 9 }),
+      ),
+    ).toBe(ZERO_YIELD_TITLE);
+  });
+});
+
+describe("zeroTailStart", () => {
+  const score = (r) => r.v;
+
+  it("returns the length of the scored head, excluding the zero tail", () => {
+    const rows = [{ v: 5 }, { v: 2 }, { v: 0 }, { v: 0 }];
+    expect(zeroTailStart(rows, score)).toBe(2);
+  });
+
+  it("returns rows.length when there is no zero tail", () => {
+    expect(zeroTailStart([{ v: 3 }, { v: 1 }], score)).toBe(2);
+  });
+
+  it("returns 0 when every row is zero", () => {
+    expect(zeroTailStart([{ v: 0 }, { v: 0 }], score)).toBe(0);
+  });
+
+  it("handles an empty list", () => {
+    expect(zeroTailStart([], score)).toBe(0);
+  });
+
+  it("only counts the CONTIGUOUS trailing run, never interior zeros", () => {
+    // An interior zero belongs to the visible head — the tail is positional.
+    const rows = [{ v: 5 }, { v: 0 }, { v: 2 }, { v: 0 }];
+    expect(zeroTailStart(rows, score)).toBe(3);
   });
 });
 

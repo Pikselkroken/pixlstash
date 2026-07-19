@@ -102,15 +102,29 @@
               ref="setTriggerRef"
               type="button"
               class="rs-listbox-trigger"
+              :class="{ 'rs-listbox-trigger--locked': selectedSetLocked }"
               role="combobox"
               aria-haspopup="listbox"
               aria-labelledby="rs-set-label"
               :aria-expanded="setMenuOpen"
+              :title="
+                selectedSetLocked
+                  ? lockedSetTitle(selectedSetLabel)
+                  : selectedSetLabel
+              "
               @click="toggleSetMenu"
               @keydown="onTriggerKeydown"
             >
+              <v-icon
+                v-if="selectedSetLocked"
+                size="14"
+                class="rs-listbox-trigger-lock"
+                >mdi-lock-outline</v-icon
+              >
               <span class="rs-listbox-value">{{ selectedSetLabel }}</span>
-              <v-icon size="16" class="rs-listbox-caret">mdi-chevron-down</v-icon>
+              <v-icon size="16" class="rs-listbox-caret"
+                >mdi-chevron-down</v-icon
+              >
             </button>
             <ul
               v-if="setMenuOpen"
@@ -135,17 +149,20 @@
                 role="option"
                 :aria-selected="opt.id === setId"
                 :aria-disabled="opt.locked || undefined"
-                :title="opt.locked ? lockedOptionTitle(opt.name) : undefined"
+                :title="opt.locked ? lockedSetTitle(opt.name) : undefined"
                 @click="selectSet(opt)"
                 @mousemove="activeSetIndex = i"
               >
-                <v-icon
-                  v-if="opt.locked"
-                  size="14"
-                  class="rs-listbox-lock"
+                <v-icon v-if="opt.locked" size="14" class="rs-listbox-lock"
                   >mdi-lock-outline</v-icon
                 >
-                <span class="rs-listbox-option-label">{{ opt.name }}</span>
+                <!-- Locked rows already carry the fuller lock explanation on the
+                     <li>; an inner title would shadow it. -->
+                <span
+                  class="rs-listbox-option-label"
+                  :title="opt.locked ? undefined : opt.name"
+                  >{{ opt.name }}</span
+                >
                 <v-icon
                   v-if="opt.id === setId"
                   size="14"
@@ -203,7 +220,10 @@
         <button
           class="rs-dialog-btn rs-dialog-btn--go"
           type="button"
-          :disabled="!tag || store.creating"
+          :disabled="!tag || store.creating || selectedSetLocked"
+          :title="
+            selectedSetLocked ? lockedSetTitle(selectedSetLabel) : undefined
+          "
           @click="create"
         >
           <v-icon size="15">{{
@@ -221,6 +241,9 @@
 // jumps to the open session instead of dead-ending on a disabled chip.
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+// Shared with TagHealthBoard's locked-scope state so both surfaces explain a
+// locked set with the same sentence.
+import { lockedSetTitle } from "./lockedSetCopy";
 
 const props = defineProps({
   preset: { type: String, default: "" },
@@ -291,27 +314,30 @@ const selectedSetLabel = computed(
   () => setOptions.value.find((o) => o.id === setId.value)?.name ?? "Any",
 );
 
-function lockedOptionTitle(name) {
-  return `'${name}' is locked — its pictures are read-only. Unlock it to review its tags.`;
-}
+// `initialScope` can prefill a locked setId straight into `setId`, bypassing the
+// click-time guard in `selectSet()`. Without this the trigger would show the
+// locked set as an ordinary selection and the user would only discover the block
+// on submit — so the trigger mirrors the locked row's own treatment.
+const selectedSetLocked = computed(
+  () => setOptions.value.find((o) => o.id === setId.value)?.locked ?? false,
+);
 
-function firstSelectableFrom(start, dir) {
-  const opts = setOptions.value;
-  for (let step = 0; step < opts.length; step += 1) {
-    const i = (start + dir * step + opts.length) % opts.length;
-    if (!opts[i].locked) return i;
-  }
-  return -1;
+// Arrow-key traversal visits EVERY option, locked ones included. That is the
+// standard listbox contract: traversal reaches a disabled row so its
+// `aria-disabled` state and lock explanation are discoverable by a keyboard-only
+// user; only *activation* is blocked (see `selectSet`). Wraps at both ends.
+function wrapIndex(i) {
+  const n = setOptions.value.length;
+  if (!n) return -1;
+  return ((i % n) + n) % n;
 }
 
 function openSetMenu() {
   if (setMenuOpen.value) return;
-  // Land on the current selection if it's selectable, else the first open row.
+  // Land on the current selection (even when locked — it can be prefilled from
+  // the launch context), else the first row.
   const sel = setOptions.value.findIndex((o) => o.id === setId.value);
-  activeSetIndex.value =
-    sel >= 0 && !setOptions.value[sel].locked
-      ? sel
-      : firstSelectableFrom(0, 1);
+  activeSetIndex.value = sel >= 0 ? sel : 0;
   setMenuOpen.value = true;
   nextTick(() => setListRef.value?.focus());
 }
@@ -343,21 +369,21 @@ function onTriggerKeydown(event) {
 function onListKeydown(event) {
   if (event.key === "ArrowDown") {
     event.preventDefault();
-    const next = firstSelectableFrom(activeSetIndex.value + 1, 1);
+    const next = wrapIndex(activeSetIndex.value + 1);
     if (next >= 0) activeSetIndex.value = next;
   } else if (event.key === "ArrowUp") {
     event.preventDefault();
-    const prev = firstSelectableFrom(activeSetIndex.value - 1, -1);
+    const prev = wrapIndex(activeSetIndex.value - 1);
     if (prev >= 0) activeSetIndex.value = prev;
   } else if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     selectSet(setOptions.value[activeSetIndex.value]);
   } else if (event.key === "Home") {
     event.preventDefault();
-    activeSetIndex.value = firstSelectableFrom(0, 1);
+    activeSetIndex.value = 0;
   } else if (event.key === "End") {
     event.preventDefault();
-    activeSetIndex.value = firstSelectableFrom(setOptions.value.length - 1, -1);
+    activeSetIndex.value = Math.max(setOptions.value.length - 1, 0);
   }
 }
 
@@ -579,6 +605,17 @@ async function create() {
   font-size: var(--text-xs);
   cursor: pointer;
   text-align: left;
+}
+/* A locked set can be prefilled from the launch context, so the trigger takes
+   the SAME greyed treatment as `.rs-listbox-option--locked` (not the lighter
+   informational `.rs-rail-scope-lock` badge) — it is a blocked selection, not a
+   note. */
+.rs-listbox-trigger--locked {
+  color: rgba(var(--v-theme-on-dark-surface), 0.38);
+}
+.rs-listbox-trigger-lock {
+  flex-shrink: 0;
+  color: rgba(var(--v-theme-on-dark-surface), 0.38);
 }
 .rs-listbox-value {
   flex: 1;

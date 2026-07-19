@@ -57,6 +57,68 @@ export function rawCorrections(r) {
   return (r.est_wrong ?? 0) + (r.est_missing ?? 0) + (r.mismatch ?? 0);
 }
 
+// --- Provably-empty review gate ---------------------------------------------
+
+// Copy for a row whose review would certainly contain zero cards. Follows the
+// convention lockedSetCopy.js established for the other blocked action on this
+// surface: state the CAUSE, then the REMEDY, in the user's own terms — never a
+// bare "unavailable".
+export const ZERO_YIELD_TITLE =
+  "Nothing to review: no picture in this scope is confirmed to have this tag, and the tagger isn't confident about any untagged one — so a review would have nothing to compare. Confirm this tag on a few pictures (or re-run the tagger) first.";
+
+// Is a review for this row provably empty? Returns the reason string when it
+// is, else `null` ("not provably empty" — the default, and the only safe
+// default: the kNN scan that builds a review is a DIFFERENT mechanism from the
+// Priority signal, so a low or zero Priority routinely still has real work).
+//
+// The gate fires on exactly one condition, and it must stay that narrow:
+//
+//   ground_truth === 0  — not one picture in scope carries this tag, so the
+//     scan has no seed to compare against (backend guarantees this implies
+//     scan_tag's n_ground_truth === 0; see tag_health_service.py's module doc)
+//   AND est_missing === 0 — the tagger is not ≥90% sure about any untagged
+//     picture either, so there is no predicted side to seed from.
+//
+// Both sides empty = the scan's input set is empty = zero cards, always.
+//
+// TWO DELIBERATE CHOICES, both load-bearing:
+//
+// 1. It reads the RAW `est_missing`, never `est_missing_adj` and never
+//    `estDisplay()`. The adjusted value is the raw count discounted by the
+//    tag's measured precision, and `estDisplay()` ROUNDS it — so a tag with 3
+//    genuine confident predictions and poor precision displays "0" while
+//    having real work (see the estDisplay test "can round a non-zero raw count's
+//    estimate down to 0"). Gating on the displayed number would disable the
+//    button on exactly those tags: a false negative that hides reviewable work,
+//    which is the failure this whole design exists to avoid.
+// 2. A row that predates the `ground_truth` field (older cache) has it
+//    `undefined`, which is `!== 0`, so the gate returns null and the button
+//    stays enabled. Absence of evidence is never treated as evidence of
+//    emptiness.
+export function zeroYieldReason(r) {
+  if (r.ground_truth !== 0) return null;
+  if ((r.est_missing ?? 0) !== 0) return null;
+  return ZERO_YIELD_TITLE;
+}
+
+// --- Zero-Priority tail ------------------------------------------------------
+
+// Index of the first row in a Priority-descending-ordered list that begins the
+// contiguous run of Priority-0 rows, i.e. the length of the "has a ranking
+// signal" head. `rows.length` when there is no such tail.
+//
+// This is a PRESENTATION split only — the tail is collapsed behind a
+// disclosure, never dropped. A Priority of 0 means the fast estimate flagged
+// nothing; it does NOT mean a review would find nothing, because the review's
+// kNN scan is an independent mechanism. Filtering these rows away would be a
+// silent false negative for the same reason the button gate above is kept
+// deliberately narrow.
+export function zeroTailStart(rows, score) {
+  let i = rows.length;
+  while (i > 0 && score(rows[i - 1]) === 0) i -= 1;
+  return i;
+}
+
 // "Why it ranks here": computed client-side from fields already on the row
 // (there is no `why` field from the backend — see the Spec E design note in
 // docs/reviews/tag-review-board-redesign-ux-spec.md §7c). Priority order: a
@@ -67,7 +129,7 @@ export function rawCorrections(r) {
 // signal — a middling overturn rate isn't worth a sentence.
 export function whyText(r) {
   if (r.has_model === false)
-    return "not in the tagger's vocabulary — similarity review still works";
+    return "not in the tagger's vocabulary, similarity review still works";
   const wrong = r.est_wrong_adj ?? r.est_wrong ?? 0;
   const missing = r.est_missing_adj ?? r.est_missing ?? 0;
   const mismatch = r.mismatch ?? 0;
