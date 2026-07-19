@@ -1,6 +1,6 @@
 import time
 
-from sqlalchemy import func, desc
+from sqlalchemy import bindparam, desc, func, update
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -235,34 +235,68 @@ class SmartScoreTask(BaseTask):
             still-NULL id is never announced as a finished rescore.
         """
         after = anomaly_state_signature(session, list(id_to_score.keys()))
-        persisted: list[int] = []
+
+        # Compare-and-swap (B1): keep only pictures whose anomaly inputs did not move
+        # between the read transaction that computed the score and this write. A drifted
+        # picture is deliberately left NULL so MissingSmartScoreFinder re-picks it and it
+        # rescores from fresh inputs — writing the stale value would resurrect an
+        # invalidated row the finder can never re-pick.
+        unchanged: list[int] = []
         skipped = 0
-        for pic_id, score in id_to_score.items():
+        for pic_id in id_to_score:
             if before.get(pic_id) != after.get(pic_id):
-                # Inputs moved between compute and persist. Leave the row NULL so
-                # MissingSmartScoreFinder re-picks it and rescores with fresh inputs.
                 skipped += 1
                 continue
-            pic = session.get(Picture, pic_id)
-            if pic is None:
-                continue
-            pic.smart_score = score
-            session.add(pic)
-            persisted.append(pic_id)
+            unchanged.append(pic_id)
+
+        # Exclude any picture hard-deleted between compute and persist — the old per-row
+        # ``session.get(...) is None`` guard. One batched SELECT (<= BATCH_SIZE ids, well
+        # under SQLite's bound-variable cap) replaces N ``session.get`` round-trips.
+        existing: set = set()
+        if unchanged:
+            existing = set(
+                session.exec(select(Picture.id).where(Picture.id.in_(unchanged))).all()
+            )
+        to_write = [pic_id for pic_id in unchanged if pic_id in existing]
+
+        if to_write:
+            # One prepared statement, N parameter sets — replaces the old 64-get + 64-set
+            # ORM loop on the single writer queue (this task runs full-library-wide via
+            # migration 0076). Target ``Picture.__table__`` (Core ``Table``), NOT the ORM
+            # ``Picture`` mapper, so SQLAlchemy does not route this through the ORM
+            # bulk-by-primary-key path (which clashes with the explicit WHERE bindparam)
+            # and so the metadata-hash ``after_flush`` hook does not re-fire. That hook is
+            # a no-op for smart_score either way — ``smart_score`` is in
+            # ``database._HASH_SKIP_COLS`` so the hash value does not depend on it — but
+            # the old ORM loop dirtied each Picture and forced a wasted hash recompute to
+            # the same value; this Core path skips that while leaving the stored
+            # ``metadata_hash`` identical, matching the previous net behaviour.
+            stmt = (
+                update(Picture.__table__)
+                .where(Picture.__table__.c.id == bindparam("_pid"))
+                .values(smart_score=bindparam("_smart_score"))
+            )
+            session.execute(
+                stmt,
+                [
+                    {"_pid": pic_id, "_smart_score": id_to_score[pic_id]}
+                    for pic_id in to_write
+                ],
+            )
         session.commit()
         if skipped:
             logger.info(
                 "SmartScoreTask: persisted %d score(s); skipped %d whose anomaly state "
                 "changed during scoring (left NULL for recompute).",
-                len(persisted),
+                len(to_write),
                 skipped,
             )
         else:
             logger.debug(
                 "SmartScoreTask: persisted %d score(s); no anomaly-state drift.",
-                len(persisted),
+                len(to_write),
             )
-        return persisted
+        return to_write
 
     @classmethod
     def count_remaining(cls, session: Session) -> int:

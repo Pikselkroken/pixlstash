@@ -121,6 +121,11 @@ class Vault:
         self._wd14_threshold = None
         self._pixlstash_tagger_threshold_offset = None
         self._tagger_settings: dict | None = None
+        # Single-entry memo for resolve_anomaly_apply_thresholds: (key, resolved_map),
+        # keyed on (meta_path, offset, default_threshold) so it self-invalidates when any
+        # of those move. Declared before the disable_background_workers early-return so
+        # both modes carry it.
+        self._anomaly_apply_thresholds_memo: tuple | None = None
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
         self._daily_snapshots_enabled: bool = daily_snapshots_enabled

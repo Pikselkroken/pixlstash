@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
+from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.db_models.tag_prediction import TagPrediction
@@ -657,6 +658,11 @@ def test_threshold_offset_change_invalidates_anomaly_scores_via_patch():
     try:
         anomaly = _upload_picture(client, "Bad1.png")
         content_only = _upload_picture(client, "Bad2.png")
+        # Stop the planner after upload (import needs its workers): once the offset patch
+        # NULLs the anomaly score, the live MissingSmartScoreFinder would otherwise
+        # re-score it and make the `is None` assertion racy. The offset-change
+        # invalidation runs on the DB queue, so it is unaffected by stopping the planner.
+        server.vault._work_planner.stop()
         for pic_id in (anomaly, content_only):
             _set_smart_score(server, pic_id, 0.5)
         _seed_prediction(server, anomaly, PENALISED_TAG, confidence=0.9)
@@ -1062,6 +1068,182 @@ def test_over_cap_demoted_id_falls_back_to_bulk_drain_emit():
         # The demoted id was NOT dropped: it rides the single origin-less bulk drain emit.
         bulk = [e for e in events if "origin_client_id" not in e]
         assert bulk == [{"picture_ids": [recorded, demoted], "fields": ["smart_score"]}]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# ------------------------------------------------------------------ bulk persist (S4)
+#
+# ``_persist_scores`` writes the CAS-surviving subset with a SINGLE bulk Core UPDATE over
+# ``Picture.__table__`` instead of a per-row ``session.get`` + attribute-set loop (64
+# SELECT + 64 UPDATE per batch on the single writer queue, run full-library-wide by
+# migration 0076). The write must still: honour the B1 compare-and-swap, return exactly
+# the ids written (in input order, drift/deleted excluded), and leave ``metadata_hash``
+# untouched — ``smart_score`` is in ``database._HASH_SKIP_COLS``.
+
+
+def test_persist_writes_batch_as_single_bulk_statement():
+    """The whole surviving batch is one executemany UPDATE, not N per-row updates."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_ids = [
+            _upload_picture(client, name)
+            for name in ("Bad1.png", "Bad2.png", "Reference1.png")
+        ]
+        assert len(set(pic_ids)) == 3
+        # Stop the planner after upload (import needs its workers) but before scoring, so
+        # no background SmartScoreTask races our manual persist and overwrites the
+        # hand-set scores with a real recompute.
+        server.vault._work_planner.stop()
+        for pid in pic_ids:
+            _prepare_for_scoring(server, pid)
+
+        before = server.vault.db.run_task(lambda s: anomaly_state_signature(s, pic_ids))
+        id_to_score = {pid: 0.5 + i * 0.1 for i, pid in enumerate(pic_ids)}
+
+        executed: list[str] = []
+
+        def _run(session):
+            original = session.execute
+
+            def _tracking(statement, *args, **kwargs):
+                executed.append(str(statement))
+                return original(statement, *args, **kwargs)
+
+            session.execute = _tracking
+            try:
+                return SmartScoreTask._persist_scores(session, id_to_score, before)
+            finally:
+                session.execute = original
+
+        persisted = server.vault.db.run_task(_run)
+
+        # Returned exactly the surviving subset, in input order.
+        assert persisted == pic_ids
+        for pid in pic_ids:
+            assert _get_smart_score(server, pid) == id_to_score[pid]
+
+        # Exactly one UPDATE ... smart_score statement carried the whole batch — the
+        # executemany fires a single ``session.execute`` regardless of row count.
+        score_updates = [
+            s
+            for s in executed
+            if s.strip().upper().startswith("UPDATE PICTURE") and "smart_score" in s
+        ]
+        assert len(score_updates) == 1, score_updates
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_persist_preserves_metadata_hash():
+    """A smart_score write must not move metadata_hash (smart_score is a skip column)."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        # Stop the planner after upload (import needs its workers) but before scoring, so
+        # no background SmartScoreTask races our manual persist.
+        server.vault._work_planner.stop()
+        _prepare_for_scoring(server, pic_id)
+
+        h0 = server.vault.db.run_task(lambda s: s.get(Picture, pic_id).metadata_hash)
+        assert h0 is not None
+
+        before = server.vault.db.run_task(
+            lambda s: anomaly_state_signature(s, [pic_id])
+        )
+        persisted = server.vault.db.run_task(
+            SmartScoreTask._persist_scores, {pic_id: 0.5}, before
+        )
+        assert persisted == [pic_id]
+        assert _get_smart_score(server, pic_id) == 0.5
+
+        # The Core UPDATE bypasses the ORM, so the metadata-hash after_flush hook never
+        # fired; the old ORM loop would have recomputed the hash to this same value.
+        h1 = server.vault.db.run_task(lambda s: s.get(Picture, pic_id).metadata_hash)
+        assert h1 == h0
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_persist_excludes_picture_deleted_mid_flight():
+    """A picture whose row no longer exists at persist time is excluded, not announced."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        # Stop the planner after upload (import needs its workers) but before scoring, so
+        # no background SmartScoreTask races our manual persist.
+        server.vault._work_planner.stop()
+        _prepare_for_scoring(server, pic_id)
+        gone_id = 9_999_999  # never existed → stands in for a hard-deleted row
+
+        before = server.vault.db.run_task(
+            lambda s: anomaly_state_signature(s, [pic_id, gone_id])
+        )
+        persisted = server.vault.db.run_task(
+            SmartScoreTask._persist_scores,
+            {pic_id: 0.5, gone_id: 0.9},
+            before,
+        )
+        # CAS passes for both (empty signatures match), but the missing row is dropped by
+        # the existence check — preserving the old ``session.get(...) is None`` guard.
+        assert persisted == [pic_id]
+        assert _get_smart_score(server, pic_id) == 0.5
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# ------------------------------------------------ penalised-tag config atomicity (S2)
+#
+# The penalised-tag score invalidation now runs INSIDE the same IMMEDIATE transaction
+# that writes the user's config, not as a separate LOW follow-up task. A crash between a
+# committed config write and a lost invalidation would leave scores stale forever; making
+# them one transaction eliminates that window.
+
+
+def test_penalised_tag_change_invalidates_atomically_no_second_task():
+    """The reset is committed within the config write's transaction; no LOW task."""
+    temp_dir, client, server = _setup()
+    try:
+        carrier = _upload_picture(client, "Bad1.png")
+        bystander = _upload_picture(client, "Changed1.png")
+        _set_smart_score(server, carrier, 0.5)
+        _set_smart_score(server, bystander, 0.5)
+        _seed_prediction(server, carrier, PENALISED_TAG, confidence=0.9)
+        _seed_prediction(server, bystander, "bad anatomy", confidence=0.9)
+
+        # Record the priority of every DB task enqueued during the PATCH so we can prove
+        # the invalidation is NOT a separate follow-up task.
+        priorities: list = []
+        original_run_task = server.vault.db.run_task
+
+        def _spy(func, *args, **kwargs):
+            priorities.append(kwargs.get("priority"))
+            return original_run_task(func, *args, **kwargs)
+
+        server.vault.db.run_task = _spy
+        try:
+            new_table = dict(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
+            new_table[PENALISED_TAG] = 1 if new_table.get(PENALISED_TAG) != 1 else 5
+            resp = client.patch(
+                "/users/me/config", json={"smart_score_penalised_tags": new_table}
+            )
+            assert resp.status_code == 200
+        finally:
+            server.vault.db.run_task = original_run_task
+
+        # Committed synchronously inside the PATCH — asserted WITHOUT polling, because the
+        # invalidation shares the IMMEDIATE task's transaction rather than trailing it.
+        assert _get_smart_score(server, carrier) is None
+        assert _get_smart_score(server, bystander) == 0.5
+
+        # No separate LOW task did the reset; exactly one IMMEDIATE task carried both the
+        # config write and the invalidation.
+        assert DBPriority.LOW not in priorities
+        assert priorities.count(DBPriority.IMMEDIATE) == 1
     finally:
         server.vault.close()
         temp_dir.cleanup()

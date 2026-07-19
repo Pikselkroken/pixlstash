@@ -314,32 +314,41 @@ def create_router(server) -> APIRouter:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+            changed_tags: set[str] = set()
             if updated:
                 session.add(user)
+                new_penalised_tags = _resolved_penalised_tags(
+                    user.smart_score_penalised_tags
+                )
+                # Diff the *resolved* weight tables, not the raw JSON strings: a reordered
+                # or reformatted payload with identical weights must not trigger a
+                # re-score.
+                changed_tags = changed_penalised_tags(
+                    old_penalised_tags, new_penalised_tags
+                )
+                if changed_tags:
+                    # Scoped, not library-wide: only pictures that actually carry one of
+                    # the re-weighted tags can have moved, and a blanket reset would
+                    # re-score the entire vault on every settings edit.
+                    #
+                    # Runs INSIDE this transaction, before the single commit:
+                    # invalidate_for_penalised_tag_change deliberately does not commit, so
+                    # the config write and the score invalidation land atomically. If the
+                    # process died between two separate tasks the config change would be
+                    # durable while the invalidation was lost, leaving scores stale
+                    # forever — the failure this path exists to eliminate.
+                    invalidate_for_penalised_tag_change(session, changed_tags)
                 session.commit()
                 session.refresh(user)
-            new_penalised_tags = _resolved_penalised_tags(
-                user.smart_score_penalised_tags
-            )
-            # Diff the *resolved* weight tables, not the raw JSON strings: a reordered
-            # or reformatted payload with identical weights must not trigger a re-score.
-            changed_tags = changed_penalised_tags(
-                old_penalised_tags, new_penalised_tags
-            )
             return user, updated, changed_tags
 
         user, updated, changed_tags = server.vault.db.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
         if changed_tags:
-            # Scoped, not library-wide: only pictures that actually carry one of the
-            # re-weighted tags can have moved, and a blanket reset would re-score the
-            # entire vault on every settings edit.
-            def _reset_smart_scores(session: Session) -> None:
-                invalidate_for_penalised_tag_change(session, changed_tags)
-                session.commit()
-
-            server.vault.db.run_task(_reset_smart_scores, priority=DBPriority.LOW)
+            # The NULL-reset already committed atomically above; just nudge the scheduler
+            # so MissingSmartScoreFinder promptly re-scores the cleared rows. wake() is a
+            # scheduler poke, not a DB write, so it need not be inside the transaction.
             server.vault.wake()
         if "keep_models_in_memory" in patch_data:
             server.vault.set_keep_models_in_memory(

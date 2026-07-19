@@ -108,6 +108,21 @@ def resolve_anomaly_apply_thresholds(vault) -> dict[str, float]:
     meta_path = vault.get_pixlstash_tagger_meta_path()
     offset = vault.get_pixlstash_tagger_threshold_offset()
     default_threshold = vault.get_pixlstash_acceptance_threshold()
+
+    # These three inputs fully determine the output, so a key built from them
+    # auto-invalidates the moment the user's offset moves or the tagger model (and thus
+    # its meta.json path) changes — no explicit invalidation hook is needed. The getters
+    # above are cheap; only ``load_label_thresholds`` (which open()s + json.load()s the
+    # meta file) is skipped on a hit. Without this, a 100k-picture rescore re-read the same
+    # unchanged file ~1,560 times (once per 64-picture batch).
+    #
+    # The memo is stored on the *vault* instance, never a module global, so multiple vaults
+    # (and the test suite's throwaway vaults) never cross-contaminate.
+    cache_key = (meta_path, offset, default_threshold)
+    memo = getattr(vault, "_anomaly_apply_thresholds_memo", None)
+    if memo is not None and memo[0] == cache_key:
+        return memo[1]
+
     per_label = load_label_thresholds(meta_path, offset)
     if not per_label:
         # Not an error: the engine may not be initialised yet (meta_path is None until
@@ -121,4 +136,19 @@ def resolve_anomaly_apply_thresholds(vault) -> dict[str, float]:
             default_threshold,
             offset,
         )
-    return {tag: per_label.get(tag, default_threshold) for tag in ANOMALY_PENALTY_TAGS}
+    resolved = {
+        tag: per_label.get(tag, default_threshold) for tag in ANOMALY_PENALTY_TAGS
+    }
+    try:
+        vault._anomaly_apply_thresholds_memo = (cache_key, resolved)
+    except (AttributeError, TypeError) as exc:
+        # A vault-like object that forbids attribute assignment (e.g. one using
+        # ``__slots__``) simply runs uncached — correct, just slower. Log so the missed
+        # caching is visible rather than silent.
+        logger.debug(
+            "resolve_anomaly_apply_thresholds: could not memoise on %r (%s); "
+            "recomputing every call.",
+            type(vault).__name__,
+            exc,
+        )
+    return resolved
