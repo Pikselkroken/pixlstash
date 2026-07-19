@@ -44,18 +44,20 @@ shrinks as automated coverage grows.
 | reflows the grid when the column count changes | Column slider changes `grid-template-columns` track count (§3.1) | ✅ |
 | search filters, records history, then resets | Search narrows results, term enters history, clearing restores all (§3.3) | ✅ |
 
-## Selection ▾ / Context Menu Parity — `menu-parity.spec.js` (plan §3.5)
+## Selection ▾ / Context Menu Parity — manual (plan §3.5)
 | Test | Covers | Status |
 |------|--------|--------|
-| both menus list the same items for a set of pictures | Selection ▾ dropdown (`.selection-menu-panel`) and right-click context menu (`.image-ctx-menu`) expose identical selection-scoped actions for the same multi-picture selection | ❌ |
+| both menus list the same items for a set of pictures | Selection ▾ dropdown (`.selection-menu-panel`) and right-click context menu (`.image-ctx-menu`) expose identical selection-scoped actions for the same multi-picture selection | 📝 |
 
-> ❌ **Known failure — [#403](https://github.com/Pikselkroken/pixlstash/issues/403).**
-> The context menu has actions the Selection ▾ menu lacks: **Restore from
+> 📝 **Not automated — no parity spec exists.** The right-click context menu is
+> automated on its own (see the `context-menu.spec.js` section below); the
+> Selection ▾ ↔ context-menu *parity comparison* is manual only.
+> **Known gap — [#403](https://github.com/Pikselkroken/pixlstash/issues/403):**
+> the context menu has actions the Selection ▾ menu lacks — **Restore from
 > snapshot** and **Reverse image search** (plus, for a single selection,
-> **Share image** / **Find similar faces**). The spec is intentionally red to
-> keep this parity gap visible; it goes green once the menus are reconciled.
-> (Toolbar.vue documents the Selection menu as "mirrors the right-click context
-> menu exactly", so the source intent is parity.)
+> **Share image** / **Find similar faces**). Keep this ❌ manually until the
+> menus are reconciled. (Toolbar.vue documents the Selection menu as "mirrors the
+> right-click context menu exactly", so the source intent is parity.)
 
 ## Picture Detail (ImageOverlay) — `overlay.spec.js` (plan §4)
 | Test | Covers | Status |
@@ -106,6 +108,11 @@ shrinks as automated coverage grows.
 |------|--------|--------|
 | combines multiple sets via the multi-select toolbar | Ctrl-click a second set reveals the combine toolbar with Union / Overlap / Difference / Unique (XOR); clearing dismisses it | ✅ |
 
+## Picture-set locking — `set-locking.spec.js` (plan §4)
+| Test | Covers | Status |
+|------|--------|--------|
+| lock freezes tagging and unlock restores it (§4) | Lock a non-empty set from the sidebar → grid lock badge + set-row lock icon appear and the context-menu Tag action is disabled; unlock → badge/icon clear and Tag is enabled again (`afterEach` unlocks any leaked lock) | ✅ |
+
 ## Sharing — `sharing.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
@@ -151,32 +158,36 @@ mutations) is unit-covered in `src/stores/useReviewSessionsStore.test.js`.
 | Test | Covers | Status |
 |------|--------|--------|
 | opens from the toolbar and renders the ranked board | Toolbar `Review and fix tags` → `.rs-overlay`; board title + the redesigned columns (Tag / Est. fixes / Est. wrong / Est. missing / Mismatch / Why it ranks here); ≥1 tag row | ✅ |
+| the persistent rebuild control is visible in the header (Spec B) | The board header always exposes its rebuild control | ✅ |
+| the Why column is never blank for a row with a ranking signal | A row with a ranking signal always shows a "Why it ranks here" explanation | ✅ |
 | the filter input narrows the visible rows | `/`-focusable filter narrows rows to matches and restores on clear | ✅ |
 | a no-match filter shows the empty state | `.rs-board-empty` "No tags match…" | ✅ |
 | the anomalies-only toggle flips its pressed state | `aria-pressed` toggles false↔true | ✅ |
 | a sortable header toggles the active sort | Clicking "Est. wrong" header goes active; rows still render | ✅ |
 | the sort dropdown re-orders without emptying the board | Sort by tag / missing keeps rows | ✅ |
 | a row with a mismatch signal shows Start review | A mismatch-flagged tag ("shirt") exposes the "Start review" action | ✅ |
-| creating a review opens a session with a scan receipt and progress | Dialog → "Scan & create" → session view, receipt ("Scanned N · N suspects"), rail done/found, Undo disabled at start | ⛔ BUG-RS-1 |
-| binary Yes/No map to keep/remove; tally + backend receipt track it | remove-dir No=remove / Yes=keep; tally + `GET /reviews/{id}` receipt agree; focus advances to the re-keyed card; Undo enabled after a decision | ⛔ BUG-RS-1 |
-| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0 | ⛔ BUG-RS-1 |
-| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "N skipped"; receipt removed/added/kept unchanged, skipped++ | ⛔ BUG-RS-1 |
-| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card` | ⛔ BUG-RS-1 |
-| working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → `.rs-archived` receipt; backend status ARCHIVED | ⛔ BUG-RS-1 |
+| creating a review opens a session with a scan receipt and progress | Dialog → "Scan & create" → session view, receipt ("Scanned N · N suspects"), rail done/found, Undo disabled at start | ✅ |
+| binary Yes/No map to keep/remove; tally + backend receipt track it | remove-dir No=remove / Yes=keep; tally + `GET /reviews/{id}` receipt agree; focus advances to the re-keyed card; Undo enabled after a decision | ✅ |
+| Escape closes the review first (back to tag health); a second Escape closes the overlay | In a session, Escape returns to the tag-health board; a second Escape dismisses the overlay | ✅ |
+| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0 | 📝 fixme |
+| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "N skipped"; receipt removed/added/kept unchanged, skipped++ | 📝 fixme |
+| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card` | 📝 fixme |
+| working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → `.rs-archived` receipt; backend status ARCHIVED | 📝 fixme |
 
-**⛔ BUG-RS-1 (blocker):** the session card never renders in a real browser.
-The moment the suggestions queue loads, `ReviewSessionView` crashes with
-`TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
-`patchBlockChildren`, and the session stays stuck on "Loading…". Reproduced in
-the production (minified), unminified, and dev builds. The six session-loop
-tests were **run and all failed** at the stuck card; they are committed guarded
-with `test.describe.fixme` (skipped, not failing) so CI stays green, and encode
-the intended behaviour — remove the `.fixme` once the crash is fixed and they
-run as-is. Not caught by the 61 API tests or 189 unit tests because **no review
-component has a mount/update test** (only the store is unit-tested). Suspected
-cause: the `<template v-if>/<template v-else>` conditional fragments sharing a
-block parent with dynamic siblings in `ReviewBinaryCard` (banner text, lines
-13–20) and/or `ReviewDecisionBar` (toolbar, lines 6/33). Fix is dev-lane work.
+**✅ BUG-RS-1 — RESOLVED.** The session card used to never render in a real
+browser: the moment the suggestions queue loaded, `ReviewSessionView` crashed
+with `TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
+`patchBlockChildren` and stayed stuck on "Loading…". Root cause was a `:key`
+collision between the card's `v-else` branch and the compiler's numeric auto-key
+for the sibling "Loading" `v-if` (only surfacing in production block patching);
+fixed by namespacing the key (`card-${current.id}`) in `ReviewSessionView.vue`.
+The three active specs above (create, binary decide, Escape-close) are the
+authoritative regression guard and run green against the production build. The
+four rows marked **📝 fixme** stay `test.fixme`'d for reasons **unrelated to
+BUG-RS-1** — each encodes a behaviour that does not yet match the implementation
+(single-suspect queue emptying, Skip tally, keyboard focus, queue completion/
+archive) and needs QA+dev reconciliation; see the per-test `FIXME (not BUG-RS-1)`
+notes in the spec. Un-`fixme` each as its behaviour is settled.
 
 ---
 
@@ -194,13 +205,17 @@ Tracked so they aren't forgotten — weighted by blast radius:
   handful of pictures are only smoke-covered.
 - **Import of malformed / huge / unsupported files** — graceful handling
   (no crash, nothing silently dropped) is manual-only.
-- **Selection/context menu *actions* execute correctly** — `menu-parity.spec.js`
-  only compares the *item lists*; it does not click through each action. Once
-  #403 is fixed, consider asserting representative actions actually fire.
-- **Review Sessions — session loop blocked + manual-only signals (plan §20).**
-  The board is automated (`review-board.spec.js`). The whole session loop is
-  **blocked by BUG-RS-1** (card render crash); its specs are written and
-  `fixme`-guarded, ready to run once fixed. Separately, several board/creation
+- **Selection ▾ ↔ context-menu parity is not automated.** `context-menu.spec.js`
+  opens the right-click menu and lists its actions, but no spec compares the two
+  menus' *item lists*, and none clicks through each action. Tracked as the #403
+  parity gap (see the "Selection ▾ / Context Menu Parity" section above). Once
+  #403 is fixed, consider a parity spec plus asserting representative actions fire.
+- **Review Sessions — partial loop automation + manual-only signals (plan §20).**
+  The board is automated (`review-board.spec.js`, 9 cases). The session loop is
+  **partly automated**: create, binary decide, and Escape-close run green
+  (BUG-RS-1 is resolved); four further cases (Undo, Skip, keyboard, queue
+  completion/archive) stay `test.fixme`'d for reasons unrelated to BUG-RS-1 and
+  are tracked separately. Separately, several board/creation
   paths are **not exercisable against the committed fixture** and stay manual
   (see release-test-plan §20): `est_wrong`/`est_missing` columns and
   auto-resolvable/bulk-accept (the fixture's predictions never disagree with
