@@ -21,6 +21,37 @@ from sqlmodel import select
 
 logger = logging.getLogger(__name__)
 
+# Characters that must never survive into a zip member name. A member name is
+# interpreted as a *relative path* by the extracting tool, so a stored
+# ``original_file_name`` such as "../../.bashrc" would write outside the
+# extraction directory on the recipient's machine (zip slip, CWE-22). The name
+# is attacker-influenced at upload time, so it is sanitised at archive-build
+# time rather than trusted.
+#
+# Only genuinely dangerous characters are replaced — control characters, the
+# Windows-reserved set, and anything that could be read as a separator. Letters
+# outside ASCII are kept, so a legitimate name like "café shot.jpg" survives
+# export intact instead of being mangled into "caf_ shot.jpg".
+_UNSAFE_ARCNAME_CHARS_RE = re.compile(r'[\x00-\x1f\x7f<>:"|?*/\\]')
+
+
+def _safe_archive_stem(name: str, fallback: str) -> str:
+    """Reduce *name* to a single, safe zip member name component.
+
+    Args:
+        name: The candidate name, typically a stored ``original_file_name``.
+        fallback: Component to use when *name* sanitises to nothing.
+
+    Returns:
+        A bare filename component with no path separators, no leading dots and
+        no drive letter, safe to place in a zip member name.
+    """
+    # Take the last component under both separators: a Windows-style name
+    # ("..\\..\\evil") keeps no basename on POSIX, so split on both.
+    candidate = str(name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    candidate = _UNSAFE_ARCNAME_CHARS_RE.sub("_", candidate).strip(". ")
+    return candidate or fallback
+
 
 class ExportUtils:
     """Utility methods for ZIP-based picture export."""
@@ -515,7 +546,16 @@ class ExportUtils:
                             orig_name = getattr(pic, "original_file_name", None)
                             if use_original_file_names and orig_name:
                                 orig_stem, orig_ext = os.path.splitext(orig_name)
-                                file_ext = orig_ext or ext
+                                # The stored name is attacker-influenced; keep
+                                # only a safe bare component so the member name
+                                # cannot escape the extraction directory.
+                                orig_stem = _safe_archive_stem(
+                                    orig_stem, f"image_{idx:05d}"
+                                )
+                                file_ext = _safe_archive_stem(
+                                    orig_ext or ext, ext.lstrip(".") or "bin"
+                                )
+                                file_ext = f".{file_ext.lstrip('.')}"
                                 count = used_names.get(orig_stem, 0) + 1
                                 used_names[orig_stem] = count
                                 name_stem = (

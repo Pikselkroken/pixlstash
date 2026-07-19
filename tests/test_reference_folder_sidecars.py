@@ -22,11 +22,15 @@ from sqlmodel import Session, delete, select
 from pixlstash.db_models import Picture, ReferenceFolder, Tag
 from pixlstash.routes.reference_folders import _validate_sidecar_suffix
 from pixlstash.server import Server
+from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
 from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_TAGS,
     classify_sidecar,
     detect_folder_suffixes,
+    is_safe_sidecar_suffix,
     resolve_typed_sidecar,
     sidecar_path,
+    writeback_path,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
@@ -151,6 +155,81 @@ def test_validate_sidecar_suffix_rejects_dangerous(evil_suffix):
     with pytest.raises(HTTPException) as exc:
         _validate_sidecar_suffix(evil_suffix)
     assert exc.value.status_code == 400
+
+
+def test_detect_folder_suffixes_ignores_cross_directory_match(tmp_path):
+    """A sidecar in a *subdirectory* must not be claimed by an image above it.
+
+    ``detect_folder_suffixes`` walks subdirectories, so matching an image stem
+    against a sidecar path by bare string prefix let ``/root/a.png`` claim
+    ``/root/ab/c.txt`` and derive the suffix ``"b/c.txt"`` — a separator-bearing
+    value that would then be persisted as the folder's convention and appended
+    to every image stem. Only same-directory stems may match.
+    """
+    root = str(tmp_path)
+    Image.new("RGB", (8, 8)).save(os.path.join(root, "a.png"), format="PNG")
+    os.makedirs(os.path.join(root, "ab"), exist_ok=True)
+    _write(os.path.join(root, "ab", "c.txt"), "cat, calm")
+
+    detected = detect_folder_suffixes(root)
+
+    for key in ("tags_suffix", "description_suffix"):
+        suffix = detected[key]
+        assert suffix is None or is_safe_sidecar_suffix(suffix), (key, suffix)
+
+
+def test_detect_folder_suffixes_still_finds_same_directory_convention(tmp_path):
+    """The dirname restriction must not break ordinary detection."""
+    root = str(tmp_path)
+    Image.new("RGB", (8, 8)).save(os.path.join(root, "a.png"), format="PNG")
+    _write(os.path.join(root, "a_tags.txt"), "cat, calm, sitting")
+
+    detected = detect_folder_suffixes(root)
+
+    assert detected["tags_suffix"] == "_tags.txt"
+    assert detected["found_tags"] is True
+
+
+@pytest.mark.parametrize(
+    "unsafe", ["b/c.txt", "../escape.txt", "a\\b.txt", "..", "x" * 65]
+)
+def test_is_safe_sidecar_suffix_rejects_unsafe(unsafe):
+    assert is_safe_sidecar_suffix(unsafe) is False
+
+
+@pytest.mark.parametrize(
+    "good", ["_tags.txt", "_description.txt", "_wd14.txt", ".caption", ".txt"]
+)
+def test_is_safe_sidecar_suffix_accepts_conventions(good):
+    assert is_safe_sidecar_suffix(good) is True
+
+
+def test_writeback_path_returns_none_for_unusable_configured_suffix():
+    """A folder configured before the rule was enforced everywhere must not
+    raise through the caller and wedge a scan — it reports 'no path'."""
+    assert (
+        writeback_path("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt", None)
+        is None
+    )
+    # An already-resolved existing path is still honoured.
+    assert (
+        writeback_path(
+            "/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt", "/refs/f/ok.txt"
+        )
+        == "/refs/f/ok.txt"
+    )
+    # And a clean suffix is unaffected.
+    assert (
+        writeback_path("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "_tags.txt", None)
+        == "/refs/f/photo_tags.txt"
+    )
+
+
+def test_resolve_typed_sidecar_returns_none_for_unusable_configured_suffix():
+    assert (
+        resolve_typed_sidecar("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt")
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +527,90 @@ def test_move_reference_picture_auto_renames_on_collision(server, tmp_path):
     pic = _picture(server, pic_id)
     assert pic.file_path == os.path.join(dest_dir, "same_1.png")
     assert os.path.isfile(pic.file_path)
+
+
+def test_move_reference_picture_blocks_sidecar_escaping_destination(server, tmp_path):
+    """A sidecar suffix must not relocate the sidecar out of the destination.
+
+    ``_sidecar_suffix_for_move`` compares ``normpath(dirname(...))`` on both
+    sides, so a non-normalized ``tags_file`` yields a separator-bearing suffix
+    that still passes the source-side check. That suffix is net-zero traversal,
+    so it stays contained on a plain destination — but if the destination holds
+    a symlink named after the incoming image stem, concatenating the suffix
+    onto the stem resolves *through* the symlink and lands outside the folder.
+    Joining via ``resolve_path_within`` resolves the symlink first and refuses.
+    """
+    client = _login_client(server)
+    source_dir = str(tmp_path / "source")
+    dest_dir = str(tmp_path / "dest")
+    outside_dir = str(tmp_path / "outside")
+    source_folder_id = _make_folder(server, source_dir)
+    dest_folder_id = _make_folder(server, dest_dir)
+    os.makedirs(outside_dir, exist_ok=True)
+
+    img = _make_image(source_dir, "cat.png")
+    # The real sidecar sits beside the image, but is recorded by a path that
+    # detours through a directory named after the image stem.
+    _write(os.path.join(source_dir, "notes.txt"), "cat, calm")
+    os.makedirs(os.path.join(source_dir, "cat"), exist_ok=True)
+    detoured = os.path.join(source_dir, "cat", "..", "notes.txt")
+    pic_id = _index_picture(server, source_folder_id, img)
+    _set_picture_sidecars(server, pic_id, tags_file=detoured)
+
+    # The destination stem is a symlink out of the folder: this is what turns
+    # the net-zero suffix into an escape under plain concatenation.
+    os.symlink(outside_dir, os.path.join(dest_dir, "cat"))
+
+    resp = client.post(
+        f"/reference-folders/{dest_folder_id}/move-pictures",
+        json={"picture_ids": [pic_id]},
+    )
+    assert resp.status_code == 400, resp.text
+
+    # Nothing was written outside the destination folder.
+    assert os.listdir(outside_dir) == []
+    # And the image was rolled back to its source path, not left half-moved.
+    assert os.path.isfile(img)
+    assert not os.path.exists(os.path.join(dest_dir, "cat.png"))
+    assert _picture(server, pic_id).file_path == img
+
+
+def test_scan_refuses_to_persist_unsafe_detected_suffix(server, tmp_path):
+    """The scan is the second door into the folder's suffix columns.
+
+    A suffix the API would reject with a 400 must not reach the DB through
+    auto-detection either; the column stays NULL so the module default is used.
+    """
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
+
+    task._persist_suffixes(
+        {"tags_suffix": "b/c.txt", "description_suffix": "../escape.txt"}
+    )
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.tags_suffix, rf.description_suffix
+
+    assert server.vault.db.run_task(_read) == (None, None)
+
+
+def test_scan_persists_a_safe_detected_suffix(server, tmp_path):
+    """The guard must not block a legitimate detected convention."""
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
+
+    task._persist_suffixes(
+        {"tags_suffix": "_tags.txt", "description_suffix": "_description.txt"}
+    )
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.tags_suffix, rf.description_suffix
+
+    assert server.vault.db.run_task(_read) == ("_tags.txt", "_description.txt")
 
 
 def test_move_reference_picture_rejects_non_reference_picture(server, tmp_path):

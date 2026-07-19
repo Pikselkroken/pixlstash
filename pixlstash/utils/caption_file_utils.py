@@ -54,6 +54,34 @@ _DESCRIPTION_NAME_RE = re.compile(
     r"(_(description|desc|caption|prompt)\.txt|\.caption)$", re.IGNORECASE
 )
 
+# A sidecar suffix is appended directly to an image's path stem to locate and
+# write its sidecar (see ``sidecar_path``), so it must stay a bare filename
+# fragment. A value carrying a path separator or ".." would redirect the write
+# outside the image's own directory (CWE-22 path traversal -> arbitrary file
+# write). This is the single definition of that rule: the API validates it at
+# the trust boundary, the folder scan validates it before persisting a detected
+# suffix, and ``sidecar_path`` enforces it again at the point of use.
+_SAFE_SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def is_safe_sidecar_suffix(suffix: str | None) -> bool:
+    """Return True when *suffix* is a bare filename fragment safe to append.
+
+    Args:
+        suffix: The candidate sidecar suffix, e.g. ``"_tags.txt"``.
+
+    Returns:
+        True when appending *suffix* to an image stem cannot leave the image's
+        directory; False for empty values, ``..``, or any path separator.
+    """
+    if not suffix or ".." in suffix:
+        return False
+    if "/" in suffix or "\\" in suffix:
+        return False
+    if os.sep in suffix or (os.altsep and os.altsep in suffix):
+        return False
+    return bool(_SAFE_SUFFIX_RE.match(suffix))
+
 
 def get_sidecar_mtime(path: str) -> float | None:
     """Return the modification time of *path* as a Unix timestamp, or ``None``."""
@@ -70,17 +98,22 @@ def sidecar_path(image_path: str, suffix: str) -> str:
     ``("photo.png", "_tags.txt")`` -> ``"photo_tags.txt"`` and
     ``("photo.png", ".txt")`` -> ``"photo.txt"``.
 
-    *suffix* must be a bare filename fragment. The API validates this at the
-    trust boundary; this is a defence-in-depth guard so a malicious suffix can
-    never redirect a read/write outside the image's own directory (path
-    traversal to arbitrary file write). Raises ``ValueError`` when it would.
+    *suffix* must be a bare filename fragment (``is_safe_sidecar_suffix``). The
+    API validates this at the trust boundary and the folder scan validates a
+    detected suffix before persisting it; this is the defence-in-depth guard at
+    the point of use, so a malicious suffix can never redirect a read/write
+    outside the image's own directory (path traversal to arbitrary file write).
+
+    The check is on the suffix rather than on the resulting path: a fragment
+    with no separator provably cannot leave the directory, whereas comparing
+    the joined path's dirname is blind to symlinks in the traversal.
+
+    Raises:
+        ValueError: If *suffix* is not a bare filename fragment.
     """
-    result = os.path.splitext(image_path)[0] + suffix
-    if os.path.normpath(os.path.dirname(result)) != os.path.normpath(
-        os.path.dirname(image_path)
-    ):
+    if not is_safe_sidecar_suffix(suffix):
         raise ValueError(f"Sidecar suffix escapes the image directory: {suffix!r}")
-    return result
+    return os.path.splitext(image_path)[0] + suffix
 
 
 def classify_sidecar(path: str) -> str | None:
@@ -122,7 +155,16 @@ def resolve_typed_sidecar(
     tags, and as a description otherwise).  Returns ``None`` when nothing exists.
     """
     if configured_suffix:
-        candidate = sidecar_path(image_path, configured_suffix)
+        try:
+            candidate = sidecar_path(image_path, configured_suffix)
+        except ValueError as exc:
+            # A folder configured before the suffix rule was enforced on every
+            # write path. There is no resolvable sidecar for an unusable
+            # suffix; say so loudly rather than wedging the caller's scan.
+            logger.warning(
+                "Cannot resolve %s sidecar for %s: %s", sidecar_type, image_path, exc
+            )
+            return None
         return candidate if os.path.isfile(candidate) else None
 
     for suffix in _KNOWN_SUFFIXES.get(sidecar_type, ()):  # type: ignore[arg-type]
@@ -141,11 +183,16 @@ def writeback_path(
     sidecar_type: str,
     configured_suffix: str | None,
     existing_path: str | None,
-) -> str:
+) -> str | None:
     """Return the path to write a sidecar of *sidecar_type* to.
 
     Prefers an already-resolved *existing_path*; otherwise builds one from the
     *configured_suffix* (or the module default for the type).
+
+    Returns ``None`` when the folder's configured suffix is not a usable
+    filename fragment, so a folder configured before the rule was enforced on
+    every write path skips its write-back (logged) instead of raising through
+    the caller and wedging a scan or returning a 500. Callers must handle it.
     """
     if existing_path:
         return existing_path
@@ -154,7 +201,13 @@ def writeback_path(
         if sidecar_type == SIDECAR_TYPE_TAGS
         else DEFAULT_DESCRIPTION_SUFFIX
     )
-    return sidecar_path(image_path, suffix)
+    try:
+        return sidecar_path(image_path, suffix)
+    except ValueError as exc:
+        logger.warning(
+            "Skipping %s write-back for %s: %s", sidecar_type, image_path, exc
+        )
+        return None
 
 
 def read_tags_sidecar(path: str) -> list[str]:
@@ -294,16 +347,33 @@ def _suffix_for_sidecar(sidecar_path_str: str, image_stems: set[str]) -> str | N
     ``foo_tags.txt`` is read as ``foo_tags`` + ``.txt`` when an image
     ``foo_tags.png`` exists, otherwise as ``foo`` + ``_tags.txt``).  Returns
     ``None`` when no image in the folder owns this sidecar.
+
+    Only stems in the sidecar's *own directory* are considered. ``os.walk``
+    spans subdirectories, so a bare prefix match would let image ``/root/a.png``
+    claim sidecar ``/root/ab/c.txt`` and yield the suffix ``"b/c.txt"`` — a
+    separator-bearing value that must never reach the folder's configuration.
+    The result is validated for the same reason before it is returned.
     """
+    sidecar_dir = os.path.dirname(sidecar_path_str)
     base = os.path.splitext(sidecar_path_str)[0]
     best_stem: str | None = None
     for stem in image_stems:
+        if os.path.dirname(stem) != sidecar_dir:
+            continue
         if base == stem or base.startswith(stem):
             if best_stem is None or len(stem) > len(best_stem):
                 best_stem = stem
     if best_stem is None:
         return None
-    return sidecar_path_str[len(best_stem) :]
+    suffix = sidecar_path_str[len(best_stem) :]
+    if not is_safe_sidecar_suffix(suffix):
+        logger.warning(
+            "Ignoring unsafe detected sidecar suffix %r for %s",
+            suffix,
+            sidecar_path_str,
+        )
+        return None
+    return suffix
 
 
 def _looks_like_tags(text: str) -> bool:

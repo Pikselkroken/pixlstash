@@ -2,7 +2,6 @@
 
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +22,7 @@ from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_TAGS,
     detect_folder_suffixes,
     get_sidecar_mtime,
+    is_safe_sidecar_suffix,
     read_description_sidecar,
     read_tags_sidecar,
     resolve_typed_sidecar,
@@ -40,22 +40,21 @@ from sqlmodel import Session, delete, select
 
 logger = get_logger(__name__)
 
-# A sidecar suffix is concatenated directly onto an image's path stem to locate
-# and write its sidecar (see ``caption_file_utils.sidecar_path``), so it must
-# stay a bare filename fragment. Allow only letters, digits, '.', '_' and '-',
-# and reject anything with a path separator or "..": a value such as
-# ``"_t.txt/../../../etc/cron.d/evil"`` would otherwise redirect the write-back
-# outside the reference folder (CWE-22 path traversal -> arbitrary file write).
-_SIDECAR_SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-
 
 def _validate_sidecar_suffix(suffix: str) -> None:
-    if (
-        ".." in suffix
-        or "/" in suffix
-        or "\\" in suffix
-        or not _SIDECAR_SUFFIX_RE.match(suffix)
-    ):
+    """Reject a sidecar suffix that is not a bare filename fragment.
+
+    This is the API trust boundary for the rule defined by
+    ``caption_file_utils.is_safe_sidecar_suffix``; the folder scan and
+    ``sidecar_path`` enforce the same rule on the other paths into the config.
+
+    Args:
+        suffix: The candidate sidecar suffix from the request.
+
+    Raises:
+        HTTPException: 400 when the suffix contains a path separator or "..".
+    """
+    if not is_safe_sidecar_suffix(suffix):
         raise HTTPException(
             status_code=400,
             detail=(
@@ -333,6 +332,40 @@ def create_router(server) -> APIRouter:
         suffix = sidecar_path[len(image_stem) :]
         return suffix or None
 
+    def _sidecar_sibling_path(base_path: str, suffix: str) -> str:
+        """Build the sidecar path for *base_path* + *suffix*, kept beside it.
+
+        The suffix is read off a filename on disk, so it is joined through
+        ``resolve_path_within`` rather than concatenated: a suffix carrying a
+        path separator must not relocate the sidecar out of the destination
+        directory.
+
+        Args:
+            base_path: The moved image path the sidecar belongs to.
+            suffix: The sidecar's trailing extension, e.g. ``.txt``.
+
+        Returns:
+            The resolved sidecar path inside ``dirname(base_path)``.
+
+        Raises:
+            HTTPException: If the suffix would escape the destination folder.
+        """
+        directory = os.path.dirname(base_path)
+        stem = os.path.splitext(os.path.basename(base_path))[0]
+        try:
+            return resolve_path_within(directory, stem + suffix)
+        except ValueError:
+            logger.warning(
+                "Rejected sidecar suffix %r escaping destination %s for %s",
+                suffix,
+                directory,
+                base_path,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Sidecar path would escape the destination folder.",
+            )
+
     def _unique_destination_file(
         source_path: str,
         destination_dir: str,
@@ -350,9 +383,10 @@ def create_router(server) -> APIRouter:
                     status_code=400,
                     detail="Destination path would escape the reference folder.",
                 )
-            candidate_stem = os.path.splitext(candidate)[0]
             collisions = [candidate]
-            collisions.extend(candidate_stem + suffix for suffix in sidecar_suffixes)
+            collisions.extend(
+                _sidecar_sibling_path(candidate, suffix) for suffix in sidecar_suffixes
+            )
             if not any(os.path.exists(path) for path in collisions):
                 return candidate
             counter += 1
@@ -1121,9 +1155,10 @@ def create_router(server) -> APIRouter:
                 rollback_moves.append((destination_path, source_path))
 
                 moved_sidecars = {}
-                destination_stem = os.path.splitext(destination_path)[0]
                 for key, sidecar, suffix in source_sidecars:
-                    destination_sidecar = destination_stem + suffix
+                    destination_sidecar = _sidecar_sibling_path(
+                        destination_path, suffix
+                    )
                     if os.path.exists(destination_sidecar):
                         destination_sidecar = _unique_destination_file(
                             sidecar,
@@ -1301,7 +1336,11 @@ def create_router(server) -> APIRouter:
                             rf.tags_suffix,
                             pic.tags_file,
                         )
-                        mtime = write_sidecar(target, ", ".join(tags))
+                        mtime = (
+                            write_sidecar(target, ", ".join(tags))
+                            if target is not None
+                            else None
+                        )
                         if mtime is not None:
                             pic.tags_file = target
                             pic.tags_file_mtime = mtime
@@ -1316,7 +1355,11 @@ def create_router(server) -> APIRouter:
                             rf.description_suffix,
                             pic.description_file,
                         )
-                        mtime = write_sidecar(target, description)
+                        mtime = (
+                            write_sidecar(target, description)
+                            if target is not None
+                            else None
+                        )
                         if mtime is not None:
                             pic.description_file = target
                             pic.description_file_mtime = mtime

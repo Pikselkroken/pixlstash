@@ -8,9 +8,11 @@ import time
 import zipfile
 from io import BytesIO
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.server import Server
+from pixlstash.utils.service.export_utils import _safe_archive_stem
 from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -106,6 +108,49 @@ def test_project_export_produces_valid_zip():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Zip member names must not escape the extraction directory (zip slip, CWE-22)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "../../evil",
+        "..\\..\\evil",
+        "/etc/passwd",
+        "C:\\Windows\\system32\\evil",
+        "....//....//evil",
+        "..",
+        ".",
+        "",
+        "  ..  ",
+        ".hidden",
+        "na\x00me",
+    ],
+)
+def test_safe_archive_stem_cannot_escape(hostile):
+    """``original_file_name`` is attacker-influenced at upload time and is used
+    as a zip member name when exporting with original names. A member name is a
+    relative path to the extracting tool, so traversal in it writes outside the
+    recipient's extraction directory."""
+    out = _safe_archive_stem(hostile, "fallback")
+    assert "/" not in out and "\\" not in out
+    assert not out.startswith(".")
+    assert out not in ("", ".", "..")
+    assert "\x00" not in out
+    # And it must stay a single component when joined for extraction.
+    assert os.path.basename(out) == out
+
+
+def test_safe_archive_stem_preserves_legitimate_names():
+    """Over-sanitising is its own regression: non-ASCII names must survive."""
+    assert _safe_archive_stem("holiday_photo", "fb") == "holiday_photo"
+    assert _safe_archive_stem("café shot", "fb") == "café shot"
+    assert _safe_archive_stem("日本語", "fb") == "日本語"
+    assert _safe_archive_stem("a-b_c.1", "fb") == "a-b_c.1"
 
 
 def test_export_status_unknown_task_returns_404():
