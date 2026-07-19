@@ -23,7 +23,9 @@ DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     # proposal to tune; the tagger detection thresholds come from the post-train gate.
     "blocky": 3,
     "noise": 2,
-    "watermark": 4,
+    # A watermark is a provenance nuisance, not an image defect: it is croppable and
+    # does not degrade the subject the way a malformed hand does. Mild (1).
+    "watermark": 1,
 }
 # Tags that PixlTagger merges into a parent just before training (its tag_remap),
 # mirrored here as PixlStash's own editable copy. A picture tagged with a child here
