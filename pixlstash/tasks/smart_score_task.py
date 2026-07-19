@@ -17,6 +17,7 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.service.anomaly_thresholds import resolve_anomaly_apply_thresholds
+from pixlstash.utils.service.smart_score_invalidation import anomaly_state_signature
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask
 
@@ -65,7 +66,7 @@ class SmartScoreTask(BaseTask):
             return {"changed_count": 0}
 
         apply_thresholds = resolve_anomaly_apply_thresholds(self._vault)
-        good_anchors, bad_anchors, candidates, scorer_config = (
+        good_anchors, bad_anchors, candidates, scorer_config, before_signature = (
             self._db.run_immediate_read_task(
                 self._fetch_score_data, picture_ids, apply_thresholds
             )
@@ -91,6 +92,7 @@ class SmartScoreTask(BaseTask):
         changed_count = self._db.run_task(
             self._persist_scores,
             id_to_score,
+            before_signature,
             priority=DBPriority.LOW,
         )
 
@@ -107,10 +109,18 @@ class SmartScoreTask(BaseTask):
     ):
         """Fetch anchors, candidates, and the scorer config for smart score computation.
 
-        Returns ``(good_anchors, bad_anchors, candidates, scorer_config)``. Mirrors
+        Returns ``(good_anchors, bad_anchors, candidates, scorer_config,
+        anomaly_signature)``. Mirrors
         :func:`pixlstash.picture_scoring.fetch_smart_score_data` and shares
         :func:`pixlstash.picture_scoring.attach_anomaly_inputs`, so the background task
         and the on-demand sort score identically.
+
+        The ``anomaly_signature`` (``{picture_id: signature}`` from
+        :func:`~pixlstash.utils.service.smart_score_invalidation.anomaly_state_signature`)
+        is captured in the *same* read transaction as the scorer inputs, so it pins the
+        exact anomaly state the scores are computed from. :meth:`_persist_scores`
+        re-snapshots and compares against it, dropping any write whose inputs a concurrent
+        tag edit moved in between — see that method.
 
         Args:
             session: Active DB session.
@@ -187,20 +197,65 @@ class SmartScoreTask(BaseTask):
         if len(bad) < _BUILTIN_MIN_BAD:
             bad = list(bad) + builtin_bad
 
-        return good, bad, candidates, scorer_config
+        before_signature = anomaly_state_signature(session, candidate_ids)
+
+        return good, bad, candidates, scorer_config, before_signature
 
     @staticmethod
-    def _persist_scores(session: Session, id_to_score: dict) -> int:
-        changed = 0
+    def _persist_scores(session: Session, id_to_score: dict, before: dict) -> int:
+        """Write each computed ``smart_score`` — but only if its inputs did not move.
+
+        Scores are computed outside this write transaction. If a concurrent tag edit
+        NULLs a picture's ``smart_score`` (via
+        :func:`~pixlstash.utils.service.smart_score_invalidation.invalidate_on_anomaly_change`)
+        after the inputs were read but before this runs, writing the stale score would
+        resurrect an invalidated row that the finder can never re-pick (``WHERE
+        smart_score IS NULL`` cannot tell "invalidated since claimed" from "not yet
+        scored"). So this is a compare-and-swap: re-snapshot the anomaly signature in this
+        transaction and write ``smart_score`` only for pictures whose signature is
+        unchanged since :meth:`_fetch_score_data` captured *before*. A picture whose
+        signature moved is **skipped and left NULL** on purpose — the finder re-picks it
+        and it rescores from fresh inputs. Writing the old value here would recreate the
+        bug.
+
+        Args:
+            session: Active DB session.
+            id_to_score: ``{picture_id: score}`` computed from the *before* inputs.
+            before: Anomaly signature map captured in the read transaction that loaded
+                the scorer inputs.
+
+        Returns:
+            Number of scores actually persisted (skipped-due-to-drift are not counted).
+        """
+        after = anomaly_state_signature(session, list(id_to_score.keys()))
+        persisted = 0
+        skipped = 0
         for pic_id, score in id_to_score.items():
+            if before.get(pic_id) != after.get(pic_id):
+                # Inputs moved between compute and persist. Leave the row NULL so
+                # MissingSmartScoreFinder re-picks it and rescores with fresh inputs.
+                skipped += 1
+                continue
             pic = session.get(Picture, pic_id)
             if pic is None:
                 continue
             pic.smart_score = score
             session.add(pic)
-            changed += 1
+            persisted += 1
         session.commit()
-        return changed
+        if skipped:
+            logger.info(
+                "SmartScoreTask: persisted %d score(s); skipped %d whose anomaly state "
+                "changed during scoring (left NULL for recompute).",
+                persisted,
+                skipped,
+            )
+        else:
+            logger.debug(
+                "SmartScoreTask: persisted %d score(s); no anomaly-state drift.",
+                persisted,
+            )
+        return persisted
 
     @classmethod
     def count_remaining(cls, session: Session) -> int:

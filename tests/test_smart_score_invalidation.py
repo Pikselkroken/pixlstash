@@ -31,6 +31,7 @@ from pixlstash.tasks.tag_task import TagTask
 from pixlstash.utils.quality.anomaly_penalty import anomaly_penalty
 from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
 from pixlstash.utils.service.smart_score_invalidation import (
+    anomaly_state_signature,
     changed_penalised_tags,
     invalidate_for_penalised_tag_change,
 )
@@ -664,6 +665,71 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
             f"({charged:.4f} -> {uncharged:.4f}); the background scorer is still using "
             "the hardcoded defaults"
         )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# --------------------------------------------- persist is a compare-and-swap (B1 race)
+#
+# Smart scores are computed outside the write transaction. If a tag edit invalidates a
+# picture (NULLs its score) between compute and persist, ``_persist_scores`` must NOT
+# write the stale value — that would resurrect an invalidated row the finder can never
+# re-pick (a NULL score means both "unscored" and "invalidated since claimed", so the
+# finder's ``WHERE smart_score IS NULL`` cannot distinguish them). The guard is a CAS on
+# the anomaly signature captured at fetch time.
+
+
+def test_persist_leaves_row_null_when_anomaly_state_changed_mid_scoring():
+    """The resurrect-during-edit race: drift between compute and persist → stays NULL."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        # Claimed-but-unscored: has an embedding, score is NULL.
+        _prepare_for_scoring(server, pic_id)
+
+        # Signature the scorer would have fed from, captured with the inputs.
+        before = server.vault.db.run_task(
+            lambda s: anomaly_state_signature(s, [pic_id])
+        )
+
+        # A concurrent tag edit lands after compute but before persist, moving the
+        # anomaly signature (adds a penalised prediction).
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.9)
+
+        # The task now tries to persist a score computed from the now-stale inputs.
+        persisted = server.vault.db.run_task(
+            SmartScoreTask._persist_scores, {pic_id: 0.5}, before
+        )
+
+        assert persisted == 0
+        # The row must stay NULL — not resurrected with the stale score — so the finder
+        # re-picks it and it rescores from fresh inputs. This is the whole point.
+        assert _get_smart_score(server, pic_id) is None
+        assert pic_id in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_persist_writes_score_when_anomaly_state_unchanged():
+    """Happy path: no drift between compute and persist → the score is written."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _prepare_for_scoring(server, pic_id)
+
+        before = server.vault.db.run_task(
+            lambda s: anomaly_state_signature(s, [pic_id])
+        )
+        # No mutation between snapshot and persist.
+        persisted = server.vault.db.run_task(
+            SmartScoreTask._persist_scores, {pic_id: 0.5}, before
+        )
+
+        assert persisted == 1
+        assert _get_smart_score(server, pic_id) == 0.5
+        assert pic_id not in _find_missing_ids(server)
     finally:
         server.vault.close()
         temp_dir.cleanup()
