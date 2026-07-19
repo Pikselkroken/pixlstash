@@ -185,7 +185,7 @@
             class="rs-board-tag"
             :class="{ 'rs-board-tag--anomaly': isAnomaly(r) }"
           >
-            <span class="rs-board-tag-name">{{ r.tag }}</span>
+            <span class="rs-board-tag-name" :title="r.tag">{{ r.tag }}</span>
             <v-icon
               v-if="isAnomaly(r)"
               size="14"
