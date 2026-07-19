@@ -51,8 +51,6 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import (
     Picture,
-    PictureSet,
-    PictureSetMember,
     Project,
     Tag,
 )
@@ -60,6 +58,7 @@ from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import locked_picture_id_subquery
 from pixlstash.services.tag_health_service import EST_MISSING_MIN_CONF
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.near_neighbor import (
@@ -297,13 +296,16 @@ def scan_tag(
         # Pictures frozen by a locked set are excluded from being SUSPECTS (the
         # editable item) below — but stay in the pool so they can still serve as
         # twins/neighbour guides (which write nothing). See the suspect loops.
-        locked = set(
-            session.exec(
-                select(PictureSetMember.picture_id)
-                .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
-                .where(PictureSet.locked.is_(True))
-            ).all()
-        )
+        #
+        # Uses the set_lock_service predicate rather than a local
+        # PictureSetMember join: membership is stack-atomic, so a picture that
+        # merely *shares a stack* with a locked-set member is frozen by the
+        # write guards too. The local join missed that arm and selected such a
+        # picture as a suspect, producing a card whose every action 423s.
+        locked = {
+            int(locked_id)
+            for locked_id in session.exec(locked_picture_id_subquery()).all()
+        }
         return emb_rows, literal, concept, locked
 
     def _load_confidence_fallback(session: Session) -> list[tuple[int, float]]:

@@ -47,11 +47,19 @@ class ReviewStatsResponse(BaseModel):
 
 
 class ReviewProgressResponse(BaseModel):
-    """Row counts for one review: decided / pending / skipped-without-decision."""
+    """Row counts for one review: decided / pending / skipped / locked."""
 
     done: int = 0
     pending: int = 0
     skipped: int = 0
+    # Still-undecided rows withheld from the queue because a locked picture set
+    # froze their suspect (locking can happen after the scan). They are never
+    # served as cards and are excluded from ``pending``, so a review whose
+    # pictures were locked mid-session still reaches ``pending == 0`` (complete)
+    # instead of appearing stuck. Non-zero means "N suspects are frozen, not
+    # lost" — unlocking the set returns them to ``pending``. Defaults to 0 for
+    # reviews closed before this count existed.
+    locked: int = 0
 
 
 class ReviewReceiptResponse(BaseModel):
@@ -125,8 +133,23 @@ class ReviewSuggestionItemResponse(BaseModel):
     created_at: Optional[str] = None
     review_id: Optional[int] = None
     # "pair" when suspect and twin are versions of one shot (same stack or
-    # dhash-near); else "binary". Derived at read time.
+    # dhash-near); else "binary". Derived at read time. Forced to "binary"
+    # when ``twin_locked`` is true: a frozen twin cannot be written, so the
+    # pair-only corners (swap / fix-twin) would only 423.
     kind: str = "binary"
+    # Per-side lock state — deliberately NOT a single card-level flag, because
+    # the two sides gate different actions. The twin's lock blocks fix-twin and
+    # swap; accept and dismiss only ever write the suspect, so they stay valid.
+    # ``locked`` is the suspect's: always false today (locked suspects are
+    # filtered out of the queue), emitted so a future selection gap shows up as
+    # a labelled card rather than an un-actionable one.
+    locked: bool = False
+    twin_locked: bool = False
+    # The locked sets freezing each side, for the "…is in the locked set 'X'"
+    # copy: [{"id": int, "name": str}, ...], deduplicated and sorted by set id.
+    # Empty when that side is not frozen.
+    locked_sets: list[dict] = []
+    twin_locked_sets: list[dict] = []
     # Scan-time neighbourhood evidence: [{"picture_id": int, "has": bool}, ...]
     # most-similar first; null for legacy rows scanned before capture existed.
     neighbors: Optional[list[dict]] = None

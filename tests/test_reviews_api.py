@@ -160,11 +160,21 @@ def test_create_review_receipt_neighbors_and_progress():
         # List view: progress and staleness.
         listed = client.get(f"{API}/reviews").json()
         assert [r["id"] for r in listed] == [rid]
-        assert listed[0]["progress"] == {"done": 0, "pending": 1, "skipped": 0}
+        assert listed[0]["progress"] == {
+            "done": 0,
+            "pending": 1,
+            "skipped": 0,
+            "locked": 0,
+        }
         assert listed[0]["stale"] is False
 
         detail = client.get(f"{API}/reviews/{rid}").json()
-        assert detail["progress"] == {"done": 0, "pending": 1, "skipped": 0}
+        assert detail["progress"] == {
+            "done": 0,
+            "pending": 1,
+            "skipped": 0,
+            "locked": 0,
+        }
         assert detail["stats"]["scanned"] == 2
         assert "auto_resolvable" in detail["stats"]
         assert detail["receipt"] == {"removed": 0, "added": 0, "kept": 0, "skipped": 0}
@@ -507,6 +517,7 @@ def test_auto_resolvable_counts_review_scoped_bulk_dry_run():
             "done": 1,
             "pending": 0,
             "skipped": 0,
+            "locked": 0,
         }
 
         # Review-scoped bulk-reopen undoes it; a mismatched review_id is a no-op.
@@ -524,6 +535,7 @@ def test_auto_resolvable_counts_review_scoped_bulk_dry_run():
             "done": 0,
             "pending": 1,
             "skipped": 0,
+            "locked": 0,
         }
     finally:
         _teardown(temp_dir, server)
@@ -560,7 +572,12 @@ def test_skip_records_no_decision_and_reopens():
         # re-inserted by refresh.
         assert client.get(f"{API}/reviews/{rid}/suggestions").json() == []
         detail = client.get(f"{API}/reviews/{rid}").json()
-        assert detail["progress"] == {"done": 0, "pending": 0, "skipped": 1}
+        assert detail["progress"] == {
+            "done": 0,
+            "pending": 0,
+            "skipped": 1,
+            "locked": 0,
+        }
         assert detail["receipt"] == {"removed": 0, "added": 0, "kept": 0, "skipped": 1}
         assert client.post(f"{API}/reviews/{rid}/refresh").json()["new_count"] == 0
         assert _get_suggestion(server, sid).status == "SKIPPED"
@@ -592,7 +609,12 @@ def test_review_wide_bulk_reopen_undoes_decided_but_not_skipped():
         assert client.post(f"/tag_suggestions/{accepted_sid}/accept").status_code == 200
         assert client.post(f"/tag_suggestions/{skipped_sid}/skip").status_code == 200
         detail = client.get(f"{API}/reviews/{rid}").json()
-        assert detail["progress"] == {"done": 1, "pending": 0, "skipped": 1}
+        assert detail["progress"] == {
+            "done": 1,
+            "pending": 0,
+            "skipped": 1,
+            "locked": 0,
+        }
         assert detail["receipt"]["removed"] == 1
 
         # "Undo N changes": empty ids + review_id reopens ALL decided rows,
@@ -1187,5 +1209,314 @@ def test_scoped_token_cannot_abort_review():
         assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
         # Owner aborts fine.
         assert client.post(f"{API}/reviews/{rid}/abort").json()["status"] == "ABORTED"
+    finally:
+        _teardown(temp_dir, server)
+
+
+# --- Locked pictures must never be served as reviewable work -----------------
+#
+# A locked picture set freezes its members' label data, so every review action
+# on such a picture 423s. Serving it as a card shows the user work they cannot
+# action. Enforcement lives at two layers (scan-time selection and card-serve
+# time); these tests pin both, plus the over-blocking regression.
+
+
+def _new_set(client, name):
+    resp = client.post("/picture_sets", json={"name": name})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["picture_set"]["id"]
+
+
+def _add_to_set(client, set_id, pic_id):
+    resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
+    assert resp.status_code == 200, resp.text
+
+
+def _set_locked(client, set_id, locked):
+    resp = client.patch(f"/picture_sets/{set_id}", json={"locked": locked})
+    assert resp.status_code == 200, resp.text
+
+
+def test_locking_a_set_after_the_scan_withdraws_its_cards():
+    # The reported bug: the scan runs once at create time, so a set locked
+    # afterwards left already-scanned rows being served as un-actionable cards.
+    # Card serving must therefore filter at READ time, not rely on the scan.
+    temp_dir, client, server = _setup()
+    try:
+        a, b = _make_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
+        assert len(rows) == 1
+        suspect = rows[0]["picture_id"]
+        # Pending before the lock.
+        assert client.get(f"{API}/reviews/{rid}").json()["progress"]["pending"] == 1
+
+        set_id = _new_set(client, "Frozen")
+        _add_to_set(client, set_id, suspect)
+        _set_locked(client, set_id, True)
+
+        # The card is withdrawn, and the session reports as exhausted rather
+        # than stuck at "1 remaining" with an empty queue.
+        assert client.get(f"{API}/reviews/{rid}/suggestions").json() == []
+        progress = client.get(f"{API}/reviews/{rid}").json()["progress"]
+        assert progress["pending"] == 0
+        assert progress["locked"] == 1
+        assert progress["done"] == 0
+
+        # Unlocking restores it — the row was withheld, never destroyed.
+        _set_locked(client, set_id, False)
+        assert len(client.get(f"{API}/reviews/{rid}/suggestions").json()) == 1
+        restored = client.get(f"{API}/reviews/{rid}").json()["progress"]
+        assert restored["pending"] == 1 and restored["locked"] == 0
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_locked_picture_is_never_scanned_as_a_suspect():
+    # Scan-time layer: a picture already frozen when the review is created must
+    # not even be selected as a suspect.
+    temp_dir, client, server = _setup()
+    try:
+        a, b = _make_pair(client, server)
+        set_id = _new_set(client, "Frozen")
+        # Freeze both sides of the pair so neither can be the suspect.
+        _add_to_set(client, set_id, a)
+        _add_to_set(client, set_id, b)
+        _set_locked(client, set_id, True)
+
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        assert client.get(f"{API}/reviews/{rid}/suggestions").json() == []
+        # Both pictures still counted as scanned (they remain in the embedding
+        # pool as twins/neighbours); they simply produced no suspect row.
+        detail = client.get(f"{API}/reviews/{rid}").json()
+        assert detail["stats"]["scanned"] == 2
+        assert detail["stats"]["found"] == 0
+        assert detail["progress"] == {
+            "done": 0,
+            "pending": 0,
+            "skipped": 0,
+            "locked": 0,
+        }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_stack_sibling_of_a_locked_member_is_also_withheld():
+    # Set membership is stack-atomic, so the write guards freeze a picture that
+    # merely SHARES A STACK with a locked-set member. Candidate selection and
+    # card serving must use the same rule or they hand out un-actionable cards.
+    temp_dir, client, server = _setup()
+    try:
+        a, b = _make_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        suspect = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]["picture_id"]
+
+        # Put the suspect in a stack with a third picture, and lock a set
+        # containing only that third picture.
+        sibling = _upload_named(client)
+
+        def _stack(session):
+            stack = PictureStack()
+            session.add(stack)
+            session.commit()
+            session.refresh(stack)
+            for pid in (suspect, sibling):
+                session.get(Picture, pid).stack_id = stack.id
+            session.commit()
+
+        server.vault.db.run_task(_stack)
+
+        set_id = _new_set(client, "Frozen sibling")
+        _add_to_set(client, set_id, sibling)
+        # Membership reconciliation may pull the whole stack into the set; the
+        # point of the test is the lock rule, so assert on the outcome below.
+        _set_locked(client, set_id, True)
+
+        assert client.get(f"{API}/reviews/{rid}/suggestions").json() == []
+        assert client.get(f"{API}/reviews/{rid}").json()["progress"]["locked"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_unlocked_picture_in_the_same_scope_is_still_served():
+    # Over-blocking regression: locking ONE set must not withdraw cards for
+    # pictures outside it. Two independent pairs, only one frozen.
+    temp_dir, client, server = _setup()
+    try:
+        a1, b1 = _make_pair(client, server, axis=0)
+        a2, b2 = _make_pair(client, server, axis=7)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
+        assert len(rows) == 2
+        frozen_suspect = rows[0]["picture_id"]
+        kept_suspect = rows[1]["picture_id"]
+
+        set_id = _new_set(client, "Frozen")
+        _add_to_set(client, set_id, frozen_suspect)
+        _set_locked(client, set_id, True)
+
+        served = client.get(f"{API}/reviews/{rid}/suggestions").json()
+        assert [r["picture_id"] for r in served] == [kept_suspect]
+        progress = client.get(f"{API}/reviews/{rid}").json()["progress"]
+        assert progress["pending"] == 1 and progress["locked"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_locking_does_not_hide_already_decided_rows():
+    # Only actionable work is withheld. A row DECIDED before the lock is this
+    # review's audit record — it stays listable and stays counted in done, so
+    # the served list and the receipt cannot disagree.
+    temp_dir, client, server = _setup()
+    try:
+        _make_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        row = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]
+        sid, suspect = row["id"], row["picture_id"]
+        assert client.post(f"/tag_suggestions/{sid}/dismiss").status_code == 200
+
+        set_id = _new_set(client, "Frozen after the decision")
+        _add_to_set(client, set_id, suspect)
+        _set_locked(client, set_id, True)
+
+        # Still listed under its decided status, and still counted as done.
+        decided = client.get(
+            f"{API}/reviews/{rid}/suggestions", params={"status": "DISMISSED"}
+        ).json()
+        assert [r["id"] for r in decided] == [sid]
+        progress = client.get(f"{API}/reviews/{rid}").json()["progress"]
+        assert progress["done"] == 1
+        assert progress["pending"] == 0 and progress["locked"] == 0
+    finally:
+        _teardown(temp_dir, server)
+
+
+def _dhash_pair(client, server, axis=0, phash=0xFFFF_FFFF_FFFF_FFFF):
+    """A genuine 'pair' card (2-bit dhash apart, NO stack) so either side can be
+    locked independently. Returns (tagged_id, untagged_id)."""
+    a = _upload_named(client)
+    b = _upload_named(client)
+    vec = _axis_vec(axis)
+    _set_embedding(server, a, vec)
+    _set_embedding(server, b, vec)
+    _set_phash(server, a, phash)
+    _set_phash(server, b, phash ^ 0x3)
+    _seed_tag(server, a)
+    return a, b
+
+
+def test_locked_twin_is_flagged_per_side_and_degrades_card_to_binary():
+    # The scan keeps frozen pictures in the pool as TWINS, so a card can have a
+    # locked twin and a free suspect. The payload must say which SIDE is frozen
+    # (the twin's lock blocks fix-twin/swap; accept+dismiss only write the
+    # suspect), and the card degrades to binary because the pair-only corners
+    # could only 423.
+    temp_dir, client, server = _setup()
+    try:
+        _dhash_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        row = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]
+        assert row["kind"] == "pair"
+        # Unlocked direction: neither side flagged.
+        assert row["locked"] is False and row["twin_locked"] is False
+        assert row["locked_sets"] == [] and row["twin_locked_sets"] == []
+        twin = row["twin_picture_id"]
+        assert twin is not None
+
+        set_id = _new_set(client, "Holiday 2019")
+        _add_to_set(client, set_id, twin)
+        _set_locked(client, set_id, True)
+
+        row = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]
+        # The card is still served — the suspect is free and fully reviewable.
+        assert row["twin_picture_id"] == twin
+        # Per-side: only the twin is frozen, and the set name is carried for the
+        # explanation copy without a per-card lookup.
+        assert row["twin_locked"] is True
+        assert row["twin_locked_sets"] == [{"id": set_id, "name": "Holiday 2019"}]
+        assert row["locked"] is False
+        assert row["locked_sets"] == []
+        # Degraded: the pair-only corners (swap / fix-twin) are gone.
+        assert row["kind"] == "binary"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_locked_twin_card_stays_actionable_and_out_of_the_locked_bucket():
+    # A locked-twin card is actionable (accept + dismiss write only the suspect),
+    # so it must stay in `pending`, NOT in the new `locked` bucket, and the
+    # "complete when pending == 0" invariant must still hold once decided.
+    temp_dir, client, server = _setup()
+    try:
+        _dhash_pair(client, server, axis=0, phash=0xFFFF_FFFF_FFFF_FFFF)
+        _dhash_pair(client, server, axis=9, phash=0x0FFF_FFFF_FFFF_0000)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
+        assert len(rows) == 2
+
+        set_id = _new_set(client, "Frozen twins")
+        for r in rows:
+            _add_to_set(client, set_id, r["twin_picture_id"])
+        _set_locked(client, set_id, True)
+
+        # Both cards are still served, both flagged, both counted as real work.
+        served = client.get(f"{API}/reviews/{rid}/suggestions").json()
+        assert len(served) == 2
+        assert all(r["twin_locked"] is True and r["locked"] is False for r in served)
+        progress = client.get(f"{API}/reviews/{rid}").json()["progress"]
+        assert progress["pending"] == 2  # actionable, so NOT the locked bucket
+        assert progress["locked"] == 0
+
+        # The two corners a binary card offers both work against a frozen twin:
+        # dismiss and accept each write only the suspect.
+        assert (
+            client.post(f"/tag_suggestions/{served[0]['id']}/dismiss").status_code
+            == 200
+        )
+        assert (
+            client.post(f"/tag_suggestions/{served[1]['id']}/accept").status_code == 200
+        )
+
+        # Invariant holds: the session completes rather than hanging.
+        progress = client.get(f"{API}/reviews/{rid}").json()["progress"]
+        assert progress["pending"] == 0 and progress["locked"] == 0
+        assert progress["done"] == 2
+        assert client.get(f"{API}/reviews/{rid}/suggestions").json() == []
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_locked_twin_blocks_only_the_pair_corners_and_makes_decisions_one_way():
+    # Pins exactly which actions a frozen twin refuses. fix-twin and swap write
+    # the twin, so they 423 — this is why the card degrades to binary. reopen
+    # also refuses (it guards BOTH sides unconditionally), so a decision on a
+    # locked-twin card is currently ONE-WAY: actionable, but not undoable until
+    # the set is unlocked.
+    temp_dir, client, server = _setup()
+    try:
+        _dhash_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        row = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]
+        sid = row["id"]
+
+        set_id = _new_set(client, "Frozen twin")
+        _add_to_set(client, set_id, row["twin_picture_id"])
+        _set_locked(client, set_id, True)
+
+        # The pair-only corners refuse.
+        assert client.post(f"/tag_suggestions/{sid}/fix-twin").status_code == 423
+        assert client.post(f"/tag_suggestions/{sid}/swap").status_code == 423
+
+        # Dismiss succeeds, but undo does not while the twin is frozen.
+        assert client.post(f"/tag_suggestions/{sid}/dismiss").status_code == 200
+        assert client.post(f"/tag_suggestions/{sid}/reopen").status_code == 423
+
+        # Unlocking restores undo, and the card comes back as a full pair.
+        _set_locked(client, set_id, False)
+        assert client.post(f"/tag_suggestions/{sid}/reopen").status_code == 200
+        restored = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]
+        assert restored["twin_locked"] is False
+        assert restored["twin_locked_sets"] == []
+        assert restored["kind"] == "pair"
     finally:
         _teardown(temp_dir, server)

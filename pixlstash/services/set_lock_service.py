@@ -27,6 +27,7 @@ whole operation.
 """
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureSet, PictureSetMember
@@ -87,17 +88,64 @@ def locked_set_names_for_pictures(
     return {pid: [name for _sid, name in pairs] for pid, pairs in detail.items()}
 
 
+def locked_sets_for_pictures(session: Session, picture_ids) -> dict[int, list[dict]]:
+    """Batch ``{picture_id: [{"id", "name"}, ...]}`` of the locked sets freezing
+    each of *picture_ids*.
+
+    Keyed by the **input** ids (never the expanded stack siblings), so a caller
+    can look up the picture it actually holds. A picture's entry includes sets
+    that freeze it via a stack sibling, matching :func:`locked_picture_ids`;
+    unfrozen ids are simply absent. Each list is deduplicated and stable-sorted
+    by set id for a deterministic payload.
+
+    Exists so a list endpoint can label many pictures in a fixed number of
+    queries — calling :func:`locked_by_sets_for_picture` per row would be an N+1.
+    """
+    ids = [int(pid) for pid in picture_ids if pid is not None]
+    if not ids:
+        return {}
+    detail = _locked_sets_by_picture(session, ids)
+    if not detail:
+        return {}
+
+    # A locked-set member freezes its whole stack, so roll each frozen picture's
+    # sets up to its stack, then hand them to every input id on that stack.
+    stack_by_picture = {
+        int(pid): (int(sid) if sid is not None else None)
+        for pid, sid in session.exec(
+            select(Picture.id, Picture.stack_id).where(
+                Picture.id.in_(sorted(set(ids) | set(detail)))
+            )
+        ).all()
+    }
+    sets_by_stack: dict[int, dict[int, str]] = {}
+    for frozen_id, pairs in detail.items():
+        stack_id = stack_by_picture.get(frozen_id)
+        if stack_id is None:
+            continue
+        sets_by_stack.setdefault(stack_id, {}).update(dict(pairs))
+
+    result: dict[int, list[dict]] = {}
+    for pid in ids:
+        sets: dict[int, str] = dict(detail.get(pid, []))
+        stack_id = stack_by_picture.get(pid)
+        if stack_id is not None:
+            sets.update(sets_by_stack.get(stack_id, {}))
+        if sets:
+            result[pid] = [
+                {"id": sid, "name": name} for sid, name in sorted(sets.items())
+            ]
+    return result
+
+
 def locked_by_sets_for_picture(session: Session, picture_id: int) -> list[dict]:
     """Return ``[{"id", "name"}, ...]`` locked sets freezing a single picture.
 
-    Deduplicated and stable-sorted by set id for a deterministic payload.
+    Deduplicated and stable-sorted by set id for a deterministic payload. Thin
+    single-id wrapper over :func:`locked_sets_for_pictures`, so the two surfaces
+    cannot disagree about what freezes a picture.
     """
-    detail = _locked_sets_by_picture(session, [picture_id])
-    sets: dict[int, str] = {}
-    for pairs in detail.values():
-        for set_id, set_name in pairs:
-            sets[set_id] = set_name
-    return [{"id": sid, "name": name} for sid, name in sorted(sets.items())]
+    return locked_sets_for_pictures(session, [picture_id]).get(picture_id, [])
 
 
 def locked_picture_ids(session: Session, picture_ids) -> set[int]:
@@ -140,6 +188,47 @@ def locked_picture_ids(session: Session, picture_ids) -> set[int]:
         if stack_id is not None and stack_id in locked_stack_ids:
             frozen.add(pid)
     return frozen
+
+
+def locked_picture_id_subquery():
+    """A ``SELECT`` of **every** frozen picture id in the vault, for use as a SQL
+    membership test (``col.in_(...)`` / ``col.notin_(...)``).
+
+    The set-valued helpers above ( :func:`locked_picture_ids` and friends) answer
+    "is *this* id frozen?" for a caller that already holds a bounded id list. Read
+    paths instead need to *filter* an open-ended, paged query — applying the lock
+    after ``LIMIT`` would silently shrink pages — so they need the rule expressed
+    as SQL rather than as a Python set. This function is that expression, and it
+    is deliberately the only other place the rule is written, so the read filters
+    and the write guards cannot drift apart.
+
+    Frozen means exactly what :func:`locked_picture_ids` means: the picture is
+    itself a member of a locked set, **or** it shares a stack with a non-deleted
+    picture that is. The ``deleted`` filter applies only to the stack-derived arm,
+    mirroring :func:`~pixlstash.services.stack_membership.expand_picture_ids_to_stacks`
+    (which drops deleted co-members while always keeping the input id itself), so
+    this predicate neither over- nor under-blocks relative to the write guards.
+
+    Returns:
+        A SQLAlchemy ``Select`` of ``Picture.id``. Correlates to nothing, so it is
+        safe to embed in any query.
+    """
+    locked_members = (
+        select(PictureSetMember.picture_id)
+        .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
+        .where(PictureSet.locked.is_(True))
+    )
+    locked_stacks = select(Picture.stack_id).where(
+        Picture.id.in_(locked_members),
+        Picture.stack_id.is_not(None),
+        Picture.deleted.is_(False),
+    )
+    return select(Picture.id).where(
+        or_(
+            Picture.id.in_(locked_members),
+            Picture.stack_id.in_(locked_stacks),
+        )
+    )
 
 
 def enforce_pictures_not_locked(session: Session, picture_ids, action: str) -> None:

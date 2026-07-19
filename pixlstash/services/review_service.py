@@ -15,13 +15,17 @@ import json
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureSet, Review, TaggerRun
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_scan_service, tag_suggestion_service
+from pixlstash.services.set_lock_service import (
+    locked_picture_id_subquery,
+    locked_sets_for_pictures,
+)
 from pixlstash.services.tag_scan_service import DEFAULT_MAX_TWIN_HAMMING
 from pixlstash.utils.near_neighbor import hamming_distance
 from pixlstash.utils.service.filter_helpers import (
@@ -282,26 +286,40 @@ def preview_review(
 
 
 def _progress_map(session: Session, review_ids: list[int]) -> dict[int, dict]:
-    """``review_id -> {"done", "pending", "skipped"}`` over the suggestion rows.
+    """``review_id -> {"done", "pending", "skipped", "locked"}`` over the rows.
 
     ``done`` counts decided rows only; SKIPPED rows carry no decision and are
     reported separately. A review is complete when ``pending`` reaches zero.
+
+    ``locked`` counts still-PENDING rows whose suspect is frozen by a locked set.
+    They are deliberately **not** counted in ``pending``: they are never served as
+    cards (see :func:`list_review_suggestions`), so counting them as pending would
+    leave the session reporting work remaining while its queue serves nothing —
+    the UI would look stuck at "N remaining" with no card to act on. Splitting
+    them out keeps the "complete when ``pending`` is 0" invariant true for a
+    session whose pictures were locked mid-review, while still reporting the
+    withheld rows so the UI can explain *why* the count dropped. Only PENDING rows
+    can be ``locked``; a row decided before the lock stays counted as ``done``.
     """
-    progress = {rid: {"done": 0, "pending": 0, "skipped": 0} for rid in review_ids}
+    progress = {
+        rid: {"done": 0, "pending": 0, "skipped": 0, "locked": 0} for rid in review_ids
+    }
     if not review_ids:
         return progress
+    is_locked = TagSuggestion.picture_id.in_(locked_picture_id_subquery())
     rows = session.exec(
         select(
             TagSuggestion.review_id,
             TagSuggestion.status,
+            is_locked.label("is_locked"),
             func.count().label("n"),
         )
         .where(TagSuggestion.review_id.in_(review_ids))
-        .group_by(TagSuggestion.review_id, TagSuggestion.status)
+        .group_by(TagSuggestion.review_id, TagSuggestion.status, is_locked)
     ).all()
-    for rid, status, n in rows:
+    for rid, status, locked_flag, n in rows:
         if status == "PENDING":
-            bucket = "pending"
+            bucket = "locked" if locked_flag else "pending"
         elif status == "SKIPPED":
             bucket = "skipped"
         else:
@@ -417,7 +435,7 @@ def list_reviews(vault: "Vault", status: str | None = None) -> list[dict]:
                 item["progress"] = snap["progress"]
             else:
                 item["progress"] = progress.get(
-                    r.id, {"done": 0, "pending": 0, "skipped": 0}
+                    r.id, {"done": 0, "pending": 0, "skipped": 0, "locked": 0}
                 )
             item["stale"] = _is_stale(r, latest_change)
             out.append(item)
@@ -702,12 +720,30 @@ def list_review_suggestions(
             raise KeyError(f"Review not found: id={review_id}")
         # Join Picture and exclude soft-deleted suspects: a deleted picture's
         # card must never be listed in the review queue.
+        #
+        # Locked suspects are withheld for the same reason, but the lock needs
+        # its OWN read-time filter rather than relying on the scan: a set can be
+        # locked at any time *after* the review was created, and the scan only
+        # ever runs at create/refresh. Rows scanned while the set was still
+        # unlocked would otherwise be served forever as cards whose every action
+        # 423s — the reported "locked images still show up in the review". The
+        # filter is applied before OFFSET/LIMIT so paging stays correct.
+        #
+        # Restricted to PENDING rows deliberately, matching the `locked` bucket
+        # in _progress_map exactly. A row DECIDED before the lock is no longer
+        # actionable work — it is this review's audit record, still counted in
+        # progress.done — so hiding it would make the served list disagree with
+        # the receipt. Only undecided work is withheld.
         q = (
             select(TagSuggestion)
             .join(Picture, Picture.id == TagSuggestion.picture_id)
             .where(
                 TagSuggestion.review_id == review_id,
                 Picture.deleted.is_(False),
+                or_(
+                    TagSuggestion.status != "PENDING",
+                    TagSuggestion.picture_id.notin_(locked_picture_id_subquery()),
+                ),
             )
         )
         if status:
@@ -736,17 +772,25 @@ def list_review_suggestions(
 
     wanted = sorted({i for i in ids if i is not None})
 
-    def _fetch_kind_info(session: Session) -> dict[int, tuple[int | None, str | None]]:
+    def _fetch_card_context(session: Session) -> tuple[dict, dict]:
+        """Kind inputs + lock state for every pictured id, in one session.
+
+        Batched together (and the lock lookup batched across all rows) so
+        labelling N cards stays a fixed number of queries rather than an N+1.
+        """
         if not wanted:
-            return {}
+            return {}, {}
         rows = session.exec(
             select(Picture.id, Picture.stack_id, Picture.perceptual_hash).where(
                 Picture.id.in_(wanted)
             )
         ).all()
-        return {pid: (stack_id, phash) for pid, stack_id, phash in rows}
+        return (
+            {pid: (stack_id, phash) for pid, stack_id, phash in rows},
+            locked_sets_for_pictures(session, wanted),
+        )
 
-    kind_info = vault.db.run_immediate_read_task(_fetch_kind_info)
+    kind_info, locked_sets = vault.db.run_immediate_read_task(_fetch_card_context)
 
     out = []
     for s in suggestions:
@@ -760,6 +804,30 @@ def list_review_suggestions(
                     "suggestion %s; returning null",
                     s.id,
                 )
+        # Per-side lock state. The scan keeps a frozen picture in the embedding
+        # pool as a twin/neighbour (it guides the vote and writes nothing), so a
+        # served card can have a LOCKED TWIN even though its suspect is free.
+        # A card-level boolean cannot express that, because the two sides gate
+        # different actions: the twin's lock blocks fix-twin and swap, while
+        # accept and dismiss only ever write the suspect.
+        suspect_locked_sets = locked_sets.get(s.picture_id, [])
+        twin_locked_sets = (
+            locked_sets.get(s.twin_picture_id, []) if s.twin_picture_id else []
+        )
+        kind = derive_kind(
+            kind_info.get(s.picture_id),
+            kind_info.get(s.twin_picture_id) if s.twin_picture_id is not None else None,
+        )
+        if twin_locked_sets:
+            # Degrade to a binary card on the suspect. A pair card offers four
+            # corners, but with a frozen twin two of them (swap, and whichever of
+            # both/neither maps to fix-twin) can only 423 — while the other two
+            # map to accept and dismiss, which are EXACTLY the actions a binary
+            # card offers. So the degradation costs no reachable decision and
+            # removes two dead corners. The row is still served rather than
+            # dropped: the suspect's disagreement signal is real and fully
+            # reviewable, so dropping it would discard legitimate work.
+            kind = "binary"
         out.append(
             {
                 "id": s.id,
@@ -775,12 +843,15 @@ def list_review_suggestions(
                 "status": s.status,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
                 "review_id": s.review_id,
-                "kind": derive_kind(
-                    kind_info.get(s.picture_id),
-                    kind_info.get(s.twin_picture_id)
-                    if s.twin_picture_id is not None
-                    else None,
-                ),
+                "kind": kind,
+                # Per-side lock state (see above). ``locked`` is the suspect's:
+                # today the queue filter means it is always False, but it is
+                # emitted so a future selection gap surfaces as a labelled card
+                # instead of an un-actionable one.
+                "locked": bool(suspect_locked_sets),
+                "locked_sets": suspect_locked_sets,
+                "twin_locked": bool(twin_locked_sets),
+                "twin_locked_sets": twin_locked_sets,
                 "neighbors": neighbors,
                 "picture_ext": exts.get(s.picture_id, ""),
                 "twin_ext": exts.get(s.twin_picture_id, ""),

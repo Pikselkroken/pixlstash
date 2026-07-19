@@ -20,6 +20,7 @@ Mirrors the vault-task conventions in :mod:`pixlstash.services.tag_prediction_se
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, Tag
@@ -29,6 +30,7 @@ from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import (
     enforce_pictures_not_locked,
+    locked_picture_id_subquery,
     locked_picture_ids,
 )
 from pixlstash.utils.service.filter_helpers import (
@@ -127,7 +129,18 @@ def list_suggestions(
     """
 
     def _fetch(session: Session) -> list[TagSuggestion]:
-        q = select(TagSuggestion)
+        # Withhold still-PENDING suspects frozen by a locked set — every action
+        # on them 423s, so listing them offers work that cannot be done. Same
+        # rule and same PENDING-only scoping as the review queue
+        # (review_service.list_review_suggestions); a row decided before the
+        # lock stays listed as the audit record. Applied before OFFSET/LIMIT so
+        # paging stays correct.
+        q = select(TagSuggestion).where(
+            or_(
+                TagSuggestion.status != "PENDING",
+                TagSuggestion.picture_id.notin_(locked_picture_id_subquery()),
+            )
+        )
         if status:
             q = q.where(TagSuggestion.status == status.upper())
         if tag:

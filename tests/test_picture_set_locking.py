@@ -961,3 +961,41 @@ def test_description_regeneration_skips_locked_pic():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_legacy_suggestion_queue_withholds_locked_pending_rows():
+    """The legacy GET /tag_suggestions list withholds still-PENDING suspects
+    frozen by a locked set (every action on them 423s), but keeps already-decided
+    rows listed as the audit record — same rule as the review queue."""
+    temp_dir, client, server = _setup()
+    try:
+        locked_pic, free_pic = _first_n_pictures(server, 2)
+        set_id = _create_set(client, "LegacyQueueFreeze")
+        _add_member(client, set_id, locked_pic)
+        _seed_tag(server, locked_pic, "malformed hand")
+        _seed_tag(server, free_pic, "malformed hand")
+        _seed_suggestion(server, locked_pic, "malformed hand", "remove")
+        _seed_suggestion(server, free_pic, "malformed hand", "remove")
+
+        # Both listed while unlocked.
+        rows = client.get("/tag_suggestions", params={"tag": "malformed hand"}).json()
+        assert {r["picture_id"] for r in rows} == {locked_pic, free_pic}
+
+        _set_locked(client, set_id, True)
+
+        # The frozen one is withheld; the free one is untouched (no over-blocking).
+        rows = client.get("/tag_suggestions", params={"tag": "malformed hand"}).json()
+        assert [r["picture_id"] for r in rows] == [free_pic]
+
+        # A row decided before the lock stays listed under its decided status.
+        decided_id = _seed_suggestion(
+            server, locked_pic, "bad anatomy", "remove", status="DISMISSED"
+        )
+        decided = client.get(
+            "/tag_suggestions", params={"tag": "bad anatomy", "status": "DISMISSED"}
+        ).json()
+        assert [r["id"] for r in decided] == [decided_id]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
