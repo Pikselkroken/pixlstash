@@ -637,6 +637,126 @@ def test_tag_health_est_wrong_missing_pinned_to_current_model_version():
         _teardown(temp_dir, server)
 
 
+def test_tag_health_est_missing_excludes_human_rejected_pictures():
+    """est_missing must count only *un-reviewed* untagged pictures. A picture a
+    human already REJECTED (NEG) keeps the tagger's original high confidence and
+    stays untagged, so before the fix it was double-counted: once (wrongly) as
+    est_missing and again (correctly) as a model_dispute. It must now be excluded
+    from est_missing and appear only in model_disputes."""
+    from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
+    from pixlstash.utils.service.label_ledger import NEG, record_human_label
+
+    temp_dir, client, server = _setup()
+    try:
+        p_unreviewed = _upload_named(client)  # untagged, conf 0.95, no human ruling
+        p_rejected = _upload_named(client)  # untagged, conf 0.95, human REJECTED
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            session.add(
+                TagPrediction(
+                    picture_id=p_unreviewed,
+                    tag="t",
+                    confidence=0.95,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_rejected,
+                    tag="t",
+                    confidence=0.95,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            session.commit()
+            # Human REJECT via the real ledger path: sets label_state=NEG /
+            # source=human but DELIBERATELY keeps the live 0.95 confidence, which
+            # is exactly what made this row match est_missing's raw conditions.
+            record_human_label(session, p_rejected, "t", NEG)
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        t = {r["tag"]: r for r in body["rows"]}["t"]
+
+        # Only the un-reviewed picture is counted; the human-rejected one is
+        # excluded (pre-fix this was 2 — the bug).
+        assert t["est_missing"] == 1
+        # est_missing_adj tracks the corrected raw count (no report → fallback).
+        assert t["est_missing_adj"] == round(1 * DEFAULT_TAG_PRECISION)
+        # The rejected row is still surfaced as a model dispute (unchanged), so
+        # nothing is lost — it just isn't double-counted as an estimated fix.
+        assert t["model_disputes"] == 1
+        assert t["has_model"] is True
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_est_wrong_excludes_human_confirmed_pictures():
+    """est_wrong must count only *un-reviewed* tagged pictures. A picture a human
+    already CONFIRMED (POS) keeps its Tag row, so a low-confidence prediction on it
+    was double-counted before the fix: once (wrongly) as est_wrong and again
+    (correctly) as a model_dispute. It must now be excluded from est_wrong and
+    appear only in model_disputes."""
+    from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
+    from pixlstash.utils.service.label_ledger import POS, record_human_label
+
+    temp_dir, client, server = _setup()
+    try:
+        p_unreviewed = _upload_named(client)  # tagged "t", conf 0.05, no ruling
+        p_confirmed = _upload_named(client)  # tagged "t", conf 0.05, human CONFIRMED
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            session.add(Tag(picture_id=p_unreviewed, tag="t"))
+            session.add(Tag(picture_id=p_confirmed, tag="t"))
+            session.add(
+                TagPrediction(
+                    picture_id=p_unreviewed,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_confirmed,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            session.commit()
+            # Human CONFIRM via the real ledger path: label_state=POS/source=human
+            # but keeps the live 0.05 confidence and the Tag row, which is exactly
+            # what made this row match est_wrong's raw conditions.
+            record_human_label(session, p_confirmed, "t", POS)
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        t = {r["tag"]: r for r in body["rows"]}["t"]
+
+        # Only the un-reviewed tagged picture is counted; the human-confirmed one
+        # is excluded (pre-fix this was 2 — the bug).
+        assert t["est_wrong"] == 1
+        assert t["est_wrong_adj"] == round(1 * DEFAULT_TAG_PRECISION)
+        # The confirmed row is still surfaced as a model dispute (unchanged).
+        assert t["model_disputes"] == 1
+        assert t["has_model"] is True
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_tag_health_default_tag_merges_folds_across_all_signals():
     """5b: a DEFAULT_TAG_MERGES child ("extra digit") must fold into its
     parent's ("malformed hand") board row across every signal — not just
@@ -835,13 +955,15 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
     temp_dir, client, server = _setup()
     try:
         # Live pictures for tag "t".
-        l_wrong = _upload_named(client)  # tagged "t", conf 0.05, human POS
+        l_wrong = _upload_named(client)  # tagged "t", conf 0.05, human POS (dispute)
+        l_est_wrong = _upload_named(client)  # tagged "t", conf 0.05, un-reviewed
         l_missing = _upload_named(client)  # untagged, conf 0.95
         l_boundary = _upload_named(client)  # conf 0.50 (boundary mass)
         # Deleted pictures that would inflate every fixed signal if counted.
         d1 = _upload_named(client)
         d2 = _upload_named(client)
         d3 = _upload_named(client)
+        d_est_wrong = _upload_named(client)  # deleted, tagged "t", 0.05, un-reviewed
 
         now = datetime.utcnow()
         t_live = now - timedelta(minutes=10)
@@ -849,7 +971,8 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
 
         def seed(session):
             session.add(Tag(picture_id=l_wrong, tag="t"))
-            # est_wrong + model_disputes + verified.
+            # model_disputes + verified (human POS the model doubts — NOT est_wrong,
+            # since est_wrong now counts only un-reviewed pictures).
             session.add(
                 TagPrediction(
                     picture_id=l_wrong,
@@ -859,6 +982,17 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
                     predicted_at=now,
                     label_state="POS",
                     label_source="human",
+                )
+            )
+            # est_wrong: an un-reviewed tagged low-confidence prediction.
+            session.add(Tag(picture_id=l_est_wrong, tag="t"))
+            session.add(
+                TagPrediction(
+                    picture_id=l_est_wrong,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v1",
+                    predicted_at=now,
                 )
             )
             # est_missing.
@@ -938,6 +1072,23 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
                         reviewed_at=t_later,
                     )
                 )
+
+            # A deleted, un-reviewed est_wrong candidate: would add to est_wrong if
+            # deleted pictures weren't excluded (proves deleted-exclusion still holds
+            # for the un-reviewed est_wrong path after the human-decision fix).
+            d_pic = session.get(Picture, d_est_wrong)
+            d_pic.deleted = True
+            session.add(d_pic)
+            session.add(Tag(picture_id=d_est_wrong, tag="t"))
+            session.add(
+                TagPrediction(
+                    picture_id=d_est_wrong,
+                    tag="t",
+                    confidence=0.05,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
             session.commit()
 
             # Scope = exactly the live pictures.
@@ -945,7 +1096,7 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
             session.add(ps)
             session.commit()
             session.refresh(ps)
-            for pid in (l_wrong, l_missing, l_boundary):
+            for pid in (l_wrong, l_est_wrong, l_missing, l_boundary):
                 session.add(PictureSetMember(set_id=ps.id, picture_id=pid))
             session.commit()
             return ps.id
@@ -961,8 +1112,9 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
         assert scoped_resp.status_code == 200, scoped_resp.text
         scoped = {r["tag"]: r for r in scoped_resp.json()["rows"]}["t"]
 
-        # Expected values — live pictures only (3 predictions: 1 verified/disputed,
-        # 1 plain, 1 boundary; overturn 1/1; last review at t_live).
+        # Expected values — live pictures only (4 predictions: 1 verified/disputed,
+        # 1 un-reviewed est_wrong, 1 est_missing, 1 boundary; overturn 1/1; last
+        # review at t_live).
         signal_keys = [
             "est_wrong",
             "est_missing",
@@ -979,12 +1131,14 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
                 f"{unscoped[key]!r} != {scoped[key]!r}"
             )
 
+        # Only the live un-reviewed l_est_wrong counts; the live human-POS l_wrong is
+        # a dispute (not est_wrong), and the deleted un-reviewed d_est_wrong is excluded.
         assert unscoped["est_wrong"] == 1
         assert unscoped["est_missing"] == 1
-        # pred_agg over 3 live predictions: 1 verified, 1 boundary. Deleted rows
-        # (all verified, non-boundary) would skew these to 4/6 and 1/6.
-        assert abs(unscoped["verified_pct"] - 1 / 3) < 1e-9
-        assert abs(unscoped["boundary_pct"] - 1 / 3) < 1e-9
+        # pred_agg over 4 live predictions: 1 verified, 1 boundary. Deleted rows
+        # (all verified, non-boundary) would skew these if counted.
+        assert abs(unscoped["verified_pct"] - 1 / 4) < 1e-9
+        assert abs(unscoped["boundary_pct"] - 1 / 4) < 1e-9
         assert unscoped["has_model"] is True
         # Only l_wrong disputes; the 3 deleted human POS @0.05 rows must not add.
         assert unscoped["model_disputes"] == 1

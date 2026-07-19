@@ -9,11 +9,18 @@ near-neighbour scan stays reserved for review creation.
 Signal definitions (thresholds are module constants, deliberately fixed for now
 — see the redesign doc's open questions):
 
-* ``est_wrong``    – tagged pictures whose prediction confidence ≤ 0.1, on the
-  current model version only (older generations are excluded — see
-  ``_current_model_version``).
-* ``est_missing``  – untagged pictures whose prediction confidence ≥ 0.9, on
-  the current model version only.
+* ``est_wrong``    – tagged, *un-reviewed* pictures (no human POS/NEG on the
+  ``(tag, picture)`` ledger row — ``label_state == "UNKNOWN"``) whose prediction
+  confidence ≤ 0.1, on the current model version only (older generations are
+  excluded — see ``_current_model_version``). A tag a human already CONFIRMED is
+  excluded even when the model doubts it: that human-vs-model contradiction is
+  surfaced via ``model_disputes`` instead, never re-counted here as an estimated
+  fix.
+* ``est_missing``  – untagged, *un-reviewed* pictures (no human POS/NEG,
+  ``label_state == "UNKNOWN"``) whose prediction confidence ≥ 0.9, on the current
+  model version only. A tag a human already REJECTED is excluded even though its
+  high-confidence prediction survives the rejection: that contradiction is
+  surfaced via ``model_disputes`` instead, never re-counted here.
 * ``est_wrong_adj`` / ``est_missing_adj`` – ``est_wrong``/``est_missing``
   discounted by the tag's measured precision from the latest
   :class:`~pixlstash.db_models.tagger_run.TaggerRun` report (same discount
@@ -284,6 +291,12 @@ def compute_tag_health_rows(
 
     # est_wrong: tagged + confidently-negative prediction, current model version only
     # (5a — an unpinned join here previously blended every model generation ever run).
+    # label_state == "UNKNOWN" restricts this to pictures no human has ruled on: a tag
+    # a human CONFIRMED (POS) keeps its Tag row and would otherwise be counted here even
+    # though the human already resolved it — that human-vs-model contradiction belongs to
+    # model_disputes, not est_wrong. (Human REJECT drops the Tag row, so those are already
+    # excluded by the inner join above; only human POS needs filtering out.) The literal
+    # matches the `verified` metric's `label_state != "UNKNOWN"` below.
     est_wrong = _fold_counts(
         session.exec(
             _scoped(
@@ -300,6 +313,7 @@ def compute_tag_health_rows(
                     Picture.deleted.is_(False),
                     TagPrediction.confidence <= EST_WRONG_MAX_CONF,
                     TagPrediction.model_version == current_version,
+                    TagPrediction.label_state == "UNKNOWN",
                 ),
                 TagPrediction.picture_id,
             ).group_by(TagPrediction.tag)
@@ -308,6 +322,12 @@ def compute_tag_health_rows(
 
     # est_missing: confidently-positive prediction with no Tag row, current model
     # version only (5a, same fix as est_wrong above).
+    # label_state == "UNKNOWN" restricts this to pictures no human has ruled on: a human
+    # REJECT (NEG) deliberately keeps the tagger's original high confidence and leaves no
+    # Tag row, so such a row would otherwise be counted here as "missing" even though the
+    # human already said no — that contradiction belongs to model_disputes, not est_missing.
+    # (Human CONFIRM adds a Tag row, so those are already excluded by `Tag.picture_id IS
+    # NULL`; only human NEG needs filtering out.)
     est_missing = _fold_counts(
         session.exec(
             _scoped(
@@ -325,6 +345,7 @@ def compute_tag_health_rows(
                     TagPrediction.confidence >= EST_MISSING_MIN_CONF,
                     Tag.picture_id.is_(None),
                     TagPrediction.model_version == current_version,
+                    TagPrediction.label_state == "UNKNOWN",
                 ),
                 TagPrediction.picture_id,
             ).group_by(TagPrediction.tag)
