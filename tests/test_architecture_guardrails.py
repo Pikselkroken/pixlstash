@@ -364,6 +364,10 @@ _LABEL_SINK_EXEMPT = {
         "internal undo chokepoint; callers reopen_suggestion (enforce) and "
         "bulk_reopen (skip) guard locked pictures before invoking"
     ),
+    ("pixlstash/services/impossible_tag_clear_service.py", "_clear_tags_in_session"): (
+        "internal clear chokepoint; sole caller clear_in_session skips locked "
+        "pictures via locked_picture_ids before invoking"
+    ),
     # --- Machine-derived / rule-4-exempt background writes ---
     # NB: description regeneration is NOT rule-4 exempt (rule 3 freezes the
     # description). description_task._generate_descriptions_batch /
