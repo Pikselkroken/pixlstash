@@ -4,7 +4,6 @@ Extracted from pixlstash/routes/tag_predictions.py to keep route handlers thin.
 Provides vault-level functions so route handlers need not call vault.db directly.
 """
 
-import json
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete
@@ -15,7 +14,6 @@ from pixlstash.db_models.tag import make_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
-from pixlstash.utils.service.caption_utils import sanitise_tag
 from pixlstash.utils.service.label_ledger import (
     NEG,
     POS,
@@ -33,65 +31,6 @@ if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
-
-
-def load_label_thresholds(meta_path: str | None, bias: float = 0.0) -> dict[str, float]:
-    """Load per-label acceptance thresholds from the PixlStash tagger meta JSON.
-
-    Keys are naturalized to match the values stored in TagPrediction.tag.
-    The bias is the user-configured offset added to each label's base threshold.
-    Returns an empty dict if the file is missing or lacks label_thresholds.
-
-    Args:
-        meta_path: Path to the tagger meta JSON file, or None.
-        bias: Offset to add to each label's base threshold.
-
-    Returns:
-        Dict mapping sanitised tag name → effective threshold.
-    """
-    if not meta_path:
-        return {}
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        raw = meta.get("label_thresholds", {})
-        if not raw:
-            return {}
-        return {
-            sanitise_tag(k) or k: max(0.01, float(v) + bias) for k, v in raw.items()
-        }
-    except Exception:
-        logger.warning(
-            "load_label_thresholds: failed to read %r; returning no thresholds",
-            meta_path,
-            exc_info=True,
-        )
-        return {}
-
-
-def load_raw_label_thresholds(meta_path: str | None) -> dict[str, float]:
-    """Load per-label thresholds from meta JSON without any offset applied.
-
-    Args:
-        meta_path: Path to the tagger meta JSON file, or None.
-
-    Returns:
-        Dict mapping sanitised tag name → base threshold.
-    """
-    if not meta_path:
-        return {}
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        raw = meta.get("label_thresholds", {})
-        return {sanitise_tag(k) or k: float(v) for k, v in raw.items()}
-    except Exception:
-        logger.warning(
-            "load_raw_label_thresholds: failed to read %r; returning no thresholds",
-            meta_path,
-            exc_info=True,
-        )
-        return {}
 
 
 def get_predictions(

@@ -4,7 +4,20 @@ from .smart_score_task import SmartScoreTask
 
 
 class MissingSmartScoreFinder(SimpleMissingFinder):
-    """Find pictures missing a stored smart score and create a SmartScoreTask."""
+    """Find pictures missing a stored smart score and create a SmartScoreTask.
+
+    Needs a full ``Vault`` (not just ``database``) because :class:`SmartScoreTask`
+    resolves the tagger's per-label acceptance thresholds through it, so it is
+    registered in ``vault.py`` rather than ``WorkPlanner.work_finders()`` — the same
+    reason ``GFS_SNAPSHOT`` and ``TAG_HEALTH_AUTO_REBUILD`` are.
+
+    Args:
+        vault: The vault owning the database and the tagger configuration.
+    """
+
+    def __init__(self, vault):
+        super().__init__(database=vault.db)
+        self._vault = vault
 
     def finder_name(self) -> str:
         return "MissingSmartScoreFinder"
@@ -19,4 +32,4 @@ class MissingSmartScoreFinder(SimpleMissingFinder):
         return SmartScoreTask.find_pictures_missing_smart_score(session, limit)
 
     def _create_task(self, pictures: list):
-        return SmartScoreTask(database=self._db, pictures=pictures)
+        return SmartScoreTask(vault=self._vault, pictures=pictures)

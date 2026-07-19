@@ -8,9 +8,11 @@ per-tag precision reader, and the CLIP-IQA term in the scorer.
 """
 
 import numpy as np
+import pytest
 from sqlmodel import SQLModel, Session, create_engine
 
 import pixlstash.db_models  # noqa: F401  (register tables for create_all)
+from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.db_models.tagger_run import TaggerRun
 from pixlstash.services.tagger_run_service import get_latest_tag_precisions
 from pixlstash.utils.quality.anomaly_penalty import (
@@ -474,3 +476,156 @@ def test_clipiqa_term_rewards_quality_aligned_embedding():
         [good_like, bad_like], [], []
     )
     assert scores[0] > scores[1]
+
+
+# ------------------------------------------------- user-configured penalised-tag weights
+#
+# The penalty must be driven by the *user's* ``User.smart_score_penalised_tags`` table, not
+# by the hardcoded ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` seed. The seed is only the
+# ``default_factory`` for that column; a present user config *replaces* it (see
+# ``smart_score_penalised_tags``), so a tag the user removed must stop being charged.
+
+# The demo user's table: no "watermark", no "noise", and "malformed hand" at 3 (not the
+# default 4). Used as a realistic stand-in for "the user edited their table".
+_USER_WEIGHTS = {
+    "bad anatomy": 5,
+    "blocky": 3,
+    "flux chin": 1,
+    "incorrect reflection": 3,
+    "malformed foot": 4,
+    "malformed hand": 3,
+    "malformed nipples": 4,
+    "malformed teeth": 4,
+    "missing nipples": 5,
+    "silicone breasts": 1,
+    "waxy skin": 2,
+}
+
+
+def _severity_for_weight(weight):
+    """The severity a tag of *weight* should contribute, per the documented formula."""
+    return SEVERITY_GAIN * (SEVERITY_BASE + SEVERITY_WEIGHT_SPAN * (weight / 5.0))
+
+
+def test_tag_absent_from_user_table_is_not_penalised():
+    # "watermark" is the whole watermark family and the user removed it, so the family
+    # contributes nothing at all — not a reduced amount.
+    assert "watermark" not in _USER_WEIGHTS
+    assert anomaly_penalty({"watermark": 1.0}, tag_weights=_USER_WEIGHTS) == 0.0
+    # Same for the noise family, whose only weighted member the user also removed. This
+    # covers the alias-inheritance path: "film grain" has no weight of its own and must
+    # inherit 0 from its now-empty family rather than falling back to the default table.
+    assert anomaly_penalty({"noise": 1.0}, tag_weights=_USER_WEIGHTS) == 0.0
+    assert anomaly_penalty({"film grain": 1.0}, tag_weights=_USER_WEIGHTS) == 0.0
+    # ... while the default table, which does carry "watermark", still charges it. This is
+    # what proves the difference comes from the weights and not from some other gate.
+    assert anomaly_penalty({"watermark": 1.0}) > 0.0
+
+
+def test_tag_present_in_user_table_contributes_its_own_weight_severity():
+    # A single tag at full confidence and precision 1.0 contributes exactly its severity.
+    for tag, weight in (("bad anatomy", 5), ("malformed foot", 4), ("flux chin", 1)):
+        penalty = anomaly_penalty(
+            {tag: 1.0},
+            tag_weights=_USER_WEIGHTS,
+            tag_precisions={tag: 1.0},
+        )
+        assert penalty == pytest.approx(_severity_for_weight(weight)), tag
+
+
+def test_user_weight_overrides_the_default_table_for_the_same_tag():
+    # "malformed hand" is 4 in the defaults and 3 in this user's table. The penalty must
+    # follow the user, which is exactly the divergence the old module-level table caused.
+    assert DEFAULT_SMART_SCORE_PENALIZED_TAGS["malformed hand"] == 4
+    assert _USER_WEIGHTS["malformed hand"] == 3
+    user = anomaly_penalty(
+        {"malformed hand": 1.0},
+        tag_weights=_USER_WEIGHTS,
+        tag_precisions={"malformed hand": 1.0},
+    )
+    assert user == pytest.approx(_severity_for_weight(3))
+    assert user != pytest.approx(_severity_for_weight(4))
+
+
+def test_changing_a_user_weight_moves_the_penalty_monotonically():
+    # Raising one tag's weight must raise its penalty and nothing else.
+    penalties = []
+    for weight in (1, 2, 3, 4, 5):
+        weights = dict(_USER_WEIGHTS, **{"malformed hand": weight})
+        penalties.append(
+            anomaly_penalty(
+                {"malformed hand": 0.9},
+                tag_weights=weights,
+                tag_precisions={"malformed hand": 1.0},
+            )
+        )
+    assert all(b > a for a, b in zip(penalties, penalties[1:])), penalties
+    # The specific 3 -> 5 move the settings UI can make.
+    assert penalties[4] > penalties[2]
+
+
+def test_default_table_is_not_consulted_when_a_user_config_exists():
+    # An empty-but-present user table must penalise nothing. If any default weight leaked
+    # through, tags in the default table would still be charged.
+    for tag in ("bad anatomy", "watermark", "noise", "malformed hand", "blocky"):
+        assert anomaly_penalty({tag: 1.0}, tag_weights={}) == 0.0, tag
+    # A user table naming a *single* tag charges only that tag.
+    solo = {"bad anatomy": 5}
+    assert anomaly_penalty({"bad anatomy": 1.0}, tag_weights=solo) > 0.0
+    assert anomaly_penalty({"watermark": 1.0}, tag_weights=solo) == 0.0
+    # "malformed hand" shares the anatomy family with "bad anatomy", so it inherits the
+    # family ceiling as an alias — the documented behaviour for unweighted family members.
+    assert anomaly_penalty({"malformed hand": 1.0}, tag_weights=solo) > 0.0
+
+
+def test_count_response_curve_holds_under_user_weights():
+    # Regression guard for migration 0077: the defect-count bands must survive the switch
+    # to user-supplied weights, for every weight class the user's table actually contains.
+    for weight in (3, 4, 5):
+        tags = [t for t in _ANATOMY_BY_WEIGHT[weight] if _USER_WEIGHTS.get(t) == weight]
+        if not tags:
+            continue
+        one = _final_score(
+            GOOD_BASE_RAW, anomaly_penalty({tags[0]: 1.0}, tag_weights=_USER_WEIGHTS)
+        )
+        assert 1.5 <= one <= 2.2, f"1 defect of weight {weight} scored {one:.3f}"
+    for weight in (3, 4, 5):
+        two = _stack_of(weight, 2)
+        score = _final_score(
+            GOOD_BASE_RAW,
+            anomaly_penalty({t: 1.0 for t in two}, tag_weights=_USER_WEIGHTS),
+        )
+        assert 1.0 <= score <= 1.5, f"{two} scored {score:.3f}"
+    for weight in (3, 4, 5):
+        for k in (3, 4, 5):
+            tags = _stack_of(weight, k)
+            score = _final_score(
+                GOOD_BASE_RAW,
+                anomaly_penalty({t: 1.0 for t in tags}, tag_weights=_USER_WEIGHTS),
+            )
+            assert score <= _FLOOR_BAND_TOP, f"{k} defects scored {score:.3f}"
+
+
+def test_scorer_threads_user_weights_through_config():
+    # End-to-end through the scorer: the same picture must score higher once the user
+    # removes the tag that was penalising it.
+    rng = np.random.default_rng(11)
+    emb = _unit(rng.standard_normal(512))
+    charged = SmartScoreUtils.calculate_smart_score_batch_numpy(
+        [_candidate(1, emb, anomaly_probs={"watermark": 0.95})],
+        [],
+        [],
+        config={"penalised_tag_weights": DEFAULT_SMART_SCORE_PENALIZED_TAGS},
+    )
+    uncharged = SmartScoreUtils.calculate_smart_score_batch_numpy(
+        [_candidate(1, emb, anomaly_probs={"watermark": 0.95})],
+        [],
+        [],
+        config={"penalised_tag_weights": _USER_WEIGHTS},
+    )
+    assert uncharged[0] > charged[0]
+    clean = SmartScoreUtils.calculate_smart_score_batch_numpy(
+        [_candidate(1, emb)], [], [], config={"penalised_tag_weights": _USER_WEIGHTS}
+    )
+    # Removing the tag from the table is equivalent to the picture not having it at all.
+    assert float(uncharged[0]) == pytest.approx(float(clean[0]))

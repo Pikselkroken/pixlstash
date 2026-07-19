@@ -60,7 +60,6 @@ class WorkPlanner:
         from pixlstash.tasks.reference_folder_scan_finder import (
             ReferenceFolderScanFinder,
         )
-        from pixlstash.tasks.missing_smart_score_finder import MissingSmartScoreFinder
         from pixlstash.tasks.missing_text_score_finder import MissingTextScoreFinder
 
         from pixlstash.utils.path_mapper import PathMapper
@@ -121,9 +120,6 @@ class WorkPlanner:
             TaskType.REFERENCE_FOLDER_SCAN: ReferenceFolderScanFinder(
                 database=database,
                 path_mapper=effective_path_mapper,
-            ),
-            TaskType.SMART_SCORE: MissingSmartScoreFinder(
-                database=database,
             ),
             TaskType.TEXT_SCORE: MissingTextScoreFinder(
                 database=database,

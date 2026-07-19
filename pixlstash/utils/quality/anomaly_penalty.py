@@ -11,8 +11,10 @@ independent families (watermark, noise, ...) add up.
 Punishment scales super-linearly with the tagger's confidence (:data:`CONF_POWER`), so a
 near-certain catastrophic defect ("bad anatomy") drives the score to the floor while a
 borderline, possibly-false detection stays gentle. The *severity* of each defect is derived
-from the per-tag weights in ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` (one editable source of
-truth); how *reliable* the detector is stays a separate axis (the precision discount).
+from the caller-supplied per-tag weight table — in the app that is the user's edited
+``User.smart_score_penalised_tags``, with ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` acting only
+as the seed/fallback. A tag the user removed from that table is not penalised at all. How
+*reliable* the detector is stays a separate axis (the precision discount).
 
 Aggregation is two-stage, because "is this the same defect seen twice?" and "how many
 distinct things are wrong?" are different questions:
@@ -138,42 +140,78 @@ ANOMALY_FAMILIES = (
 # defects can compound; a single family never approaches it.
 DEFAULT_PENALTY_CAP = 3.5
 
-_PENALISED_WEIGHTS = {
-    str(tag).strip().lower(): float(weight)
-    for tag, weight in DEFAULT_SMART_SCORE_PENALIZED_TAGS.items()
-}
 
+def normalise_tag_weights(weights: dict | None) -> dict[str, float]:
+    """Lowercase/normalise a ``{tag: weight}`` table; ``None`` yields the shipped defaults.
 
-_FAMILY_MAX_WEIGHT = {
-    fam["name"]: max(
-        [_PENALISED_WEIGHTS[t] for t in fam["tags"] if t in _PENALISED_WEIGHTS] or [0.0]
-    )
-    for fam in ANOMALY_FAMILIES
-}
-
-
-def _tag_weight(tag: str, family_name: str) -> float:
-    """Weight for one canonical tag, from the single editable per-tag weight table.
-
-    Tags registered in ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` use their own weight. Family
-    members that are *not* registered there (``jpeg artifacts``, ``film grain``,
-    ``compression artifacts``) are unweighted aliases of a registered sibling, so they
-    inherit the family's maximum registered weight rather than dropping to zero.
+    ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` is only the *seed* for a new user's editable
+    table (it is the ``default_factory`` of ``User.smart_score_penalised_tags``). It is
+    used here purely as the fallback for callers that have no user config to offer —
+    every scoring path is expected to pass the resolved user table instead.
     """
-    if tag in _PENALISED_WEIGHTS:
-        return _PENALISED_WEIGHTS[tag]
-    return _FAMILY_MAX_WEIGHT.get(family_name, 0.0)
+    source = DEFAULT_SMART_SCORE_PENALIZED_TAGS if weights is None else weights
+    normalised: dict[str, float] = {}
+    for tag, weight in source.items():
+        if tag is None:
+            continue
+        clean = str(tag).strip().lower()
+        if not clean:
+            continue
+        normalised[clean] = float(weight)
+    return normalised
 
 
-def _tag_severity(tag: str, family_name: str) -> float:
+_PENALISED_WEIGHTS = normalise_tag_weights(None)
+
+
+def _family_max_weights(weights: dict[str, float]) -> dict[str, float]:
+    """Per-family ceiling: the largest weight any of its members carries in *weights*."""
+    return {
+        fam["name"]: max([weights[t] for t in fam["tags"] if t in weights] or [0.0])
+        for fam in ANOMALY_FAMILIES
+    }
+
+
+_FAMILY_MAX_WEIGHT = _family_max_weights(_PENALISED_WEIGHTS)
+
+
+def _tag_weight(
+    tag: str,
+    family_name: str,
+    weights: dict[str, float],
+    family_max: dict[str, float],
+) -> float:
+    """Weight for one canonical tag, from the effective per-tag weight table.
+
+    Tags present in *weights* use their own weight. Family members that are *absent*
+    (``jpeg artifacts``, ``film grain``, ``compression artifacts``) are unweighted aliases
+    of a sibling, so they inherit the family's maximum present weight.
+
+    Absence therefore means "not penalised" at the family level: if no member of a family
+    appears in the user's table, ``family_max`` is 0 and every member — alias or not —
+    contributes nothing. That is the semantic the settings UI implies, since it can only
+    express weights 1-5 and removing a row is the only way to say "stop charging this".
+    """
+    if tag in weights:
+        return weights[tag]
+    return family_max.get(family_name, 0.0)
+
+
+def _tag_severity(
+    tag: str,
+    family_name: str,
+    weights: dict[str, float],
+    family_max: dict[str, float],
+) -> float:
     """Per-tag severity: ``SEVERITY_GAIN × (BASE + SPAN × weight/5)``.
 
     Replaces the old per-*family* severity, which took the family's maximum member weight
     and so punished ``incorrect reflection`` (weight 3) exactly as hard as ``bad anatomy``
-    (weight 5). A weight of 0 (an explicitly de-penalised tag such as ``silicone breasts``)
-    yields 0 severity and is skipped by :func:`anomaly_penalty`.
+    (weight 5). A weight of 0 — a tag absent from the effective table whose family is also
+    empty, or a legacy explicit 0 such as the default ``silicone breasts`` — yields 0
+    severity and is skipped by :func:`anomaly_penalty`.
     """
-    weight = _tag_weight(tag, family_name)
+    weight = _tag_weight(tag, family_name, weights, family_max)
     if weight <= 0.0:
         return 0.0
     return SEVERITY_GAIN * (SEVERITY_BASE + SEVERITY_WEIGHT_SPAN * (weight / 5.0))
@@ -199,16 +237,28 @@ _FAMILY_BY_NAME = {fam["name"]: fam for fam in ANOMALY_FAMILIES}
 # Merge children are the *same* defect as their parent, so they collapse onto the parent's
 # canonical tag and combine with it by noisy-OR instead of counting as a second defect.
 _CANONICAL_TAG = {tag: DEFAULT_TAG_MERGES.get(tag, tag) for tag in _TAG_TO_FAMILY}
-# Public {family name: severity ceiling} — the severity of the family's most severe single
-# tag. Note this is no longer the family's maximum *penalty*: several distinct defects in
-# one family accumulate past it (up to 1/(1 - RANK_DECAY) times it). Retained for
-# introspection and tests.
-FAMILY_SEVERITY = {
-    fam["name"]: max(
-        [_tag_severity(t, fam["name"]) for t in fam["tags"]] or [0.0],
-    )
-    for fam in ANOMALY_FAMILIES
-}
+
+
+def family_severity(weights: dict | None = None) -> dict[str, float]:
+    """{family name: severity ceiling} under *weights* (defaults when ``None``).
+
+    The ceiling is the severity of the family's most severe single tag. Note this is not
+    the family's maximum *penalty*: several distinct defects in one family accumulate past
+    it (up to ``1 / (1 - RANK_DECAY)`` times it). Provided for introspection and tests.
+    """
+    effective = normalise_tag_weights(weights)
+    family_max = _family_max_weights(effective)
+    return {
+        fam["name"]: max(
+            [_tag_severity(t, fam["name"], effective, family_max) for t in fam["tags"]]
+            or [0.0],
+        )
+        for fam in ANOMALY_FAMILIES
+    }
+
+
+# Severity ceilings under the shipped default weights.
+FAMILY_SEVERITY = family_severity()
 
 # The full anomaly vocabulary the penalty looks at (lowercased). Callers query
 # TagPrediction for exactly these tags.
@@ -249,6 +299,7 @@ def anomaly_penalty(
     anomaly_probs: dict,
     *,
     tag_precisions: dict | None = None,
+    tag_weights: dict | None = None,
     human_tags=None,
     metrics: dict | None = None,
     cap: float = DEFAULT_PENALTY_CAP,
@@ -265,6 +316,11 @@ def anomaly_penalty(
             folded human POS/NEG to 1.0/0.0).
         tag_precisions: ``{tag: precision}`` from the latest evaluated TaggerRun; tags
             not present fall back to :data:`DEFAULT_TAG_PRECISION`.
+        tag_weights: the effective ``{tag: weight}`` table — normally the resolved
+            ``User.smart_score_penalised_tags``. A tag absent from it is **not**
+            penalised (subject to the family-alias rule in :func:`_tag_weight`).
+            ``None`` falls back to ``DEFAULT_SMART_SCORE_PENALIZED_TAGS``, which is only
+            correct for callers that genuinely have no user config.
         human_tags: set of tags a human verified — these bypass the precision floor and
             count as certain (a human said it is there, regardless of model precision).
         metrics: ``{sharpness, noise_level, colorfulness}`` for objective corroboration.
@@ -278,6 +334,8 @@ def anomaly_penalty(
     tag_precisions = tag_precisions or {}
     human_tags = human_tags or frozenset()
     metrics = metrics or {}
+    weights = normalise_tag_weights(tag_weights)
+    family_max = _family_max_weights(weights)
 
     # Stage 1: per *canonical* tag complement product, for noisy-OR = 1 - prod(1 - e_t).
     # Only true duplicates (a merge child and its parent) share a key here.
@@ -293,8 +351,9 @@ def anomaly_penalty(
             continue
 
         canonical = _CANONICAL_TAG.get(tag, tag)
-        if _tag_severity(canonical, family_name) <= 0.0:
-            # Weight 0 means "registered but deliberately not penalised".
+        if _tag_severity(canonical, family_name, weights, family_max) <= 0.0:
+            # Zero weight means "absent from the user's table (and from its family), or
+            # explicitly de-penalised" — either way, not charged.
             continue
 
         is_human = tag in human_tags
@@ -329,7 +388,7 @@ def anomaly_penalty(
     contributions: dict[str, list[float]] = {}
     for (family_name, canonical), complement in canonical_complement.items():
         combined_evidence = 1.0 - complement
-        severity = _tag_severity(canonical, family_name)
+        severity = _tag_severity(canonical, family_name, weights, family_max)
         contributions.setdefault(family_name, []).append(severity * combined_evidence)
 
     total = 0.0

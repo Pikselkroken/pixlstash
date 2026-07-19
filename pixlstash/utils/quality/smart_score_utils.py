@@ -191,6 +191,11 @@ class SmartScoreUtils:
             # {tag: precision} from the latest evaluated TaggerRun; empty → tags use the
             # DEFAULT_TAG_PRECISION fallback in anomaly_penalty.
             "tag_precisions": {},
+            # {tag: weight} — the owner's resolved User.smart_score_penalised_tags, from
+            # picture_scoring.resolve_penalised_tag_weights. A tag absent from it is not
+            # penalised. None falls back to DEFAULT_SMART_SCORE_PENALIZED_TAGS, which is
+            # only right for callers with no user config (e.g. unit tests).
+            "penalised_tag_weights": None,
             "topk": 3,
             "sim_knee": 0.3,
             "sim_power": 1.5,
@@ -475,12 +480,14 @@ class SmartScoreUtils:
         # confidence- and precision-weighted, combined by noisy-OR within correlated
         # families. See pixlstash.utils.quality.anomaly_penalty.
         tag_precisions = cfg.get("tag_precisions") or {}
+        penalised_tag_weights = cfg.get("penalised_tag_weights")
         penalty_cap = float(cfg["penalised_tag_cap"])
         penalised_equivalent = np.array(
             [
                 anomaly_penalty(
                     c.get("anomaly_probs") or {},
                     tag_precisions=tag_precisions,
+                    tag_weights=penalised_tag_weights,
                     human_tags=c.get("anomaly_human"),
                     metrics={
                         "sharpness": c.get("sharpness"),

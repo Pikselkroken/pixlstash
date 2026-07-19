@@ -12,17 +12,28 @@ directions: a penalised-tag edit invalidates, a content-tag edit does not.
 import json
 import os
 import tempfile
+import time
 from datetime import datetime
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from pixlstash.db_models import Picture, Tag
+from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.picture_scoring import fetch_anomaly_confidences
 from pixlstash.server import Server
+from pixlstash.tasks import TaskType
 from pixlstash.tasks.smart_score_task import SmartScoreTask
 from pixlstash.tasks.tag_task import TagTask
+from pixlstash.utils.quality.anomaly_penalty import anomaly_penalty
+from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
+from pixlstash.utils.service.smart_score_invalidation import (
+    changed_penalised_tags,
+    invalidate_for_penalised_tag_change,
+)
 from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -77,6 +88,37 @@ def _seed_prediction(server, pic_id, tag, confidence=0.9, status="PENDING"):
         session.commit()
 
     server.vault.db.run_task(insert)
+
+
+def _seed_human_prediction(server, pic_id, tag, label_state, confidence=0.9):
+    """Insert a prediction carrying a human decision in the label ledger."""
+
+    def insert(session):
+        session.add(
+            TagPrediction(
+                picture_id=pic_id,
+                tag=tag,
+                confidence=confidence,
+                model_version="test-v1",
+                status="PENDING",
+                predicted_at=datetime.utcnow(),
+                label_state=label_state,
+                label_source=HUMAN,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(insert)
+
+
+def _wait_for(predicate, timeout=10.0):
+    """Poll *predicate* until true; the config-change invalidation runs on the LOW queue."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _set_smart_score(server, pic_id, value=0.5, with_embedding=True):
@@ -309,6 +351,295 @@ def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
         ]
         assert len(smart_score_updates) == 1, smart_score_updates
         assert "IN (" in smart_score_updates[0].replace("\n", " ")
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# --------------------------------------------------------- confidence-gated penalty
+#
+# A model prediction below the tagger's apply threshold never became a visible ``Tag``,
+# so it must not push the score down. Human decisions are exempt in both directions —
+# which is why the gate lives in ``fetch_anomaly_confidences`` rather than being replaced
+# by a read of the ``Tag`` table, which would silently drop human POS/NEG rows.
+
+_THRESHOLDS = {"watermark": 0.6, "bad anatomy": 0.62}
+
+
+def _probs(server, pic_id, thresholds=_THRESHOLDS):
+    return server.vault.db.run_task(
+        lambda s: fetch_anomaly_confidences(s, [pic_id], apply_thresholds=thresholds)
+    )
+
+
+def test_sub_threshold_model_prediction_is_not_scored():
+    """A model prediction under its apply threshold contributes nothing."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, "watermark", confidence=0.4)  # < 0.6
+
+        probs, human = _probs(server, pic_id)
+        assert "watermark" not in probs.get(pic_id, {})
+        assert (
+            anomaly_penalty(probs.get(pic_id, {}), human_tags=human.get(pic_id)) == 0.0
+        )
+
+        # Ungated (apply_thresholds=None) it *is* present — proving the gate is what
+        # removed it, not a missing row.
+        raw, _ = server.vault.db.run_task(
+            lambda s: fetch_anomaly_confidences(s, [pic_id])
+        )
+        assert raw[pic_id]["watermark"] == pytest.approx(0.4)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_above_threshold_model_prediction_is_scored():
+    """The positive direction: over-gating would be its own regression."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, "watermark", confidence=0.8)  # > 0.6
+
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.8)
+        assert anomaly_penalty(probs[pic_id], human_tags=human.get(pic_id)) > 0.0
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_human_positive_below_threshold_still_counts():
+    """A human said the defect is there; its model confidence is irrelevant."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_human_prediction(server, pic_id, "watermark", POS, confidence=0.1)
+
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == 1.0
+        assert "watermark" in human[pic_id]
+        assert anomaly_penalty(probs[pic_id], human_tags=human[pic_id]) > 0.0
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_human_negative_suppresses_even_above_threshold():
+    """A human said the defect is absent; a confident model must not override that."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_human_prediction(server, pic_id, "watermark", NEG, confidence=0.99)
+
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == 0.0
+        assert "watermark" not in human.get(pic_id, set())
+        assert anomaly_penalty(probs[pic_id], human_tags=human.get(pic_id)) == 0.0
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# ------------------------------------------------ scoped penalised-tag config change
+#
+# Re-weighting a penalised tag must invalidate only the pictures carrying it. The
+# previous behaviour NULLed every row in the table, forcing a full-library re-score on
+# any settings edit.
+
+
+def test_changed_penalised_tags_diffs_the_resolved_tables():
+    # Tags outside any anomaly family diff plainly.
+    assert changed_penalised_tags({"a": 3}, {"a": 3}) == set()
+    assert changed_penalised_tags({"a": 3}, {"a": 5}) == {"a"}  # reweighted
+    assert changed_penalised_tags({"a": 3}, {}) == {"a"}  # removed
+    assert changed_penalised_tags({}, {"a": 3}) == {"a"}  # added
+    assert changed_penalised_tags({"A ": 3}, {"a": 3}) == set()  # normalised
+
+
+def test_changed_penalised_tags_includes_family_aliases():
+    """Aliases inherit the family ceiling, so a ceiling move must invalidate them too."""
+    # "blocky" is the compression family's only weighted member; its unweighted siblings
+    # "jpeg artifacts" / "compression artifacts" inherit its weight.
+    changed = changed_penalised_tags({"blocky": 3}, {"blocky": 5})
+    assert {"blocky", "jpeg artifacts", "compression artifacts"} <= changed
+    # Removing it drops the whole family to zero — same requirement.
+    changed = changed_penalised_tags({"blocky": 3}, {})
+    assert {"blocky", "jpeg artifacts", "compression artifacts"} <= changed
+    # Merge children are stored under their own name but scored as the parent.
+    changed = changed_penalised_tags({"malformed hand": 3}, {"malformed hand": 5})
+    assert {"malformed hand", "extra digit", "missing digit"} <= changed
+    # A family whose ceiling did not move contributes nothing.
+    unchanged = changed_penalised_tags(
+        {"blocky": 3, "watermark": 4}, {"blocky": 3, "watermark": 2}
+    )
+    assert "watermark" in unchanged
+    assert "blocky" not in unchanged and "jpeg artifacts" not in unchanged
+
+
+def test_penalised_tag_config_change_invalidates_only_matching_pictures():
+    """Assert both sets: the carriers are cleared and the bystanders keep their score."""
+    temp_dir, client, server = _setup()
+    try:
+        carrier_tag = _upload_picture(client, "Bad1.png")
+        carrier_pred = _upload_picture(client, "Bad2.png")
+        bystander = _upload_picture(client, "Changed1.png")
+        for pic_id in (carrier_tag, carrier_pred, bystander):
+            _set_smart_score(server, pic_id, 0.5)
+
+        # One carries an applied Tag, one only an anomaly TagPrediction — the penalty
+        # reads both, so invalidation must cover both.
+        server.vault.db.run_task(
+            lambda s: (
+                s.add(Tag(picture_id=carrier_tag, tag=PENALISED_TAG)),
+                s.commit(),
+            )
+        )
+        _seed_prediction(server, carrier_pred, PENALISED_TAG, confidence=0.9)
+        # The bystander carries an *unrelated* penalised tag, so it is not just "untagged".
+        _seed_prediction(server, bystander, "bad anatomy", confidence=0.9)
+
+        cleared = server.vault.db.run_task(
+            lambda s: (
+                invalidate_for_penalised_tag_change(s, {PENALISED_TAG}),
+                s.commit(),
+            )[0]
+        )
+        assert cleared == 2
+        assert _get_smart_score(server, carrier_tag) is None
+        assert _get_smart_score(server, carrier_pred) is None
+        assert _get_smart_score(server, bystander) == 0.5
+
+        missing = _find_missing_ids(server)
+        assert carrier_tag in missing and carrier_pred in missing
+        assert bystander not in missing
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_no_weight_change_invalidates_nothing():
+    """An unrelated config edit must not touch any cached score."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _set_smart_score(server, pic_id, 0.5)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.9)
+
+        cleared = server.vault.db.run_task(
+            lambda s: (invalidate_for_penalised_tag_change(s, set()), s.commit())[0]
+        )
+        assert cleared == 0
+        assert _get_smart_score(server, pic_id) == 0.5
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_patch_config_invalidates_only_pictures_with_the_changed_tag():
+    """End-to-end through PATCH /users/me/config."""
+    temp_dir, client, server = _setup()
+    try:
+        carrier = _upload_picture(client, "Bad1.png")
+        bystander = _upload_picture(client, "Changed1.png")
+        _set_smart_score(server, carrier, 0.5)
+        _set_smart_score(server, bystander, 0.5)
+        _seed_prediction(server, carrier, PENALISED_TAG, confidence=0.9)
+        _seed_prediction(server, bystander, "bad anatomy", confidence=0.9)
+
+        # Re-weight only PENALISED_TAG; leave every other tag where it was.
+        new_table = dict(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
+        new_table[PENALISED_TAG] = 1 if new_table.get(PENALISED_TAG) != 1 else 5
+        resp = client.patch(
+            "/users/me/config", json={"smart_score_penalised_tags": new_table}
+        )
+        assert resp.status_code == 200
+
+        _wait_for(lambda: _get_smart_score(server, carrier) is None)
+        assert _get_smart_score(server, carrier) is None
+        assert _get_smart_score(server, bystander) == 0.5
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# ------------------------------------------------ background scorer honours user config
+#
+# ``SmartScoreTask`` runs in the background with no request, so it cannot use the
+# request-scoped ``get_smart_score_penalised_tags_from_request``. It must resolve the
+# owner's table from the DB inside its own read session — this is the wiring that made
+# ``User.smart_score_penalised_tags`` reach the scorer at all.
+
+
+def _prepare_for_scoring(server, pic_id):
+    """Give the picture an embedding and clear its score so the finder picks it up."""
+
+    def _apply(session):
+        pic = session.get(Picture, pic_id)
+        pic.image_embedding = np.random.rand(512).astype(np.float32).tobytes()
+        pic.smart_score = None
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(_apply)
+
+
+def test_background_task_scores_and_honours_the_users_penalised_tags():
+    """The SMART_SCORE finder builds a runnable task that respects the user's table."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.95)
+
+        # Drive the finder by hand: the live WorkPlanner would otherwise claim and score
+        # the same picture concurrently, making the assertions below racy.
+        server.vault._work_planner.stop()
+
+        finder = server.vault._planner_work_finders[TaskType.SMART_SCORE]
+        assert hasattr(finder, "_vault"), "finder must carry the vault for thresholds"
+
+        # 1) With the tag in the user's table it is charged.
+        with_tag = dict(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
+        with_tag[PENALISED_TAG] = 5
+        assert (
+            client.patch(
+                "/users/me/config", json={"smart_score_penalised_tags": with_tag}
+            ).status_code
+            == 200
+        )
+        _prepare_for_scoring(server, pic_id)
+        task = finder.find_task()
+        assert task is not None and pic_id in task.params["picture_ids"]
+        assert task._run_task()["changed_count"] == 1
+        # The TaskRunner normally does this; without it the finder keeps the picture
+        # claimed and the second find_task() below would return None.
+        finder.on_task_complete(task, None)
+        charged = _get_smart_score(server, pic_id)
+        assert charged is not None and 1.0 <= charged <= 5.0
+
+        # 2) Remove the tag from the user's table — the same picture must score higher,
+        #    which is only possible if the background path reads the user's config.
+        without_tag = {k: v for k, v in with_tag.items() if k != PENALISED_TAG}
+        assert (
+            client.patch(
+                "/users/me/config", json={"smart_score_penalised_tags": without_tag}
+            ).status_code
+            == 200
+        )
+        _prepare_for_scoring(server, pic_id)
+        task = finder.find_task()
+        assert task is not None
+        assert task._run_task()["changed_count"] == 1
+        finder.on_task_complete(task, None)
+        uncharged = _get_smart_score(server, pic_id)
+        assert uncharged is not None
+        assert uncharged > charged, (
+            f"removing {PENALISED_TAG!r} from the user's table did not raise the score "
+            f"({charged:.4f} -> {uncharged:.4f}); the background scorer is still using "
+            "the hardcoded defaults"
+        )
     finally:
         server.vault.close()
         temp_dir.cleanup()

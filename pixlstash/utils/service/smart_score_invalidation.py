@@ -28,10 +28,17 @@ every routine re-tag, which is a serious throughput regression on a small box.
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Iterable
 
-from sqlalchemy import update
+from sqlalchemy import func, or_, update
+from sqlmodel import select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, Tag, TagPrediction
+from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
 from pixlstash.picture_scoring import fetch_anomaly_confidences
+from pixlstash.utils.quality.anomaly_penalty import (
+    ANOMALY_FAMILIES,
+    _family_max_weights,
+    normalise_tag_weights,
+)
 from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
@@ -169,6 +176,103 @@ def invalidate_changed_anomaly_scores(
         context,
         len(changed),
         len(ids),
+        cleared,
+    )
+    return cleared
+
+
+def changed_penalised_tags(before: dict | None, after: dict | None) -> set[str]:
+    """Return every tag whose *effective* penalty weight moved between the two tables.
+
+    This is not a plain dict diff. Unweighted family members (``jpeg artifacts``,
+    ``film grain``, ``compression artifacts``) inherit their family's ceiling via
+    :func:`~pixlstash.utils.quality.anomaly_penalty._tag_weight`, so removing the family's
+    only weighted member silently drops those aliases to zero too. Diffing the raw tables
+    alone would miss a picture tagged only ``jpeg artifacts`` when the user re-weighted
+    ``blocky``, leaving its cached score stale forever. Any family whose ceiling moved
+    therefore contributes all of its members, plus their merge children (which are scored
+    under the parent's canonical tag but stored under their own name).
+
+    Args:
+        before: Resolved ``{tag: weight}`` table before the config edit.
+        after: Resolved ``{tag: weight}`` table after the config edit.
+
+    Returns:
+        Set of lowercase tag names whose effective weight moved.
+    """
+    old = normalise_tag_weights(before or {})
+    new = normalise_tag_weights(after or {})
+    changed = {tag for tag in set(old) | set(new) if old.get(tag) != new.get(tag)}
+
+    old_family_max = _family_max_weights(old)
+    new_family_max = _family_max_weights(new)
+    for family in ANOMALY_FAMILIES:
+        name = family["name"]
+        if old_family_max.get(name) != new_family_max.get(name):
+            changed.update(family["tags"])
+    # Merge children are stored under their own tag but scored as the parent, so they
+    # must follow whenever their parent's effective weight moved.
+    for child, parent in DEFAULT_TAG_MERGES.items():
+        if parent in changed:
+            changed.add(child)
+    return changed
+
+
+def invalidate_for_penalised_tag_change(
+    session: "Session", changed_tags: Iterable[str]
+) -> int:
+    """NULL the cached score of every picture carrying one of *changed_tags*.
+
+    Re-weighting a penalised tag only moves the score of pictures that actually carry
+    that tag, so invalidating the whole library (the previous behaviour) forced a full
+    re-score of every picture on any settings edit — tens of thousands of GPU-backed
+    recomputes to fix a few hundred rows.
+
+    "Carrying" spans both label sources the penalty reads: an applied :class:`Tag` row,
+    or an anomaly :class:`TagPrediction` row (which is what
+    :func:`~pixlstash.picture_scoring.fetch_anomaly_confidences` actually feeds the
+    scorer, including human POS/NEG decisions). Predictions are matched without a
+    confidence gate on purpose: a weight change must invalidate a picture whose
+    prediction sits either side of the apply threshold, and over-invalidating a handful
+    of rows is far cheaper than missing a stale score.
+
+    Issued as one bulk UPDATE per tag chunk with an ``IN (subquery)``, so no picture ids
+    are round-tripped into Python. Does **not** commit — the caller owns the transaction.
+
+    Args:
+        session: Active DB session.
+        changed_tags: Lowercase tag names whose weight was added/removed/changed.
+
+    Returns:
+        Number of cached scores cleared.
+    """
+    tags = sorted({str(t).strip().lower() for t in changed_tags if t})
+    if not tags:
+        logger.debug(
+            "Smart-score invalidation (penalised-tag config): no tag weights moved; "
+            "no cached scores cleared."
+        )
+        return 0
+    cleared = 0
+    for chunk in _chunks(tags):
+        tagged = select(Tag.picture_id).where(func.lower(Tag.tag).in_(chunk))
+        predicted = select(TagPrediction.picture_id).where(
+            func.lower(TagPrediction.tag).in_(chunk)
+        )
+        result = session.exec(
+            update(Picture)
+            .where(
+                Picture.smart_score.is_not(None),
+                or_(Picture.id.in_(tagged), Picture.id.in_(predicted)),
+            )
+            .values(smart_score=None)
+        )
+        cleared += result.rowcount or 0
+    logger.info(
+        "Smart-score invalidation (penalised-tag config): %d tag weight(s) changed "
+        "(%s), cleared %d cached score(s) for recompute.",
+        len(tags),
+        ", ".join(tags),
         cleared,
     )
     return cleared

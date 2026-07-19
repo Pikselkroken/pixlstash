@@ -7,16 +7,24 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import update
 from sqlmodel import Session
 
 from PIL import Image
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, User
+from pixlstash.db_models import User
+from pixlstash.db_models.tag import (
+    DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+    DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import config_service
 from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
+from pixlstash.utils.service.smart_score_invalidation import (
+    changed_penalised_tags,
+    invalidate_for_penalised_tag_change,
+)
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
     serialize_user_config,
@@ -24,6 +32,19 @@ from pixlstash.utils.service.user_settings_utils import (
 from pixlstash.utils.watermark import get_default_watermark_bytes
 
 logger = get_logger(__name__)
+
+
+def _resolved_penalised_tags(raw) -> dict:
+    """Resolve a stored ``smart_score_penalised_tags`` value to ``{tag: weight}``.
+
+    Uses the same parser the scorer does, so the config-change diff is taken over the
+    weights that actually reach the penalty rather than over the raw JSON text.
+    """
+    return smart_score_penalised_tags(
+        raw,
+        DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+        default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    )
 
 
 def create_router(server) -> APIRouter:
@@ -284,7 +305,9 @@ def create_router(server) -> APIRouter:
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
 
-            old_penalised_tags = user.smart_score_penalised_tags
+            old_penalised_tags = _resolved_penalised_tags(
+                user.smart_score_penalised_tags
+            )
             try:
                 updated = apply_user_config_patch(user, patch_data)
             except ValueError as exc:
@@ -294,18 +317,25 @@ def create_router(server) -> APIRouter:
                 session.add(user)
                 session.commit()
                 session.refresh(user)
-            penalised_tags_changed = (
-                user.smart_score_penalised_tags != old_penalised_tags
+            new_penalised_tags = _resolved_penalised_tags(
+                user.smart_score_penalised_tags
             )
-            return user, updated, penalised_tags_changed
+            # Diff the *resolved* weight tables, not the raw JSON strings: a reordered
+            # or reformatted payload with identical weights must not trigger a re-score.
+            changed_tags = changed_penalised_tags(
+                old_penalised_tags, new_penalised_tags
+            )
+            return user, updated, changed_tags
 
-        user, updated, penalised_tags_changed = server.vault.db.run_task(
+        user, updated, changed_tags = server.vault.db.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
-        if penalised_tags_changed:
-
+        if changed_tags:
+            # Scoped, not library-wide: only pictures that actually carry one of the
+            # re-weighted tags can have moved, and a blanket reset would re-score the
+            # entire vault on every settings edit.
             def _reset_smart_scores(session: Session) -> None:
-                session.exec(update(Picture).values(smart_score=None))
+                invalidate_for_penalised_tag_change(session, changed_tags)
                 session.commit()
 
             server.vault.db.run_task(_reset_smart_scores, priority=DBPriority.LOW)

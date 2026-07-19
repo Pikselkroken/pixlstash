@@ -172,6 +172,14 @@ class Vault:
         self._planner_work_finders[TaskType.TAG_HEALTH_AUTO_REBUILD] = (
             TagHealthAutoRebuildFinder(vault=self)
         )
+        # Needs a full Vault to resolve the tagger's per-label acceptance thresholds
+        # (meta.json path + user threshold offset) for the anomaly penalty; same reason
+        # as the two finders above.
+        from pixlstash.tasks.missing_smart_score_finder import MissingSmartScoreFinder
+
+        self._planner_work_finders[TaskType.SMART_SCORE] = MissingSmartScoreFinder(
+            vault=self
+        )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,

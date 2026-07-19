@@ -6,6 +6,10 @@ from pydantic import BaseModel, ConfigDict
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_prediction_service
+from pixlstash.utils.service.anomaly_thresholds import (
+    load_label_thresholds,
+    load_raw_label_thresholds,
+)
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
 from pixlstash.routes.pictures._helpers import enforce_picture_scope
 
@@ -144,9 +148,7 @@ def create_router(server) -> APIRouter:
             "tag_predictions": payload,
             "meta": {
                 "acceptance_threshold": server.vault.get_pixlstash_acceptance_threshold(),
-                "label_thresholds": tag_prediction_service.load_label_thresholds(
-                    meta_path, offset
-                ),
+                "label_thresholds": load_label_thresholds(meta_path, offset),
             },
         }
 
@@ -329,7 +331,7 @@ def create_router(server) -> APIRouter:
         if offset is None:
             offset = server.vault.get_pixlstash_tagger_threshold_offset()
         meta_path = server.vault.get_pixlstash_tagger_meta_path()
-        raw = tag_prediction_service.load_raw_label_thresholds(meta_path)
+        raw = load_raw_label_thresholds(meta_path)
         sorted_labels = sorted(raw.items())
         return [
             {

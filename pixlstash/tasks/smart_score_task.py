@@ -16,6 +16,7 @@ from pixlstash.picture_scoring import (
     prepare_smart_score_inputs,
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
+from pixlstash.utils.service.anomaly_thresholds import resolve_anomaly_apply_thresholds
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask
 
@@ -24,11 +25,23 @@ logger = get_logger(__name__)
 
 
 class SmartScoreTask(BaseTask):
-    """Task that pre-computes and stores smart scores for one batch of pictures."""
+    """Task that pre-computes and stores smart scores for one batch of pictures.
+
+    Needs the :class:`~pixlstash.vault.Vault` (not just the database) because two of the
+    scorer's inputs are owned outside the DB session: the tagger's per-label acceptance
+    thresholds, which live in the model's ``meta.json`` plus the user's threshold offset.
+    The owner's penalised-tag weights are resolved from the DB inside the read session by
+    :func:`~pixlstash.picture_scoring.attach_anomaly_inputs`, so this background path and
+    the request path score identically.
+
+    Args:
+        vault: Vault used to resolve the tagger's anomaly apply thresholds.
+        pictures: Pictures to score in this batch.
+    """
 
     BATCH_SIZE = 64
 
-    def __init__(self, database, pictures: list):
+    def __init__(self, vault, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
             task_type="SmartScoreTask",
@@ -37,7 +50,8 @@ class SmartScoreTask(BaseTask):
                 "batch_size": len(picture_ids),
             },
         )
-        self._db = database
+        self._vault = vault
+        self._db = vault.db
         self._pictures = pictures or []
 
     def _run_task(self):
@@ -50,8 +64,11 @@ class SmartScoreTask(BaseTask):
         if not picture_ids:
             return {"changed_count": 0}
 
-        good_anchors, bad_anchors, candidates, tag_precisions = (
-            self._db.run_immediate_read_task(self._fetch_score_data, picture_ids)
+        apply_thresholds = resolve_anomaly_apply_thresholds(self._vault)
+        good_anchors, bad_anchors, candidates, scorer_config = (
+            self._db.run_immediate_read_task(
+                self._fetch_score_data, picture_ids, apply_thresholds
+            )
         )
 
         good_list, bad_list, cand_list, cand_ids = prepare_smart_score_inputs(
@@ -66,7 +83,7 @@ class SmartScoreTask(BaseTask):
             cand_list,
             good_list,
             bad_list,
-            config={"tag_precisions": tag_precisions},
+            config=scorer_config,
         )
 
         id_to_score = {cand_ids[i]: float(scores[i]) for i in range(len(cand_ids))}
@@ -85,13 +102,21 @@ class SmartScoreTask(BaseTask):
         return {"changed_count": changed_count}
 
     @staticmethod
-    def _fetch_score_data(session: Session, candidate_ids: list):
-        """Fetch anchors, candidates, and per-tag precision for smart score computation.
+    def _fetch_score_data(
+        session: Session, candidate_ids: list, apply_thresholds: dict | None = None
+    ):
+        """Fetch anchors, candidates, and the scorer config for smart score computation.
 
-        Returns ``(good_anchors, bad_anchors, candidates, tag_precisions)``. Mirrors
+        Returns ``(good_anchors, bad_anchors, candidates, scorer_config)``. Mirrors
         :func:`pixlstash.picture_scoring.fetch_smart_score_data` and shares
         :func:`pixlstash.picture_scoring.attach_anomaly_inputs`, so the background task
         and the on-demand sort score identically.
+
+        Args:
+            session: Active DB session.
+            candidate_ids: Pictures to score.
+            apply_thresholds: Per-tag confidence gate; see
+                :func:`pixlstash.picture_scoring.fetch_anomaly_confidences`.
         """
         good = session.exec(
             select(Picture.image_embedding, Picture.score)
@@ -152,7 +177,9 @@ class SmartScoreTask(BaseTask):
                 }
             )
 
-        tag_precisions = attach_anomaly_inputs(session, candidates)
+        scorer_config = attach_anomaly_inputs(
+            session, candidates, apply_thresholds=apply_thresholds
+        )
 
         builtin_good, builtin_bad = _load_builtin_anchors()
         if len(good) < _BUILTIN_MIN_GOOD:
@@ -160,7 +187,7 @@ class SmartScoreTask(BaseTask):
         if len(bad) < _BUILTIN_MIN_BAD:
             bad = list(bad) + builtin_bad
 
-        return good, bad, candidates, tag_precisions
+        return good, bad, candidates, scorer_config
 
     @staticmethod
     def _persist_scores(session: Session, id_to_score: dict) -> int:
