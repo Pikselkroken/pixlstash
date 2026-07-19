@@ -102,13 +102,16 @@ describe("queue ordering", () => {
 
 // --- Decisions write through the existing per-item endpoints -------------------
 
-function seedSession(store, item) {
+// `progress` mirrors the server's four-bucket shape from `_progress_map`
+// (done / pending / skipped / locked). `progress` overrides let a test seed a
+// session that already has frozen suspects or earlier skips.
+function seedSession(store, item, progress = {}) {
   store.sessions = [
     {
       id: 1,
       tag: item.tag,
       stats: { scanned: 100, found: 2, prev_reviewed: 0 },
-      progress: { done: 0, pending: 2 },
+      progress: { done: 0, pending: 2, skipped: 0, locked: 0, ...progress },
       stale: false,
     },
   ];
@@ -135,7 +138,12 @@ describe("resolveCurrent (via answerBinary)", () => {
     expect(store.queues[1].items).toHaveLength(0);
     expect(store.tallies[1]).toEqual({ removed: 1, added: 0, kept: 0 });
     expect(store.undoStacks[1]).toHaveLength(1);
-    expect(store.sessions[0].progress).toEqual({ done: 1, pending: 1 });
+    expect(store.sessions[0].progress).toEqual({
+      done: 1,
+      pending: 1,
+      skipped: 0,
+      locked: 0,
+    });
   });
 
   it("rolls back the head, tally, and progress when the write fails", async () => {
@@ -147,8 +155,169 @@ describe("resolveCurrent (via answerBinary)", () => {
 
     expect(store.queues[1].items[0]).toEqual(item);
     expect(store.tallies[1]).toEqual({ removed: 0, added: 0, kept: 0 });
-    expect(store.sessions[0].progress).toEqual({ done: 0, pending: 2 });
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 0,
+      locked: 0,
+    });
     expect(store.error).toBeTruthy();
+  });
+});
+
+// --- bumpProgress preserves the buckets no decision owns ----------------------
+//
+// REGRESSION GUARD: bumpProgress used to rebuild `progress` as a fresh
+// {done, pending} object, dropping `locked` and `skipped`. ReviewSessionView
+// renders its "N suspects frozen by a locked set" badge from
+// `session.progress.locked`, so the badge silently vanished on the reviewer's
+// first decision — the count dropped with no explanation, which is precisely
+// what the locked bucket was added to explain.
+
+describe("bumpProgress bucket preservation", () => {
+  const item = {
+    id: 77,
+    picture_id: 900,
+    tag: "cat",
+    direction: "remove",
+    kind: "binary",
+  };
+
+  it("keeps locked and skipped intact through a decision", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+
+    await store.answerBinary("no");
+
+    expect(store.sessions[0].progress).toEqual({
+      done: 1,
+      pending: 1,
+      skipped: 4, // a decision never touches the skipped bucket
+      locked: 3, // nor the frozen-suspect bucket
+    });
+  });
+
+  it("keeps locked intact when a decision write fails and rolls back", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+    apiClient.post.mockRejectedValueOnce(new Error("boom"));
+
+    await store.answerBinary("no");
+
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 4,
+      locked: 3,
+    });
+  });
+
+  it("moves pending into skipped on a skip, leaving locked alone", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+
+    await store.skip();
+
+    expect(apiClient.post).toHaveBeenCalledWith("/tag_suggestions/77/skip");
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 1,
+      skipped: 5,
+      locked: 3,
+    });
+  });
+
+  it("rolls a failed skip back without disturbing locked", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+    apiClient.post.mockRejectedValueOnce(new Error("boom"));
+
+    await store.skip();
+
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 4,
+      locked: 3,
+    });
+    expect(store.error).toBeTruthy();
+  });
+
+  it("undoes a decision back to the seeded buckets", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+
+    await store.answerBinary("no");
+    await store.undo();
+
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 4,
+      locked: 3,
+    });
+  });
+
+  it("undoes a skip back to the seeded buckets", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+
+    await store.skip();
+    await store.undo();
+
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 4,
+      locked: 3,
+    });
+  });
+
+  it("returns skipped cards to pending on reopenSkipped, locked untouched", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+
+    await store.skip();
+    await store.reopenSkipped(1);
+
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 4,
+      locked: 3,
+    });
+    expect(store.queues[1].items).toHaveLength(1);
+  });
+
+  it("drops an already-gone (404) skip from skipped without crediting pending", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 3, skipped: 4 });
+
+    await store.skip(); // skipped 4 → 5, pending 2 → 1
+    const gone = new Error("gone");
+    gone.response = { status: 404 };
+    apiClient.post.mockRejectedValueOnce(gone);
+    await store.reopenSkipped(1);
+
+    // The row no longer exists server-side: it leaves `skipped` but never
+    // rejoins `pending`.
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 1,
+      skipped: 4,
+      locked: 3,
+    });
+    expect(store.queues[1].items).toHaveLength(0);
+  });
+
+  it("preserves an unknown future bucket the server may add", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item, { locked: 2, deferred: 9 });
+
+    await store.answerBinary("no");
+
+    expect(store.sessions[0].progress.deferred).toBe(9);
+    expect(store.sessions[0].progress.locked).toBe(2);
   });
 });
 
@@ -345,8 +514,13 @@ describe("skip", () => {
     expect(store.queues[1].items).toHaveLength(0);
     expect(store.tallies[1].skipped).toBe(1);
     expect(store.skippedCountFor(1)).toBe(1);
-    // A skip is not a decision: done unchanged, pending drained.
-    expect(store.sessions[0].progress).toEqual({ done: 0, pending: 1 });
+    // A skip is not a decision: done unchanged, pending drained into skipped.
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 1,
+      skipped: 1,
+      locked: 0,
+    });
     expect(store.undoStacks[1]).toHaveLength(1);
     expect(store.undoStacks[1][0].action).toBe("skip");
   });
@@ -377,7 +551,12 @@ describe("skip", () => {
 
     expect(store.queues[1].items[0]).toEqual(item);
     expect(store.tallies[1].skipped).toBe(0);
-    expect(store.sessions[0].progress).toEqual({ done: 0, pending: 2 });
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 0,
+      locked: 0,
+    });
     expect(store.error).toBeTruthy();
   });
 
@@ -392,7 +571,12 @@ describe("skip", () => {
     expect(apiClient.post).toHaveBeenCalledWith("/tag_suggestions/41/reopen");
     expect(store.queues[1].items[0]).toEqual(item);
     expect(store.tallies[1].skipped).toBe(0);
-    expect(store.sessions[0].progress).toEqual({ done: 0, pending: 2 });
+    expect(store.sessions[0].progress).toEqual({
+      done: 0,
+      pending: 2,
+      skipped: 0,
+      locked: 0,
+    });
     expect(store.decisionsCount).toBe(0); // skips never counted as decisions
   });
 

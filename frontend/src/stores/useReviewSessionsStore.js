@@ -903,13 +903,24 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   }
 
   // Adjust the session's progress counters. A decision moves done+1/pending-1;
-  // a skip only drains pending (the item leaves the queue with no decision).
-  function bumpProgress(id, { done = 0, pending = 0 }) {
+  // a skip moves pending-1/skipped+1 (the item leaves the queue with no
+  // decision, but the server still counts the row in its own SKIPPED bucket).
+  //
+  // Only the buckets a caller actually owns are recomputed — the rest of the
+  // server's progress object is spread through untouched. `locked` in particular
+  // is NEVER owned by a decision: it counts still-PENDING suspects frozen by a
+  // locked picture set, which no accept/dismiss/skip/undo can change. Rebuilding
+  // `progress` from scratch here dropped it (and `skipped`), so the "N suspects
+  // frozen by a locked set" badge in ReviewSessionView vanished on the first
+  // decision — the exact silent-count-drop this bucket exists to explain.
+  function bumpProgress(id, { done = 0, pending = 0, skipped = 0 }) {
     sessions.value = sessions.value.map((s) => {
       if (s.id !== id) return s;
       const progress = {
+        ...(s.progress || {}),
         done: Math.max(0, (s.progress?.done ?? 0) + done),
         pending: Math.max(0, (s.progress?.pending ?? 0) + pending),
+        skipped: Math.max(0, (s.progress?.skipped ?? 0) + skipped),
       };
       return { ...s, progress };
     });
@@ -993,7 +1004,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     // Optimistic: the card leaves the queue immediately.
     setQueue(id, { items: queueFor(id).items.slice(1) });
     bumpTally(id, { skipped: 1 });
-    bumpProgress(id, { pending: -1 });
+    bumpProgress(id, { pending: -1, skipped: 1 });
     try {
       await apiClient.post(`/tag_suggestions/${item.id}/skip`);
       undoStacks.value = {
@@ -1012,7 +1023,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       // Real failure: put the card back, nothing silently lost.
       setQueue(id, { items: [item, ...queueFor(id).items] });
       bumpTally(id, { skipped: 1 }, -1);
-      bumpProgress(id, { pending: 1 });
+      bumpProgress(id, { pending: 1, skipped: -1 });
       error.value = e?.message || "Failed to skip";
     }
   }
@@ -1054,7 +1065,10 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       [id]: stack.filter((e) => !settled.has(e)),
     };
     bumpTally(id, { skipped: settled.size }, -1);
-    bumpProgress(id, { pending: reopened.length });
+    // `settled` = reopened (SKIPPED → PENDING) plus already-gone 404s (the row
+    // no longer exists in any bucket). Both leave the server's `skipped` count,
+    // so it drops by settled.size while `pending` only regains the reopened.
+    bumpProgress(id, { pending: reopened.length, skipped: -settled.size });
     if (reopened.length) {
       setQueue(id, {
         items: sortQueue([
@@ -1084,7 +1098,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     undoStacks.value = { ...undoStacks.value, [s.id]: stack.slice(0, -1) };
     bumpTally(s.id, last.delta, -1);
     if (last.action === "skip") {
-      bumpProgress(s.id, { pending: 1 });
+      bumpProgress(s.id, { pending: 1, skipped: -1 });
     } else {
       bumpProgress(s.id, { done: -1, pending: 1 });
       // Net XP: undoing a decision walks the counter back (skips never counted).
