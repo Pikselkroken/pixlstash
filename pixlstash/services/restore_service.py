@@ -7,11 +7,17 @@ the snapshot file before any data work to handle cross-version snapshots.
 
 import os
 import shutil
+import sqlite3
 import tempfile
 import threading
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlmodel import Session, create_engine, select
 from sqlalchemy import (
     bindparam as sa_bindparam,
@@ -126,6 +132,140 @@ _SUPPORTED_RESOURCE_TYPES: tuple[str, ...] = ("picture", "picture_set", "charact
 # "100% missing" is a legitimate one-picture deletion, not a mount blip.
 _MAX_MISSING_RATIO_FOR_CLEANUP: float = 0.5
 _MIN_PICTURES_FOR_MISSING_RATIO_CHECK: int = 10
+
+
+@lru_cache(maxsize=1)
+def _alembic_paths() -> tuple[Path, Path]:
+    """Locate the Alembic ini + migrations directory for snapshot upgrades.
+
+    Returns:
+        ``(alembic_ini, migrations_dir)`` as absolute paths.
+
+    Raises:
+        RuntimeError: If neither the repo-root nor the packaged layout has
+            both an ``alembic.ini`` and a ``migrations`` directory.
+    """
+    module_dir = Path(__file__).resolve().parent.parent
+    repo_root = module_dir.parent
+    for candidate_ini, candidate_migrations in (
+        (repo_root / "alembic.ini", repo_root / "migrations"),
+        (module_dir / "alembic.ini", module_dir / "migrations"),
+    ):
+        if candidate_ini.exists() and candidate_migrations.exists():
+            return candidate_ini, candidate_migrations
+    raise RuntimeError("Alembic config not found for snapshot upgrade.")
+
+
+def _alembic_config(sqlalchemy_url: str = "") -> Config:
+    """Build an Alembic ``Config`` pointed at this package's migrations.
+
+    Args:
+        sqlalchemy_url: Database URL to operate on. Only needed for commands
+            that actually connect (e.g. ``upgrade``); revision-graph lookups
+            can pass the empty default.
+
+    Returns:
+        A configured Alembic ``Config``.
+    """
+    alembic_ini, migrations_dir = _alembic_paths()
+    config = Config(str(alembic_ini))
+    config.set_main_option("script_location", str(migrations_dir))
+    if sqlalchemy_url:
+        config.set_main_option("sqlalchemy.url", sqlalchemy_url)
+    return config
+
+
+@lru_cache(maxsize=1)
+def _alembic_head_revisions() -> frozenset[str]:
+    """Return the current head revision(s) of the migration graph.
+
+    Cached: the migration scripts are read-only for the life of the process.
+
+    Returns:
+        Frozen set of head revision identifiers (normally exactly one).
+    """
+    return frozenset(ScriptDirectory.from_config(_alembic_config()).get_heads())
+
+
+def _snapshot_schema_revision(db_path: str) -> Optional[str]:
+    """Return the Alembic revision stamped in the SQLite file at *db_path*.
+
+    Args:
+        db_path: Absolute path to a snapshot ``.sqlite`` file.
+
+    Returns:
+        The ``alembic_version.version_num`` value, or None when the file has
+        no ``alembic_version`` table (a very old snapshot), the table is
+        empty, or it could not be read.
+    """
+    if not os.path.isfile(db_path):
+        logger.warning(
+            "RestoreService: cannot read schema revision, no such file: %s", db_path
+        )
+        return None
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT version_num FROM alembic_version LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        # Most commonly "no such table: alembic_version" on a pre-Alembic
+        # snapshot; treated as "unknown revision" so the caller upgrades.
+        logger.info(
+            "RestoreService: no readable alembic_version in snapshot %s (%s); "
+            "treating it as out of date.",
+            db_path,
+            exc,
+        )
+        return None
+    return row[0] if row and row[0] else None
+
+
+def _snapshot_schema_is_current(db_path: str) -> bool:
+    """Return True only if the snapshot's schema is at the migration head.
+
+    This replaces the old "does column X exist?" sniff. Probing a single
+    column cannot tell a current snapshot from an intermediate one — a file
+    can carry ``metadata_hash`` and still predate ``tags_file`` — and any ORM
+    entity load against such a file selects columns that do not exist, which
+    fails at query time. Comparing the stamped revision against the head is
+    the only check that stays correct as new migrations land.
+
+    Args:
+        db_path: Absolute path to a snapshot ``.sqlite`` file.
+
+    Returns:
+        True when the stamped revision is one of the current heads. False for
+        an unstamped, behind, or unrecognised revision — i.e. fail towards
+        "needs upgrading", never towards reading a stale schema.
+    """
+    revision = _snapshot_schema_revision(db_path)
+    if revision is None:
+        return False
+    try:
+        heads = _alembic_head_revisions()
+    except Exception as exc:
+        logger.error(
+            "RestoreService: could not resolve Alembic head revisions while "
+            "checking snapshot %s: %s",
+            db_path,
+            exc,
+            exc_info=True,
+        )
+        return False
+    if revision in heads:
+        return True
+    logger.info(
+        "RestoreService: snapshot %s is at schema revision %s, head is %s; "
+        "it will be upgraded before use.",
+        db_path,
+        revision,
+        sorted(heads),
+    )
+    return False
 
 
 @dataclass
@@ -1280,36 +1420,18 @@ class RestoreService:
             return {"identical_ids": [], "changed_ids": list(picture_ids)}
         else:
             # ── Legacy uncompressed snapshot ────────────────────────────────
-            # Probe → optional in-place backfill → read hashes, held under the
-            # per-path file lock so a concurrent compare/preview/restore can't
-            # read a half-rewritten file. The lock is reentrant, so the nested
-            # _backfill_snapshot call re-enters safely.
-            from sqlalchemy import inspect as sa_inspect
-
+            # Schema-currency check → optional in-place upgrade + backfill →
+            # read hashes, held under the per-path file lock so a concurrent
+            # compare/preview/restore can't read a half-rewritten file. The
+            # lock is reentrant, so the nested _backfill_snapshot call
+            # re-enters safely.
             with self._snapshot_file_lock(snapshot_path):
-                _probe_engine = None
-                try:
-                    _probe_engine = create_engine(
-                        f"sqlite:///{snapshot_path}", echo=False
-                    )
-                    snap_has_col = "metadata_hash" in {
-                        c["name"]
-                        for c in sa_inspect(_probe_engine).get_columns("picture")
-                    }
-                except Exception:
-                    snap_has_col = False
-                finally:
-                    if _probe_engine is not None:
-                        try:
-                            _probe_engine.dispose()
-                        except Exception:
-                            logger.warning(
-                                "RestoreService.compare_hashes: failed to dispose probe engine for snapshot %d",
-                                snapshot_id,
-                            )
-
-                if not snap_has_col:
-                    # One-time fix: write migration + hashes into the snapshot.
+                if not _snapshot_schema_is_current(snapshot_path):
+                    # One-time fix: alembic-upgrade the file to head and write
+                    # the hashes into it. The check is revision-based, not a
+                    # single-column probe: the NULL-hash path below does a full
+                    # ORM entity load, which selects *every* column of the
+                    # current Picture model, so anything short of head fails.
                     self._backfill_snapshot(snapshot_path)
 
                 # Read hashes from the (possibly just backfilled) file.
@@ -1333,10 +1455,20 @@ class RestoreService:
                                     snap_session, pid
                                 )
                 except Exception as exc:
+                    # Last-resort path only: an out-of-date snapshot is handled
+                    # by the upgrade above, so anything landing here is a real
+                    # failure. Log the full context needed to diagnose it.
                     logger.warning(
-                        "RestoreService.compare_hashes: failed to read snapshot %d: %s",
+                        "RestoreService.compare_hashes: failed to read snapshot "
+                        "%d at %s (schema revision %s, head %s) for %d picture "
+                        "id(s): %s — reporting all as changed.",
                         snapshot_id,
+                        snapshot_path,
+                        _snapshot_schema_revision(snapshot_path),
+                        sorted(_alembic_head_revisions()),
+                        len(picture_ids),
                         exc,
+                        exc_info=True,
                     )
                     # Treat all as changed on error (conservative / keep enabled)
                     return {"identical_ids": [], "changed_ids": list(picture_ids)}
@@ -1401,10 +1533,15 @@ class RestoreService:
     def _backfill_snapshot(self, abs_snapshot: str, reset_all: bool = False) -> None:
         """Compute and permanently write metadata_hash for pictures in *abs_snapshot*.
 
-        If the snapshot predates the metadata_hash migration (column missing),
-        the file is upgraded in-place via a temp copy that replaces the
-        original.  After the column exists, all rows whose metadata_hash IS
-        NULL are filled and committed directly to the snapshot file.
+        If the snapshot's schema is behind the current Alembic head, the file
+        is upgraded in-place via a temp copy that replaces the original.  Once
+        the schema is current, all rows whose metadata_hash IS NULL are filled
+        and committed directly to the snapshot file.
+
+        The "is it current?" test compares the snapshot's stamped Alembic
+        revision against head rather than probing for a specific column: an
+        intermediate snapshot can have ``metadata_hash`` yet lack columns added
+        by later migrations, and hashing loads the full Picture entity.
 
         Held under the per-path file lock so concurrent compare/preview/
         restore on the same snapshot can't read a half-rewritten file.
@@ -1423,32 +1560,17 @@ class RestoreService:
             )
             return
 
-        from sqlalchemy import inspect as sa_inspect
-
         with self._snapshot_file_lock(abs_snapshot):
-            _probe = None
-            try:
-                _probe = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
-                col_names = {
-                    col["name"] for col in sa_inspect(_probe).get_columns("picture")
-                }
-            finally:
-                if _probe is not None:
-                    try:
-                        _probe.dispose()
-                    except Exception:
-                        logger.warning(
-                            "RestoreService._backfill_snapshot: failed to dispose probe engine for %s",
-                            abs_snapshot,
-                        )
-
-            if "metadata_hash" not in col_names:
+            if not _snapshot_schema_is_current(abs_snapshot):
                 # Upgrade via a temp copy, then atomically replace the original.
                 upgraded = self._upgrade_snapshot_schema(abs_snapshot)
                 if upgraded is None:
                     logger.warning(
-                        "RestoreService._backfill_snapshot: schema upgrade failed for %s",
+                        "RestoreService._backfill_snapshot: schema upgrade failed "
+                        "for %s (schema revision %s, head %s)",
                         abs_snapshot,
+                        _snapshot_schema_revision(abs_snapshot),
+                        sorted(_alembic_head_revisions()),
                     )
                     return
                 tmp_dir = os.path.dirname(upgraded)
@@ -1459,7 +1581,7 @@ class RestoreService:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
                 return
 
-            # Column already exists — fill any NULL hashes on the original.
+            # Already at head — fill any NULL hashes on the original.
             self._fill_snapshot_hashes_at(abs_snapshot, reset_all=reset_all)
 
     def _fill_snapshot_hashes_at(self, db_path: str, reset_all: bool = False) -> None:
@@ -1475,8 +1597,6 @@ class RestoreService:
             reset_all: When True, reset all existing hashes to NULL first so
                 every picture is recomputed (use after algorithm changes).
         """
-        import sqlite3 as _sqlite3
-
         engine = create_engine(f"sqlite:///{db_path}", echo=False)
         try:
             with Session(engine) as session:
@@ -1506,7 +1626,7 @@ class RestoreService:
             # connection, so a ``with sqlite3.connect(...)`` here would leak the
             # file handle and block deletion of the snapshot on Windows. Close
             # explicitly in a finally.
-            conn = _sqlite3.connect(db_path)
+            conn = sqlite3.connect(db_path)
             try:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 conn.execute("PRAGMA journal_mode=DELETE")
@@ -1576,32 +1696,11 @@ class RestoreService:
             return None
 
         try:
-            from alembic import command
-            from alembic.config import Config
-            from pathlib import Path
-
-            module_dir = Path(__file__).resolve().parent.parent
-            repo_root = module_dir.parent
-            for candidate_ini, candidate_migrations in (
-                (repo_root / "alembic.ini", repo_root / "migrations"),
-                (module_dir / "alembic.ini", module_dir / "migrations"),
-            ):
-                if candidate_ini.exists() and candidate_migrations.exists():
-                    alembic_ini = candidate_ini
-                    migrations_dir = candidate_migrations
-                    break
-            else:
-                raise RuntimeError("Alembic config not found for snapshot upgrade.")
-
-            config = Config(str(alembic_ini))
-            config.set_main_option("script_location", str(migrations_dir))
-            config.set_main_option("sqlalchemy.url", f"sqlite:///{tmp_snapshot}")
+            config = _alembic_config(f"sqlite:///{tmp_snapshot}")
             with _ALEMBIC_UPGRADE_LOCK:
                 command.upgrade(config, "head")
             # Snapshot and convert back to rollback journal so the
             # main file contains all data without a WAL sidecar.
-            import sqlite3
-
             # ``with sqlite3.connect(...)`` commits but does not close the
             # connection; close explicitly so the handle is released before the
             # temp dir is removed (Windows blocks deletion of open files).

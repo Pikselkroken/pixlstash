@@ -1930,3 +1930,225 @@ def test_preview_full_warns_about_permanently_deleted(server):
     assert preview.summary.get("permanently_deleted") == 1, preview.summary
     assert any("permanently deleted" in w for w in preview.warnings), preview.warnings
     assert pic.id  # silence unused-var linters
+
+
+# ---------------------------------------------------------------------------
+# Legacy snapshots at an *intermediate* schema (has metadata_hash, but predates
+# later columns) must be alembic-upgraded, not sniffed for a single column.
+# ---------------------------------------------------------------------------
+
+# Revision that introduced tags_file / description_file; a snapshot stamped at
+# its parent has metadata_hash (added back in 0049) but not the sidecar columns.
+_INTERMEDIATE_REVISION = "0056_add_hide_purge_snapshot_warning"
+_INTERMEDIATE_ONLY_COLUMNS = (
+    "tags_file",
+    "tags_file_mtime",
+    "description_file",
+    "description_file_mtime",
+)
+
+
+def _register_legacy_uncompressed_snapshot(server, cp, *, with_sidecar: bool):
+    """Materialize *cp* to a plain ``.sqlite`` and register it as a snapshot.
+
+    Args:
+        server: The test server fixture.
+        cp: The compressed snapshot to copy from.
+        with_sidecar: When False the registered snapshot points at a manifest
+            path with no ``.hashes.json`` beside it, so ``compare_hashes``
+            takes the legacy in-file read path instead of the sidecar path.
+
+    Returns:
+        Tuple of (snapshot_id, absolute path to the plain .sqlite file).
+    """
+    from pixlstash.utils.snapshot_compression import materialize_snapshot
+
+    vault_root = server.vault.image_root
+    legacy_rel = cp.relative_path[: -len(".zst")]
+    legacy_abs = os.path.join(vault_root, legacy_rel)
+    materialize_snapshot(os.path.join(vault_root, cp.relative_path), legacy_abs)
+
+    manifest_rel = (
+        cp.manifest_relative_path
+        if with_sidecar
+        else legacy_rel + ".no-sidecar.manifest.json"
+    )
+
+    def _register(session):
+        row = Snapshot(
+            kind="MANUAL",
+            created_at=cp.created_at,
+            relative_path=legacy_rel,
+            manifest_relative_path=manifest_rel,
+            byte_size=os.path.getsize(legacy_abs),
+            picture_count=cp.picture_count,
+            schema_version=cp.schema_version,
+            label="legacy",
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row.id
+
+    return server.vault.db.run_task(_register), legacy_abs
+
+
+def _downgrade_snapshot_to_intermediate_schema(abs_snapshot: str):
+    """Rewrite *abs_snapshot* to look like a pre-0057 snapshot.
+
+    Drops the caption-sidecar columns added by 0057, back-dates
+    ``alembic_version`` to 0057's parent, and NULLs ``metadata_hash`` so the
+    read path is forced through the full-entity hash computation — the exact
+    combination that produced ``no such column: picture.tags_file``.
+    """
+    import sqlite3
+
+    with closing(sqlite3.connect(abs_snapshot)) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(picture)").fetchall()}
+        assert "metadata_hash" in cols, "Pre-test invariant: snapshot has metadata_hash"
+        for col in _INTERMEDIATE_ONLY_COLUMNS:
+            assert col in cols, f"Pre-test invariant: snapshot has {col}"
+            conn.execute(f"ALTER TABLE picture DROP COLUMN {col}")
+        conn.execute("UPDATE picture SET metadata_hash = NULL")
+        conn.execute(
+            "UPDATE alembic_version SET version_num = ?", (_INTERMEDIATE_REVISION,)
+        )
+        conn.commit()
+
+
+def _snapshot_columns(abs_snapshot: str) -> set:
+    import sqlite3
+
+    with closing(sqlite3.connect(abs_snapshot)) as conn:
+        return {r[1] for r in conn.execute("PRAGMA table_info(picture)").fetchall()}
+
+
+def _snapshot_revision(abs_snapshot: str) -> str:
+    import sqlite3
+
+    with closing(sqlite3.connect(abs_snapshot)) as conn:
+        return conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+
+
+def test_compare_hashes_upgrades_intermediate_schema_snapshot(server):
+    """A snapshot that *has* ``metadata_hash`` but predates ``tags_file`` must
+    still be alembic-upgraded before its hashes are read.
+
+    The old code probed for ``metadata_hash`` alone, concluded the file was
+    current, and then blew up with ``no such column: picture.tags_file`` on the
+    ORM entity load — swallowing the error and reporting every picture as
+    changed. An unmodified picture must come back as *identical*.
+    """
+    _create_file(server, "intermediate.jpg")
+    pic = _add_picture(server, filename="intermediate.jpg", description="same")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    legacy_id, legacy_abs = _register_legacy_uncompressed_snapshot(
+        server, cp, with_sidecar=False
+    )
+    _downgrade_snapshot_to_intermediate_schema(legacy_abs)
+    assert "tags_file" not in _snapshot_columns(legacy_abs)
+
+    result = server.vault.restore_service.compare_hashes(legacy_id, [pic.id])
+
+    assert result["identical_ids"] == [pic.id], (
+        "An unchanged picture in an intermediate-schema snapshot must compare "
+        f"identical after the schema upgrade; got {result}"
+    )
+    assert result["changed_ids"] == []
+    # The upgrade must have been written back to the snapshot file itself.
+    assert "tags_file" in _snapshot_columns(legacy_abs), (
+        "compare_hashes must persist the upgraded schema into the snapshot"
+    )
+    assert _snapshot_revision(legacy_abs) != _INTERMEDIATE_REVISION
+
+
+def test_compare_hashes_intermediate_schema_snapshot_detects_mutation(server):
+    """The upgrade path must not over-match: a picture genuinely changed since
+    the intermediate-schema snapshot still lands in ``changed_ids``."""
+    _create_file(server, "intermediate_diff.jpg")
+    pic = _add_picture(server, filename="intermediate_diff.jpg", description="orig")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    legacy_id, legacy_abs = _register_legacy_uncompressed_snapshot(
+        server, cp, with_sidecar=False
+    )
+    _downgrade_snapshot_to_intermediate_schema(legacy_abs)
+
+    def _mutate(session):
+        session.get(Picture, pic.id).description = "different"
+        session.commit()
+
+    server.vault.db.run_task(_mutate)
+
+    result = server.vault.restore_service.compare_hashes(legacy_id, [pic.id])
+    assert result["changed_ids"] == [pic.id], (
+        f"Mutated picture must still be reported as changed; got {result}"
+    )
+    assert result["identical_ids"] == []
+
+
+def test_compare_hashes_leaves_current_snapshot_untouched(server):
+    """A legacy uncompressed snapshot already at head must not be rewritten.
+
+    The schema-currency check is there to upgrade stale files, not to churn
+    every snapshot on every compare.
+    """
+    _create_file(server, "current_legacy.jpg")
+    pic = _add_picture(server, filename="current_legacy.jpg", description="same")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    legacy_id, legacy_abs = _register_legacy_uncompressed_snapshot(
+        server, cp, with_sidecar=False
+    )
+    revision_before = _snapshot_revision(legacy_abs)
+    stat_before = os.stat(legacy_abs)
+
+    result = server.vault.restore_service.compare_hashes(legacy_id, [pic.id])
+
+    assert result["identical_ids"] == [pic.id], result
+    stat_after = os.stat(legacy_abs)
+    assert stat_after.st_mtime_ns == stat_before.st_mtime_ns, (
+        "A snapshot already at head must not be rewritten by compare_hashes"
+    )
+    assert stat_after.st_size == stat_before.st_size
+    assert _snapshot_revision(legacy_abs) == revision_before
+
+
+def test_backfill_all_snapshot_hashes_repairs_intermediate_schema_snapshot(server):
+    """``backfill_all_snapshot_hashes`` must repair an intermediate-schema
+    snapshot rather than failing on it.
+
+    The old single-column probe took the "column already exists" branch and ran
+    the hash fill straight against the un-upgraded file, which raised on the
+    ORM load and left the snapshot permanently broken.
+    """
+    from sqlmodel import create_engine
+
+    _create_file(server, "backfill_intermediate.jpg")
+    pic = _add_picture(server, filename="backfill_intermediate.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    _legacy_id, legacy_abs = _register_legacy_uncompressed_snapshot(
+        server, cp, with_sidecar=False
+    )
+    _downgrade_snapshot_to_intermediate_schema(legacy_abs)
+
+    server.vault.restore_service.backfill_all_snapshot_hashes()
+
+    assert "tags_file" in _snapshot_columns(legacy_abs), (
+        "backfill_all_snapshot_hashes must upgrade an intermediate-schema snapshot"
+    )
+    assert _snapshot_revision(legacy_abs) != _INTERMEDIATE_REVISION
+
+    engine = create_engine(f"sqlite:///{legacy_abs}", echo=False)
+    try:
+        from sqlmodel import Session as _Session
+
+        with _Session(engine) as session:
+            stored = session.get(Picture, pic.id).metadata_hash
+    finally:
+        engine.dispose()
+    assert stored is not None, (
+        "backfill must fill the NULL metadata_hash in the repaired snapshot"
+    )
