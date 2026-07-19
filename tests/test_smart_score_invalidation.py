@@ -14,6 +14,7 @@ import os
 import tempfile
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -23,14 +24,17 @@ from sqlmodel import select
 from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.event_types import EventType
 from pixlstash.picture_scoring import fetch_anomaly_confidences
 from pixlstash.server import Server
 from pixlstash.tasks import TaskType
+from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.smart_score_task import SmartScoreTask
 from pixlstash.tasks.tag_task import TagTask
 from pixlstash.utils.quality.anomaly_penalty import anomaly_penalty
 from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
 from pixlstash.utils.service.smart_score_invalidation import (
+    InteractiveRescoreRegistry,
     anomaly_state_signature,
     changed_penalised_tags,
     invalidate_all_anomaly_scores,
@@ -806,7 +810,7 @@ def test_persist_leaves_row_null_when_anomaly_state_changed_mid_scoring():
             SmartScoreTask._persist_scores, {pic_id: 0.5}, before
         )
 
-        assert persisted == 0
+        assert persisted == []
         # The row must stay NULL — not resurrected with the stale score — so the finder
         # re-picks it and it rescores from fresh inputs. This is the whole point.
         assert _get_smart_score(server, pic_id) is None
@@ -831,9 +835,233 @@ def test_persist_writes_score_when_anomaly_state_unchanged():
             SmartScoreTask._persist_scores, {pic_id: 0.5}, before
         )
 
-        assert persisted == 1
+        assert persisted == [pic_id]
         assert _get_smart_score(server, pic_id) == 0.5
         assert pic_id not in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# ------------------------------------------ interactive rescore refresh (Fix C)
+#
+# An anomaly-tag edit NULLs a picture's cached smart_score; a background SmartScoreTask
+# rescores it. Previously the grid refresh for that card was deferred until the WHOLE
+# vault backfill drained (``count_remaining() == 0``). A migration NULL-reset keeps a
+# backfill in flight, so an interactive edit's card never refreshed. The
+# ``InteractiveRescoreRegistry`` now lets the completion handler emit an immediate,
+# origin-stamped ``CHANGED_PICTURES`` for the edited card — independent of the drain gate
+# — while bulk backfill work still coalesces into the single drain-time emit.
+
+
+def _fake_smart_score_completion(picture_ids, persisted_ids):
+    """A COMPLETED ``SmartScoreTask`` exactly as ``_on_task_completed`` reads it.
+
+    ``persisted_ids`` is the CAS-written subset (see ``_persist_scores``); an id claimed
+    but skipped for drift is present in ``picture_ids`` but absent from ``persisted_ids``.
+    """
+    return SimpleNamespace(
+        type="SmartScoreTask",
+        status=TaskStatus.COMPLETED,
+        result={
+            "changed_count": len(persisted_ids),
+            "persisted_ids": list(persisted_ids),
+        },
+        params={"picture_ids": list(picture_ids)},
+    )
+
+
+def _capture_smart_score_events(server):
+    """Record every ``CHANGED_PICTURES`` event carrying the ``smart_score`` field."""
+    events: list[dict] = []
+
+    def _listen(event_type, data):
+        if event_type is EventType.CHANGED_PICTURES and isinstance(data, dict):
+            if "smart_score" in (data.get("fields") or []):
+                events.append(data)
+
+    server.vault.add_event_listener(_listen)
+    return events
+
+
+def test_interactive_edit_refreshes_card_without_waiting_for_backfill_drain():
+    """The headline fix: an edit mid-backfill refreshes THAT card immediately, stamped."""
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")
+        # A second unscored picture keeps the backfill in flight: count_remaining() > 0.
+        pending = _upload_picture(client, "Bad2.png")
+        # Stop the planner so no background task races us to score/consume.
+        server.vault._work_planner.stop()
+        _prepare_for_scoring(server, pending)  # embedding + NULL score
+
+        # The edited card is scored, then a user edit (tab "tab-a") NULLs and registers it.
+        _set_smart_score(server, edited, 0.5)
+        assert (
+            client.post(
+                f"/pictures/{edited}/tags",
+                json={"tag": PENALISED_TAG},
+                headers={"X-Client-Id": "tab-a"},
+            ).status_code
+            == 200
+        )
+        assert _get_smart_score(server, edited) is None
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+
+        events = _capture_smart_score_events(server)
+
+        # The background rescore persists a fresh score for the edited card.
+        _set_smart_score(server, edited, 0.7)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited], [edited]), None
+        )
+
+        # The drain gate has NOT been reached, yet the card refreshed immediately,
+        # origin-stamped so the initiating tab reconciles in place.
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) > 0
+        assert events == [
+            {
+                "picture_ids": [edited],
+                "fields": ["smart_score"],
+                "origin_client_id": "tab-a",
+            }
+        ]
+        # The registry self-evicts on consume.
+        assert edited not in server.vault.interactive_rescore_registry.snapshot()
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_full_backfill_emits_once_at_drain_not_per_batch():
+    """No interactive edits → no per-batch flood; exactly one origin-less emit at drain."""
+    temp_dir, client, server = _setup()
+    try:
+        pics = [
+            _upload_picture(client, n)
+            for n in ("Bad1.png", "Bad2.png", "Reference1.png")
+        ]
+        server.vault._work_planner.stop()
+        for p in pics:
+            _prepare_for_scoring(server, p)  # embedding + NULL score
+
+        events = _capture_smart_score_events(server)
+
+        batch1, batch2 = pics[:2], pics[2:]
+        # First batch completes with the vault still un-drained: nothing is emitted.
+        for p in batch1:
+            _set_smart_score(server, p, 0.6)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion(batch1, batch1), None
+        )
+        assert events == []
+
+        # Final batch drains the vault: exactly one origin-less bulk emit fires.
+        for p in batch2:
+            _set_smart_score(server, p, 0.6)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion(batch2, batch2), None
+        )
+        assert events == [{"picture_ids": batch2, "fields": ["smart_score"]}]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_cas_skipped_id_is_not_announced_and_stays_registered():
+    """A picture skipped by _persist_scores' CAS is still NULL — never announced rescored."""
+    temp_dir, client, server = _setup()
+    try:
+        persisted_pic = _upload_picture(client, "Bad1.png")
+        skipped_pic = _upload_picture(client, "Bad2.png")
+        server.vault._work_planner.stop()
+        # Both registered interactive from the same tab.
+        server.vault.interactive_rescore_registry.record(
+            [persisted_pic, skipped_pic], "tab-x"
+        )
+        # Keep an unscored picture so the drain gate is not reached.
+        _prepare_for_scoring(server, skipped_pic)
+
+        events = _capture_smart_score_events(server)
+
+        # The task claimed both, but the CAS persisted only persisted_pic; skipped_pic
+        # drifted mid-scoring and is excluded from persisted_ids (left NULL).
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([persisted_pic, skipped_pic], [persisted_pic]),
+            None,
+        )
+
+        # Only the persisted id is announced — never the still-NULL skipped id.
+        assert events == [
+            {
+                "picture_ids": [persisted_pic],
+                "fields": ["smart_score"],
+                "origin_client_id": "tab-x",
+            }
+        ]
+        # The skipped id is NOT consumed: it stays registered for its next rescore.
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(skipped_pic)
+            == "tab-x"
+        )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_interactive_registry_caps_and_demotes_overflow_without_dropping():
+    """Over the cap the overflow id is returned (demoted), not silently stored/dropped."""
+    reg = InteractiveRescoreRegistry(max_entries=2)
+    assert reg.record([1, 2], "tab") == []  # fits under the cap
+    assert reg.record([3], "tab") == [3]  # overflow → demoted, not stored
+    # Re-recording an existing id refreshes its origin without counting against the cap.
+    assert reg.record([1], "tab2") == []
+    assert len(reg) == 2
+
+    consumed = reg.consume([1, 2, 3])
+    # Only the two stored ids come back (grouped by their latest origin); the demoted id
+    # was never stored, so the completion side falls back to the bulk path for it.
+    assert consumed == {"tab2": [1], "tab": [2]}
+    assert len(reg) == 0
+
+
+def test_over_cap_demoted_id_falls_back_to_bulk_drain_emit():
+    """Cap→bulk-fallback is fail-safe: a demoted id is delivered by the drain emit, not lost."""
+    temp_dir, client, server = _setup()
+    try:
+        recorded = _upload_picture(client, "Bad1.png")
+        demoted = _upload_picture(client, "Bad2.png")
+        server.vault._work_planner.stop()
+
+        # Shrink the cap so the second interactive id overflows and is demoted.
+        server.vault.interactive_rescore_registry = InteractiveRescoreRegistry(
+            max_entries=1
+        )
+        reg = server.vault.interactive_rescore_registry
+        assert reg.record([recorded], "tab-a") == []
+        assert reg.record([demoted], "tab-b") == [demoted]
+
+        events = _capture_smart_score_events(server)
+
+        # Both rescores persist in the same batch that drains the vault (remaining == 0).
+        for p in (recorded, demoted):
+            _set_smart_score(server, p, 0.6)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([recorded, demoted], [recorded, demoted]),
+            None,
+        )
+
+        # The recorded id got its immediate origin-stamped refresh.
+        assert {
+            "picture_ids": [recorded],
+            "fields": ["smart_score"],
+            "origin_client_id": "tab-a",
+        } in events
+        # The demoted id was NOT dropped: it rides the single origin-less bulk drain emit.
+        bulk = [e for e in events if "origin_client_id" not in e]
+        assert bulk == [{"picture_ids": [recorded, demoted], "fields": ["smart_score"]}]
     finally:
         server.vault.close()
         temp_dir.cleanup()

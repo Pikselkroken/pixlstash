@@ -205,7 +205,11 @@ def create_router(server) -> APIRouter:
                     # Adding a penalised tag records a human POS, which the smart
                     # score's anomaly penalty reads — drop the cached score if so.
                     with invalidate_on_anomaly_change(
-                        session, [pic_id], context="add tag to picture"
+                        session,
+                        [pic_id],
+                        context="add tag to picture",
+                        registry=server.vault.interactive_rescore_registry,
+                        origin_client_id=origin_client_id,
                     ):
                         if sentinel is not None:
                             session.delete(sentinel)
@@ -323,7 +327,11 @@ def create_router(server) -> APIRouter:
                 # Removing a penalised tag records a human NEG, which the smart
                 # score's anomaly penalty reads — drop the cached score if so.
                 with invalidate_on_anomaly_change(
-                    session, [pic_id], context="remove tag from picture"
+                    session,
+                    [pic_id],
+                    context="remove tag from picture",
+                    registry=server.vault.interactive_rescore_registry,
+                    origin_client_id=origin_client_id,
                 ):
                     # Manually removing an anomaly tag is a human NEG decision — record it
                     # before the delete so the reviewed negative survives the lost Tag row.
@@ -396,7 +404,11 @@ def create_router(server) -> APIRouter:
             # Removing a penalised tag everywhere records a human NEG, which the
             # smart score's anomaly penalty reads — drop the cached score if so.
             with invalidate_on_anomaly_change(
-                session, [pic_id], context="remove tag everywhere"
+                session,
+                [pic_id],
+                context="remove tag everywhere",
+                registry=server.vault.interactive_rescore_registry,
+                origin_client_id=origin_client_id,
             ):
                 if tag_ids:
                     # Explicit single-tag removal is a human NEG decision; record it.
@@ -454,7 +466,11 @@ def create_router(server) -> APIRouter:
             # Clearing tags leaves the prediction ledger intact, so the scorer's
             # anomaly inputs usually do not move; the guard no-ops when they don't.
             with invalidate_on_anomaly_change(
-                session, [pic_id], context="clear all tags on picture"
+                session,
+                [pic_id],
+                context="clear all tags on picture",
+                registry=server.vault.interactive_rescore_registry,
+                origin_client_id=origin_client_id,
             ):
                 session.exec(delete(Tag).where(Tag.picture_id == pic_id))
                 session.flush()

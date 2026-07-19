@@ -14,6 +14,7 @@ from pixlstash.server import Server
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks import TaskType
 from pixlstash.vault import Vault
+from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreRegistry
 from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -198,6 +199,7 @@ def _fake_vault_for_smart_score_completion(remaining_after_batch: int):
             return remaining_after_batch
 
     vault.db = _DB()
+    vault.interactive_rescore_registry = InteractiveRescoreRegistry()
     vault._notify_worker_ids_processed = lambda worker_type, changed: (
         worker_notifications.append((worker_type, changed))
     )

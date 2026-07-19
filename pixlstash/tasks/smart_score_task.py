@@ -89,7 +89,7 @@ class SmartScoreTask(BaseTask):
 
         id_to_score = {cand_ids[i]: float(scores[i]) for i in range(len(cand_ids))}
 
-        changed_count = self._db.run_task(
+        persisted_ids = self._db.run_task(
             self._persist_scores,
             id_to_score,
             before_signature,
@@ -99,9 +99,13 @@ class SmartScoreTask(BaseTask):
         logger.debug(
             "SmartScoreTask completed in %.2fs with %s updates",
             time.time() - start,
-            changed_count,
+            len(persisted_ids),
         )
-        return {"changed_count": changed_count}
+        # ``persisted_ids`` is the *actually-written* subset — ids the CAS in
+        # ``_persist_scores`` skipped (anomaly signature drifted mid-scoring) are left
+        # NULL and excluded, so the completion handler never announces a still-NULL score
+        # as a finished rescore.
+        return {"changed_count": len(persisted_ids), "persisted_ids": persisted_ids}
 
     @staticmethod
     def _fetch_score_data(
@@ -202,7 +206,7 @@ class SmartScoreTask(BaseTask):
         return good, bad, candidates, scorer_config, before_signature
 
     @staticmethod
-    def _persist_scores(session: Session, id_to_score: dict, before: dict) -> int:
+    def _persist_scores(session: Session, id_to_score: dict, before: dict) -> list[int]:
         """Write each computed ``smart_score`` — but only if its inputs did not move.
 
         Scores are computed outside this write transaction. If a concurrent tag edit
@@ -225,10 +229,13 @@ class SmartScoreTask(BaseTask):
                 the scorer inputs.
 
         Returns:
-            Number of scores actually persisted (skipped-due-to-drift are not counted).
+            The picture ids whose score was actually written this transaction, in input
+            order. Ids skipped due to anomaly-state drift (left NULL for recompute) are
+            excluded — the interactive-refresh path keys off this list, so a skipped,
+            still-NULL id is never announced as a finished rescore.
         """
         after = anomaly_state_signature(session, list(id_to_score.keys()))
-        persisted = 0
+        persisted: list[int] = []
         skipped = 0
         for pic_id, score in id_to_score.items():
             if before.get(pic_id) != after.get(pic_id):
@@ -241,19 +248,19 @@ class SmartScoreTask(BaseTask):
                 continue
             pic.smart_score = score
             session.add(pic)
-            persisted += 1
+            persisted.append(pic_id)
         session.commit()
         if skipped:
             logger.info(
                 "SmartScoreTask: persisted %d score(s); skipped %d whose anomaly state "
                 "changed during scoring (left NULL for recompute).",
-                persisted,
+                len(persisted),
                 skipped,
             )
         else:
             logger.debug(
                 "SmartScoreTask: persisted %d score(s); no anomaly-state drift.",
-                persisted,
+                len(persisted),
             )
         return persisted
 

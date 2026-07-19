@@ -43,6 +43,7 @@ from .utils.reference_folder_watcher import ReferenceFolderWatcher
 from . import worker_config
 
 from pixlstash.event_types import EventType
+from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreRegistry
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.snapshot_service import SnapshotService
@@ -133,6 +134,13 @@ class Vault:
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
         self._path_mapper = path_mapper
+        # Bridges an interactive tag edit that NULLs a smart_score to the immediate,
+        # origin-stamped grid refresh emitted when its background rescore lands — so the
+        # edited card updates in place instead of waiting for the whole backfill to drain
+        # (see _on_task_completed's SmartScoreTask branch). Created before the
+        # disable_background_workers early-return because the mutation handlers that
+        # record into it run in both modes.
+        self.interactive_rescore_registry = InteractiveRescoreRegistry()
 
         if disable_background_workers:
             logger.info(
@@ -746,6 +754,11 @@ class Vault:
         if task.type == "SmartScoreTask":
             changed_count = int(result.get("changed_count") or 0)
             picture_ids = list(task.params.get("picture_ids") or [])
+            persisted_ids = [
+                int(pid)
+                for pid in (result.get("persisted_ids") or [])
+                if pid is not None
+            ]
             if changed_count > 0 and picture_ids:
                 smart_score_changes = [
                     (Picture, int(pic_id), "smart_score", None)
@@ -756,6 +769,24 @@ class Vault:
                     self._notify_worker_ids_processed(
                         TaskType.SMART_SCORE,
                         smart_score_changes,
+                    )
+                # INTERACTIVE path: rescored ids that a user tag edit invalidated get an
+                # immediate, origin-stamped CHANGED_PICTURES so the initiating tab
+                # reconciles the card in place — independent of the global drain gate
+                # below. Only *persisted* ids are consulted, so an id the CAS in
+                # _persist_scores skipped (still NULL) is never announced as rescored.
+                # Ids that were never registered (background-only rescores, or interactive
+                # ids demoted when the registry was full) are left to the bulk drain emit.
+                for origin, ids in self.interactive_rescore_registry.consume(
+                    persisted_ids
+                ).items():
+                    self.notify(
+                        EventType.CHANGED_PICTURES,
+                        {
+                            "picture_ids": sorted(ids),
+                            "fields": ["smart_score"],
+                            "origin_client_id": origin,
+                        },
                     )
                 remaining = int(
                     self.db.run_immediate_read_task(SmartScoreTask.count_remaining) or 0

@@ -25,6 +25,8 @@ and the stored score stands — over-invalidating here would re-score the whole 
 every routine re-tag, which is a serious throughput regression on a small box.
 """
 
+import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Iterable
 
@@ -54,6 +56,100 @@ _ID_CHUNK = 900
 # representation noise from counting as a change, while staying far finer than any
 # difference the penalty could express.
 _CONFIDENCE_PRECISION = 6
+
+
+class InteractiveRescoreRegistry:
+    """Bounded ``picture_id -> origin_client_id`` map bridging a *user* tag edit to the
+    background rescore its invalidation triggers.
+
+    ``smart_score`` is recomputed asynchronously: a tag edit only NULLs the cached score,
+    and a background :class:`~pixlstash.tasks.smart_score_task.SmartScoreTask` later
+    rescores it. The vault normally defers the grid ``CHANGED_PICTURES`` refresh for a
+    rescored batch until the *entire* backfill drains
+    (``count_remaining() == 0``). Any migration NULL-reset keeps a backfill in flight, so
+    an interactive edit made meanwhile would have its card refresh deferred indefinitely.
+
+    This registry lets the invalidation side record "this id was invalidated by a user
+    edit from *that* tab", so the completion side can emit an immediate, origin-stamped
+    refresh for just those ids — independent of the global drain gate — while bulk
+    backfill work still coalesces into the single drain-time emit.
+
+    Thread-safe: :meth:`record` runs on the DB-task thread that performs the invalidation;
+    :meth:`consume` runs on the task-completion thread. Bounded to *max_entries*; a record
+    that would overflow the cap is **rejected and returned** so the caller can log the
+    demotion. A demoted id is not dropped — because it is absent from the registry, the
+    completion side simply falls back to the existing drain-time bulk emit for it.
+    """
+
+    # A large interactive burst during a full backfill is the worst case. The cap bounds
+    # memory while staying far above any plausible count of hand-edited cards in flight.
+    MAX_ENTRIES = 4096
+
+    def __init__(self, max_entries: int = MAX_ENTRIES) -> None:
+        self._max_entries = int(max_entries)
+        self._lock = threading.Lock()
+        # Insertion-ordered so the oldest recordings are easy to reason about; ids are
+        # popped on consume, so the map self-evicts as rescores complete.
+        self._entries: "OrderedDict[int, str | None]" = OrderedDict()
+
+    def record(
+        self, picture_ids: Iterable[int], origin_client_id: str | None
+    ) -> list[int]:
+        """Mark *picture_ids* as interactively invalidated by *origin_client_id*.
+
+        An id already present has its origin refreshed to the latest editor (the most
+        recent edit is the one whose tab should reconcile) without counting against the
+        cap again. Returns the ids that could not be recorded because the cap is full, so
+        the caller can log their demotion to the bulk refresh path.
+        """
+        demoted: list[int] = []
+        with self._lock:
+            for raw in picture_ids:
+                if raw is None:
+                    continue
+                pid = int(raw)
+                if pid in self._entries:
+                    self._entries[pid] = origin_client_id
+                    self._entries.move_to_end(pid)
+                    continue
+                if len(self._entries) >= self._max_entries:
+                    demoted.append(pid)
+                    continue
+                self._entries[pid] = origin_client_id
+        return demoted
+
+    def consume(self, picture_ids: Iterable[int]) -> dict:
+        """Remove *picture_ids* found in the registry and group them by origin.
+
+        Returns ``{origin_client_id: [picture_id, ...]}`` for exactly the ids that were
+        registered (ids absent from the registry — background-only rescores, or entries
+        already consumed — are ignored). Consuming clears the entries so they cannot be
+        re-emitted, and so the map self-evicts as rescores land.
+        """
+        grouped: dict = {}
+        with self._lock:
+            for raw in picture_ids:
+                if raw is None:
+                    continue
+                pid = int(raw)
+                origin = self._entries.pop(pid, _MISSING)
+                if origin is _MISSING:
+                    continue
+                grouped.setdefault(origin, []).append(pid)
+        return grouped
+
+    def snapshot(self) -> dict:
+        """Return a copy of the current ``{picture_id: origin}`` map (read-only, for tests)."""
+        with self._lock:
+            return dict(self._entries)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._entries)
+
+
+# Sentinel distinguishing "id absent" from "id present with origin None" in ``consume``.
+_MISSING = object()
 
 
 def _normalise_ids(picture_ids: Iterable) -> list[int]:
@@ -136,7 +232,13 @@ def invalidate_smart_scores(session: "Session", picture_ids: Iterable) -> int:
 
 
 def invalidate_changed_anomaly_scores(
-    session: "Session", picture_ids: Iterable, before: dict, *, context: str
+    session: "Session",
+    picture_ids: Iterable,
+    before: dict,
+    *,
+    context: str,
+    registry: "InteractiveRescoreRegistry | None" = None,
+    origin_client_id: str | None = None,
 ) -> int:
     """Clear the cached score of every picture whose anomaly signature moved since *before*.
 
@@ -151,6 +253,12 @@ def invalidate_changed_anomaly_scores(
         picture_ids: Pictures that were snapshotted before the mutation.
         before: Signature map captured before the mutation.
         context: Short description of the mutation, for the log line.
+        registry: When the invalidation is driven by an *interactive* user edit, the
+            vault's :class:`InteractiveRescoreRegistry`; the changed ids are recorded so
+            the background rescore emits an immediate origin-stamped refresh. ``None`` for
+            background/settings-driven invalidations, which stay on the bulk drain path.
+        origin_client_id: The originating tab's ``X-Client-Id`` to stamp the eventual
+            refresh with, recorded alongside each changed id when *registry* is given.
 
     Returns:
         Number of cached scores cleared.
@@ -179,6 +287,17 @@ def invalidate_changed_anomaly_scores(
         len(ids),
         cleared,
     )
+    if registry is not None:
+        demoted = registry.record(changed, origin_client_id)
+        if demoted:
+            logger.warning(
+                "Smart-score invalidation (%s): interactive rescore registry full "
+                "(cap %d); demoted %d picture id(s) to the bulk refresh path — they "
+                "will refresh on the next full backfill drain, not immediately.",
+                context,
+                registry._max_entries,
+                len(demoted),
+            )
     return cleared
 
 
@@ -343,7 +462,12 @@ def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
 
 @contextmanager
 def invalidate_on_anomaly_change(
-    session: "Session", picture_ids: Iterable, *, context: str
+    session: "Session",
+    picture_ids: Iterable,
+    *,
+    context: str,
+    registry: "InteractiveRescoreRegistry | None" = None,
+    origin_client_id: str | None = None,
 ):
     """Clear the cached smart score of any picture whose anomaly state the block changed.
 
@@ -359,6 +483,13 @@ def invalidate_on_anomaly_change(
         session: Active DB session.
         picture_ids: Pictures the wrapped block may mutate.
         context: Short description of the mutation, for the log line.
+        registry: Pass the vault's :class:`InteractiveRescoreRegistry` when the wrapped
+            mutation is an *interactive* user edit, so the background rescore of any
+            invalidated picture emits an immediate origin-stamped grid refresh instead of
+            waiting for the whole backfill to drain. Leave ``None`` for background paths.
+        origin_client_id: The originating tab's ``X-Client-Id``, stamped onto that
+            eventual refresh so the initiating tab reconciles the card in place rather
+            than raising the "sort order changed" pill.
     """
     ids = _normalise_ids(picture_ids)
     if not ids:
@@ -366,4 +497,11 @@ def invalidate_on_anomaly_change(
         return
     before = anomaly_state_signature(session, ids)
     yield
-    invalidate_changed_anomaly_scores(session, ids, before, context=context)
+    invalidate_changed_anomaly_scores(
+        session,
+        ids,
+        before,
+        context=context,
+        registry=registry,
+        origin_client_id=origin_client_id,
+    )
