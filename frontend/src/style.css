@@ -65,6 +65,22 @@ body {
   color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
+/* Screen-reader-only text. NEVER use `display: none` / `visibility: hidden` for
+   this — those remove the node from the accessibility tree, so a live region
+   built on them announces nothing. Clipping keeps it rendered and announced. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ===========================================================================
    Desktop-app chrome — applied only inside the Electron shell (main.js adds
    `.is-desktop` to <html> when window.pixlstashDesktop exists). A plain browser

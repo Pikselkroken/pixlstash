@@ -48,13 +48,17 @@
             @click="openZoom(pane.id, pane.ext)"
             @error="onImgError($event, pane.id)"
           />
-          <!-- Reference-only lock: this pane's picture is in a locked set (only
-               ever the twin — suspects in locked sets are excluded by the scan).
-               It carries no controls; the badge says why. -->
+          <!-- On a PAIR card a locked pane is not an inert reference: both of
+               its pictures are written by some corner (fix-twin / swap), so a
+               lock here BLOCKS decisions. The badge is the "which half" answer
+               and carries the blocking wording; the decision bar carries the
+               remedy. (The backend degrades a locked-twin pair to a binary card
+               at read time, so this only shows on a client-cached card that
+               predates the lock.) -->
           <span
-            v-if="lockedSetsStore.isLocked(pane.id)"
+            v-if="paneLockNames(pane.id).length"
             class="rs-lock-badge"
-            :title="referenceTitle(pane.id)"
+            :title="blockingPaneTitle(paneLockNames(pane.id))"
           >
             <v-icon size="14">mdi-lock-outline</v-icon>
           </span>
@@ -80,10 +84,8 @@
 // convention as the old overlay and the store's pairSides()).
 import { computed, inject } from "vue";
 import { pairSides } from "../../stores/useReviewSessionsStore";
-import {
-  useLockedSetsStore,
-  buildReferenceReason,
-} from "../../stores/useLockedSetsStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { blockingPaneTitle, lockedSetNamesOf } from "./lockedSetCopy";
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -94,8 +96,20 @@ const backendUrl = inject("rs-backend-url", "");
 const openZoomInject = inject("rs-open-zoom", () => {});
 const openTagApply = inject("rs-open-tag-apply", () => {});
 
-function referenceTitle(id) {
-  return buildReferenceReason(lockedSetsStore.lockedSetNames(id));
+// Locking set names for a pane. The payload ships them inline (`locked_sets` /
+// `twin_locked_sets`); useLockedSetsStore is the fallback for a card cached
+// before the set was locked.
+function paneLockNames(id) {
+  const item = props.item;
+  const payload =
+    id === item.picture_id
+      ? item.locked_sets
+      : id === item.twin_picture_id
+        ? item.twin_locked_sets
+        : null;
+  const names = lockedSetNamesOf(payload);
+  if (names.length) return names;
+  return lockedSetsStore.isLocked(id) ? lockedSetsStore.lockedSetNames(id) : [];
 }
 
 const panes = computed(() => {

@@ -32,6 +32,17 @@
           <v-icon size="14">mdi-fire</v-icon>{{ store.decisionsCount }}×
         </span>
       </span>
+      <!-- `progress.locked`: suspects frozen mid-session and held out of the
+           queue. Surfaced so a review that visibly shrinks explains itself
+           instead of silently dropping its count. -->
+      <span
+        v-if="lockedProgress"
+        class="rs-session-locked"
+        :title="lockedProgressNote(lockedProgress)"
+      >
+        <v-icon size="14">mdi-lock-outline</v-icon>
+        {{ lockedProgress }} frozen
+      </span>
       <span class="rs-session-tally">
         <span class="rs-tally-removed">✗ {{ tally.removed }}</span>
         <span class="rs-tally-added">+ {{ tally.added }}</span>
@@ -43,6 +54,22 @@
     </div>
 
     <section class="rs-session-body">
+      <!-- Store-level error (a failed decision write, refresh, undo…). The
+           optimistic mutation in resolveCurrent() rolls back on failure, so
+           without this the user sees an identical screen and a tally that
+           flickers and returns — a 423 with no renderer. -->
+      <div v-if="store.error" class="rs-error-bar" role="alert">
+        <v-icon size="16">mdi-alert-circle-outline</v-icon>
+        <span class="rs-error-msg">{{ store.error }}</span>
+        <button
+          class="rs-error-dismiss"
+          type="button"
+          @click="store.error = null"
+        >
+          Dismiss
+        </button>
+      </div>
+
       <div v-if="queueError" class="rs-state rs-state--error">
         {{ queueError }}
         <button
@@ -183,6 +210,13 @@
         </div>
       </div>
 
+      <!-- Assertive because it answers a deliberate user action and must
+           interrupt; cleared on card change so it never re-reads a stale reason.
+           Clipped, never `display: none` — a hidden node is not announced. -->
+      <p class="visually-hidden" role="status" aria-live="assertive">
+        {{ announcement }}
+      </p>
+
       <ReviewDecisionBar
         v-if="current"
         :kind="current.kind === 'pair' ? 'pair' : 'binary'"
@@ -190,12 +224,14 @@
         :can-undo="store.canUndo"
         :gamify="store.gamify"
         :hold="holdActive"
-        :locked="suspectLocked"
-        :lock-reason="suspectLockReason"
+        :blocked="blockedReasons"
+        :lock-note="lockNote"
+        :lock-detail="lockDetail"
+        :flash-tick="flashTick"
         @answer="attemptBinary"
         @corner="attemptPair"
         @skip="doSkip"
-        @undo="store.undo()"
+        @undo="attemptUndo"
         @gamify-toggle="store.setGamify($event)"
       />
     </section>
@@ -204,8 +240,20 @@
 
 <script setup>
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
-import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import {
+  useReviewSessionsStore,
+  binaryAction,
+  pairAction,
+} from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import {
+  LOCKED_UNDO_CHIP_LABEL,
+  blockedDecisionMessage,
+  blockedUndoMessage,
+  lockedDecisionChipLabel,
+  lockedProgressNote,
+  lockedSetNamesOf,
+} from "./lockedSetCopy";
 import ReviewBinaryCard from "./ReviewBinaryCard.vue";
 import ReviewPairCard from "./ReviewPairCard.vue";
 import ReviewDecisionBar from "./ReviewDecisionBar.vue";
@@ -220,17 +268,151 @@ const lockedSetsStore = useLockedSetsStore();
 
 const current = computed(() => store.current);
 
-// The suspect (the editable picture) can become locked mid-session if its set
-// was locked after this review opened — the scan excludes locked suspects on
-// refresh, but an already-materialised card can still surface one. Deciding it
-// would write the frozen label ledger and 423, so decisions are gated here (in
-// addition to the decision bar's disabled buttons) and the keyboard path below.
-const suspectLocked = computed(
-  () => !!current.value && lockedSetsStore.isLocked(current.value.picture_id),
+// --- Lock gating ---------------------------------------------------------------
+//
+// A card has TWO sides and either can be frozen, which is what the original gate
+// got wrong: it tested only `picture_id` (the suspect), while on a pair card the
+// locked picture is almost always the TWIN — and `pairAction()` writes the twin
+// on the fix-twin/swap corners. So every button stayed live, the request went
+// out, and the backend answered 423.
+//
+// The payload is authoritative and ships the locking set NAMES inline
+// (`locked_sets` / `twin_locked_sets`), so no extra call is needed for the copy.
+// `useLockedSetsStore` is the defensive fallback for the mid-session case where
+// this client's cached card predates the lock.
+function resolveLock(pictureId, payloadLocked, payloadSets) {
+  const payloadNames = lockedSetNamesOf(payloadSets);
+  const locked =
+    !!payloadLocked || payloadNames.length > 0 || lockedSetsStore.isLocked(pictureId);
+  if (!locked) return { locked: false, names: [] };
+  return {
+    locked: true,
+    names: payloadNames.length
+      ? payloadNames
+      : lockedSetsStore.lockedSetNames(pictureId),
+  };
+}
+
+function uniqueNames(names) {
+  return [...new Set(names)];
+}
+
+const suspectLock = computed(() => {
+  const item = current.value;
+  if (!item) return { locked: false, names: [] };
+  return resolveLock(item.picture_id, item.locked, item.locked_sets);
+});
+
+const twinLock = computed(() => {
+  const item = current.value;
+  if (!item || item.twin_picture_id == null) return { locked: false, names: [] };
+  return resolveLock(item.twin_picture_id, item.twin_locked, item.twin_locked_sets);
+});
+
+// Which side each per-item action writes. Normal locked-twin pair cards arrive
+// already degraded to `kind: "binary"` by the backend, so this table is the
+// defensive path for a stale cached card — not elaborate per-corner gating.
+const ACTION_WRITES = {
+  accept: { suspect: true, twin: false },
+  dismiss: { suspect: true, twin: false },
+  "fix-twin": { suspect: false, twin: true },
+  swap: { suspect: true, twin: true },
+};
+
+function blockReasonFor(kind, decision) {
+  const item = current.value;
+  if (!item) return "";
+  const action =
+    kind === "binary" ? binaryAction(item, decision) : pairAction(item, decision);
+  // Unknown action → assume it writes the suspect (fail closed, never open).
+  const writes = ACTION_WRITES[action] ?? { suspect: true, twin: false };
+  const hitsSuspect = writes.suspect && suspectLock.value.locked;
+  const hitsTwin = writes.twin && twinLock.value.locked;
+  if (!hitsSuspect && !hitsTwin) return "";
+  if (hitsSuspect && hitsTwin) {
+    return blockedDecisionMessage(
+      uniqueNames([...suspectLock.value.names, ...twinLock.value.names]),
+      "both",
+    );
+  }
+  if (hitsSuspect) return blockedDecisionMessage(suspectLock.value.names, "suspect");
+  return blockedDecisionMessage(twinLock.value.names, "twin");
+}
+
+// Undo is ONE-WAY on a locked card: `reopen_suggestion` guards both sides
+// unconditionally, so a decision made there is final until the set is unlocked.
+// Explain that up front rather than letting Undo fail silently — which would
+// reproduce the exact bug this change fixes.
+const undoBlockedReason = computed(() => {
+  const s = store.activeSession;
+  if (!s) return "";
+  const stack = store.undoStacks[s.id] || [];
+  const item = stack[stack.length - 1]?.item;
+  if (!item) return "";
+  const a = resolveLock(item.picture_id, item.locked, item.locked_sets);
+  const b =
+    item.twin_picture_id != null
+      ? resolveLock(item.twin_picture_id, item.twin_locked, item.twin_locked_sets)
+      : { locked: false, names: [] };
+  if (!a.locked && !b.locked) return "";
+  return blockedUndoMessage(uniqueNames([...a.names, ...b.names]));
+});
+
+// decision key -> reason. A key present here is pre-emptively marked
+// `aria-disabled` on the bar AND refused by the attempt*() guards below, so the
+// mouse and keyboard paths share one gate and one announcement.
+const blockedReasons = computed(() => {
+  const item = current.value;
+  const out = {};
+  if (item) {
+    const keys =
+      item.kind === "pair"
+        ? ["both", "neither", "left", "right"]
+        : ["yes", "no"];
+    const kind = item.kind === "pair" ? "pair" : "binary";
+    for (const key of keys) {
+      const reason = blockReasonFor(kind, key);
+      if (reason) out[key] = reason;
+    }
+  }
+  if (undoBlockedReason.value) out.undo = undoBlockedReason.value;
+  return out;
+});
+
+const cardLockNames = computed(() =>
+  uniqueNames([
+    ...(suspectLock.value.locked ? suspectLock.value.names : []),
+    ...(twinLock.value.locked ? twinLock.value.names : []),
+  ]),
 );
-const suspectLockReason = computed(() =>
-  current.value ? lockedSetsStore.lockReason(current.value.picture_id) : "",
-);
+
+const lockNote = computed(() => {
+  if (suspectLock.value.locked || twinLock.value.locked) {
+    return lockedDecisionChipLabel(cardLockNames.value);
+  }
+  return undoBlockedReason.value ? LOCKED_UNDO_CHIP_LABEL : "";
+});
+
+const lockDetail = computed(() => {
+  const r = blockedReasons.value;
+  return (
+    r.yes || r.no || r.both || r.neither || r.left || r.right || r.undo || ""
+  );
+});
+
+// Response to a blocked press: announced assertively AND flashed on the chip,
+// because the keyboard user this protects is usually sighted.
+const announcement = ref("");
+const flashTick = ref(0);
+
+function announceBlocked(reason) {
+  if (!reason) return;
+  announcement.value = reason;
+  flashTick.value += 1;
+}
+
+const lockedProgress = computed(() => props.session.progress?.locked ?? 0);
+
 const tally = computed(() => store.activeTally);
 const found = computed(() => props.session.stats?.found ?? 0);
 const scanned = computed(() => props.session.stats?.scanned ?? 0);
@@ -304,6 +486,9 @@ watch(
       }, 300);
     }
     prevKind = kind;
+    // A new card invalidates the previous card's blocked-decision explanation —
+    // clear the live region so it can never be re-read out of context.
+    announcement.value = "";
     // Focus follows the card (the container is re-keyed per card).
     nextTick(() => cardRef.value?.focus?.({ preventScroll: true }));
   },
@@ -329,8 +514,18 @@ onUnmounted(() => {
 // (an inline confirm bar) instead of dispatching.
 const pendingDecision = ref(null); // { kind, decision, conflict } or null
 
+// The ONE gate for both inputs. The decision bar emits on a blocked click just
+// like an unblocked one (its buttons are aria-disabled, not disabled, so they
+// stay focusable) and lands here — so a blocked mouse press and a blocked key
+// press produce the identical announcement, and neither issues a request.
 function attemptBinary(answer) {
-  if (holdActive.value || !current.value || suspectLocked.value) return;
+  if (holdActive.value || !current.value) return;
+  const blocked = blockedReasons.value[answer];
+  if (blocked) {
+    announceBlocked(blocked);
+    return;
+  }
+  announcement.value = "";
   const conflict = store.decisionConflict(current.value, "binary", answer);
   if (conflict) {
     pendingDecision.value = { kind: "binary", decision: answer, conflict };
@@ -340,13 +535,28 @@ function attemptBinary(answer) {
 }
 
 function attemptPair(corner) {
-  if (holdActive.value || !current.value || suspectLocked.value) return;
+  if (holdActive.value || !current.value) return;
+  const blocked = blockedReasons.value[corner];
+  if (blocked) {
+    announceBlocked(blocked);
+    return;
+  }
+  announcement.value = "";
   const conflict = store.decisionConflict(current.value, "pair", corner);
   if (conflict) {
     pendingDecision.value = { kind: "pair", decision: corner, conflict };
     return;
   }
   store.answerPair(corner);
+}
+
+function attemptUndo() {
+  if (undoBlockedReason.value) {
+    announceBlocked(undoBlockedReason.value);
+    return;
+  }
+  announcement.value = "";
+  store.undo();
 }
 
 function confirmPending() {
@@ -412,22 +622,46 @@ function handleKey(key) {
     return true;
   }
   if (key === "u") {
-    store.undo();
+    attemptUndo();
     return true;
   }
   if (key === "h") {
     store.setHeatmapEnabled(!store.heatmapEnabled);
     return true;
   }
+  // The `return attempt…(x), true` comma-operator form used here reported the
+  // key as consumed unconditionally — including when attempt*() bailed at its
+  // lock guard — so the overlay called preventDefault() and the user got nothing
+  // at all: strictly worse than the mouse path. Every branch is now an explicit
+  // statement + `return true`. Consuming the key is still correct: attempt*()
+  // has announced the reason, so the press was answered, not swallowed.
   if (item.kind === "pair") {
-    if (key === "b") return attemptPair("both"), true;
-    if (key === "n") return attemptPair("neither"), true;
-    if (key === "l") return attemptPair("left"), true;
-    if (key === "r") return attemptPair("right"), true;
+    if (key === "b") {
+      attemptPair("both");
+      return true;
+    }
+    if (key === "n") {
+      attemptPair("neither");
+      return true;
+    }
+    if (key === "l") {
+      attemptPair("left");
+      return true;
+    }
+    if (key === "r") {
+      attemptPair("right");
+      return true;
+    }
     return false;
   }
-  if (key === "y") return attemptBinary("yes"), true;
-  if (key === "n") return attemptBinary("no"), true;
+  if (key === "y") {
+    attemptBinary("yes");
+    return true;
+  }
+  if (key === "n") {
+    attemptBinary("no");
+    return true;
+  }
   return false;
 }
 
@@ -525,6 +759,22 @@ defineExpose({ handleKey });
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   color: rgb(var(--v-theme-tertiary));
+}
+
+/* `progress.locked` — the suspects this review is holding back. Warning-toned
+   because it explains a missing count, not an error. */
+.rs-session-locked {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-warning));
+  background: color-mix(in srgb, rgb(var(--v-theme-warning)) 12%, transparent);
+  border: 1px solid
+    color-mix(in srgb, rgb(var(--v-theme-warning)) 45%, transparent);
 }
 
 .rs-session-tally {
@@ -654,6 +904,39 @@ defineExpose({ handleKey });
   border-color: color-mix(in srgb, rgb(var(--v-theme-accent)) 60%, transparent);
   background: color-mix(in srgb, rgb(var(--v-theme-accent)) 16%, transparent);
   color: rgb(var(--v-theme-accent));
+}
+
+/* Store-level error surface (defence in depth behind the pre-emptive lock
+   gating: a stale lock store means a decision can still be refused server-side,
+   and that refusal must be readable rather than an invisible rollback). */
+.rs-error-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid
+    color-mix(in srgb, rgb(var(--v-theme-error)) 55%, transparent);
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
+  color: rgb(var(--v-theme-error));
+}
+.rs-error-msg {
+  flex: 1;
+  font-size: var(--text-sm);
+}
+.rs-error-dismiss {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 var(--space-3);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 1px solid
+    color-mix(in srgb, rgb(var(--v-theme-error)) 55%, transparent);
+  background: transparent;
+  color: rgb(var(--v-theme-error));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
 }
 
 .rs-confirm {

@@ -3,21 +3,30 @@
        button slots per kind, Undo ALWAYS rendered (disabled when the history
        is empty), no wrapping — the buttons never move mid-loop. -->
   <div class="rs-decide" role="toolbar" aria-label="Decision">
-    <!-- Locked suspect (a pre-lock open session can still hold one): decisions
-         write the frozen label ledger, so they're disabled here rather than
-         letting the click hit the backend and surface a raw 423. Skip/Undo stay
-         live so the reviewer can move past the card. -->
-    <span v-if="locked" class="rs-decide-lock" :title="lockReason">
+    <!-- Lock note. A card can be frozen on EITHER side (the suspect's set, or
+         the twin's), and the two block different corners — so the note names the
+         set and the buttons that cannot succeed point at it via
+         aria-describedby. It is marked `aria-disabled`, never `disabled`: a
+         `disabled` button leaves the tab order, so a keyboard user could never
+         reach the control to discover why it does nothing. Skip stays fully
+         live — it is the way past a locked card. -->
+    <span
+      v-if="lockNote"
+      :id="chipId"
+      class="rs-decide-lock"
+      :class="{ 'rs-decide-lock--flash': flashing }"
+      :title="lockDetail || lockNote"
+    >
       <v-icon size="15">mdi-lock-outline</v-icon>
-      <span>Locked — Skip to move on</span>
+      <span>{{ lockNote }}</span>
     </span>
 
     <template v-if="kind === 'binary'">
       <button
         class="rs-decide-btn rs-decide-btn--yes"
         type="button"
-        :disabled="hold || locked"
-        :title="locked ? lockReason : undefined"
+        :disabled="hold"
+        v-bind="lockAttrs('yes')"
         @click="emit('answer', 'yes')"
       >
         <kbd>Y</kbd>
@@ -29,8 +38,8 @@
       <button
         class="rs-decide-btn rs-decide-btn--no"
         type="button"
-        :disabled="hold || locked"
-        :title="locked ? lockReason : undefined"
+        :disabled="hold"
+        v-bind="lockAttrs('no')"
         @click="emit('answer', 'no')"
       >
         <kbd>N</kbd>
@@ -45,8 +54,8 @@
       <button
         class="rs-decide-btn rs-decide-btn--yes"
         type="button"
-        :disabled="hold || locked"
-        :title="locked ? lockReason : undefined"
+        :disabled="hold"
+        v-bind="lockAttrs('both')"
         @click="emit('corner', 'both')"
       >
         <kbd>B</kbd>
@@ -56,8 +65,8 @@
       <button
         class="rs-decide-btn rs-decide-btn--no"
         type="button"
-        :disabled="hold || locked"
-        :title="locked ? lockReason : undefined"
+        :disabled="hold"
+        v-bind="lockAttrs('neither')"
         @click="emit('corner', 'neither')"
       >
         <kbd>N</kbd>
@@ -67,8 +76,8 @@
       <button
         class="rs-decide-btn"
         type="button"
-        :disabled="hold || locked"
-        :title="locked ? lockReason : undefined"
+        :disabled="hold"
+        v-bind="lockAttrs('left')"
         @click="emit('corner', 'left')"
       >
         <kbd>L</kbd>
@@ -78,8 +87,8 @@
       <button
         class="rs-decide-btn"
         type="button"
-        :disabled="hold || locked"
-        :title="locked ? lockReason : undefined"
+        :disabled="hold"
+        v-bind="lockAttrs('right')"
         @click="emit('corner', 'right')"
       >
         <kbd>R</kbd>
@@ -99,11 +108,20 @@
       <kbd>S</kbd>
       <span class="rs-decide-verb">Skip</span>
     </button>
+    <!-- Undo. `disabled` when there is simply nothing to undo (no reason to
+         explain), but `aria-disabled` + the lock reason when a decision EXISTS
+         and cannot be reopened — reopen guards both sides of the card, so a
+         decision on a locked-twin card is final until the set is unlocked. -->
     <button
       class="rs-decide-btn"
       type="button"
       :disabled="!canUndo"
-      title="Undo the last decision — reopens it and reverses the tag change."
+      :title="
+        undoBlocked
+          ? undefined
+          : 'Undo the last decision — reopens it and reverses the tag change.'
+      "
+      v-bind="lockAttrs('undo')"
       @click="emit('undo')"
     >
       <kbd>U</kbd>
@@ -129,21 +147,76 @@
 </template>
 
 <script setup>
-defineProps({
+import { computed, onUnmounted, ref, useId, watch } from "vue";
+
+const props = defineProps({
   kind: { type: String, required: true }, // 'binary' | 'pair'
   direction: { type: String, default: "remove" },
   canUndo: { type: Boolean, default: false },
   gamify: { type: Boolean, default: false },
   // Key-slip guard: right after the card TYPE changes, decisions are briefly
-  // disabled so a rapid-keyed N can't fire "Neither" unseen.
+  // disabled so a rapid-keyed N can't fire "Neither" unseen. This is the ONLY
+  // real `disabled` on a decision button — it lasts 300ms and has nothing to
+  // explain, so losing tab order for that moment costs nothing.
   hold: { type: Boolean, default: false },
-  // Suspect picture is in a locked set: disable the decision buttons (Skip/Undo
-  // stay live). `lockReason` is the tooltip explaining why / how to unlock.
-  locked: { type: Boolean, default: false },
-  lockReason: { type: String, default: "" },
+  // Per-decision block reasons: { yes|no|both|neither|left|right|undo: reason }.
+  // A non-empty reason marks that control `aria-disabled` (still focusable) and
+  // points its aria-describedby at the lock chip. The parent owns the guard, so
+  // clicking a blocked control still emits and is stopped in ONE place shared
+  // with the keyboard path.
+  blocked: { type: Object, default: () => ({}) },
+  // Persistent lock chip: `lockNote` is its label (chip hidden when empty),
+  // `lockDetail` its tooltip. Copy comes from lockedSetCopy.js.
+  lockNote: { type: String, default: "" },
+  lockDetail: { type: String, default: "" },
+  // Bumped by the parent when a blocked control is pressed — flashes the chip so
+  // the (usually sighted) keyboard user gets a visible answer as well as the
+  // announced one.
+  flashTick: { type: Number, default: 0 },
 });
 
 const emit = defineEmits(["answer", "corner", "skip", "undo", "gamify-toggle"]);
+
+const chipId = useId();
+
+const undoBlocked = computed(() =>
+  props.canUndo ? props.blocked?.undo || "" : "",
+);
+
+// aria-disabled (NOT disabled) + the reason, co-located via aria-describedby so
+// it is heard on focus rather than only on a hover the keyboard never performs.
+function lockAttrs(key) {
+  const reason = key === "undo" ? undoBlocked.value : props.blocked?.[key] || "";
+  if (!reason) return {};
+  return {
+    "aria-disabled": "true",
+    "aria-describedby": chipId,
+    title: reason,
+  };
+}
+
+const flashing = ref(false);
+let flashTimer = null;
+
+watch(
+  () => props.flashTick,
+  (tick) => {
+    if (!tick) return;
+    flashing.value = false;
+    if (flashTimer) clearTimeout(flashTimer);
+    // Re-trigger the animation on a repeat press of the same blocked control.
+    requestAnimationFrame(() => {
+      flashing.value = true;
+      flashTimer = setTimeout(() => {
+        flashing.value = false;
+      }, 200); // --dur-2
+    });
+  },
+);
+
+onUnmounted(() => {
+  if (flashTimer) clearTimeout(flashTimer);
+});
 </script>
 
 <style scoped>
@@ -175,26 +248,58 @@ const emit = defineEmits(["answer", "corner", "skip", "undo", "gamify-toggle"]);
   white-space: nowrap;
   transition: background 0.12s;
 }
-.rs-decide-btn:hover:not(:disabled) {
+.rs-decide-btn:hover:not(:disabled):not([aria-disabled="true"]) {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
-.rs-decide-btn:disabled {
+/* Same treatment for both: `disabled` (the 300ms key-slip hold) and
+   `aria-disabled` (a lock, which stays focusable so its reason is reachable). */
+.rs-decide-btn:disabled,
+.rs-decide-btn[aria-disabled="true"] {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-/* Locked-suspect note, anchored left so the decision buttons stay right. */
+/* Lock note, anchored left so the decision buttons stay right. It is the
+   aria-describedby target of every control it explains, so it must stay in the
+   DOM (and visible) for as long as any control is blocked. */
 .rs-decide-lock {
   margin-right: auto;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
 .rs-decide-lock .v-icon {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
+}
+/* Visible answer to a blocked press — the announcement's sighted counterpart. */
+.rs-decide-lock--flash {
+  animation: rs-lock-flash var(--dur-2) var(--ease-standard);
+}
+@keyframes rs-lock-flash {
+  50% {
+    background: color-mix(
+      in srgb,
+      rgb(var(--v-theme-warning)) 26%,
+      transparent
+    );
+    color: rgb(var(--v-theme-warning));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rs-decide-lock--flash {
+    animation: none;
+    background: color-mix(
+      in srgb,
+      rgb(var(--v-theme-warning)) 26%,
+      transparent
+    );
+    color: rgb(var(--v-theme-warning));
+  }
 }
 .rs-decide-btn kbd {
   font-family: var(--font-mono, monospace);
