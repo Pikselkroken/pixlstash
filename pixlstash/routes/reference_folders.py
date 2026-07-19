@@ -255,22 +255,32 @@ def create_router(server) -> APIRouter:
             return False
 
     def _resolve_scope_path(root: str, scope_path: Optional[str]) -> str:
-        if not scope_path:
-            return os.path.realpath(os.path.normpath(root))
-        raw_scope = str(scope_path).strip()
-        if not raw_scope:
-            return os.path.realpath(os.path.normpath(root))
-        if os.path.isabs(raw_scope):
-            resolved = os.path.realpath(os.path.normpath(raw_scope))
-        else:
-            resolved = os.path.realpath(os.path.normpath(os.path.join(root, raw_scope)))
         root_real = os.path.realpath(os.path.normpath(root))
-        if not _is_within_path(resolved, root_real):
+        raw_scope = str(scope_path).strip() if scope_path else ""
+        if not raw_scope:
+            return root_real
+        if os.path.isabs(raw_scope):
+            # An absolute scope must already sit inside the root. Reduce it to
+            # the relative remainder so the user-controlled value flows through
+            # resolve_path_within — the traversal sanitizer the rest of this
+            # module (and CodeQL's taint analysis) relies on — instead of a
+            # bespoke containment check the analyser cannot see. os.path.relpath
+            # is called only after confirming the same root, so it cannot raise
+            # on a cross-drive path.
+            abs_real = os.path.realpath(os.path.normpath(raw_scope))
+            if not _is_within_path(abs_real, root_real):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Scope path is outside the reference folder.",
+                )
+            raw_scope = os.path.relpath(abs_real, root_real)
+        try:
+            return resolve_path_within(root_real, raw_scope)
+        except ValueError as exc:
             raise HTTPException(
                 status_code=400,
                 detail="Scope path is outside the reference folder.",
-            )
-        return resolved
+            ) from exc
 
     def _validate_destination_dir(root: str, subpath: Optional[str]) -> str:
         destination = _resolve_scope_path(root, subpath)
@@ -687,7 +697,6 @@ def create_router(server) -> APIRouter:
                 )
             relocation_report = None
             old_folder = os.path.normpath(rf.folder)
-            new_folder = old_folder
             if "folder" in payload.model_fields_set and payload.folder is not None:
                 new_folder = os.path.normpath(payload.folder)
                 error = validate_reference_folder_path(new_folder)
