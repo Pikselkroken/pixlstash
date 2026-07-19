@@ -22,6 +22,12 @@ import App from "../App.vue";
 //
 //   Any of the above routes may also carry:
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
+//   ?review=board                → Open the tag-review overlay on the health board
+//   ?review=<reviewId>           → …on that review (open session or archived receipt)
+//   ?review_project=<id>         → Board scope: project
+//   ?review_set=<id>             → Board scope: set
+//   ?review_character=<id|UNASSIGNED> → Board scope: character
+//   (see composables/useReviewRoute.js)
 
 const routes = [
   { path: "/", name: "all-pictures", component: App },

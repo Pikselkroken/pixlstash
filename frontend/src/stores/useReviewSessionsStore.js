@@ -189,6 +189,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // review's receipt. { type: 'board' } | { type: 'session'|'archived', id }.
   const view = ref({ type: "board" });
   const error = ref(null);
+  // Set by useReviewRoute before it flips `overlayOpen`, so a `?review=<id>`
+  // URL can be restored. Consumed (and cleared) by load() once the session
+  // lists have landed — an id can only be resolved to an open session vs an
+  // archived receipt vs nothing once both lists exist.
+  const pendingRestoreViewId = ref(null);
 
   // --- Sessions (open + archived reviews) -----------------------------------
   const sessions = ref([]); // OPEN reviews from GET /reviews?status=OPEN
@@ -698,10 +703,23 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     createError.value = null;
     tagVotes.value = {}; // fresh consistency ledger each time the overlay opens
     fetchHealth();
-    fetchArchived();
+    const archivedLoaded = fetchArchived();
     fetchAnomalyTags();
     fetchScopeOptions();
     await fetchSessions();
+
+    // URL restore (?review=<id>). Resolved only now, against the real lists —
+    // a stale/deleted/unknown id degrades to the board rather than leaving
+    // `view` asserting a session that does not exist.
+    const restoreId = pendingRestoreViewId.value;
+    pendingRestoreViewId.value = null;
+    if (restoreId == null) return;
+    if (sessions.value.some((s) => s.id === restoreId)) {
+      openSession(restoreId);
+      return;
+    }
+    await archivedLoaded;
+    if (archived.value.some((a) => a.id === restoreId)) openArchived(restoreId);
   }
 
   function showBoard() {
@@ -730,6 +748,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     }
     activeAward.value = null;
     view.value = { type: "board" };
+    pendingRestoreViewId.value = null;
     error.value = null;
     createError.value = null;
     anomalyRegions.value = {};
@@ -1156,6 +1175,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   return {
     overlayOpen,
     view,
+    pendingRestoreViewId,
     error,
     sessions,
     archived,

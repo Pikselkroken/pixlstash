@@ -67,6 +67,7 @@ frontend/src/
 │   ├── useGridKeyboardNav.js    # Keyboard navigation and keyboard-driven actions for ImageGrid
 │   ├── useGridRealtimeSync.js   # WebSocket picture-event decision table for ImageGrid (see §9)
 │   ├── useBreadcrumb.js         # Current-view breadcrumb trail from route + id→name maps; shared by in-grid nav and TitleBar
+│   ├── useReviewRoute.js        # URL ⇄ tag-review overlay (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
 │   └── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │
 ├── utils/
@@ -503,6 +504,26 @@ Tag review is modelled as first-class **review sessions** (one tag + a frozen sc
 
 #### `ReviewSessionsOverlay.vue` (`views/`, ~580 lines)
 Full-screen entry point for tag review. Hosts the tag-health board (landing view) and the open-session rail, and switches between them.
+
+##### Review overlay URL state (`composables/useReviewRoute.js`)
+
+The overlay is addressable, the same way the image lightbox is via `?overlay=<pictureId>`. `useReviewRoute()` is called once from `App.vue` (the overlay's mount point, since `overlayOpen` gates the `v-if`) and syncs both directions:
+
+| Param | Meaning |
+|---|---|
+| `?review=board` | Overlay open on the tag-health board |
+| `?review=<reviewId>` | Overlay open on that review — an OPEN session or an ARCHIVED receipt, resolved by id against the loaded lists (`/reviews` gives both from one id space) |
+| `?review_project=<id>` | Board scope: project |
+| `?review_set=<id>` | Board scope: set |
+| `?review_character=<id\|UNASSIGNED>` | Board scope: character |
+
+**Mechanics — mirror `ImageGrid.vue`'s `_pushOverlayRoute` / `_removeOverlayRoute` / `route.query.overlay` watcher exactly:** `router.replace` only (never `push`), a `syncing` re-entrancy flag so the writer never feeds the reader, and a no-op guard so an unchanged query produces no navigation at all. Consequence, shared with the image overlay: **Back pops to the history entry that preceded the overlay** and the read-watcher reconciles the overlay shut on the way out — there is exactly one back-semantics for both overlays.
+
+**Deliberately not encoded:** board sort, tag-filter text, the anomalies-only toggle, the zero-Priority disclosure, scroll position, zoom, the tag panel, and the new-review dialog. Transient view-shaping state, cheap to re-apply, and it would otherwise ride along in shared links as somebody else's incidental filter.
+
+**Degradation (never throws, never half-opens):** presence of `?review` alone opens the overlay, so `?review`, `?review=`, `?review=true` and `?review=garbage` all land on the board. A numeric id that resolves to neither list (archived-and-purged, deleted, never existed) falls back to the board and the URL self-heals to `?review=board`. Malformed scope dimensions are dropped individually. A scope naming a **locked** set lands on the board's locked terminal state — that is the correct destination, not an error.
+
+`store.pendingRestoreViewId` carries the id from the route into `store.load()`, which resolves it only after `fetchSessions`/`fetchArchived` have landed. `openNewReview()`'s scope prefill (`ReviewSessionsOverlay.vue` ~:205-213, reading `store.healthScoped`) is untouched — the composable seeds `healthScope` directly before the overlay mounts, so `load()`'s single `/tag_health` call is already scoped.
 
 #### `ReviewSessionView.vue` (`reviews/`, ~700 lines)
 One open review session: header, progress, and the queue of decision cards. Drives accept/dismiss/fix through the store, which writes to `/tag_suggestions`.

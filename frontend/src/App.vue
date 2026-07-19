@@ -10,6 +10,7 @@ import {
 } from "vue";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
+import { useReviewRoute } from "./composables/useReviewRoute";
 import {
   apiClient,
   API_BASE_URL,
@@ -66,6 +67,10 @@ const lockedSetsStore = useLockedSetsStore();
 // --- Router ---
 const route = useRoute();
 const router = useRouter();
+
+// Keeps the tag-review overlay in the URL (?review=…), the same way ImageGrid
+// keeps the image lightbox in ?overlay=<id>. See useReviewRoute.js.
+useReviewRoute(route, router, reviewSessionsStore, { watch });
 
 // The multi-select (union/overlap) bar is shown at the grid's bottom edge
 // whenever more than one character or set is selected (mirrors ImageGrid's
