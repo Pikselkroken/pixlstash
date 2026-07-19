@@ -143,7 +143,7 @@ below.
 |---|---|
 | Page / grid canvas | `background` / `onBackground` |
 | Raised control surface (card, input, menu) | `surface` / `onSurface` |
-| Sidebar, toolbar, panels | `sidebar` / `toolbar` / `panel` (+ their `-text`) |
+| Sidebar, toolbar, panels | `sidebar` / `toolbar` / `panel` (text pair: `sidebar-text` / `toolbar-text`, but `onPanel` for panel) |
 | Brand accent, key state | `accent` / `onAccent` |
 | Primary action button | `primary` / `onPrimary` |
 | Secondary / tertiary action | `secondary` / `tertiary` |
