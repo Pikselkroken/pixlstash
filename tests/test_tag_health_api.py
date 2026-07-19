@@ -551,6 +551,122 @@ def test_tag_health_scoped_survives_large_scope():
         _teardown(temp_dir, server)
 
 
+def test_tag_health_scoped_has_model_true_for_older_version_in_scope():
+    """has_model is vault-wide *vocabulary* membership, not a scoped
+    current-version count. A scoped board whose in-scope pictures were last
+    tagged by an EARLIER run than the vault's newest prediction must still report
+    the tag as in the current tagger's vocabulary (has_model=true).
+
+    Regression guard for the scoped false-negative: pre-fix, has_model was
+    derived from the count of current-version predictions *within the scope*, so
+    zero in-scope current-version rows forced has_model=false on every row (the
+    UI then showed "not in the tagger's vocabulary" for every tag).
+    """
+    temp_dir, client, server = _setup()
+    try:
+        p_in = _upload_named(client)  # in the set, tagged "t", OLD-gen prediction
+        p_out = _upload_named(client)  # outside, "t" CURRENT-gen prediction (newer)
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            ps = PictureSet(name="scope_set")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            session.add(PictureSetMember(set_id=ps.id, picture_id=p_in))
+            session.add(Tag(picture_id=p_in, tag="t"))
+            # In-scope picture was last tagged by the OLD generation.
+            session.add(
+                TagPrediction(
+                    picture_id=p_in,
+                    tag="t",
+                    confidence=0.5,
+                    model_version="v_old",
+                    predicted_at=now - timedelta(days=2),
+                )
+            )
+            # A NEWER generation exists vault-wide but OUT of scope, so
+            # current_version is v_new and "t" is in the current vocabulary —
+            # yet no in-scope prediction is on v_new.
+            session.add(
+                TagPrediction(
+                    picture_id=p_out,
+                    tag="t",
+                    confidence=0.5,
+                    model_version="v_new",
+                    predicted_at=now,
+                )
+            )
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        scoped = client.get(f"{API}/tag_health", params={"set_id": set_id}).json()
+        assert scoped["scoped"] is True
+        srows = {r["tag"]: r for r in scoped["rows"]}
+        # "t" is in scope (via p_in's tag/prediction) and in the current
+        # vocabulary (via p_out's v_new prediction) → has_model must be true even
+        # though NO in-scope prediction is on the current version. Pre-fix: false.
+        assert srows["t"]["has_model"] is True
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_has_model_false_for_out_of_vocabulary_tags():
+    """has_model=false when a tag is absent from the current vocabulary: it has
+    only older-version predictions anywhere in the vault, or no predictions at
+    all. Confirms the vault-wide vocabulary query does not simply report
+    has_model=true for every tag (the other direction of the scoped fix)."""
+    temp_dir, client, server = _setup()
+    try:
+        p_current = _upload_named(client)  # "current_tag", CURRENT-gen prediction
+        p_stale = _upload_named(client)  # "stale_tag", only OLD-gen prediction
+        p_notag = _upload_named(client)  # "no_pred_tag", ground-truth only
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            session.add(Tag(picture_id=p_current, tag="current_tag"))
+            session.add(Tag(picture_id=p_stale, tag="stale_tag"))
+            session.add(Tag(picture_id=p_notag, tag="no_pred_tag"))
+            # Newest prediction anywhere → current_version = v_new.
+            session.add(
+                TagPrediction(
+                    picture_id=p_current,
+                    tag="current_tag",
+                    confidence=0.5,
+                    model_version="v_new",
+                    predicted_at=now,
+                )
+            )
+            # Only an older generation ever predicted "stale_tag".
+            session.add(
+                TagPrediction(
+                    picture_id=p_stale,
+                    tag="stale_tag",
+                    confidence=0.5,
+                    model_version="v_old",
+                    predicted_at=now - timedelta(days=2),
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        rows = {r["tag"]: r for r in body["rows"]}
+        # In the current vocabulary.
+        assert rows["current_tag"]["has_model"] is True
+        # Only an older-version prediction exists anywhere → out of vocabulary.
+        assert rows["stale_tag"]["has_model"] is False
+        # No prediction at all → out of vocabulary.
+        assert rows["no_pred_tag"]["has_model"] is False
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_tag_health_empty_vault_and_rebuild_idempotence():
     temp_dir, client, server = _setup()
     try:

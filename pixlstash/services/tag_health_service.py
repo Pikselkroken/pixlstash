@@ -39,10 +39,14 @@ Signal definitions (thresholds are module constants, deliberately fixed for now
 * ``mismatch``     – same-stack picture pairs disagreeing on the tag, plus
   stored high-likeness pairs (≥ ``MISMATCH_LIKENESS_THRESHOLD``) disagreeing
   (same-stack pairs are not double counted).
-* ``has_model``    – the tag has prediction rows for the current model version
-  (the most recently written non-``manual`` prediction's version). Tags with
-  no predictions at all still get a row with ``has_model=False`` so the board
-  can show a "no model signal" state.
+* ``has_model``    – the tag is in the *current tagger's vocabulary*: at least
+  one prediction row exists on the current model version (the most recently
+  written non-``manual`` prediction's version) somewhere in the vault. This is
+  a property of the MODEL, not of the board's scope, so it is computed
+  vault-wide even on a scoped board — a scope whose in-scope pictures were last
+  tagged by an *earlier* run still reports the tag as in-vocabulary. Tags with
+  no current-version prediction anywhere still get a row with ``has_model=False``
+  so the board can show a "no model signal" state.
 
 Every signal above folds child tags into their parent per
 :data:`~pixlstash.db_models.tag.DEFAULT_TAG_MERGES` before grouping — the same
@@ -352,11 +356,13 @@ def compute_tag_health_rows(
         ).all()
     )
 
-    # One grouped pass over tag_prediction: totals, verified, boundary, has_model.
-    # Folded into DEFAULT_TAG_MERGES buckets by summing per-literal-tag results —
-    # a child and its parent's prediction rows both count toward the parent's row.
-    pred_agg: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
-    for tag_value, total, verified, boundary, current in session.exec(
+    # One grouped pass over tag_prediction: totals, verified, boundary (these
+    # stay scoped). ``has_model`` is NOT derived here — it is vault-wide
+    # vocabulary membership, computed once below (see ``vocab``). Folded into
+    # DEFAULT_TAG_MERGES buckets by summing per-literal-tag results — a child and
+    # its parent's prediction rows both count toward the parent's row.
+    pred_agg: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+    for tag_value, total, verified, boundary in session.exec(
         _scoped(
             select(
                 TagPrediction.tag,
@@ -373,12 +379,8 @@ def compute_tag_health_rows(
                         else_=0,
                     )
                 ),
-                # current_version None renders as IS NULL → matches nothing → 0.
-                func.sum(
-                    case((TagPrediction.model_version == current_version, 1), else_=0)
-                ),
             )
-            # Exclude soft-deleted pictures so verified_pct/boundary_pct/has_model
+            # Exclude soft-deleted pictures so verified_pct/boundary_pct
             # match est_wrong/est_missing above (which already join+filter deleted);
             # otherwise a deleted picture's predictions inflate the unscoped board.
             .join(Picture, Picture.id == TagPrediction.picture_id)
@@ -390,7 +392,6 @@ def compute_tag_health_rows(
         bucket[0] += int(total)
         bucket[1] += int(verified or 0)
         bucket[2] += int(boundary or 0)
-        bucket[3] += int(current or 0)
 
     # model_disputes: human-frozen label strongly contradicted by the live prediction.
     disputes = _fold_counts(
@@ -497,11 +498,37 @@ def compute_tag_health_rows(
     }
     all_tags = sorted(ground_truth_tags | predicted_tags)
 
+    # has_model vocabulary: the folded tags that carry ≥1 prediction on the
+    # current model version, computed VAULT-WIDE (deliberately NOT run through
+    # ``_scoped``). ``has_model`` asks "is this tag in the current tagger's
+    # vocabulary?" — a property of the model, not of the board's scope. On a
+    # scoped board whose in-scope pictures were last tagged by an earlier run,
+    # a scope-restricted current-version count would be zero and wrongly report
+    # every tag as out-of-vocabulary (the R-bug this fixes); the unscoped query
+    # asks the model-vocabulary question directly. ``current_version is None``
+    # (no non-manual predictions anywhere) → empty vocab → ``has_model=False``
+    # everywhere, matching the pre-existing "no model signal" behaviour.
+    vocab: set[str] = set()
+    if current_version is not None:
+        vocab = {
+            DEFAULT_TAG_MERGES.get(t, t)
+            for t in session.exec(
+                select(TagPrediction.tag)
+                .join(Picture, Picture.id == TagPrediction.picture_id)
+                .where(
+                    Picture.deleted.is_(False),
+                    TagPrediction.model_version == current_version,
+                )
+                .distinct()
+            )
+            if not is_tag_sentinel(t)
+        }
+
     now = datetime.utcnow()
     rows: list[dict] = []
     total_tags = len(all_tags)
     for i, tag_value in enumerate(all_tags):
-        total, verified, boundary, current = pred_agg.get(tag_value, (0, 0, 0, 0))
+        total, verified, boundary = pred_agg.get(tag_value, (0, 0, 0))
         acc, dis = accepted.get(tag_value, 0), dismissed.get(tag_value, 0)
         wrong = int(est_wrong.get(tag_value, 0))
         missing = int(est_missing.get(tag_value, 0))
@@ -522,7 +549,7 @@ def compute_tag_health_rows(
                 "boundary_pct": (boundary / total) if total else 0.0,
                 "overturn_rate": (acc / (acc + dis)) if (acc + dis) else None,
                 "model_disputes": int(disputes.get(tag_value, 0)),
-                "has_model": current > 0,
+                "has_model": tag_value in vocab,
                 "last_reviewed_at": last_reviewed.get(tag_value),
                 "computed_at": now,
             }
