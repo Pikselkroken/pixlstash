@@ -309,14 +309,23 @@ def scan_tag(
     def _load_confidence_fallback(session: Session) -> list[tuple[int, float]]:
         """Fix 1's bootstrap candidates: literal-tag ``TagPrediction`` rows at or
         above ``EST_MISSING_MIN_CONF``, pinned to the current (non-``manual``)
-        model version, for pictures with no existing literal ``Tag`` row.
+        model version, for *un-reviewed* pictures with no existing literal ``Tag``
+        row (``label_state == "UNKNOWN"`` — no human POS/NEG on the ledger).
 
         Mirrors ``tag_health_service.compute_tag_health_rows``'s ``est_missing``
         query one-for-one (same threshold constant, same model-version pin, same
-        outer-join-on-Tag shape) so this fallback and the board's "estimated
-        missing" count can never silently diverge. Deliberately literal (not
-        ``equiv``-merged like the vote path's ``has_concept``) to match that
-        query exactly rather than inventing new merge semantics here.
+        outer-join-on-Tag shape, same ``label_state == "UNKNOWN"`` un-reviewed
+        filter) so this fallback and the board's "estimated missing" count can
+        never silently diverge. The un-reviewed filter is what stops the cold-start
+        path re-proposing a tag a human already REJECTED via the tag-prediction
+        reject endpoint: that reject writes a ledger NEG (keeping the tagger's high
+        confidence) but no ``TagSuggestion`` row, so ``_write``'s suggestion-level
+        dedup can't see it — only this ledger filter can. (A human ACCEPT adds a
+        ``Tag`` row, so those are already dropped by ``Tag.picture_id IS NULL``; an
+        un-reviewed confident prediction is ``label_state == "UNKNOWN"`` and is
+        still proposed.) Deliberately literal (not ``equiv``-merged like the vote
+        path's ``has_concept``) to match that query exactly rather than inventing
+        new merge semantics here.
         """
         pid = None
         if project and picture_ids is None:
@@ -347,6 +356,9 @@ def scan_tag(
                 TagPrediction.confidence >= EST_MISSING_MIN_CONF,
                 TagPrediction.model_version == current_version,
                 Tag.picture_id.is_(None),
+                # Un-reviewed only — mirrors est_missing so a human-REJECTED tag
+                # (ledger NEG, no Tag row) is never re-proposed as a cold-start add.
+                TagPrediction.label_state == "UNKNOWN",
             )
         )
         if picture_ids is not None:
