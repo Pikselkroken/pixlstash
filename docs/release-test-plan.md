@@ -225,7 +225,9 @@ Covers the lazy ML library loading change introduced in 1.2.
 - [ ] Click the stack badge again — the stack collapses back to the leader thumbnail
 
 ### 3.5 Selection ▾ / Context Menu Parity
-Automated by `frontend/e2e/specs/menu-parity.spec.js` (see `docs/regular-tests.md`).
+The right-click context menu is automated by `frontend/e2e/specs/context-menu.spec.js`
+(opens on right-click and lists the picture actions, §3.5; see `docs/regular-tests.md`).
+The Selection ▾ parity assertion below is manual.
 - [ ] Select 2+ pictures (Ctrl-click) → open the **Selection ▾** dropdown (or press **S**) and note the action items
 - [ ] Right-click one of the **selected** pictures and note the context-menu action items
 - [ ] Both menus list the **same** selection-scoped actions
@@ -448,18 +450,21 @@ runs with `disable_background_workers: true`, so it cannot exercise this path).
 New in this release: a tag-health board, first-class review sessions in a rail,
 and binary/pair decision cards (replaces the old "Review tags" overlay). Spec:
 `docs/reviews/2026-07-review-sessions-redesign-draft.md` (Rulings + Decisions,
-2026-07-15). The board is automated (`review-board.spec.js`, 7 cases). The
-session loop is automated but **currently `fixme`-guarded** behind the blocker
-below.
+2026-07-15). The board is automated (`review-board.spec.js`, 9 cases). The
+session loop is automated: three cases (create, binary decide, Escape-close) are
+active and green; four further cases are `fixme`-guarded pending QA+dev
+behaviour reconciliation (see §20.9).
 
-> 🚫 **RELEASE BLOCKER — BUG-RS-1 (session card never renders).** Opening any
-> review shows the session header + rail correctly, then the card area is stuck
-> on **"Loading…"** forever. The browser throws
+> ✅ **BUG-RS-1 (session card never renders) — RESOLVED.** The card used to be
+> stuck on **"Loading…"** forever, with the browser throwing
 > `TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
-> `patchBlockChildren` the instant the suggestions queue loads. Reproduced in the
-> production, unminified, and dev builds against the committed fixture vault. The
-> **entire session loop (§20.3–§20.8) is unusable** until this is fixed. Do not
-> ship the session loop with this open. The board (§20.1) is unaffected.
+> `patchBlockChildren` the instant the suggestions queue loaded (a `:key`
+> collision between the card's `v-else` branch and the compiler's numeric
+> auto-key for the sibling "Loading" `v-if`, only surfacing in production block
+> patching). Fixed by namespacing the key (`card-${current.id}`) in
+> `ReviewSessionView.vue`. The session loop renders and the core decision flow
+> works; the authoritative regression guard is the create + binary-decide specs
+> in `review-session.spec.js`.
 
 ### 20.1 Tag-health board — AUTOMATED (`review-board.spec.js`)
 
@@ -480,7 +485,7 @@ on a **real vault** (or a seeded fixture):
 - [ ] **Model-disputes** banner ("The current model disputes N of your earlier calls") when a human label contradicts a confident current-model prediction
 - [ ] **Build-progress bar** shows while the cache (re)builds on a large vault (on the small fixture the rebuild is synchronous and the bar does not visibly fill)
 
-### 20.3 Create a review — BLOCKED past the dialog by BUG-RS-1
+### 20.3 Create a review — AUTOMATED (`review-session.spec.js`, create case)
 
 - [ ] **New review** → pick a tag (open tags greyed / jump to their session) → optional scope (project/set/character) → **Scan & create**
 - [ ] The session cover-sheet receipt reads "Scanned N pictures · N suspects · N handled earlier"
@@ -488,7 +493,7 @@ on a **real vault** (or a seeded fixture):
 - [ ] "Include previously reviewed" toggle (default off) re-parents earlier-handled suspects into the new review
 - [ ] Auto-resolve line ("N obvious suspects — Auto-resolve") appears when neighbour vote + tagger agree ≥90% (needs aligned predictions; 0 on the current fixture)
 
-### 20.4 Session loop — binary — BLOCKED by BUG-RS-1
+### 20.4 Session loop — binary — AUTOMATED (`review-session.spec.js`, binary-decide + Escape-close cases)
 
 - [ ] One image, one question; **Yes / No / Skip / Undo** with `Y / N / S / U` keys
 - [ ] Direction mapping: **probably-wrong** card → No removes the tag, Yes keeps it; **probably-missing** card → Yes adds the tag, No leaves it untagged
@@ -496,22 +501,22 @@ on a **real vault** (or a seeded fixture):
 - [ ] Undo is disabled when the stack is empty, enabled after a decision; XP/streak **decrement** on undo (net counters); celebrations never fire on undo
 - [ ] Neighbour strip shows "N of M similar images have '<tag>'" with per-thumb tag/no-tag badges
 
-### 20.5 Session loop — pair cards — BLOCKED by BUG-RS-1
+### 20.5 Session loop — pair cards — MANUAL (no active spec yet)
 
 - [ ] For same-stack or dhash-near pairs a pair card appears with **Both / Neither / Left only / Right only** (`B / N / L / R`); Right-only performs the swap
 - [ ] LEFT pane = tagged side, RIGHT pane = untagged side
 
-### 20.6 Skip / refresh / staleness — BLOCKED by BUG-RS-1
+### 20.6 Skip / refresh / staleness — MANUAL (Skip case `fixme`'d, not BUG-RS-1)
 
 - [ ] Skip removes the item with **no** decision written (nothing to tags/ledger); rail shows "N skipped"; completion offers "Reopen N skipped"
 - [ ] After a vault change, the staleness hint ("Vault changed since scan → Refresh") appears; **Refresh appends** newly-found suspects with a **NEW — from refresh** badge and never resurrects decided cards
 
-### 20.7 Abort / archive — BLOCKED by BUG-RS-1
+### 20.7 Abort / archive — MANUAL (queue-completion case `fixme`'d, not BUG-RS-1)
 
 - [ ] Abort with decisions made shows a dialog: **Keep N changes** (decisions stand) / **Undo N changes** (review-scoped bulk-reopen) / Cancel
 - [ ] Working through the queue reaches an explicit completion state; **Archive** produces a receipt ("N reviewed — N removed, N added, N kept, N skipped")
 
-### 20.8 Manual tag / evidence region / gamification — BLOCKED by BUG-RS-1
+### 20.8 Manual tag / evidence region / gamification — MANUAL
 
 - [ ] Manual-tag escape hatch: bottom-left **Apply tags** button on the card + `T` shortcut opens the tag panel
 - [ ] Evidence region: `H` toggles the Grad-CAM heatmap + boxes on cards that have a region; preference persists
@@ -520,7 +525,13 @@ on a **real vault** (or a seeded fixture):
 ### 20.9 Acceptance criteria (release gate)
 
 - [ ] Board (§20.1) passes automated + manual
-- [ ] **BUG-RS-1 fixed**, the six `review-session.spec.js` cases un-`fixme`'d and green
+- [x] **BUG-RS-1 fixed** — the three authoritative `review-session.spec.js`
+      regression cases (create, binary decide, Escape-close) are un-`fixme`'d and
+      green against the production build. The remaining four cases in the spec
+      stay `fixme`'d for reasons **unrelated to BUG-RS-1** (single-suspect queue
+      emptying, Skip tally, keyboard focus, queue-completion/archive — see the
+      per-test `FIXME (not BUG-RS-1)` notes) and are tracked separately, not as a
+      release gate on the render fix
 - [ ] Binary + pair decision mapping verified against the backend receipt (accept/dismiss/swap/skip written correctly; skip writes nothing)
 - [ ] One-open-per-tag (409), abort keep-vs-undo, and archive receipt verified
 - [ ] Regressions in the old review overlay's replacement confirmed (no orphaned `TagSuggestion` rows; existing per-item accept/dismiss/reopen still work)

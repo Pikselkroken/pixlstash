@@ -1,5 +1,23 @@
 # Visual drift audit — June 2026
 
+> **SUPERSEDED — mostly resolved on `develop` (as of 2026-07).** This document is
+> kept as a historical record of the June 2026 scan. Do **not** read it as the
+> current bug list. Since it was written, most of the fix order below has landed on
+> `develop`:
+> - **Step 1 (PressStart2P):** done. Zero live references remain in `frontend/src`
+>   (retired in favour of Tiny5).
+> - **Step 2 (adopt `design-tokens.css`):** done. It is imported globally via
+>   `frontend/src/main.js`.
+> - **Step 3 (hardcoded hex):** largely done. The audited count of 38 distinct hex
+>   values is down to ~9 in the scanned scope.
+> - Steps 4–7 (shadows, radius, spacing, type) are in progress; treat the specifics
+>   below as historical, not a live tally.
+>
+> **Still literally true:** one `9999px` radius lingers in
+> `frontend/src/components/views/ImageGrid.vue` (the pill-typo from the radius table
+> below); it should snap to `--radius-pill`. (Note: the other `-9999px` values in the
+> codebase are off-screen drag-ghost offsets, not radii, and are fine.)
+
 Why this exists: the sleekness slipped after v1.6.0. This is the evidence, measured
 not eyeballed, plus the order to fix it in. Numbers are from a scan of
 `frontend/src/components` + `App.css` + `style.css`.

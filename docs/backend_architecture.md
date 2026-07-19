@@ -62,6 +62,12 @@ pixlstash/
 │   ├── quality.py                    # Quality (sharpness, contrast, …)
 │   ├── tag.py                        # User-confirmed tags
 │   ├── tag_prediction.py             # Model-predicted tags + confidence
+│   ├── tag_health.py                 # Per-tag health board cache
+│   ├── tag_suggestion.py             # Suspected label fixes (review queue)
+│   ├── tagger_run.py                 # Tagger eval runs pushed from PixlTagger
+│   ├── review.py                     # Tag review sessions + item decisions
+│   ├── detection.py                  # Florence-2 object detections
+│   ├── snapshot.py                   # Vault snapshots (GFS retention)
 │   ├── picture_likeness.py           # Pairwise image similarity
 │   ├── picture_set.py                # Sets + membership
 │   ├── picture_stack.py              # Stacks (duplicates / variants)
@@ -127,6 +133,12 @@ pixlstash/
 │       └── plugin_template.py
 │
 ├── tagger_plugins/                   # TaggerPlugin subclasses + registry (WD14, PixlStash tagger, Florence-2, JoyCaption)
+│
+├── inference/                        # ML engine + model lifecycle
+│   ├── engine.py                     # InferenceEngine (captioning, detection, embeddings)
+│   ├── model_lifecycle.py            # Model load/unload management
+│   ├── vram_budget.py                # VRAM budgeting
+│   └── workflows/                    # tagging, description, text/clip/face embedding
 │
 ├── services/                         # Business-logic extracted from route handlers
 │   ├── config_service.py             # Hardware monitoring + import folder utilities
@@ -282,13 +294,13 @@ Key endpoints (see the auto-generated index below for the full set):
 | GET | `/pictures/search` | Keyword + semantic search |
 | GET | `/pictures/stats` | Aggregate stats |
 | POST | `/pictures/import` | Upload images → create Pictures |
-| GET | `/pictures/import/{task_id}/status` | Import progress |
+| GET | `/pictures/import/status?task_id=…` | Import progress |
 | GET | `/pictures/export` | Start async ZIP export |
-| GET | `/pictures/export/{task_id}/status` | Export progress |
-| GET | `/pictures/export/{task_id}/download` | Download finished ZIP |
-| GET | `/pictures/{id}/thumbnail` | Cached thumbnail |
+| GET | `/pictures/export/status?task_id=…` | Export progress |
+| GET | `/pictures/export/download/{task_id}` | Download finished ZIP |
+| GET | `/pictures/thumbnails/{id}.webp` | Cached thumbnail |
 | POST | `/pictures/thumbnails` | Batch thumbnails |
-| GET | `/pictures/{id}/{ext}` | Serve original (optionally watermarked) |
+| GET | `/pictures/{id}.{ext}` | Serve original (optionally watermarked) |
 | POST | `/pictures/{id}/plugin/{name}` | Run image plugin |
 | PATCH | `/pictures/project` | Bulk assign to project |
 | POST | `/pictures/scores` | Bulk apply user ratings |
@@ -551,10 +563,39 @@ UserToken: id, user_id, token_hash, scope (ALL|READ),
 GuestSession / GuestScore
 ```
 
+### Tag review & health
+
+```text
+TagHealth: id, tag (unique), est_wrong, est_missing,
+           est_wrong_adj, est_missing_adj, mismatch, verified_pct,
+           boundary_pct, overturn_rate, model_disputes, has_model,
+           last_reviewed_at, computed_at
+           → per-tag health board cache (rebuilt in the background)
+
+TagSuggestion: id, picture_id, tag, direction ("add"|"remove"),
+               source, score, reason, twin_picture_id, twin_sim,
+               review_id, neighbors (JSON), status, created_at,
+               reviewed_at, prior_review_id/status/reviewed_at
+               (suspected label fixes in the review queue)
+
+Review: id, tag, project_id, set_id, character_id, status
+        (OPEN|ARCHIVED|ABORTED), scanned, found, prev_reviewed,
+        created_at, refreshed_at, receipt_snapshot
+        (one review session = one tag + a frozen scope + one scan)
+
+TaggerRun: id, run (unique), model_version, verdict, recommend,
+           accepted, anomaly_macro_f1, report (JSON), created_at
+           (tagger eval runs pushed from PixlTagger)
+```
+
 ### Filesystem-linked
 
 ```text
 ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
+
+Snapshot: id, kind, created_at, relative_path,
+          manifest_relative_path, byte_size, picture_count,
+          schema_version, label   (vault snapshots, GFS retention)
 ```
 
 **Vector storage**: image and text embeddings are stored as `BLOB` columns on `Picture` (no external vector DB). Face features are stored on `Face`.
@@ -576,6 +617,7 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | Task | Queue | Finder | Purpose |
 |------|-------|--------|---------|
 | `FACE_EXTRACTION` | GPU | `MissingFaceExtractionFinder` | InsightFace detection + 512-d embedding |
+| `FACE_MODEL_REFRESH` | GPU | `MissingFaceModelRefreshFinder` | Re-embed `Face` rows in place when `insightface_model_pack` changes (selects faces whose `model_pack` differs from the configured pack, preserving `character_id`). `depends_on=[FACE_EXTRACTION]` so brand-new pictures are never starved by a pack-refresh sweep. Registered in `vault.py`. |
 | `QUALITY` | CPU | `MissingQualityFinder` | OpenCV quality metrics |
 | `TAGGER` | GPU | `MissingTagFinder` | All enabled tag plugins (union) |
 | `TAG_PREDICTION_BACKFILL` | GPU | `MissingTagPredictionFinder` | Recover `tag_prediction` rows for pictures with tags but no predictions (runs the PixlStash tagger for raw scores only; never re-tags). Gated on the PixlStash tagger being active; depends on `FACE_EXTRACTION` + `TAGGER` so live work runs first. |
@@ -592,7 +634,7 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 | `MISSING_FILE_PURGE` | CPU | `MissingFilePurgeFinder` | Remove records for vanished files |
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
 | `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
-| `PICTURE_SPLIT_ASSIGNMENT` | CPU | `PictureSplitAssignmentFinder` | Periodic existence check for pictures with no `PictureSplit` row; queues `picture_split_service.assign_splits` (idempotent — only unassigned pictures are targeted). Replaces the previously-uncalled `POST /picture_splits/assign` as the sole trigger, so freeze eligibility (`eval_candidate_n_pos`) moves without manual action. No `depends_on()` ordering on `IMAGE_EMBEDDING`/`LIKENESS` — deliberately soft (see the finder's module docstring): hard-blocking on those risks starving split assignment during active review, the exact bug this finder fixes. |
+| `GFS_SNAPSHOT` | CPU | `EnsureGfsSnapshotFinder` | Drives the Grandfather-Father-Son automatic snapshot schedule: at most one snapshot per check (every 5 minutes), of the highest tier that is due (`MONTHLY` / `WEEKLY` / `DAILY`). Retention prunes each tier independently (7 daily / 4 weekly / 12 monthly). Registered in `vault.py`. |
 | `TAG_HEALTH_AUTO_REBUILD` | CPU | `TagHealthAutoRebuildFinder` | Checks `tag_health_service.is_stale` at most every 5 minutes (`AUTO_REBUILD_CHECK_INTERVAL_S`); when stale and no rebuild is running, dispatches through the same idempotent `start_rebuild` path `POST /tag_health/rebuild` uses. Closes the loop so `GET /tag_health`'s `stale` flag (new pictures / `TaggerRun`s / reviewed `TagSuggestion`s since the cache's `computed_at`) self-heals without a manual click. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
@@ -673,12 +715,24 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 
 | Module | Role |
 |--------|------|
-| [services/_filter_helpers.py](../pixlstash/services/_filter_helpers.py) | Shared SQL filter helpers (`normalize_set_mode`, `collect_set_filter_ids`, `project_membership_exists_clause`). Lives in `services/` to avoid a circular import between `routes/pictures/` and `services/picture_stats.py`; it is a utility module, not a service in the domain sense |
+| [utils/service/filter_helpers.py](../pixlstash/utils/service/filter_helpers.py) | Shared SQL filter helpers (`normalize_set_mode`, `collect_set_filter_ids`, `project_membership_exists_clause`). Lives under `utils/service/` (not `services/`); it is a stateless utility module, not a service in the domain sense |
+| [utils/service/picture_stats.py](../pixlstash/utils/service/picture_stats.py) | Aggregation queries for `GET /pictures/stats`; accepts a `PictureStatsParams` dataclass and returns the stats dict; used by `routes/pictures/_misc.py`. Lives under `utils/service/`, not `services/` |
 | [services/config_service.py](../pixlstash/services/config_service.py) | Hardware monitoring (CPU, RAM, GPU via `psutil` / `pynvml`) and import-folder path resolution; extracted from `routes/config.py` |
-| [services/picture_stats.py](../pixlstash/services/picture_stats.py) | Aggregation queries for `GET /pictures/stats`; accepts a `PictureStatsParams` dataclass and returns the stats dict; used by `routes/pictures/_misc.py` |
+| [services/picture_service.py](../pixlstash/services/picture_service.py) | DB-layer helpers for single-picture reads from route handlers; accept a `Database` (`vault.db`) and delegate session management to it |
+| [services/search_query_service.py](../pixlstash/services/search_query_service.py) | DB-layer helpers for face-search and likeness-search queries; same `Database`-delegating pattern as `picture_service.py` |
 | [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
 | [services/share_service.py](../pixlstash/services/share_service.py) | Validates picture share tokens (`UserToken`), resolves shared pictures, and returns the correct watermark bytes (custom or default) |
+| [services/stack_membership.py](../pixlstash/services/stack_membership.py) | Stack-atomic project & set membership helpers — keeps every member of a stack sharing the same project (`PictureProjectMember` / `Picture.project_id`) and set (`PictureSetMember`) membership |
+| [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections) |
+| [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
+| [services/restore_service.py](../pixlstash/services/restore_service.py) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
+| [services/tagger_run_service.py](../pixlstash/services/tagger_run_service.py) | System-of-record DB side for tagger evaluation runs pushed from PixlTagger: upsert a posted report on the run name and list stored runs for the stats panel |
+| [services/tag_health_service.py](../pixlstash/services/tag_health_service.py) | Tag health board cache — computes one `TagHealth` row per tag from indexed SQL over `tag_prediction` / `tag` / `tag_suggestion` / `picture` plus stored `PictureLikeness` pairs; rebuilt in the background |
+| [services/tag_suggestion_service.py](../pixlstash/services/tag_suggestion_service.py) | Human half of the tag-suggestion review queue: list ranked suspects and apply (write through to `Tag`) or dismiss them |
+| [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
+| [services/review_service.py](../pixlstash/services/review_service.py) | Service layer for review sessions (one tag + a frozen scope + one scan's results): create, scan-once, append-only refresh, archive/abort, and per-item decisions |
+| [services/impossible_tag_scan_service.py](../pixlstash/services/impossible_tag_scan_service.py) | On-demand impossible-tag scan — (re)builds the cleanup queue for person-tags that are impossible on a picture with no detectable face; sibling of `tag_scan_service.py` |
 | [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
 
 ### 10.1 DB access rule for services (enforced in CI)
@@ -741,6 +795,20 @@ Selected milestones:
 | 0034 | Token scope columns |
 | 0038–0040 | Watermark fields, move `text_score` to `Picture` |
 | 0041–0044 | Guest scores, grid sort indexes |
+| 0045 | Tagger settings JSON column |
+| 0049 | Vault snapshots table |
+| 0053 | Face model pack tracking |
+| 0057 | Split caption sidecars |
+| 0058–0059 | Tag suggestions + tagger runs (PixlTagger eval history) |
+| 0061 | Florence-2 detections |
+| 0065 | Review sessions |
+| 0066–0067 | Tag health board (+ precision-adjusted estimates) |
+| 0068–0070 | Tag-review scoring subsystem: picture splits, eval slices, freeze eligibility *(removed by 0071)* |
+| 0071 | Remove the tag-review accuracy/scoring subsystem (drops `picture_split`, `tag_eval_slice*`, `eval_*` TagHealth columns) |
+| 0072 | Review receipt snapshot + suggestion prior-decision fields |
+| 0073 | Picture-set lock (`PictureSet.locked`) |
+
+Current head: `0073_add_pictureset_locked`.
 
 ---
 
@@ -1315,7 +1383,7 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-05-26. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+*Last updated: 2026-07-19. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
 

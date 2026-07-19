@@ -93,7 +93,7 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 ## Task System
 
 - The TaskRunner class manages asynchronous tasks, allowing for background processing of image quality calculations and other operations without blocking the main server thread.
-- Work is first found using the WorkPlanner which has multiple WorkFinders registered to find different types of work (e.g., quality calculation, metadata extraction).
+- Work is first found using the WorkPlanner (`pixlstash/work_planner.py`), whose `work_finders()` returns the registered finder instances that locate different types of work (e.g., quality calculation, metadata extraction). Each finder is a `Missing*Finder`/`*Finder` subclass of `BaseTaskFinder` in `pixlstash/tasks/`.
 - Once work is found a new Task for a batch of images is created and added to the TaskRunner's queue.
 - The TaskRunner continuously processes tasks from the queue, executing the associated work function, reporting progress and handling results.
 
@@ -111,7 +111,7 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
   - **Feature branch (schema still in flux):** it's fine to amend, squash, or merge migrations rather than stacking multiple migrations for the same change. Keep the migration history tidy before it lands.
   - **`main` branch:** strict patterns apply. A migration on `main` must never be modified; all subsequent schema changes go in new migration files. (Reason: anything on `main` may already have been deployed and run, so altering an existing migration would leave those databases divergent.)
 - Place schema upgrade steps in strictly increasing version order; never insert a migration out of sequence, so upgrades always apply in the correct order.
-- The Alembic revision identifier variables (`revision`, `down_revision`, `branch_labels`, `depends_on`) are read by Alembic at runtime via module import, not by explicit code references. Declare them as exported by including `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]` after the `depends_on` line. This prevents false "unused variable" warnings from static analysers (including CodeQL) without needing `# noqa` comments. The script template (`migrations/script.py.mako`) already includes this line, so new migrations will have it automatically.
+- The Alembic revision identifier variables (`revision`, `down_revision`, `branch_labels`, `depends_on`) are read by Alembic at runtime via module import, not by explicit code references. Declare them as exported by including `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]` after the `depends_on` line. This prevents false "unused variable" warnings from static analysers (including CodeQL) without needing `# noqa` comments. The script template (`pixlstash/migrations/script.py.mako`) already includes this line, so new migrations will have it automatically.
 - When a code change requires existing data to be regenerated (e.g. tags, embeddings, quality scores), trigger reprocessing by resetting the relevant column(s) to `NULL` in the Alembic migration script. The `Missing*Finder` classes in `pixlstash/tasks/` query for pictures with `NULL` values and will automatically pick up those rows for reprocessing when the server next runs. Alembic migrations should only contain schema changes and this kind of targeted `NULL`-reset; no application logic should be placed in migrations.
 - **All `op.add_column` calls must be conditional.** Always use `sa.inspect(op.get_bind())` to fetch existing columns and skip the `add_column` if the column already exists. The baseline migration (`0001_baseline`) uses `SQLModel.metadata.create_all()`, which creates tables with all current model columns; later migrations that blindly run `ALTER TABLE … ADD COLUMN` will therefore fail on a fresh database. The standard pattern is:
   ```python
@@ -124,7 +124,7 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 ## Developer Workflows
 
 - **Install dependencies:** `pip install -e .`
-- **Run server:** `python -m pixlstash.server`
+- **Run server:** `python -m pixlstash.app`
 - **Run tests:** `python -m pytest -s -vvv --fast-captions --force-cpu`
 - **Check formatting:** `ruff check pixlstash`
 - **Build frontend:** `npm run build` (in `frontend/`)

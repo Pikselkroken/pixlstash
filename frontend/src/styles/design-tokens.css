@@ -4,8 +4,9 @@
 
    This is the SHIPPED copy of the design tokens. The SPEC and the reasoning live
    in `docs/design/design-tokens.css` + `docs/design/visual-language.md`; this file
-   must stay byte-for-byte in sync with the values there. The lead designer owns
-   both. Do not edit values here without updating the doc (and vice versa).
+   must keep the token values in sync with the values there (the comments are
+   deliberately condensed here, so the two files are not byte-identical). The lead
+   designer owns both. Do not edit values here without updating the doc (and vice versa).
 
    COLOR is not here — it lives in the Vuetify themes in `main.js`
    (`pixlStashLight` / `pixlStashDark`), consumed as `rgb(var(--v-theme-*))`.

@@ -32,7 +32,7 @@ the other two test layers:
 | Frontend units | Vitest | pure utils / pure logic |
 | **End-to-end** | **Playwright** | **the built SPA + a live backend, one origin** |
 
-There are **16 specs** today, all green locally. Each spec maps to a section of
+There are **21 specs** today, all green locally. Each spec maps to a section of
 [`docs/release-test-plan.md`](release-test-plan.md), so the manual release
 checklist shrinks as e2e coverage grows.
 
@@ -43,15 +43,24 @@ checklist shrinks as e2e coverage grows.
 | Smoke | [`grid.spec.js`](../frontend/e2e/specs/grid.spec.js) | Reference spec: render, overlay open/close, search toggle |
 | §1 Authentication | [`auth.spec.js`](../frontend/e2e/specs/auth.spec.js) | Session persists across reload, logged-out redirect, token generation, logout |
 | §3 Grid & browsing | [`grid-browse.spec.js`](../frontend/e2e/specs/grid-browse.spec.js) | Render, sort + direction flip, column reflow, search → history → reset |
+| §3.5 Context menu | [`context-menu.spec.js`](../frontend/e2e/specs/context-menu.spec.js) | Right-click a card opens the context menu listing Tag / Reverse image search / Share image; Escape dismisses |
 | §4 Picture detail | [`overlay.spec.js`](../frontend/e2e/specs/overlay.spec.js) | Overlay open/close, arrow-key next/prev, Escape close |
+| §4 Picture-set locking | [`set-locking.spec.js`](../frontend/e2e/specs/set-locking.spec.js) | Lock a set → grid lock badge + Tag action disabled; unlock restores tagging |
+| §5 Tags | [`tags.spec.js`](../frontend/e2e/specs/tags.spec.js) | Add a tag via the inline input, remove it via its ✕ chip |
+| §6 Star rating | [`rating.spec.js`](../frontend/e2e/specs/rating.spec.js) | Set a star rating in the overlay; it round-trips and survives a reload |
+| §7/§8/§9 Sets / Projects / Characters | [`entities.spec.js`](../frontend/e2e/specs/entities.spec.js) | Sidebar set/character rows filter the grid; Projects tab opens a project |
 | §10 Faces | [`faces.spec.js`](../frontend/e2e/specs/faces.spec.js) | Face crops in the side panel + bounding-box overlay toggle |
 | §11 Stacks | [`stacks.spec.js`](../frontend/e2e/specs/stacks.spec.js) | Expand-all / collapse-all from the View menu |
-| §20 Review Sessions | [`review-board.spec.js`](../frontend/e2e/specs/review-board.spec.js) | Tag-health board: open, render columns, filter, sort, anomalies toggle, Start-review row (drives the real `tag_health` cache) |
-| §20 Review Sessions | [`review-session.spec.js`](../frontend/e2e/specs/review-session.spec.js) | Session loop: create → binary Yes/No mapping, tally + backend receipt, focus advance, Undo, Skip, keyboard, archive. **`fixme`-guarded — blocked by the session card render crash (BUG-RS-1); see docs/regular-tests.md §Review Sessions** |
+| Statistics sidebar | [`stats.spec.js`](../frontend/e2e/specs/stats.spec.js) | Toolbar toggle shows/hides the stats sidebar with its Tags/Pictures/Tasks tabs |
+| Boolean set operations | [`set-operations.spec.js`](../frontend/e2e/specs/set-operations.spec.js) | Multi-select sets reveals Union / Overlap / Difference / Unique; clearing dismisses |
+| Sharing | [`sharing.spec.js`](../frontend/e2e/specs/sharing.spec.js) | Context menu → Share image → Create Link mints a read-only URL |
+| Snapshots | [`snapshots.spec.js`](../frontend/e2e/specs/snapshots.spec.js) | Settings → Snapshots lists ≥1 restore point with a Restore action (list-only) |
+| §19 Grid live-update | [`grid-own-change-no-pill.spec.js`](../frontend/e2e/specs/grid-own-change-no-pill.spec.js), [`grid-external-change-pill.spec.js`](../frontend/e2e/specs/grid-external-change-pill.spec.js), [`grid-injection.spec.js`](../frontend/e2e/specs/grid-injection.spec.js), [`grid-overlay-deferral.spec.js`](../frontend/e2e/specs/grid-overlay-deferral.spec.js) | WebSocket refresh: own change raises no pill, external raises the right pill, injection origin-suppression, flood coalescing, overlay deferral |
+| §20 Review Sessions | [`review-board.spec.js`](../frontend/e2e/specs/review-board.spec.js) | Tag-health board (9 cases): open, render columns, rebuild control, Why column, filter, sort, anomalies toggle, Start-review row (drives the real `tag_health` cache) |
+| §20 Review Sessions | [`review-session.spec.js`](../frontend/e2e/specs/review-session.spec.js) | Session loop (7 cases): create, binary Yes/No mapping + tally + backend receipt, and Escape-close run green (**BUG-RS-1 render crash resolved**); four further cases — Undo, Skip, keyboard, queue completion/archive — stay `test.fixme`'d for reasons unrelated to BUG-RS-1 (see docs/regular-tests.md §Review Sessions) |
 
-Still manual (candidates for future specs): §5 Tags, §6 Star rating / quality
-score, §7 Picture sets, §8 Projects, §9 Characters, §14 Tag predictions,
-§15 Export.
+Still manual (candidates for future specs): §14 Tag predictions, §15 Export,
+and the Selection ▾ ↔ context-menu parity comparison (#403).
 
 ## 3. Architecture
 

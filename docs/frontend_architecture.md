@@ -37,7 +37,8 @@ frontend/src/
 │   └── unknown-person.png       # Fallback avatar for unrecognised faces
 │
 ├── styles/
-│   └── context-menu.css         # Shared CSS for native-style context menus
+│   ├── context-menu.css         # Shared CSS for native-style context menus
+│   └── design-tokens.css        # Design-system tokens: spacing, radius, type ramp, elevation, motion, colour
 │
 ├── stores/                      # Pinia stores (cross-component shared state)
 │   ├── useSelectionStore.js
@@ -51,6 +52,9 @@ frontend/src/
 │   ├── useSidebarStore.js
 │   ├── useSearchStore.js
 │   ├── useSnapshotsStore.js
+│   ├── useGenStackPrefsStore.js # remembered "stack generated/filtered output with source" prefs
+│   ├── useLockedSetsStore.js    # which pictures are frozen by a locked picture set
+│   ├── useReviewSessionsStore.js # tag-review sessions, health board, and sticker gamification
 │   ├── useEntityNamesStore.js   # id→name maps for the ImageGrid breadcrumb
 │   └── useTasksStore.js         # active background work (workers + ComfyUI runs); app-wide activity light
 │
@@ -61,15 +65,18 @@ frontend/src/
 │   ├── useStackOrdering.js      # Stack expand/collapse, reorder, visual mapping in ImageGrid
 │   ├── useGridFetch.js          # Grid image fetch state + all fetch/query-param functions
 │   ├── useGridKeyboardNav.js    # Keyboard navigation and keyboard-driven actions for ImageGrid
+│   ├── useGridRealtimeSync.js   # WebSocket picture-event decision table for ImageGrid (see §9)
 │   ├── useBreadcrumb.js         # Current-view breadcrumb trail from route + id→name maps; shared by in-grid nav and TitleBar
 │   └── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │
 ├── utils/
 │   ├── apiClient.js             # Axios instance, auth state, session/token helpers
 │   ├── clipboard.js             # Cross-browser clipboard write helper
+│   ├── descriptions.js          # Pure helpers for picture-description formatting/normalisation
 │   ├── dockerHelpers.js         # Pure helpers for Docker volume/mount path building
 │   ├── media.js                 # File extension lists, file-type predicates, drop-target helpers
 │   ├── setAppearance.js         # Picture-set icon/colour palette constants (kept in sync with backend)
+│   ├── snapshots.js             # Snapshot kind→chip-colour and relative-date helpers (shared by snapshot UIs)
 │   ├── stack.js                 # Pure stack-ordering and leader-selection utilities
 │   ├── tags.js                  # Tag normalisation, deduplication, penalty scoring
 │   └── utils.js                 # Date formatting, score toggle, stack colours, ComfyUI error parsing
@@ -80,12 +87,24 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Desktop-only custom window title bar (Electron): wordmark, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces (ImageGrid, ImageOverlay, LoginScreen, SearchOverlay, overlay panels)
-    ├── panels/      # Large structural panels that form the app shell (SideBar, Toolbar, SelectionBar, SelectionMenu, StatsSidebar, …)
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, LoginScreen
+    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
+    ├── reviews/     # Tag-review surfaces (see below)
+    │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
+    │   ├── ReviewRail.vue             # Rail of open review sessions
+    │   ├── ReviewBinaryCard.vue       # Single-tag accept/dismiss decision card
+    │   ├── ReviewPairCard.vue         # Twin/near-duplicate pair decision card
+    │   ├── ReviewDecisionBar.vue      # Accept/dismiss/fix/undo action bar
+    │   ├── ReviewCelebration.vue      # Session-complete celebration
+    │   ├── ReviewArchivedReceipt.vue  # Archived-session summary receipt
+    │   ├── ReviewSticker.vue          # Die-cut sticker award (vocabulary from setAppearance.js)
+    │   ├── NewReviewDialog.vue        # "Start a review" tag + scope picker
+    │   ├── TagHealthBoard.vue         # Landing tag-health board
+    │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
-    ├── settings/    # Settings dialog and its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute)
+    ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection
-    └── widgets/     # Reusable primitives used across multiple domains
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel)
 ```
 
 ---
@@ -96,7 +115,7 @@ frontend/src/
 |---------|--------|
 | Framework | Vue 3 (Composition API, `<script setup>`) |
 | UI component library | Vuetify 3 |
-| State management | **Pinia** — 10 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
+| State management | **Pinia** — 16 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
 | Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`) render `App.vue` via `<RouterView>`. `App.vue` watches the route and syncs params to Pinia stores; nav handlers call `router.push()` to update the URL. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
 | Build tool | Vite 5 |
@@ -107,7 +126,7 @@ frontend/src/
 ### Key Design Principles
 
 - **Pinia for cross-component state.** All state shared across more than one component lives in a Pinia store in `src/stores/`. `App.vue` owns only layout-shell state (sidebar/stats visibility, pending import counts) that is not consumed anywhere else.
-- **Sidebar tabs are stateless; the route is the single source of truth for the grid view.** Switching a sidebar tab/category (People / Sets / Projects / Folders, and the Global ↔ Project mode) is a *pure sidebar-display* operation: it only changes which list of entries the sidebar renders. It must **not** call `router.push()`, must **not** emit any `select-*` / navigation event, and must **not** write to the filter / selection / sort / grid stores. The grid keeps showing whatever the current route resolves to. Only an explicit **entry click** (a specific character / set / project) navigates, via `router.push()`. This decoupling is what lets a user stay on a global view, switch to the Projects tab purely to reveal its entries as **drop targets**, and drag the current selection onto a project or one of its characters without losing the view they found the pictures in. See [§5 → SideBar.vue](#sidebarvue--150-lines).
+- **Sidebar tabs are stateless; the route is the single source of truth for the grid view.** Switching a sidebar tab/category (People / Sets / Projects / Folders, and the Global ↔ Project mode) is a *pure sidebar-display* operation: it only changes which list of entries the sidebar renders. It must **not** call `router.push()`, must **not** emit any `select-*` / navigation event, and must **not** write to the filter / selection / sort / grid stores. The grid keeps showing whatever the current route resolves to. Only an explicit **entry click** (a specific character / set / project) navigates, via `router.push()`. This decoupling is what lets a user stay on a global view, switch to the Projects tab purely to reveal its entries as **drop targets**, and drag the current selection onto a project or one of its characters without losing the view they found the pictures in. See [§5 → SideBar.vue](#sidebarvue--9-320-lines).
 - **Composables for reusable logic.** Complex logic extracted from mega-components lives in `src/composables/` as `useX()` functions. Composables accept dependencies as parameters and are independently unit-testable.
 - **Flat component structure.** All components sit directly in `src/components/` with sub-directories by domain (`views/`, `panels/`, `editors/`, `settings/`, `io/`, `widgets/`). Shared presentational sub-components (e.g. `StarRatingOverlay`, `ProgressOverlay`) live in `widgets/`.
 - **Utilities are pure functions.** Every file in `src/utils/` exports only plain functions and constants; none hold reactive state themselves (except `apiClient.js`, which holds `isAuthenticated`, `sessionContext`, and `isReadOnly`).
@@ -166,6 +185,10 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useProjectStore` | `useProjectStore.js` | `projectViewMode` *(sidebar-display only — see below)*, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
 | `useSidebarStore` | `useSidebarStore.js` | `sidebarDocked` (width pref), `sidebarPinned` (visibility pref), `statsOpen`, `sidebarForcedHidden`, `statsForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId`; computeds `effectivePinned`, `effectiveDocked`, `sidebarVisible`, `sidebarOverlay` model the pin / dock / auto-hide behaviour (mobile `*ForcedHidden` overrides win). All localStorage access is try/caught. |
 | `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
+| `useSnapshotsStore` | `useSnapshotsStore.js` | `snapshots`, `loading`, `activeJob`, `error`, `dailySnapshotsEnabled`; drives the shared `RestoreConfirmDialog` hoisted in `App.vue` (`restoreDialogOpen`, `restoreDialogSnapshotId`, `restoreDialogResources`). Owns snapshot list load / create / restore and the snapshot WebSocket event handlers (called from `App.vue`). |
+| `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
+| `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
+| `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
 | `useTasksStore` | `useTasksStore.js` | `workerSnapshots`, `series` (per-worker throughput history), `systemUsage` (CPU/RAM/VRAM), `comfyuiRuns` (frontend-driven run progress keyed by run id); computeds `activeEntries` (backend workers + ComfyUI runs, merged), `hasActiveTasks`, `activeCount`. The **single poller** of `GET /workers/progress` (adaptive cadence — see §4.4) and the single source of truth for the app-wide "is the app working" indicators. |
 
@@ -205,10 +228,10 @@ All indicator animations honour `prefers-reduced-motion: reduce`.
 
 ### Layout and Shell
 
-#### `Root.vue` (66 lines)
+#### `Root.vue` (59 lines)
 Auth gate. Renders `LoginScreen` or `App` based on `isAuthenticated`. Handles `?token=` share links on mount.
 
-#### `App.vue` (~1 700 lines)
+#### `App.vue` (~2 580 lines)
 Application shell. Owns all global state. Renders `SideBar` + `ImageGrid` + `StatsSidebar`. Manages WebSocket, keyboard shortcuts, window drag/drop, paste, config loading, export, update checks.
 
 #### `TitleBar.vue` (~400 lines)
@@ -221,7 +244,7 @@ Presentational "PixlStash" brand wordmark in the Tiny5 pixel font (replaced the 
 
 ### Large Stateful Components
 
-#### `ImageGrid.vue` (~8 670 lines)
+#### `ImageGrid.vue` (~7 360 lines)
 The core image display engine. Responsibilities:
 - Virtualised grid scroll with dynamic thumbnail sizes (via `useVirtualScroll`).
 - Fetches images from `GET /pictures` with all filter params as query args.
@@ -234,7 +257,7 @@ The core image display engine. Responsibilities:
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
 
-#### `SideBar.vue` (~8 150 lines)
+#### `SideBar.vue` (~9 320 lines)
 Left navigation panel. Responsibilities:
 - Tabs: People, Sets, Projects, Folders.
 - Character list with face thumbnails, drag-drop assignment, inline create/edit.
@@ -273,7 +296,7 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
   the view and breaks the drag-to-assign flow. Keep navigation in entry-click
   handlers only.
 
-#### `ImageOverlay.vue` (~6 590 lines)
+#### `ImageOverlay.vue` (~4 880 lines)
 Full-screen image lightbox. Responsibilities:
 - **Frozen navigation backbone (overlay-open deferral, see §9.1).** prev/next and the filmstrip read membership from a snapshot of `allImages` (`frozenAllImages`, captured on open and cleared on close) via the `overlayImages` computed, not from the live `allImages` prop. This keeps left/right working for the overlay's whole lifetime even after the current picture stops matching the active filter (e.g. the user removes the tag the view is filtered on) or a background refetch reshuffles the grid. The currently displayed card stays fresh independently: it lives in `image.value` and is updated by local edits / `fetchOverlayMetadata`, not by the snapshot. Stack expansion still loads fresh members from `/stacks/{id}/pictures`; only the sequence/membership is frozen.
 - Image display with pan/zoom (fit / 1.5× / 2×).
@@ -290,8 +313,15 @@ Full-screen image lightbox. Responsibilities:
 - Key props: `open`, `initialImageId`, `allImages`, `tagUpdate`, `hiddenTags`, `applyTagFilter`, `availablePlugins`, `comfyuiProgress`, `guestScore`
 - Emits: `close`, `apply-score`, `set-guest-score`, `add-tag`, `remove-tag`, `update-description`, `overlay-change`, `added-to-set`, `set-project`, `comfyui-run`, `run-plugin`
 
-#### `Toolbar.vue` (`panels/`, ~3 300 lines)
-Top/grid toolbar. Imports state directly from Pinia stores (`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`, `useExportStore`, `useSidebarStore`) — no `inject` or prop drilling. The selection action UI that used to live here was extracted into `SelectionBar.vue` + `SelectionMenu.vue` (see below); `Toolbar` no longer holds any selection state.
+#### Overlay side-panels (`views/`)
+The overlay's right-hand panels, extracted from `ImageOverlay.vue` so each owns its own markup and state:
+- `OverlayTagsPanel.vue` (~1 230 lines) — tag list, add/remove, autocomplete, AI-prediction accept/reject.
+- `OverlayDescriptionPanel.vue` (~450 lines) — inline description editing (uses `utils/descriptions.js`) and copy.
+- `OverlayMetadataPanel.vue` (~705 lines) — metadata, score, dates, file info, penalised-tag indicator.
+- `OverlayFilmstrip.vue` (~330 lines) — the frozen-navigation filmstrip strip (reads `overlayImages`, see §9.1).
+
+#### `Toolbar.vue` (`panels/`, ~1 410 lines)
+Top/grid toolbar. Imports state directly from Pinia stores (`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`, `useExportStore`, `useSidebarStore`) — no `inject` or prop drilling. The selection action UI that used to live here was extracted into `SelectionBar.vue` + `SelectionMenu.vue` (see below); the tag / ComfyUI / export / import / global-filter menu bodies were extracted into the `Tb*Panel` / `GbFilterPanel` sub-panels (see below). `Toolbar` no longer holds any selection state.
 
 Responsibilities:
 - Grid bar: sort selector, filter chips (tags, score, media type, resolution), column slider, stack controls, view mode toggles.
@@ -299,6 +329,14 @@ Responsibilities:
 - Export menu: type (full/face), caption mode, resolution, tag format, character name inclusion, bounding-box sidecar (`exportBboxMode`: none / COCO JSON → `bbox_mode` query param).
 - Props: `selectedCount`, `selectedCharacter`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `backendUrl`, `comfyuiConfigured`.
 - Key emits: `comfyui-run-grid`, `expand-all-stacks`, `collapse-all-stacks`, `confirm-export-zip`, `open-import`, `open-settings`.
+
+#### Toolbar menu panels (`panels/`)
+The individual toolbar menu bodies, extracted from `Toolbar.vue` so each dropdown owns its own markup and state:
+- `TbTagPanel.vue` (~1 480 lines) — the tag filter / tag-management menu body.
+- `TbComfyPanel.vue` (~230 lines) — the ComfyUI-run menu body.
+- `TbExportPanel.vue` (~215 lines) — the export options menu body (type, caption, resolution, tag format, bbox sidecar).
+- `TbImportPanel.vue` (~370 lines) — the import-source menu body.
+- `GbFilterPanel.vue` (~1 240 lines) — the global-filter panel (score / media-type / resolution / tag filter controls) shared by the grid bar.
 
 #### `SelectionBar.vue` (`panels/`)
 Floating selection action bar shown above the grid when images are selected (the leftover from the Toolbar split). Driven by props from `ImageGrid`; it renders the per-selection plugin/ComfyUI run menus, the tag/caption controls, and the `SelectionMenu` dropdown. Uses the `@container selbar` query against the grid-content wrapper, so its layout responds to the available grid width.
@@ -326,8 +364,8 @@ Right-side statistics panel. Responsibilities:
 
 ### Settings Dialog and Sub-sections
 
-#### `UserSettingsDialog.vue` (~2 580 lines)
-Multi-tab settings dialog. Each tab now delegates to its own section component (the Behaviour, Workflows and Snapshots tabs were extracted from inline markup). Tabs:
+#### `UserSettingsDialog.vue` (~320 lines)
+Thin multi-tab settings shell. It now owns only the tab chrome and routing — every tab's content was extracted into its own section component, so the dialog itself holds no inline tab markup. Tabs:
 - **Appearance** → `<AppearanceSection>`
 - **Behaviour** → `<BehaviourSection>` (`!isReadOnly`)
 - **Smart Score** → `<SmartScoreSection>` (`!isReadOnly`)
@@ -361,6 +399,9 @@ Account management tab. Props: `open: Boolean`. Emits: `update:public-url`.
 - On `open` change: resets form, fetches auth info, tokens, public URL, watermark preview.
 - Manages: password change, API token CRUD (create/list/delete/copy), share-link builder, public URL config, watermark upload/clear.
 - Owns: `tokenDialogOpen` and `tokenDeleteDialogOpen` dialogs (rendered inside this component using Vuetify's overlay teleport system).
+
+#### Settings layout primitives (`settings/`)
+Small presentational building blocks shared by the section components above, so every tab lays out with one consistent grammar: `SettingsSection`, `SettingsRow`, `SettingsTwoCol`, `SettingsFieldBlock`, `SettingsSliderRow`, `SettingsInfoCard`, `SettingsChip` / `SettingsChipGrid`, and `SettingsAddTagRow`. Presentational only — state lives in the section components.
 
 ---
 
@@ -397,6 +438,9 @@ Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPictu
 ---
 
 ### Shared / Primitive Components
+
+#### App* design-system layer (`widgets/`)
+The house-styled form/control primitives that wrap Vuetify with the PixlStash tokens (`styles/design-tokens.css`), so new UI composes from one consistent kit instead of raw Vuetify: `AppButton.vue` (~140 lines), `AppDialog.vue` (~165 lines), `AppInput.vue` (~95 lines), `AppSelect.vue` (~95 lines), `AppStepper.vue` (~125 lines), `AppTextarea.vue` (~60 lines), plus `FieldLabel.vue` (~15 lines) for consistent field labelling. Presentational; each takes `v-model` / props and emits the matching update events.
 
 #### `AddToEntityControl.vue` (966 lines)
 Reusable control for assigning images to/from characters and sets. Props: `type` (`'character'`|`'set'`), `imageIds`, `selectedCharacter`, `selectedSet`. Emits: `added`, `removed`, `selected`. Used in `Toolbar`, `ImageOverlay`, `ImageGridContextMenu`.
@@ -450,6 +494,45 @@ Empty-state illustration and caption for the scrapheap (deleted-images holding a
 
 #### `LoginScreen.vue` (209 lines)
 Login/registration form. On mount calls `checkLoginStatus()` to detect first-run (no users exist → show registration form). Calls `login()` from `apiClient.js`.
+
+---
+
+### Tag Review
+
+Tag review is modelled as first-class **review sessions** (one tag + a frozen scope + one scan's results), backed by `useReviewSessionsStore` (§4). State lives in the store; these components are the surface.
+
+#### `ReviewSessionsOverlay.vue` (`views/`, ~580 lines)
+Full-screen entry point for tag review. Hosts the tag-health board (landing view) and the open-session rail, and switches between them.
+
+#### `ReviewSessionView.vue` (`reviews/`, ~700 lines)
+One open review session: header, progress, and the queue of decision cards. Drives accept/dismiss/fix through the store, which writes to `/tag_suggestions`.
+
+#### `ReviewRail.vue` (`reviews/`, ~740 lines)
+Rail of open review sessions — each entry is one tag's in-progress review; select to resume, archive to close.
+
+#### `ReviewBinaryCard.vue` (`reviews/`, ~685 lines)
+Single-tag accept/dismiss decision card for one picture.
+
+#### `ReviewPairCard.vue` (`reviews/`, ~320 lines)
+Twin / near-duplicate pair card: compares a picture against a reference to fix-twin / swap.
+
+#### `ReviewDecisionBar.vue` (`reviews/`, ~275 lines)
+The accept / dismiss / fix / undo action bar shared by the decision cards.
+
+#### `ReviewCelebration.vue` (`reviews/`, ~355 lines)
+Session-complete celebration screen.
+
+#### `ReviewArchivedReceipt.vue` (`reviews/`, ~135 lines)
+Summary receipt shown for an archived session (what was decided).
+
+#### `ReviewSticker.vue` (`reviews/`, ~85 lines)
+Die-cut sticker award. The sticker vocabulary is imported from the Picture Set palette (`utils/setAppearance.js`) so sets and stickers never drift.
+
+#### `NewReviewDialog.vue` (`reviews/`, ~730 lines)
+"Start a review" dialog: pick a tag and freeze the scope for a new session.
+
+#### `TagHealthBoard.vue` (`reviews/`, ~935 lines)
+Landing tag-health board — precision-adjusted estimates and thresholds per tag, the jumping-off point for starting a review. Pure estimate/threshold math lives in `tagHealthBoardLogic.js` (~90 lines).
 
 ---
 
