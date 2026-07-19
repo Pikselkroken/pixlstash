@@ -929,6 +929,180 @@ def _scoped_token_env():
     return temp_dir, client, server, set_id, r.json()["token"]
 
 
+# ---------------------------------------------------------------------------
+# Delete: single review + clear-all-archived. Deleting a review removes only the
+# Review row; its suggestion rows detach (review_id -> NULL) so per-item
+# decisions and the no-resurrection guarantee survive.
+# ---------------------------------------------------------------------------
+
+
+def test_delete_single_review_detaches_rows_and_preserves_decision():
+    temp_dir, client, server = _setup()
+    try:
+        a, _b = _make_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        sid = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]["id"]
+
+        # Decide it: accept removes the suspect's tag and writes the human ledger.
+        assert client.post(f"/tag_suggestions/{sid}/accept").status_code == 200
+
+        # Delete the review session.
+        resp = client.delete(f"{API}/reviews/{rid}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"deleted": 1}
+
+        # The review is gone; a re-GET is 404.
+        assert client.get(f"{API}/reviews/{rid}").status_code == 404
+        assert client.get(f"{API}/reviews").json() == []
+
+        # The suggestion row survived, detached (review_id -> NULL) with its
+        # decision intact — deleting the session resurrected nothing.
+        row = _get_suggestion(server, sid)
+        assert row is not None
+        assert row.review_id is None
+        assert row.status == "ACCEPTED"
+
+        # The underlying label decision stands: accept removed the tag, and the
+        # human-label ledger entry the accept wrote is untouched by the delete.
+        tags = client.get(f"/pictures/{a}/tags").json()["tags"]
+        assert not any(t["tag"] == TAG for t in tags)
+        pred = server.vault.db.run_immediate_read_task(
+            lambda s: s.exec(
+                select(TagPrediction).where(
+                    TagPrediction.picture_id == a,
+                    TagPrediction.tag == TAG,
+                )
+            ).first()
+        )
+        assert pred is not None and pred.label_source == "human"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_delete_open_review_frees_the_tag_and_keeps_pending_row():
+    temp_dir, client, server = _setup()
+    try:
+        _make_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        sid = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]["id"]
+
+        # Delete the OPEN review mid-review: the pending row detaches, no decision
+        # is lost, and the tag is free for a new OPEN review (unique index clear).
+        assert client.delete(f"{API}/reviews/{rid}").json() == {"deleted": 1}
+        row = _get_suggestion(server, sid)
+        assert row is not None and row.review_id is None and row.status == "PENDING"
+
+        again = client.post(f"{API}/reviews", json={"tag": TAG})
+        assert again.status_code == 200
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_delete_review_404_for_unknown_id():
+    temp_dir, client, server = _setup()
+    try:
+        assert client.delete(f"{API}/reviews/999999").status_code == 404
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_clear_archived_deletes_only_archived_and_returns_count():
+    temp_dir, client, server = _setup()
+    try:
+        # Three reviews on distinct tags: two archived, one aborted, plus one OPEN.
+        _make_pair(client, server, axis=0, tag="tag a")
+        _make_pair(client, server, axis=1, tag="tag b")
+        _make_pair(client, server, axis=2, tag="tag c")
+        _make_pair(client, server, axis=3, tag="tag d")
+
+        r_arch1 = client.post(f"{API}/reviews", json={"tag": "tag a"}).json()["id"]
+        r_arch2 = client.post(f"{API}/reviews", json={"tag": "tag b"}).json()["id"]
+        r_abort = client.post(f"{API}/reviews", json={"tag": "tag c"}).json()["id"]
+        r_open = client.post(f"{API}/reviews", json={"tag": "tag d"}).json()["id"]
+
+        assert client.post(f"{API}/reviews/{r_arch1}/archive").status_code == 200
+        assert client.post(f"{API}/reviews/{r_arch2}/archive").status_code == 200
+        assert client.post(f"{API}/reviews/{r_abort}/abort").status_code == 200
+
+        # Clear all archived: exactly the two ARCHIVED reviews are deleted.
+        resp = client.delete(f"{API}/reviews", params={"status": "ARCHIVED"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"deleted": 2}
+
+        remaining = {r["id"]: r["status"] for r in client.get(f"{API}/reviews").json()}
+        assert set(remaining) == {r_abort, r_open}
+        assert remaining[r_abort] == "ABORTED"
+        assert remaining[r_open] == "OPEN"
+
+        # Idempotent: a second clear finds nothing to delete.
+        assert client.delete(
+            f"{API}/reviews", params={"status": "ARCHIVED"}
+        ).json() == {"deleted": 0}
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_clear_reviews_requires_archived_status():
+    temp_dir, client, server = _setup()
+    try:
+        _make_pair(client, server)
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+
+        # Missing status -> 422 (required query param); never a delete-everything.
+        assert client.delete(f"{API}/reviews").status_code == 422
+        # A non-ARCHIVED status is refused (guards OPEN/ABORTED sessions).
+        assert (
+            client.delete(f"{API}/reviews", params={"status": "OPEN"}).status_code
+            == 400
+        )
+        assert (
+            client.delete(f"{API}/reviews", params={"status": "ABORTED"}).status_code
+            == 400
+        )
+        # The OPEN review is still there — nothing was deleted.
+        assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_delete_review():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        assert bearer.delete(f"{API}/reviews/{rid}", headers=headers).status_code == 403
+        # The rejected call must not have deleted the session.
+        assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
+        # Owner deletes fine.
+        assert client.delete(f"{API}/reviews/{rid}").json() == {"deleted": 1}
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_clear_archived_reviews():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        assert client.post(f"{API}/reviews/{rid}/archive").status_code == 200
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (
+            bearer.delete(
+                f"{API}/reviews", params={"status": "ARCHIVED"}, headers=headers
+            ).status_code
+            == 403
+        )
+        # The rejected call must not have deleted the archived session.
+        assert client.get(f"{API}/reviews/{rid}").json()["status"] == "ARCHIVED"
+        # Owner clears fine.
+        assert client.delete(
+            f"{API}/reviews", params={"status": "ARCHIVED"}
+        ).json() == {"deleted": 1}
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_scoped_token_cannot_create_review():
     temp_dir, client, server, _set_id, token = _scoped_token_env()
     try:

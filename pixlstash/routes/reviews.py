@@ -100,6 +100,12 @@ class RefreshReviewResponse(BaseModel):
     refreshed_at: Optional[str] = None
 
 
+class DeleteReviewsResponse(BaseModel):
+    """How many review sessions a delete removed (1 for a single delete)."""
+
+    deleted: int
+
+
 class ReviewSuggestionItemResponse(BaseModel):
     """One card in a review's ranked queue."""
 
@@ -201,6 +207,34 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=403, detail="Not available to this token")
         return review_service.list_reviews(server.vault, status=status)
 
+    @router.delete(
+        "/reviews",
+        summary="Bulk-delete review sessions by status (clear all archived)",
+        description=(
+            "Deletes every review in the given ``status`` and returns the "
+            "``deleted`` count. ``status`` is **required** and must be "
+            "``ARCHIVED`` — the 'clear all archived' action; there is no "
+            "delete-everything default. Suggestion rows are detached "
+            "(``review_id`` cleared), never destroyed, so per-item decisions and "
+            "the no-resurrection guarantee stand. Owner-only."
+        ),
+        response_model=DeleteReviewsResponse,
+    )
+    def clear_reviews(request: Request, status: str):
+        # Owner-only surface (see the /reviews reads): a scoped share token is
+        # READ-only and must not delete review sessions. Check BEFORE any DB read.
+        if _token_scope_ids(server, request) is not None:
+            raise HTTPException(status_code=403, detail="Not available to this token")
+        # Bulk delete only ever clears ARCHIVED reviews. Anything else (a missing
+        # or OPEN/ABORTED status) is refused so this endpoint can never wipe open
+        # or aborted sessions.
+        if (status or "").upper() != review_service.ARCHIVED:
+            raise HTTPException(
+                status_code=400, detail="status=ARCHIVED is required for bulk delete"
+            )
+        deleted = review_service.clear_reviews(server.vault, review_service.ARCHIVED)
+        return {"deleted": deleted}
+
     # NOTE: must be registered before /reviews/{review_id} so the literal
     # "preview" segment is not captured by the int path parameter.
     @router.get(
@@ -256,6 +290,29 @@ def create_router(server) -> APIRouter:
             return review_service.get_review(server.vault, review_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="Review not found")
+
+    @router.delete(
+        "/reviews/{review_id}",
+        summary="Delete one review session",
+        description=(
+            "Deletes the review (any status). Its suggestion rows are detached "
+            "(``review_id`` cleared), not destroyed: a review is an audit receipt "
+            "over per-item decisions already written through to the tags/label "
+            "ledger, so deleting it never resurrects or alters the underlying "
+            "labels. 404 if the review does not exist. Owner-only."
+        ),
+        response_model=DeleteReviewsResponse,
+    )
+    def delete_review(review_id: int, request: Request):
+        # Owner-only surface (see the /reviews reads): a scoped share token is
+        # READ-only and must not delete a review session. Check BEFORE any DB read.
+        if _token_scope_ids(server, request) is not None:
+            raise HTTPException(status_code=403, detail="Not available to this token")
+        try:
+            review_service.delete_review(server.vault, review_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Review not found")
+        return {"deleted": 1}
 
     @router.post(
         "/reviews/{review_id}/refresh",

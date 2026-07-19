@@ -568,6 +568,71 @@ def set_review_status(vault: "Vault", review_id: int, status: str) -> dict:
     return _serialize(review)
 
 
+def delete_review(vault: "Vault", review_id: int) -> None:
+    """Delete one review session by id (any status).
+
+    Removes the :class:`Review` row only. Its :class:`TagSuggestion` rows are
+    **not** deleted: ``TagSuggestion.review_id`` is an ``ON DELETE SET NULL`` FK
+    (SQLite FK enforcement is on — see ``database.init_database``), so those rows
+    survive with ``review_id`` cleared. This is deliberate:
+
+    * A review is an *audit receipt* over per-item decisions that were written
+      through to the ``Tag`` rows / human-label ledger as they were made.
+      Deleting the session must never resurrect or alter those decisions.
+    * The no-resurrection guarantee is keyed on the suggestion row's ``status``,
+      not on ``review_id`` (see :func:`tag_scan_service.scan_tag`): a DECIDED row
+      left with ``review_id = NULL`` is still counted as ``prev_reviewed`` and
+      suppressed on the next scan of the tag. Deleting the suggestion rows would
+      instead re-surface already-decided suspects — a resurrection. So they are
+      detached, not destroyed.
+
+    Deleting an OPEN review the owner is mid-review-of is allowed: the row goes
+    away (freeing the tag for a new OPEN review) and its still-PENDING suggestion
+    rows detach to ``review_id = NULL`` with no decision lost.
+
+    Raises:
+        KeyError: If no review with that id exists.
+    """
+
+    def _delete(session: Session) -> None:
+        review = session.get(Review, review_id)
+        if review is None:
+            raise KeyError(f"Review not found: id={review_id}")
+        # No ORM relationship maps Review -> TagSuggestion, so this issues a bare
+        # DELETE and the DB-level ON DELETE SET NULL detaches the suggestion rows.
+        session.delete(review)
+        session.commit()
+
+    vault.db.run_task(_delete)
+
+
+def clear_reviews(vault: "Vault", status: str) -> int:
+    """Delete every review in ``status`` and return how many were deleted.
+
+    Powers the review rail's "clear all archived" bulk action. Each deleted
+    review's suggestion rows are detached (``review_id`` set NULL), never
+    destroyed — identical semantics to :func:`delete_review`, so the decision
+    audit and the no-resurrection guarantee are preserved.
+
+    Raises:
+        ValueError: If ``status`` is not a member of :data:`VALID_STATUSES`.
+    """
+    normalized = (status or "").upper()
+    if normalized not in VALID_STATUSES:
+        raise ValueError(f"Invalid status for bulk delete: {status!r}")
+
+    def _delete(session: Session) -> int:
+        reviews = list(
+            session.exec(select(Review).where(Review.status == normalized)).all()
+        )
+        for review in reviews:
+            session.delete(review)
+        session.commit()
+        return len(reviews)
+
+    return vault.db.run_task(_delete)
+
+
 def derive_kind(
     suspect: tuple[int | None, str | None] | None,
     twin: tuple[int | None, str | None] | None,
