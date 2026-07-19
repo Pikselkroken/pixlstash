@@ -294,7 +294,7 @@ function onImgLoad(event) {
 watch(imgRef, (el, prev) => {
   if (ro && prev) ro.unobserve(prev);
   if (el) {
-    if (!ro) ro = new ResizeObserver(measure);
+    if (!ro) ro = new ResizeObserver(() => measure());
     ro.observe(el);
     measure();
   }
