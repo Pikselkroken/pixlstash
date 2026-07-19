@@ -393,7 +393,8 @@ def test_scores_below_the_old_clamp_floor_stay_ordered():
     )
     assert mild > catastrophic, (mild, catastrophic)
     # Both still read as "1.0" to a user, and both honour the [1, 5] contract.
-    assert 1.0 < catastrophic < mild <= _FLOOR_BAND_TOP
+    assert 1.0 < catastrophic <= _FLOOR_BAND_TOP
+    assert 1.0 < mild <= _FLOOR_BAND_TOP
 
 
 def test_compress_raw_score_is_monotonic_and_bounded():

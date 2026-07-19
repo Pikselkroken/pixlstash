@@ -236,7 +236,8 @@ def test_removing_content_tag_does_not_invalidate():
 
         tag_id = _tag_id_for(server, pic_id, CONTENT_TAG)
         assert tag_id is not None
-        assert client.delete(f"/pictures/{pic_id}/tags/{tag_id}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pic_id}/tags/{tag_id}")
+        assert delete_resp.status_code == 200
 
         assert _get_smart_score(server, pic_id) == 0.5
     finally:
