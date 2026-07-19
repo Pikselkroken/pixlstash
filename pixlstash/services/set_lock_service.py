@@ -231,6 +231,167 @@ def locked_picture_id_subquery():
     )
 
 
+def locked_set_ids(session: Session, set_ids) -> set[int]:
+    """Return the subset of *set_ids* that are locked.
+
+    The set-level counterpart to :func:`locked_picture_ids`. Used by *propagation*
+    paths (ComfyUI generation, image-plugin runs) that copy a source picture's set
+    memberships onto derived outputs: those paths must drop the locked sets rather
+    than fail, so they need to know which ids to drop.
+
+    Args:
+        session: Pre-opened DB session.
+        set_ids: Candidate ``PictureSet`` ids.
+
+    Returns:
+        The locked ids among *set_ids*. Empty when nothing is locked.
+    """
+    ids = {int(sid) for sid in set_ids if sid is not None}
+    if not ids:
+        return set()
+    rows = session.exec(
+        select(PictureSet.id).where(
+            PictureSet.id.in_(sorted(ids)),
+            PictureSet.locked.is_(True),
+        )
+    ).all()
+    return {int(sid) for sid in rows}
+
+
+def drop_locked_set_ids(
+    session: Session, set_ids, action: str, picture_ids=None
+) -> list[int]:
+    """Filter *set_ids* down to the unlocked ones, logging every id dropped.
+
+    The shared implementation behind the propagation paths' "skip the locked set,
+    keep going" behaviour. A locked set's membership cannot change
+    (:func:`enforce_set_not_locked`), but a derived-output propagation is not a
+    direct user request to edit that set — failing the whole generation would
+    discard work the user did ask for. So the locked sets are skipped and the
+    unlocked ones still propagate.
+
+    The skip is never silent: every dropped set is logged at ``WARNING`` with the
+    action and the affected picture ids, so an unexpectedly missing membership is
+    traceable (CLAUDE.md forbids silent failures).
+
+    Args:
+        session: Pre-opened DB session.
+        set_ids: Candidate ``PictureSet`` ids to propagate into.
+        action: Short human-facing phrase naming the propagation, for the log.
+        picture_ids: Optional pictures that would have been added, for the log.
+
+    Returns:
+        Sorted list of the unlocked ids among *set_ids*.
+    """
+    ids = {int(sid) for sid in set_ids if sid is not None}
+    if not ids:
+        return []
+    locked = locked_set_ids(session, ids)
+    if locked:
+        logger.warning(
+            "Skipped '%s' into %d locked set(s) %s for picture(s) %s — a locked "
+            "set's membership cannot change; the unlocked sets %s still applied",
+            action,
+            len(locked),
+            sorted(locked),
+            sorted(int(pid) for pid in (picture_ids or []) if pid is not None),
+            sorted(ids - locked),
+        )
+    return sorted(ids - locked)
+
+
+def enforce_stack_membership_not_locked(
+    session: Session, picture_ids, stack_id, action: str
+) -> None:
+    """Raise ``423`` if stacking *picture_ids* into *stack_id* would change a
+    locked set's membership.
+
+    Stacks are atomic for set membership (see
+    :mod:`~pixlstash.services.stack_membership`): an enlarged stack reconciles to
+    the **union** of its members' sets. So stacking a picture onto a stack whose
+    members sit in a locked set would add that picture to the locked set.
+
+    Unlike the propagation paths (which skip — see :func:`drop_locked_set_ids`),
+    stacking is a **direct user request**, so it fails loudly. Skipping instead
+    would leave the stack violating its own atomicity invariant, and a later
+    reconcile would then quietly pull the new picture into the locked set anyway.
+
+    Args:
+        session: Pre-opened DB session.
+        picture_ids: Pictures being joined into the stack.
+        stack_id: Target stack id, or ``None`` when a new stack is being created
+            from *picture_ids* alone.
+        action: Short human-facing verb phrase, echoed in the error detail.
+
+    Raises:
+        HTTPException: ``423`` with ``detail`` =
+            ``{"code": "set_locked", "action", "sets": [{"id","name"}]}``.
+    """
+    ids = {int(pid) for pid in picture_ids if pid is not None}
+    if not ids:
+        return
+
+    # The resulting stack = the incoming pictures (expanded to any stack they are
+    # already in, since those come along on a merge) plus the target stack's
+    # current members.
+    members = set(expand_picture_ids_to_stacks(session, sorted(ids)))
+    if stack_id is not None:
+        members.update(
+            int(pid)
+            for pid in session.exec(
+                select(Picture.id).where(
+                    Picture.stack_id == int(stack_id),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+            if pid is not None
+        )
+    if len(members) < 2:
+        # A single-member stack has no sibling to inherit membership from.
+        return
+
+    rows = session.exec(
+        select(PictureSetMember.set_id, PictureSetMember.picture_id, PictureSet.name)
+        .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
+        .where(
+            PictureSetMember.picture_id.in_(sorted(members)),
+            PictureSet.locked.is_(True),
+        )
+    ).all()
+    if not rows:
+        return
+
+    # Only a locked set that does not already contain every resulting member
+    # would gain a row from the reconcile. One that already contains them all is
+    # untouched, so blocking it would be an over-block.
+    members_by_set: dict[int, set[int]] = {}
+    names: dict[int, str] = {}
+    for set_id, pic_id, set_name in rows:
+        members_by_set.setdefault(int(set_id), set()).add(int(pic_id))
+        names[int(set_id)] = set_name
+    gaining = {
+        set_id for set_id, present in members_by_set.items() if present != members
+    }
+    if not gaining:
+        return
+
+    set_list = [{"id": sid, "name": names[sid]} for sid in sorted(gaining)]
+    logger.info(
+        "Blocked '%s' on picture(s) %s — would add member(s) to locked set(s) %s",
+        action,
+        sorted(ids),
+        [s["name"] for s in set_list],
+    )
+    raise HTTPException(
+        status_code=LOCKED_STATUS_CODE,
+        detail={
+            "code": "set_locked",
+            "action": action,
+            "sets": set_list,
+        },
+    )
+
+
 def enforce_pictures_not_locked(session: Session, picture_ids, action: str) -> None:
     """Raise ``423`` if any of *picture_ids* is frozen by a locked set.
 

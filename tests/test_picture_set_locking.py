@@ -19,7 +19,15 @@ import numpy as np
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
-from pixlstash.db_models import Face, Picture, ReferenceFolder, Tag
+from pixlstash.db_models import (
+    Face,
+    Picture,
+    PictureSetMember,
+    PictureStack,
+    ReferenceFolder,
+    Tag,
+    make_tag_sentinel,
+)
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
@@ -222,7 +230,8 @@ def test_locked_set_rejects_field_edits_and_delete():
             client.patch(f"/picture_sets/{set_id}", json={"name": "Thawed"}).status_code
             == 200
         )
-        assert client.delete(f"/picture_sets/{set_id}").status_code == 200
+        delete_resp = client.delete(f"/picture_sets/{set_id}")
+        assert delete_resp.status_code == 200, delete_resp.text
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -306,8 +315,10 @@ def test_cross_set_picture_label_freeze_and_membership_allowed():
         _assert_locked(client.delete(f"/pictures/{pic}"))
 
         # But membership of that same picture in an UNLOCKED set is allowed.
-        assert client.post(f"/picture_sets/{set_b}/members/{pic}").status_code == 200
-        assert client.delete(f"/picture_sets/{set_b}/members/{pic}").status_code == 200
+        add_resp = client.post(f"/picture_sets/{set_b}/members/{pic}")
+        assert add_resp.status_code == 200, add_resp.text
+        remove_resp = client.delete(f"/picture_sets/{set_b}/members/{pic}")
+        assert remove_resp.status_code == 200, remove_resp.text
 
         # Unlocking A restores every label edit.
         _set_locked(client, set_a, False)
@@ -325,7 +336,8 @@ def test_cross_set_picture_label_freeze_and_membership_allowed():
             client.patch(f"/pictures/{pic}", json={"tags": ["fine2"]}).status_code
             == 200
         )
-        assert client.delete(f"/pictures/{pic}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pic}")
+        assert delete_resp.status_code == 200, delete_resp.text
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -430,8 +442,81 @@ def test_locked_members_endpoint_and_metadata():
         assert locked_meta["locked_by_sets"] == [
             {"id": locked_set, "name": "MembersFrozen"}
         ]
+        # `locked` is the authoritative frozen-ness flag and tracks the names.
+        assert locked_meta["locked"] is True
         free_meta = client.get(f"/pictures/{pic_free}/metadata").json()
         assert free_meta["locked_by_sets"] == []
+        assert free_meta["locked"] is False
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_metadata_hides_locked_set_names_from_out_of_scope_token():
+    """A share token learns a picture is frozen, never the private set's name.
+
+    ``enforce_picture_scope`` authorizes the *picture*; it says nothing about the
+    related entities named in its payload. A set-scoped READ token can hold a
+    picture that is also a member of some other, locked set it cannot enumerate
+    via ``GET /picture_sets`` — and set names are user-authored and routinely
+    carry client / project / subject identifiers.
+
+    Both directions: the out-of-scope name is withheld (while ``locked`` still
+    tells the UI to disable its editing controls), and an in-scope locked set is
+    still named, to the token and to the owner alike.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic = _first_n_pictures(server, 1)[0]
+        share_set = _create_set(client, "Shared")
+        secret_set = _create_set(client, "SECRET-Client-Q3")
+        _add_member(client, share_set, pic)
+        _add_member(client, secret_set, pic)
+        _set_locked(client, secret_set, True)
+
+        token = client.post(
+            "/users/me/token",
+            json={
+                "description": "set read",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": share_set,
+            },
+        ).json()["token"]
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # The token may read the picture (it is in its share) …
+        scoped = bearer.get(f"/pictures/{pic}/metadata", headers=headers)
+        assert scoped.status_code == 200, scoped.text
+        body = scoped.json()
+        # … and must learn that it is frozen, so the UI disables the right
+        # controls …
+        assert body["locked"] is True
+        # … but not the name or the id of the set doing the freezing.
+        assert body["locked_by_sets"] == []
+        assert "SECRET-Client-Q3" not in scoped.text
+        assert str(secret_set) not in [str(s.get("id")) for s in body["locked_by_sets"]]
+        # Cross-check the premise: the token genuinely cannot enumerate that set.
+        visible = bearer.get("/picture_sets", headers=headers).json()
+        assert [s["name"] for s in visible] == ["Shared"]
+
+        # Owner is unaffected — the name is still served (no over-blocking).
+        owner_body = client.get(f"/pictures/{pic}/metadata").json()
+        assert owner_body["locked"] is True
+        assert owner_body["locked_by_sets"] == [
+            {"id": secret_set, "name": "SECRET-Client-Q3"}
+        ]
+
+        # And a set the token CAN see is still named to it: locking the shared
+        # set must surface it, or we have simply over-blocked.
+        _set_locked(client, share_set, True)
+        scoped_body = bearer.get(f"/pictures/{pic}/metadata", headers=headers).json()
+        assert scoped_body["locked"] is True
+        assert scoped_body["locked_by_sets"] == [{"id": share_set, "name": "Shared"}], (
+            "an in-scope locked set must still be named"
+        )
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -995,6 +1080,256 @@ def test_legacy_suggestion_queue_withholds_locked_pending_rows():
             "/tag_suggestions", params={"tag": "bad anatomy", "status": "DISMISSED"}
         ).json()
         assert [r["id"] for r in decided] == [decided_id]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# 14. Finder selection uses the SAME locked definition as the write guards
+# ---------------------------------------------------------------------------
+
+
+def _seed_stack_directly(server, picture_ids):
+    """Put *picture_ids* in one stack by writing ``stack_id`` straight to the DB.
+
+    Deliberately bypasses ``POST /stacks``: that route now reconciles set
+    membership across the stack (and refuses to grow a locked set), so it cannot
+    produce the state under test here — a picture that *shares a stack with* a
+    locked-set member without being a member itself. That state exists in any
+    database written before the lock guards landed, and is still reachable
+    through the restore path, so the finders must handle it.
+    """
+
+    def seed(session):
+        stack = PictureStack(name="seeded")
+        session.add(stack)
+        session.flush()
+        for pos, pid in enumerate(picture_ids):
+            pic = session.get(Picture, pid)
+            pic.stack_id = stack.id
+            pic.stack_position = pos
+            session.add(pic)
+        session.commit()
+        return int(stack.id)
+
+    return server.vault.db.run_task(seed)
+
+
+def test_finders_exclude_stack_sibling_of_locked_member():
+    """Regression: an unbounded GPU re-queue loop.
+
+    Both finders used a narrow ``PictureSetMember -> PictureSet.locked`` join with
+    no stack arm, while their write guards (``locked_picture_ids``) expand to the
+    whole stack. A picture sharing a stack with a locked-set member was therefore
+    selected, ran full tagging/captioning inference, had its write skipped, kept
+    its sentinel, and was selected again on the next sweep — forever.
+
+    Asserts both directions: the stack sibling is NOT selected, and an unrelated
+    unlocked picture still IS (over-blocking would be its own regression).
+    """
+    from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
+    from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+
+    temp_dir, client, server = _setup()
+    try:
+        member_pic, sibling_pic, free_pic = _first_n_pictures(server, 3)
+
+        # member_pic and sibling_pic share a stack; only member_pic is in the set.
+        _seed_stack_directly(server, [member_pic, sibling_pic])
+        set_id = _create_set(client, "LoopFreeze")
+
+        def add_member_only(session):
+            session.add(PictureSetMember(set_id=set_id, picture_id=member_pic))
+            session.commit()
+
+        server.vault.db.run_task(add_member_only)
+        _set_locked(client, set_id, True)
+
+        # Every picture carries pending work for both finders.
+        def seed_work(session):
+            for pid in (member_pic, sibling_pic, free_pic):
+                session.add(Tag(picture_id=pid, tag=make_tag_sentinel()))
+                pic = session.get(Picture, pid)
+                pic.description = None
+                session.add(pic)
+            session.commit()
+
+        server.vault.db.run_task(seed_work)
+
+        tag_ids = {
+            p.id
+            for p in server.vault.db.run_immediate_read_task(
+                lambda s: MissingTagFinder._fetch_missing_tags(s, 100)
+            )
+        }
+        desc_ids = {
+            p.id
+            for p in server.vault.db.run_immediate_read_task(
+                lambda s: MissingDescriptionFinder._fetch_missing_descriptions(s, 100)
+            )
+        }
+
+        for name, selected in (("tag", tag_ids), ("description", desc_ids)):
+            # The loop case: neither the member nor its stack sibling is queued.
+            assert member_pic not in selected, name
+            assert sibling_pic not in selected, name
+            # The over-blocking case: an unrelated picture is still queued.
+            assert free_pic in selected, name
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# 15. Membership-mutation paths respect the lock
+# ---------------------------------------------------------------------------
+
+
+def _set_member_ids(server, set_id):
+    return server.vault.db.run_immediate_read_task(
+        lambda s: {
+            int(pid)
+            for pid in s.exec(
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.set_id == set_id
+                )
+            ).all()
+        }
+    )
+
+
+def test_stacking_refused_when_it_would_grow_a_locked_set():
+    """Stacks are set-membership-atomic, so stacking a loose picture onto a
+    locked-set member would add it to the locked set. That is a direct user
+    request, so it fails loudly with 423 — and the locked set is unchanged."""
+    temp_dir, client, server = _setup()
+    try:
+        member_pic, loose_pic = _first_n_pictures(server, 2)
+        set_id = _create_set(client, "StackGrowFreeze")
+        _add_member(client, set_id, member_pic)
+        _set_locked(client, set_id, True)
+
+        resp = client.post("/stacks", json={"picture_ids": [member_pic, loose_pic]})
+        assert resp.status_code == 423, resp.text
+        assert resp.json()["detail"]["code"] == "set_locked"
+        assert [s["id"] for s in resp.json()["detail"]["sets"]] == [set_id]
+
+        # The locked set did not gain a member, and no stack was created.
+        assert _set_member_ids(server, set_id) == {member_pic}
+        stacks = server.vault.db.run_immediate_read_task(
+            lambda s: [
+                pid
+                for pid in s.exec(
+                    select(Picture.stack_id).where(
+                        Picture.id.in_([member_pic, loose_pic])
+                    )
+                ).all()
+            ]
+        )
+        assert stacks == [None, None]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_stacking_still_works_when_no_locked_set_would_grow():
+    """Over-blocking regression: stacking is untouched for an unlocked set, and
+    is still allowed when every resulting member is ALREADY in the locked set
+    (that reconcile adds no row, so there is nothing to refuse)."""
+    temp_dir, client, server = _setup()
+    try:
+        free_a, free_b, both_a, both_b = _first_n_pictures(server, 4)
+
+        # (1) Unlocked set: stacking works normally and propagates membership.
+        unlocked_id = _create_set(client, "StackUnlocked")
+        _add_member(client, unlocked_id, free_a)
+        resp = client.post("/stacks", json={"picture_ids": [free_a, free_b]})
+        assert resp.status_code == 200, resp.text
+        assert _set_member_ids(server, unlocked_id) == {free_a, free_b}
+
+        # (2) Locked set that already contains both pictures: no row would be
+        # added, so the stack is allowed.
+        locked_id = _create_set(client, "StackAlreadyBoth")
+        _add_member(client, locked_id, both_a)
+        _add_member(client, locked_id, both_b)
+        _set_locked(client, locked_id, True)
+        resp = client.post("/stacks", json={"picture_ids": [both_a, both_b]})
+        assert resp.status_code == 200, resp.text
+        assert _set_member_ids(server, locked_id) == {both_a, both_b}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_comfyui_output_propagation_skips_locked_set():
+    """A ComfyUI generation from a source picture in a locked set must not add
+    its outputs to that set — but must still propagate the unlocked ones."""
+    from pixlstash.routes.comfyui import _copy_set_and_project_assignments
+
+    temp_dir, client, server = _setup()
+    try:
+        source_pic, output_pic = _first_n_pictures(server, 2)
+        locked_id = _create_set(client, "GenLocked")
+        open_id = _create_set(client, "GenOpen")
+        _add_member(client, locked_id, source_pic)
+        _add_member(client, open_id, source_pic)
+        _set_locked(client, locked_id, True)
+
+        _copy_set_and_project_assignments(server, source_pic, [output_pic])
+
+        # Locked set unchanged; unlocked set still received the output.
+        assert _set_member_ids(server, locked_id) == {source_pic}
+        assert _set_member_ids(server, open_id) == {source_pic, output_pic}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_comfyui_view_context_assignment_skips_locked_set():
+    """Generating while viewing a locked set must not drop the outputs into it."""
+    from pixlstash.routes.comfyui import _assign_pictures_to_view_context
+
+    temp_dir, client, server = _setup()
+    try:
+        (output_pic,) = _first_n_pictures(server, 1)
+        locked_id = _create_set(client, "ViewLocked")
+        _set_locked(client, locked_id, True)
+        _assign_pictures_to_view_context(server, [output_pic], locked_id, None, None)
+        assert _set_member_ids(server, locked_id) == set()
+
+        # Unlocked control: the same call still assigns.
+        open_id = _create_set(client, "ViewOpen")
+        _assign_pictures_to_view_context(server, [output_pic], open_id, None, None)
+        assert _set_member_ids(server, open_id) == {output_pic}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_image_plugin_output_propagation_skips_locked_set():
+    """An upscale/edit run must not add its outputs to a locked source set."""
+    from pixlstash.image_plugins.service import _propagate_output_picture_sets
+
+    temp_dir, client, server = _setup()
+    try:
+        source_pic, output_pic = _first_n_pictures(server, 2)
+        locked_id = _create_set(client, "PluginLocked")
+        open_id = _create_set(client, "PluginOpen")
+        _add_member(client, locked_id, source_pic)
+        _add_member(client, open_id, source_pic)
+        _set_locked(client, locked_id, True)
+
+        _propagate_output_picture_sets(server, [source_pic], [output_pic])
+
+        assert _set_member_ids(server, locked_id) == {source_pic}
+        assert _set_member_ids(server, open_id) == {source_pic, output_pic}
     finally:
         server.vault.close()
         temp_dir.cleanup()

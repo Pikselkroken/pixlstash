@@ -19,6 +19,7 @@ from pixlstash.db_models import (
     TAG_PENDING_SENTINEL,
 )
 from pixlstash.image_plugins.base import ImagePlugin
+from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.stacking import (
@@ -423,6 +424,26 @@ def _propagate_output_picture_sets(
                 for set_id in set_ids:
                     desired_pairs.add((set_id, out_id))
 
+        if not desired_pairs:
+            return
+
+        # A locked set's membership cannot change. An upscale/edit run is a
+        # propagation path, not an explicit set edit, so locked target sets are
+        # dropped (and logged) while the unlocked ones still propagate — failing
+        # the run would discard outputs the user did ask for.
+        allowed_set_ids = set(
+            drop_locked_set_ids(
+                session,
+                {set_id for set_id, _ in desired_pairs},
+                "copy plugin outputs into the source picture's sets",
+                picture_ids=output_ids,
+            )
+        )
+        desired_pairs = {
+            (set_id, out_id)
+            for set_id, out_id in desired_pairs
+            if set_id in allowed_set_ids
+        }
         if not desired_pairs:
             return
 

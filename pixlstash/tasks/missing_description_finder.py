@@ -5,13 +5,12 @@ from sqlalchemy import or_
 
 from pixlstash.db_models import (
     Picture,
-    PictureSet,
-    PictureSetMember,
     DESCRIPTION_SENTINEL_LIKE_PATTERN,
     DESCRIPTION_SENTINEL_ESCAPE_CHAR,
     parse_engine_from_description_sentinel,
     is_description_sentinel,
 )
+from pixlstash.services.set_lock_service import locked_picture_id_subquery
 
 from .description_task import DescriptionTask
 from .task_type import TaskType
@@ -95,11 +94,14 @@ class MissingDescriptionFinder(BaseTaskFinder):
         # never re-queue it for machine (re)description. Parity with the tagger's
         # MissingTagFinder exclusion; the description_task write-side also skips
         # locked pics as defense in depth.
-        not_locked = ~Picture.id.in_(
-            select(PictureSetMember.picture_id)
-            .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
-            .where(PictureSet.locked.is_(True))
-        )
+        #
+        # Must be the shared set_lock_service predicate, not a local
+        # PictureSetMember join. The local join had no stack arm, while
+        # DescriptionTask's write guard (`locked_picture_ids`) does: a picture
+        # merely *sharing a stack* with a locked-set member was selected here, ran
+        # full captioning inference, had its write skipped, kept its NULL
+        # description, and was selected again next sweep — an unbounded loop.
+        not_locked = ~Picture.id.in_(locked_picture_id_subquery())
         return session.exec(
             select(Picture)
             .where(

@@ -36,6 +36,7 @@ from pixlstash.event_types import EventType
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.routes.pictures._helpers import enforce_picture_scope
+from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.stacking import (
     build_stack_filename_prefix,
@@ -783,14 +784,23 @@ def _copy_set_and_project_assignments(
         return
 
     def copy_task(session):
-        source_set_ids = [
-            row.set_id
-            for row in session.exec(
-                select(PictureSetMember).where(
-                    PictureSetMember.picture_id == source_picture_id
-                )
-            ).all()
-        ]
+        # A locked set's membership cannot change. This is a *propagation* path —
+        # the user asked for a generation, not to edit the set — so a locked
+        # source set is skipped (and logged) rather than failing the whole
+        # generation and discarding images already imported.
+        source_set_ids = drop_locked_set_ids(
+            session,
+            [
+                row.set_id
+                for row in session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.picture_id == source_picture_id
+                    )
+                ).all()
+            ],
+            "copy generated outputs into the source picture's sets",
+            picture_ids=target_picture_ids,
+        )
         source_project_ids = [
             row.project_id
             for row in session.exec(
@@ -880,6 +890,17 @@ def _assign_pictures_to_view_context(
                 ref_sid = char.reference_picture_set_id
                 if ref_sid not in effective_set_ids:
                     effective_set_ids.append(ref_sid)
+
+        # Same rule as _copy_set_and_project_assignments: adding the outputs to
+        # the set the user happened to be viewing (or a character's reference
+        # set) is propagation, not an explicit set edit, so a locked target is
+        # skipped and logged instead of failing the generation.
+        effective_set_ids = drop_locked_set_ids(
+            session,
+            effective_set_ids,
+            "assign generated outputs to the active view's set",
+            picture_ids=new_ids,
+        )
 
         for pic_id in new_ids:
             existing_sets = {
