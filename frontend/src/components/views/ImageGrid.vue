@@ -4922,7 +4922,17 @@ function gridImageSortKey(img) {
     return Date.parse(img.created_at) || 0;
   }
   if (sort.includes("SMART_SCORE")) {
-    return getGridSmartScoreValue(img) ?? 0;
+    // Match the server's ORDER BY exactly. The backend sorts on the smart_score
+    // column with a plain .asc()/.desc() (db_models/picture.py), so SQLite's
+    // native NULL rule applies: NULL is less than every real value, i.e. NULLs
+    // sort FIRST on ascending and LAST on descending. Map a missing smart score
+    // to -Infinity so the shared comparator (which flips on `descending`) lands
+    // a null-scored card in the same slot the server put it, in BOTH directions.
+    // A 0 sentinel is wrong here: it collides with a genuine zero score and,
+    // now that smart scores can be negative and null (tag edits invalidate
+    // them), it mis-orders nulls relative to real scores.
+    const smart = getGridSmartScoreValue(img);
+    return smart === null ? -Infinity : smart;
   }
   if (
     sort.includes("CHARACTER_LIKENESS") &&
