@@ -819,6 +819,60 @@ def test_scan_tag_confidence_fallback_ignores_stale_model_version():
         gc.collect()
 
 
+def test_scan_tag_confidence_fallback_excludes_human_rejected():
+    """The cold-start fallback must not re-propose a tag a human already
+    REJECTED via the tag-prediction reject endpoint. That reject writes a ledger
+    NEG (``label_state="NEG"``) but keeps the tagger's high confidence and adds no
+    ``Tag`` row and no ``TagSuggestion`` row — so ``scan_tag._write``'s
+    suggestion-level dedup can't suppress it. Only the ``label_state == "UNKNOWN"``
+    filter (mirroring est_missing) does: pre-fix, the rejected picture was
+    re-surfaced as a PENDING "add" suspect; it must now be excluded, while an
+    un-reviewed confident picture is still proposed.
+    """
+    from pixlstash.services import tag_scan_service
+    from pixlstash.utils.service.label_ledger import NEG, record_human_label
+
+    temp_dir, client, server = _setup()
+    try:
+        a = _upload_picture(client)  # un-reviewed confident → proposed
+        img_path = os.path.join(PICTURES_DIR, "Bad2.png")
+        with open(img_path, "rb") as f:
+            b = upload_pictures_and_wait(
+                client, [("file", ("Bad2.png", f, "image/png"))]
+            )["results"][0]["picture_id"]  # human-REJECTED confident → excluded
+        _set_embedding(server, a, [1.0] + [0.0] * 511)
+        _set_embedding(server, b, [0.0, 1.0] + [0.0] * 510)
+
+        # Both get an equally confident current-version prediction; zero Tag rows
+        # for the tag anywhere, so the near-zero-ground-truth fallback fires.
+        _seed_prediction(server, a, "compression artifacts", 0.93)
+        _seed_prediction(server, b, "compression artifacts", 0.93)
+
+        # Human rejects the tag on B via the ledger (keeps conf 0.93, no Tag row,
+        # no TagSuggestion) — the exact shape the suggestion-dedup can't catch.
+        def reject_b(session):
+            record_human_label(session, b, "compression artifacts", NEG)
+            session.commit()
+
+        server.vault.db.run_task(reject_b)
+
+        res = tag_scan_service.scan_tag(
+            server.vault, "compression artifacts", project=None
+        )
+        # Pre-fix this was 2 (both A and B proposed) — B is the re-proposal bug.
+        assert res["added"] == 1
+        assert res["count"] == 1
+
+        rows = client.get("/tag_suggestions").json()
+        picture_ids = {r["picture_id"] for r in rows}
+        assert a in picture_ids  # un-reviewed confident candidate still proposed
+        assert b not in picture_ids  # human-rejected candidate excluded
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
     """Fix 2 regression: a minority-base-rate tag (p=0.25, well above the
     Fix-1 floor of 5 ground-truth positives) at whose true prevalence the old
