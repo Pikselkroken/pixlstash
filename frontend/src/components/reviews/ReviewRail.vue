@@ -1,5 +1,5 @@
 <template>
-  <nav class="rs-rail">
+  <nav ref="railRootRef" class="rs-rail">
     <!-- Close + title live in the rail (the rail owns the overlay chrome). -->
     <div class="rs-rail-head">
       <button
@@ -41,7 +41,7 @@
           @click="store.openSession(s.id)"
         >
           <span class="rs-rail-session-row">
-            <span class="rs-rail-session-tag">{{ s.tag }}</span>
+            <span class="rs-rail-session-tag" :title="s.tag">{{ s.tag }}</span>
             <v-icon
               v-if="s.stale"
               size="14"
@@ -65,7 +65,9 @@
              (matching the rest of the card) — only the abort button, which
              stops its click from bubbling here, behaves differently. -->
         <div class="rs-rail-session-meta" @click="store.openSession(s.id)">
-          <span class="rs-rail-session-scope">{{ scopeLabel(s) }}</span>
+          <span class="rs-rail-session-scope" :title="scopeLabel(s)">{{
+            scopeLabel(s)
+          }}</span>
           <v-icon
             v-if="scopeSetLocked(s)"
             size="12"
@@ -86,7 +88,12 @@
       </div>
       <div v-if="!store.sessions.length" class="rs-rail-none">None open</div>
 
-      <button class="rs-rail-new" type="button" @click="emit('new-review')">
+      <button
+        ref="railNewRef"
+        class="rs-rail-new"
+        type="button"
+        @click="emit('new-review')"
+      >
         <v-icon size="16">mdi-plus</v-icon> New review
       </button>
 
@@ -106,6 +113,11 @@
             :title="
               archivedClearArmed
                 ? 'Click again to clear every archived review — this cannot be undone'
+                : 'Clear all archived reviews'
+            "
+            :aria-label="
+              archivedClearArmed
+                ? 'Confirm: clear every archived review'
                 : 'Clear all archived reviews'
             "
             @click="onClearArchivedClick"
@@ -130,7 +142,7 @@
             @click="store.openArchived(a.id)"
           >
             <v-icon size="14" class="rs-rail-archived-check">mdi-check</v-icon>
-            <span class="rs-rail-archived-tag">{{ a.tag }}</span>
+            <span class="rs-rail-archived-tag" :title="a.tag">{{ a.tag }}</span>
             <span class="rs-rail-archived-sum">{{ archivedSummary(a) }}</span>
           </button>
           <!-- One-click delete: a receipt is just an audit summary (decisions
@@ -141,7 +153,8 @@
             class="rs-rail-archived-del"
             type="button"
             :title="`Delete the archived review for “${a.tag}”`"
-            @click.stop="store.deleteArchived(a.id)"
+            :aria-label="`Delete the archived review for ${a.tag}`"
+            @click.stop="onDeleteArchived(a.id)"
           >
             <v-icon size="13">mdi-close</v-icon>
           </button>
@@ -259,7 +272,7 @@
 </template>
 
 <script setup>
-import { onUnmounted, ref } from "vue";
+import { nextTick, onUnmounted, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import ReviewSticker from "./ReviewSticker.vue";
 
@@ -268,6 +281,8 @@ const store = useReviewSessionsStore();
 
 const abortDialog = ref(null); // { id, tag, changes } | null
 const shelfOpen = ref(true);
+const railRootRef = ref(null);
+const railNewRef = ref(null);
 
 // Two-step sticker clear: first click arms, second (within the window) wipes.
 const clearArmed = ref(false);
@@ -292,7 +307,15 @@ function onClearClick() {
 const archivedClearArmed = ref(false);
 let archivedClearTimer = null;
 
-function onClearArchivedClick() {
+// The whole Archived section unmounts when the list empties, so the button the
+// user just pressed disappears and focus would fall to <body>. Capture the
+// fallback target BEFORE the store call (it's still mounted), then move focus
+// once the removal has rendered.
+function railNewEl() {
+  return railNewRef.value?.$el ?? railNewRef.value ?? null;
+}
+
+async function onClearArchivedClick() {
   clearTimeout(archivedClearTimer);
   if (!archivedClearArmed.value) {
     archivedClearArmed.value = true;
@@ -302,7 +325,28 @@ function onClearArchivedClick() {
     return;
   }
   archivedClearArmed.value = false;
-  store.clearArchived();
+  const fallback = railNewEl();
+  await store.clearArchived();
+  await nextTick();
+  fallback?.focus();
+}
+
+// Per-item delete: focus the next archived row's delete button, or the rail's
+// "New review" button when that was the last archived item.
+async function onDeleteArchived(id) {
+  const index = store.archived.findIndex((a) => a.id === id);
+  const wasLast = store.archived.length <= 1;
+  const fallback = railNewEl();
+  await store.deleteArchived(id);
+  await nextTick();
+  if (wasLast) {
+    fallback?.focus();
+    return;
+  }
+  const dels =
+    railRootRef.value?.querySelectorAll(".rs-rail-archived-del") ?? [];
+  const next = dels[Math.min(Math.max(index, 0), dels.length - 1)];
+  (next ?? fallback)?.focus();
 }
 
 onUnmounted(() => {
@@ -731,8 +775,8 @@ function archivedSummary(a) {
 .rs-archived-clear {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 3px;
+  gap: var(--space-1);
+  padding: var(--space-1);
   border: none;
   border-radius: var(--radius-sm);
   background: none;
