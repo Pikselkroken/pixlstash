@@ -4,7 +4,7 @@ import { setActivePinia, createPinia } from "pinia";
 // The store imports a singleton apiClient; mock the module so no real HTTP
 // happens and we can assert which per-item endpoints a decision hits.
 vi.mock("../utils/apiClient", () => ({
-  apiClient: { get: vi.fn(), post: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   isReadOnly: { value: false },
 }));
 
@@ -27,8 +27,10 @@ beforeEach(() => {
   window.localStorage.clear();
   apiClient.get.mockReset();
   apiClient.post.mockReset();
+  apiClient.delete.mockReset();
   apiClient.get.mockResolvedValue({ data: [] });
   apiClient.post.mockResolvedValue({ data: {} });
+  apiClient.delete.mockResolvedValue({ data: {} });
 });
 
 afterEach(() => {
@@ -488,6 +490,74 @@ describe("undoChangesAndAbort", () => {
     });
     await store.skip();
     expect(store.decidedCountFor(1)).toBe(0);
+  });
+});
+
+// --- Archived-receipt deletion ---------------------------------------------------
+
+describe("deleteArchived", () => {
+  it("DELETEs the review and drops it from the archived list", async () => {
+    const store = useReviewSessionsStore();
+    store.archived = [
+      { id: 3, tag: "cat" },
+      { id: 4, tag: "dog" },
+    ];
+
+    await store.deleteArchived(3);
+
+    expect(apiClient.delete).toHaveBeenCalledWith("/reviews/3");
+    expect(store.archived.map((a) => a.id)).toEqual([4]);
+  });
+
+  it("falls back to the board when the deleted receipt is the active view", async () => {
+    const store = useReviewSessionsStore();
+    store.archived = [{ id: 3, tag: "cat" }];
+    store.openArchived(3);
+    expect(store.view).toEqual({ type: "archived", id: 3 });
+
+    await store.deleteArchived(3);
+
+    expect(store.view).toEqual({ type: "board" });
+  });
+
+  it("leaves the view alone when a different archived receipt is active", async () => {
+    const store = useReviewSessionsStore();
+    store.archived = [
+      { id: 3, tag: "cat" },
+      { id: 4, tag: "dog" },
+    ];
+    store.openArchived(4);
+
+    await store.deleteArchived(3);
+
+    expect(store.view).toEqual({ type: "archived", id: 4 });
+  });
+});
+
+describe("clearArchived", () => {
+  it("bulk-DELETEs with status=ARCHIVED and empties the list", async () => {
+    const store = useReviewSessionsStore();
+    store.archived = [
+      { id: 3, tag: "cat" },
+      { id: 4, tag: "dog" },
+    ];
+
+    await store.clearArchived();
+
+    expect(apiClient.delete).toHaveBeenCalledWith("/reviews", {
+      params: { status: "ARCHIVED" },
+    });
+    expect(store.archived).toEqual([]);
+  });
+
+  it("falls back to the board when an archived receipt is the active view", async () => {
+    const store = useReviewSessionsStore();
+    store.archived = [{ id: 3, tag: "cat" }];
+    store.openArchived(3);
+
+    await store.clearArchived();
+
+    expect(store.view).toEqual({ type: "board" });
   });
 });
 

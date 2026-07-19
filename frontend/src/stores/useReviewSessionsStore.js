@@ -847,6 +847,32 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     await abortSession(id);
   }
 
+  // Discard one archived review's receipt. Decisions were written through on
+  // each card during the review, so deleting the receipt only drops the audit
+  // summary — it never reverses a change. Drop it from the local list and, if
+  // its receipt is the current view, fall back to the board.
+  async function deleteArchived(id) {
+    try {
+      await apiClient.delete(`/reviews/${id}`);
+      archived.value = archived.value.filter((a) => a.id !== id);
+      if (view.value.type === "archived" && view.value.id === id) showBoard();
+    } catch (e) {
+      error.value = e?.message || "Failed to delete the archived review";
+    }
+  }
+
+  // Bulk-clear every archived receipt. `status` is a required query param the
+  // backend pins to ARCHIVED so this can never touch an open review.
+  async function clearArchived() {
+    try {
+      await apiClient.delete("/reviews", { params: { status: "ARCHIVED" } });
+      archived.value = [];
+      if (view.value.type === "archived") showBoard();
+    } catch (e) {
+      error.value = e?.message || "Failed to clear the archived reviews";
+    }
+  }
+
   // --- Decisions ----------------------------------------------------------------
 
   function bumpTally(id, delta, sign = 1) {
@@ -1197,6 +1223,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     archiveSession,
     abortSession,
     undoChangesAndAbort,
+    deleteArchived,
+    clearArchived,
     answerBinary,
     answerPair,
     skip,

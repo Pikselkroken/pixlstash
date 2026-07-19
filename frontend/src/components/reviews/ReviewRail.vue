@@ -91,20 +91,61 @@
       </button>
 
       <template v-if="store.archived.length">
-        <div class="rs-rail-label rs-rail-label--archived">Archived</div>
-        <button
+        <div class="rs-rail-label rs-rail-label--archived rs-archived-head">
+          <span>Archived</span>
+          <span class="rs-archived-spacer"></span>
+          <!-- Clearing every receipt is permanent, so it takes two clicks
+               (same arm→"Sure?"→wipe pattern as the sticker shelf clear): the
+               first arms a state that auto-reverts after a few seconds, the
+               second wipes the list. Only the receipts go — the decisions were
+               written through during each review and are untouched. -->
+          <button
+            class="rs-archived-clear"
+            :class="{ 'rs-archived-clear--armed': archivedClearArmed }"
+            type="button"
+            :title="
+              archivedClearArmed
+                ? 'Click again to clear every archived review — this cannot be undone'
+                : 'Clear all archived reviews'
+            "
+            @click="onClearArchivedClick"
+          >
+            <v-icon size="14">mdi-trash-can-outline</v-icon>
+            <span v-if="archivedClearArmed">Sure?</span>
+          </button>
+        </div>
+        <!-- Each row is a wrapper DIV so the per-item delete can be a real
+             sibling <button> (never nested inside the receipt button), revealed
+             on hover / focus-within — mirrors the open-session rows above. -->
+        <div
           v-for="a in store.archived"
           :key="a.id"
-          class="rs-rail-item rs-rail-archived"
-          :class="{ 'rs-rail-item--active': isArchivedActive(a.id) }"
-          type="button"
-          :title="`Show the receipt for “${a.tag}”`"
-          @click="store.openArchived(a.id)"
+          class="rs-rail-archived-wrap"
+          :class="{ 'rs-rail-archived-wrap--active': isArchivedActive(a.id) }"
         >
-          <v-icon size="14" class="rs-rail-archived-check">mdi-check</v-icon>
-          <span class="rs-rail-archived-tag">{{ a.tag }}</span>
-          <span class="rs-rail-archived-sum">{{ archivedSummary(a) }}</span>
-        </button>
+          <button
+            class="rs-rail-item rs-rail-archived"
+            type="button"
+            :title="`Show the receipt for “${a.tag}”`"
+            @click="store.openArchived(a.id)"
+          >
+            <v-icon size="14" class="rs-rail-archived-check">mdi-check</v-icon>
+            <span class="rs-rail-archived-tag">{{ a.tag }}</span>
+            <span class="rs-rail-archived-sum">{{ archivedSummary(a) }}</span>
+          </button>
+          <!-- One-click delete: a receipt is just an audit summary (decisions
+               are preserved server-side), so it needs no confirm. Sibling
+               button, box reserved via visibility so revealing it never
+               reflows the row. -->
+          <button
+            class="rs-rail-archived-del"
+            type="button"
+            :title="`Delete the archived review for “${a.tag}”`"
+            @click.stop="store.deleteArchived(a.id)"
+          >
+            <v-icon size="13">mdi-close</v-icon>
+          </button>
+        </div>
       </template>
     </div>
 
@@ -246,7 +287,28 @@ function onClearClick() {
   store.clearStickers();
 }
 
-onUnmounted(() => clearTimeout(clearArmTimer));
+// Two-step clear-all for the Archived list — same arm→confirm→wipe pattern as
+// the sticker shelf clear above, with its own ref + timer (never shared).
+const archivedClearArmed = ref(false);
+let archivedClearTimer = null;
+
+function onClearArchivedClick() {
+  clearTimeout(archivedClearTimer);
+  if (!archivedClearArmed.value) {
+    archivedClearArmed.value = true;
+    archivedClearTimer = setTimeout(() => {
+      archivedClearArmed.value = false;
+    }, CLEAR_ARM_MS);
+    return;
+  }
+  archivedClearArmed.value = false;
+  store.clearArchived();
+}
+
+onUnmounted(() => {
+  clearTimeout(clearArmTimer);
+  clearTimeout(archivedClearTimer);
+});
 
 function isActive(id) {
   return store.view.type === "session" && store.view.id === id;
@@ -655,7 +717,59 @@ function archivedSummary(a) {
 .rs-rail-label--archived {
   padding-top: var(--space-4);
 }
+/* Archived header carries the "Clear all" control on its trailing edge. */
+.rs-archived-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rs-archived-spacer {
+  flex: 1;
+}
+/* Clear-all: mirrors the sticker-shelf clear (.rs-shelf-clear) so both
+   destructive clears read identically. */
+.rs-archived-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+.rs-archived-clear:hover {
+  color: rgb(var(--v-theme-error));
+}
+.rs-archived-clear--armed {
+  color: rgb(var(--v-theme-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
+}
+
+/* The wrap carries the card surface (hover / active) so it extends under the
+   delete button beside the receipt button — same structure as the session
+   rows above. */
+.rs-rail-archived-wrap {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+.rs-rail-archived-wrap:hover,
+.rs-rail-archived-wrap:focus-within,
+.rs-rail-archived-wrap--active {
+  background: rgba(var(--v-theme-on-dark-surface), 0.12);
+}
+.rs-rail-archived-wrap:hover .rs-rail-archived,
+.rs-rail-archived-wrap:focus-within .rs-rail-archived,
+.rs-rail-archived-wrap--active .rs-rail-archived {
+  background: transparent;
+}
 .rs-rail-archived {
+  flex: 1;
+  min-width: 0;
   flex-direction: row;
   align-items: center;
   gap: var(--space-2);
@@ -675,6 +789,33 @@ function archivedSummary(a) {
 .rs-rail-archived-sum {
   font-size: 11px;
   white-space: nowrap;
+}
+
+/* Per-item delete: a real sibling button, invisible until the row is hovered or
+   anything in it has focus (focus-within keeps it keyboard-reachable).
+   `visibility` (not `display`) so its box stays reserved and revealing it never
+   reflows the row — same technique as the session abort control. */
+.rs-rail-archived-del {
+  visibility: hidden;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: var(--space-1);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-error));
+  cursor: pointer;
+}
+.rs-rail-archived-wrap:hover .rs-rail-archived-del,
+.rs-rail-archived-wrap:focus-within .rs-rail-archived-del {
+  visibility: visible;
+}
+.rs-rail-archived-del:hover {
+  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
 }
 
 /* Sticker shelf: hard-capped height + own scroll so navigation always wins
