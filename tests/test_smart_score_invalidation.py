@@ -382,7 +382,12 @@ def test_sub_threshold_model_prediction_is_not_scored():
         probs, human = _probs(server, pic_id)
         assert "watermark" not in probs.get(pic_id, {})
         assert (
-            anomaly_penalty(probs.get(pic_id, {}), human_tags=human.get(pic_id)) == 0.0
+            anomaly_penalty(
+                probs.get(pic_id, {}),
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            == 0.0
         )
 
         # Ungated (apply_thresholds=None) it *is* present — proving the gate is what
@@ -405,7 +410,14 @@ def test_above_threshold_model_prediction_is_scored():
 
         probs, human = _probs(server, pic_id)
         assert probs[pic_id]["watermark"] == pytest.approx(0.8)
-        assert anomaly_penalty(probs[pic_id], human_tags=human.get(pic_id)) > 0.0
+        assert (
+            anomaly_penalty(
+                probs[pic_id],
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            > 0.0
+        )
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -421,7 +433,12 @@ def test_human_positive_below_threshold_still_counts():
         probs, human = _probs(server, pic_id)
         assert probs[pic_id]["watermark"] == 1.0
         assert "watermark" in human[pic_id]
-        assert anomaly_penalty(probs[pic_id], human_tags=human[pic_id]) > 0.0
+        assert (
+            anomaly_penalty(
+                probs[pic_id], tag_thresholds=_THRESHOLDS, human_tags=human[pic_id]
+            )
+            > 0.0
+        )
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -437,7 +454,14 @@ def test_human_negative_suppresses_even_above_threshold():
         probs, human = _probs(server, pic_id)
         assert probs[pic_id]["watermark"] == 0.0
         assert "watermark" not in human.get(pic_id, set())
-        assert anomaly_penalty(probs[pic_id], human_tags=human.get(pic_id)) == 0.0
+        assert (
+            anomaly_penalty(
+                probs[pic_id],
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            == 0.0
+        )
     finally:
         server.vault.close()
         temp_dir.cleanup()

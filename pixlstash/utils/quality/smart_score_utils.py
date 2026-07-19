@@ -191,6 +191,12 @@ class SmartScoreUtils:
             # {tag: precision} from the latest evaluated TaggerRun; empty → tags use the
             # DEFAULT_TAG_PRECISION fallback in anomaly_penalty.
             "tag_precisions": {},
+            # {tag: acceptance threshold} — the same gate that dropped sub-threshold
+            # predictions upstream, from resolve_anomaly_apply_thresholds. The penalty
+            # grades confidence relative to it, so a barely-accepted detection is mild for
+            # every tag regardless of where its gate sits. Empty → raw probabilities are
+            # graded directly (see anomaly_penalty._confidence_evidence).
+            "tag_thresholds": {},
             # {tag: weight} — the owner's resolved User.smart_score_penalised_tags, from
             # picture_scoring.resolve_penalised_tag_weights. A tag absent from it is not
             # penalised. None falls back to DEFAULT_SMART_SCORE_PENALIZED_TAGS, which is
@@ -480,6 +486,7 @@ class SmartScoreUtils:
         # confidence- and precision-weighted, combined by noisy-OR within correlated
         # families. See pixlstash.utils.quality.anomaly_penalty.
         tag_precisions = cfg.get("tag_precisions") or {}
+        tag_thresholds = cfg.get("tag_thresholds") or {}
         penalised_tag_weights = cfg.get("penalised_tag_weights")
         penalty_cap = float(cfg["penalised_tag_cap"])
         penalised_equivalent = np.array(
@@ -488,6 +495,7 @@ class SmartScoreUtils:
                     c.get("anomaly_probs") or {},
                     tag_precisions=tag_precisions,
                     tag_weights=penalised_tag_weights,
+                    tag_thresholds=tag_thresholds,
                     human_tags=c.get("anomaly_human"),
                     metrics={
                         "sharpness": c.get("sharpness"),

@@ -10,7 +10,16 @@ independent families (watermark, noise, ...) add up.
 
 Punishment scales super-linearly with the tagger's confidence (:data:`CONF_POWER`), so a
 near-certain catastrophic defect ("bad anatomy") drives the score to the floor while a
-borderline, possibly-false detection stays gentle. The *severity* of each defect is derived
+borderline, possibly-false detection stays gentle. Confidence is read *relative to the
+tag's own acceptance threshold* rather than in absolute terms: the scorer only ever sees
+predictions that already cleared that gate, so the usable range for a tag is
+``[threshold, 1.0]`` and the threshold varies per label (0.5-0.85 on the shipped model
+once the user's ``threshold_offset`` is applied). Normalising to ``u = (p - t) / (1 - t)``
+before the exponent makes "just over the line" mean the same thing for a tag gated at 0.50
+as for one gated at 0.85 — with a bare exponent on ``p`` it does not, because ``0.86**k``
+stays close to 1 for any usable ``k`` while ``0.51**k`` collapses. A just-accepted
+detection is charged :data:`EVIDENCE_FLOOR` of full severity (it is a *visible* tag, so it
+is not free), rising to full severity at ``p = 1``. The *severity* of each defect is derived
 from the caller-supplied per-tag weight table — in the app that is the user's edited
 ``User.smart_score_penalised_tags``, with ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` acting only
 as the seed/fallback. A tag the user removed from that table is not penalised at all. How
@@ -65,11 +74,33 @@ PRECISION_FLOOR = 0.70
 DEFAULT_TAG_PRECISION = 0.90
 
 # --- Severity & confidence shaping ------------------------------------------
-# Confidence shaping: per-image evidence = confidence**CONF_POWER. CONF_POWER > 1 makes
-# punishment rise super-linearly with the tagger's confidence — a 0.95 detection is
-# punished much harder than a 0.6 one, while a borderline (possibly false) detection stays
-# gentle. This is the "depending on the confidence the tagger gave it" knob.
-CONF_POWER = 1.5
+# Confidence shaping: per-image evidence rises from EVIDENCE_FLOOR at the tag's acceptance
+# threshold to 1.0 at confidence 1.0, as
+#   EVIDENCE_FLOOR + (1 - EVIDENCE_FLOOR) * u**CONF_POWER,  u = (p - t) / (1 - t)
+# CONF_POWER > 1 makes punishment rise super-linearly across that range, so a detection
+# barely over its gate reads as mild while a near-certain one carries full severity. This
+# is the "depending on the confidence the tagger gave it" knob.
+#
+# Raised from 1.5 to 3.0 together with the switch to threshold-relative normalisation. The
+# reason is measurable: the tagger's accepted confidences are near-binary (median 0.999 on
+# the demo vault, p25 >= 0.87 for every anatomy tag), so a bare exponent on the raw
+# probability is close to a no-op — it can only discount the handful of predictions that
+# are numerically low, not the ones that are low *for their own gate*. Normalising first
+# and then applying a steeper exponent is what actually separates a 0.86 "malformed hand"
+# (gate 0.85, u = 0.07) from a 0.999 one.
+CONF_POWER = 3.0
+# Evidence charged to a detection sitting exactly on its acceptance threshold, as a
+# fraction of full severity. It is deliberately non-zero: a prediction that cleared the
+# gate became a *visible* tag, so it must cost something — this is a mildness knob, not a
+# second gate. Only applies when the caller supplies the tag's threshold; without one
+# there is no "just accepted" point to anchor to and the raw confidence is used instead
+# (see :func:`_confidence_evidence`).
+EVIDENCE_FLOOR = 0.20
+# Upper clamp on a supplied acceptance threshold. Thresholds arrive as the model's
+# calibrated value plus the user's threshold_offset, which is unbounded above, and the
+# normalisation divides by (1 - t). Clamping keeps that division finite; a tag gated this
+# high is effectively "human confirmation only" anyway.
+MAX_APPLY_THRESHOLD = 0.99
 # Severity gain applied on top of the per-tag severity factor. Raise to punish harder
 # across the board. Calibrated (with RANK_DECAY below) against the demo vault so a single
 # confident anatomy defect on an otherwise-good picture lands in 1.5-2.2 on the [1, 5]
@@ -272,6 +303,36 @@ def _clip01(value) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
+def _confidence_evidence(prob: float, threshold: float | None) -> float:
+    """Shape a calibrated probability into evidence in ``[0, 1]``.
+
+    With a known acceptance *threshold* the probability is first normalised onto the range
+    the tag can actually occupy — ``u = (p - t) / (1 - t)``, since anything below ``t`` was
+    dropped by the gate — and evidence runs from :data:`EVIDENCE_FLOOR` at ``u = 0`` to
+    ``1.0`` at ``u = 1`` with exponent :data:`CONF_POWER`. That makes "barely accepted"
+    equally mild for every tag no matter where its gate sits, and leaves full-confidence
+    detections untouched at ``1.0``, which is what keeps the calibrated defect-count bands
+    where they were.
+
+    Without a threshold (``None`` or ``<= 0``) there is no "just accepted" point to anchor
+    the floor to — charging a floor to a 0.05 prediction would be plainly wrong — so the
+    raw probability is shaped directly by :data:`CONF_POWER`. That is the path unit tests
+    and any caller with no gate resolved take.
+
+    Args:
+        prob: Calibrated probability, already clamped to ``[0, 1]``.
+        threshold: The tag's acceptance threshold, or ``None`` when unknown.
+
+    Returns:
+        Evidence in ``[0, 1]``, monotonically increasing in *prob*.
+    """
+    if threshold is None or threshold <= 0.0:
+        return prob**CONF_POWER
+    t = min(float(threshold), MAX_APPLY_THRESHOLD)
+    u = _clip01((prob - t) / (1.0 - t))
+    return EVIDENCE_FLOOR + (1.0 - EVIDENCE_FLOOR) * (u**CONF_POWER)
+
+
 def _agreement(metric_name: str, metrics: dict) -> float | None:
     """Objective support in [0, 1] for a defect, or ``None`` if the metric is absent."""
     if metric_name == "noise":
@@ -300,6 +361,7 @@ def anomaly_penalty(
     *,
     tag_precisions: dict | None = None,
     tag_weights: dict | None = None,
+    tag_thresholds: dict | None = None,
     human_tags=None,
     metrics: dict | None = None,
     cap: float = DEFAULT_PENALTY_CAP,
@@ -321,6 +383,11 @@ def anomaly_penalty(
             penalised (subject to the family-alias rule in :func:`_tag_weight`).
             ``None`` falls back to ``DEFAULT_SMART_SCORE_PENALIZED_TAGS``, which is only
             correct for callers that genuinely have no user config.
+        tag_thresholds: ``{tag: acceptance threshold}`` — the same gate the caller used to
+            drop sub-threshold predictions, from
+            :func:`~pixlstash.utils.service.anomaly_thresholds.resolve_anomaly_apply_thresholds`.
+            Confidence is graded relative to it (see :func:`_confidence_evidence`); tags
+            missing from it fall back to grading the raw probability.
         human_tags: set of tags a human verified — these bypass the precision floor and
             count as certain (a human said it is there, regardless of model precision).
         metrics: ``{sharpness, noise_level, colorfulness}`` for objective corroboration.
@@ -332,6 +399,7 @@ def anomaly_penalty(
     if not anomaly_probs:
         return 0.0
     tag_precisions = tag_precisions or {}
+    tag_thresholds = tag_thresholds or {}
     human_tags = human_tags or frozenset()
     metrics = metrics or {}
     weights = normalise_tag_weights(tag_weights)
@@ -365,9 +433,11 @@ def anomaly_penalty(
                 # Too unreliable to down-score; handled via the review queue instead.
                 continue
 
-        # Super-linear in confidence: a near-certain defect is punished much harder than a
-        # borderline one. Precision is a separate (per-classifier) reliability discount.
-        evidence = (p**CONF_POWER) * precision
+        # Super-linear in confidence *relative to the tag's own gate*: a near-certain
+        # defect is punished much harder than one that barely cleared the threshold.
+        # Precision is a separate (per-classifier) reliability discount. A human POS
+        # arrives as p = 1.0 and so always carries full evidence regardless of the gate.
+        evidence = _confidence_evidence(p, tag_thresholds.get(tag)) * precision
 
         family = _FAMILY_BY_NAME[family_name]
         metric_name = family.get("corroborate")

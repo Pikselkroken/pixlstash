@@ -831,12 +831,15 @@ def attach_anomaly_inputs(
     Returns:
         Config overrides for
         :meth:`~pixlstash.utils.quality.smart_score_utils.SmartScoreUtils.calculate_smart_score_batch_numpy`:
-        ``tag_precisions`` from the latest evaluated :class:`TaggerRun`, and
-        ``penalised_tag_weights`` resolved from the owner's config.
+        ``tag_precisions`` from the latest evaluated :class:`TaggerRun`,
+        ``penalised_tag_weights`` resolved from the owner's config, and ``tag_thresholds``
+        — the same gate applied here, forwarded so the penalty can grade each detection's
+        confidence relative to its own acceptance threshold rather than in absolute terms.
     """
     config = {
         "tag_precisions": get_latest_tag_precisions(session),
         "penalised_tag_weights": resolve_penalised_tag_weights(session),
+        "tag_thresholds": dict(apply_thresholds or {}),
     }
     ids = [c.get("id") for c in candidates if c.get("id") is not None]
     if not ids:

@@ -17,6 +17,7 @@ from pixlstash.db_models.tagger_run import TaggerRun
 from pixlstash.services.tagger_run_service import get_latest_tag_precisions
 from pixlstash.utils.quality.anomaly_penalty import (
     DEFAULT_PENALTY_CAP,
+    EVIDENCE_FLOOR,
     FAMILY_SEVERITY,
     PRECISION_FLOOR,
     RANK_DECAY,
@@ -97,9 +98,13 @@ def test_distinct_defects_in_a_family_accumulate_with_diminishing_returns():
     # diminishing returns, bounded by the geometric RANK_DECAY series. The old noisy-OR
     # capped the family at a single tag's severity, which is what crushed the bottom of
     # the scale — three defects scored barely worse than one.
-    one = anomaly_penalty({"bad anatomy": 0.9})
+    #
+    # Asserted at full confidence, which is where the count bands are defined. Confidence
+    # is a separate axis and is now graded steeply (CONF_POWER), so a 0.9 detection is
+    # deliberately not "three confirmed defects" — see the threshold-grading tests below.
+    one = anomaly_penalty({"bad anatomy": 1.0})
     three = anomaly_penalty(
-        {"bad anatomy": 0.9, "malformed hand": 0.9, "malformed foot": 0.9}
+        {"bad anatomy": 1.0, "malformed hand": 1.0, "malformed foot": 1.0}
     )
     assert three > one
     # Strictly more than the old family ceiling, strictly less than naive triple-counting.
@@ -145,13 +150,14 @@ def test_merge_child_is_noisy_ored_into_its_parent_not_counted_twice():
     # "extra digit" IS "malformed hand" — the same defect under two names. Noisy-OR is
     # reserved for exactly this duplicate-detection job, so the pair must stay within one
     # canonical tag's severity rather than escalating like two distinct defects would.
-    hand_only = anomaly_penalty({"malformed hand": 0.9})
-    child = anomaly_penalty({"extra digit": 0.9})
+    # At full confidence, so the comparison isolates aggregation from confidence grading.
+    hand_only = anomaly_penalty({"malformed hand": 1.0})
+    child = anomaly_penalty({"extra digit": 1.0})
     assert 0.0 < child <= FAMILY_SEVERITY["anatomy"] + 1e-9
-    combined = anomaly_penalty({"extra digit": 0.9, "malformed hand": 0.9})
+    combined = anomaly_penalty({"extra digit": 1.0, "malformed hand": 1.0})
     assert combined <= FAMILY_SEVERITY["anatomy"] + 1e-9
     # Two *distinct* defects of the same weight escalate; a duplicate barely moves.
-    two_distinct = anomaly_penalty({"malformed hand": 0.9, "malformed foot": 0.9})
+    two_distinct = anomaly_penalty({"malformed hand": 1.0, "malformed foot": 1.0})
     assert combined < two_distinct
     assert combined < 1.3 * hand_only
 
@@ -171,7 +177,8 @@ def test_family_severity_follows_the_affine_weight_map():
         return SEVERITY_GAIN * (SEVERITY_BASE + SEVERITY_WEIGHT_SPAN * (weight / 5.0))
 
     assert FAMILY_SEVERITY["anatomy"] == expected(5.0)
-    assert FAMILY_SEVERITY["watermark"] == expected(4.0)
+    # "watermark" is a provenance nuisance, not an image defect: shipped weight 1.
+    assert FAMILY_SEVERITY["watermark"] == expected(1.0)
     assert FAMILY_SEVERITY["anatomy"] > FAMILY_SEVERITY["noise"]
 
 
@@ -186,6 +193,69 @@ def test_penalty_super_linear_in_confidence():
     high = anomaly_penalty({"bad anatomy": 0.8})
     low = anomaly_penalty({"bad anatomy": 0.4})
     assert high > 2.0 * low
+
+
+def test_just_over_threshold_costs_far_less_than_near_certain():
+    # The grading knob: within the range a tag can actually occupy ([threshold, 1.0], since
+    # anything below the gate was dropped upstream), a barely-accepted detection must read
+    # as genuinely mild while a near-certain one carries close to full severity.
+    thresholds = {"bad anatomy": 0.72}
+    at_gate = anomaly_penalty({"bad anatomy": 0.72}, tag_thresholds=thresholds)
+    near_certain = anomaly_penalty({"bad anatomy": 0.999}, tag_thresholds=thresholds)
+    assert at_gate > 0.0, "a visible (accepted) tag must still cost something"
+    assert at_gate == pytest.approx(EVIDENCE_FLOOR * near_certain, rel=0.02)
+    # Concretely: at the gate it costs about a fifth of a near-certain detection.
+    assert near_certain / at_gate >= 4.5
+
+
+def test_threshold_relative_grading_is_consistent_across_tags():
+    # A tag gated at 0.50 and one gated at 0.85 must charge the same for "just over the
+    # line". Grading the raw probability cannot do this: 0.50**k and 0.85**k diverge
+    # arbitrarily as k grows, so "barely accepted" would mean something different for
+    # every label. Compared at equal severity by using one tag against two gates.
+    lenient = anomaly_penalty(
+        {"bad anatomy": 0.50}, tag_thresholds={"bad anatomy": 0.50}
+    )
+    strict = anomaly_penalty(
+        {"bad anatomy": 0.85}, tag_thresholds={"bad anatomy": 0.85}
+    )
+    assert lenient == pytest.approx(strict)
+    # Midway through each tag's usable range must likewise agree.
+    mid_lenient = anomaly_penalty(
+        {"bad anatomy": 0.75}, tag_thresholds={"bad anatomy": 0.50}
+    )
+    mid_strict = anomaly_penalty(
+        {"bad anatomy": 0.925}, tag_thresholds={"bad anatomy": 0.85}
+    )
+    assert mid_lenient == pytest.approx(mid_strict)
+
+
+def test_full_confidence_is_unchanged_by_threshold_grading():
+    # The property that keeps the migration-0077 count bands valid: the shaping is an
+    # identity at p = 1, so a full-confidence defect costs exactly what it always did,
+    # whatever its gate.
+    ungated = anomaly_penalty({"bad anatomy": 1.0})
+    for threshold in (0.4, 0.62, 0.75, 0.85):
+        gated = anomaly_penalty(
+            {"bad anatomy": 1.0}, tag_thresholds={"bad anatomy": threshold}
+        )
+        assert gated == pytest.approx(ungated), threshold
+
+
+def test_penalty_monotonic_in_confidence_above_the_threshold():
+    thresholds = {"bad anatomy": 0.62}
+    probs = [0.62, 0.7, 0.8, 0.9, 0.95, 1.0]
+    penalties = [
+        anomaly_penalty({"bad anatomy": p}, tag_thresholds=thresholds) for p in probs
+    ]
+    assert all(b > a for a, b in zip(penalties, penalties[1:])), penalties
+
+
+def test_absurd_threshold_offset_cannot_divide_by_zero():
+    # Thresholds arrive as the model's value plus the user's unbounded threshold_offset.
+    penalty = anomaly_penalty({"bad anatomy": 1.0}, tag_thresholds={"bad anatomy": 1.4})
+    assert penalty > 0.0
+    assert penalty == pytest.approx(anomaly_penalty({"bad anatomy": 1.0}))
 
 
 def test_lower_precision_punishes_less():
