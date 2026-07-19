@@ -22,6 +22,9 @@ from pixlstash.utils.service.label_ledger import (
     not_human_labeled,
     record_human_label,
 )
+from pixlstash.utils.service.smart_score_invalidation import (
+    invalidate_on_anomaly_change,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -142,18 +145,23 @@ def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
         if prediction is None:
             raise KeyError(f"Prediction not found: picture_id={pic_id} tag={tag!r}")
 
-        # Record the human acceptance, snapshotting the tagger version/confidence the
-        # reviewer agreed with (frozen in label_model_version/label_confidence).
-        record_human_label(session, pic_id, tag, POS)
+        # Confirming an anomaly tag folds its probability to 1.0 in the scorer's
+        # inputs, so the cached smart score must be dropped for recompute.
+        with invalidate_on_anomaly_change(
+            session, [pic_id], context="confirm tag prediction"
+        ):
+            # Record the human acceptance, snapshotting the tagger version/confidence the
+            # reviewer agreed with (frozen in label_model_version/label_confidence).
+            record_human_label(session, pic_id, tag, POS)
 
-        existing_tag = session.exec(
-            select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
-        ).first()
-        if existing_tag is None:
-            session.add(Tag(picture_id=pic_id, tag=tag))
+            existing_tag = session.exec(
+                select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
+            ).first()
+            if existing_tag is None:
+                session.add(Tag(picture_id=pic_id, tag=tag))
 
-        session.flush()
-        recompute_anomaly_tag_uncertainty(session, pic_id)
+            session.flush()
+            recompute_anomaly_tag_uncertainty(session, pic_id)
         session.commit()
 
     vault.db.run_task(_confirm)
@@ -174,12 +182,17 @@ def reject_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
         enforce_pictures_not_locked(
             session, [pic_id], "reject a tag on a locked picture"
         )
-        # Record the human rejection as durable NEG supervision (snapshotting the
-        # tagger version/confidence overruled). Creates a synthetic 'manual' row if
-        # the tag was added manually, so the reject persists through fetches.
-        record_human_label(session, pic_id, tag, NEG)
-        session.flush()
-        recompute_anomaly_tag_uncertainty(session, pic_id)
+        # Rejecting an anomaly tag folds its probability to 0.0 in the scorer's
+        # inputs, so the cached smart score must be dropped for recompute.
+        with invalidate_on_anomaly_change(
+            session, [pic_id], context="reject tag prediction"
+        ):
+            # Record the human rejection as durable NEG supervision (snapshotting the
+            # tagger version/confidence overruled). Creates a synthetic 'manual' row if
+            # the tag was added manually, so the reject persists through fetches.
+            record_human_label(session, pic_id, tag, NEG)
+            session.flush()
+            recompute_anomaly_tag_uncertainty(session, pic_id)
         session.commit()
 
     vault.db.run_task(_reject)
@@ -228,13 +241,18 @@ def reset_picture_tags(
         # Reset deletes ALL confirmed Tag rows and drops a retag sentinel — a
         # destructive rewrite of frozen label data. Refuse on a locked picture.
         enforce_pictures_not_locked(session, [pic_id], "reset tags on a locked picture")
-        session.exec(
-            delete(TagPrediction)
-            .where(TagPrediction.picture_id == pic_id)
-            .where(not_human_labeled())
-        )
-        session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-        session.add(Tag(tag=make_tag_sentinel(engine_name), picture_id=pic_id))
+        # Dropping the model's prediction rows removes their anomaly probabilities
+        # from the scorer's inputs, so the cached smart score goes stale.
+        with invalidate_on_anomaly_change(
+            session, [pic_id], context="reset picture tags"
+        ):
+            session.exec(
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id == pic_id)
+                .where(not_human_labeled())
+            )
+            session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+            session.add(Tag(tag=make_tag_sentinel(engine_name), picture_id=pic_id))
         session.commit()
 
     vault.db.run_task(_reset)

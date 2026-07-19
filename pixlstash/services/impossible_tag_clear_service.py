@@ -26,6 +26,9 @@ from pixlstash.utils.service.label_ledger import (
     record_human_label,
 )
 from pixlstash.utils.service.person_tags import tags_to_clear
+from pixlstash.utils.service.smart_score_invalidation import (
+    invalidate_on_anomaly_change,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -71,6 +74,21 @@ def clear_in_session(
     if not picture_ids:
         return []
     removed: list[tuple[int, str]] = []
+    # One snapshot/compare over the whole selection so the stale cached smart scores
+    # are cleared in a single bulk UPDATE rather than one write per picture.
+    with invalidate_on_anomaly_change(
+        session, picture_ids, context="impossible-tag clear"
+    ):
+        removed = _clear_tags_in_session(session, picture_ids, filters)
+    session.commit()
+    return removed
+
+
+def _clear_tags_in_session(
+    session: Session, picture_ids: list[int], filters: list[str]
+) -> list[tuple[int, str]]:
+    """Remove the filter-implied tags and record a NEG per removed tag. No commit."""
+    removed: list[tuple[int, str]] = []
     for chunk in _chunks(list(picture_ids)):
         faced = set(
             session.exec(
@@ -108,7 +126,6 @@ def clear_in_session(
                     removed.append((pid, row.tag))
             session.flush()
             recompute_anomaly_tag_uncertainty(session, pid)
-    session.commit()
     return removed
 
 
@@ -125,17 +142,22 @@ def restore_in_session(session: Session, pairs: list[tuple[int, str]]) -> list[i
         )
         pairs = [(pid, tag) for pid, tag in pairs if pid not in locked]
     touched: set[int] = set()
-    for pid, tag in pairs:
-        existing = session.exec(
-            select(Tag).where(Tag.picture_id == pid, Tag.tag == tag)
-        ).first()
-        if existing is None:
-            session.add(Tag(picture_id=pid, tag=tag))
-        clear_human_label(session, pid, tag)
-        touched.add(pid)
-    for pid in touched:
-        session.flush()
-        recompute_anomaly_tag_uncertainty(session, pid)
+    # Clearing the ledger entries reverses the human NEGs the clear recorded, which
+    # moves the scorer's anomaly inputs back — invalidate in one bulk UPDATE.
+    with invalidate_on_anomaly_change(
+        session, [pid for pid, _tag in pairs], context="impossible-tag restore"
+    ):
+        for pid, tag in pairs:
+            existing = session.exec(
+                select(Tag).where(Tag.picture_id == pid, Tag.tag == tag)
+            ).first()
+            if existing is None:
+                session.add(Tag(picture_id=pid, tag=tag))
+            clear_human_label(session, pid, tag)
+            touched.add(pid)
+        for pid in touched:
+            session.flush()
+            recompute_anomaly_tag_uncertainty(session, pid)
     session.commit()
     return sorted(touched)
 

@@ -21,6 +21,10 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
+from pixlstash.utils.service.smart_score_invalidation import (
+    anomaly_state_signature,
+    invalidate_changed_anomaly_scores,
+)
 from pixlstash.utils.service.tag_prediction_utils import PENALISED_TAG_SET
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.inference.engine import InferenceEngine
@@ -851,6 +855,12 @@ class TagTask(BaseTask):
             if pid in existing_picture_ids
         }
 
+        # Snapshot the scorer's anomaly inputs before any prediction row is touched:
+        # a re-tag that moves an anomaly confidence (or drops a stale-version row)
+        # changes the smart score, whose cached value would otherwise never refresh.
+        # Taken before the stale-row delete below so that delete is covered too.
+        before_anomaly = anomaly_state_signature(session, picture_ids)
+
         # --- Single bulk fetch of all existing TagPrediction rows for the batch ---
         existing_rows = session.exec(
             select(TagPrediction).where(TagPrediction.picture_id.in_(picture_ids))
@@ -979,6 +989,11 @@ class TagTask(BaseTask):
                     max(anomaly_scores) if anomaly_scores else 0.0
                 )
 
+        # One bulk UPDATE for the whole batch — a write per picture here would
+        # saturate the single DB writer queue on a large re-tag.
+        invalidate_changed_anomaly_scores(
+            session, picture_ids, before_anomaly, context="tagger prediction rewrite"
+        )
         session.commit()
         return written
 
