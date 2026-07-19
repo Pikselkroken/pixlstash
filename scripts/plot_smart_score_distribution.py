@@ -15,6 +15,41 @@ import requests
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 
 
+API_V1_PREFIX = "/api/v1"
+
+
+def normalize_base_url(base_url: str) -> str:
+    """Strip trailing slashes and ensure the API version prefix is present.
+
+    The server mounts every data route under ``/api/v1`` and serves the
+    frontend ``index.html`` from a catch-all for anything else, so an
+    unprefixed URL yields ``200 text/html`` rather than a 404.
+    """
+    base_url = base_url.rstrip("/")
+    if not base_url.endswith(API_V1_PREFIX):
+        base_url += API_V1_PREFIX
+    return base_url
+
+
+def _json_or_raise(resp: requests.Response, what: str):
+    """Return decoded JSON, or raise with the URL and body when it isn't JSON."""
+    content_type = resp.headers.get("content-type", "")
+    if "json" not in content_type.lower():
+        raise RuntimeError(
+            f"{what} returned non-JSON ({content_type or 'unknown content-type'}) "
+            f"from {resp.url}. This usually means the URL missed the "
+            f"{API_V1_PREFIX} prefix and hit the frontend fallback. "
+            f"First 200 bytes: {resp.text[:200]!r}"
+        )
+    try:
+        return resp.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"{what} returned undecodable JSON from {resp.url}: {exc}. "
+            f"First 200 bytes: {resp.text[:200]!r}"
+        ) from exc
+
+
 def build_session(
     base_url: str,
     timeout: float,
@@ -42,8 +77,15 @@ def fetch_smart_score_rows(
     limit: int | None,
 ) -> tuple[list, int, int]:
     summary = session.get(f"{base_url}/characters/ALL/summary", timeout=timeout)
+    if summary.status_code in (401, 403):
+        raise RuntimeError(
+            f"{summary.status_code} from {summary.url}: the server requires "
+            "authentication. Pass an API token with --token."
+        )
     summary.raise_for_status()
-    db_total = int(summary.json().get("image_count") or 0)
+    db_total = int(
+        _json_or_raise(summary, "/characters/ALL/summary").get("image_count") or 0
+    )
 
     query_limit = limit if limit is not None else max(20000, db_total + 2000)
     resp = session.get(
@@ -58,7 +100,7 @@ def fetch_smart_score_rows(
         timeout=max(timeout, 60.0),
     )
     resp.raise_for_status()
-    rows = resp.json()
+    rows = _json_or_raise(resp, "/pictures")
     if not isinstance(rows, list):
         raise RuntimeError(f"Unexpected /pictures payload: {type(rows)!r}")
     return rows, db_total, query_limit
@@ -321,7 +363,10 @@ def main() -> None:
     parser.add_argument(
         "--base-url",
         default="http://127.0.0.1:9537",
-        help="PixlStash API base URL (default: http://127.0.0.1:9537)",
+        help=(
+            "PixlStash server URL, with or without the /api/v1 suffix "
+            "(default: http://127.0.0.1:9537)"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -374,7 +419,7 @@ def main() -> None:
     args = parser.parse_args()
 
     generate_plot_and_report(
-        base_url=args.base_url.rstrip("/"),
+        base_url=normalize_base_url(args.base_url),
         output_plot_dir=Path(os.path.expanduser(args.plot_dir)),
         output_report_dir=Path(os.path.expanduser(args.report_dir)),
         timeout=float(args.timeout),
