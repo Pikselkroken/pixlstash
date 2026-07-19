@@ -5890,6 +5890,13 @@ defineExpose({
                           </v-tooltip>
                         </span>
                         <v-icon
+                          v-if="pset.locked"
+                          class="sidebar-lock-icon"
+                          size="11"
+                          :title="SET_LOCKED_ROW_TITLE"
+                          >mdi-lock-outline</v-icon
+                        >
+                        <v-icon
                           v-if="sharedSetIds.has(pset.id)"
                           class="sidebar-shared-icon"
                           size="11"
@@ -8266,9 +8273,12 @@ defineExpose({
 }
 
 /* Corner lock overlay for the collapsed/dock set icon (and the collapsed
-   flyout button). Mirrors the grid lock badge's translucent-surface backing
-   (ImageGrid .thumbnail-lock-badge) via the shared `--scrim-surface` token so a
-   locked set reads as locked in the collapsed sidebar. Sits over the set icon. */
+   flyout button). Sits over the set icon, so it keeps a translucent backing via
+   the shared `--scrim-surface` token to stay legible against an arbitrary set
+   thumbnail. NOTE: this deliberately no longer matches the grid's
+   `.thumbnail-lock-badge`, which dropped its scrim to read as a sibling of the
+   problem indicator; that badge sits in a padded badge column, this one is a
+   corner chip directly on top of imagery. */
 .sidebar-collapsed-lock {
   position: absolute;
   right: 1px;

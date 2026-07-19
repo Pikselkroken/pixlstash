@@ -6563,15 +6563,10 @@ function handleEmptyStateReset() {
   color: rgb(var(--v-theme-accent)) !important;
 }
 
-/* Lock badge: keep the standard .thumbnail-badge chrome but drop the surface to
-   a reduced opacity for the requested translucent look. Uses the shared
-   `--scrim-surface` token (warm surface, composited lighter so the photo reads
-   through) — the light-canvas half of the badge-scrim family. */
-.thumbnail-lock-badge {
-  background: var(--scrim-surface);
-  display: flex;
-  align-items: center;
-}
+/* Lock badge: styled as a sibling of the problem indicator — no scrim, zero
+   padding, same left edge and inset. See the shared
+   `.penalised-tag-indicator, .stack-indicator, .thumbnail-lock-badge` rules
+   below, which it joins rather than restating. */
 
 .thumbnail-share-badge {
   opacity: 1;
@@ -7127,8 +7122,14 @@ function handleEmptyStateReset() {
   border-radius: 8px;
 }
 
+/* The lock badge joins these two so the three read as siblings in the top-left
+   column: same flex centring, same `padding: 0` (so their icons share one left
+   edge and inset), and — for the lock and problem indicators — no chrome at all.
+   Icon size is already shared: both bind `badgeIconSizes.penalised`, so they
+   track each other at every column count. */
 .penalised-tag-indicator,
-.stack-indicator {
+.stack-indicator,
+.thumbnail-lock-badge {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7137,7 +7138,8 @@ function handleEmptyStateReset() {
   padding: 0;
 }
 
-.penalised-tag-indicator {
+.penalised-tag-indicator,
+.thumbnail-lock-badge {
   background: none !important;
   border: none !important;
   box-shadow: none !important;
