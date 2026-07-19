@@ -614,6 +614,84 @@ def test_tag_health_scoped_has_model_true_for_older_version_in_scope():
         _teardown(temp_dir, server)
 
 
+def test_tag_health_set_scoped_board_reports_vocabulary_both_ways():
+    """One set-filtered request must answer the vocabulary question correctly in
+    BOTH directions: a tag whose only current-version prediction lives OUTSIDE
+    the set is still in-vocabulary (has_model=true), while a tag that no current
+    generation ever predicted anywhere is still out-of-vocabulary
+    (has_model=false).
+
+    This is the end-to-end guard for the reported bug — applying a picture-set
+    filter in the review overlay reported "not in the tagger's vocabulary" for
+    every row, because has_model was a *scope-restricted* current-version count.
+    The negative direction is asserted in the same response so a fix that simply
+    reports has_model=true everywhere cannot pass.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        p_in = _upload_named(client)  # in the set: "in_vocab" + "out_vocab"
+        p_out = _upload_named(client)  # outside the set: current-gen "in_vocab"
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            ps = PictureSet(name="scope_set")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            session.add(PictureSetMember(set_id=ps.id, picture_id=p_in))
+            session.add(Tag(picture_id=p_in, tag="in_vocab"))
+            session.add(Tag(picture_id=p_in, tag="out_vocab"))
+            # In-scope predictions are all from the OLD generation.
+            session.add(
+                TagPrediction(
+                    picture_id=p_in,
+                    tag="in_vocab",
+                    confidence=0.5,
+                    model_version="v_old",
+                    predicted_at=now - timedelta(days=2),
+                )
+            )
+            session.add(
+                TagPrediction(
+                    picture_id=p_in,
+                    tag="out_vocab",
+                    confidence=0.5,
+                    model_version="v_old",
+                    predicted_at=now - timedelta(days=2),
+                )
+            )
+            # Newest prediction anywhere → current_version = v_new, and it only
+            # covers "in_vocab" (and sits outside the scope).
+            session.add(
+                TagPrediction(
+                    picture_id=p_out,
+                    tag="in_vocab",
+                    confidence=0.5,
+                    model_version="v_new",
+                    predicted_at=now,
+                )
+            )
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        resp = client.get(f"{API}/tag_health", params={"set_id": set_id})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["scoped"] is True
+        rows = {r["tag"]: r for r in body["rows"]}
+        # Only in-scope tags get rows (p_out's tags are not in the set).
+        assert set(rows) == {"in_vocab", "out_vocab"}
+        # Current vocabulary via the out-of-scope v_new prediction. Pre-fix: false.
+        assert rows["in_vocab"]["has_model"] is True
+        # No v_new prediction anywhere → genuinely out of vocabulary.
+        assert rows["out_vocab"]["has_model"] is False
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_tag_health_has_model_false_for_out_of_vocabulary_tags():
     """has_model=false when a tag is absent from the current vocabulary: it has
     only older-version predictions anywhere in the vault, or no predictions at
