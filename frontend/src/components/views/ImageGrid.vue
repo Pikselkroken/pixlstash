@@ -4804,6 +4804,23 @@ function formatGridSmartScoreValue(img) {
   return value === null ? "" : value.toFixed(2);
 }
 
+// The ONE null-ordering rule shared by every client-side smart-score sort path
+// (fresh insert AND reposition). SQLite ranks NULL below every real value, and
+// the backend sorts the smart_score column with a plain .asc()/.desc() and no
+// NULLS clause (pixlstash/db_models/picture.py), so NULLs sort FIRST on ascending
+// and LAST on descending. Map a null/absent score to -Infinity so the shared
+// comparator (which flips on `descending`) lands a null-scored card exactly where
+// the server put it, in BOTH directions. A 0 sentinel is wrong: it collides with
+// a genuine zero and, now that smart scores can be negative and null (tag edits
+// invalidate them), it mis-orders nulls relative to real scores. Route EVERY path
+// through this helper — never an inline ternary or `?? 0` — so the insert and
+// reposition paths cannot drift (the failure the gridSortDescending comment warns
+// of). This is only an ordering key; it must never be written back as a card's
+// displayed smart score, or a null-scored card would render a fake 0.
+function smartScoreSortKey(smartScore) {
+  return Number.isFinite(smartScore) ? smartScore : -Infinity;
+}
+
 function invalidateVisibleThumbnailRanges() {
   const start = Math.max(0, visibleStart.value - renderBuffer.value);
   const end = Math.min(
@@ -4887,11 +4904,23 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
     const currentIndex = items.findIndex((item) => item.id === imageId);
     if (currentIndex === -1) return;
 
-    const targetScore = smartScore ?? 0;
+    // Keep the ordering key separate from the displayed value. The card must
+    // store the TRUE smart score (a real number or null → "no score"); only the
+    // sort key collapses null to the SQLite sentinel via smartScoreSortKey.
+    // Writing the sentinel onto `smartScore` would make a null-scored card render
+    // a fake 0.
+    const normalisedScore = Number.isFinite(smartScore) ? smartScore : null;
+    const targetKey = smartScoreSortKey(normalisedScore);
+    // Write the TRUE score to BOTH the camelCase and snake_case keys.
+    // getGridSmartScoreValue reads `smartScore` then falls back to `smart_score`
+    // (grid cards / metadata responses carry both), so setting only one key would
+    // let a stale value leak through the fallback and render a wrong (or fake 0)
+    // score. Both must hold the normalised value — null for "no score".
     const target = {
       ...items[currentIndex],
       ...(latestInfo && typeof latestInfo === "object" ? latestInfo : {}),
-      smartScore: targetScore,
+      smartScore: normalisedScore,
+      smart_score: normalisedScore,
       thumbnail:
         items[currentIndex]?.thumbnail ?? latestInfo?.thumbnail ?? null,
     };
@@ -4900,8 +4929,8 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
       items,
       currentIndex,
       target,
-      targetScore,
-      (item) => item.smartScore ?? 0,
+      targetKey,
+      (item) => smartScoreSortKey(getGridSmartScoreValue(item)),
       descending,
     );
   } finally {
@@ -4922,17 +4951,10 @@ function gridImageSortKey(img) {
     return Date.parse(img.created_at) || 0;
   }
   if (sort.includes("SMART_SCORE")) {
-    // Match the server's ORDER BY exactly. The backend sorts on the smart_score
-    // column with a plain .asc()/.desc() (db_models/picture.py), so SQLite's
-    // native NULL rule applies: NULL is less than every real value, i.e. NULLs
-    // sort FIRST on ascending and LAST on descending. Map a missing smart score
-    // to -Infinity so the shared comparator (which flips on `descending`) lands
-    // a null-scored card in the same slot the server put it, in BOTH directions.
-    // A 0 sentinel is wrong here: it collides with a genuine zero score and,
-    // now that smart scores can be negative and null (tag edits invalidate
-    // them), it mis-orders nulls relative to real scores.
-    const smart = getGridSmartScoreValue(img);
-    return smart === null ? -Infinity : smart;
+    // Match the server's ORDER BY exactly via the shared null rule (see
+    // smartScoreSortKey). The reposition path uses the same helper, so the two
+    // ordering paths cannot drift.
+    return smartScoreSortKey(getGridSmartScoreValue(img));
   }
   if (
     sort.includes("CHARACTER_LIKENESS") &&
@@ -5063,7 +5085,11 @@ async function refreshSmartScoreForImage(imageId) {
     }
     await nextTick();
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    repositionImageBySmartScore(imageId, smartScore ?? 0, latestInfo);
+    // Pass the TRUE smart score (number or null). repositionImageBySmartScore
+    // derives its ordering key from the null rule and preserves null as the
+    // card's displayed value — collapsing to 0 here would both mis-order the
+    // card and show a fake 0.
+    repositionImageBySmartScore(imageId, smartScore, latestInfo);
   }
 }
 
