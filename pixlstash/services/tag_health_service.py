@@ -47,6 +47,21 @@ Signal definitions (thresholds are module constants, deliberately fixed for now
   tagged by an *earlier* run still reports the tag as in-vocabulary. Tags with
   no current-version prediction anywhere still get a row with ``has_model=False``
   so the board can show a "no model signal" state.
+* ``ground_truth`` – how many **pictures** (not ``tag`` rows) carry this tag:
+  the count of DISTINCT non-deleted ``picture_id``s with a ``Tag`` row for any
+  literal tag in the folded tag's ``DEFAULT_TAG_MERGES`` equivalence class.
+  Unlike ``has_model`` this IS scope-restricted — on a scoped board it counts
+  only in-scope pictures, because it answers "does a review *of this scope*
+  have confirmed examples to vote against?". Its equivalence class is
+  deliberately identical to the ``equiv`` set
+  :func:`pixlstash.services.tag_scan_service.scan_tag` builds for
+  ``has_concept``, and the count is over distinct pictures for the same reason
+  ``scan_tag`` builds a *set*: a picture tagged with both a child and its
+  parent is one confirmed example, not two. ``ground_truth == 0`` therefore
+  implies ``scan_tag``'s ``n_ground_truth == 0`` (the board counts every
+  non-deleted in-scope picture; ``scan_tag`` counts the subset of those that
+  also have an embedding), which is the direction the board's
+  "this review would find nothing" gate depends on.
 
 Every signal above folds child tags into their parent per
 :data:`~pixlstash.db_models.tag.DEFAULT_TAG_MERGES` before grouping — the same
@@ -472,18 +487,37 @@ def compute_tag_health_rows(
     # The scoped path already excludes deleted via its scope helper
     # (fetch_tag_review_scope_picture_ids); the redundant filter there is
     # harmless and keeps this consistent with the other signals' join+_scoped.
-    ground_truth_tags = {
-        DEFAULT_TAG_MERGES.get(t, t)
-        for t in session.exec(
-            _scoped(
-                select(Tag.tag)
-                .join(Picture, Picture.id == Tag.picture_id)
-                .where(Picture.deleted.is_(False)),
-                Tag.picture_id,
-            ).distinct()
-        )
-        if not is_tag_sentinel(t)
-    }
+    #
+    # One grouped pass replaces what used to be a bare `SELECT DISTINCT Tag.tag`:
+    # it yields both the ground-truth tag universe (the dict's keys) AND each
+    # folded tag's ``ground_truth`` picture count, so the board gains a signal
+    # without gaining a query.
+    #
+    # The DEFAULT_TAG_MERGES fold is pushed into SQL as a CASE over the literal
+    # tag and the count is COUNT(DISTINCT picture_id) *over the folded group*.
+    # Both details are load-bearing: this count must equal |{pictures carrying
+    # any tag in the equivalence class}|, which is exactly the ``concept`` set
+    # ``tag_scan_service.scan_tag`` builds (``equiv = {tag} | children-of-tag``,
+    # then ``select(Tag.picture_id).where(Tag.tag.in_(equiv))`` — a SET of
+    # picture ids). Folding in Python by summing per-literal-tag counts would
+    # double-count a picture tagged with BOTH a child ("extra digit") and its
+    # parent ("malformed hand"), which the UNIQUE(picture_id, tag) constraint
+    # permits, and would no longer match scan_tag's set semantics.
+    folded_tag = case(DEFAULT_TAG_MERGES, value=Tag.tag, else_=Tag.tag)
+    ground_truth_counts: dict[str, int] = {}
+    for tag_value, n in session.exec(
+        _scoped(
+            select(folded_tag, func.count(Tag.picture_id.distinct()))
+            .join(Picture, Picture.id == Tag.picture_id)
+            .where(Picture.deleted.is_(False)),
+            Tag.picture_id,
+        ).group_by(folded_tag)
+    ).all():
+        # Sentinels never merge, so the folded value is the literal one here.
+        if is_tag_sentinel(tag_value):
+            continue
+        ground_truth_counts[tag_value] = int(n)
+    ground_truth_tags = set(ground_truth_counts)
     predicted_tags = {
         DEFAULT_TAG_MERGES.get(t, t)
         for t in session.exec(
@@ -550,6 +584,7 @@ def compute_tag_health_rows(
                 "overturn_rate": (acc / (acc + dis)) if (acc + dis) else None,
                 "model_disputes": int(disputes.get(tag_value, 0)),
                 "has_model": tag_value in vocab,
+                "ground_truth": int(ground_truth_counts.get(tag_value, 0)),
                 "last_reviewed_at": last_reviewed.get(tag_value),
                 "computed_at": now,
             }
@@ -709,6 +744,7 @@ def list_tag_health(vault: "Vault") -> dict:
                 "overturn_rate": r.overturn_rate,
                 "model_disputes": r.model_disputes,
                 "has_model": r.has_model,
+                "ground_truth": r.ground_truth,
                 "last_reviewed_at": r.last_reviewed_at.isoformat()
                 if r.last_reviewed_at
                 else None,

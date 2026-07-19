@@ -1405,6 +1405,214 @@ def test_tag_health_deleted_only_tag_excluded_from_unscoped_board():
         _teardown(temp_dir, server)
 
 
+def test_tag_health_ground_truth_counts_pictures_and_folds_merge_aliases():
+    """``ground_truth`` counts distinct in-scope, non-deleted PICTURES carrying
+    the folded tag — not ``tag`` rows — in both the cached and the scoped payload.
+
+    Three things are asserted deliberately:
+
+    * a merge alias ("extra digit") contributes to its parent's
+      ("malformed hand") count and gets no row of its own;
+    * a picture carrying BOTH the child and the parent literal counts ONCE (the
+      UNIQUE constraint is on (picture_id, tag), so both rows can coexist; a
+      naive per-literal-tag sum would report it twice);
+    * the resulting number equals ``|{pictures with any tag in scan_tag's equiv
+      set}|`` — the correspondence the "this review would find nothing" gate
+      rests on (see ``tag_scan_service.scan_tag``'s ``equiv``).
+    """
+    from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
+
+    temp_dir, client, server = _setup()
+    try:
+        p_parent = _upload_named(client)  # "malformed hand"
+        p_child = _upload_named(client)  # "extra digit" (merge alias)
+        p_both = _upload_named(client)  # both literals — one picture, counts once
+        p_solo = _upload_named(client)  # unrelated tag with no aliases
+        p_pred = _upload_named(client)  # prediction only, zero ground truth
+        p_deleted = _upload_named(client)  # "malformed hand" but soft-deleted
+
+        now = datetime.utcnow()
+
+        def seed(session):
+            session.add(Tag(picture_id=p_parent, tag="malformed hand"))
+            session.add(Tag(picture_id=p_child, tag="extra digit"))
+            session.add(Tag(picture_id=p_both, tag="malformed hand"))
+            session.add(Tag(picture_id=p_both, tag="extra digit"))
+            session.add(Tag(picture_id=p_solo, tag="solo"))
+            session.add(Tag(picture_id=p_deleted, tag="malformed hand"))
+            pic = session.get(Picture, p_deleted)
+            pic.deleted = True
+            session.add(pic)
+            session.add(
+                TagPrediction(
+                    picture_id=p_pred,
+                    tag="predicted_only",
+                    confidence=0.5,
+                    model_version="v1",
+                    predicted_at=now,
+                )
+            )
+            ps = PictureSet(name="gt_scope")
+            session.add(ps)
+            session.commit()
+            session.refresh(ps)
+            # Scope holds the parent-literal picture and the both-literals one.
+            session.add(PictureSetMember(set_id=ps.id, picture_id=p_parent))
+            session.add(PictureSetMember(set_id=ps.id, picture_id=p_both))
+            session.commit()
+            return ps.id
+
+        set_id = server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        rows = {r["tag"]: r for r in body["rows"]}
+
+        assert "extra digit" not in rows  # the child never gets its own row
+        # p_parent + p_child + p_both == 3 distinct live pictures; p_both is one
+        # picture despite holding two literal tag rows, and p_deleted is excluded.
+        assert rows["malformed hand"]["ground_truth"] == 3
+        assert rows["solo"]["ground_truth"] == 1
+        # A tag known only from a prediction has no confirmed examples at all.
+        assert rows["predicted_only"]["ground_truth"] == 0
+
+        # The count must equal scan_tag's own equivalence-set picture count,
+        # built here exactly the way scan_tag builds `equiv` / `concept`.
+        equiv = {"malformed hand"} | {
+            child
+            for child, parent in DEFAULT_TAG_MERGES.items()
+            if parent == "malformed hand"
+        }
+
+        def _scan_concept(session):
+            return set(
+                session.exec(
+                    select(Tag.picture_id)
+                    .join(Picture, Picture.id == Tag.picture_id)
+                    .where(Picture.deleted.is_(False), Tag.tag.in_(sorted(equiv)))
+                ).all()
+            )
+
+        concept = server.vault.db.run_immediate_read_task(_scan_concept)
+        assert concept == {p_parent, p_child, p_both}
+        assert rows["malformed hand"]["ground_truth"] == len(concept)
+
+        # Scoped payload carries the field too, restricted to the scope: only
+        # p_parent and p_both are in the set.
+        scoped = client.get(f"{API}/tag_health", params={"set_id": set_id}).json()
+        assert scoped["scoped"] is True
+        srows = {r["tag"]: r for r in scoped["rows"]}
+        assert srows["malformed hand"]["ground_truth"] == 2
+        assert "extra digit" not in srows
+        assert "solo" not in srows  # p_solo is outside the scope
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_tag_health_zero_ground_truth_agrees_with_scan_confidence_fallback():
+    """The "a review would find nothing" gate's correctness proof, as a test.
+
+    When a tag has zero ground truth, ``tag_scan_service.scan_tag`` takes its
+    near-zero-ground-truth branch (``n_ground_truth < MIN_GROUND_TRUTH_FOR_VOTE``)
+    and its ONLY source of suspects is ``_load_confidence_fallback``, whose WHERE
+    clause is documented as mirroring this module's ``est_missing`` aggregate
+    one-for-one — same ``EST_MISSING_MIN_CONF``, same current-model-version pin,
+    same ``Tag.picture_id IS NULL`` outer join, same ``label_state == "UNKNOWN"``
+    (see the coupling note in ``tag_scan_service._load_confidence_fallback``'s
+    docstring). The board can therefore promise "``ground_truth == 0`` and
+    ``est_missing == 0`` ⇒ this review yields nothing".
+
+    This asserts the two agree on the PICTURE SET, across every predicate that
+    differentiates them at zero ground truth (confidence threshold, model-version
+    pin, human ruling). Change one side's predicate without the other and this
+    fails — which is the point. (``Tag.picture_id IS NULL`` is not exercised
+    here because it is vacuously true for both at zero ground truth: no picture
+    carries the tag.)
+    """
+    import numpy as np
+
+    from pixlstash.services import tag_scan_service
+    from pixlstash.utils.service.label_ledger import NEG, record_human_label
+
+    temp_dir, client, server = _setup()
+    try:
+        p_hit_a = _upload_named(client)  # conf 0.95, current version, un-ruled
+        p_hit_b = _upload_named(client)  # conf 0.95, current version, un-ruled
+        p_low = _upload_named(client)  # conf 0.85 — under the threshold
+        p_stale = _upload_named(client)  # conf 0.99 on a superseded version
+        p_rejected = _upload_named(client)  # conf 0.95 but human-REJECTED (NEG)
+
+        now = datetime.utcnow()
+        # Deterministic, orthogonal embeddings: scan_tag needs >= 2 pictures with
+        # embeddings to get past its guard, but the fallback branch never votes
+        # on them, so their values are irrelevant to the outcome.
+        for i, pid in enumerate((p_hit_a, p_hit_b, p_low, p_stale, p_rejected)):
+            vec = np.zeros(512, dtype=np.float32)
+            vec[i] = 1.0
+            blob = vec.tobytes()
+
+            def _set(session, pid=pid, blob=blob):
+                pic = session.get(Picture, pid)
+                pic.image_embedding = blob
+                session.add(pic)
+                session.commit()
+
+            server.vault.db.run_task(_set)
+
+        def seed(session):
+            for pid, conf, version, at in (
+                (p_hit_a, 0.95, "v_new", now),
+                (p_hit_b, 0.95, "v_new", now),
+                (p_low, 0.85, "v_new", now),
+                (p_stale, 0.99, "v_old", now - timedelta(days=2)),
+                (p_rejected, 0.95, "v_new", now),
+            ):
+                session.add(
+                    TagPrediction(
+                        picture_id=pid,
+                        tag="coldstart",
+                        confidence=conf,
+                        model_version=version,
+                        predicted_at=at,
+                    )
+                )
+            session.commit()
+            # Human REJECT keeps the 0.95 confidence and writes no Tag row, so
+            # only the label_state filter can exclude it — on both sides.
+            record_human_label(session, p_rejected, "coldstart", NEG)
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        body = _rebuild_and_wait(client)
+        row = {r["tag"]: r for r in body["rows"]}["coldstart"]
+
+        # Premise of the gate: no confirmed examples anywhere.
+        assert row["ground_truth"] == 0
+        assert row["est_missing"] == 2
+
+        res = tag_scan_service.scan_tag(server.vault, "coldstart", project=None)
+        assert res["count"] == 2
+        assert res["added"] == 2
+        assert res["removed"] == 0
+
+        def _suspects(session):
+            return {
+                (int(s.picture_id), s.reason)
+                for s in session.exec(
+                    select(TagSuggestion).where(TagSuggestion.tag == "coldstart")
+                ).all()
+            }
+
+        suspects = server.vault.db.run_immediate_read_task(_suspects)
+        # The fallback branch actually ran (not the kNN vote).
+        assert all("no confirmed examples yet" in reason for _, reason in suspects)
+        # ...and it agrees with est_missing on the exact picture set.
+        assert {pid for pid, _ in suspects} == {p_hit_a, p_hit_b}
+        assert row["est_missing"] == len(suspects)
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_tag_health_est_adj_reflects_precision_discount_and_fallback():
     """3: est_wrong_adj/est_missing_adj discount by the tag's measured precision
     (from the latest TaggerRun report), falling back to DEFAULT_TAG_PRECISION

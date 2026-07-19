@@ -39,6 +39,12 @@ class TagHealth(SQLModel, table=True):
         has_model: the tag has prediction rows for the current model version;
             tags with no predictions at all still get a row with
             ``has_model=False`` (the board shows "no model signal").
+        ground_truth: how many in-scope, non-deleted PICTURES carry this tag
+            (confirmed examples). Counts pictures, not ``tag`` rows, and is
+            DEFAULT_TAG_MERGES-folded like every other signal, so it matches
+            the equivalence set ``tag_scan_service.scan_tag`` votes against.
+            ``0`` means a review would fall back to the confidence-only
+            bootstrap path.
     """
 
     __tablename__ = "tag_health"
@@ -60,6 +66,10 @@ class TagHealth(SQLModel, table=True):
     overturn_rate: Optional[float] = Field(default=None)
     model_disputes: int = Field(default=0)
     has_model: bool = Field(default=False)
+    # Count of distinct non-deleted pictures carrying the folded tag (see class
+    # docstring). Zero is load-bearing: it is what lets the board tell the user a
+    # review would find nothing before they start one.
+    ground_truth: int = Field(default=0)
 
     # Latest reviewed_at over the tag's suggestions (any source); NULL when the
     # tag has never had a suggestion reviewed ("Last review: never").

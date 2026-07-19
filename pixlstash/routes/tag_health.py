@@ -49,6 +49,21 @@ class TagHealthRowResponse(BaseModel):
     overturn_rate: Optional[float] = None
     model_disputes: int = 0
     has_model: bool = False
+    ground_truth: int = Field(
+        default=0,
+        description=(
+            "How many pictures (not tag rows) carry this tag — the tag's confirmed "
+            "examples. Counts DISTINCT non-deleted pictures holding any literal tag "
+            "in this tag's DEFAULT_TAG_MERGES equivalence class, so a merge alias "
+            "('extra digit') counts toward its parent ('malformed hand') and a "
+            "picture holding both counts once. Restricted to the requested scope on "
+            "a scoped response. Zero means a review of this tag has no ground truth "
+            "to vote against: the scan falls back to model confidence alone, so "
+            "ground_truth == 0 together with est_missing == 0 proves a review would "
+            "yield no items. 0 on a row that predates this field, until the next "
+            "rebuild."
+        ),
+    )
     # Latest reviewed_at over the tag's suggestions; null = never reviewed.
     last_reviewed_at: Optional[str] = None
     computed_at: Optional[str] = None
