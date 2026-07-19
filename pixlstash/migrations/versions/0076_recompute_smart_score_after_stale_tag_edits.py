@@ -1,16 +1,27 @@
-"""Recompute smart scores left stale by tag edits made before invalidation existed.
+"""Recompute smart scores after the anomaly-penalty overhaul.
 
 ``Picture.smart_score`` is a cached derived column and ``MissingSmartScoreFinder`` only
-picks up pictures whose score is ``NULL``, so a stored score was previously never
-recomputed. Its anomaly-penalty term, however, is a live function of the anomaly-tag
-predictions, so every tag refresh or manual anomaly-tag edit since the score was first
-computed left the stored value silently wrong.
+picks up pictures whose score is ``NULL``, so a stored score is never recomputed on its
+own. Its anomaly-penalty term is a live function of the anomaly-tag predictions, and a
+series of scoring changes on this branch invalidates every stored value:
 
-The code fix invalidates the score whenever a picture's anomaly state actually changes
-(``pixlstash.utils.service.smart_score_invalidation``), but that only covers edits made
-from now on. Scores already stale in an existing database cannot heal themselves, so this
-migration NULL-resets the column once; the finder then recomputes every picture against
-its current anomaly-tag state on the next run. Mirrors
+* Stale scores from tag edits made before invalidation existed. The score is now
+  invalidated whenever a picture's anomaly state changes
+  (``pixlstash.utils.service.smart_score_invalidation``), but scores already stale in an
+  existing database cannot heal themselves.
+* Graded anomaly aggregation and a soft score floor. Distinct defects accumulate with a
+  rank decay and each tag contributes its own weight, and the raw score is soft-compressed
+  into ``[0, 1]`` instead of hard-clipped
+  (``pixlstash.utils.quality.anomaly_penalty`` / ``smart_score_utils``).
+* User penalised-tag weights and the apply gate. The penalty uses the user's
+  ``User.smart_score_penalised_tags`` weights, and only predictions clearing the tagger's
+  per-label acceptance threshold are penalised
+  (``pixlstash.picture_scoring.fetch_anomaly_confidences``).
+* Threshold-relative confidence grading. A detection's confidence is normalised onto its
+  tag's usable ``[threshold, 1.0]`` range before the severity exponent.
+
+This migration NULL-resets the column once; the finder then recomputes every picture
+against the current formula on the next run. Mirrors
 ``0062_recompute_smart_score_calibrated_anomaly``. Schema-only otherwise — no columns are
 added or removed.
 
