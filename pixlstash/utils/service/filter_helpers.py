@@ -11,6 +11,7 @@ from pixlstash.db_models import (
     Face,
     Picture,
     PictureProjectMember,
+    PictureSet,
     PictureSetMember,
 )
 from pixlstash.pixl_logging import get_logger
@@ -285,6 +286,64 @@ def fetch_scope_allowed_picture_ids(server, request) -> set[int] | None:
     logger.warning(
         "fetch_scope_allowed_picture_ids: unrecognised token_scope resource_type %r;"
         " returning empty set (no access)",
+        token_scope.resource_type,
+    )
+    return set()
+
+
+def fetch_scope_allowed_set_ids(server, request) -> set[int] | None:
+    """Return picture-set IDs the current token scope may *learn about*.
+
+    Object-level scope authorizes a *picture*; it says nothing about the related
+    entities named in that picture's payload. A picture-set-scoped token can
+    legitimately read a picture that also belongs to some other, private set —
+    and without this helper the response would hand over that set's id and
+    user-authored name, which the token cannot obtain from ``GET /picture_sets``.
+    Any handler that embeds set identity in a picture-derived payload must filter
+    it through this function first.
+
+    The policy mirrors, and is the single source of truth for, the set-visibility
+    ladder already implemented by ``GET /picture_sets`` and
+    ``GET /picture_sets/locked-members`` in :mod:`pixlstash.routes.picture_sets`:
+    a ``picture_set`` token sees exactly its own set, a ``project`` token sees
+    that project's sets, and every other scoped token sees no sets at all.
+
+    Args:
+        server: The server instance.
+        request: The current FastAPI request.
+
+    Returns:
+        ``None`` when the token is unscoped / owner (no restriction — the caller
+        must not filter). A ``set[int]`` of visible set IDs for a scoped token,
+        which may be empty. An empty ``set`` for a ``character``, ``picture``, or
+        unrecognised ``resource_type`` (fail-closed: no set is disclosed).
+    """
+    token_scope = getattr(request.state, "token_scope", None)
+    if token_scope is None or token_scope.resource_type is None:
+        return None
+
+    resource_id = token_scope.resource_id
+
+    if token_scope.resource_type == "picture_set":
+        return {int(resource_id)}
+
+    if token_scope.resource_type == "project":
+
+        def _fetch_project_sets(session: Session, project_id: int) -> set[int]:
+            return {
+                int(r[0])
+                for r in session.exec(
+                    select(PictureSet.id).where(PictureSet.project_id == project_id)
+                ).all()
+            }
+
+        return server.vault.db.run_immediate_read_task(_fetch_project_sets, resource_id)
+
+    # character / picture / anything unrecognised: no set visibility at all.
+    # Deliberately fail-closed rather than defaulting to disclosure.
+    logger.debug(
+        "fetch_scope_allowed_set_ids: token_scope resource_type %r has no picture-set"
+        " visibility; returning empty set",
         token_scope.resource_type,
     )
     return set()

@@ -1010,7 +1010,9 @@ def test_delete_open_review_frees_the_tag_and_keeps_pending_row():
 
         # Delete the OPEN review mid-review: the pending row detaches, no decision
         # is lost, and the tag is free for a new OPEN review (unique index clear).
-        assert client.delete(f"{API}/reviews/{rid}").json() == {"deleted": 1}
+        delete_resp = client.delete(f"{API}/reviews/{rid}")
+        assert delete_resp.status_code == 200, delete_resp.text
+        assert delete_resp.json() == {"deleted": 1}
         row = _get_suggestion(server, sid)
         assert row is not None and row.review_id is None and row.status == "PENDING"
 
@@ -1023,7 +1025,8 @@ def test_delete_open_review_frees_the_tag_and_keeps_pending_row():
 def test_delete_review_404_for_unknown_id():
     temp_dir, client, server = _setup()
     try:
-        assert client.delete(f"{API}/reviews/999999").status_code == 404
+        missing_resp = client.delete(f"{API}/reviews/999999")
+        assert missing_resp.status_code == 404, missing_resp.text
     finally:
         _teardown(temp_dir, server)
 
@@ -1057,9 +1060,9 @@ def test_clear_archived_deletes_only_archived_and_returns_count():
         assert remaining[r_open] == "OPEN"
 
         # Idempotent: a second clear finds nothing to delete.
-        assert client.delete(
-            f"{API}/reviews", params={"status": "ARCHIVED"}
-        ).json() == {"deleted": 0}
+        clear_resp = client.delete(f"{API}/reviews", params={"status": "ARCHIVED"})
+        assert clear_resp.status_code == 200, clear_resp.text
+        assert clear_resp.json() == {"deleted": 0}
     finally:
         _teardown(temp_dir, server)
 
@@ -1071,16 +1074,13 @@ def test_clear_reviews_requires_archived_status():
         rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
 
         # Missing status -> 422 (required query param); never a delete-everything.
-        assert client.delete(f"{API}/reviews").status_code == 422
+        no_status_resp = client.delete(f"{API}/reviews")
+        assert no_status_resp.status_code == 422, no_status_resp.text
         # A non-ARCHIVED status is refused (guards OPEN/ABORTED sessions).
-        assert (
-            client.delete(f"{API}/reviews", params={"status": "OPEN"}).status_code
-            == 400
-        )
-        assert (
-            client.delete(f"{API}/reviews", params={"status": "ABORTED"}).status_code
-            == 400
-        )
+        open_resp = client.delete(f"{API}/reviews", params={"status": "OPEN"})
+        assert open_resp.status_code == 400, open_resp.text
+        aborted_resp = client.delete(f"{API}/reviews", params={"status": "ABORTED"})
+        assert aborted_resp.status_code == 400, aborted_resp.text
         # The OPEN review is still there — nothing was deleted.
         assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
     finally:
@@ -1093,11 +1093,14 @@ def test_scoped_token_cannot_delete_review():
         rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
         bearer = TestClient(server.api)
         headers = {"Authorization": f"Bearer {token}"}
-        assert bearer.delete(f"{API}/reviews/{rid}", headers=headers).status_code == 403
+        scoped_resp = bearer.delete(f"{API}/reviews/{rid}", headers=headers)
+        assert scoped_resp.status_code == 403, scoped_resp.text
         # The rejected call must not have deleted the session.
         assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
         # Owner deletes fine.
-        assert client.delete(f"{API}/reviews/{rid}").json() == {"deleted": 1}
+        owner_resp = client.delete(f"{API}/reviews/{rid}")
+        assert owner_resp.status_code == 200, owner_resp.text
+        assert owner_resp.json() == {"deleted": 1}
     finally:
         _teardown(temp_dir, server)
 
@@ -1209,6 +1212,105 @@ def test_scoped_token_cannot_abort_review():
         assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
         # Owner aborts fine.
         assert client.post(f"{API}/reviews/{rid}/abort").json()["status"] == "ABORTED"
+    finally:
+        _teardown(temp_dir, server)
+
+
+# --- The three review READ endpoints, both directions ------------------------
+#
+# The write-side scoped-token tests above are the easy half. These three are the
+# data-egress half: /reviews/{id}/suggestions in particular serves twin +
+# up-to-k neighbour picture ids, per-picture tag bits, and (since the locked-set
+# work) picture-set NAMES — all of which routinely fall outside a share token's
+# grant, which is why the whole surface is owner-only. The gate is correct today
+# but was untested on the reads, i.e. one refactor from being a silent hole.
+# Each test asserts BOTH directions: scoped token 403, owner still 200 with a
+# populated payload (over-blocking is its own regression).
+
+
+def test_scoped_token_cannot_read_reviews():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        client.post(f"{API}/reviews", json={"tag": TAG})
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        scoped_resp = bearer.get(f"{API}/reviews", headers=headers)
+        assert scoped_resp.status_code == 403, scoped_resp.text
+        # Owner still lists the session — no over-blocking.
+        owner_resp = client.get(f"{API}/reviews")
+        assert owner_resp.status_code == 200, owner_resp.text
+        assert len(owner_resp.json()) == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_read_review_detail():
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        scoped_resp = bearer.get(f"{API}/reviews/{rid}", headers=headers)
+        assert scoped_resp.status_code == 403, scoped_resp.text
+        # A scoped token must not be able to distinguish "forbidden" from
+        # "missing" either — a 404 here would confirm/deny review ids.
+        assert bearer.get(f"{API}/reviews/999999", headers=headers).status_code == 403
+        owner_resp = client.get(f"{API}/reviews/{rid}")
+        assert owner_resp.status_code == 200, owner_resp.text
+        assert owner_resp.json()["id"] == rid
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scoped_token_cannot_read_review_suggestions():
+    """The one new data-egress path in the locked-sets work.
+
+    The owner side additionally asserts the cards still carry ``locked_sets``,
+    so the 403 above cannot be "fixed" by quietly emptying the payload.
+    """
+    temp_dir, client, server, _set_id, token = _scoped_token_env()
+    try:
+        rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token}"}
+        scoped_resp = bearer.get(f"{API}/reviews/{rid}/suggestions", headers=headers)
+        assert scoped_resp.status_code == 403, scoped_resp.text
+        assert scoped_resp.json()["detail"] == "Not available to this token"
+
+        # Owner side: the queue is served in full. These are exactly the fields
+        # the gate exists to withhold — the twin's id and the neighbourhood ids.
+        owner_resp = client.get(f"{API}/reviews/{rid}/suggestions")
+        assert owner_resp.status_code == 200, owner_resp.text
+        cards = owner_resp.json()
+        assert cards, "owner must still get the queue"
+        card = cards[0]
+        assert card["twin_picture_id"] is not None
+
+        # Lock a set holding the twin: the owner's card must still NAME it.
+        # (The suspect is deliberately left unlocked — a locked suspect is
+        # filtered out of the PENDING queue entirely, so it could not carry a
+        # name to assert on.)
+        twin_set = client.post(
+            f"{API}/picture_sets", json={"name": "TwinFrozen"}
+        ).json()["picture_set"]["id"]
+        assert (
+            client.post(
+                f"{API}/picture_sets/{twin_set}/members/{card['twin_picture_id']}"
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch(
+                f"{API}/picture_sets/{twin_set}", json={"locked": True}
+            ).status_code
+            == 200
+        )
+        locked_cards = client.get(f"{API}/reviews/{rid}/suggestions").json()
+        assert any(
+            c.get("twin_locked")
+            and any(s["name"] == "TwinFrozen" for s in c.get("twin_locked_sets", []))
+            for c in locked_cards
+        ), "owner must still see the locking set names on the cards"
     finally:
         _teardown(temp_dir, server)
 

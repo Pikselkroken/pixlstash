@@ -1488,6 +1488,115 @@ def test_scoped_token_filter_cannot_widen_to_other_set():
         gc.collect()
 
 
+def _suggestion_id_for(server, picture_id):
+    """The id of the (single) seeded suggestion for *picture_id*."""
+
+    def fetch(session):
+        return session.exec(
+            select(TagSuggestion.id).where(TagSuggestion.picture_id == picture_id)
+        ).first()
+
+    return server.vault.db.run_immediate_read_task(fetch)
+
+
+def _set_twin(server, suggestion_id, twin_picture_id, twin_sim=0.97):
+    """Point an existing suggestion at a twin, reason string included.
+
+    The reason mirrors what ``tag_scan_service`` actually writes — it embeds the
+    twin's id and similarity — because that free-text field is a twin attribute
+    too and is part of what must be redacted.
+    """
+
+    def update(session):
+        row = session.get(TagSuggestion, suggestion_id)
+        row.twin_picture_id = twin_picture_id
+        row.twin_sim = twin_sim
+        row.reason = (
+            f"near-twin {twin_picture_id} (sim {twin_sim:.3f}) disagrees; "
+            "80% of nearest neighbours have the tag"
+        )
+        session.add(row)
+        session.commit()
+
+    server.vault.db.run_task(update)
+
+
+def test_scoped_token_list_redacts_out_of_scope_twin():
+    """A suggestion is a *pair*; the scope filter only constrains the suspect.
+
+    Without redaction a Set-A token learns the id, existence, file type,
+    perceptual similarity and model confidence of a Set-B picture — and the
+    ``reason`` string spells the id out in prose. Iterating tags would enumerate
+    picture ids across the vault. This is the same disclosure that made
+    ``GET /reviews/{id}/suggestions`` owner-only; the reasoning is applied here
+    rather than left at the module boundary.
+    """
+    temp_dir, client, server, _set_a, _set_b, pic_a, pic_b, token_a = (
+        _setup_scoped_token_env()
+    )
+    try:
+        # The in-scope suspect's twin is the out-of-scope picture.
+        _set_twin(server, _suggestion_id_for(server, pic_a), pic_b)
+
+        bearer = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {token_a}"}
+        resp = bearer.get(f"{API}/tag_suggestions", headers=headers)
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert [r["picture_id"] for r in rows] == [pic_a]
+        row = rows[0]
+        # Every twin-derived attribute is withheld …
+        for field in (
+            "twin_picture_id",
+            "twin_sim",
+            "twin_ext",
+            "twin_tagger_confidence",
+        ):
+            assert row[field] is None, f"{field} leaked an out-of-scope twin"
+        # … including the one hiding in prose.
+        assert str(pic_b) not in (row["reason"] or "")
+        # The suspect's own fields are untouched — this is a redaction, not a
+        # blanket blanking of the card.
+        assert row["tag"] == "malformed hand"
+        assert row["picture_ext"]
+
+        # Owner sees the full pair — over-blocking is its own regression.
+        owner_rows = client.get(
+            f"{API}/tag_suggestions", params={"tag": "malformed hand"}
+        ).json()
+        assert owner_rows[0]["twin_picture_id"] == pic_b
+        assert owner_rows[0]["twin_sim"] == 0.97
+        assert str(pic_b) in owner_rows[0]["reason"]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_owner_filter_does_not_redact_own_twin():
+    """Redaction keys on the TOKEN scope, never the user's filter narrowing.
+
+    An owner narrowing the queue to Set A still owns Set B's picture, so their
+    twin must survive. Guards against wiring the redaction to
+    ``_resolve_review_picture_ids`` (scope ∩ filter) instead of the raw scope.
+    """
+    temp_dir, client, server, set_a, _set_b, pic_a, pic_b, _token = (
+        _setup_scoped_token_env()
+    )
+    try:
+        _set_twin(server, _suggestion_id_for(server, pic_a), pic_b)
+        rows = client.get(
+            f"{API}/tag_suggestions",
+            params={"tag": "malformed hand", "set_id": set_a},
+        ).json()
+        assert rows[0]["twin_picture_id"] == pic_b
+        assert str(pic_b) in rows[0]["reason"]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def _force_variable_limit(server, limit=999):
     """Pin every DB connection's ``SQLITE_LIMIT_VARIABLE_NUMBER`` to *limit*.
 

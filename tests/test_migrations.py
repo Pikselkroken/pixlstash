@@ -233,3 +233,88 @@ def test_alembic_0051_migrates_deleted_file_log_to_path_sha():
             assert rows[1][0] != "/private/ref/secret.png"
         finally:
             conn.close()
+
+
+def test_alembic_0075_leaves_existing_ground_truth_null():
+    """A deployed tag_health cache upgraded across 0075 gets NULL, never 0.
+
+    The board's zero-yield gate treats ``ground_truth === 0 && est_missing === 0``
+    as *proof* that a review would yield nothing and disables "Start review". A
+    ``server_default="0"`` backfill would make every pre-existing row assert that
+    proof it does not have, disabling the button vault-wide until the next
+    rebuild. NULL means "not measured", which the gate leaves alone — absence of
+    evidence is not evidence of emptiness.
+
+    Only a real deployed DB ever hits this path: a fresh DB builds tag_health
+    from the current model, so the column already exists and 0075 is a no-op.
+    Reproduced by hand-building the pre-0075 table and stamping 0074.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE tag_health (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    tag VARCHAR NOT NULL,
+                    est_wrong INTEGER NOT NULL,
+                    est_missing INTEGER NOT NULL,
+                    est_wrong_adj FLOAT,
+                    est_missing_adj FLOAT,
+                    mismatch INTEGER NOT NULL,
+                    verified_pct FLOAT NOT NULL,
+                    boundary_pct FLOAT NOT NULL,
+                    overturn_rate FLOAT,
+                    model_disputes INTEGER NOT NULL,
+                    has_model BOOLEAN NOT NULL,
+                    last_reviewed_at DATETIME,
+                    computed_at DATETIME
+                );
+                CREATE UNIQUE INDEX ix_tag_health_tag ON tag_health (tag);
+                CREATE TABLE alembic_version (version_num VARCHAR NOT NULL);
+                INSERT INTO alembic_version (version_num)
+                    VALUES ('0074_recompute_tag_health_exclude_human_decisions');
+                INSERT INTO tag_health
+                    (tag, est_wrong, est_missing, mismatch, verified_pct,
+                     boundary_pct, model_disputes, has_model, computed_at)
+                    VALUES ('malformed hand', 3, 0, 0, 0.5, 0.1, 0, 1,
+                            '2026-07-01 00:00:00');
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert result.returncode == 0, (
+            f"upgrade failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        conn = sqlite3.connect(db_path)
+        try:
+            info = {
+                r[1]: r
+                for r in conn.execute("PRAGMA table_info(tag_health)").fetchall()
+            }
+            assert "ground_truth" in info, "0075 must add ground_truth"
+            # notnull flag (index 3) must be 0 and there must be no default (4).
+            assert info["ground_truth"][3] == 0, "ground_truth must be nullable"
+            assert info["ground_truth"][4] is None, (
+                "ground_truth must have no server default — a 0 default is "
+                "indistinguishable from a measured zero"
+            )
+            row = conn.execute(
+                "SELECT ground_truth, est_missing, computed_at FROM tag_health"
+            ).fetchone()
+            assert row[0] is None, (
+                "a pre-0075 row must read NULL, not 0: with est_missing == 0 a "
+                "backfilled 0 would disable 'Start review' for this tag"
+            )
+            assert row[1] == 0
+            # …and the cache is marked stale so a rebuild fills in the real count.
+            assert row[2].startswith("1970-01-01")
+        finally:
+            conn.close()

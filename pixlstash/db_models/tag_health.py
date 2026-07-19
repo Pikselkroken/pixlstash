@@ -44,7 +44,8 @@ class TagHealth(SQLModel, table=True):
             DEFAULT_TAG_MERGES-folded like every other signal, so it matches
             the equivalence set ``tag_scan_service.scan_tag`` votes against.
             ``0`` means a review would fall back to the confidence-only
-            bootstrap path.
+            bootstrap path. ``None`` means the row predates this field and has
+            not been rebuilt yet — *not* zero.
     """
 
     __tablename__ = "tag_health"
@@ -68,8 +69,11 @@ class TagHealth(SQLModel, table=True):
     has_model: bool = Field(default=False)
     # Count of distinct non-deleted pictures carrying the folded tag (see class
     # docstring). Zero is load-bearing: it is what lets the board tell the user a
-    # review would find nothing before they start one.
-    ground_truth: int = Field(default=0)
+    # review would find nothing before they start one. Nullable precisely so a
+    # measured 0 stays distinguishable from "this row predates the field" — a
+    # backfilled 0 would make the board claim zero yield for every stale row.
+    # Every rebuild writes a real int; NULL only ever appears pre-rebuild.
+    ground_truth: Optional[int] = Field(default=None)
 
     # Latest reviewed_at over the tag's suggestions (any source); NULL when the
     # tag has never had a suggestion reviewed ("Last review: never").

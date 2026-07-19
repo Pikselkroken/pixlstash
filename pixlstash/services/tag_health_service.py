@@ -61,7 +61,10 @@ Signal definitions (thresholds are module constants, deliberately fixed for now
   implies ``scan_tag``'s ``n_ground_truth == 0`` (the board counts every
   non-deleted in-scope picture; ``scan_tag`` counts the subset of those that
   also have an embedding), which is the direction the board's
-  "this review would find nothing" gate depends on.
+  "this review would find nothing" gate depends on. Every rebuild writes a real
+  integer; a **NULL** ``ground_truth`` can only appear on a cached row written
+  before the column existed and means "not measured", never "zero" — the gate
+  must not fire on it (see migration ``0075``).
 
 Every signal above folds child tags into their parent per
 :data:`~pixlstash.db_models.tag.DEFAULT_TAG_MERGES` before grouping — the same

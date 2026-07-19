@@ -9,10 +9,19 @@ aggregate, so ``ground_truth == 0 and est_missing == 0`` proves an empty scan.
 
 Additive column on a derived cache — ``tag_health`` rows are wholesale replaced
 by every rebuild (``tag_health_service.rebuild_tag_health`` DELETEs the table
-before reinserting), so no backfill or NULL-reset is needed; existing rows carry
-the ``0`` server default until the next rebuild. ``computed_at`` is reset to the
+before reinserting), so no backfill is needed. ``computed_at`` is reset to the
 epoch so ``is_stale`` reports the cache as stale and the auto-rebuild finder
 refreshes it with real counts.
+
+The column is **nullable with no server default**, deliberately. A ``0`` here
+would be a placeholder that is indistinguishable from a measured zero, and the
+board's zero-yield gate (``tagHealthBoardLogic.zeroYieldReason``) treats
+``ground_truth === 0 && est_missing === 0`` as proof that a review would yield
+nothing and disables "Start review". Backfilling ``0`` would therefore disable
+the button vault-wide for every pre-existing row until the next rebuild landed.
+``NULL`` serializes as ``null``/``undefined``, which the gate already treats as
+"no measurement yet" and leaves the button enabled — absence of evidence is not
+evidence of emptiness.
 
 Revision ID: 0075_add_tag_health_ground_truth
 Revises: 0074_recompute_tag_health_exclude_human_decisions
@@ -46,10 +55,10 @@ def upgrade() -> None:
     if "ground_truth" not in existing_cols:
         op.add_column(
             "tag_health",
-            sa.Column("ground_truth", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("ground_truth", sa.Integer(), nullable=True),
         )
-        # Existing rows now hold a placeholder 0 rather than a real count; mark
-        # the cache stale so the next rebuild recomputes it.
+        # Existing rows now hold NULL ("not measured yet"), distinguishable from
+        # a real 0; mark the cache stale so the next rebuild fills in real counts.
         op.execute(sa.text("UPDATE tag_health SET computed_at = '1970-01-01 00:00:00'"))
 
 

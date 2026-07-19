@@ -67,6 +67,7 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_character_ids,
     fetch_scope_allowed_picture_ids,
+    fetch_scope_allowed_set_ids,
     VALID_COMBINE_MODES,
 )
 from pixlstash.utils.service.serialization_utils import safe_model_dict
@@ -176,7 +177,27 @@ class PictureFullMetadataResponse(BaseModel):
     tags: Optional[list] = None
     smartScore: Optional[float] = None
     metadata: Optional[dict] = None
-    locked_by_sets: list[dict] = []
+    locked: bool = Field(
+        default=False,
+        description=(
+            "True when a locked picture set freezes this picture's label data "
+            "(directly, or through a stack sibling). This is the authoritative "
+            "'is it frozen' signal and is always accurate, even for a share token "
+            "that may not see the locking set — use it to disable editing "
+            "controls. ``locked_by_sets`` may be empty while this is true."
+        ),
+    )
+    locked_by_sets: list[dict] = Field(
+        default=[],
+        description=(
+            "The locked sets freezing this picture, as ``{id, name}``, restricted "
+            "to the sets the caller's token may see (owner/unscoped sees all). A "
+            "resource-scoped share token is not told the id or the user-authored "
+            "name of a locked set outside its grant, so this list can be empty "
+            "while ``locked`` is true — render the 'Locked by <names>' detail only "
+            "when it is non-empty, and never derive locked-ness from its length."
+        ),
+    )
 
 
 class PictureFaceResponse(BaseModel):
@@ -1093,9 +1114,23 @@ def register_routes(router, server):
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
         # Locked sets freezing this picture, so the overlay can show the reason
         # without a second request.
-        pic_dict["locked_by_sets"] = server.vault.db.run_immediate_read_task(
+        #
+        # `enforce_picture_scope` above authorizes the *picture*; it says nothing
+        # about the related entities named in its payload. A set-scoped token may
+        # legitimately read a picture that is also a member of some other, private
+        # locked set, and that set's user-authored name (which routinely carries a
+        # client / project / subject identifier) is not obtainable from
+        # `GET /picture_sets`. So the *fact* of the freeze is disclosed —
+        # `locked` is what the UI needs to disable the right controls — while the
+        # names are filtered down to the sets this token may actually see.
+        locked_sets = server.vault.db.run_immediate_read_task(
             locked_by_sets_for_picture, pic.id
         )
+        pic_dict["locked"] = bool(locked_sets)
+        visible_set_ids = fetch_scope_allowed_set_ids(server, request)
+        if visible_set_ids is not None:
+            locked_sets = [s for s in locked_sets if s["id"] in visible_set_ids]
+        pic_dict["locked_by_sets"] = locked_sets
 
         if smart_score:
             pic_dict["smartScore"] = pic.smart_score  # already stored in DB

@@ -49,8 +49,8 @@ class TagHealthRowResponse(BaseModel):
     overturn_rate: Optional[float] = None
     model_disputes: int = 0
     has_model: bool = False
-    ground_truth: int = Field(
-        default=0,
+    ground_truth: Optional[int] = Field(
+        default=None,
         description=(
             "How many pictures (not tag rows) carry this tag — the tag's confirmed "
             "examples. Counts DISTINCT non-deleted pictures holding any literal tag "
@@ -60,8 +60,10 @@ class TagHealthRowResponse(BaseModel):
             "a scoped response. Zero means a review of this tag has no ground truth "
             "to vote against: the scan falls back to model confidence alone, so "
             "ground_truth == 0 together with est_missing == 0 proves a review would "
-            "yield no items. 0 on a row that predates this field, until the next "
-            "rebuild."
+            "yield no items. **Null** on a cached row that predates this field, "
+            "until the next rebuild — null means 'not measured', which is NOT the "
+            "same as 0 and must never be treated as proof of zero yield. A scoped "
+            "response is always computed live and so is never null."
         ),
     )
     # Latest reviewed_at over the tag's suggestions; null = never reviewed.

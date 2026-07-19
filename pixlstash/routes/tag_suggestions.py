@@ -23,7 +23,16 @@ logger = get_logger(__name__)
 
 
 class TagSuggestionItemResponse(BaseModel):
-    """A single suspected label fix in the review queue."""
+    """A single suspected label fix in the review queue.
+
+    **Twin fields are scope-redacted.** For a resource-scoped share token whose
+    grant does not cover the twin picture, ``twin_picture_id``, ``twin_sim``,
+    ``twin_ext`` and ``twin_tagger_confidence`` are ``null`` and ``reason`` is
+    replaced with a generic string — the twin's identity is not the token's to
+    learn. An owner/unscoped caller always gets the full pair. Clients already
+    handle a twinless row (the confidence-only bootstrap path emits one), so a
+    redacted row needs no special casing.
+    """
 
     model_config = ConfigDict(extra="allow")
 
@@ -172,6 +181,61 @@ def _serialize(s: TagSuggestion) -> dict:
     }
 
 
+# Stand-in for a `reason` string that names an out-of-scope twin. The scan writes
+# the twin's id and similarity (or dhash distance) straight into `reason` — see
+# `tag_scan_service._scan`'s "near-twin {id} (sim …)" / "near-duplicate twin {id}
+# (dhash hamming …)" strings — so the free-text field is a twin attribute too, and
+# redacting only the structured `twin_*` fields would leave the id in plain sight.
+REDACTED_TWIN_REASON = "a near-twin outside this share disagrees with this label"
+
+# Every attribute of the *twin* picture this payload carries. Enumerated (rather
+# than pattern-matched on a `twin_` prefix) so that adding a twin-derived field
+# without adding it here is a visible omission in review. `reason` is handled
+# separately because it is redacted to a replacement string, not to None.
+TWIN_DERIVED_FIELDS = (
+    "twin_picture_id",
+    "twin_sim",
+    "twin_ext",
+    "twin_tagger_confidence",
+)
+
+
+def _redact_out_of_scope_twin(item: dict, scope_ids: set[int] | None) -> dict:
+    """Strip every twin-picture attribute when the twin is outside the token scope.
+
+    The list filter (``_resolve_review_picture_ids``) constrains
+    ``TagSuggestion.picture_id`` — the *suspect* — only. A suggestion is a pair,
+    and the twin routinely sits outside a share token's grant, so serving the row
+    unmodified discloses the id, existence, file type, perceptual similarity and
+    model confidence of a picture the token may not see; iterating tags would
+    enumerate picture ids across the vault. This is the same reasoning that made
+    ``GET /reviews/{id}/suggestions`` owner-only (``routes/reviews.py``), applied
+    here rather than left at the module seam.
+
+    Args:
+        item: A serialized suggestion dict (mutated in place and returned).
+        scope_ids: Picture ids the **token** may see, from
+            ``fetch_scope_allowed_picture_ids``. ``None`` (owner/unscoped) is a
+            no-op — note this must be the raw token scope, never the
+            user-filter intersection, or an owner narrowing the queue by
+            project/set would have their own twins redacted.
+
+    Returns:
+        The same dict. Rows with no twin, and every row for an unscoped caller,
+        are returned untouched.
+    """
+    if scope_ids is None:
+        return item
+    twin_id = item.get("twin_picture_id")
+    if twin_id is None or int(twin_id) in scope_ids:
+        return item
+    for field in TWIN_DERIVED_FIELDS:
+        item[field] = None
+    if item.get("reason"):
+        item["reason"] = REDACTED_TWIN_REASON
+    return item
+
+
 def _resolve_review_picture_ids(
     server,
     request: Request,
@@ -276,6 +340,10 @@ def create_router(server) -> APIRouter:
             if s.twin_picture_id is not None:
                 pairs.append((s.twin_picture_id, s.tag))
         confs = tag_suggestion_service.get_tagger_confidences(server.vault, pairs)
+        # The token's own scope, NOT `picture_ids` (which also folds in the
+        # caller's project/set/character narrowing) — an owner filtering the queue
+        # must still see their twins.
+        token_scope_ids = fetch_scope_allowed_picture_ids(server, request)
         out = []
         for s in suggestions:
             item = _serialize(s)
@@ -283,7 +351,7 @@ def create_router(server) -> APIRouter:
             item["twin_ext"] = exts.get(s.twin_picture_id, "")
             item["tagger_confidence"] = confs.get((s.picture_id, s.tag))
             item["twin_tagger_confidence"] = confs.get((s.twin_picture_id, s.tag))
-            out.append(item)
+            out.append(_redact_out_of_scope_twin(item, token_scope_ids))
         return out
 
     @router.post(
@@ -453,9 +521,16 @@ def create_router(server) -> APIRouter:
                 ids.append(s["picture_id"])
                 ids.append(s.get("twin_picture_id"))
             exts = tag_suggestion_service.get_picture_exts(server.vault, ids)
+            # Same twin-disclosure rule as the GET listing. Unreachable by a
+            # scoped token today (POST + a READ token is refused by the auth
+            # middleware, and "scoped" implies "READ" since ALL+resource_type is
+            # refused at mint), but that equivalence is load-bearing and lives two
+            # modules away — redact here so this payload is safe on its own terms.
+            token_scope_ids = fetch_scope_allowed_picture_ids(server, request)
             for s in result["sample"]:
                 s["picture_ext"] = exts.get(s["picture_id"], "")
                 s["twin_ext"] = exts.get(s.get("twin_picture_id"), "")
+                _redact_out_of_scope_twin(s, token_scope_ids)
         if not payload.dry_run:
             origin_client_id = getattr(request.state, "origin_client_id", None)
             _notify_changed(server, result["picture_ids"], origin_client_id)
