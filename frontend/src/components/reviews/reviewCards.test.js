@@ -43,6 +43,9 @@ function lockPictures(name, pictureIds) {
 
 // jsdom has no ResizeObserver; ReviewBinaryCard observes its <img>.
 globalThis.ResizeObserver = class {
+  // Real ResizeObserver takes a callback; accept and ignore it so callers can
+  // construct the stub the same way (no observations fire in jsdom).
+  constructor(_callback) {}
   observe() {}
   unobserve() {}
   disconnect() {}

@@ -1112,18 +1112,15 @@ def test_scoped_token_cannot_clear_archived_reviews():
         assert client.post(f"{API}/reviews/{rid}/archive").status_code == 200
         bearer = TestClient(server.api)
         headers = {"Authorization": f"Bearer {token}"}
-        assert (
-            bearer.delete(
-                f"{API}/reviews", params={"status": "ARCHIVED"}, headers=headers
-            ).status_code
-            == 403
+        scoped_delete_resp = bearer.delete(
+            f"{API}/reviews", params={"status": "ARCHIVED"}, headers=headers
         )
+        assert scoped_delete_resp.status_code == 403
         # The rejected call must not have deleted the archived session.
         assert client.get(f"{API}/reviews/{rid}").json()["status"] == "ARCHIVED"
         # Owner clears fine.
-        assert client.delete(
-            f"{API}/reviews", params={"status": "ARCHIVED"}
-        ).json() == {"deleted": 1}
+        owner_resp = client.delete(f"{API}/reviews", params={"status": "ARCHIVED"})
+        assert owner_resp.json() == {"deleted": 1}
     finally:
         _teardown(temp_dir, server)
 
