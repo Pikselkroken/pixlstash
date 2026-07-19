@@ -36,6 +36,7 @@ from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
 from pixlstash.picture_scoring import fetch_anomaly_confidences
 from pixlstash.utils.quality.anomaly_penalty import (
     ANOMALY_FAMILIES,
+    ANOMALY_PENALTY_TAGS,
     _family_max_weights,
     normalise_tag_weights,
 )
@@ -273,6 +274,68 @@ def invalidate_for_penalised_tag_change(
         "(%s), cleared %d cached score(s) for recompute.",
         len(tags),
         ", ".join(tags),
+        cleared,
+    )
+    return cleared
+
+
+def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
+    """NULL the cached score of every picture that carries an anomaly prediction.
+
+    The tagger's ``threshold_offset`` moves *two* things at once for every anomaly
+    detection: the apply gate in
+    :func:`~pixlstash.picture_scoring.fetch_anomaly_confidences` (which decides whether a
+    model prediction reaches the scorer at all) and the acceptance threshold ``t`` that the
+    penalty normalises each detection against via ``u = (p - t) / (1 - t)``. A change to
+    the offset therefore invalidates *every* cached score that has an anomaly component,
+    regardless of which specific tag is involved — so this is deliberately not scoped by
+    tag the way :func:`invalidate_for_penalised_tag_change` is.
+
+    The set is still bounded to *anomaly-bearing* pictures rather than the whole vault:
+    the scorer's anomaly inputs come solely from :class:`TagPrediction` rows in the anomaly
+    vocabulary (:data:`~pixlstash.utils.quality.anomaly_penalty.ANOMALY_PENALTY_TAGS` —
+    exactly what ``fetch_anomaly_confidences`` reads). A picture with no such prediction has
+    no anomaly term, so the offset cannot have moved its score, and re-scoring it would be a
+    needless GPU-backed recompute. Predictions are matched without a confidence gate on
+    purpose: the offset shifts the gate itself, so a prediction sitting either side of the
+    old threshold can cross it and must be re-evaluated.
+
+    Issued as one bulk UPDATE per tag chunk with an ``IN (subquery)``, so no picture ids are
+    round-tripped into Python. Does **not** commit — the caller owns the transaction.
+
+    Args:
+        session: Active DB session.
+        context: Short description of the trigger, for the log line.
+
+    Returns:
+        Number of cached scores cleared.
+    """
+    tags = sorted(ANOMALY_PENALTY_TAGS)
+    if not tags:
+        logger.warning(
+            "Smart-score invalidation (%s): the anomaly vocabulary is empty; "
+            "no cached scores cleared.",
+            context,
+        )
+        return 0
+    cleared = 0
+    for chunk in _chunks(tags):
+        predicted = select(TagPrediction.picture_id).where(
+            func.lower(TagPrediction.tag).in_(chunk)
+        )
+        result = session.exec(
+            update(Picture)
+            .where(
+                Picture.smart_score.is_not(None),
+                Picture.id.in_(predicted),
+            )
+            .values(smart_score=None)
+        )
+        cleared += result.rowcount or 0
+    logger.info(
+        "Smart-score invalidation (%s): tagger threshold offset changed, cleared %d "
+        "cached anomaly-bearing score(s) for recompute.",
+        context,
         cleared,
     )
     return cleared

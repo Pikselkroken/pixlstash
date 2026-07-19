@@ -23,6 +23,7 @@ from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
     changed_penalised_tags,
+    invalidate_all_anomaly_scores,
     invalidate_for_penalised_tag_change,
 )
 from pixlstash.utils.service.user_settings_utils import (
@@ -353,7 +354,26 @@ def create_router(server) -> APIRouter:
             if raw:
                 try:
                     settings = _json.loads(raw)
+                    # The threshold offset moves both the anomaly apply gate and the
+                    # penalty's u = (p - t)/(1 - t) normalisation, so every cached score
+                    # with an anomaly component goes stale when it changes. Capture the
+                    # resolved offset either side of the apply and invalidate only on a
+                    # real move (an identical save must not re-score).
+                    old_offset = server.vault.get_pixlstash_tagger_threshold_offset()
                     server.vault.set_tagger_settings(settings)
+                    new_offset = server.vault.get_pixlstash_tagger_threshold_offset()
+                    if new_offset != old_offset:
+
+                        def _reset_anomaly_scores(session: Session) -> None:
+                            invalidate_all_anomaly_scores(
+                                session, context="tagger threshold offset config"
+                            )
+                            session.commit()
+
+                        server.vault.db.run_task(
+                            _reset_anomaly_scores, priority=DBPriority.LOW
+                        )
+                        server.vault.wake()
                 except (ValueError, TypeError) as exc:
                     logger.warning(
                         "Could not apply tagger_settings from patch: %s", exc

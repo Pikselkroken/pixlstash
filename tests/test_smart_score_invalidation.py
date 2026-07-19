@@ -33,6 +33,7 @@ from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
 from pixlstash.utils.service.smart_score_invalidation import (
     anomaly_state_signature,
     changed_penalised_tags,
+    invalidate_all_anomaly_scores,
     invalidate_for_penalised_tag_change,
 )
 from tests.utils import upload_pictures_and_wait
@@ -585,6 +586,109 @@ def test_patch_config_invalidates_only_pictures_with_the_changed_tag():
         _wait_for(lambda: _get_smart_score(server, carrier) is None)
         assert _get_smart_score(server, carrier) is None
         assert _get_smart_score(server, bystander) == 0.5
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+# --------------------------------------------- tagger threshold-offset config change
+#
+# The tagger's ``threshold_offset`` moves both the anomaly apply gate and the penalty's
+# ``u = (p - t)/(1 - t)`` normalisation, so every cached score with an anomaly component
+# goes stale when it changes. Unlike a penalised-tag re-weight it is not scoped by tag —
+# but it is still bounded to pictures that actually carry an anomaly ``TagPrediction``,
+# because a picture with no anomaly term cannot have moved.
+
+
+def _patch_threshold_offset(client, offset):
+    return client.patch(
+        "/users/me/config",
+        json={
+            "tagger_settings": {
+                "plugins": {
+                    "pixlstash_tagger": {"params": {"threshold_offset": offset}}
+                }
+            }
+        },
+    )
+
+
+def test_invalidate_all_anomaly_scores_clears_only_anomaly_bearing_pictures():
+    """The helper clears anomaly-bearing scores and leaves content-only / clean ones."""
+    temp_dir, client, server = _setup()
+    try:
+        anomaly = _upload_picture(client, "Bad1.png")
+        content_only = _upload_picture(client, "Bad2.png")
+        clean = _upload_picture(client, "Changed1.png")
+        for pic_id in (anomaly, content_only, clean):
+            _set_smart_score(server, pic_id, 0.5)
+
+        # Only the first carries an anomaly-vocabulary prediction; the second carries a
+        # pure content prediction; the third carries none.
+        _seed_prediction(server, anomaly, PENALISED_TAG, confidence=0.9)
+        _seed_prediction(server, content_only, CONTENT_TAG, confidence=0.9)
+
+        cleared = server.vault.db.run_task(
+            lambda s: (
+                invalidate_all_anomaly_scores(s, context="test"),
+                s.commit(),
+            )[0]
+        )
+        assert cleared == 1
+        assert _get_smart_score(server, anomaly) is None
+        assert _get_smart_score(server, content_only) == 0.5
+        assert _get_smart_score(server, clean) == 0.5
+
+        missing = _find_missing_ids(server)
+        assert anomaly in missing
+        assert content_only not in missing and clean not in missing
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_threshold_offset_change_invalidates_anomaly_scores_via_patch():
+    """End-to-end: changing the offset clears anomaly-bearing scores, spares the rest."""
+    temp_dir, client, server = _setup()
+    try:
+        anomaly = _upload_picture(client, "Bad1.png")
+        content_only = _upload_picture(client, "Bad2.png")
+        for pic_id in (anomaly, content_only):
+            _set_smart_score(server, pic_id, 0.5)
+        _seed_prediction(server, anomaly, PENALISED_TAG, confidence=0.9)
+        _seed_prediction(server, content_only, CONTENT_TAG, confidence=0.9)
+
+        # Default offset is 0.0; move it so the anomaly normalisation shifts.
+        assert _patch_threshold_offset(client, 0.15).status_code == 200
+
+        assert _wait_for(lambda: _get_smart_score(server, anomaly) is None)
+        assert _get_smart_score(server, anomaly) is None
+        assert _get_smart_score(server, content_only) == 0.5
+        assert anomaly in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_identical_threshold_offset_save_is_a_noop():
+    """Re-saving the same offset must not re-score — the guard is on a real move."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.9)
+
+        # Establish a non-default offset first, then score the picture.
+        assert _patch_threshold_offset(client, 0.2).status_code == 200
+        _set_smart_score(server, pic_id, 0.5)
+
+        # Saving the identical offset again is a no-op: the score must survive.
+        assert _patch_threshold_offset(client, 0.2).status_code == 200
+        # Give the LOW queue a chance to (wrongly) run before asserting it did not.
+        assert not _wait_for(
+            lambda: _get_smart_score(server, pic_id) is None, timeout=1.0
+        )
+        assert _get_smart_score(server, pic_id) == 0.5
+        assert pic_id not in _find_missing_ids(server)
     finally:
         server.vault.close()
         temp_dir.cleanup()
