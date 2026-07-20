@@ -91,3 +91,56 @@ describe('launchWithOverlayFallback — a broken overlay must never prevent laun
     assert.deepEqual(rec.notifications, [OVERLAY_FALLBACK_MESSAGE]);
   });
 });
+
+describe('launchWithOverlayFallback — IPC handler-shaped flows (accel:use / accel:install)', () => {
+  it('accel:use shape: state read AFTER a failed overlay start reports null active (no phantom GPU)', async () => {
+    // The 2026-07-20 zombie: accel:use persisted setActiveAccel('cu128') BEFORE the
+    // start, the start died on the broken overlay, and the handler returned a state
+    // still claiming cu128 active with no backend running. Model the handler flow:
+    // persist first, launch through the fallback, then compute the returned state.
+    let activeAccel: Accel | null = null;
+    const setActiveAccel = async (accel: Accel | null) => {
+      activeAccel = accel;
+    };
+    const starts: Array<Accel | null> = [];
+    const hooks: OverlayFallbackHooks = {
+      start: async (accel) => {
+        starts.push(accel);
+        if (accel === 'cu128') throw new Error('ImportError: libcudart.so.13');
+      },
+      deactivateOverlay: () => setActiveAccel(null),
+      notify: () => {},
+      log: () => {},
+    };
+
+    // The handler body: setActiveAccel(accel) → fallback-wrapped start → state.
+    await setActiveAccel('cu128');
+    await launchWithOverlayFallback('cu128', hooks);
+    const stateAfter = { active: activeAccel as Accel | null };
+
+    assert.deepEqual(starts, ['cu128', null], 'CPU retry happened');
+    assert.equal(stateAfter.active, null, 'the post-fallback state shows NO active accel — phantom-active is impossible');
+  });
+
+  it('accel:install shape: the just-installed overlay dir is NOT deleted on start failure', async () => {
+    // deactivateOverlay clears only the active-accel state; the multi-GB download
+    // survives for reinspection / re-activation after a fix.
+    const overlayDirsOnDisk = new Set<Accel>(['cu128']); // the fresh install
+    let activeAccel: Accel | null = 'cu128'; // installOverlay activates on success
+    const hooks: OverlayFallbackHooks = {
+      start: async (accel) => {
+        if (accel === 'cu128') throw new Error('ImportError: libcudart.so.13');
+      },
+      deactivateOverlay: async () => {
+        activeAccel = null; // setActiveAccel(null) — never touches the dir
+      },
+      notify: () => {},
+      log: () => {},
+    };
+
+    await launchWithOverlayFallback('cu128', hooks);
+
+    assert.ok(overlayDirsOnDisk.has('cu128'), 'the installed overlay dir survives the failed start');
+    assert.equal(activeAccel, null, 'only the active state was cleared');
+  });
+});

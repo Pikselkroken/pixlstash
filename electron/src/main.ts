@@ -499,7 +499,7 @@ async function writeServerSettings(settings: ServerSettings): Promise<void> {
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
   // Keep the tray's "Enable server" checkbox in sync with the new config.
   refreshTrayMenu();
-  await startAndLoad(await activeOverlayAccel());
+  await startWithOverlayFallback(await activeOverlayAccel());
 }
 
 function buildMenu(): void {
@@ -598,7 +598,9 @@ async function changeBackendsLocation(rawDir: string): Promise<void> {
   // move itself succeeded.
   if (active) {
     try {
-      await startAndLoad(active);
+      // Fallback-wrapped: if the (moved) overlay fails to start, the user still
+      // gets a running CPU app + the dialog instead of a dead backend.
+      await startWithOverlayFallback(active);
     } catch (relaunchErr) {
       if (!moveError) throw relaunchErr;
     }
@@ -655,6 +657,25 @@ async function activeOverlayAccel(): Promise<Accel | null> {
   return null;
 }
 
+/**
+ * Launch (or relaunch) the backend with `accel`, falling back to the bundled
+ * CPU/Metal env when startup fails while a GPU overlay is active: deactivate the
+ * overlay (dir kept on disk for reinstall/inspection), show the fallback dialog,
+ * retry once on CPU (see {@link launchWithOverlayFallback}). EVERY launch site
+ * that can start with a non-null overlay must go through this wrapper — a broken
+ * overlay must never leave the app dead, and because the fallback ends with the
+ * active-accel state cleared, a state read AFTER the launch can never report a
+ * phantom-active GPU with no backend running (the accel:use zombie, 2026-07-20).
+ * With `accel === null` a failure rethrows unchanged (nothing to fall back from).
+ */
+async function startWithOverlayFallback(accel: Accel | null): Promise<void> {
+  await launchWithOverlayFallback(accel, {
+    start: startAndLoad,
+    deactivateOverlay: () => manager.setActiveAccel(null),
+    notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
+  });
+}
+
 /** Launch: dev passthrough, or the bundled env (+ active GPU overlay), straight into the library. */
 async function boot(): Promise<void> {
   try {
@@ -683,11 +704,7 @@ async function boot(): Promise<void> {
     // fails with an overlay active, deactivate it (dir kept for reinstall), tell
     // the user, and retry once on the bundled CPU/Metal env. If that also fails,
     // the error falls through to the fatal phase below as before.
-    await launchWithOverlayFallback(await activeOverlayAccel(), {
-      start: startAndLoad,
-      deactivateOverlay: () => manager.setActiveAccel(null),
-      notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
-    });
+    await startWithOverlayFallback(await activeOverlayAccel());
   } catch (e) {
     sendPhase({ phase: 'error', message: (e as Error).message });
   }
@@ -833,7 +850,7 @@ function registerIpc(): void {
         await manager.setActiveAccel(null);
       }
 
-      await startAndLoad(await activeOverlayAccel());
+      await startWithOverlayFallback(await activeOverlayAccel());
     },
   );
 
@@ -895,19 +912,30 @@ function registerIpc(): void {
     await manager.installOverlay(accel, runtime, (p) =>
       mainWindow?.webContents.send('install:progress', p),
     );
-    await startAndLoad(accel);
+    // If the freshly-installed overlay fails to start, fall back to CPU — the
+    // just-downloaded dir is kept (only the active state is cleared), and the
+    // state returned below is computed AFTER, so it reflects the real outcome.
+    await startWithOverlayFallback(accel);
     return acceleratorState();
   });
 
   ipcMain.handle('accel:use', async (_e, accel: Accel | null) => {
+    // setActiveAccel BEFORE the start is fine only because the fallback wrapper
+    // guarantees a failed overlay start ends with the active state cleared
+    // (deactivateOverlay) and a CPU backend running — and acceleratorState() is
+    // computed AFTER, so the UI can never show a phantom-active GPU over a dead
+    // backend (the 2026-07-20 zombie: active-accel.json said cu128, no server).
     await manager.setActiveAccel(accel);
-    await startAndLoad(accel);
+    await startWithOverlayFallback(accel);
     return acceleratorState();
   });
 
   ipcMain.handle('accel:remove', async (_e, accel: Accel) => {
     await manager.remove(accel);
-    await startAndLoad(await activeOverlayAccel());
+    // Relaunch on whatever remains active (another overlay or null). A remaining
+    // overlay that fails to start falls back to CPU; a null start failure
+    // rethrows to the IPC caller unchanged, as before.
+    await startWithOverlayFallback(await activeOverlayAccel());
     return acceleratorState();
   });
 }
