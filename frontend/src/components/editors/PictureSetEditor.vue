@@ -2,7 +2,7 @@
   <AppDialog
     :open="open"
     :title="set?.id ? 'Edit picture set' : 'New picture set'"
-    :width="640"
+    :width="660"
     @close="emit('close')"
   >
     <div class="editor-body">
@@ -102,10 +102,11 @@
                 @click="localSet.set_icon = ICON_CARDS"
               >
                 <img
-                  v-if="props.thumbnailUrl"
+                  v-if="props.thumbnailUrl && !thumbnailBroken"
                   :src="props.thumbnailUrl"
                   class="icon-btn-thumb"
                   alt="Thumbnail"
+                  @error="thumbnailBroken = true"
                 />
                 <v-icon
                   v-else
@@ -214,6 +215,16 @@ const localSet = ref({
 const isLockedSet = computed(() => !!props.set?.locked);
 
 const nameInputRef = ref(null);
+
+// An empty set's thumbnail URL 404s; hide the <img> on error so the create
+// path's mdi-layers-triple fallback shows instead of a broken-image glyph.
+const thumbnailBroken = ref(false);
+watch(
+  () => props.thumbnailUrl,
+  () => {
+    thumbnailBroken.value = false;
+  },
+);
 
 const isValid = computed(() => {
   return localSet.value.name && localSet.value.name.trim().length > 0;
@@ -488,11 +499,11 @@ watch(
 
 .icon-grid {
   display: grid;
-  /* Fit however many 32px icon columns the remaining width holds — a fixed
-     repeat(8, 1fr) can't shrink below the 32px buttons and clipped the last
-     column on platforms with classic (non-overlay) scrollbars. The stable
-     gutter keeps the scrollbar from eating a column once content overflows. */
-  grid-template-columns: repeat(auto-fill, minmax(32px, 1fr));
+  /* Eight 32px-button columns need ~270px plus the scroll gutter; the dialog
+     is sized 660 wide so that much is left after the thumbnail and colour
+     asides. The stable gutter reserves the scrollbar's width up front so it
+     can't eat into the last column when content overflows. */
+  grid-template-columns: repeat(8, 1fr);
   column-gap: var(--space-1);
   row-gap: var(--space-1);
   flex: 1;
@@ -555,6 +566,10 @@ watch(
   align-items: start;
   max-height: 168px;
   overflow-y: auto;
+  /* The scroll container clips at its padding box, so give the selected/hovered
+     swatch's scale(1.1) overhang (~1.5px per side) room instead of clipping
+     its border on the edge rows and columns. */
+  padding: var(--space-1);
 }
 
 .color-swatch {
