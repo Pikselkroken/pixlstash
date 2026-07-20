@@ -812,13 +812,16 @@ defineExpose({ handleKey });
   display: flex;
   flex-direction: column;
 }
-.rs-card:focus {
-  outline: none;
-}
+/* `.rs-card` is a tabindex="-1" focus-management target: it's programmatically
+   focused on every card advance so the group is announced, but it can never
+   receive a keyboard-Tab focus. Chromium's sticky keyboard modality makes that
+   scripted focus match :focus-visible right after a Y/N/S/U keypress, painting a
+   full-card purple ring after every decision (GH #578, most visible in Electron
+   on Windows). The ring is always spurious here — the real focus indicators live
+   on the buttons/thumbnails — so suppress it on the container. */
+.rs-card:focus,
 .rs-card:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: -2px;
-  border-radius: var(--radius-md);
+  outline: none;
 }
 /* Distinct entry transition while the key-slip hold is active, so a card-type
    change is visually announced. */
