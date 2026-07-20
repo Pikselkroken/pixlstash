@@ -1,43 +1,63 @@
 # PixlStash Release Test Plan
 
-This document defines the checks to perform before each release.
-API/integration tests are automated and run via pytest — this plan covers only
-what requires a browser, visual inspection, or a live external service.
+This document contains **only what needs hands, eyes, or real hardware**.
+Everything else runs automatically and must be green before this plan even
+starts:
+
+- **Backend API/integration** — pytest, run per-file in `ci.yml` on every
+  push/PR (plus a widened blocking gate on release-prep branches/tags and an
+  OS-sensitive subset on Windows runners).
+- **Browser journeys** — the Playwright e2e suite (`frontend/e2e/specs/`,
+  the `e2e` job in `ci.yml`), catalogued in `docs/regular-tests.md`.
+- **Electron logic** — 40 `node --test` unit tests in `electron/test/`
+  (overlay install args, CPU fallback state machine, backends location,
+  forced-backend parsing, hardware-detector injection). Run them locally with
+  `cd electron && npm test` — they are **not** wired into any workflow yet.
+- **ROCm GPU overlay install** — `rocm-overlay-install.yml` (weekly) installs
+  the ROCm torch overlay with the app's pip arguments and asserts a real HIP
+  build imports. The cu128 overlay has no CI equivalent — it is covered by the
+  Desktop section below.
+
+**Automated-coverage map** (sections removed from previous editions of this
+plan; legacy § numbers are still cited in spec titles):
+
+| Legacy section | Now automated by |
+|---|---|
+| §1 Authentication (login/logout, tokens, session persistence) | `auth.spec.js` |
+| §2 Import — drag overlay affordance | `import.spec.js` (drop→import stays manual, see Import section) |
+| §3.1–3.3 Grid display, sort, search | `grid.spec.js`, `grid-browse.spec.js` |
+| §3.5 Context menu opens/lists actions | `context-menu.spec.js` (Selection ▾ parity stays manual, #403) |
+| §4 ImageOverlay open/navigate/close | `overlay.spec.js` |
+| §5 Tags add/remove | `tags.spec.js` |
+| §6 Star rating — overlay persist + grid stars + grid↔overlay sync | `rating.spec.js` |
+| §7/§8/§9 Set/project/character navigation & filtering | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js` |
+| §10 Faces crops + bounding boxes | `faces.spec.js` |
+| §11 Stack expand/collapse | `stacks.spec.js` (badge click + visual stacking order stay manual) |
+| §14 Predictions — delete drops to prediction chip, Confirm restores | `tag-predictions.spec.js` (generation after import stays manual) |
+| §15 Export — selection ZIP contents + set ZIP count | `export.spec.js` |
+| §19.1/19.4 Live-update own-change silence, pill choice, flood coalescing, overlay deferral | `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-overlay-deferral.spec.js` |
+| §20.1 Tag-health board; §20.3/20.4 review create + binary decide + Escape | `review-board.spec.js`, `review-session.spec.js` |
+| §0.5 From source (Linux) | CI `e2e` job (pip install, `npm run build`, boots server, logs in, renders grid) |
 
 ---
 
 ## How to Use
 
-1. Work through each manual item below in order.
+1. Work through each section below in order.
 2. Mark each item ✅ Pass / ❌ Fail / ⏭ Skip (with reason).
 3. A release is only signed off when all non-skipped items pass.
 
 ---
 
-## 0. Installation & First Launch
+## 1. Installation & Packaging
 
-Perform all checks on a **clean machine** (no prior PixlStash install, no existing `vault.db`).
+Perform on a **clean machine/VM** (no prior PixlStash install, no existing
+`vault.db`). CI builds all of these artifacts but never runs them — this
+section is the only place they are executed.
 
----
+### 1.1 pip + venv (PyPI)
 
-### 0.1 Windows — Installer
-
-| Check | Windows |
-|-------|---------|
-| Download the `.exe` installer from the latest GitHub release page | |
-| Double-click the installer and follow the wizard as a normal user — completes to "Finish" with no error dialog | |
-| If SmartScreen appears: click **More info** → **Run anyway** — wizard proceeds normally | |
-| Open Start Menu → search **PixlStash Server** → click to launch — a console window opens and prints startup logs | |
-| Open `http://localhost:9537` in a browser — the login page loads with username/password fields | |
-| Enter the default credentials and click **Log in** — the image grid page renders | |
-| Click the import button, select one `.jpg` file, confirm import — the picture appears in the grid | |
-| Close the console window — open Task Manager and confirm no `pixlstash` or `python` processes remain | |
-
----
-
-### 0.2 pip + venv
-
-Requires Python 3.10+. Test on all three platforms.
+Requires Python 3.10+.
 
 ```
 python -m venv venv
@@ -49,94 +69,85 @@ pixlstash-server
 
 | Check | macOS | Ubuntu 24.04 | Windows |
 |-------|-------|--------------|---------|
-| `pip install pixlstash` completes with exit code 0 and no red error lines | | | |
-| `pixlstash-server` starts; logs show AI models downloading and then "Uvicorn running" | | | |
-| Open `http://localhost:9537` — the login page loads | | | |
-| Log in with default credentials, click the import button, import one `.jpg` — it appears in the grid | | | |
-| Press Ctrl-C in the terminal — server exits cleanly with no Python traceback and no lock files left | | | |
+| `pip install pixlstash` completes with exit code 0 | | | |
+| `pixlstash-server` starts; logs show model download then "Uvicorn running" | | | |
+| `http://localhost:9537` shows the login page; log in, import one `.jpg` — it appears in the grid | | | |
+| Ctrl-C — server exits cleanly, no traceback, no lock files left | | | |
 
----
-
-### 0.3 Docker — CPU image
-
-Works on Linux, macOS, and Windows (Docker Desktop / Docker Engine required).
+### 1.2 Docker — CPU image
 
 ```bash
-docker pull ghcr.io/pikselkroken/pixlstash:latest
 docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 \
   ghcr.io/pikselkroken/pixlstash:latest
 ```
 
-| Check | macOS | Ubuntu 24.04 | Windows |
-|-------|-------|--------------|---------|
-| `docker run` command above exits pull phase and prints "Uvicorn running" in logs | | | |
-| Open `http://localhost:9537` — the login page loads | | | |
-| Log in, import one `.jpg` — it appears in the grid | | | |
-| Press Ctrl-C — container stops cleanly (no dangling container in `docker ps -a`) | | | |
+| Check | Any host OS |
+|-------|-------------|
+| Container pulls and logs "Uvicorn running" | |
+| Login page loads; log in, import one `.jpg` — it appears in the grid | |
+| Ctrl-C — container stops cleanly (nothing dangling in `docker ps -a`) | |
 
----
+### 1.3 Docker — GPU image (Ubuntu, NVIDIA)
 
-### 0.4 Docker — GPU image (Ubuntu 24.04)
-
-Requires NVIDIA Container Toolkit installed and Docker restarted.  
-Verify GPU access first: `docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi`
+Requires NVIDIA Container Toolkit. Verify GPU access first:
+`docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi`
 
 ```bash
-docker pull ghcr.io/pikselkroken/pixlstash:latest-gpu
-mkdir -p ~/Pictures/pixlstash
-docker run -d \
-  --runtime nvidia \
-  --user $(id -u):$(id -g) \
-  -e HOME=/home/pixlstash \
-  -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-  -e PIXLSTASH_HOST=0.0.0.0 \
-  -p 9537:9537 \
-  -v ~/Pictures/pixlstash:/home/pixlstash \
-  --name pixlstash \
-  ghcr.io/pikselkroken/pixlstash:latest-gpu
+docker run -d --runtime nvidia --user $(id -u):$(id -g) \
+  -e HOME=/home/pixlstash -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -e PIXLSTASH_HOST=0.0.0.0 \
+  -p 9537:9537 -v ~/Pictures/pixlstash:/home/pixlstash \
+  --name pixlstash ghcr.io/pikselkroken/pixlstash:latest-gpu
 ```
 
-> **If the container exits immediately with a permission error:** a previous run may have created `~/Pictures/pixlstash/.config` owned by root. Fix with `sudo chown -R $(id -u):$(id -g) ~/Pictures/pixlstash`, then re-run the `docker run` command above.
+> If the container exits with a permission error, a previous run may have left
+> a root-owned `~/Pictures/pixlstash/.config`; `sudo chown -R $(id -u):$(id -g)
+> ~/Pictures/pixlstash` and re-run.
 
 | Check | Ubuntu 24.04 |
 |-------|--------------|
-| `nvidia-smi` inside the CUDA verification container shows the GPU with no errors | |
-| GPU container starts — `docker logs pixlstash` prints "Uvicorn running" with no CUDA errors | |
-| `docker logs pixlstash` shows CUDA/GPU inference messages and **no** "CPU fallback" warning | |
-| Open `http://localhost:9537` — the login page loads | |
-| Log in, import one `.jpg`, wait 30 s — background tagging completes and tags appear on the picture | |
+| `docker logs pixlstash` shows "Uvicorn running", CUDA inference messages, and **no** "CPU fallback" warning | |
+| Log in, import one `.jpg`, wait ~30 s — background tagging completes on GPU and tags appear | |
 
----
+### 1.4 From source (macOS / Windows)
 
-### 0.5 From Source
-
-Requires Python 3.10+, Node.js 20+, npm.
+Linux is covered by the CI `e2e` job (same steps, real boot + login). Run on
+the other two:
 
 ```bash
 git clone https://github.com/pikselkroken/pixlstash.git && cd pixlstash
-python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv venv && venv activation
 pip install --upgrade pip && pip install -e .
 cd frontend && npm ci && npm run build && cd ..
 pixlstash-server
 ```
 
-| Check | macOS | Ubuntu 24.04 | Windows |
-|-------|-------|--------------|---------|
-| `pip install -e .` exits with code 0 and no red error lines | | | |
-| `npm run build` exits with code 0 and produces `frontend/dist/` | | | |
-| `pixlstash-server` starts and `http://localhost:9537` shows the login page | | | |
-| Log in, import one `.jpg` — it appears in the grid | | | |
+| Check | macOS | Windows |
+|-------|-------|---------|
+| `pip install -e .` and `npm run build` both exit 0 | | |
+| Server starts; log in, import one `.jpg` — it appears in the grid | | |
+
+### 1.5 Windows server installer (Inno Setup `.exe`)
+
+The standalone server installer built by `windows-installer.yml` (distinct
+from the Electron desktop installer, covered in section 3).
+
+| Check | Windows |
+|-------|---------|
+| Download the `.exe` from the release page; wizard completes as a normal user with no error dialog | |
+| If SmartScreen appears: **More info** → **Run anyway** proceeds normally | |
+| Start Menu → **PixlStash Server** — console opens with startup logs; login page loads; import one `.jpg` | |
+| Close the console — no `pixlstash`/`python` processes remain in Task Manager | |
 
 ---
 
-### 0.6 Upgrade from 1.1.x
+## 2. Upgrade from the previous minor release
 
-Perform on a machine with an existing 1.1.2 or 1.1.3 `vault.db`. Do **not** wipe the database — the point is to verify the migration chain.
-
-#### 0.6.1 Database migration (migrations 0034 – 0044)
-
-Ten new migrations ship with 1.2. Run against a copy of a real 1.1.x `vault.db`:
+Run against a **copy** of a real `vault.db` created by the previous minor
+version (e.g. testing 1.7.x → use a 1.6.x vault). Do not wipe the database —
+the point is the migration chain. (Individual migration logic is covered by
+the pytest migration/schema suites; this checks the end-to-end chain on real
+data.)
 
 ```bash
 cp vault.db vault.db.bak
@@ -145,393 +156,219 @@ alembic upgrade head
 
 | Check |  |
 |-------|--|
-| `alembic upgrade head` completes with exit code 0 and no Python traceback | |
-| Migration `0035_drop_face_quality` — server starts and face-quality column is absent (no column error in logs) | |
-| Migration `0039_drop_color_histogram` — server starts and color-histogram column is absent | |
-| Migration `0040_move_text_score_to_picture` — open a picture that previously had a text score; verify smart score still shows the correct value | |
-| Migration `0043_pictureset_icon_color` — existing picture sets appear in the sidebar with no errors; icon/color columns default to `null` (automatic thumbnail) | |
-| Migration `0044_add_grid_sort_indexes` — grid loads and sorts correctly; check server logs for any index-creation errors (large DBs may take a few seconds) | |
-| After all migrations: existing pictures, sets, characters, projects and tags are intact | |
-
-#### 0.6.2 New config keys on upgraded install
-
-These keys are new in 1.2 and may be absent from an existing `server-config.json`.
-
-| Check |  |
-|-------|--|
-| Start server with an existing config that does **not** contain `require_local_for_write` — server starts without error (defaults to `true`) | |
-| If `host` is `0.0.0.0` and `require_local_for_write` is explicitly set to `false` — startup log prints a **warning** (not a hard failure) about unrestricted write access | |
-| Start server with an existing config that does **not** contain `public_url` — sharing feature still works; share link uses the internal/relative URL | |
-| Start server with an existing config that does **not** contain `disable_background_workers` — background workers start normally (defaults to `false`) | |
-
-#### 0.6.3 CPU-only install with `--force-cpu`
-
-Covers the lazy ML library loading change introduced in 1.2.
-
-| Check |  |
-|-------|--|
-| `pixlstash-server --force-cpu` starts without error on a machine with no CUDA | |
-| Background tagging runs and uses CPU (no "CUDA unavailable" hard failure in logs) | |
-
-#### 0.6.4 Watch folders on Windows (upgrade)
-
-| Check | Windows |
-|-------|---------|
-| An existing watch folder configured with a Windows path (`C:\...`) is imported correctly after upgrade — no path-not-found errors in logs | |
-| A new file dropped into the watch folder is picked up and imported automatically | |
+| `alembic upgrade head` completes with exit code 0, no traceback | |
+| Server starts against the upgraded vault with no schema errors in logs | |
+| Existing pictures, sets, characters, projects, tags, and scores are intact (spot-check counts and a few known pictures) | |
+| Columns reset to `NULL` by migrations are picked up for reprocessing by the background finders (watch the task indicator) | |
+| Start with the **previous version's `server-config.json`** (missing any newly added keys) — server starts, new keys take their documented defaults, no hard failure | |
+| Windows: an existing watch folder with a `C:\...` path still imports; a new file dropped into it is picked up automatically | |
 
 ---
 
-## 1. Authentication
+## 3. Desktop (Electron) app — Windows / Linux / macOS
 
-### 1.1 Login / Logout
-- [ ] Open **Settings** (gear icon in the toolbar) → click **Log out** in the top-right of the dialog header → verify the browser navigates immediately to the login page
-- [ ] While logged out, navigate directly to `http://localhost:9537` → verify you are redirected to the login page and the grid is not shown
+The packaged desktop app. CI builds the installers (`electron.yml`) but
+**never launches them**, and the `electron/test` unit suite covers only the
+overlay/fallback logic — everything below needs a real machine per OS.
+Context: the overlay fallback, per-accel ORT pin, and backend-list dedup all
+shipped after live incidents verified **on Linux only**; Windows and macOS
+have never been manually exercised and are the priority columns.
 
-### 1.2 API Tokens
-- [ ] Open **Settings** → **Account Settings** tab → click **Generate new token** → fill in a name → click **Create** → confirm the new token row appears in the token list with the correct name
+Overlay expectations per OS: **Windows/Linux** offer the cu128 (CUDA) overlay
+from Settings (ROCm where applicable on Linux); **macOS has no overlay UI at
+all** — Metal is bundled in the runtime.
 
-### 1.3 Session Persistence
-- [ ] While logged in with the grid visible, press **F5** to reload the page → verify the grid loads again without being redirected to the login page
+### 3.1 Install & first run
 
----
+| Check | Windows | Linux | macOS |
+|-------|---------|-------|-------|
+| Install: Windows NSIS `.exe` / Linux AppImage (and `.deb`) / macOS `.dmg` or `.zip` — completes without error | | | |
+| Windows: slow-extraction messaging is visible during install (no silent multi-minute hang); SmartScreen **More info → Run anyway** path works | | n/a | n/a |
+| First-run wizard appears: pick a library folder and a compute choice; both are honoured after the app starts | | | |
+| App boots to the grid; importing one `.jpg` works end-to-end | | | |
 
-## 2. Picture Import
+### 3.2 GPU overlay install & activation (Windows/Linux)
 
-- [ ] Drag two or more image files from the OS file manager and drop them anywhere on the image grid — a "Drop files here to import" overlay appears while dragging, and import starts immediately on drop
-- [ ] A progress indicator appears showing import status — wait for it to complete
-- [ ] The imported pictures appear in the grid without a page reload
+| Check | Windows (cu128) | Linux (cu128) |
+|-------|-----------------|---------------|
+| Settings → compute backends: install the GPU overlay — download/install completes and the backend activates | | |
+| After restart on the GPU backend, JoyCaption **nf4** produces a caption for a newly imported picture **on the GPU** (check logs: no CPU fallback) | | |
+| ONNX runtime loads on the overlay (no `libcudart`/DLL import errors in logs — regression: per-accel ORT pin) | | |
 
----
+### 3.3 Broken-overlay resilience (Windows/Linux)
 
-## 3. Image Grid & Browsing
+Make the active overlay unloadable (e.g. rename a core torch library file
+inside the overlay directory), then launch:
 
-### 3.1 Grid Display
-- [ ] After import: all thumbnails render within 5 s with no broken-image icons
-- [ ] Scroll to the bottom of a grid with more than one page of results — new pictures load automatically as you scroll (no manual "load more" needed)
-- [ ] Use the column slider/buttons to change the column count from its current value to a different number — the grid reflows immediately without a page reload
+| Check | Windows | Linux |
+|-------|---------|-------|
+| The app shows the "GPU acceleration unavailable" dialog — **no fatal error screen** | | |
+| The app boots and works on CPU | | |
+| Settings shows **CPU as the active backend** — no phantom-active GPU entry | | |
+| The GPU backend can be re-activated from Settings (overlay directory was not deleted) | | |
 
-### 3.2 Sorting & Filtering
-- [ ] Click the **Sort** button → verify the dropdown lists at least: Date, Import date, Smart score, Star rating, Name, File size, Random
-- [ ] Select **Date (newest first)** → confirm the grid reorders so the newest picture is in the top-left position
+### 3.4 Compute-backend list
 
-### 3.3 Search
-- [ ] Type a search term in the search bar and press Enter — the grid updates to show only matching pictures
-- [ ] Click the ✕ (clear) button on the search bar — the grid resets to the full unfiltered view
-- [ ] Click the search bar again — previous search terms from this session appear in the history dropdown
+| Check | Windows | Linux | macOS |
+|-------|---------|-------|-------|
+| Every backend appears **exactly once** (no duplicate row for the active runtime) | | | |
+| The built-in CPU (Win/Linux) / Metal (macOS) row is always present and shows **Use** when it is not active | | | |
+| macOS: **no** overlay install UI is offered anywhere | n/a | n/a | |
 
-### 3.4 Stacks View
-- [ ] Locate a stack indicator badge on a thumbnail → click it — the stack expands to show all member pictures
-- [ ] Click the stack badge again — the stack collapses back to the leader thumbnail
+### 3.5 Upgrade in place (Linux AppImage)
 
-### 3.5 Selection ▾ / Context Menu Parity
-The right-click context menu is automated by `frontend/e2e/specs/context-menu.spec.js`
-(opens on right-click and lists the picture actions, §3.5; see `docs/regular-tests.md`).
-The Selection ▾ parity assertion below is manual.
-- [ ] Select 2+ pictures (Ctrl-click) → open the **Selection ▾** dropdown (or press **S**) and note the action items
-- [ ] Right-click one of the **selected** pictures and note the context-menu action items
-- [ ] Both menus list the **same** selection-scoped actions
-  - ⚠️ **Known bug — currently FAILS:** the context menu shows **Restore from snapshot** and **Reverse image search** (and, for a single selection, **Share image** / **Find similar faces**) which the Selection ▾ menu lacks. Tracked in [#403](https://github.com/Pikselkroken/pixlstash/issues/403). Mark ❌ until reconciled.
+| Check | Linux |
+|-------|-------|
+| Replace the old AppImage binary with the new one; existing vault opens and works | |
+| A previously installed GPU overlay is still detected and still works after the upgrade | |
 
----
+### 3.6 Tray & shutdown
 
-## 4. Picture Detail (ImageOverlay)
-
-- [ ] Click any picture thumbnail — the ImageOverlay opens and shows the full-size image plus the side panel with metadata
-- [ ] Press the **→** (right arrow) keyboard key — the next picture in the grid loads in the ImageOverlay
-- [ ] Press the **←** (left arrow) keyboard key — the previous picture loads
-- [ ] Press **Escape** — the ImageOverlay closes and the grid is visible again without a page reload
-
----
-
-## 5. Tags
-
-- [ ] Open the ImageOverlay on a picture → click **Add tag** → type a tag name → press Enter — the tag appears immediately in the tag list without a page reload
-- [ ] Click the ✕ next to a tag in the ImageOverlay — the tag is removed immediately from the list without a page reload
+| Check | Windows | Linux | macOS |
+|-------|---------|-------|-------|
+| Closing the window hides to tray (when the pref is on); the tray menu restores it | | | |
+| Full quit from the tray/menu **actually stops the backend** — no orphaned server process afterwards | | | |
+| Windows: clean uninstall removes the app; the library folder and vault are left intact | | n/a | n/a |
 
 ---
 
-## 6. Star Rating / Quality Score
+## 4. Grid & browsing — manual remainder
 
-- [ ] In the grid; click the 3rd star — the rating saves. Refersh the grid. It stays.
-- [ ] Open the ImageOverlay for the same picture — verify it shows 3 filled stars
-- [ ] In the ImageOverlay for the same picture — click 4 stars. Verify it shows 4 filled stars. Exit the Image overlay. Confirm that it displays 4 active stars in the grid.
----
-
-## 7. Picture Sets
-
-- [ ] In the sidebar, click a set with a known picture count — the grid shows only pictures in that set
-- [ ] Open the ImageOverlay on one of those pictures → Open the set menu. Uncheck the current set - exit the image overlay - confirm the sidebar count for that set decreases by 1 and the picture disappears from the set.
-- [ ] Using the project created in section 8, click each project set (for example `Release Set A` and `Release Set B`) — each set filter shows only pictures assigned to that set
+- [ ] **Selection ▾ / context-menu parity:** select 2+ pictures, compare the Selection ▾ dropdown with the right-click context menu — both must list the same selection-scoped actions.
+  - ⚠️ **Known bug — currently FAILS:** the context menu shows **Restore from snapshot** and **Reverse image search** (and, for a single selection, **Share image** / **Find similar faces**) which Selection ▾ lacks. Tracked in [#403](https://github.com/Pikselkroken/pixlstash/issues/403). Mark ❌ until reconciled.
+- [ ] **Stack badge:** the top-left badge on a stack leader shows the member count; clicking it expands the members **in the correct stacking order**, clicking again collapses (the View-menu expand/collapse path is automated; the badge click and visual order are not)
 
 ---
 
-## 8. Projects
+## 5. Import & background processing
 
-- [ ] Open the **Projects** view in the sidebar → create a new project named `Release Project`
-- [ ] Open `Release Project` → create two sets under it named `Release Set A` and `Release Set B`
-- [ ] Open `Release Project` → create one character under it named `Release Character`
-- [ ] In the grid, select at least 3 pictures → add them to `Release Project`
-- [ ] Add 2 of those project pictures to `Release Set A` and 1 picture to `Release Set B`
-- [ ] Click `Release Project` — the grid shows only pictures belonging to that project and the sidebar count matches the grid count
-- [ ] Click `Release Set A` then `Release Set B` — each set shows only its assigned project pictures and the counts match the sidebar
+The e2e harness runs with `disable_background_workers: true` and the import
+endpoint requires the face worker — so everything here needs a real server
+run with workers ON.
 
----
-
-## 9. Characters
-
-- [ ] In the sidebar, click `Release Character` created in section 8 — the grid shows only pictures/faces assigned to that character
-- [ ] Assign at least one face from a picture in `Release Project` to `Release Character` and verify the character count increases
-- [ ] Verify the character row shows a thumbnail and the updated picture/face count
+- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (the drag overlay itself is automated; the drop → import path is not)
+- [ ] After importing a batch of 5+ pictures: the task indicator shows live progress; faces, a generated caption (Description section), and predicted tags appear on the new pictures once processing completes
+- [ ] Deleting all tags on a processed picture and requeueing (Reset and regenerate) produces fresh predictions
 
 ---
 
-## 10. Faces
+## 6. ComfyUI Integration
 
-- [ ] Open the ImageOverlay on a picture that has detected faces — the **Faces** section in the side panel shows face crops
-- [ ] If face bounding-box overlays are enabled (toggle in toolbar), open a picture with faces — coloured bounding boxes are drawn over the faces in the image
+Requires a live ComfyUI server.
 
----
-
-## 11. Stacks
-
-- [ ] In the grid with stacks enabled, find a stack — the top-left stack badge shows the member count
-- [ ] Click the badge to expand — all member pictures are shown in the correct stacking order
+- [ ] Settings → **Workflows**: enter the ComfyUI server URL → Save → the host appears in the dialog
+- [ ] Toolbar ComfyUI menu: run a text-to-image workflow with a prompt — progress shows; the output picture appears in the grid
+- [ ] Run an image-to-image workflow from a source picture — output appears and is linked to the source
+- [ ] **Abort** during a run — execution stops and the progress indicator disappears
 
 ---
 
-## 12. ComfyUI Integration
+## 7. Image Plugins
 
-- [ ] Open **Settings** → **Workflows** tab → enter the ComfyUI server URL → click **Save** → confirm the host appears in the dialog.
-- [ ] In the toolbar, open the ComfyUI menu → select a text-to-image workflow → fill in a prompt → click **Run** — a progress indicator appears and, after completion, the output picture appears in the grid
-- [ ] Repeat with an image-to-image workflow: select a source picture → run — output appears and is linked to the source
-- [ ] While a workflow is running: click **Abort** — execution stops and the progress indicator disappears
+Visual-judgement checks (apply via the ImageOverlay):
 
----
-
-## 13. Image Plugins
-
-For each plugin: open the ImageOverlay on a test picture, apply the plugin, confirm the result is visible.
-
-- [ ] **Blur/Sharpen**: apply blur level 5 → the saved picture is visibly blurrier than the original
-- [ ] **Brightness/Contrast**: increase brightness by 2 → the saved picture is visibly brighter
-- [ ] **Colour Filter**: apply a colour tint → the saved picture shows the colour shift
+- [ ] **Blur/Sharpen**: blur level 5 — result is visibly blurrier
+- [ ] **Brightness/Contrast**: +2 brightness — result is visibly brighter
+- [ ] **Colour Filter**: apply a tint — result shows the colour shift
 
 ---
 
-## 14. Tag Predictions
+## 8. Performance & Stability
 
-- [ ] Import a new picture and wait for background processing to complete
-- [ ] Open the ImageOverlay → scroll to **Tag Predictions** — at least one predicted tag is listed
-- [ ] Click **Accept** on a prediction — the tag moves to the confirmed tag list and disappears from predictions
-- [ ] Deleting a tag causes it to drop down to prediction IF it had a > 0.0 prediction
----
+Needs a real library at scale (the e2e fixture is ~110 pictures and renders in
+one page).
 
-## 15. Export
-
-- [ ] Select 3 pictures in the grid (click while holding Ctrl/Cmd) → open the **Export** menu in the toolbar → choose **Full resolution** → click **Download ZIP** → verify the downloaded file opens correctly and contains 3 image files
-- [ ] In the sidebar, open a character → open the **Export** menu → download a project export ZIP → verify it contains the pictures from the character
-- [ ] In the sidebar, open a picture set → open the **Export** menu → download a project export ZIP → verify it contains the pictures from the set
+- [ ] Import 200+ pictures; scroll the full grid at normal speed — pictures keep loading in as you scroll, no thumbnails remain broken, the browser does not freeze
+- [ ] While face extraction is processing 20+ images: scroll, sort, and open the overlay — the UI stays responsive with no full-page freeze
 
 ---
 
-## 16. Background Task System
+## 9. Folder Management (Reference + Import)
 
-- [ ] After importing a batch of 5+ pictures: a task progress overlay or indicator appears in the UI showing live status (percentage or picture count)
-- [ ] Open a picture that contains faces — the **Faces** section in the side panel shows at least one face crop
-- [ ] Open a picture's ImageOverlay → scroll to the **Description** section — a generated caption is present (not blank)
+Use two test folders: `reference_test/` (≥2 pre-existing images) and
+`import_test/` (empty, add 1 image mid-test).
 
----
+### 9.1 pip / native install
 
-## 17. Performance & Stability
+- [ ] Sidebar **Folders** → Add folder → **Reference folder** → `reference_test/` — created with no error, no pending-restart badge, scanning starts automatically
+- [ ] Clicking the reference folder shows its pictures in the grid
+- [ ] Add an **Import folder** → `import_test/`; copy a new image into it while running — it appears in the grid automatically
+- [ ] Remove the reference folder — the entry disappears and its indexed pictures leave the grid
 
-- [ ] Import 200+ pictures; after thumbnails load, scroll through the full grid at normal speed — no thumbnails remain broken (grey/placeholder) and the browser does not freeze
-- [ ] While a face extraction background task is processing 20+ images: interact with the grid (scroll, sort, open ImageOverlay) — the UI remains responsive with no full-page freeze
+### 9.2 Docker install
 
----
-
-## 18. Folder Management (Reference + Import)
-
-Use two test folders on disk:
-- `reference_test/` containing at least 2 images already present before adding the folder
-- `import_test/` initially empty, then add at least 1 new image during the test
-
-### 18.1 pip / native install
-
-- [ ] Open sidebar **Folders** tab → **Add folder** → **Reference folder** → add `reference_test/` absolute path — folder is created successfully with no error toast/dialog
-- [ ] After adding the reference folder, verify it does **not** show a pending-restart badge/status and begins scanning automatically
-- [ ] Click the new reference folder in sidebar — pictures from that folder appear in the grid
-- [ ] Open sidebar **Folders** tab → **Add folder** → **Import folder** → add `import_test/` absolute path — folder is created successfully
-- [ ] Copy one new image file into `import_test/` while PixlStash is running — image appears in the grid automatically without restarting PixlStash
-- [ ] Remove the reference folder from the sidebar context/delete action — folder entry disappears and its indexed pictures are removed from the grid
-
-### 18.2 Docker install
-
-- [ ] Start PixlStash container with host mounts that include the planned reference/import test paths
-- [ ] Open sidebar **Folders** tab → **Add folder** → **Reference folder** — in Docker mode, folder browsing UI is unavailable and manual path entry is required
-- [ ] Save a new reference folder path — Docker restart prompt appears telling user to restart container with updated mount
-- [ ] Newly added reference folder shows pending-restart/pending-mount status before restart
-- [ ] Restart container, then refresh UI — reference folder status transitions away from pending (active if mount is valid; mount error if invalid)
-- [ ] Add a new import folder path in Docker mode — restart prompt appears
-- [ ] After restart and adding a new file into mounted `import_test/`, verify automatic import picks up the file and it appears in the grid
+- [ ] In Docker mode, folder browsing is unavailable and manual path entry is required
+- [ ] Saving a new reference/import folder prompts for a container restart with an updated mount; the folder shows pending-restart status until then
+- [ ] After restart the folder transitions to active (or mount-error if invalid); a new file in the mounted `import_test/` is picked up automatically
 
 ---
 
-## 19. Grid Live-Update (real-time sync)
+## 10. Grid Live-Update — manual remainder
 
-Covers the WebSocket-driven grid refresh and the two "pill" notifications. The
-echo-suppression chain decides whether a change is *yours* (reconcile silently)
-or *external* (raise a pill). Background fixes for [#499](https://github.com/Pikselkroken/pixlstash/issues/499),
-[#500](https://github.com/Pikselkroken/pixlstash/issues/500), and [#501](https://github.com/Pikselkroken/pixlstash/issues/501)
-landed here; see `docs/reviews/2026-06-grid-refresh-cleanup-plan.md`.
+The deterministic core is automated (own vs external, pill choice, flood
+coalescing, overlay deferral — see `docs/regular-tests.md`). These need what
+the harness can't do: a real second client, workers ON, a network drop, and a
+storage-denied browser.
 
-Most positive/negative directions are automated (see `docs/regular-tests.md`,
-the `grid-*` specs). These manual checks cover what the e2e harness can't do
-deterministically: a real second client, background workers ON, network
-reconnect, and storage-denied `clientId`.
+### 10.1 External change from a real second client
 
-The two pills:
-- **"New pictures"** — raised on an external picture *add*.
-- **"View changed externally — click to refresh"** — raised on an external
-  *update* that affects the current sort/filter.
+Two tabs or devices as the same owner (A observes, B mutates):
 
-### 19.1 Own change is silent (#499)
+- [ ] B imports a picture → A shows the **"New pictures"** pill; clicking loads it
+- [ ] B changes a rating/tag affecting A's sort → A shows **"View changed externally"**; clicking reflects it
 
-In a **single tab**, perform each action below and confirm the grid reconciles
-in place with **no pill** for your own action:
+### 10.2 Quiet during bulk work (workers ON)
 
-- [ ] Add a tag to a picture (overlay → Add tag) — tag appears, no pill
-- [ ] Remove a tag from a picture — tag disappears, no pill
-- [ ] Change a star rating in the grid or overlay — rating updates, no pill
-- [ ] Add 3+ pictures to a set (Selection ▾ → add to set) — set count updates, no pill
-- [ ] Run an image plugin on a picture (e.g. Blur) — output appears, no pill
-- [ ] Reset tags on a picture (overlay → Tag Predictions → reset) — tags clear, no pill
+- [ ] Import a 20+ batch (or reset tags/quality on a large selection) — the grid does **not** churn per picture; updates land in coalesced batches and the UI stays usable throughout
 
-### 19.2 External change raises the correct pill
+### 10.3 Reconnect after network drop
 
-Use **two tabs or two devices logged in as the same owner** (tab A is the
-observer; make changes in tab B).
+- [ ] DevTools → Offline, wait, → Online — the WebSocket reconnects and the grid recovers
+- [ ] ⚠️ **Known gap:** events during the offline window are lost (no replay). Mark ✅ if reconnect itself recovers; note the gap.
 
-- [ ] In tab B, **import** a picture → tab A shows the **"New pictures"** pill; click it → the new picture loads into the grid
-- [ ] In tab B, **change a rating or add a tag** on a picture that affects tab A's current sort/filter → tab A shows the **"View changed externally"** pill; click it → the change is reflected
-- [ ] Confirm the pill text matches the change type (add → "New pictures"; update → "View changed externally")
+### 10.4 Storage-denied clientId
 
-### 19.3 Quiet during bulk work (#500)
-
-Requires a **real server run with background workers ENABLED** (the e2e harness
-runs with `disable_background_workers: true`, so it cannot exercise this path).
-
-- [ ] Trigger a bulk sweep that fans out worker events: import a batch of 20+ pictures, or reset tags/quality on a large selection so background tagging/quality/smart-score reprocesses them
-- [ ] While the sweep runs, watch the grid — it should **not** churn or reshuffle continuously; updates land in coalesced batches, not one reflow per picture
-- [ ] The grid stays usable (scroll, sort, open overlay) during the sweep with no repeated full-grid reloads
-
-### 19.4 Overlay deferral
-
-- [ ] Open the lightbox (ImageOverlay) on any picture
-- [ ] From a second tab/device, make an external change (import or rating change) → confirm **no pill appears while the overlay is open**
-- [ ] Close the overlay → the grid reconciles and the pending change is applied (pill may appear on close if applicable)
-
-### 19.5 Reconnect after network drop
-
-- [ ] Open the grid, then in browser DevTools set the network to **Offline**
-- [ ] Wait a few seconds, then set the network back to **Online** → the WebSocket reconnects and the grid recovers to a usable state
-- [ ] ⚠️ **Known gap:** events that occurred *during* the offline window are lost (no replay on reconnect). A change made elsewhere while this tab was offline may not appear until a manual reload. Mark ✅ if reconnect itself recovers; note this gap.
-
-### 19.6 Storage-denied clientId (#501)
-
-- [ ] Open a **private/incognito window** (or a browser with `sessionStorage` blocked) and log in
-- [ ] Make an **own** change (add a tag or change a rating), then **reload immediately**
-- [ ] ⚠️ **Known narrow limitation:** in storage-denied mode the per-tab `clientId` regenerates on every reload, so an in-flight echo for the pre-reload mutation can be misclassified as external and wrongly raise a pill. Observe whether a pill appears right after reload; this is the documented edge case, not a regression of #499.
+- [ ] In a private window (or with `sessionStorage` blocked): make an own change, reload immediately — a pill may wrongly appear for the in-flight echo. ⚠️ Documented narrow limitation (#501), not a regression.
 
 ---
 
-## 20. Review Sessions (tag-review redesign)
+## 11. Review Sessions — manual remainder
 
-New in this release: a tag-health board, first-class review sessions in a rail,
-and binary/pair decision cards (replaces the old "Review tags" overlay). Spec:
-`docs/reviews/2026-07-review-sessions-redesign-draft.md` (Rulings + Decisions,
-2026-07-15). The board is automated (`review-board.spec.js`, 9 cases). The
-session loop is automated: three cases (create, binary decide, Escape-close) are
-active and green; four further cases are `fixme`-guarded pending QA+dev
-behaviour reconciliation (see §20.9).
+Board + create + binary decide + Escape-close are automated
+(`review-board.spec.js`, `review-session.spec.js`; four further cases are
+`fixme`-guarded pending behaviour reconciliation). The rest needs a real vault
+or human judgement.
 
-> ✅ **BUG-RS-1 (session card never renders) — RESOLVED.** The card used to be
-> stuck on **"Loading…"** forever, with the browser throwing
-> `TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
-> `patchBlockChildren` the instant the suggestions queue loaded (a `:key`
-> collision between the card's `v-else` branch and the compiler's numeric
-> auto-key for the sibling "Loading" `v-if`, only surfacing in production block
-> patching). Fixed by namespacing the key (`card-${current.id}`) in
-> `ReviewSessionView.vue`. The session loop renders and the core decision flow
-> works; the authoritative regression guard is the create + binary-decide specs
-> in `review-session.spec.js`.
+### 11.1 Board signals not exercisable on the committed fixture
 
-### 20.1 Tag-health board — AUTOMATED (`review-board.spec.js`)
+- [ ] **Est. wrong / Est. missing** non-zero on a vault with disagreeing predictions
+- [ ] **"no model signal"** row for a tag outside the tagger vocabulary (kNN review still offered)
+- [ ] **Model-disputes** banner when a human label contradicts a confident current-model prediction
+- [ ] **Build-progress bar** visibly fills while the cache rebuilds on a large vault
 
-- [ ] Toolbar **Review and fix tags** opens the overlay to the board "Which tags need review?"
-- [ ] The board lists tags with columns Tag / Est. fixes / Est. wrong / Est. missing / Mismatch / verified / last-reviewed / "Why it ranks here"
-- [ ] Filter input narrows rows (and `/` focuses it); no-match shows "No tags match…"
-- [ ] Sort dropdown and sortable headers re-order without emptying the board
-- [ ] Anomalies-only toggle flips (fixture has no anomaly tags → may show empty; the toggle state must still flip)
-- [ ] A tag with a mismatch signal offers **Start review**; a tag with an open review offers **Open →** (greyed for creation — one open review per tag)
+### 11.2 Pair cards
 
-### 20.2 Board signals not exercisable on the committed fixture — MANUAL
+- [ ] Same-stack / dhash-near pairs show a pair card with **Both / Neither / Left only / Right only** (`B/N/L/R`); Right-only performs the swap; LEFT = tagged side, RIGHT = untagged side
 
-The `test-data` vault produces mismatch signals but not the others. Verify these
-on a **real vault** (or a seeded fixture):
+### 11.3 Skip / refresh / staleness
 
-- [ ] **Est. wrong / Est. missing** non-zero: a tag with tagged pictures whose prediction ≤0.1 (wrong) and high-confidence (≥0.9) predictions with no tag row (missing)
-- [ ] **"no model signal"** row state for a tag outside the tagger vocabulary (kNN review still offered)
-- [ ] **Model-disputes** banner ("The current model disputes N of your earlier calls") when a human label contradicts a confident current-model prediction
-- [ ] **Build-progress bar** shows while the cache (re)builds on a large vault (on the small fixture the rebuild is synchronous and the bar does not visibly fill)
+- [ ] Skip removes the item with **no** decision written; rail shows "N skipped"; completion offers "Reopen N skipped"
+- [ ] After a vault change, the staleness hint appears; **Refresh appends** new suspects with a **NEW — from refresh** badge and never resurrects decided cards
 
-### 20.3 Create a review — AUTOMATED (`review-session.spec.js`, create case)
+### 11.4 Abort / archive
 
-- [ ] **New review** → pick a tag (open tags greyed / jump to their session) → optional scope (project/set/character) → **Scan & create**
-- [ ] The session cover-sheet receipt reads "Scanned N pictures · N suspects · N handled earlier"
-- [ ] Creating a **second** review for the same tag is refused (one-open-per-tag): the chip shows "· open" and jumps to the existing session (backend returns 409)
-- [ ] "Include previously reviewed" toggle (default off) re-parents earlier-handled suspects into the new review
-- [ ] Auto-resolve line ("N obvious suspects — Auto-resolve") appears when neighbour vote + tagger agree ≥90% (needs aligned predictions; 0 on the current fixture)
+- [ ] Abort with decisions made offers **Keep N changes / Undo N changes / Cancel** and each behaves as labelled
+- [ ] Completing the queue reaches an explicit completion state; **Archive** produces the receipt ("N reviewed — N removed, N added, N kept, N skipped")
 
-### 20.4 Session loop — binary — AUTOMATED (`review-session.spec.js`, binary-decide + Escape-close cases)
+### 11.5 Manual tag / evidence region / gamification
 
-- [ ] One image, one question; **Yes / No / Skip / Undo** with `Y / N / S / U` keys
-- [ ] Direction mapping: **probably-wrong** card → No removes the tag, Yes keeps it; **probably-missing** card → Yes adds the tag, No leaves it untagged
-- [ ] Focus advances card→card (the card container re-keys and takes focus); decision-bar buttons hold constant positions; an Undo button is always shown
-- [ ] Undo is disabled when the stack is empty, enabled after a decision; XP/streak **decrement** on undo (net counters); celebrations never fire on undo
-- [ ] Neighbour strip shows "N of M similar images have '<tag>'" with per-thumb tag/no-tag badges
+- [ ] **Apply tags** button + `T` opens the tag panel from a card
+- [ ] `H` toggles the Grad-CAM heatmap/boxes on cards with a region; the preference persists
+- [ ] Gamification opt-in: XP counters climb on decisions, stickers persist in the capped shelf, celebrations fire on decisions and never on undo, rewards are never clawed back
 
-### 20.5 Session loop — pair cards — MANUAL (no active spec yet)
+### 11.6 Acceptance criteria (release gate)
 
-- [ ] For same-stack or dhash-near pairs a pair card appears with **Both / Neither / Left only / Right only** (`B / N / L / R`); Right-only performs the swap
-- [ ] LEFT pane = tagged side, RIGHT pane = untagged side
-
-### 20.6 Skip / refresh / staleness — MANUAL (Skip case `fixme`'d, not BUG-RS-1)
-
-- [ ] Skip removes the item with **no** decision written (nothing to tags/ledger); rail shows "N skipped"; completion offers "Reopen N skipped"
-- [ ] After a vault change, the staleness hint ("Vault changed since scan → Refresh") appears; **Refresh appends** newly-found suspects with a **NEW — from refresh** badge and never resurrects decided cards
-
-### 20.7 Abort / archive — MANUAL (queue-completion case `fixme`'d, not BUG-RS-1)
-
-- [ ] Abort with decisions made shows a dialog: **Keep N changes** (decisions stand) / **Undo N changes** (review-scoped bulk-reopen) / Cancel
-- [ ] Working through the queue reaches an explicit completion state; **Archive** produces a receipt ("N reviewed — N removed, N added, N kept, N skipped")
-
-### 20.8 Manual tag / evidence region / gamification — MANUAL
-
-- [ ] Manual-tag escape hatch: bottom-left **Apply tags** button on the card + `T` shortcut opens the tag panel
-- [ ] Evidence region: `H` toggles the Grad-CAM heatmap + boxes on cards that have a region; preference persists
-- [ ] Gamification opt-in ("Pretend this is fun"): XP pill appears, counters climb on decisions, stickers land in the capped sticker shelf and persist; celebrations fire on a decision, never on undo; rewards are never clawed back
-
-### 20.9 Acceptance criteria (release gate)
-
-- [ ] Board (§20.1) passes automated + manual
-- [x] **BUG-RS-1 fixed** — the three authoritative `review-session.spec.js`
-      regression cases (create, binary decide, Escape-close) are un-`fixme`'d and
-      green against the production build. The remaining four cases in the spec
-      stay `fixme`'d for reasons **unrelated to BUG-RS-1** (single-suspect queue
-      emptying, Skip tally, keyboard focus, queue-completion/archive — see the
-      per-test `FIXME (not BUG-RS-1)` notes) and are tracked separately, not as a
-      release gate on the render fix
-- [ ] Binary + pair decision mapping verified against the backend receipt (accept/dismiss/swap/skip written correctly; skip writes nothing)
+- [ ] Board automated specs green + §11.1 spot-checked on a real vault
+- [ ] Binary + pair decision mapping verified against the backend receipt (accept/dismiss/swap/skip; skip writes nothing)
 - [ ] One-open-per-tag (409), abort keep-vs-undo, and archive receipt verified
-- [ ] Regressions in the old review overlay's replacement confirmed (no orphaned `TagSuggestion` rows; existing per-item accept/dismiss/reopen still work)
+- [ ] No orphaned `TagSuggestion` rows; per-item accept/dismiss/reopen still work
