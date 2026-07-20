@@ -64,15 +64,6 @@ export interface RuntimeInfo {
   torch: string;
   torchvision: string;
   onnxruntime: string;
-  /**
-   * Exact bitsandbytes version the bundle was built against. bitsandbytes is
-   * CUDA-only and is stripped from the bundled CPU/Metal env, then re-added to
-   * the CUDA overlay; pinning to this recorded version keeps that install
-   * bounded instead of floating to PyPI latest. Absent on builds that never
-   * shipped bitsandbytes (e.g. no macOS wheel), where the overlay pushes it
-   * unpinned.
-   */
-  bitsandbytes?: string;
 }
 
 export const ACCEL_LABELS: Record<Accel, string> = {

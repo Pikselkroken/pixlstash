@@ -76,44 +76,6 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
     assert.ok(args.includes('onnxruntime-gpu==1.20.0'));
   });
 
-  it('cu128 overlay pins bitsandbytes to the built version recorded in runtime.json', () => {
-    const { args } = buildOverlayPipArgs(
-      'cu128',
-      {
-        accel: 'cpu',
-        torch: '2.10.0+cpu',
-        torchvision: '0.25.0+cpu',
-        onnxruntime: '1.20.0',
-        bitsandbytes: '0.45.0',
-      },
-      'c.txt',
-      'd',
-      ['2.10.0'],
-      undefined,
-    );
-    // Exact pin, not floating PyPI-latest: JoyCaption NF4/INT8 quantisation needs
-    // bitsandbytes on CUDA, and the version must be the one the bundle was built with.
-    assert.ok(args.includes('bitsandbytes==0.45.0'));
-    assert.ok(!args.includes('bitsandbytes'), 'must be pinned, never unpinned, when a version is recorded');
-  });
-
-  it('cu128 overlay falls back to unpinned bitsandbytes when none was recorded', () => {
-    const { args } = buildOverlayPipArgs(
-      'cu128',
-      { accel: 'cpu', torch: '2.10.0+cpu', torchvision: '0.25.0+cpu', onnxruntime: '1.20.0' },
-      'c.txt',
-      'd',
-      ['2.10.0'],
-      undefined,
-    );
-    assert.ok(args.includes('bitsandbytes'));
-  });
-
-  it('rocm overlay does NOT add bitsandbytes (no reliable ROCm quantisation path)', () => {
-    const { args } = buildOverlayPipArgs('rocm', ROCM_RUNTIME, 'c.txt', 'd', ['2.10.0'], undefined);
-    assert.ok(!args.some((a) => a === 'bitsandbytes' || a.startsWith('bitsandbytes==')));
-  });
-
   it('a corporate pip mirror becomes --extra-index-url, never the primary GPU index', () => {
     const { args } = buildOverlayPipArgs(
       'rocm',
