@@ -1,3 +1,4 @@
+import logging
 import tempfile
 from types import SimpleNamespace
 
@@ -485,6 +486,189 @@ def test_ws_desktop_session_allowed_from_loopback(server, monkeypatch):
     auth = server.auth.authenticate_websocket(loopback_ws)
     assert auth is not None
     assert auth.is_owner is True
+
+
+# --- Env-provisioned initial owner credentials (Docker first-run) ------------
+#
+# Inside a container the host's traffic arrives as the bridge-gateway IP, never
+# loopback, so the loopback-only registration gate makes first-run setup
+# impossible. The fix is NOT to relax the IP guard (under Docker's userland
+# proxy an attacker and the operator are indistinguishable by IP) but to claim
+# the account from PIXLSTASH_INITIAL_USERNAME/PIXLSTASH_INITIAL_PASSWORD at
+# startup, before any client can race for it.
+
+DOCKER_403_MARKER = "PIXLSTASH_INITIAL_USERNAME"
+NON_DOCKER_403_DETAIL = (
+    "Initial setup must be completed from the device running PixlStash."
+)
+
+
+def _set_initial_creds(monkeypatch, server, username, password):
+    monkeypatch.setenv(server.auth.INITIAL_USERNAME_ENV, username)
+    monkeypatch.setenv(server.auth.INITIAL_PASSWORD_ENV, password)
+
+
+def test_env_claim_provisions_unclaimed_account(server, monkeypatch):
+    """Unclaimed account + both env vars → claimed at startup, and the creds
+    work for a normal login from a NON-loopback client (the whole point:
+    Docker operators never reach the server over loopback)."""
+    _set_initial_creds(monkeypatch, server, "dockerowner", "s3cretpass")
+
+    assert server.auth.claim_owner_from_env() is True
+    user = server.auth.get_user()
+    assert user.username == "dockerowner"
+    assert user.password_hash is not None
+
+    # Registration-gate policy no longer applies (the account is claimed);
+    # disable the separate remote-write gate so the login itself is under test.
+    monkeypatch.setitem(server.auth._server_config, "require_local_for_write", False)
+    monkeypatch.setattr(
+        server.auth, "_get_real_client_ip", lambda request: "192.168.1.50"
+    )
+    with TestClient(server.api) as client:
+        response = client.post(
+            f"{API_PREFIX}/login",
+            json={"username": "dockerowner", "password": "s3cretpass"},
+        )
+        assert response.status_code == 200
+        assert response.json()["message"] == "Login successful."
+
+
+def test_env_claim_never_touches_claimed_account(server, monkeypatch, caplog):
+    """Claimed account + env vars → NOT modified (a restart with stale env
+    must not be a takeover vector), with an INFO notice that they are ignored."""
+    # Claim the account the normal way first.
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "127.0.0.1")
+    with TestClient(server.api) as client:
+        assert (
+            client.post(
+                f"{API_PREFIX}/login",
+                json={"username": "realowner", "password": "realownerpass"},
+            ).status_code
+            == 200
+        )
+    claimed = server.auth.get_user()
+    original_hash = claimed.password_hash
+    assert original_hash is not None
+
+    _set_initial_creds(monkeypatch, server, "attacker", "attackerpass")
+    with caplog.at_level(logging.INFO, logger="pixlstash.server"):
+        assert server.auth.claim_owner_from_env() is False
+    unchanged = server.auth.get_user()
+    assert unchanged.username == "realowner"
+    assert unchanged.password_hash == original_hash
+    assert any("already claimed" in r.getMessage() for r in caplog.records)
+
+
+def test_env_claim_with_only_one_var_claims_nothing(server, monkeypatch, caplog):
+    """Exactly one of the two vars set → loud warning, nothing claimed."""
+    for present, absent in (
+        (server.auth.INITIAL_USERNAME_ENV, server.auth.INITIAL_PASSWORD_ENV),
+        (server.auth.INITIAL_PASSWORD_ENV, server.auth.INITIAL_USERNAME_ENV),
+    ):
+        caplog.clear()
+        monkeypatch.setenv(present, "half-configured")
+        monkeypatch.delenv(absent, raising=False)
+        with caplog.at_level(logging.WARNING, logger="pixlstash.server"):
+            assert server.auth.claim_owner_from_env() is False
+        user = server.auth.get_user()
+        assert user.username is None
+        assert user.password_hash is None
+        assert any(
+            r.levelno == logging.WARNING and "nothing was claimed" in r.getMessage()
+            for r in caplog.records
+        )
+        monkeypatch.delenv(present, raising=False)
+
+
+def test_env_claim_rejects_password_over_72_bytes(server, monkeypatch, caplog):
+    """An env password over bcrypt's 72-byte limit → existing validation fires,
+    loud error, nothing claimed."""
+    _set_initial_creds(monkeypatch, server, "dockerowner", "x" * 73)
+    with caplog.at_level(logging.ERROR, logger="pixlstash.server"):
+        assert server.auth.claim_owner_from_env() is False
+    user = server.auth.get_user()
+    assert user.username is None
+    assert user.password_hash is None
+    assert any(
+        r.levelno == logging.ERROR and "72 bytes" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_env_claim_rejects_password_below_login_floor(server, monkeypatch, caplog):
+    """An env password under the login endpoint's 8-char floor would provision
+    an account that can never log in (422 at /login) — refuse it loudly."""
+    _set_initial_creds(monkeypatch, server, "dockerowner", "short7c")
+    with caplog.at_level(logging.ERROR, logger="pixlstash.server"):
+        assert server.auth.claim_owner_from_env() is False
+    user = server.auth.get_user()
+    assert user.username is None
+    assert user.password_hash is None
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+def test_registration_guard_unchanged_in_docker_but_message_actionable(
+    server, monkeypatch
+):
+    """Under PIXLSTASH_IN_DOCKER=1 the guard REJECTS exactly as before (the
+    bridge-gateway IP carries no operator-vs-attacker signal), but the 403
+    tells the operator about the env-var provisioning path."""
+    monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
+    # The Docker bridge gateway is how host traffic actually appears in-container.
+    monkeypatch.setattr(
+        server.auth, "_get_real_client_ip", lambda request: "172.17.0.1"
+    )
+    client = TestClient(server.api)
+    response = client.post(
+        f"{API_PREFIX}/login",
+        json={"username": "operator", "password": "operatorpass"},
+    )
+    assert response.status_code == 403
+    assert DOCKER_403_MARKER in response.json()["detail"]
+    assert server.auth.get_user().password_hash is None
+
+    # Same guard, same message on the second claim path (first password on an
+    # unclaimed account via change_password).
+    unclaimed = server.auth.get_user()
+    monkeypatch.setattr(server.auth, "get_user_for_request", lambda request: unclaimed)
+    payload = SimpleNamespace(current_password=None, new_password="operatorpass")
+    with pytest.raises(Exception) as exc:
+        server.auth.change_password(_fake_request("172.17.0.1"), payload)
+    assert getattr(exc.value, "status_code", None) == 403
+    assert DOCKER_403_MARKER in getattr(exc.value, "detail", "")
+    assert server.auth.get_user().password_hash is None
+
+
+def test_registration_message_unchanged_outside_docker(server, monkeypatch):
+    """Without the Docker flag the 403 detail is byte-identical to before."""
+    monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
+    monkeypatch.setattr(
+        server.auth, "_get_real_client_ip", lambda request: "192.168.1.50"
+    )
+    client = TestClient(server.api)
+    response = client.post(
+        f"{API_PREFIX}/login",
+        json={"username": "attacker", "password": "attackerpass"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == NON_DOCKER_403_DETAIL
+    assert server.auth.get_user().password_hash is None
+
+
+def test_registration_still_allowed_from_loopback_in_docker(server, monkeypatch):
+    """The 'docker exec' loopback path keeps working under the Docker flag
+    (the guard's allow side is untouched too)."""
+    monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "127.0.0.1")
+    client = TestClient(server.api)
+    response = client.post(
+        f"{API_PREFIX}/login",
+        json={"username": "owner", "password": "ownerpassword"},
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Username and password set successfully."
+    assert server.auth.get_user().password_hash is not None
 
 
 def test_secure_endpoint_works_on_loopback_with_require_ssl(server, monkeypatch):

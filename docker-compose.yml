@@ -33,5 +33,13 @@ services:
       # Optional: uncomment + add a bind mount to put images on your real filesystem
       # PIXLSTASH_IMAGE_ROOT: "/mnt/photos"
 
+      # First run only: provision the owner account. Inside a container the
+      # server never sees loopback traffic, so the in-browser first-run setup
+      # is blocked by design. Uncomment BOTH lines, start the container once,
+      # log in, then remove them again (they are ignored — with a log message —
+      # once the account is claimed, but should not linger in the environment).
+      # PIXLSTASH_INITIAL_USERNAME: "owner"
+      # PIXLSTASH_INITIAL_PASSWORD: "change-me-now"
+
 volumes:
   pixlstash-home:

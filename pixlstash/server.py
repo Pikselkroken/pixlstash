@@ -1142,6 +1142,14 @@ class Server:
             logger,
         )
         self._user = self.auth.ensure_user()
+        # Headless installs (Docker): claim the still-unclaimed owner account
+        # from PIXLSTASH_INITIAL_USERNAME/PIXLSTASH_INITIAL_PASSWORD, because
+        # the loopback-only first-owner registration gate is unreachable from
+        # inside a container. No-op when the vars are unset or the account is
+        # already claimed. This is the single startup chokepoint for env
+        # provisioning, regardless of how the server was launched.
+        if self.auth.claim_owner_from_env():
+            self._user = self.auth.user
         # Desktop (Electron) shell: register the pre-authenticated loopback
         # owner session so the local window opens straight into the library.
         # No-op for every other install type (env var unset).

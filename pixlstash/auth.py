@@ -373,10 +373,26 @@ class AuthService:
                 "Rejected first-owner registration from non-loopback IP %s.",
                 client_ip,
             )
-            raise HTTPException(
-                status_code=403,
-                detail="Initial setup must be completed from the device running PixlStash.",
-            )
+            if os.environ.get("PIXLSTASH_IN_DOCKER", "") == "1":
+                # Inside a container the host's traffic arrives as the bridge
+                # gateway IP, never loopback, so the in-browser first-run setup
+                # can never pass this guard. The guard itself must stay exactly
+                # this strict (under Docker's userland proxy a LAN attacker is
+                # indistinguishable from the operator by IP); instead, tell the
+                # operator the supported provisioning path.
+                detail = (
+                    "Initial setup cannot be completed through a Docker "
+                    "network. Set the PIXLSTASH_INITIAL_USERNAME and "
+                    "PIXLSTASH_INITIAL_PASSWORD environment variables on the "
+                    "container and restart it to provision the owner account "
+                    "(then unset them). Alternatively, log in from inside the "
+                    "container over loopback using 'docker exec'."
+                )
+            else:
+                detail = (
+                    "Initial setup must be completed from the device running PixlStash."
+                )
+            raise HTTPException(status_code=403, detail=detail)
 
     def _validate_bcrypt_password_length(self, password: Optional[str]):
         if password is None:
@@ -428,6 +444,15 @@ class AuthService:
     # Env var the Electron desktop shell uses to hand the server a
     # pre-authenticated owner session token (see seed_desktop_session).
     DESKTOP_SESSION_ENV = "PIXLSTASH_DESKTOP_SESSION"
+    # Env vars a headless install (Docker, a remote server) uses to provision
+    # the initial owner credentials at startup (see claim_owner_from_env).
+    INITIAL_USERNAME_ENV = "PIXLSTASH_INITIAL_USERNAME"
+    INITIAL_PASSWORD_ENV = "PIXLSTASH_INITIAL_PASSWORD"
+    # Minimum accepted length for an env-provisioned password, matching
+    # LoginRequest's ``min_length=8`` floor: a shorter env password would claim
+    # an account whose credentials the login endpoint itself rejects (422),
+    # locking the operator out.
+    INITIAL_PASSWORD_MIN_LEN = 8
     # Minimum accepted length of the desktop session token. The shell ships a
     # 32-byte token rendered as 64 hex chars; 32 is the documented floor of that
     # contract (see seed_desktop_session and ServerProcess.ts).
@@ -477,6 +502,124 @@ class AuthService:
             "Seeded a pre-authenticated desktop session for the local owner."
         )
         return token
+
+    def claim_owner_from_env(self) -> bool:
+        """Claim the unclaimed owner account from env-provided credentials.
+
+        Headless installs (Docker in particular) can never satisfy the
+        loopback-only first-owner registration gate
+        (:meth:`_require_loopback_for_registration`): inside a container, host
+        traffic arrives as the bridge-gateway IP, so the in-browser first-run
+        setup is unreachable by design. The IP guard must stay that strict —
+        under Docker's userland proxy a LAN attacker is indistinguishable from
+        the operator by IP — so instead the operator provisions the initial
+        credentials via the ``PIXLSTASH_INITIAL_USERNAME`` /
+        ``PIXLSTASH_INITIAL_PASSWORD`` env vars. This startup chokepoint claims
+        the account with them before the server accepts requests, removing the
+        racing window entirely.
+
+        Hard rules:
+
+        - An **already-claimed account is never modified** — stale env vars on
+          a later restart must not become a takeover vector; they are ignored
+          with an INFO log.
+        - Exactly one of the two vars set is a configuration error: warn
+          loudly, claim nothing.
+        - The password passes the same bcrypt 72-byte validation as every
+          other claim path, plus the login endpoint's 8-character floor.
+
+        Returns:
+            True when the account was claimed from the env vars.
+        """
+        username = os.environ.get(self.INITIAL_USERNAME_ENV, "").strip()
+        # Strip to mirror LoginRequest's whitespace-stripping validator —
+        # otherwise an env password with stray whitespace could never log in.
+        password = os.environ.get(self.INITIAL_PASSWORD_ENV, "").strip()
+        if not username and not password:
+            return False
+        if bool(username) != bool(password):
+            self._logger.warning(
+                "Ignoring initial owner credentials: only %s is set. Both %s "
+                "and %s must be set (non-empty) to provision the owner "
+                "account; nothing was claimed.",
+                self.INITIAL_USERNAME_ENV if username else self.INITIAL_PASSWORD_ENV,
+                self.INITIAL_USERNAME_ENV,
+                self.INITIAL_PASSWORD_ENV,
+            )
+            return False
+
+        user = self.ensure_user()
+        if user.username or user.password_hash:
+            self._logger.info(
+                "Ignoring %s/%s: the owner account is already claimed. These "
+                "variables only provision an unclaimed account on first "
+                "startup and should be unset now.",
+                self.INITIAL_USERNAME_ENV,
+                self.INITIAL_PASSWORD_ENV,
+            )
+            return False
+
+        try:
+            self._validate_bcrypt_password_length(password)
+        except HTTPException as exc:
+            self._logger.error(
+                "Refusing to claim the owner account from %s: %s Nothing was "
+                "claimed; fix the password and restart.",
+                self.INITIAL_PASSWORD_ENV,
+                exc.detail,
+            )
+            return False
+        if len(password) < self.INITIAL_PASSWORD_MIN_LEN:
+            self._logger.error(
+                "Refusing to claim the owner account from %s: the password "
+                "must be at least %d characters (the login endpoint enforces "
+                "this floor, so a shorter password could never log in). "
+                "Nothing was claimed; fix the password and restart.",
+                self.INITIAL_PASSWORD_ENV,
+                self.INITIAL_PASSWORD_MIN_LEN,
+            )
+            return False
+
+        hashed_password = bcrypt.hash(password)
+
+        def set_credentials(session: Session):
+            db_user = session.exec(select(User)).first()
+            if db_user is None:
+                db_user = User(max_vram_gb=default_max_vram_gb())
+            if db_user.username or db_user.password_hash:
+                # Re-checked inside the transaction so a claim that raced this
+                # one (e.g. a concurrent loopback login) is never overwritten.
+                return db_user
+            db_user.username = username
+            db_user.password_hash = hashed_password
+            session.add(db_user)
+            session.commit()
+            session.refresh(db_user)
+            return db_user
+
+        user = self._db.run_task(set_credentials, priority=DBPriority.IMMEDIATE)
+        if user.password_hash != hashed_password:
+            self._logger.warning(
+                "Did not claim the owner account from %s/%s: the account was "
+                "claimed by another path while startup provisioning ran. The "
+                "existing credentials are untouched.",
+                self.INITIAL_USERNAME_ENV,
+                self.INITIAL_PASSWORD_ENV,
+            )
+            return False
+        self.user = user
+        self.username = user.username
+        self.password_hash = user.password_hash
+        self._logger.info(
+            "Claimed the owner account as %r from %s/%s. Initial setup is "
+            "complete — unset these environment variables now; they are no "
+            "longer needed, and leaving them set exposes the initial password "
+            "in the container/process environment.",
+            username,
+            self.INITIAL_USERNAME_ENV,
+            self.INITIAL_PASSWORD_ENV,
+        )
+        return True
 
     def set_password_hash(self, hashed_password: str):
         def update_user(session: Session):
@@ -1324,6 +1467,12 @@ class AuthService:
                     db_user = session.exec(select(User)).first()
                     if db_user is None:
                         db_user = User(max_vram_gb=default_max_vram_gb())
+                    # Re-check unclaimed-ness INSIDE the transaction, mirroring
+                    # claim_owner_from_env: two concurrent loopback claims must
+                    # not overwrite each other — first commit wins, the loser
+                    # falls through to normal credential verification.
+                    if db_user.username or db_user.password_hash:
+                        return db_user
                     db_user.username = request.username
                     db_user.password_hash = hashed_password
                     session.add(db_user)
@@ -1335,6 +1484,16 @@ class AuthService:
                 self.user = user
                 self.username = user.username
                 self.password_hash = user.password_hash
+                if user.password_hash != hashed_password:
+                    # Lost the claim race: another loopback client committed
+                    # first. Do not issue a session for this request; the
+                    # caller must log in against the winning credentials.
+                    self._logger.warning(
+                        "First-owner claim raced; keeping the first claim."
+                    )
+                    raise HTTPException(
+                        status_code=401, detail="Invalid username or password"
+                    )
                 response = JSONResponse(
                     content={"message": "Username and password set successfully."}
                 )
