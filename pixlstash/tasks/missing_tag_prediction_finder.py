@@ -48,6 +48,17 @@ class MissingTagPredictionFinder(SimpleMissingFinder):
         if engine is None:
             return False
         try:
+            # Tagging turned off entirely (no active tag plugin) means no
+            # background inference at all — mirror MissingTagFinder, which bails on
+            # a falsy ``active_tag_plugin``. Without this the workflow's
+            # ``active or "pixlstash_tagger"`` fallback reports the PixlStash tagger
+            # as "enabled" even when the user cleared the active plugin, so this
+            # backfill would keep running GPU inference against a disabled tagger.
+            active_tag_plugin = (getattr(engine, "tagger_settings", None) or {}).get(
+                "active_tag_plugin"
+            )
+            if not active_tag_plugin:
+                return False
             # Only the PixlStash tagger produces the raw scores predictions are
             # built from, so this backfill only applies when it is the active tagger.
             return bool(engine.tagging_workflow.is_pixlstash_tagger_enabled)

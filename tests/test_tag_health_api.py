@@ -40,6 +40,35 @@ from tests.utils import upload_pictures_and_wait
 API = "/api/v1"
 
 
+def _disable_background_tagger(server):
+    """Turn the background tagger pipeline off for the whole test server.
+
+    Every tag-health test seeds its own ``Tag``/``TagPrediction`` fixtures and
+    asserts exact counts; it never relies on the model actually tagging. But
+    ``upload_pictures_and_wait`` writes a ``__tag`` retag sentinel on each imported
+    picture (see ``routes/pictures/_import.py``), which drives two background
+    finders that would race the seed and the board rebuild:
+
+    * ``MissingTagFinder`` claims any sentinel-carrying picture, runs the tagger,
+      then ``TagTask._add_tags_bulk`` *deletes every ``Tag`` row for that picture*
+      (sentinel and seeded tags alike) and rewrites them, plus writes
+      ``TagPrediction`` rows on the tagger's own ``model_version`` — moving
+      ``_current_model_version`` off the seeded ``"v1"`` and dropping the seeded
+      predictions out of the version-pinned ``est_wrong``/``est_missing`` signals.
+    * ``MissingTagPredictionFinder`` back-fills predictions for any picture that
+      has a real tag but no prediction (e.g. the deliberately prediction-less
+      ``no-model`` row), which would flip its ``has_model`` to true.
+
+    Both only fire once the (uncached) tagger model finishes downloading and
+    running, so the failure is timing-dependent — green on a cold cache, red on a
+    warm one. Clearing ``active_tag_plugin`` bails ``MissingTagFinder`` (it treats
+    a falsy active plugin as "off") and, together with the matching guard in
+    ``MissingTagPredictionFinder``, bails the backfill too — removing the race at
+    the source instead of trying to out-wait it.
+    """
+    server.vault.set_tagger_settings({"active_tag_plugin": None})
+
+
 def _setup():
     temp_dir = tempfile.TemporaryDirectory()
     image_root = os.path.join(temp_dir.name, "images")
@@ -53,6 +82,8 @@ def _setup():
         "/login", json={"username": "testuser", "password": "testpassword"}
     )
     assert resp.status_code == 200
+    # After login so no settings reload during authentication can clobber it.
+    _disable_background_tagger(server)
     return temp_dir, client, server
 
 
@@ -205,33 +236,35 @@ def _seed_stable(server, seed_fn):
     return server.vault.db.run_task(_wrapped)
 
 
-@pytest.mark.skip(
-    reason="Flaky: est_wrong tagger-pipeline race — quarantined for 1.7.0rc1, "
-    "tracked in #532"
-)
 def test_tag_health_aggregates_on_fixture_vault():
     temp_dir, client, server = _setup()
     try:
-        p1 = _upload_named(client)  # tagged "t", conf 0.05  → est_wrong + dispute
+        p1 = _upload_named(client)  # tagged "t", conf 0.05 human POS → model-disputes
         p2 = _upload_named(client)  # untagged,   conf 0.95  → est_missing
         p3 = _upload_named(client)  # untagged,   conf 0.50  → boundary mass
         p4 = _upload_named(client)  # tagged "u", no predictions → no-model row
+        p5 = _upload_named(client)  # tagged "t", conf 0.05 un-reviewed → est_wrong
 
         now = datetime.utcnow()
 
         def seed(session):
             session.add(Tag(picture_id=p1, tag="t"))
             session.add(Tag(picture_id=p4, tag="u"))
-            # Three predictions for "t", all on the current model version.
+            session.add(Tag(picture_id=p5, tag="t"))
+            # Four predictions for "t", all on the current model version. est_wrong
+            # (tagged + un-reviewed low-confidence) and model_disputes (human POS the
+            # model contradicts) are mutually exclusive since human-adjudicated rows
+            # are excluded from est_wrong, so they need distinct pictures (p5 vs p1).
             session.add(
                 TagPrediction(
                     picture_id=p1,
                     tag="t",
                     confidence=0.05,
                     model_version="v1",
-                    predicted_at=now - timedelta(minutes=2),
+                    predicted_at=now - timedelta(minutes=3),
                     # Human froze POS but the live model is confidently negative:
-                    # a model-disputes-human row (and a verified one).
+                    # a model-disputes-human row (and a verified one). Excluded from
+                    # est_wrong precisely because a human already ruled on it.
                     label_state="POS",
                     label_source="human",
                 )
@@ -242,7 +275,7 @@ def test_tag_health_aggregates_on_fixture_vault():
                     tag="t",
                     confidence=0.95,
                     model_version="v1",
-                    predicted_at=now - timedelta(minutes=1),
+                    predicted_at=now - timedelta(minutes=2),
                 )
             )
             session.add(
@@ -250,6 +283,17 @@ def test_tag_health_aggregates_on_fixture_vault():
                     picture_id=p3,
                     tag="t",
                     confidence=0.50,
+                    model_version="v1",
+                    predicted_at=now - timedelta(minutes=1),
+                )
+            )
+            # Tagged + un-reviewed (label_state defaults to UNKNOWN) low-confidence
+            # prediction on the current version → the one genuine est_wrong row.
+            session.add(
+                TagPrediction(
+                    picture_id=p5,
+                    tag="t",
+                    confidence=0.05,
                     model_version="v1",
                     predicted_at=now,
                 )
@@ -299,8 +343,9 @@ def test_tag_health_aggregates_on_fixture_vault():
         assert t["est_wrong"] == 1
         assert t["est_missing"] == 1
         assert t["mismatch"] == 1
-        assert abs(t["verified_pct"] - 1 / 3) < 1e-9
-        assert abs(t["boundary_pct"] - 1 / 3) < 1e-9
+        # Four "t" predictions: 1 verified (p1 human POS), 1 boundary (p3 @ 0.50).
+        assert abs(t["verified_pct"] - 1 / 4) < 1e-9
+        assert abs(t["boundary_pct"] - 1 / 4) < 1e-9
         assert t["overturn_rate"] == 0.5
         assert t["model_disputes"] == 1
         assert t["has_model"] is True
