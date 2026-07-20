@@ -488,13 +488,18 @@ watch(
 
 .icon-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  /* Fit however many 32px icon columns the remaining width holds — a fixed
+     repeat(8, 1fr) can't shrink below the 32px buttons and clipped the last
+     column on platforms with classic (non-overlay) scrollbars. The stable
+     gutter keeps the scrollbar from eating a column once content overflows. */
+  grid-template-columns: repeat(auto-fill, minmax(32px, 1fr));
   column-gap: var(--space-1);
   row-gap: var(--space-1);
   flex: 1;
   min-width: 0;
   max-height: 188px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .icon-cat-header {
