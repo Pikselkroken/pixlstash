@@ -156,12 +156,6 @@ watch(
 // Desktop-shell preference: keep running in the tray when the window is closed.
 const hideToTrayOnClose = ref(true);
 
-const activeLabel = computed(() => {
-  if (!state.value) return "";
-  const active = state.value.items.find((i) => i.active);
-  return active ? active.label : state.value.bundled.label;
-});
-
 async function refresh() {
   if (!desktop) return;
   try {
@@ -555,12 +549,18 @@ watch(
       first
     >
       <template v-if="state">
+        <!-- One unified runtime list: the built-in runtime first, then every
+             GPU overlay. Exactly one row reads "· active" (each row derives it
+             from its own `active` flag), and rows never appear, disappear, or
+             move as the active runtime changes — only status text and actions
+             swap. That keeps the section legible right after a failed GPU
+             activation reverts to the built-in runtime. -->
         <SettingsRow
-          :label="activeLabel"
+          :label="state.bundled.label"
           :sub="
             state.bundled.active
               ? 'Built-in runtime · active'
-              : 'GPU acceleration · active'
+              : 'Built-in runtime'
           "
         >
           <AppButton
@@ -568,9 +568,10 @@ watch(
             variant="ghost"
             size="sm"
             :disabled="busy"
+            :aria-label="`Use ${state.bundled.label}`"
             @click="useBuiltIn"
           >
-            Use built-in
+            Use
           </AppButton>
         </SettingsRow>
 
@@ -585,6 +586,7 @@ watch(
             variant="primary_green"
             size="sm"
             :disabled="busy"
+            :aria-label="`Install ${item.label}`"
             @click="install(item.accel)"
           >
             {{ item.recommended ? "Install (recommended)" : "Install" }}
@@ -595,6 +597,7 @@ watch(
               variant="primary_green"
               size="sm"
               :disabled="busy"
+              :aria-label="`Use ${item.label}`"
               @click="use(item.accel)"
             >
               Use
@@ -603,6 +606,7 @@ watch(
               variant="ghost"
               size="sm"
               :disabled="busy"
+              :aria-label="`Remove ${item.label}`"
               @click="remove(item.accel)"
             >
               Remove
