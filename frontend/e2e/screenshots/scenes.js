@@ -412,6 +412,16 @@ export const scenes = [
 ]
 
 export const manual = {
+  'ScreenshotReview1.jpg':
+    'Tag review card (1.7) — hand-shot against a curated library; needs a review-session fixture scene',
+  'ScreenshotReview3.jpg':
+    'Tag health table (1.7) — hand-shot; needs review history to populate the rankings',
+  'ScreenshotLockSets.jpg':
+    'Set context menu with Lock set (1.7) — hand-shot against a curated library',
+  'ScreenshotSegmentation.jpg':
+    'Object-detection boxes (1.7) — hand-shot; needs a segmented picture fixture',
+  'ScreenshotSettings.jpg':
+    'Refreshed settings dialog (1.7) — hand-shot; replaceable by a settings-tab scene later',
   'ComfyWorkflow.png': 'ComfyUI graph — external app, not the PixlStash SPA',
   'ComfyImageEdit.jpg': 'ComfyUI graph — external app',
   'ComfyOutpaint.jpg': 'ComfyUI graph — external app',
