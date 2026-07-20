@@ -82,6 +82,9 @@
   Var /GLOBAL PixlInstallLogPath
   !ifndef BUILD_UNINSTALLER
     Var /GLOBAL PixlKillResult
+    # Tick count (ms) captured just before the runtime is extracted, so
+    # customInstall can report how long the big extraction actually took.
+    Var /GLOBAL PixlExtractStartTick
   !endif
 
   # Defining customCheckAppRunning (below) makes the `!ifmacrondef
@@ -262,6 +265,9 @@
 # ---------------------------------------------------------------------------
 !macro customInit
   StrCpy $PixlKillResult "no previous backend checked (fresh install)"
+  # Seed the extraction timer so customInstall's elapsed print is safe even if
+  # customCheckAppRunning was skipped (e.g. an inner elevated UAC instance).
+  StrCpy $PixlExtractStartTick ""
 !macroend
 
 # ---------------------------------------------------------------------------
@@ -402,6 +408,47 @@
       ${EndIf}
     ${EndIf}
   !endif
+
+  # --- PixlStash addition: set honest expectations for the long extraction. ---
+  # The bundled ~2 GB / ~30k-file AI runtime is extracted next. For our (non-web)
+  # target electron-builder does NOT use NSIS `File /r`: it embeds an app-*.7z and
+  # extracts it with `Nsis7z::Extract` into a temp dir, then `CopyFiles /SILENT`
+  # every file into place (see extractAppPackage.nsh / extractUsing7za). Nsis7z
+  # drives its own progress bar but prints no per-file detail; the CopyFiles pass
+  # is /SILENT, so it shows nothing at all and the bar can sit still for minutes
+  # while ~30k files are copied and antivirus scans them twice (once per pass).
+  # That silent window is what gets reported as a hang (GitHub #520). We can't add
+  # live motion without overriding electron-builder's extract macro, so we set
+  # accurate expectations instead: tell the user the bar may stop and NOT to
+  # cancel. (electron-builder set `SetDetailsPrint none` at the top of the section,
+  # which suppresses DetailPrint, so flip it to `both` to make the notice visible,
+  # then restore `none` for the extraction.)
+  !ifndef BUILD_UNINSTALLER
+    SetDetailsPrint both
+    DetailPrint "----------------------------------------------------------------"
+    DetailPrint "Installing the PixlStash AI runtime (~2 GB, thousands of files)."
+    DetailPrint "This can take several minutes -- 10-30 min on a slow disk or with"
+    DetailPrint "antivirus active. The progress bar may appear to STOP for a while;"
+    DetailPrint "this is normal. Please wait and do NOT cancel."
+    DetailPrint "----------------------------------------------------------------"
+    # Non-modal, always-visible notice: overwrite the install page's header
+    # subtitle (the descriptive line under the "Installing" title at the top of
+    # the page -- control 1038 on $HWNDPARENT) so the warning stays on screen for
+    # the whole extraction without a popup and without being buried in the details
+    # list. The INSTFILES page is already displayed by the time this section code
+    # runs, and MUI does not rewrite the header until the page changes, so the text
+    # sticks. If the control can't be found we still have the detail lines above.
+    !ifndef WM_SETTEXT
+      !define WM_SETTEXT 0x000C
+    !endif
+    GetDlgItem $0 $HWNDPARENT 1038
+    ${If} $0 != 0
+      SendMessage $0 ${WM_SETTEXT} 0 "STR:Installing a large AI runtime (~2 GB) -- this can take several minutes. The progress bar may pause; please wait and do not cancel."
+    ${EndIf}
+    System::Call 'kernel32::GetTickCount()i .r0'
+    StrCpy $PixlExtractStartTick $0
+    SetDetailsPrint none
+  !endif
 !macroend
 
 # ---------------------------------------------------------------------------
@@ -423,6 +470,14 @@
   DetailPrint "Backend check: $PixlKillResult"
   DetailPrint "Bundled backend: $INSTDIR\resources\python\python.exe"
   DetailPrint "Application files extracted."
+  # Report how long the extraction took (start captured in customCheckAppRunning).
+  # Guarded: the timer is unset if customCheckAppRunning was skipped.
+  ${If} $PixlExtractStartTick != ""
+    System::Call 'kernel32::GetTickCount()i .r0'
+    IntOp $4 $0 - $PixlExtractStartTick
+    IntOp $4 $4 / 1000
+    DetailPrint "Runtime extraction took approximately $4 seconds."
+  ${EndIf}
   DetailPrint "----------------------------------------------------------------"
 
   # Persist the log for completed installs (the abort path is covered by
