@@ -278,28 +278,6 @@ def prune_gpu_only(py: Path) -> dict[str, str]:
     return pruned
 
 
-def _pyi_is_runtime_required(pyi_path: Path) -> bool:
-    """True if a ``.pyi`` is a lazy_loader runtime stub, not a throwaway type stub.
-
-    ``lazy_loader.attach_stub`` reads the sibling module's ``.pyi`` at *import
-    time* to discover which names to expose lazily (skimage, scipy, networkx and
-    friends do this in their package ``__init__``). Deleting such a stub turns the
-    import into ``ValueError: Cannot load imports from non-existent stub`` and
-    takes the whole backend down. A plain type stub has no runtime reader and is
-    safe to drop. Detect the difference by whether the sibling module calls
-    ``attach_stub``.
-    """
-    sibling_py = pyi_path.with_suffix(".py")
-    if not sibling_py.is_file():
-        return False
-    try:
-        return "attach_stub" in sibling_py.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        # Can't read the sibling to decide -> keep the stub; a broken import is
-        # far worse than a few KB of retained type hints.
-        return True
-
-
 def strip_env(python_dir: Path) -> None:
     """Drop caches, tests, type stubs and C++ headers to shrink the installer.
 
@@ -309,14 +287,10 @@ def strip_env(python_dir: Path) -> None:
     via torch.utils.cpp_extension — never at inference) and the per-package test/
     cache trees measurably cuts install time, not just size. The GPU overlay ships
     its own complete torch, so the bundled headers are dead weight there too.
-
-    ``.pyi`` type stubs are dropped too, EXCEPT the ones ``lazy_loader`` loads at
-    runtime (see ``_pyi_is_runtime_required``) -- removing those crashes startup.
     """
     log("stripping caches/tests/stubs/headers")
     removed_dirs = 0
     removed_files = 0
-    kept_stubs = 0
     for root, dirs, files in os.walk(python_dir):
         for d in list(dirs):
             if d in {"__pycache__", "tests", "test"}:
@@ -325,23 +299,16 @@ def strip_env(python_dir: Path) -> None:
                 removed_dirs += 1
         for f in files:
             if f.endswith(".pyi"):
-                pyi_path = Path(root) / f
-                if _pyi_is_runtime_required(pyi_path):
-                    kept_stubs += 1
-                    continue
                 try:
-                    pyi_path.unlink()
+                    (Path(root) / f).unlink()
                     removed_files += 1
                 except OSError as exc:
-                    log(f"could not remove type stub {pyi_path}: {exc}")
+                    log(f"could not remove type stub {Path(root) / f}: {exc}")
     for include_dir in python_dir.rglob("site-packages/torch/include"):
         if include_dir.is_dir():
             shutil.rmtree(include_dir, ignore_errors=True)
             log(f"removed torch C++ headers: {include_dir}")
-    log(
-        f"removed {removed_dirs} cache/test dirs and {removed_files} .pyi stubs "
-        f"(kept {kept_stubs} lazy_loader runtime stubs)"
-    )
+    log(f"removed {removed_dirs} cache/test dirs and {removed_files} .pyi stubs")
 
 
 def main() -> int:
