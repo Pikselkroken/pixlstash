@@ -6,6 +6,7 @@ import {
   Accel,
   ACCEL_LABELS,
   ONNX_PACKAGE,
+  ORT_GPU_PIN,
   RuntimeInfo,
   TORCH_INDEX,
   activeAccelPath,
@@ -100,7 +101,21 @@ export function buildOverlayPipArgs(
     args.push(`torch==${torchWant}`, `torchvision==${basePep440(info.torchvision)}`);
   }
   if (ONNX_PACKAGE[accel] === 'onnxruntime-gpu') {
-    args.push(`onnxruntime-gpu==${basePep440(info.onnxruntime)}`);
+    // NOT the bundle's ORT version: onnxruntime-gpu has a CUDA-flavor axis the
+    // version number doesn't express — PyPI serves one flavor per release, and
+    // 1.27.0 moved to CUDA 13 (links libcudart.so.13) while the cu128 overlay's
+    // nvidia stack only ships libcudart.so.12, so `import onnxruntime` ImportErrors
+    // and the whole backend dies at startup (insightface imports it in the
+    // pixlstash import chain; live incident 2026-07-20). Pin per accel to the last
+    // build of that accel's CUDA generation instead — see ORT_GPU_PIN in config.ts.
+    const ortPin = ORT_GPU_PIN[accel];
+    if (!ortPin) {
+      // A new GPU accel was mapped to onnxruntime-gpu without recording which
+      // CUDA generation it needs. Falling back to the bundle version is exactly
+      // the incident above, so fail loudly at install time instead.
+      throw new Error(`No onnxruntime-gpu pin recorded for ${accel} — add it to ORT_GPU_PIN`);
+    }
+    args.push(`onnxruntime-gpu==${ortPin}`);
   }
   return { args, usedFallback };
 }
@@ -130,6 +145,61 @@ export function filterConstraintsFreeze(frozen: string): string {
         l && !l.startsWith('-') && !l.startsWith('#') && !l.includes(' @ ') && !drop.test(l),
     );
   return kept.join('\n') + '\n';
+}
+
+/** The message shown when a broken GPU overlay is bypassed at launch. */
+export const OVERLAY_FALLBACK_MESSAGE =
+  'GPU acceleration failed to load — running on CPU. Reinstall it from Settings.';
+
+/** Injected effects for {@link launchWithOverlayFallback}, so it is unit-testable. */
+export interface OverlayFallbackHooks {
+  /** Spawn the backend (+ optional overlay) and load the UI; throws on startup failure. */
+  start: (accel: Accel | null) => Promise<void>;
+  /** Deactivate the active overlay (setActiveAccel(null)). Must NOT delete the dir. */
+  deactivateOverlay: () => Promise<void>;
+  /** Surface the fallback message to the user (dialog). */
+  notify: (message: string) => void;
+  /** Diagnostic logging; defaults to console.error. */
+  log?: (message: string) => void;
+}
+
+/**
+ * Launch the backend, falling back to the bundled CPU/Metal env when startup
+ * fails WITH a GPU overlay active. A broken overlay must never prevent launch:
+ * e.g. an overlay whose onnxruntime-gpu is the wrong CUDA generation makes
+ * `import onnxruntime` throw at module load, which kills the whole backend
+ * during startup (insightface imports it in pixlstash's import chain — live
+ * incident 2026-07-20). In that case we deactivate the overlay (the dir is kept
+ * on disk for reinstall/inspection — only the active-accel state is cleared),
+ * tell the user, and retry once without it.
+ *
+ * Cannot loop by construction: the retry is the literal `hooks.start(null)` call
+ * in the catch block — there is no recursion and no second catch, so if the
+ * bundled-env launch also fails, that error propagates to the caller's existing
+ * fatal path (a genuine packaging error, not an overlay problem). A failure with
+ * `accel === null` rethrows immediately: no overlay was involved, so there is
+ * nothing to fall back from.
+ */
+export async function launchWithOverlayFallback(
+  accel: Accel | null,
+  hooks: OverlayFallbackHooks,
+): Promise<void> {
+  try {
+    await hooks.start(accel);
+  } catch (e) {
+    if (accel === null) throw e; // bundled env failed — nothing to fall back to
+    const log = hooks.log ?? ((m: string) => console.error(m));
+    log(
+      `[overlay-fallback] backend startup failed with the ${accel} overlay active; ` +
+        `deactivating it (dir kept for reinstall/inspection) and retrying on the ` +
+        `bundled env: ${(e as Error).message}`,
+    );
+    await hooks.deactivateOverlay();
+    hooks.notify(OVERLAY_FALLBACK_MESSAGE);
+    // Exactly one retry, overlay-free. NOT wrapped in another try — a failure
+    // here is a genuine packaging error and must reach the caller's fatal path.
+    await hooks.start(null);
+  }
 }
 
 /**

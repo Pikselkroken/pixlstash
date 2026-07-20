@@ -18,7 +18,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetector';
-import { BackendManager, OVERLAY_ACCELS } from './backend/BackendManager';
+import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
 import { ServerProcess } from './backend/ServerProcess';
 import {
   Accel,
@@ -678,7 +678,16 @@ async function boot(): Promise<void> {
       return;
     }
 
-    await startAndLoad(await activeOverlayAccel());
+    // A broken GPU overlay must never prevent launch (e.g. an onnxruntime-gpu of
+    // the wrong CUDA generation kills the backend at import time): if startup
+    // fails with an overlay active, deactivate it (dir kept for reinstall), tell
+    // the user, and retry once on the bundled CPU/Metal env. If that also fails,
+    // the error falls through to the fatal phase below as before.
+    await launchWithOverlayFallback(await activeOverlayAccel(), {
+      start: startAndLoad,
+      deactivateOverlay: () => manager.setActiveAccel(null),
+      notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
+    });
   } catch (e) {
     sendPhase({ phase: 'error', message: (e as Error).message });
   }

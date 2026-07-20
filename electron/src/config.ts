@@ -100,6 +100,29 @@ export const ONNX_PACKAGE: Record<Accel, string> = {
 };
 
 /**
+ * Exact `onnxruntime-gpu` version per overlay accelerator. The bundle's ORT
+ * version CANNOT be used here because onnxruntime-gpu has a hidden CUDA-flavor
+ * axis the version number doesn't express: PyPI serves exactly one CUDA flavor
+ * per release, and it moved generations — 1.27.0 is a CUDA 13 build linking
+ * `libcudart.so.13`, while a cu128 overlay's whole nvidia stack is CUDA 12
+ * (only `libcudart.so.12` on disk). Installing it makes `import onnxruntime`
+ * throw ImportError at module load, and since insightface imports onnxruntime
+ * inside pixlstash's startup import chain, the entire backend exits code 1
+ * (live incident, 2026-07-20). So each overlay accel pins the last PyPI build
+ * of its own CUDA generation: 1.26.0 is the last CUDA-12 release (verified
+ * working through the cu128 overlay — CUDAExecutionProvider available). A
+ * future cu13x accel gets its own entry here. Deliberately resolved from PyPI
+ * with NO extra package index (the ORT azure cuda-12 feed was considered and
+ * rejected: a new supply-chain trust surface for zero need while 1.26.0 works).
+ * Every accel that maps to `onnxruntime-gpu` in {@link ONNX_PACKAGE} MUST have
+ * an entry here — {@link buildOverlayPipArgs} throws if one is missing.
+ */
+export const ORT_GPU_PIN: Partial<Record<Accel, string>> = {
+  cu128: '1.26.0',
+  // rocm: no entry — ONNX_PACKAGE.rocm is the bundled CPU 'onnxruntime'.
+};
+
+/**
  * The read-only Python runtime embedded in the installer. Packaged: under the
  * app's resources dir; dev: electron/resources/python, produced locally by
  * `python scripts/build_desktop_runtime.py`.
