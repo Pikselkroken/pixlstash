@@ -1,4 +1,4 @@
-# [1.7.0]
+# [1.7.0] [Security:Moderate]
 
 Smart Scores are recomputed for your whole library the first time you open 1.7.0, so the grid may re-order compared to 1.6. This is expected, not a bug: scoring is now calibrated and precision-aware, so it judges image defects more accurately. Your originals and snapshots are untouched, and the recompute runs in the background.
 
@@ -13,6 +13,8 @@ Smart Scores are recomputed for your whole library the first time you open 1.7.0
 - ComfyUI generation progress now shows in the task manager; image-to-image and filter outputs can optionally stack onto the source, and the image-to-image dialog closes itself when a run starts.
 - Watch folders now retry on transient hash failures instead of skipping the file.
 - Harden object-scope enforcement on the tag-prediction endpoints: the confirm, reject, delete, and reset handlers now run the deny-by-default scope check, closing a defense-in-depth gap (issue #504).
+- Fix bug stopping the manually drawn face boxes from being stored
+- Update Axios [Security:Moderate]
 
 # [1.6.12]
 - Synced versions to frontend and ensure all builds succeed
