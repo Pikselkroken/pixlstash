@@ -18,6 +18,14 @@ suite is pytest — those are not duplicated here.
 Each spec maps to a section of `release-test-plan.md` so the manual checklist
 shrinks as automated coverage grows.
 
+> **Numbering note (2026-07):** the release test plan was overhauled — fully
+> automated sections were removed and the remaining manual sections renumbered
+> (1 Installation, 2 Upgrade, 3 Desktop/Electron, 4 Grid manual remainder,
+> 5 Import & background, 6 ComfyUI, 7 Plugins, 8 Performance, 9 Folders,
+> 10 Live-update remainder, 11 Review sessions remainder). Spec titles and the
+> "plan §" tags below still cite the **legacy** numbering; the plan's preamble
+> carries the legacy→spec coverage map.
+
 | Status | Meaning |
 |--------|---------|
 | ✅ | Automated and passing |
@@ -85,6 +93,35 @@ shrinks as automated coverage grows.
 | Test | Covers | Status |
 |------|--------|--------|
 | sets a rating that persists across a reload | Click the Nth star in the overlay; the score round-trips to the backend and survives a reload | ✅ |
+| a grid star click saves, survives a reload, and matches the overlay | The compact hover star badge on a thumbnail card: click the Nth star, reload — the grid badge still shows N and the overlay for the same picture agrees (grid↔overlay sync). Uses the 2nd card so the two tests never share a picture | ✅ |
+
+## Picture import — `import.spec.js` (plan §2, partial)
+| Test | Covers | Status |
+|------|--------|--------|
+| dragging files over the grid raises the import overlay; leaving clears it | A synthetic DataTransfer with a real JPEG File dispatched on the grid scroll wrapper raises the "Drop files here to import" overlay; dragleave clears it | ✅ |
+
+> ⚠️ **Drop → import completes is NOT automatable in this harness:**
+> `POST /pictures/import` returns 400 "Face worker is not running" and the e2e
+> backend boots with `disable_background_workers: true`. The import-completion
+> half of legacy §2 stays in the manual plan (Import & background processing)
+> until the harness grows a worker-enabled mode or a test hook.
+
+## Export — `export.spec.js` (plan §15)
+| Test | Covers | Status |
+|------|--------|--------|
+| exports 3 selected pictures to a ZIP containing exactly 3 image files | Ctrl-click 3 cards → toolbar Export panel (captions "none") → Export → the downloaded ZIP's central directory holds exactly 3 image entries | ✅ |
+| exports a picture set to a ZIP matching the sidebar count | Open a non-empty set, export the current view — ZIP image-entry count equals the set's sidebar count badge | ✅ |
+
+## Tag predictions — `tag-predictions.spec.js` (plan §14)
+| Test | Covers | Status |
+|------|--------|--------|
+| a deleted tag drops to a prediction chip and Confirm restores it | Discovers (via API) a picture whose applied tag has a live prediction ≥ 0.35, deep-links its overlay (`?overlay=<id>`), deletes the tag → the label drops to the "Rejected Tags" prediction chip with a confidence badge; the chip's ✓ confirms it back into the applied list (backend-verified). Round trip restores the fixture | ✅ |
+
+> Prediction *generation* after a fresh import needs background workers —
+> manual (plan section 5). Note the UI has no separate "Tag Predictions"
+> accept list any more: only REJECTED predictions ≥ 0.3 render, as the
+> "Rejected Tags" chips; a synthetic manual reject gets confidence 0.0 and
+> stays hidden by design.
 
 ## Picture Sets / Projects / Characters — `entities.spec.js` (plan §7/§8/§9)
 | Test | Covers | Status |
@@ -203,8 +240,23 @@ Tracked so they aren't forgotten — weighted by blast radius:
   Data-loss territory; should be the next spec.
 - **Bulk operations at scale** — select-all/range and apply-to-many beyond a
   handful of pictures are only smoke-covered.
-- **Import of malformed / huge / unsupported files** — graceful handling
-  (no crash, nothing silently dropped) is manual-only.
+- **Import completion blocked by the worker requirement.** The import endpoint
+  hard-requires the face worker, and the harness disables workers — so
+  drop→import, malformed/huge/unsupported file handling, and everything
+  downstream of an import (progress UI, caption/tag/face generation) is
+  manual-only. A worker-enabled harness mode (or an import test hook) would
+  unlock a large block of legacy §2/§16 automation at once.
+- **Infinite scroll needs a bigger fixture.** The ~110-picture fixture renders
+  in a single page (108 thumbnails mount eagerly), so "scroll loads more" has
+  nothing to assert; it lives in the manual Performance section. A multi-page
+  fixture would make it automatable.
+- **Entity creation flows (projects/sets/characters) are navigation-only.**
+  `entities.spec.js` navigates existing entities; creating a project with
+  child sets/characters and assigning pictures through the UI (legacy §8/§9)
+  is not automated.
+- **Image plugins** — applying a plugin and asserting an output picture
+  appears is automatable; the "visibly blurrier/brighter" judgement is not.
+  Currently fully manual (plan section 7).
 - **Selection ▾ ↔ context-menu parity is not automated.** `context-menu.spec.js`
   opens the right-click menu and lists its actions, but no spec compares the two
   menus' *item lists*, and none clicks through each action. Tracked as the #403
