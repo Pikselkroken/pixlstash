@@ -90,3 +90,45 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
     assert.equal(flagValue(args, '--extra-index-url'), 'https://mirror.corp/simple');
   });
 });
+
+describe('filterConstraintsFreeze', () => {
+  // Regression for the 2026-07-20 live failure: the bundled env froze
+  // setuptools==83.0.0 while the CUDA torch wheels declare `setuptools<82`,
+  // making every overlay install ResolutionImpossible. Build tooling must
+  // never appear in the constraints.
+  it('drops build tooling (setuptools/pip/wheel) so torch metadata cannot conflict', async () => {
+    const { filterConstraintsFreeze } = await import('../src/backend/BackendManager');
+    const frozen = [
+      'numpy==2.4.4',
+      'setuptools==83.0.0',
+      'pip==25.1',
+      'wheel==0.45.0',
+      'pillow==12.3.0',
+    ].join('\n');
+    assert.equal(filterConstraintsFreeze(frozen), 'numpy==2.4.4\npillow==12.3.0\n');
+  });
+
+  it('drops overlay-owned dists, direct references, and option/comment lines', async () => {
+    const { filterConstraintsFreeze } = await import('../src/backend/BackendManager');
+    const frozen = [
+      'torch==2.13.0+cpu',
+      'torchvision==0.28.0+cpu',
+      'onnxruntime==1.27.0',
+      'pixlstash @ file:///build/pixlstash-1.7.0-py3-none-any.whl',
+      '-e /some/editable',
+      '# a comment',
+      'jinja2==3.1.6',
+    ].join('\n');
+    assert.equal(filterConstraintsFreeze(frozen), 'jinja2==3.1.6\n');
+  });
+
+  it('does not over-drop packages that merely start with a dropped name', async () => {
+    const { filterConstraintsFreeze } = await import('../src/backend/BackendManager');
+    // e.g. "pipdeptree" / "wheel-filename" must survive the pip/wheel drop.
+    const frozen = ['pipdeptree==2.23.0', 'wheel-filename==1.4.0', 'setuptools-scm==8.1.0'].join('\n');
+    assert.equal(
+      filterConstraintsFreeze(frozen),
+      'pipdeptree==2.23.0\nwheel-filename==1.4.0\nsetuptools-scm==8.1.0\n',
+    );
+  });
+});

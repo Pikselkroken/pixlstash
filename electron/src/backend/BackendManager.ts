@@ -106,6 +106,33 @@ export function buildOverlayPipArgs(
 }
 
 /**
+ * Reduce a `pip freeze` of the bundled env to the pins usable as overlay
+ * install constraints. Dropped, two kinds:
+ *  - torch/torchvision/onnxruntime: owned by the overlay itself, so the bundle's
+ *    CPU pins must not constrain them.
+ *  - Build tooling (setuptools/pip/wheel): constraining these serves no runtime
+ *    alignment purpose, and the CUDA torch wheels declare `setuptools<82` — with
+ *    the bundled env frozen at setuptools>=82 the constraint made every overlay
+ *    install ResolutionImpossible (seen live 2026-07-20: bundled 83.0.0 vs
+ *    torch 2.11.0+cu128). pip is free to put a satisfying setuptools in the
+ *    overlay instead, which is the long-standing installed state anyway.
+ * Constraints files also reject direct references (`pkg @ url` / local paths —
+ * e.g. the pixlstash wheel and the spaCy model) and option/comment lines, so
+ * only plain `name==version` pins survive.
+ */
+export function filterConstraintsFreeze(frozen: string): string {
+  const drop = /^(torch|torchvision|onnxruntime|onnxruntime-gpu|setuptools|pip|wheel)(==|@|\s|$)/i;
+  const kept = frozen
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(
+      (l) =>
+        l && !l.startsWith('-') && !l.startsWith('#') && !l.includes(' @ ') && !drop.test(l),
+    );
+  return kept.join('\n') + '\n';
+}
+
+/**
  * Manages the on-demand GPU wheel overlays. The bundled env (CPU on Windows/
  * Linux, Metal on macOS) always works; this installs torch/onnxruntime-gpu for a
  * discrete GPU into a `userData/backends/<accel>` directory that ServerProcess
@@ -210,22 +237,7 @@ export class BackendManager {
    */
   private async bundledConstraints(): Promise<string> {
     const frozen = await this.capture(bundledInterpreter(), ['-m', 'pip', 'freeze']);
-    const drop = /^(torch|torchvision|onnxruntime|onnxruntime-gpu)(==|@|\s|$)/i;
-    const kept = frozen
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      // Constraints files reject direct references (``pkg @ url`` / local paths —
-      // e.g. the pixlstash wheel and the spaCy model) and option/comment lines,
-      // so keep only plain ``name==version`` pins.
-      .filter(
-        (l) =>
-          l &&
-          !l.startsWith('-') &&
-          !l.startsWith('#') &&
-          !l.includes(' @ ') &&
-          !drop.test(l),
-      );
-    return kept.join('\n') + '\n';
+    return filterConstraintsFreeze(frozen);
   }
 
   /** Public (local-tag-stripped) versions of `pkg` on `index`, newest first. */
