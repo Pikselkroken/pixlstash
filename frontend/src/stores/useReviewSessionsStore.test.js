@@ -675,6 +675,34 @@ describe("undoChangesAndAbort", () => {
     await store.skip();
     expect(store.decidedCountFor(1)).toBe(0);
   });
+
+  it("falls back to server progress.done when the tally is unseeded (rail abort of a review not opened this run)", () => {
+    // The review carries prior-sitting changes on the server (progress.done),
+    // but it was never opened this app run, so fetchDetail never seeded the
+    // local tally. decidedCountFor must still report the changes so the
+    // Keep/Undo abort dialog is shown instead of silently keeping them.
+    const store = useReviewSessionsStore();
+    seedSession(
+      store,
+      { id: 9, picture_id: 5, tag: "cat", direction: "remove", kind: "binary" },
+      { done: 3, pending: 0 },
+    );
+    // No fetchDetail / decision this run → the tally is empty.
+    expect(store.tallies[1]).toBeUndefined();
+    expect(store.decidedCountFor(1)).toBe(3);
+  });
+
+  it("does not count skipped-only rows as changes via the progress fallback", () => {
+    // progress.done excludes skips, so a review with only skips reads zero and
+    // aborts straight through (no Keep/Undo dialog for nothing to undo).
+    const store = useReviewSessionsStore();
+    seedSession(
+      store,
+      { id: 10, picture_id: 6, tag: "cat", direction: "remove", kind: "binary" },
+      { done: 0, skipped: 2 },
+    );
+    expect(store.decidedCountFor(1)).toBe(0);
+  });
 });
 
 // --- Archived-receipt deletion ---------------------------------------------------

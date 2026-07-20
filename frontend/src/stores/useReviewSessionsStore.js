@@ -323,7 +323,20 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // the abort dialog's "You made N changes".
   function decidedCountFor(id) {
     const r = receiptFor(id);
-    return r.removed + r.added + r.kept;
+    const fromReceipt = r.removed + r.added + r.kept;
+    if (fromReceipt) return fromReceipt;
+    // `receiptFor` derives an OPEN review's count from the local tally, which is
+    // seeded from the server receipt ONLY when the session is opened this app run
+    // (openSession → fetchDetail → seedTallyFromReceipt) and only once that async
+    // load lands. A review aborted straight from the rail without being opened —
+    // or before that seed resolves — therefore reads zero here, so
+    // openAbortDialog silently skips the Keep/Undo dialog and abortSession keeps
+    // changes made in an earlier sitting (the "it just applies them" bug). Fall
+    // back to the server's authoritative decided-row count: `progress.done`
+    // excludes skips, is present on every list row, and is bumped optimistically
+    // per decision — so the dialog is never wrongly skipped.
+    const s = sessions.value.find((x) => x.id === id);
+    return Math.max(0, s?.progress?.done ?? 0);
   }
 
   // The session receipt for the completion state / abort dialog. It has ONE
