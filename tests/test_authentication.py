@@ -504,8 +504,8 @@ NON_DOCKER_403_DETAIL = (
 
 
 def _set_initial_creds(monkeypatch, server, username, password):
-    monkeypatch.setenv(server.auth.INITIAL_USERNAME_ENV, username)
-    monkeypatch.setenv(server.auth.INITIAL_PASSWORD_ENV, password)
+    monkeypatch.setenv(server.auth.INITIAL_OWNER_LOGIN_ENV, username)
+    monkeypatch.setenv(server.auth.INITIAL_OWNER_AUTH_ENV, password)
 
 
 def test_env_claim_provisions_unclaimed_account(server, monkeypatch):
@@ -563,8 +563,8 @@ def test_env_claim_never_touches_claimed_account(server, monkeypatch, caplog):
 def test_env_claim_with_only_one_var_claims_nothing(server, monkeypatch, caplog):
     """Exactly one of the two vars set → loud warning, nothing claimed."""
     for present, absent in (
-        (server.auth.INITIAL_USERNAME_ENV, server.auth.INITIAL_PASSWORD_ENV),
-        (server.auth.INITIAL_PASSWORD_ENV, server.auth.INITIAL_USERNAME_ENV),
+        (server.auth.INITIAL_OWNER_LOGIN_ENV, server.auth.INITIAL_OWNER_AUTH_ENV),
+        (server.auth.INITIAL_OWNER_AUTH_ENV, server.auth.INITIAL_OWNER_LOGIN_ENV),
     ):
         caplog.clear()
         monkeypatch.setenv(present, "half-configured")
