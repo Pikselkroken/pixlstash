@@ -19,31 +19,68 @@ object the enumeration yielded (verified: dependency-time identity matches
 enumeration identity), so ``id(route)`` is a stable, correct key. A request-time
 route object not present in the map resolves to **deny**, never allow.
 
-**Report-only in Step 1 (``AUTHZ_GATE_ENFORCING = False``).** The gate denies
-nothing at runtime and the startup enumeration only *prints* the undeclared-route
-backlog. The fail-closed machinery — 403 on a miss at request time and boot
-failure on a miss at startup — exists behind the constant and is proven by the
-decoy-route guardrail test. Later steps flip the constant on. This is the
-single-boolean rollback switch of plan §6: a code constant, flipped per release,
-not runtime config.
+**Report-only shipped default (``AUTHZ_GATE_ENFORCING = False``).** At the shipped
+default the gate denies nothing at runtime and the startup enumeration only
+*prints* the undeclared-route backlog; the inline handler checks remain the live
+enforcement. The single boolean is the per-release rollback switch of plan §6 — a
+code constant, not runtime config — and stays ``False`` through Steps 3-5, flipping
+fail-closed only at Step 6 under the adversarial sign-off.
+
+**Step-3 owner-class enforcement (behind the flag; principal ruling 2026-07-21).**
+The enforcement *code* for the non-id-resolution classes lands now:
+``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` delegate to the existing ``AuthService``
+helpers (``require_unscoped_owner`` + ``real_client_ip``/``is_local_ip``), and a
+startup ``PUBLIC``-consistency check reconciles ``PUBLIC`` declarations against
+the middleware's ``AUTH_EXCLUDED_*``. Per-policy-class staging is carried by
+*which branches are implemented* — there is deliberately no second toggle. It is
+proven now by ``AuthzGate(enforcing=True)`` tests; the id-resolving classes
+(``*_SCOPED`` / ``SCOPED_LIST`` / ``body_ids`` batch) stay pass-through until
+Step 4. Because the shipped default stays report-only, none of this changes
+runtime behaviour until the Step-6 flip — no window is weaker *or* stronger than
+today (the inline checks still run).
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 
+from pixlstash.auth import is_auth_excluded_path, is_local_ip
 from pixlstash.authz.policy import (
     SCOPED_POLICIES,
+    AccessPolicy,
     RoutePolicy,
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.route_inventory import iter_api_route_contexts
 
+if TYPE_CHECKING:
+    from pixlstash.auth import AuthService
+
 logger = logging.getLogger(__name__)
+
+# The owner-class policies the gate resolves WITHOUT resolving a per-object
+# resource id. Step 3 makes the gate enforcing for exactly these (plus the
+# PUBLIC-consistency startup check); the id-resolving classes
+# (``SCOPED_POLICIES`` + ``SCOPED_LIST`` + ``body_ids`` batch) stay pass-through
+# until Step 4. Enforcement of an owner class delegates to the existing
+# ``AuthService`` helpers (plan §3.3 item 4 — the ``token_scope`` ladder is NOT
+# reimplemented here), so a route declaring one of these needs the ``auth``
+# service injected; a missing service while enforcing is a boot failure, never a
+# silently-skipped check.
+OWNER_CLASS_POLICIES = frozenset(
+    {AccessPolicy.OWNER_ONLY, AccessPolicy.LOCAL_OWNER_ONLY}
+)
+
+# The SPA catch-all can never be a static ``AUTH_EXCLUDED_*`` entry (it is a
+# path-template, not a literal path/prefix), yet it is legitimately PUBLIC — it
+# serves the static shell/assets and returns no owner data (matrix §N1). Exempt
+# it from the PUBLIC-consistency check so a correct declaration does not boot-fail.
+_PUBLIC_CONSISTENCY_EXEMPT_PATHS = frozenset({"/{full_path:path}"})
 
 # Master rollback switch (plan §6). A CODE CONSTANT flipped per release, NOT
 # runtime config. FALSE == report-only: the gate logs undeclared routes and the
@@ -79,6 +116,7 @@ class AuthzGate:
         *,
         registry: dict[tuple[str, str], RoutePolicy] | None = None,
         enforcing: bool = AUTHZ_GATE_ENFORCING,
+        auth: "AuthService | None" = None,
     ) -> None:
         """Initialise the gate.
 
@@ -87,9 +125,19 @@ class AuthzGate:
                 ``ROUTE_POLICIES``; an explicit table is injected by tests.
             enforcing: Whether misses fail closed (403 / boot failure) or are
                 report-only. Defaults to the ``AUTHZ_GATE_ENFORCING`` constant.
+            auth: The :class:`~pixlstash.auth.AuthService`. Required to enforce an
+                owner-class policy (``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY``), whose
+                enforcement delegates to ``require_unscoped_owner`` /
+                ``real_client_ip`` rather than reimplementing the scope ladder
+                (plan §3.3 item 4). May be ``None`` when the gate is report-only
+                or the registry declares no owner-class route (e.g. the PUBLIC-only
+                decoy tests); an enforcing gate with owner-class routes but no
+                ``auth`` is a boot failure (a skipped owner check is the
+                BOLA-by-omission class this refactor exists to kill).
         """
         self._registry = registry if registry is not None else ROUTE_POLICIES
         self._enforcing = enforcing
+        self._auth = auth
         self._policy_by_route_id: dict[int, RoutePolicy] = {}
         self._logged_misses: set[int] = set()
         self._resolved = False
@@ -152,6 +200,7 @@ class AuthzGate:
         undeclared, dead = self.resolve_routes(app)
         authoring_problems = validate_policy_declarations(self._registry)
         authoring_problems += self._scoped_id_param_problems(app)
+        public_drift = self._public_consistency_problems()
 
         if undeclared:
             logger.warning(
@@ -168,8 +217,19 @@ class AuthzGate:
                 len(dead),
                 "\n".join(f"  {method} {path}" for method, path in dead),
             )
+        if public_drift:
+            logger.warning(
+                "[authz-gate] %d PUBLIC declaration(s) are NOT auth-excluded in "
+                "the middleware (AUTH_EXCLUDED_*) — the two lists have drifted; a "
+                "PUBLIC route the middleware still authenticates is a "
+                "mis-declaration (boot-fails when enforcing):\n%s",
+                len(public_drift),
+                "\n".join(f"  {problem}" for problem in public_drift),
+            )
 
-        # Registry-authoring errors are always fatal.
+        # Registry-authoring errors are ALWAYS fatal (independent of the
+        # report-only flag): they are mistakes in the declaration table itself,
+        # provable without runtime config.
         if authoring_problems:
             raise RuntimeError(
                 "authz registry declaration error(s) — fix the declaration "
@@ -177,39 +237,72 @@ class AuthzGate:
             )
 
         if self._enforcing:
+            # Construction gap: enforcing an owner-class policy requires the auth
+            # service (enforcement delegates to it). Missing it is a wiring bug —
+            # fail loud, never silently skip the owner check.
+            owner_routes = [
+                key
+                for key, rp in self._registry.items()
+                if rp.policy in OWNER_CLASS_POLICIES
+            ]
+            if owner_routes and self._auth is None:
+                raise RuntimeError(
+                    "authz gate is ENFORCING and the registry declares "
+                    f"{len(owner_routes)} owner-class route(s) "
+                    "(OWNER_ONLY/LOCAL_OWNER_ONLY), but no AuthService was "
+                    "injected. Owner-class enforcement delegates to "
+                    "AuthService.require_unscoped_owner; construct the gate with "
+                    "auth=... so the owner check is never silently skipped."
+                )
+
             gaps: list[str] = []
             if undeclared:
                 gaps.append(f"{len(undeclared)} undeclared route(s)")
             if dead:
                 gaps.append(f"{len(dead)} dead declaration(s)")
+            if public_drift:
+                gaps.append(f"{len(public_drift)} PUBLIC-consistency drift(s)")
             if gaps:
                 detail = "\n".join(f"  {method} {path}" for method, path in undeclared)
+                drift_detail = "\n".join(f"  {problem}" for problem in public_drift)
                 raise RuntimeError(
                     "authz gate is ENFORCING but the coverage matrix is "
                     "incomplete: "
                     + "; ".join(gaps)
                     + ".\nEvery mounted data route must declare an AccessPolicy "
-                    "in pixlstash/authz/registry.py.\nUndeclared routes:\n" + detail
+                    "in pixlstash/authz/registry.py, and every PUBLIC route must "
+                    "be auth-excluded in the middleware.\nUndeclared routes:\n"
+                    + detail
+                    + ("\nPUBLIC drift:\n" + drift_detail if public_drift else "")
                 )
 
         logger.info(
             "[authz-gate] resolved %d declared route policies (enforcing=%s); "
-            "%d route(s) undeclared, %d dead declaration(s).",
+            "%d route(s) undeclared, %d dead declaration(s), %d PUBLIC drift(s).",
             len(self._policy_by_route_id),
             self._enforcing,
             len(undeclared),
             len(dead),
+            len(public_drift),
         )
 
     async def __call__(self, request: Request) -> None:
-        """Router-level dependency: deny-by-default on an undeclared route.
+        """Router-level dependency: deny-by-default on an undeclared route, plus
+        owner-class enforcement (Step 3).
 
         Keys the policy map by the matched route's object identity
         (``id(request.scope["route"])``). A route not in the map is a miss:
         report-only logs it once (deduped per route) and lets it through;
-        enforcing raises 403. A declared route passes the gate untouched in Step 1
-        — object-scope enforcement (``*_SCOPED`` membership, ``SCOPED_LIST``
-        filtering, ``body_ids`` batch checks, ``OWNER_ONLY``) lands in Steps 3-4.
+        enforcing raises 403.
+
+        A declared route, when enforcing, has its **owner-class** policy applied
+        here (``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY``, plus ``PUBLIC`` / ``ANY_TOKEN``
+        which need no per-object check). The id-resolving classes
+        (``*_SCOPED`` / ``SCOPED_LIST`` / ``body_ids`` batch) are **pass-through**
+        until Step 4 — their inline ``enforce_picture_scope`` /
+        ``fetch_scope_allowed`` checks remain the live enforcement. When
+        report-only, every declared route passes untouched (the inline checks are
+        the sole enforcement).
         """
         route = request.scope.get("route")
         route_policy = (
@@ -231,10 +324,73 @@ class AuthzGate:
                     request.url.path,
                 )
             return
-        # Declared route: Step 1 performs no object-scope enforcement here. The
-        # inline enforce_picture_scope calls remain the live enforcement until
-        # Steps 3-5 relocate them behind this gate.
+
+        if not self._enforcing:
+            # Report-only: the inline handler checks are the live enforcement.
+            return
+        self._enforce_policy(request, route_policy)
+
+    def _enforce_policy(self, request: Request, route_policy: RoutePolicy) -> None:
+        """Apply a declared policy on the pre-branch request path (enforcing mode).
+
+        Step 3 covers the non-id-resolution classes only. ``PUBLIC`` / ``ANY_TOKEN``
+        need no object check (the middleware already authenticated non-excluded
+        paths). ``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` delegate to the existing
+        ``AuthService`` helpers so the ``token_scope`` ladder lives in exactly one
+        place. The id-resolving classes fall through as pass-through (Step 4).
+        """
+        policy = route_policy.policy
+        if policy in (AccessPolicy.PUBLIC, AccessPolicy.ANY_TOKEN):
+            return
+        if policy is AccessPolicy.OWNER_ONLY:
+            self._enforce_unscoped_owner(request)
+            return
+        if policy is AccessPolicy.LOCAL_OWNER_ONLY:
+            self._enforce_unscoped_owner(request)
+            self._enforce_local(request)
+            return
+        # *_SCOPED / SCOPED_LIST / body_ids batch → Step 4. Pass-through: the inline
+        # enforce_picture_scope / fetch_scope_allowed checks are still live.
         return
+
+    def _enforce_unscoped_owner(self, request: Request) -> None:
+        """Require a fully-unscoped owner via the shared AuthService helper.
+
+        Delegates to ``AuthService.require_unscoped_owner`` (401 if unauthenticated,
+        403 for any scoped/unscoped-READ token or a resource-restricted token) so
+        the wire contract stays byte-identical to today's inline call. ``auth`` is
+        guaranteed present here: an enforcing gate with owner-class routes but no
+        auth service boot-fails in :meth:`enforce_startup`. The ``None`` guard is a
+        defensive fail-closed for any construction path that bypasses that check.
+        """
+        if self._auth is None:
+            logger.error(
+                "[authz-gate] owner-class route reached with no AuthService while "
+                "enforcing (%s) — failing closed. This is a wiring bug.",
+                request.url.path,
+            )
+            raise HTTPException(status_code=403, detail="Authorization unavailable")
+        self._auth.require_unscoped_owner(request)
+
+    def _enforce_local(self, request: Request) -> None:
+        """Require the request to originate from a loopback / local-IP client.
+
+        The ``LOCAL_OWNER_ONLY`` locality half (§16.3 host-capability class). Uses
+        ``AuthService.real_client_ip`` (trusted-proxy aware) + ``is_local_ip`` and
+        raises the same 403 detail as ``_require_local_for_write`` for wire
+        consistency. Assumes ``_enforce_unscoped_owner`` ran first (owner identity
+        established); ``auth`` is therefore non-None.
+        """
+        if self._auth is None:  # defensive; unreachable after _enforce_unscoped_owner
+            raise HTTPException(status_code=403, detail="Authorization unavailable")
+        if not is_local_ip(self._auth.real_client_ip(request)):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Full access is restricted to local network connections. "
+                    "Use a share token for remote access."
+                ),
+            )
 
     def _scoped_id_param_problems(self, app) -> list[str]:
         """Return problems where a ``*_SCOPED`` ``id_param`` is not in its template."""
@@ -253,5 +409,32 @@ class AuthzGate:
                     )
         return problems
 
+    def _public_consistency_problems(self) -> list[str]:
+        """Return ``PUBLIC`` declarations that the middleware does not auth-exclude.
 
-__all__ = ["AUTHZ_GATE_ENFORCING", "AuthzGate"]
+        A ``PUBLIC`` route must also be excluded from authentication by the
+        middleware (``AUTH_EXCLUDED_*``), or the two lists have drifted: the
+        registry says "no auth" while the middleware still demands it. This
+        reconciles the declaration table with the live auth surface (plan §3.3
+        item 3). Unlike the pure authoring checks this is not unconditionally
+        fatal — it compares against the middleware's exclusion surface, so it is
+        report-only until the gate is enforcing (then it boot-fails). The SPA
+        catch-all (:data:`_PUBLIC_CONSISTENCY_EXEMPT_PATHS`) is exempt: it is a
+        path-template that can never be a static ``AUTH_EXCLUDED_*`` entry yet is
+        legitimately public (matrix §N1).
+        """
+        problems: list[str] = []
+        for (method, path), route_policy in self._registry.items():
+            if route_policy.policy is not AccessPolicy.PUBLIC:
+                continue
+            if path in _PUBLIC_CONSISTENCY_EXEMPT_PATHS:
+                continue
+            if not is_auth_excluded_path(path):
+                problems.append(
+                    f"{method} {path}: declared PUBLIC but not in AUTH_EXCLUDED_* "
+                    "(middleware would still require auth)"
+                )
+        return problems
+
+
+__all__ = ["AUTHZ_GATE_ENFORCING", "OWNER_CLASS_POLICIES", "AuthzGate"]

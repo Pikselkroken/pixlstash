@@ -30,14 +30,19 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
-| `any_token` | 16 |
-| `owner_only` | 91 |
+| `any_token` | 15 |
+| `owner_only` | 76 |
 | `picture_scoped` | 33 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
 | `character_scoped` | 5 |
 | `project_scoped` | 6 |
-| `local_owner_only` | 0 |
+| `local_owner_only` | 16 |
+
+> **Updated for Step 3 (2026-07-21).** The §16.3 host-capability retarget moved 16
+> rows `owner_only` → `local_owner_only` (owner + loopback/local-IP), and the F-c
+> rider tightened `GET /users/me/auth` `any_token` → `owner_only`. Step-2 baseline
+> was `owner_only` 91 / `any_token` 16 / `local_owner_only` 0.
 
 ---
 
@@ -81,7 +86,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | PATCH | `/api/v1/server-config/snapshots` | owner_only |  | require_unscoped_owner |
 | GET | `/api/v1/server-config/watch-folders` | owner_only |  | require_unscoped_owner; also READ_BLOCKED; owner only |
 | GET | `/api/v1/session/context` | any_token |  |  |
-| GET | `/api/v1/users/me/auth` | any_token |  |  |
+| GET | `/api/v1/users/me/auth` | owner_only |  | Owner account state (username + has_password). **Step-3 F-c hardening rider (decided 2026-07-21):** tightened `any_token` → `owner_only` so a share token cannot read owner identity. Gate now rejects scoped/unscoped-READ tokens. |
 | POST | `/api/v1/users/me/auth` | owner_only |  | Change owner password; POST blocked for READ tokens; owner only |
 | GET | `/api/v1/users/me/config` | owner_only |  | Owner config; READ_BLOCKED_GET_PATHS blocks READ tokens; only owner reaches |
 | PATCH | `/api/v1/users/me/config` | owner_only |  | require_unscoped_owner; owner config write |
@@ -102,33 +107,33 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
-| GET | `/api/v1/filesystem/browse` | owner_only |  | §16.3 host FS browse; READ_BLOCKED; owner only today (Step-3 retarget LOCAL_OWNER_ONLY) |
-| POST | `/api/v1/filesystem/folders` | owner_only |  | §16.3 host FS mkdir; POST blocked for READ tokens; owner only today (Step-3 retarget LOCAL_OWNER_ONLY) |
+| GET | `/api/v1/filesystem/browse` | local_owner_only |  | §16.3 host FS browse; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/filesystem/folders` | local_owner_only |  | §16.3 host FS mkdir; owner + loopback/local-IP (**Step-3 retarget applied**) |
 
 ### import_folders.py (§16.3)
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/import-folders` | scoped_list |  |  |
-| POST | `/api/v1/import-folders` | owner_only |  | §16.3 import-folder create; POST blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| PATCH | `/api/v1/import-folders/{folder_id}` | owner_only |  | §16.3 import-folder update; PATCH blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| DELETE | `/api/v1/import-folders/{folder_id}` | owner_only |  | §16.3 import-folder delete; DELETE blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY) |
+| POST | `/api/v1/import-folders` | local_owner_only |  | §16.3 import-folder create; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| PATCH | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder update; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| DELETE | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder delete; owner + loopback/local-IP (**Step-3 retarget applied**) |
 
 ### reference_folders.py (§16.3)
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/reference-folders` | scoped_list |  |  |
-| POST | `/api/v1/reference-folders` | owner_only |  | §16.3 reference-folder create; POST blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| GET | `/api/v1/reference-folders/detect-sidecars` | owner_only |  | §16.3 walks host path; READ_BLOCKED; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| PATCH | `/api/v1/reference-folders/{folder_id}` | owner_only |  | §16.3 reference-folder update; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| DELETE | `/api/v1/reference-folders/{folder_id}` | owner_only |  | §16.3 reference-folder delete; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| POST | `/api/v1/reference-folders/{folder_id}/metadata/export` | owner_only |  | §16.3 write sidecars to host FS; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| POST | `/api/v1/reference-folders/{folder_id}/metadata/import` | owner_only |  | §16.3 read sidecars from host FS; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| POST | `/api/v1/reference-folders/{folder_id}/move-pictures` | owner_only |  | §16.3 move pictures on host FS; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| POST | `/api/v1/reference-folders/{folder_id}/open` | owner_only |  | §16.3 open folder in host file manager; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| POST | `/api/v1/reference-folders/{folder_id}/relocate` | owner_only |  | §16.3 reference-folder relocate; owner today (Step-3 LOCAL_OWNER_ONLY) |
-| POST | `/api/v1/server/restart` | owner_only |  | §16.3 restart the server process; owner today (Step-3 LOCAL_OWNER_ONLY) |
+| POST | `/api/v1/reference-folders` | local_owner_only |  | §16.3 reference-folder create; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| GET | `/api/v1/reference-folders/detect-sidecars` | local_owner_only |  | §16.3 walks host path; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| PATCH | `/api/v1/reference-folders/{folder_id}` | local_owner_only |  | §16.3 reference-folder update; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| DELETE | `/api/v1/reference-folders/{folder_id}` | local_owner_only |  | §16.3 reference-folder delete; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/reference-folders/{folder_id}/metadata/export` | local_owner_only |  | §16.3 write sidecars to host FS; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/reference-folders/{folder_id}/metadata/import` | local_owner_only |  | §16.3 read sidecars from host FS; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/reference-folders/{folder_id}/move-pictures` | local_owner_only |  | §16.3 move pictures on host FS; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/reference-folders/{folder_id}/open` | local_owner_only |  | §16.3 open folder in host file manager; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/reference-folders/{folder_id}/relocate` | local_owner_only |  | §16.3 reference-folder relocate; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/server/restart` | local_owner_only |  | §16.3 restart the server process; owner + loopback/local-IP (**Step-3 retarget applied**) |
 
 ### pictures/*
 
@@ -172,7 +177,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/{id}/face` | picture_scoped | id=id |  |
 | DELETE | `/api/v1/pictures/{id}/face/{index}` | picture_scoped | id=id |  |
 | GET | `/api/v1/pictures/{id}/metadata` | picture_scoped | id=id |  |
-| POST | `/api/v1/pictures/{id}/open-location` | owner_only |  | §16.3 open file location in host file manager; no request scope; owner today (Step-3 LOCAL_OWNER_ONLY) |
+| POST | `/api/v1/pictures/{id}/open-location` | local_owner_only |  | §16.3 open file location in host file manager; owner + loopback/local-IP (**Step-3 retarget applied**) |
 | GET | `/api/v1/pictures/{id}/{field}` | picture_scoped | id=id |  |
 
 ### tags.py

@@ -316,9 +316,19 @@ class AuthService:
             detail="HTTPS is required for this operation.",
         )
 
-    def _get_real_client_ip(self, request: Request) -> str:
+    def real_client_ip(self, request: Request) -> str:
+        """Return the request's real client IP (walking trusted-proxy hops).
+
+        Public entry point for the authorization gate's ``LOCAL_OWNER_ONLY``
+        locality check (:mod:`pixlstash.authz.gate`), which is a legitimate second
+        caller and must not reach into a private method. Internal auth callers use
+        the private alias below.
+        """
         trusted = self._server_config.get("trusted_proxies", [])
         return get_real_client_ip(request, trusted)
+
+    def _get_real_client_ip(self, request: Request) -> str:
+        return self.real_client_ip(request)
 
     def _get_real_client_ip_ws(self, websocket) -> str:
         """Return the real client IP for a WebSocket handshake.

@@ -1218,10 +1218,13 @@ class Server:
         # Centralised authorization gate (Phase 1 of the authz refactor;
         # docs/backend_architecture.md §16.2). Attached as a router-level
         # dependency on every include_router in _setup_routes, then resolved
-        # against the mounted routes below. Report-only in Step 1
+        # against the mounted routes below. Report-only at the shipped default
         # (AUTHZ_GATE_ENFORCING=False): it denies nothing and only logs the
-        # undeclared-route backlog.
-        self.authz = AuthzGate(enforcing=AUTHZ_GATE_ENFORCING)
+        # undeclared-route backlog. The auth service is injected so the Step-3
+        # owner-class enforcement (OWNER_ONLY/LOCAL_OWNER_ONLY) can delegate to
+        # require_unscoped_owner/real_client_ip once the flag is enforcing; an
+        # enforcing gate with owner-class routes but no auth boot-fails.
+        self.authz = AuthzGate(enforcing=AUTHZ_GATE_ENFORCING, auth=self.auth)
         self._add_cors_exception_handler()
         self._setup_routes()
         self._install_custom_openapi()

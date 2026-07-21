@@ -49,6 +49,7 @@ from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 _PUBLIC = AccessPolicy.PUBLIC
 _ANY = AccessPolicy.ANY_TOKEN
 _OWNER = AccessPolicy.OWNER_ONLY
+_LOCAL = AccessPolicy.LOCAL_OWNER_ONLY
 _PIC = AccessPolicy.PICTURE_SCOPED
 _SET = AccessPolicy.SET_SCOPED
 _CHAR = AccessPolicy.CHARACTER_SCOPED
@@ -122,7 +123,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Change owner password; POST blocked for READ tokens; owner only",
     ),
-    ("GET", "/api/v1/users/me/auth"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/users/me/auth"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner account state (owner username + has_password). F-c hardening "
+            "rider (decided 2026-07-21): tightened any_token -> owner_only so a "
+            "resource-scoped share token cannot read the owner's account identity. "
+            "Gate now rejects scoped tokens; unscoped-READ newly 403'd here too."
+        ),
+    ),
     ("POST", "/api/v1/users/me/token"): RoutePolicy(
         _OWNER, justification="Mint API token; POST blocked for READ tokens; owner only"
     ),
@@ -177,72 +186,72 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 host FS browse; READ_BLOCKED; owner only today (Step-3 retarget LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 host FS browse; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget; discharges CSO §16.3 accepted-risk)",
     ),
     ("POST", "/api/v1/filesystem/folders"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 host FS mkdir; POST blocked for READ tokens; owner only today (Step-3 retarget LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 host FS mkdir; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     ("GET", "/api/v1/import-folders"): RoutePolicy(
         _LIST
     ),  # self-filters to empty for scoped tokens
     ("POST", "/api/v1/import-folders"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 import-folder create; POST blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 import-folder create; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("PATCH", "/api/v1/import-folders/{folder_id}"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 import-folder update; PATCH blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 import-folder update; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("DELETE", "/api/v1/import-folders/{folder_id}"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 import-folder delete; DELETE blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 import-folder delete; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     # ── reference_folders.py (§16.3 host-capability) ────────────────────────
     ("GET", "/api/v1/reference-folders"): RoutePolicy(
         _LIST
     ),  # self-filters to empty for scoped tokens
     ("GET", "/api/v1/reference-folders/detect-sidecars"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 walks host path; READ_BLOCKED; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 walks host path; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/reference-folders"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 reference-folder create; POST blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 reference-folder create; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("PATCH", "/api/v1/reference-folders/{folder_id}"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 reference-folder update; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 reference-folder update; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/relocate"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 reference-folder relocate; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 reference-folder relocate; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/move-pictures"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 move pictures on host FS; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 move pictures on host FS; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/metadata/export"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 write sidecars to host FS; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 write sidecars to host FS; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/metadata/import"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 read sidecars from host FS; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 read sidecars from host FS; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("DELETE", "/api/v1/reference-folders/{folder_id}"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 reference-folder delete; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 reference-folder delete; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/open"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 open folder in host file manager; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 open folder in host file manager; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/server/restart"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 restart the server process; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 restart the server process; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     # ── pictures: single-object reads (enforce_picture_scope) → PICTURE_SCOPED
     ("GET", "/api/v1/pictures/{id}.{ext}"): RoutePolicy(_PIC, id_param="id"),
@@ -309,8 +318,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER, justification="Owner scoring op; POST not in READ_SAFE; owner only"
     ),
     ("POST", "/api/v1/pictures/{id}/open-location"): RoutePolicy(
-        _OWNER,
-        justification="§16.3 open file location in host file manager; no request scope; owner today (Step-3 LOCAL_OWNER_ONLY)",
+        _LOCAL,
+        justification="§16.3 open file location in host file manager; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     ("POST", "/api/v1/pictures/scrapheap/restore"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner"
