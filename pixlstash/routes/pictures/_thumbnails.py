@@ -31,7 +31,6 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
-from ._helpers import enforce_picture_scope
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 
@@ -105,7 +104,6 @@ def register_routes(router, server):
         pic = server.vault.db.run_immediate_read_task(fetch_picture, id)
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
-        enforce_picture_scope(server, request, id)
 
         thumb_path = ImageUtils.get_thumbnail_path(
             server.vault.image_root, pic.file_path

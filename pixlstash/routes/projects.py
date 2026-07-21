@@ -625,11 +625,6 @@ def create_router(server) -> APIRouter:
         include_attachments: bool = Query(default=True),
     ):
         server.auth.require_user_id(request)
-        # Scope guard (BOLA): reject any token scoped to a different resource —
-        # not just a project-id mismatch.  Previously a character- or
-        # picture_set-scoped token fell through this check and could export an
-        # arbitrary project.
-        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None
@@ -859,10 +854,6 @@ def create_router(server) -> APIRouter:
     )
     def list_attachments(request: Request, project_id: int):
         server.auth.require_user_id(request)
-        # Scope guard (BOLA): a resource-scoped token may only touch its own
-        # project — checking the include_attachments flag alone let a project-A
-        # token list project-B's attachments.
-        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None
@@ -989,9 +980,6 @@ def create_router(server) -> APIRouter:
     )
     def download_attachment(request: Request, project_id: int, attachment_id: int):
         server.auth.require_user_id(request)
-        # Scope guard (BOLA): a resource-scoped token may only download from its
-        # own project's attachments.
-        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None

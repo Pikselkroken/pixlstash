@@ -140,13 +140,6 @@ def test_owner_only_reviews_flip_both_directions():
     with _owner_env() as env:
         server, owner, anon = env["server"], env["owner"], env["anon"]
 
-        # BEFORE (report-only): unscoped-READ reaches the review queue today.
-        r = anon.get(f"{API}/reviews", headers=_bearer(env["unscoped_read"]))
-        assert r.status_code == 200, (
-            f"report-only: unscoped-READ should still reach /reviews today, "
-            f"got {r.status_code}: {r.text}"
-        )
-
         with _enforcing(server):
             # NEGATIVE: unscoped-READ is now denied by the gate.
             r = anon.get(f"{API}/reviews", headers=_bearer(env["unscoped_read"]))
@@ -175,11 +168,6 @@ def test_owner_only_tag_health_flip():
     with _owner_env() as env:
         server, owner, anon = env["server"], env["owner"], env["anon"]
 
-        r = anon.get(f"{API}/tag_health", headers=_bearer(env["unscoped_read"]))
-        assert r.status_code == 200, (
-            f"report-only: unscoped-READ should still reach /tag_health today, "
-            f"got {r.status_code}: {r.text}"
-        )
         with _enforcing(server):
             r = anon.get(f"{API}/tag_health", headers=_bearer(env["unscoped_read"]))
             assert r.status_code == 403, (
@@ -204,14 +192,6 @@ def test_users_me_auth_tightened_to_owner_only():
     still reads."""
     with _owner_env() as env:
         server, owner, anon = env["server"], env["owner"], env["anon"]
-
-        # BEFORE (report-only): a share token can read owner account state today.
-        for label, tok in (("unscoped", "unscoped_read"), ("scoped", "scoped_read")):
-            r = anon.get(f"{API}/users/me/auth", headers=_bearer(env[tok]))
-            assert r.status_code == 200, (
-                f"report-only: {label}-READ should reach /users/me/auth today, "
-                f"got {r.status_code}: {r.text}"
-            )
 
         with _enforcing(server):
             for label, tok in (
@@ -246,13 +226,6 @@ def test_local_owner_only_remote_cookie_regression():
     remote = {"X-Forwarded-For": "8.8.8.8"}  # spoofed via trusted testclient proxy
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
-
-        # BEFORE (report-only): a remote owner cookie is NOT locality-blocked today.
-        r = owner.get(f"{API}/filesystem/browse", headers=remote)
-        assert not _is_locality_403(r), (
-            "report-only: a remote owner cookie should NOT be locality-403'd today "
-            f"(the §16.3 gap); got {r.status_code}: {r.text}"
-        )
 
         with _enforcing(server):
             # NEGATIVE: remote owner cookie is now denied on locality grounds.
@@ -443,11 +416,10 @@ def test_public_consistency_exempts_spa_catchall():
 # ---------------------------------------------------------------------------
 
 
-def test_shipped_default_is_report_only():
-    """The single-boolean rollback switch stays False at the shipped default — the
-    Step-3 enforcement code is proven behind the flag, not shipped live (Step 6)."""
-    assert AUTHZ_GATE_ENFORCING is False, (
-        "AUTHZ_GATE_ENFORCING must remain False through Step 5 (plan §6); the "
-        "owner-class enforcement is proven via enforcing=True in tests, not by "
-        "flipping the shipped constant."
+def test_shipped_default_is_enforcing():
+    """Step 6 flipped the single-boolean switch: the gate now ships ENFORCING.
+    Report-only remains the one-line rollback (flip the constant back to False)."""
+    assert AUTHZ_GATE_ENFORCING is True, (
+        "Step 6 ships AUTHZ_GATE_ENFORCING=True (enforcement live); report-only is "
+        "reachable as the one-line rollback (plan §6) — flip the constant to False."
     )

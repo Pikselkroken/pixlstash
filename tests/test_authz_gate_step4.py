@@ -402,9 +402,10 @@ def test_non_integer_scoped_id_fails_closed():
     assert client.get("/api/v1/step4-decoy/proj/UNASSIGNED/summary").status_code == 200
 
 
-def test_shipped_default_is_report_only():
-    """The rollback constant stays False at the shipped default through Step 5."""
-    assert AUTHZ_GATE_ENFORCING is False
+def test_shipped_default_is_enforcing():
+    """Step 6 flipped the rollback constant: the gate ships ENFORCING. Report-only
+    remains the one-line rollback (flip back to False)."""
+    assert AUTHZ_GATE_ENFORCING is True
 
 
 # ===========================================================================

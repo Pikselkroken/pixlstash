@@ -69,12 +69,9 @@ def create_router(server) -> APIRouter:
     router = APIRouter()
 
     def _require_owner_filesystem_request(request: Request) -> None:
-        server.auth.require_user_id(request)
-        if getattr(request.state, "token_scope", None) is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Filesystem browsing is not available for token-authenticated requests.",
-            )
+        # Owner identity + locality (LOCAL_OWNER_ONLY, §16.3) are enforced by the
+        # centralised authz gate before this handler runs. This helper now carries
+        # only the operational Docker-mode restriction, which is not an authz rule.
         if server.running_in_docker():
             raise HTTPException(
                 status_code=403,

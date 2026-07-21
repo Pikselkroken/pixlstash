@@ -12,12 +12,6 @@ from sqlalchemy import (
 )
 from sqlmodel import Session, select
 
-# Thin re-export: the picture-scope membership logic moved to
-# pixlstash/authz/membership.py (backend refactor plan §3.7, Step 4). Kept
-# importable from here so the ~20 inline call sites (comfyui, tags,
-# tag_predictions, _anomaly, _thumbnails, _crud, ...) stay unchanged until Step 5.
-# The redundant ``as`` alias marks this an intentional re-export (ruff F401).
-from pixlstash.authz.membership import enforce_picture_scope as enforce_picture_scope
 from pixlstash.db_models import (
     Picture,
     Tag,
@@ -289,5 +283,6 @@ def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
     return enriched
 
 
-# enforce_picture_scope and its private _picture_id_in_scoped_* helpers now live
-# in pixlstash/authz/membership.py (re-exported at the top of this module).
+# enforce_picture_scope and its private _picture_id_in_scoped_* helpers live in
+# pixlstash/authz/membership.py — the single home for object-membership checks.
+# The centralised authz gate calls them; handlers no longer do (Step 5).

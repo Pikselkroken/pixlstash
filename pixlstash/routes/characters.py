@@ -528,7 +528,6 @@ def create_router(server) -> APIRouter:
         Returns:
             A dict containing reference picture ids.
         """
-        _require_scope_allows_character(request, id)
 
         def fetch_reference_pictures(session: Session, character_id: int):
             faces = select_reference_faces_for_character(
@@ -868,7 +867,6 @@ def create_router(server) -> APIRouter:
         response_model=Optional[CharacterResponse],
     )
     def get_character_by_id(request: Request, id: int):
-        _require_scope_allows_character(request, id)
         try:
             char = server.vault.db.run_immediate_read_task(
                 lambda session: Character.find(session, id=id)
@@ -924,7 +922,6 @@ def create_router(server) -> APIRouter:
         },
     )
     def get_character_field_by_id(request: Request, id: int, field: str):
-        _require_scope_allows_character(request, id)
         if field == "thumbnail":
             thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")

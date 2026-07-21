@@ -718,7 +718,6 @@ def create_router(server) -> APIRouter:
         responses={200: {"content": {"image/png": {}}}},
     )
     def get_picture_set_thumbnail(id: int, request: Request):
-        _require_scope_allows_picture_set(request, id)
         thumbnail_cache_version = 16
         cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
         os.makedirs(cache_dir, exist_ok=True)
@@ -982,7 +981,6 @@ def create_router(server) -> APIRouter:
                     "/api/v1/projects/{project_id_or_name}/picture_sets/{name}."
                 ),
             )
-        _require_scope_allows_picture_set(request, id)
 
         sort_mech = None
         if sort:
@@ -1453,8 +1451,6 @@ def create_router(server) -> APIRouter:
         include_deleted: bool = Query(False),
         expand_stacks: bool = Query(False),
     ):
-        _require_scope_allows_picture_set(request, id)
-
         def fetch_members(session, id, include_deleted, expand_stacks):
             picture_set = session.get(PictureSet, id)
             if not picture_set:

@@ -5,11 +5,10 @@ tagger's Grad-CAM localiser for a single picture + anomaly label and returns an
 APPROXIMATE bounding box plus a colourised heatmap overlay. Boxes are a UI hint,
 not precise detection.
 
-Object scope: this is a per-object data endpoint, so it is in scope state (a) —
-it calls the ``enforce_picture_scope`` chokepoint (in ``_helpers.py``)
-immediately after parsing the id and before any DB read, image load, branch, or
-return, exactly like ``get_picture`` / ``get_picture_metadata`` /
-``get_picture_field`` in ``_crud.py``.
+Object scope: this is a per-object data endpoint. It is declared
+``PICTURE_SCOPED`` (id_param ``id``) in ``pixlstash/authz/registry.py``; the
+centralised authz gate runs ``enforce_picture_scope`` before the handler body on
+every request, so no inline scope check lives here (backend refactor plan Step 5).
 """
 
 import os
@@ -25,8 +24,6 @@ from pixlstash.services import picture_service
 from pixlstash.tagger_plugins.pixlstash_tagger import UnknownAnomalyLabel
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import sanitise_tag
-
-from ._helpers import enforce_picture_scope
 
 from PIL import Image, UnidentifiedImageError
 
@@ -129,13 +126,6 @@ def register_routes(router, server):
             pic_id = int(id)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Invalid picture id") from exc
-
-        # Object-level access check before any DB read, image load, branch, or
-        # return — scope state (a). Owner/unscoped sessions (token_scope is None)
-        # pass straight through; a scoped token outside this picture's grant gets
-        # a 403 here. Mirrors get_picture / get_picture_metadata /
-        # get_picture_field and the detections sibling.
-        enforce_picture_scope(server, request, pic_id)
 
         tag_clean = (tag or "").strip()
         if not tag_clean:

@@ -856,14 +856,15 @@ def test_matched_route_path_is_prefix_stripped(built_app):
 # ---------------------------------------------------------------------------
 # Guardrail 9: The authz gate is deny-by-default (Phase 1 Step 1)
 #
-# The gate ships REPORT-ONLY (AUTHZ_GATE_ENFORCING=False): at runtime it denies
-# nothing and the startup enumeration only prints the undeclared-route backlog.
-# But the fail-closed machinery must EXIST and be proven now — CSO acceptance
-# criterion (b): an undeclared route must 403 at request time AND boot-fail at
-# startup once the flag is enforcing. Correct route-identity keying (criterion a)
-# is necessary but NOT sufficient for fail-closed; these decoy tests are the
-# load-bearing proof. See the backend refactor plan §3.5 step 1 and
-# docs/backend_architecture.md §16.2.
+# Step 6 (2026-07-21) flipped the SHIPPED default to ENFORCING
+# (AUTHZ_GATE_ENFORCING=True): at runtime an undeclared route is a hard 403 and a
+# boot failure. Report-only remains reachable as the one-line rollback (flip the
+# constant back to False), and is still proven below via an explicitly
+# enforcing=False gate. The fail-closed machinery is CSO acceptance criterion (b):
+# an undeclared route must 403 at request time AND boot-fail at startup when the
+# flag is enforcing. Correct route-identity keying (criterion a) is necessary but
+# NOT sufficient for fail-closed; these decoy tests are the load-bearing proof.
+# See the backend refactor plan §3.5 and docs/backend_architecture.md §16.2.
 #
 # Criterion (c) — SCOPED_LIST / body_ids list-and-batch filtering — is Step 4
 # work and is deliberately absent here; nothing below implies the gate covers it.
@@ -957,15 +958,22 @@ def test_authz_startup_boot_fails_on_undeclared_route_when_enforcing():
 
 
 def test_authz_gate_report_only_denies_nothing():
-    """The shipped Step-1 default: report-only, empty registry, denies nothing and
-    boot proceeds even though every route is a miss."""
+    """Report-only mode (the one-line rollback, plan §6) denies nothing: an
+    explicitly report-only gate with an empty registry lets every route through and
+    boot proceeds even though every route is a miss.
+
+    Step 6 (2026-07-21) flipped the SHIPPED default to enforcing, so
+    ``AUTHZ_GATE_ENFORCING`` is now True; report-only is no longer the default but
+    remains available as the single-boolean rollback (flip the constant back to
+    False to restore this behaviour everywhere)."""
     from starlette.testclient import TestClient
 
     from pixlstash.authz.gate import AUTHZ_GATE_ENFORCING, AuthzGate
 
-    assert AUTHZ_GATE_ENFORCING is False, (
-        "Phase 1 Step 1 ships the gate report-only; AUTHZ_GATE_ENFORCING must "
-        "default to False (the single-boolean rollback switch, plan §6)."
+    assert AUTHZ_GATE_ENFORCING is True, (
+        "Step 6 ships the gate ENFORCING; AUTHZ_GATE_ENFORCING must default to "
+        "True. Report-only stays reachable as the one-line rollback (flip the "
+        "constant back to False), which this test exercises via enforcing=False."
     )
 
     gate = AuthzGate(registry={}, enforcing=False)

@@ -35,7 +35,6 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.routes.pictures._helpers import enforce_picture_scope
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.stacking import (
@@ -1384,13 +1383,6 @@ def create_router(server) -> APIRouter:
         if not picture_ids:
             raise HTTPException(status_code=400, detail="picture_ids must be integers")
 
-        # Scope guard (BOLA): i2i reads each source picture's bytes and uploads
-        # them to the ComfyUI host, so a scoped token must only reach its own
-        # pictures. Enforce per id before any fetch/upload (no-op for owner /
-        # unscoped tokens).
-        for pic_id in picture_ids:
-            enforce_picture_scope(server, request, pic_id)
-
         caption = payload.get("caption") or ""
         if not isinstance(caption, str):
             caption = str(caption)
@@ -1525,11 +1517,6 @@ def create_router(server) -> APIRouter:
         source_picture_id: int | None = (
             int(raw_source_id) if raw_source_id is not None else None
         )
-        # Scope guard (BOLA): if t2i references an existing source picture, a
-        # scoped token may only reference one within its grant (no-op for owner).
-        if source_picture_id is not None:
-            enforce_picture_scope(server, request, source_picture_id)
-
         raw_set_id = payload.get("set_id")
         raw_project_id = payload.get("project_id")
         raw_character_id = payload.get("character_id")
@@ -1689,12 +1676,6 @@ def create_router(server) -> APIRouter:
             pic_id = int(picture_id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
-
-        # Object-level access check before any DB work, so every return branch
-        # below is uniformly gated. Owner/unscoped sessions have token_scope is
-        # None and pass straight through; a scoped token outside this picture's
-        # grant gets a 403 here (mirrors get_picture / get_picture_field).
-        enforce_picture_scope(server, request, pic_id)
 
         pics = server.vault.db.run_immediate_read_task(
             Picture.find, id=pic_id, select_fields=["id", "file_path"]

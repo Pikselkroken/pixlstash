@@ -189,17 +189,10 @@ def create_router(server) -> APIRouter:
     """
     router = APIRouter()
 
-    # -------------------------------------------------------------------------
-    # Helper
-    # -------------------------------------------------------------------------
-
-    def _require_owner_request(request: Request) -> None:
-        server.auth.require_user_id(request)
-        if getattr(request.state, "token_scope", None) is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="This folder operation is only available to the owner.",
-            )
+    # Owner identity + locality for every reference-folder host operation
+    # (LOCAL_OWNER_ONLY, and the LOOPBACK_OWNER_ONLY red-line routes /open and
+    # /server/restart) are enforced by the centralised authz gate before the
+    # handler runs — no inline owner check lives here (backend refactor plan Step 5).
 
     def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -564,7 +557,6 @@ def create_router(server) -> APIRouter:
         tags=["folders"],
     )
     def detect_reference_folder_sidecars(request: Request, path: str):
-        _require_owner_request(request)
         folder = os.path.normpath(path)
         error = validate_reference_folder_path(folder)
         if error:
@@ -596,7 +588,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderCreateRequest = Body(...),
     ):
-        _require_owner_request(request)
 
         folder = os.path.normpath(payload.folder)
         host_path = _normalize_optional_host_path(payload.host_path)
@@ -687,7 +678,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderUpdateRequest = Body(...),
     ):
-        _require_owner_request(request)
 
         def update(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -868,7 +858,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: RelocateReferenceFolderRequest = Body(...),
     ):
-        _require_owner_request(request)
 
         def fetch_and_validate(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -1046,7 +1035,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: MoveReferencePicturesRequest = Body(...),
     ):
-        _require_owner_request(request)
         if not payload.picture_ids:
             raise HTTPException(
                 status_code=400, detail="picture_ids must be a non-empty list."
@@ -1305,7 +1293,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderMetadataRequest = Body(...),
     ):
-        _require_owner_request(request)
         requested_types = _metadata_types(payload.types)
 
         def export_metadata(session: Session):
@@ -1403,7 +1390,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderMetadataRequest = Body(...),
     ):
-        _require_owner_request(request)
         requested_types = _metadata_types(payload.types)
 
         def import_metadata(session: Session):
@@ -1516,7 +1502,6 @@ def create_router(server) -> APIRouter:
         response_model=ReferenceFolderDeleteResponse,
     )
     def delete_reference_folder(folder_id: int, request: Request):
-        _require_owner_request(request)
 
         def remove(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -1586,7 +1571,6 @@ def create_router(server) -> APIRouter:
         response_model=ServerRestartResponse,
     )
     def restart_server(request: Request):
-        _require_owner_request(request)
         logger.info("Server restart requested via API.")
         # Re-exec this process with the same arguments.
         # Use os.execve to carry forward PYTHONPATH so the pixlstash package
@@ -1615,7 +1599,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         subpath: Optional[str] = None,
     ):
-        _require_owner_request(request)
 
         def get_folder(session: Session):
             rf = session.get(ReferenceFolder, folder_id)

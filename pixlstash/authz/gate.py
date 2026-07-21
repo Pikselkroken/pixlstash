@@ -135,7 +135,12 @@ _PUBLIC_CONSISTENCY_EXEMPT_PATHS = frozenset({"/{full_path:path}"})
 # fails on the backlog. TRUE == fail-closed: an undeclared route is 403 at
 # request time and a boot failure at startup. Phase 1 Step 1 ships FALSE; the
 # enforcing steps (3-6) flip it on.
-AUTHZ_GATE_ENFORCING = False
+#
+# STEP 6 (2026-07-21): flipped to True. Enforcement is LIVE — the gate is now the
+# sole object-authorization chokepoint; the redundant inline handler checks were
+# removed in Step 5. Flip this single constant back to False to revert the entire
+# object-enforcement + fail-closed behaviour in one line (the plan §6 rollback).
+AUTHZ_GATE_ENFORCING = True
 
 # Path-template parameter extractor: ``{picture_id}`` and ``{path:path}`` -> the
 # bare name. Used to validate that a ``*_SCOPED`` declaration's ``id_param``

@@ -11,7 +11,6 @@ from pixlstash.utils.service.anomaly_thresholds import (
     load_raw_label_thresholds,
 )
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
-from pixlstash.routes.pictures._helpers import enforce_picture_scope
 
 logger = get_logger(__name__)
 
@@ -122,10 +121,6 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped READ share token may only read
-        # tag predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
         predictions = tag_prediction_service.get_predictions(
             server.vault, pic_id, status
         )
@@ -167,10 +162,6 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
         try:
             tag_prediction_service.confirm_tag_prediction(server.vault, pic_id, tag)
         except KeyError:
@@ -194,10 +185,6 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
-
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
 
         tag_prediction_service.reject_tag_prediction(server.vault, pic_id, tag)
         server.handle_vault_event(
@@ -226,10 +213,6 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
-
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
 
         count = tag_prediction_service.delete_tag_predictions(server.vault, pic_id)
         server.handle_vault_event(
@@ -264,10 +247,6 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
         model = payload.model if payload else None
         tag_prediction_service.reset_picture_tags(
             server.vault, pic_id, engine_name=model
@@ -301,10 +280,6 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
-
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
 
         model = payload.model if payload else None
         found = server.vault.reset_description_interactive(
