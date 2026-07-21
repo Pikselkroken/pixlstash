@@ -14,6 +14,7 @@ from platformdirs import user_config_dir
 from contextlib import asynccontextmanager
 from PIL import Image
 from fastapi import (
+    Depends,
     FastAPI,
     Request,
     HTTPException,
@@ -36,6 +37,7 @@ from pixlstash.db_models import (
 
 from pixlstash.event_types import EventType
 from pixlstash.auth import AuthService, LoginRequest, is_auth_excluded_path
+from pixlstash.authz import AUTHZ_GATE_ENFORCING, AuthzGate
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.vault import Vault
@@ -1213,9 +1215,21 @@ class Server:
         # mutation handlers can echo it back on the WebSocket event envelope.
         # Echo-matching only — never used for authz/scoping.
         self.api.add_middleware(OriginClientMiddleware)
+        # Centralised authorization gate (Phase 1 of the authz refactor;
+        # docs/backend_architecture.md §16.2). Attached as a router-level
+        # dependency on every include_router in _setup_routes, then resolved
+        # against the mounted routes below. Report-only in Step 1
+        # (AUTHZ_GATE_ENFORCING=False): it denies nothing and only logs the
+        # undeclared-route backlog.
+        self.authz = AuthzGate(enforcing=AUTHZ_GATE_ENFORCING)
         self._add_cors_exception_handler()
         self._setup_routes()
         self._install_custom_openapi()
+        # Build the route-identity policy map now that every router is mounted,
+        # and print the undeclared-route backlog (or, when enforcing, fail boot on
+        # any undeclared/dead route). Consumes the same route walk as the CI
+        # coverage-matrix guardrail so the two can never disagree.
+        self.authz.enforce_startup(self.api)
 
         # Temporary storage for export tasks
         self.export_tasks = {}
@@ -2441,35 +2455,47 @@ class Server:
                     if client in self._ws_clients:
                         self._ws_clients.remove(client)
 
+        # Every include_router carries the authz gate as a router-level
+        # dependency (dependencies=[Depends(self.authz)]). This is the single
+        # wiring point for the centralised, deny-by-default authorization model
+        # (Phase 1; docs/backend_architecture.md §16.2). In Step 1 the gate is
+        # report-only, so it denies nothing — it only observes undeclared routes.
+        gate = [Depends(self.authz)]
         self.api.include_router(
             create_config_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         self.api.include_router(
             create_characters_router(self),
             prefix=API_V1_PREFIX,
             tags=["characters"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_picture_sets_router(self),
             prefix=API_V1_PREFIX,
             tags=["picture_sets"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_projects_router(self),
             prefix=API_V1_PREFIX,
             tags=["projects"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_tags_router(self),
             prefix=API_V1_PREFIX,
             tags=["tags"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_stacks_router(self),
             prefix=API_V1_PREFIX,
             tags=["stacks"],
+            dependencies=gate,
         )
         # tag_predictions must be registered before pictures so that the
         # specific path /pictures/{id}/tag_predictions is not swallowed by
@@ -2478,6 +2504,7 @@ class Server:
             create_tag_predictions_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         # guest_scores must be registered before pictures for the same reason:
         # /pictures/guest-scores must not be swallowed by /pictures/{id}/{field}.
@@ -2485,66 +2512,79 @@ class Server:
             create_guest_scores_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         self.api.include_router(
             create_tag_suggestions_router(self),
             prefix=API_V1_PREFIX,
             tags=["tag_suggestions"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_reviews_router(self),
             prefix=API_V1_PREFIX,
             tags=["reviews"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_tag_health_router(self),
             prefix=API_V1_PREFIX,
             tags=["tag_health"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_tagger_runs_router(self),
             prefix=API_V1_PREFIX,
             tags=["tagger_runs"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_pictures_router(self),
             prefix=API_V1_PREFIX,
             tags=["pictures"],
+            dependencies=gate,
         )
         self.api.include_router(
             create_comfyui_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         self.api.include_router(
             create_reference_folders_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         self.api.include_router(
             create_import_folders_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         self.api.include_router(
             create_filesystem_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         self.api.include_router(
             create_taggers_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
         )
         self.api.include_router(
             create_snapshots_router(self),
             prefix=API_V1_PREFIX,
             tags=["snapshots"],
+            dependencies=gate,
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.
         self.api.include_router(
             create_share_router(self),
             tags=["share"],
+            dependencies=gate,
         )
 
         # E2E-only test hooks. Registered ONLY when ``enable_test_hooks`` is
@@ -2561,6 +2601,7 @@ class Server:
                 create_test_hooks_router(self),
                 prefix=API_V1_PREFIX,
                 include_in_schema=False,
+                dependencies=gate,
             )
 
         @self.api.middleware("http")
