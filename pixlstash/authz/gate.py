@@ -42,13 +42,22 @@ today (the inline checks still run).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from pixlstash.auth import is_auth_excluded_path, is_local_ip
+from pixlstash.authz.membership import (
+    ID_RESOLVERS,
+    enforce_character_scope,
+    enforce_picture_scope,
+    enforce_project_scope,
+    enforce_set_scope,
+)
 from pixlstash.authz.policy import (
     SCOPED_POLICIES,
     AccessPolicy,
@@ -62,6 +71,34 @@ if TYPE_CHECKING:
     from pixlstash.auth import AuthService
 
 logger = logging.getLogger(__name__)
+
+# Membership check for each object-scoped policy class (Step 4). Each is a
+# blocking DB read via ``server.vault.db.run_immediate_read_task``; the gate runs
+# them on a threadpool worker (:func:`run_in_threadpool`) so the event loop is
+# never blocked (principal ruling 2026-07-21 D1). ``token_scope is None`` (owner)
+# is handled inside each function — it returns immediately.
+_MEMBERSHIP_BY_POLICY = {
+    AccessPolicy.PICTURE_SCOPED: enforce_picture_scope,
+    AccessPolicy.SET_SCOPED: enforce_set_scope,
+    AccessPolicy.CHARACTER_SCOPED: enforce_character_scope,
+    AccessPolicy.PROJECT_SCOPED: enforce_project_scope,
+}
+
+
+def _is_resource_scoped(request: Request) -> bool:
+    """Return True for a *resource-scoped* share token (the only principal an
+    object check can narrow).
+
+    An owner (``token_scope is None``) and an unscoped-READ token
+    (``resource_type is None``) both have unrestricted object access today — the
+    membership ladder returns "no restriction" for both (``filter_helpers`` and
+    the ``enforce_*`` functions). The gate's object enforcement therefore only
+    engages a token that names a specific resource; anything looser passes exactly
+    as it does now.
+    """
+    token_scope = getattr(request.state, "token_scope", None)
+    return token_scope is not None and token_scope.resource_type is not None
+
 
 # The owner-class policies the gate resolves WITHOUT resolving a per-object
 # resource id. Step 3 makes the gate enforcing for exactly these (plus the
@@ -117,6 +154,7 @@ class AuthzGate:
         registry: dict[tuple[str, str], RoutePolicy] | None = None,
         enforcing: bool = AUTHZ_GATE_ENFORCING,
         auth: "AuthService | None" = None,
+        server=None,
     ) -> None:
         """Initialise the gate.
 
@@ -134,10 +172,19 @@ class AuthzGate:
                 decoy tests); an enforcing gate with owner-class routes but no
                 ``auth`` is a boot failure (a skipped owner check is the
                 BOLA-by-omission class this refactor exists to kill).
+            server: The application ``Server`` (holds ``vault.db``). Required to
+                enforce an object-scoped policy (``*_SCOPED`` with a resolvable id
+                / ``body_ids`` batch), whose membership check reads the database
+                via ``server.vault.db.run_immediate_read_task`` (Step 4). May be
+                ``None`` when the gate is report-only or declares no DB-scoped
+                route (e.g. owner/list/PUBLIC-only decoy tests); an enforcing gate
+                with a DB-scoped route but no ``server`` is a boot failure — the
+                object check must never be silently skipped.
         """
         self._registry = registry if registry is not None else ROUTE_POLICIES
         self._enforcing = enforcing
         self._auth = auth
+        self._server = server
         self._policy_by_route_id: dict[int, RoutePolicy] = {}
         self._logged_misses: set[int] = set()
         self._resolved = False
@@ -200,6 +247,7 @@ class AuthzGate:
         undeclared, dead = self.resolve_routes(app)
         authoring_problems = validate_policy_declarations(self._registry)
         authoring_problems += self._scoped_id_param_problems(app)
+        authoring_problems += self._id_resolver_problems()
         public_drift = self._public_consistency_problems()
 
         if undeclared:
@@ -255,6 +303,26 @@ class AuthzGate:
                     "auth=... so the owner check is never silently skipped."
                 )
 
+            # Construction gap (Step 4): an object-scoped route whose id the gate
+            # resolves needs server.vault.db for the membership read. A
+            # ``resolved_inline`` route is exempt (its inline handler check is the
+            # enforcement, not the gate). Missing server is a wiring bug — fail
+            # loud, never silently skip the object check.
+            db_scoped_routes = [
+                key
+                for key, rp in self._registry.items()
+                if rp.policy in SCOPED_POLICIES and not rp.resolved_inline
+            ]
+            if db_scoped_routes and self._server is None:
+                raise RuntimeError(
+                    "authz gate is ENFORCING and the registry declares "
+                    f"{len(db_scoped_routes)} object-scoped route(s) "
+                    "(*_SCOPED with a gate-resolved id), but no server was "
+                    "injected. Object-scope enforcement reads membership via "
+                    "server.vault.db; construct the gate with server=... so the "
+                    "object check is never silently skipped."
+                )
+
             gaps: list[str] = []
             if undeclared:
                 gaps.append(f"{len(undeclared)} undeclared route(s)")
@@ -295,14 +363,13 @@ class AuthzGate:
         report-only logs it once (deduped per route) and lets it through;
         enforcing raises 403.
 
-        A declared route, when enforcing, has its **owner-class** policy applied
-        here (``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY``, plus ``PUBLIC`` / ``ANY_TOKEN``
-        which need no per-object check). The id-resolving classes
-        (``*_SCOPED`` / ``SCOPED_LIST`` / ``body_ids`` batch) are **pass-through**
-        until Step 4 — their inline ``enforce_picture_scope`` /
-        ``fetch_scope_allowed`` checks remain the live enforcement. When
-        report-only, every declared route passes untouched (the inline checks are
-        the sole enforcement).
+        A declared route, when enforcing, has its policy applied here. Owner-class
+        (``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY``, plus ``PUBLIC`` / ``ANY_TOKEN`` which
+        need no per-object check) is applied synchronously; the object-scoped
+        classes (``*_SCOPED`` single / ``body_ids`` batch / ``SCOPED_LIST``) run the
+        Step-4 membership enforcement, which reads the DB on a threadpool worker.
+        When report-only, every declared route passes untouched (the inline checks
+        are the sole enforcement).
         """
         route = request.scope.get("route")
         route_policy = (
@@ -328,16 +395,18 @@ class AuthzGate:
         if not self._enforcing:
             # Report-only: the inline handler checks are the live enforcement.
             return
-        self._enforce_policy(request, route_policy)
+        await self._enforce_policy(request, route_policy)
 
-    def _enforce_policy(self, request: Request, route_policy: RoutePolicy) -> None:
+    async def _enforce_policy(
+        self, request: Request, route_policy: RoutePolicy
+    ) -> None:
         """Apply a declared policy on the pre-branch request path (enforcing mode).
 
-        Step 3 covers the non-id-resolution classes only. ``PUBLIC`` / ``ANY_TOKEN``
-        need no object check (the middleware already authenticated non-excluded
-        paths). ``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` delegate to the existing
-        ``AuthService`` helpers so the ``token_scope`` ladder lives in exactly one
-        place. The id-resolving classes fall through as pass-through (Step 4).
+        ``PUBLIC`` / ``ANY_TOKEN`` need no object check (the middleware already
+        authenticated non-excluded paths). ``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY``
+        delegate to the existing ``AuthService`` helpers so the ``token_scope``
+        ladder lives in exactly one place. The object-scoped classes are handled
+        by :meth:`_enforce_scoped_policy` (Step 4).
         """
         policy = route_policy.policy
         if policy in (AccessPolicy.PUBLIC, AccessPolicy.ANY_TOKEN):
@@ -349,9 +418,145 @@ class AuthzGate:
             self._enforce_unscoped_owner(request)
             self._enforce_local(request)
             return
-        # *_SCOPED / SCOPED_LIST / body_ids batch → Step 4. Pass-through: the inline
-        # enforce_picture_scope / fetch_scope_allowed checks are still live.
-        return
+        # *_SCOPED single / body_ids batch / SCOPED_LIST → Step 4 object scoping.
+        await self._enforce_scoped_policy(request, route_policy)
+
+    async def _enforce_scoped_policy(
+        self, request: Request, route_policy: RoutePolicy
+    ) -> None:
+        """Enforce an object-scoped policy (Step 4) once the gate is enforcing.
+
+        The check engages only a **resource-scoped** token (:func:`_is_resource_scoped`);
+        an owner or unscoped-READ token has unrestricted object access and passes
+        immediately — no body read, no DB — exactly as today's inline ladders do.
+
+        * ``SCOPED_LIST`` — no single id to check. An audited ``scope_aware`` list
+          filters its own results (its inline ``fetch_scope_allowed_*`` remains the
+          enforcement); the gate stamps the declared-intent signal and passes. An
+          unaudited list fails **closed** (403): a new list route added without
+          scope-aware filtering leaks nothing to a scoped token (§3.6 / D4).
+        * ``resolved_inline`` ``*_SCOPED`` — the id is name-derived (§N3); the gate
+          cannot resolve it without duplicating handler logic, so the inline
+          ``_require_scope_allows_*`` check is the enforcement and the gate passes.
+        * ``*_SCOPED`` single / ``body_ids`` batch — resolve the id(s) and run the
+          per-object membership check for every one on a threadpool worker.
+        """
+        if not _is_resource_scoped(request):
+            return
+
+        policy = route_policy.policy
+        if policy is AccessPolicy.SCOPED_LIST:
+            if not route_policy.scope_aware:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This resource is not available to scoped tokens",
+                )
+            # Belt-and-suspenders declared-intent signal; the handler's own
+            # fetch_scope_allowed_* filter is the actual enforcement for the 39
+            # audited list routes (§3.6).
+            request.state.scope_filter_required = True
+            return
+
+        if route_policy.resolved_inline:
+            return
+
+        raw_ids = await self._collect_raw_ids(request, route_policy)
+        for raw_id in raw_ids:
+            # Blocking membership read → threadpool so the event loop is never
+            # blocked (D1). One id per hop; the gate runs before the handler, so
+            # this is sequential occupancy, not doubled.
+            await run_in_threadpool(self._check_one_id, request, route_policy, raw_id)
+
+    async def _collect_raw_ids(
+        self, request: Request, route_policy: RoutePolicy
+    ) -> list:
+        """Collect the raw id(s) to object-check: from ``body_ids`` or ``id_param``.
+
+        Returns raw (unparsed) ids; :meth:`_check_one_id` parses/resolves each.
+        Returns an empty list when there is nothing to check (absent path param,
+        absent/empty body field) — a resource-scoped token that supplies no id
+        gets no data anyway (the handler rejects a malformed request).
+        """
+        if route_policy.body_ids:
+            return await self._read_body_ids(request, route_policy.body_ids)
+        if route_policy.id_param:
+            raw = request.path_params.get(route_policy.id_param)
+            return [] if raw is None else [raw]
+        return []
+
+    async def _read_body_ids(self, request: Request, field: str) -> list:
+        """Extract the id(s) from a JSON body field for a ``body_ids`` batch route.
+
+        Handles a list (checked element by element), a single scalar (``run_t2i``'s
+        optional ``source_picture_id``, §N6), and an absent/``None`` value (no-op).
+        Reading the body here is safe: Starlette caches it on ``request._body`` so
+        the handler's own ``Body(...)`` parse re-reads the cache.
+        """
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            logger.warning(
+                "[authz-gate] could not parse JSON body to extract %r for object "
+                "scoping on %s %s (%s); no ids to check — the handler will reject a "
+                "malformed body",
+                field,
+                request.method,
+                request.url.path,
+                exc,
+            )
+            return []
+        if not isinstance(payload, dict):
+            return []
+        value = payload.get(field)
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [item for item in value if item is not None]
+        return [value]
+
+    def _check_one_id(
+        self, request: Request, route_policy: RoutePolicy, raw_id
+    ) -> None:
+        """Resolve (if needed) and membership-check one raw id. Runs on a
+        threadpool worker (blocking DB read), never on the event loop.
+
+        Raises ``HTTPException(403)`` when the scoped token may not reach the
+        object. A malformed id or an id_resolver that returns ``None`` fails
+        closed — a resource-scoped token must not act on an id whose membership
+        cannot be established.
+        """
+        if route_policy.id_resolver:
+            resolver = ID_RESOLVERS.get(route_policy.id_resolver)
+            if resolver is None:
+                logger.error(
+                    "[authz-gate] route declares unknown id_resolver %r on %s %s; "
+                    "failing closed. This is a registry-authoring bug.",
+                    route_policy.id_resolver,
+                    request.method,
+                    request.url.path,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access this resource",
+                )
+            picture_id = resolver(self._server, raw_id)
+            if picture_id is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access this resource",
+                )
+            enforce_picture_scope(self._server, request, picture_id)
+            return
+
+        try:
+            obj_id = int(raw_id)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised to access this resource",
+            )
+        check = _MEMBERSHIP_BY_POLICY[route_policy.policy]
+        check(self._server, request, obj_id)
 
     def _enforce_unscoped_owner(self, request: Request) -> None:
         """Require a fully-unscoped owner via the shared AuthService helper.
@@ -407,6 +612,26 @@ class AuthzGate:
                         f"{method} {path}: id_param {route_policy.id_param!r} is "
                         "not a parameter of the route template"
                     )
+        return problems
+
+    def _id_resolver_problems(self) -> list[str]:
+        """Return problems where a declared ``id_resolver`` names no real resolver.
+
+        A typo'd or removed resolver name would otherwise fail closed silently at
+        request time (a skipped-then-403 object check). Catch it at boot so a
+        registry-authoring mistake is fatal, not a latent 403.
+        """
+        problems: list[str] = []
+        for (method, path), route_policy in self._registry.items():
+            if (
+                route_policy.id_resolver
+                and route_policy.id_resolver not in ID_RESOLVERS
+            ):
+                problems.append(
+                    f"{method} {path}: id_resolver {route_policy.id_resolver!r} is "
+                    "not a registered resolver (pixlstash/authz/membership.py "
+                    "ID_RESOLVERS)"
+                )
         return problems
 
     def _public_consistency_problems(self) -> list[str]:

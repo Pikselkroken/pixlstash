@@ -96,17 +96,47 @@ class RoutePolicy:
             the resource id (e.g. ``"picture_id"``). Validated at startup: a
             ``*_SCOPED`` policy whose ``id_param`` is absent from the route
             template is a boot failure, not a silent no-op.
-        body_ids: For a batch route, the JSON field holding the id list the gate
-            must check every element of (Step 4 enforcement).
+        body_ids: For a batch route, the JSON body field holding the id(s) the
+            gate must check. A list is checked element by element; a single scalar
+            (e.g. ``run_t2i``'s optional ``source_picture_id``) is checked as one
+            id; ``None`` / absent is a no-op.
         justification: Mandatory for the policies in
-            :data:`JUSTIFICATION_REQUIRED`; a written reason the route is public
-            or grants local-owner filesystem authority.
+            :data:`JUSTIFICATION_REQUIRED`, and for ``resolved_inline`` routes; a
+            written reason the route is public, grants local-owner filesystem
+            authority, or defers its object check to an inline handler ladder.
+        resolved_inline: ``True`` marks a ``*_SCOPED`` route whose object id is
+            **name-derived** (e.g. ``/projects/{project_name}/...``) and therefore
+            cannot be resolved to a numeric id at the gate without duplicating the
+            handler's own name→id lookup — the exact divergence this refactor
+            exists to kill (matrix §N3; principal ruling 2026-07-21 D2). The gate
+            does **not** object-check these; the handler's inline
+            ``_require_scope_allows_*`` check remains the live enforcement and must
+            not be removed in Step 5 until a shared name→id resolver exists. This
+            is a typed, validator-checked exemption — not a comment.
+        scope_aware: Only valid on :attr:`AccessPolicy.SCOPED_LIST`. ``True`` marks
+            a list/search route that has been **audited** to filter its own result
+            set for a resource-scoped token (the 39 current list routes all do).
+            A ``SCOPED_LIST`` route left ``scope_aware=False`` (the safe-by-omission
+            default) is failed **closed** by the gate for a resource-scoped token —
+            a new, unaudited list route leaks nothing (matrix §3.6; principal
+            ruling 2026-07-21 D4). The gate cannot synthesise a correct empty
+            envelope for an arbitrary list shape, so "leak nothing" is a 403, not
+            an empty body.
+        id_resolver: Names a registered resolver that maps the route's raw id(s)
+            (from :attr:`id_param` or :attr:`body_ids`) to a **picture id** before
+            the picture-membership check — for routes keyed by a non-picture id
+            that nonetheless authorise on picture scope (matrix §N4: the
+            ``tag_suggestions`` mutators key on a ``suggestion_id`` that resolves to
+            ``TagSuggestion.picture_id``). Only valid on a ``*_SCOPED`` policy.
     """
 
     policy: AccessPolicy
     id_param: str | None = None
     body_ids: str | None = None
     justification: str | None = None
+    resolved_inline: bool = False
+    scope_aware: bool = False
+    id_resolver: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.policy, AccessPolicy):
@@ -130,12 +160,18 @@ def validate_policy_declarations(
     """
     problems: list[str] = []
     for (method, path), route_policy in registry.items():
-        if route_policy.policy in JUSTIFICATION_REQUIRED and not (
-            (route_policy.justification or "").strip()
-        ):
+        justification_required = (
+            route_policy.policy in JUSTIFICATION_REQUIRED
+            or route_policy.resolved_inline
+        )
+        if justification_required and not ((route_policy.justification or "").strip()):
+            reason = (
+                route_policy.policy.value
+                if route_policy.policy in JUSTIFICATION_REQUIRED
+                else "resolved_inline"
+            )
             problems.append(
-                f"{method} {path}: {route_policy.policy.value} requires a "
-                "justification string"
+                f"{method} {path}: {reason} requires a justification string"
             )
         if (
             route_policy.policy in SCOPED_POLICIES
@@ -145,6 +181,24 @@ def validate_policy_declarations(
             problems.append(
                 f"{method} {path}: {route_policy.policy.value} requires an "
                 "id_param (or body_ids for a batch route)"
+            )
+        # resolved_inline is a *_SCOPED-only deferral (name-derived id, §N3).
+        if route_policy.resolved_inline and route_policy.policy not in SCOPED_POLICIES:
+            problems.append(
+                f"{method} {path}: resolved_inline is only valid on a *_SCOPED policy"
+            )
+        # scope_aware only means something on a list route (§3.6).
+        if route_policy.scope_aware and route_policy.policy is not (
+            AccessPolicy.SCOPED_LIST
+        ):
+            problems.append(
+                f"{method} {path}: scope_aware is only valid on a scoped_list policy"
+            )
+        # id_resolver maps a non-picture id to a picture id for the membership
+        # check; it only applies where an object scope check runs (§N4).
+        if route_policy.id_resolver and route_policy.policy not in SCOPED_POLICIES:
+            problems.append(
+                f"{method} {path}: id_resolver is only valid on a *_SCOPED policy"
             )
     return problems
 

@@ -56,6 +56,17 @@ _CHAR = AccessPolicy.CHARACTER_SCOPED
 _PROJ = AccessPolicy.PROJECT_SCOPED
 _LIST = AccessPolicy.SCOPED_LIST
 
+# A SCOPED_LIST route that has been AUDITED to filter its own result set for a
+# resource-scoped token (via the handler's inline ``fetch_scope_allowed_*`` /
+# ``token_scope`` filter, or by self-emptying). ``scope_aware=True`` is the
+# machine-checked record of that audit: the gate passes such a route through to
+# its handler filter, and fails **closed** (403) for any SCOPED_LIST route left
+# WITHOUT it — so a new, unaudited list route leaks nothing to a scoped token
+# (backend refactor plan §3.6; principal ruling 2026-07-21 D4). Shared frozen
+# singleton — every current list route is audited (matrix derivation), so they
+# all point at this one instance.
+_LIST_AWARE = RoutePolicy(_LIST, scope_aware=True)
+
 
 ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── App-level / public (auth-excluded in AUTH_EXCLUDED_*) ───────────────
@@ -194,9 +205,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="§16.3 host FS mkdir; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
-    ("GET", "/api/v1/import-folders"): RoutePolicy(
-        _LIST
-    ),  # self-filters to empty for scoped tokens
+    (
+        "GET",
+        "/api/v1/import-folders",
+    ): _LIST_AWARE,  # self-filters to empty for scoped tokens
     ("POST", "/api/v1/import-folders"): RoutePolicy(
         _LOCAL,
         justification="§16.3 import-folder create; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
@@ -210,9 +222,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="§16.3 import-folder delete; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
     ),
     # ── reference_folders.py (§16.3 host-capability) ────────────────────────
-    ("GET", "/api/v1/reference-folders"): RoutePolicy(
-        _LIST
-    ),  # self-filters to empty for scoped tokens
+    (
+        "GET",
+        "/api/v1/reference-folders",
+    ): _LIST_AWARE,  # self-filters to empty for scoped tokens
     ("GET", "/api/v1/reference-folders/detect-sidecars"): RoutePolicy(
         _LOCAL,
         justification="§16.3 walks host path; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
@@ -271,39 +284,45 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _PIC, body_ids="picture_ids"
     ),  # loops enforce_picture_scope over every id
     # ── pictures: list / search / batch-filter (fetch_scope_allowed) → SCOPED_LIST
-    ("GET", "/api/v1/pictures"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/stream"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/count"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/search"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/stats"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/likeness-groups"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/comfyui_models"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/comfyui_loras"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/export"): RoutePolicy(
-        _LIST
-    ),  # generate_zip scope-filters via fetch_scope_allowed
-    ("POST", "/api/v1/pictures/thumbnails"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
-    ("POST", "/api/v1/pictures/tags/bulk_fetch"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
-    ("POST", "/api/v1/pictures/character_likeness/batch"): RoutePolicy(
-        _LIST
-    ),  # drops out-of-scope ids via fetch_scope_allowed
-    ("POST", "/api/v1/pictures/plugins/{name}"): RoutePolicy(_LIST),
-    ("PATCH", "/api/v1/pictures/project"): RoutePolicy(_LIST),
-    ("POST", "/api/v1/pictures/apply-scores"): RoutePolicy(_LIST),
-    ("POST", "/api/v1/pictures/detect"): RoutePolicy(_LIST),
-    ("POST", "/api/v1/pictures/face-search"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
-    ("POST", "/api/v1/pictures/likeness-search"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
-    ("POST", "/api/v1/pictures/impossible-tags/clear"): RoutePolicy(_LIST),
-    ("POST", "/api/v1/pictures/impossible-tags/restore"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/tags"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/stream"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/count"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/search"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/stats"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/likeness-groups"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/comfyui_models"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/comfyui_loras"): _LIST_AWARE,
+    (
+        "GET",
+        "/api/v1/pictures/export",
+    ): _LIST_AWARE,  # generate_zip scope-filters via fetch_scope_allowed
+    (
+        "POST",
+        "/api/v1/pictures/thumbnails",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
+    (
+        "POST",
+        "/api/v1/pictures/tags/bulk_fetch",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
+    (
+        "POST",
+        "/api/v1/pictures/character_likeness/batch",
+    ): _LIST_AWARE,  # drops out-of-scope ids via fetch_scope_allowed
+    ("POST", "/api/v1/pictures/plugins/{name}"): _LIST_AWARE,
+    ("PATCH", "/api/v1/pictures/project"): _LIST_AWARE,
+    ("POST", "/api/v1/pictures/apply-scores"): _LIST_AWARE,
+    ("POST", "/api/v1/pictures/detect"): _LIST_AWARE,
+    (
+        "POST",
+        "/api/v1/pictures/face-search",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
+    (
+        "POST",
+        "/api/v1/pictures/likeness-search",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/pictures/impossible-tags/clear"): _LIST_AWARE,
+    ("POST", "/api/v1/pictures/impossible-tags/restore"): _LIST_AWARE,
+    ("GET", "/api/v1/tags"): _LIST_AWARE,
     # ── pictures: owner-only surfaces ───────────────────────────────────────
     ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
     ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
@@ -350,11 +369,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/tagger/label-thresholds"): RoutePolicy(_ANY),
     # ── stacks.py ───────────────────────────────────────────────────────────
-    ("GET", "/api/v1/stacks/{stack_id}"): RoutePolicy(
-        _LIST
-    ),  # returns pictures filtered by fetch_scope_allowed
-    ("GET", "/api/v1/stacks/{stack_id}/pictures"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/pictures/{picture_id}/stack"): RoutePolicy(_LIST),
+    (
+        "GET",
+        "/api/v1/stacks/{stack_id}",
+    ): _LIST_AWARE,  # returns pictures filtered by fetch_scope_allowed
+    ("GET", "/api/v1/stacks/{stack_id}/pictures"): _LIST_AWARE,
+    ("GET", "/api/v1/pictures/{picture_id}/stack"): _LIST_AWARE,
     ("POST", "/api/v1/stacks"): RoutePolicy(
         _OWNER, justification="Create stack; POST blocked for READ tokens; owner only"
     ),
@@ -374,7 +394,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="Set member position; PATCH blocked for READ tokens; owner only",
     ),
     # ── characters.py ───────────────────────────────────────────────────────
-    ("GET", "/api/v1/characters"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/characters"): _LIST_AWARE,
     ("GET", "/api/v1/characters/{id}"): RoutePolicy(_CHAR, id_param="id"),
     ("GET", "/api/v1/characters/{id}/summary"): RoutePolicy(_CHAR, id_param="id"),
     ("GET", "/api/v1/characters/{id}/reference_pictures"): RoutePolicy(
@@ -382,14 +402,25 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/characters/{id}/{field}"): RoutePolicy(_CHAR, id_param="id"),
     ("GET", "/api/v1/projects/{project_name}/characters/{character_name}"): RoutePolicy(
-        _CHAR, id_param="character_name"
-    ),  # NEEDS REVIEW: derived id (name); Step-4 gate needs name->id resolution
-    ("POST", "/api/v1/characters/membership"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
-    ("POST", "/api/v1/characters/likeness-search"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; fetch_scope_allowed_character_ids
+        _CHAR,
+        id_param="character_name",
+        resolved_inline=True,
+        justification=(
+            "§N3 name-derived id: (project_name, character_name) -> character id. "
+            "The gate cannot resolve name->id without duplicating the handler's "
+            "lookup (divergence risk, D2); the inline _require_scope_allows_character "
+            "check remains the live enforcement until a shared name->id resolver "
+            "exists — do not remove it in Step 5 before then."
+        ),
+    ),
+    (
+        "POST",
+        "/api/v1/characters/membership",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
+    (
+        "POST",
+        "/api/v1/characters/likeness-search",
+    ): _LIST_AWARE,  # READ_SAFE; fetch_scope_allowed_character_ids
     ("POST", "/api/v1/characters"): RoutePolicy(
         _OWNER,
         justification="Create character; POST blocked for READ tokens; owner only",
@@ -409,8 +440,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER, justification="Remove faces; DELETE blocked for READ tokens; owner only"
     ),
     # ── picture_sets.py ─────────────────────────────────────────────────────
-    ("GET", "/api/v1/picture_sets"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/picture_sets/locked-members"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/picture_sets"): _LIST_AWARE,
+    ("GET", "/api/v1/picture_sets/locked-members"): _LIST_AWARE,
     ("GET", "/api/v1/picture_sets/{id}"): RoutePolicy(_SET, id_param="id"),
     ("GET", "/api/v1/picture_sets/{id}/thumbnail"): RoutePolicy(_SET, id_param="id"),
     ("GET", "/api/v1/picture_sets/{id}/members"): RoutePolicy(_SET, id_param="id"),
@@ -418,11 +449,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         "GET",
         "/api/v1/projects/{project_name}/picture_sets/{picture_set_name}",
     ): RoutePolicy(
-        _SET, id_param="picture_set_name"
-    ),  # NEEDS REVIEW: derived id (name); Step-4 gate needs name->id resolution
-    ("POST", "/api/v1/picture_sets/membership"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
+        _SET,
+        id_param="picture_set_name",
+        resolved_inline=True,
+        justification=(
+            "§N3 name-derived id: (project_name, picture_set_name) -> set id. The "
+            "gate cannot resolve name->id without duplicating the handler's lookup "
+            "(divergence risk, D2); the inline _require_scope_allows_picture_set "
+            "check remains the live enforcement until a shared name->id resolver "
+            "exists — do not remove it in Step 5 before then."
+        ),
+    ),
+    (
+        "POST",
+        "/api/v1/picture_sets/membership",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
     ("POST", "/api/v1/picture_sets"): RoutePolicy(
         _OWNER, justification="Create set; POST blocked for READ tokens; owner only"
     ),
@@ -448,10 +489,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="Bulk replace set members; PUT blocked for READ tokens; owner only",
     ),
     # ── projects.py ─────────────────────────────────────────────────────────
-    ("GET", "/api/v1/projects"): RoutePolicy(_LIST),
-    ("GET", "/api/v1/projects/{id_or_name}"): RoutePolicy(_PROJ, id_param="id_or_name"),
+    ("GET", "/api/v1/projects"): _LIST_AWARE,
+    ("GET", "/api/v1/projects/{id_or_name}"): RoutePolicy(
+        _PROJ,
+        id_param="id_or_name",
+        resolved_inline=True,
+        justification=(
+            "§N3 id-or-name: {id_or_name} may be a numeric id OR a project name. "
+            "The gate cannot resolve it without duplicating the handler's "
+            "int-or-name lookup (divergence risk, D2); the inline "
+            "_require_scope_allows_project check remains the live enforcement until "
+            "a shared resolver exists — do not remove it in Step 5 before then."
+        ),
+    ),
     ("GET", "/api/v1/projects/{id_or_name}/picture_sets"): RoutePolicy(
-        _PROJ, id_param="id_or_name"
+        _PROJ,
+        id_param="id_or_name",
+        resolved_inline=True,
+        justification=(
+            "§N3 id-or-name: {id_or_name} may be a numeric id OR a project name. "
+            "The gate cannot resolve it without duplicating the handler's "
+            "int-or-name lookup (divergence risk, D2); the inline "
+            "_require_scope_allows_project check remains the live enforcement until "
+            "a shared resolver exists — do not remove it in Step 5 before then."
+        ),
     ),
     ("GET", "/api/v1/projects/{project_id}/summary"): RoutePolicy(
         _PROJ, id_param="project_id"
@@ -465,9 +526,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/projects/{project_id}/attachments/{attachment_id}"): RoutePolicy(
         _PROJ, id_param="project_id"
     ),
-    ("POST", "/api/v1/projects/membership"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
+    (
+        "POST",
+        "/api/v1/projects/membership",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
     ("POST", "/api/v1/projects"): RoutePolicy(
         _OWNER, justification="Create project; POST blocked for READ tokens; owner only"
     ),
@@ -494,13 +556,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="Delete attachment; DELETE blocked for READ tokens; owner only",
     ),
     # ── guest_scores.py (share-token guest scoring; READ_SAFE) ──────────────
-    ("GET", "/api/v1/pictures/guest-scores"): RoutePolicy(_LIST),
-    ("DELETE", "/api/v1/pictures/guest-scores/session"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope + guest session
-    ("POST", "/api/v1/pictures/guest-scores"): RoutePolicy(
-        _LIST
-    ),  # READ_SAFE; scope-filters ids
+    ("GET", "/api/v1/pictures/guest-scores"): _LIST_AWARE,
+    (
+        "DELETE",
+        "/api/v1/pictures/guest-scores/session",
+    ): _LIST_AWARE,  # READ_SAFE; scope + guest session
+    (
+        "POST",
+        "/api/v1/pictures/guest-scores",
+    ): _LIST_AWARE,  # READ_SAFE; scope-filters ids
     # ── comfyui.py ──────────────────────────────────────────────────────────
     ("GET", "/api/v1/comfyui/workflows"): RoutePolicy(_ANY),
     ("DELETE", "/api/v1/comfyui/workflows/{workflow_name}"): RoutePolicy(
@@ -609,40 +673,46 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="Vault-wide rebuild; inline _reject_scoped_tokens; owner/full only",
     ),
     # ── tag_suggestions.py ──────────────────────────────────────────────────
-    ("GET", "/api/v1/tag_suggestions"): RoutePolicy(_LIST),
-    ("POST", "/api/v1/tag_suggestions/bulk-accept"): RoutePolicy(
-        _LIST
-    ),  # _resolve_review_picture_ids scope-filters
+    ("GET", "/api/v1/tag_suggestions"): _LIST_AWARE,
+    (
+        "POST",
+        "/api/v1/tag_suggestions/bulk-accept",
+    ): _LIST_AWARE,  # _resolve_review_picture_ids scope-filters
     ("POST", "/api/v1/tag_suggestions/scan"): RoutePolicy(
         _OWNER,
         justification="Rebuild suggestions for a tag; POST blocked for READ tokens; owner only",
     ),
     # Carry-forward (F2): single-item mutators shipped without enforce_picture_scope;
     # plan mandates PICTURE_SCOPED. Today reachable only by owner (POST blocked for
-    # READ tokens). NEEDS REVIEW: id is a suggestion_id, Step-4 gate must resolve
-    # suggestion -> picture before the membership check.
+    # READ tokens). §N4: the path id is a suggestion_id, so the gate uses the
+    # ``tag_suggestion`` id_resolver (TagSuggestion.picture_id) to reach the picture
+    # before the membership check. Latent end-state — a scoped token cannot reach
+    # these POSTs today (not in READ_SAFE_POST_PATHS).
     ("POST", "/api/v1/tag_suggestions/{suggestion_id}/accept"): RoutePolicy(
-        _PIC, id_param="suggestion_id"
+        _PIC, id_param="suggestion_id", id_resolver="tag_suggestion"
     ),
     ("POST", "/api/v1/tag_suggestions/{suggestion_id}/reopen"): RoutePolicy(
-        _PIC, id_param="suggestion_id"
+        _PIC, id_param="suggestion_id", id_resolver="tag_suggestion"
     ),
     ("POST", "/api/v1/tag_suggestions/{suggestion_id}/fix-twin"): RoutePolicy(
-        _PIC, id_param="suggestion_id"
+        _PIC, id_param="suggestion_id", id_resolver="tag_suggestion"
     ),
     ("POST", "/api/v1/tag_suggestions/{suggestion_id}/swap"): RoutePolicy(
-        _PIC, id_param="suggestion_id"
+        _PIC, id_param="suggestion_id", id_resolver="tag_suggestion"
     ),
     ("POST", "/api/v1/tag_suggestions/{suggestion_id}/skip"): RoutePolicy(
-        _PIC, id_param="suggestion_id"
+        _PIC, id_param="suggestion_id", id_resolver="tag_suggestion"
     ),
     ("POST", "/api/v1/tag_suggestions/{suggestion_id}/dismiss"): RoutePolicy(
-        _PIC, id_param="suggestion_id"
+        _PIC, id_param="suggestion_id", id_resolver="tag_suggestion"
     ),
     # Highest-risk carry-forward: bulk-reopen takes a body id list and has no
-    # handler-level scope filter at all. body_ids names the list; NEEDS REVIEW:
-    # the ids are suggestion ids, resolved to pictures in Step 4.
-    ("POST", "/api/v1/tag_suggestions/bulk-reopen"): RoutePolicy(_PIC, body_ids="ids"),
+    # handler-level scope filter at all. §N4: body_ids names the list of
+    # SUGGESTION ids; the gate resolves each to its picture (tag_suggestion
+    # resolver) and membership-checks every one — not just the first.
+    ("POST", "/api/v1/tag_suggestions/bulk-reopen"): RoutePolicy(
+        _PIC, body_ids="ids", id_resolver="tag_suggestion"
+    ),
     # ── tagger_runs.py ──────────────────────────────────────────────────────
     # NEEDS REVIEW: the plan carry-forward lists "tagger_runs -> PICTURE_SCOPED",
     # but these endpoints carry NO picture id (global model-eval stats). Declared

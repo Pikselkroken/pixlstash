@@ -392,9 +392,30 @@ Four routes are scope-checked today via a **derived** id (resolved from a name /
 | `GET /api/v1/projects/{project_name}/characters/{character_name}` | `character_scoped` | `character_name` | (project_name, char_name) → character id |
 | `GET /api/v1/projects/{id_or_name}` and `/picture_sets` | `project_scoped` | `id_or_name` | id-or-name → project id |
 
+**Step-4 resolution (principal ruling 2026-07-21 D2):** these 4 routes are marked
+`resolved_inline=True` (a typed, validator-checked `RoutePolicy` field, not a
+comment). The gate does **not** object-check them — resolving name→id at the gate
+would duplicate each handler's own int-or-name lookup and risk a
+gate/handler divergence (the exact defect this refactor exists to kill; there is
+**no** shared name→id resolver today, verified). Their inline
+`_require_scope_allows_*` checks remain the live enforcement and must **not** be
+removed in Step 5 until a shared resolver exists. Note: `GET
+/projects/{project_id}/summary|export|attachments*` are **numeric** `project_id`
+(or the aggregate `UNASSIGNED`, which the gate fails closed to 403 for a scoped
+token — matching the handler), so those are gate-enforced, not `resolved_inline`.
+
 ### N4. `tag_suggestions` single-item mutators + `bulk-reopen` (F2 carry-forward) — `picture_scoped` on a `suggestion_id`
 
 Per the plan carry-forward and the prior CSO sign-off (`docs/reviews/1.7.0rc1-authz-coverage-matrix.md`, 2026-07-18), the 7 mutators (`accept`/`reopen`/`fix-twin`/`swap`/`skip`/`dismiss` + `bulk-reopen`) shipped **without** `enforce_picture_scope`. They are **latent, not live**: all are POSTs not in `READ_SAFE_POST_PATHS`, so a READ (⇒ scoped) token is middleware-blocked; only the owner reaches them today. I declared them `picture_scoped` per the plan mandate. **Step-4 work:** the id on the single-item routes is a `suggestion_id` and on `bulk-reopen` a body list `ids` of **suggestion** ids — the gate must resolve `suggestion → picture_id` before the membership check. `bulk-reopen` is the highest risk of the set (an enumerable id list, no handler-level scope filter at all) and is covered explicitly via `body_ids="ids"`.
+
+**Step-4 resolution:** the 7 routes carry `id_resolver="tag_suggestion"` (a typed,
+validator-checked field naming `membership.ID_RESOLVERS["tag_suggestion"]`, which
+maps `TagSuggestion.picture_id`). The gate resolves each suggestion id → picture
+id, then runs `enforce_picture_scope`; `bulk-reopen` resolves and checks **every**
+id behind `body_ids="ids"`, not just the first (a suggestion that does not resolve
+fails closed). Latent end-state — these POSTs are middleware-blocked for scoped
+tokens today — proven by the `AuthzGate(enforcing=True)` decoy tests in
+`tests/test_authz_gate_step4.py`.
 
 ### N5. `tagger_runs` — the plan said `PICTURE_SCOPED`, but these carry no picture id
 
@@ -403,6 +424,11 @@ The plan carry-forward text lists "`tagger_runs` endpoints → `PICTURE_SCOPED`"
 ### N6. `run_t2i` body id is single + optional
 
 `POST /api/v1/comfyui/run_t2i` calls `enforce_picture_scope(source_picture_id)` only when a `source_picture_id` is present in the body (t2i may have none). I recorded `body_ids="source_picture_id"` (a single, optional field, not a list) so the declaration validates and Step 4 knows where to look. The gate's batch `body_ids` resolution must tolerate a single/absent value here.
+
+**Step-4 resolution:** the gate's `_read_body_ids` handles a single scalar (checked
+as one id) and an absent/`None` value (no-op), in addition to a list — so `run_t2i`
+with no `source_picture_id` passes and with an out-of-scope one is 403'd. Covered
+by `test_body_ids_single_optional_scalar_run_t2i`.
 
 ---
 

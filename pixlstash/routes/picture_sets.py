@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from sqlalchemy import desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
+from pixlstash.authz.membership import enforce_set_scope
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -320,34 +321,14 @@ def create_router(server) -> APIRouter:
         )
 
     def _require_scope_allows_picture_set(request: Request, set_id: int):
-        """Raise 403 if the token scope does not cover the requested picture set."""
-        scope = getattr(request.state, "token_scope", None)
-        if scope is None:
-            return
-        if scope.resource_type == "picture_set":
-            if scope.resource_id != set_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token is not authorised for this picture set",
-                )
-        elif scope.resource_type == "project":
-            # Allow access if the set belongs to the token's project
-            def _check_set_in_project(session, sid: int, pid: int):
-                ps = session.get(PictureSet, sid)
-                if ps is None or ps.project_id != pid:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Token is not authorised for this picture set",
-                    )
+        """Raise 403 if the token scope does not cover the requested picture set.
 
-            server.vault.db.run_immediate_read_task(
-                _check_set_in_project, set_id, scope.resource_id
-            )
-        elif scope.resource_type is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised for this resource type",
-            )
+        Thin delegation to the single membership implementation in
+        ``pixlstash/authz/membership.py`` (backend refactor plan §3.7, Step 4).
+        The authz gate calls the same function directly for SET_SCOPED routes;
+        Step 5 removes this shim.
+        """
+        enforce_set_scope(server, request, set_id)
 
     @router.get(
         "/picture_sets",

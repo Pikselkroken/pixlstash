@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import case as sa_case, exists, func
 from sqlmodel import Session, select
 
+from pixlstash.authz.membership import enforce_character_scope
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -330,34 +331,14 @@ def create_router(server) -> APIRouter:
         )
 
     def _require_scope_allows_character(request: Request, character_id: int):
-        """Raise 403 if the token scope does not cover the requested character."""
-        scope = getattr(request.state, "token_scope", None)
-        if scope is None:
-            return
-        if scope.resource_type == "character":
-            if scope.resource_id != character_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token is not authorised for this character",
-                )
-        elif scope.resource_type == "project":
+        """Raise 403 if the token scope does not cover the requested character.
 
-            def check_char_project(session: Session, cid: int, pid: int) -> bool:
-                char = session.get(Character, cid)
-                return char is not None and char.project_id == pid
-
-            if not server.vault.db.run_immediate_read_task(
-                check_char_project, character_id, scope.resource_id
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token is not authorised for this character",
-                )
-        elif scope.resource_type is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised for this resource type",
-            )
+        Thin delegation to the single membership implementation in
+        ``pixlstash/authz/membership.py`` (backend refactor plan §3.7, Step 4).
+        The authz gate calls the same function directly for CHARACTER_SCOPED
+        routes; Step 5 removes this shim.
+        """
+        enforce_character_scope(server, request, character_id)
 
     def _get_hidden_tags_from_request(request: Request) -> list[str]:
         if request.query_params.get("apply_tag_filter", "").lower() != "true":

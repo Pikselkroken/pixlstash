@@ -16,6 +16,7 @@ from sqlalchemy import delete, exists, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from pixlstash.authz.membership import enforce_project_scope
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -162,21 +163,14 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=409, detail="Project name already exists")
 
     def _require_scope_allows_project(request: Request, project_id: int):
-        """Raise 403 if the token scope does not cover the requested project."""
-        scope = getattr(request.state, "token_scope", None)
-        if scope is None:
-            return
-        if scope.resource_type == "project":
-            if scope.resource_id != project_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token is not authorised for this project",
-                )
-        elif scope.resource_type is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised for this resource type",
-            )
+        """Raise 403 if the token scope does not cover the requested project.
+
+        Thin delegation to the single membership implementation in
+        ``pixlstash/authz/membership.py`` (backend refactor plan §3.7, Step 4).
+        The authz gate calls the same function directly for PROJECT_SCOPED
+        routes; Step 5 removes this shim.
+        """
+        enforce_project_scope(server, request, project_id)
 
     # -------------------------------------------------------------------------
     # Projects CRUD

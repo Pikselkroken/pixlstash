@@ -12,11 +12,14 @@ from sqlalchemy import (
 )
 from sqlmodel import Session, select
 
+# Thin re-export: the picture-scope membership logic moved to
+# pixlstash/authz/membership.py (backend refactor plan §3.7, Step 4). Kept
+# importable from here so the ~20 inline call sites (comfyui, tags,
+# tag_predictions, _anomaly, _thumbnails, _crud, ...) stay unchanged until Step 5.
+# The redundant ``as`` alias marks this an intentional re-export (ruff F401).
+from pixlstash.authz.membership import enforce_picture_scope as enforce_picture_scope
 from pixlstash.db_models import (
-    Face,
     Picture,
-    PictureProjectMember,
-    PictureSetMember,
     Tag,
 )
 from pixlstash.pixl_logging import get_logger
@@ -286,89 +289,5 @@ def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
     return enriched
 
 
-def _picture_id_in_scoped_set(server, picture_id: int, set_id: int) -> bool:
-    """Return True if picture_id is a member of set_id."""
-
-    def check(session):
-        return (
-            session.exec(
-                select(PictureSetMember).where(
-                    PictureSetMember.set_id == set_id,
-                    PictureSetMember.picture_id == picture_id,
-                )
-            ).first()
-            is not None
-        )
-
-    return server.vault.db.run_immediate_read_task(check)
-
-
-def _picture_id_in_scoped_character(server, picture_id: int, character_id: int) -> bool:
-    """Return True if the picture has at least one face assigned to character_id."""
-
-    def check(session):
-        return (
-            session.exec(
-                select(Face).where(
-                    Face.picture_id == picture_id,
-                    Face.character_id == character_id,
-                )
-            ).first()
-            is not None
-        )
-
-    return server.vault.db.run_immediate_read_task(check)
-
-
-def _picture_id_in_scoped_project(server, picture_id: int, project_id: int) -> bool:
-    """Return True if picture_id is a member of project_id."""
-
-    def check(session):
-        return (
-            session.exec(
-                select(PictureProjectMember).where(
-                    PictureProjectMember.picture_id == picture_id,
-                    PictureProjectMember.project_id == project_id,
-                )
-            ).first()
-            is not None
-        )
-
-    return server.vault.db.run_immediate_read_task(check)
-
-
-def enforce_picture_scope(server, request: Request, picture_id: int):
-    """Raise 403 if a scoped token does not permit access to this picture."""
-    scope = getattr(request.state, "token_scope", None)
-    if scope is None:
-        return
-    if scope.resource_type == "picture_set":
-        if not _picture_id_in_scoped_set(server, picture_id, scope.resource_id):
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type == "character":
-        if not _picture_id_in_scoped_character(server, picture_id, scope.resource_id):
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type == "project":
-        if not _picture_id_in_scoped_project(server, picture_id, scope.resource_id):
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type == "picture":
-        # Single-picture share token: only that exact picture is permitted.
-        if picture_id != scope.resource_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type is not None:
-        raise HTTPException(
-            status_code=403,
-            detail="Token is not authorised for this resource type",
-        )
+# enforce_picture_scope and its private _picture_id_in_scoped_* helpers now live
+# in pixlstash/authz/membership.py (re-exported at the top of this module).

@@ -1224,7 +1224,9 @@ class Server:
         # owner-class enforcement (OWNER_ONLY/LOCAL_OWNER_ONLY) can delegate to
         # require_unscoped_owner/real_client_ip once the flag is enforcing; an
         # enforcing gate with owner-class routes but no auth boot-fails.
-        self.authz = AuthzGate(enforcing=AUTHZ_GATE_ENFORCING, auth=self.auth)
+        self.authz = AuthzGate(
+            enforcing=AUTHZ_GATE_ENFORCING, auth=self.auth, server=self
+        )
         self._add_cors_exception_handler()
         self._setup_routes()
         self._install_custom_openapi()
