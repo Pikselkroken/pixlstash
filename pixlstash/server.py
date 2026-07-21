@@ -12,7 +12,6 @@ from platformdirs import user_config_dir
 
 
 from contextlib import asynccontextmanager
-from PIL import Image
 from fastapi import (
     Depends,
     FastAPI,
@@ -28,16 +27,15 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pillow_heif import register_heif_opener
 
-from sqlmodel import select
 
 from pixlstash.db_models import (
-    Picture,
     User,
 )
 
 from pixlstash.event_types import EventType
 from pixlstash.auth import AuthService, LoginRequest, is_auth_excluded_path
 from pixlstash.authz import AUTHZ_GATE_ENFORCING, AuthzGate
+from pixlstash.maintenance import MaintenanceMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.vault import Vault
@@ -76,7 +74,6 @@ from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.utils.atomic_write import write_json_atomic
-from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
@@ -923,7 +920,7 @@ def _inject_path_param_examples(operation):
         schema["examples"] = [value]
 
 
-class Server:
+class Server(MaintenanceMixin):
     """
     Main server class for the PixlStash FastAPI application.
 
@@ -1449,147 +1446,6 @@ class Server:
                 for client in stale:
                     if client in self._ws_clients:
                         self._ws_clients.remove(client)
-
-    def _generate_missing_thumbnails(self):
-        def fetch_pictures(session):
-            return session.exec(select(Picture.id, Picture.file_path)).all()
-
-        rows = self.vault.db.run_immediate_read_task(fetch_pictures)
-        if not rows:
-            logger.info("No pictures found for thumbnail generation.")
-            return
-
-        missing = []
-        for row in rows:
-            pic_id, file_path = row
-            if not file_path:
-                continue
-            thumb_path = ImageUtils.get_thumbnail_path(self.vault.image_root, file_path)
-            if thumb_path and os.path.exists(thumb_path):
-                continue
-            missing.append((pic_id, file_path))
-
-        total = len(missing)
-        if total == 0:
-            logger.debug("All thumbnails already exist.")
-            return
-
-        logger.info("Generating %s missing thumbnails at startup.", total)
-        generated = 0
-        skipped = 0
-        missing_source_count = 0
-        for index, (pic_id, file_path) in enumerate(missing, start=1):
-            resolved = ImageUtils.resolve_picture_path(self.vault.image_root, file_path)
-            if not resolved or not os.path.exists(resolved):
-                missing_source_count += 1
-                skipped += 1
-                logger.warning(
-                    "Missing source file for thumbnail generation: %s", resolved
-                )
-                if (
-                    missing_source_count == 1
-                    and not Server.DEFAULT_CLEANUP_MISSING_PICTURES
-                ):
-                    logger.info(
-                        "Startup cleanup tip: run with '--cleanup-missing-pictures' "
-                        "to remove stale picture records that point to missing files."
-                    )
-                continue
-            img = ImageUtils.load_image_or_video(resolved)
-            if img is None:
-                skipped += 1
-                logger.warning(
-                    "Failed to load image for thumbnail generation: %s", resolved
-                )
-                continue
-            if not isinstance(img, Image.Image):
-                img = Image.fromarray(img)
-            thumbnail_bytes = ImageUtils.generate_thumbnail_bytes(img)
-            if not thumbnail_bytes:
-                skipped += 1
-                logger.warning(
-                    "Failed to generate thumbnail bytes for picture %s", pic_id
-                )
-                continue
-            saved = ImageUtils.write_thumbnail_bytes(
-                self.vault.image_root, file_path, thumbnail_bytes
-            )
-            if saved:
-                generated += 1
-            else:
-                skipped += 1
-                logger.warning("Failed to persist thumbnail for picture %s", pic_id)
-            if index % 250 == 0:
-                logger.info("Thumbnail generation progress: %s/%s", index, total)
-
-        logger.info(
-            "Thumbnail generation completed: %s generated, %s skipped (%s missing source files).",
-            generated,
-            skipped,
-            missing_source_count,
-        )
-
-    def _cleanup_missing_pictures(self):
-        def fetch_pictures(session):
-            return session.exec(select(Picture.id, Picture.file_path)).all()
-
-        rows = self.vault.db.run_immediate_read_task(fetch_pictures)
-        if not rows:
-            logger.info("No pictures found for startup missing-file cleanup.")
-            return
-
-        missing_ids = []
-        thumbnail_candidates = []
-        for row in rows:
-            pic_id, file_path = row
-            resolved = None
-            if file_path:
-                resolved = ImageUtils.resolve_picture_path(
-                    self.vault.image_root, file_path
-                )
-            if not resolved or not os.path.isfile(resolved):
-                missing_ids.append(pic_id)
-                if file_path:
-                    thumbnail_candidates.append(file_path)
-
-        if not missing_ids:
-            logger.info("Startup missing-file cleanup found no stale picture records.")
-            return
-
-        logger.warning(
-            "Startup missing-file cleanup removing %s stale picture records.",
-            len(missing_ids),
-        )
-
-        def delete_rows(session, ids: list[int]):
-            deleted_count = 0
-            pictures = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
-            for pic in pictures:
-                session.delete(pic)
-                deleted_count += 1
-            session.commit()
-            return deleted_count
-
-        deleted_count = self.vault.db.run_task(delete_rows, missing_ids)
-
-        thumbnails_removed = 0
-        for rel_path in thumbnail_candidates:
-            thumb_path = ImageUtils.get_thumbnail_path(self.vault.image_root, rel_path)
-            if not thumb_path or not os.path.isfile(thumb_path):
-                continue
-            try:
-                os.remove(thumb_path)
-                thumbnails_removed += 1
-            except Exception as exc:
-                logger.warning(
-                    "Failed to delete orphan thumbnail %s: %s", thumb_path, exc
-                )
-
-        logger.info(
-            "Startup missing-file cleanup completed: %s records removed, %s orphan thumbnails removed.",
-            deleted_count,
-            thumbnails_removed,
-        )
 
     def run(self):
         self._shutdown_on_lifespan = True
