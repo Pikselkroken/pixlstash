@@ -1,3 +1,8 @@
+# [1.7.1] [Security:Critical]
+
+- Update tar, brace-expansion and js-yaml node packages
+- We don't actually use the feature that makes the tar vulnerability critical, but better safe than sorry.
+
 # [1.7.0] [Security:Moderate]
 
 Smart Scores are recomputed for your whole library the first time you open 1.7.0, so the grid may re-order compared to 1.6. This is expected, not a bug: scoring is now calibrated and precision-aware, so it judges image defects more accurately. Your originals and snapshots are untouched, and the recompute runs in the background.
