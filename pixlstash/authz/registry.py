@@ -7,22 +7,659 @@ path as enumerated by :func:`pixlstash.route_inventory.iter_api_route_contexts`
 matrix: reviewable in one screen, diffable, greppable. See the backend refactor
 plan §3.2 and ``docs/backend_architecture.md`` §16.2.
 
-**Empty by design in Phase 1 Step 1.** The declaration back-fill for all mounted
-routes is Step 2 (a separate PR that carries the adversarial security review). In
-Step 1 the registry is empty, so the gate treats every route as undeclared and —
-in report-only mode — logs the full backlog rather than denying anything. The CI
-guardrail's audit allowlist (``tests/test_architecture_guardrails.py``) therefore
-still holds the full current route set; it burns down as this table fills.
+**Phase 1 Step 2 — back-fill of current behaviour.** Every mounted route below is
+declared with the single :class:`AccessPolicy` that reproduces its behaviour
+TODAY, so that when the gate flips to enforcing (Steps 3-4) nothing changes. The
+derivation, per route, comes from the auth middleware gating in ``auth.py``
+(``AUTH_EXCLUDED_*``, ``READ_BLOCKED_GET_PATHS``, ``READ_SAFE_POST_PATHS``, the
+non-GET block for READ tokens, ``require_local_for_write``, the ``ALL``
++``resource_type`` fail-closed rejection) PLUS the inline object checks in the
+handlers (``enforce_picture_scope`` / ``fetch_scope_allowed_picture_ids`` /
+``require_unscoped_owner`` / the ``_require_scope_allows_*`` ladders). The full
+per-route rationale and the reviewer flags live in
+``docs/reviews/authz-coverage-matrix.md`` — that document is the artifact the
+adversarial security review consumes.
+
+**Semantics that shape the mapping (verified against the code):**
+
+* The auth middleware blocks READ-scoped tokens from every non-GET method except
+  the ``READ_SAFE_POST_PATHS`` allowlist, and from the ``READ_BLOCKED_GET_PATHS``
+  GET set. Every resource-scoped share token is a READ token
+  (``ALL``+``resource_type`` is refused at mint and fail-closed at the
+  middleware), so a mutating route with no ``READ_SAFE`` exemption is reachable
+  ONLY by an unscoped owner today — hence ``OWNER_ONLY`` is a no-op there.
+* ``fetch_scope_allowed_picture_ids`` (and the ``_require_scope_allows_*``
+  ladders) return "no restriction" for BOTH an owner token and an unscoped-READ
+  token (``token_scope.resource_type is None``); they only narrow/deny a
+  *resource-scoped* token. So a handler's inline scope filter only affects
+  resource-scoped share tokens.
+* The inline checks REMAIN until Step 5; these declarations record the intended
+  end-state so the gate can take over without a behaviour change.
+
+The ``AUTHZ_GATE_ENFORCING`` constant in ``pixlstash/authz/gate.py`` is still
+``False`` — this table is declared but not yet enforced (Step 2 is declarations
+only). The CI guardrail's audit allowlist burns to zero as this table fills.
 """
 
 from __future__ import annotations
 
-from pixlstash.authz.policy import RoutePolicy
+from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 
-# Step 2 back-fills this table with one entry per mounted (method, path). Until
-# then it is intentionally empty: no route is declared, so the deny-by-default
-# gate would deny every route if it were enforcing. It is NOT enforcing in Step 1
-# (see AUTHZ_GATE_ENFORCING in pixlstash/authz/gate.py) — it reports only.
-ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {}
+# Short aliases keep the table scannable in one screen.
+_PUBLIC = AccessPolicy.PUBLIC
+_ANY = AccessPolicy.ANY_TOKEN
+_OWNER = AccessPolicy.OWNER_ONLY
+_PIC = AccessPolicy.PICTURE_SCOPED
+_SET = AccessPolicy.SET_SCOPED
+_CHAR = AccessPolicy.CHARACTER_SCOPED
+_PROJ = AccessPolicy.PROJECT_SCOPED
+_LIST = AccessPolicy.SCOPED_LIST
+
+
+ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
+    # ── App-level / public (auth-excluded in AUTH_EXCLUDED_*) ───────────────
+    ("GET", "/"): RoutePolicy(
+        _PUBLIC, justification="Frontend SPA index; auth-excluded; no owner data"
+    ),
+    ("GET", "/version"): RoutePolicy(
+        _PUBLIC, justification="Health/version probe; auth-excluded"
+    ),
+    ("GET", "/scalar"): RoutePolicy(
+        _PUBLIC, justification="API docs UI; auth-excluded"
+    ),
+    ("GET", "/favicon.ico"): RoutePolicy(
+        _PUBLIC, justification="Static favicon; auth-excluded"
+    ),
+    ("GET", "/docs"): RoutePolicy(
+        _PUBLIC, justification="Swagger UI; auth-excluded (/docs/ prefix)"
+    ),
+    ("GET", "/docs/oauth2-redirect"): RoutePolicy(
+        _PUBLIC, justification="Swagger oauth2 redirect; auth-excluded"
+    ),
+    ("GET", "/openapi.json"): RoutePolicy(
+        _PUBLIC, justification="OpenAPI schema; auth-excluded"
+    ),
+    ("GET", "/{full_path:path}"): RoutePolicy(
+        _PUBLIC,
+        justification=(
+            "Frontend SPA fallback serving the static shell/assets; returns no "
+            "owner resource data. NEEDS REVIEW: this template is not statically "
+            "in AUTH_EXCLUDED_*, so the middleware requires auth for a concrete "
+            "non-excluded deep path; the planned PUBLIC-consistency check must "
+            "reconcile (add to exclusions or special-case)."
+        ),
+    ),
+    ("GET", "/api/v1/check-session"): RoutePolicy(
+        _PUBLIC, justification="Session status probe; auth-excluded (/check-session)"
+    ),
+    ("GET", "/api/v1/login"): RoutePolicy(
+        _PUBLIC, justification="Registration-status probe; auth-excluded (/login)"
+    ),
+    ("POST", "/api/v1/login"): RoutePolicy(
+        _PUBLIC,
+        justification="Password login / first-owner claim; auth-excluded (/login)",
+    ),
+    ("POST", "/api/v1/logout"): RoutePolicy(
+        _PUBLIC, justification="Logout; auth-excluded (/logout)"
+    ),
+    ("GET", "/share/{token_slug}"): RoutePolicy(
+        _PUBLIC,
+        justification="Share-link landing; resolves its own token; auth-excluded (/share/ prefix)",
+    ),
+    # ── App-level authenticated, no per-object data ─────────────────────────
+    ("GET", "/api/v1/network/info"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/protected"): RoutePolicy(_ANY),
+    # ── config.py (user account + server-config) ────────────────────────────
+    ("GET", "/api/v1/users/me/config"): RoutePolicy(
+        _OWNER,
+        justification="Owner config; READ_BLOCKED_GET_PATHS blocks READ tokens; only owner reaches",
+    ),
+    ("GET", "/api/v1/users/me/penalised-tags"): RoutePolicy(_ANY),
+    ("PATCH", "/api/v1/users/me/config"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner; owner config write"
+    ),
+    ("POST", "/api/v1/users/me/auth"): RoutePolicy(
+        _OWNER,
+        justification="Change owner password; POST blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/users/me/auth"): RoutePolicy(_ANY),
+    ("POST", "/api/v1/users/me/token"): RoutePolicy(
+        _OWNER, justification="Mint API token; POST blocked for READ tokens; owner only"
+    ),
+    ("GET", "/api/v1/users/me/token"): RoutePolicy(
+        _OWNER,
+        justification="List API tokens; list_tokens rejects token_scope is not None (auth.py:1178), so every scoped/READ token is 403'd; owner only",
+    ),
+    ("DELETE", "/api/v1/users/me/token/{token_id}"): RoutePolicy(
+        _OWNER,
+        justification="Revoke API token; DELETE blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/users/me/token/{token_id}"): RoutePolicy(
+        _OWNER,
+        justification="Update API token; PATCH blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/users/me/watermark"): RoutePolicy(_ANY),
+    ("POST", "/api/v1/users/me/watermark"): RoutePolicy(
+        _OWNER,
+        justification="Upload watermark; POST blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/users/me/watermark"): RoutePolicy(
+        _OWNER,
+        justification="Delete watermark; DELETE blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/users/me/shared-resource-ids"): RoutePolicy(
+        _OWNER,
+        justification="get_shared_resource_ids rejects token_scope is not None (auth.py:1314), so every scoped/READ token is 403'd; owner only",
+    ),
+    ("POST", "/api/v1/users/me/shared-picture-ids/batch"): RoutePolicy(
+        _OWNER, justification="POST not in READ_SAFE; READ tokens blocked; owner only"
+    ),
+    ("DELETE", "/api/v1/users/me/tokens/by-resource"): RoutePolicy(
+        _OWNER,
+        justification="Revoke tokens for a resource; DELETE blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/session/context"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/workers/progress"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/server-config/watch-folders"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner; also READ_BLOCKED; owner only"
+    ),
+    ("GET", "/api/v1/server-config/filesystem-roots"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner; also READ_BLOCKED; owner only"
+    ),
+    ("GET", "/api/v1/server-config/snapshots"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("PATCH", "/api/v1/server-config/snapshots"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("POST", "/api/v1/server-config/open"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner; opens config in host editor"
+    ),
+    # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
+    ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 host FS browse; READ_BLOCKED; owner only today (Step-3 retarget LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/filesystem/folders"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 host FS mkdir; POST blocked for READ tokens; owner only today (Step-3 retarget LOCAL_OWNER_ONLY)",
+    ),
+    # ── import_folders.py (§16.3 host-capability) ───────────────────────────
+    ("GET", "/api/v1/import-folders"): RoutePolicy(
+        _LIST
+    ),  # self-filters to empty for scoped tokens
+    ("POST", "/api/v1/import-folders"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 import-folder create; POST blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("PATCH", "/api/v1/import-folders/{folder_id}"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 import-folder update; PATCH blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("DELETE", "/api/v1/import-folders/{folder_id}"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 import-folder delete; DELETE blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    # ── reference_folders.py (§16.3 host-capability) ────────────────────────
+    ("GET", "/api/v1/reference-folders"): RoutePolicy(
+        _LIST
+    ),  # self-filters to empty for scoped tokens
+    ("GET", "/api/v1/reference-folders/detect-sidecars"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 walks host path; READ_BLOCKED; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/reference-folders"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 reference-folder create; POST blocked for READ; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("PATCH", "/api/v1/reference-folders/{folder_id}"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 reference-folder update; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/reference-folders/{folder_id}/relocate"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 reference-folder relocate; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/reference-folders/{folder_id}/move-pictures"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 move pictures on host FS; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/reference-folders/{folder_id}/metadata/export"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 write sidecars to host FS; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/reference-folders/{folder_id}/metadata/import"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 read sidecars from host FS; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("DELETE", "/api/v1/reference-folders/{folder_id}"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 reference-folder delete; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/reference-folders/{folder_id}/open"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 open folder in host file manager; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/server/restart"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 restart the server process; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    # ── pictures: single-object reads (enforce_picture_scope) → PICTURE_SCOPED
+    ("GET", "/api/v1/pictures/{id}.{ext}"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/metadata"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/character_likeness"): RoutePolicy(
+        _PIC, id_param="id"
+    ),
+    ("GET", "/api/v1/pictures/{id}/detections"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/{field}"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/anomaly_region"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
+    ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
+    ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),
+    ("DELETE", "/api/v1/pictures/{id}/face/{index}"): RoutePolicy(_PIC, id_param="id"),
+    ("DELETE", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
+    ("DELETE", "/api/v1/pictures"): RoutePolicy(
+        _PIC, body_ids="picture_ids"
+    ),  # loops enforce_picture_scope over every id
+    # ── pictures: list / search / batch-filter (fetch_scope_allowed) → SCOPED_LIST
+    ("GET", "/api/v1/pictures"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/stream"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/count"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/search"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/stats"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/likeness-groups"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/comfyui_models"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/comfyui_loras"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/export"): RoutePolicy(
+        _LIST
+    ),  # generate_zip scope-filters via fetch_scope_allowed
+    ("POST", "/api/v1/pictures/thumbnails"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/pictures/tags/bulk_fetch"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/pictures/character_likeness/batch"): RoutePolicy(
+        _LIST
+    ),  # drops out-of-scope ids via fetch_scope_allowed
+    ("POST", "/api/v1/pictures/plugins/{name}"): RoutePolicy(_LIST),
+    ("PATCH", "/api/v1/pictures/project"): RoutePolicy(_LIST),
+    ("POST", "/api/v1/pictures/apply-scores"): RoutePolicy(_LIST),
+    ("POST", "/api/v1/pictures/detect"): RoutePolicy(_LIST),
+    ("POST", "/api/v1/pictures/face-search"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/pictures/likeness-search"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/pictures/impossible-tags/clear"): RoutePolicy(_LIST),
+    ("POST", "/api/v1/pictures/impossible-tags/restore"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/tags"): RoutePolicy(_LIST),
+    # ── pictures: owner-only surfaces ───────────────────────────────────────
+    ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/pictures/import/status"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/pictures/export/status"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/pictures/export/download/{task_id}"): RoutePolicy(_ANY),
+    ("POST", "/api/v1/pictures/import"): RoutePolicy(
+        _OWNER,
+        justification="Import pictures; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/pictures/score_character_likeness"): RoutePolicy(
+        _OWNER, justification="Owner scoring op; POST not in READ_SAFE; owner only"
+    ),
+    ("POST", "/api/v1/pictures/{id}/open-location"): RoutePolicy(
+        _OWNER,
+        justification="§16.3 open file location in host file manager; no request scope; owner today (Step-3 LOCAL_OWNER_ONLY)",
+    ),
+    ("POST", "/api/v1/pictures/scrapheap/restore"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("DELETE", "/api/v1/pictures/scrapheap"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    # ── tags.py: single-picture tag mutations (enforce_picture_scope) ────────
+    ("POST", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),
+    ("DELETE", "/api/v1/pictures/{id}/tags/{tag_id}"): RoutePolicy(_PIC, id_param="id"),
+    ("POST", "/api/v1/pictures/{id}/tags/remove_all"): RoutePolicy(_PIC, id_param="id"),
+    ("DELETE", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),
+    # ── tag_predictions.py: #504 mutators (enforce_picture_scope) ────────────
+    ("GET", "/api/v1/pictures/{id}/tag_predictions"): RoutePolicy(_PIC, id_param="id"),
+    ("POST", "/api/v1/pictures/{id}/tag_predictions/{tag}/confirm"): RoutePolicy(
+        _PIC, id_param="id"
+    ),
+    ("POST", "/api/v1/pictures/{id}/tag_predictions/{tag}/reject"): RoutePolicy(
+        _PIC, id_param="id"
+    ),
+    ("POST", "/api/v1/pictures/{id}/tag_predictions/delete"): RoutePolicy(
+        _PIC, id_param="id"
+    ),
+    ("POST", "/api/v1/pictures/{id}/reset_tags"): RoutePolicy(_PIC, id_param="id"),
+    ("POST", "/api/v1/pictures/{id}/reset_description"): RoutePolicy(
+        _PIC, id_param="id"
+    ),
+    ("GET", "/api/v1/tagger/label-thresholds"): RoutePolicy(_ANY),
+    # ── stacks.py ───────────────────────────────────────────────────────────
+    ("GET", "/api/v1/stacks/{stack_id}"): RoutePolicy(
+        _LIST
+    ),  # returns pictures filtered by fetch_scope_allowed
+    ("GET", "/api/v1/stacks/{stack_id}/pictures"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/pictures/{picture_id}/stack"): RoutePolicy(_LIST),
+    ("POST", "/api/v1/stacks"): RoutePolicy(
+        _OWNER, justification="Create stack; POST blocked for READ tokens; owner only"
+    ),
+    ("PATCH", "/api/v1/stacks/{stack_id}/order"): RoutePolicy(
+        _OWNER, justification="Reorder stack; PATCH blocked for READ tokens; owner only"
+    ),
+    ("POST", "/api/v1/stacks/{stack_id}/members"): RoutePolicy(
+        _OWNER,
+        justification="Add stack members; POST blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/stacks/{stack_id}/members"): RoutePolicy(
+        _OWNER,
+        justification="Remove stack members; DELETE blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/stacks/{stack_id}/members/{picture_id}"): RoutePolicy(
+        _OWNER,
+        justification="Set member position; PATCH blocked for READ tokens; owner only",
+    ),
+    # ── characters.py ───────────────────────────────────────────────────────
+    ("GET", "/api/v1/characters"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/characters/{id}"): RoutePolicy(_CHAR, id_param="id"),
+    ("GET", "/api/v1/characters/{id}/summary"): RoutePolicy(_CHAR, id_param="id"),
+    ("GET", "/api/v1/characters/{id}/reference_pictures"): RoutePolicy(
+        _CHAR, id_param="id"
+    ),
+    ("GET", "/api/v1/characters/{id}/{field}"): RoutePolicy(_CHAR, id_param="id"),
+    ("GET", "/api/v1/projects/{project_name}/characters/{character_name}"): RoutePolicy(
+        _CHAR, id_param="character_name"
+    ),  # NEEDS REVIEW: derived id (name); Step-4 gate needs name->id resolution
+    ("POST", "/api/v1/characters/membership"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/characters/likeness-search"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; fetch_scope_allowed_character_ids
+    ("POST", "/api/v1/characters"): RoutePolicy(
+        _OWNER,
+        justification="Create character; POST blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/characters/{id}"): RoutePolicy(
+        _OWNER,
+        justification="Update character; PATCH blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/characters/{id}"): RoutePolicy(
+        _OWNER,
+        justification="Delete character; DELETE blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/characters/{character_id}/faces"): RoutePolicy(
+        _OWNER, justification="Assign face; POST blocked for READ tokens; owner only"
+    ),
+    ("DELETE", "/api/v1/characters/{character_id}/faces"): RoutePolicy(
+        _OWNER, justification="Remove faces; DELETE blocked for READ tokens; owner only"
+    ),
+    # ── picture_sets.py ─────────────────────────────────────────────────────
+    ("GET", "/api/v1/picture_sets"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/picture_sets/locked-members"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/picture_sets/{id}"): RoutePolicy(_SET, id_param="id"),
+    ("GET", "/api/v1/picture_sets/{id}/thumbnail"): RoutePolicy(_SET, id_param="id"),
+    ("GET", "/api/v1/picture_sets/{id}/members"): RoutePolicy(_SET, id_param="id"),
+    (
+        "GET",
+        "/api/v1/projects/{project_name}/picture_sets/{picture_set_name}",
+    ): RoutePolicy(
+        _SET, id_param="picture_set_name"
+    ),  # NEEDS REVIEW: derived id (name); Step-4 gate needs name->id resolution
+    ("POST", "/api/v1/picture_sets/membership"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/picture_sets"): RoutePolicy(
+        _OWNER, justification="Create set; POST blocked for READ tokens; owner only"
+    ),
+    ("PATCH", "/api/v1/picture_sets/{id}"): RoutePolicy(
+        _OWNER, justification="Update set; PATCH blocked for READ tokens; owner only"
+    ),
+    ("DELETE", "/api/v1/picture_sets/{id}"): RoutePolicy(
+        _OWNER, justification="Delete set; DELETE blocked for READ tokens; owner only"
+    ),
+    ("POST", "/api/v1/picture_sets/{id}/members/{picture_id}"): RoutePolicy(
+        _OWNER, justification="Add set member; POST blocked for READ tokens; owner only"
+    ),
+    ("DELETE", "/api/v1/picture_sets/{id}/members/{picture_id}"): RoutePolicy(
+        _OWNER,
+        justification="Remove set member; DELETE blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/picture_sets/{id}/members"): RoutePolicy(
+        _OWNER,
+        justification="Bulk add set members; POST blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/picture_sets/{id}/members"): RoutePolicy(
+        _OWNER,
+        justification="Bulk replace set members; PUT blocked for READ tokens; owner only",
+    ),
+    # ── projects.py ─────────────────────────────────────────────────────────
+    ("GET", "/api/v1/projects"): RoutePolicy(_LIST),
+    ("GET", "/api/v1/projects/{id_or_name}"): RoutePolicy(_PROJ, id_param="id_or_name"),
+    ("GET", "/api/v1/projects/{id_or_name}/picture_sets"): RoutePolicy(
+        _PROJ, id_param="id_or_name"
+    ),
+    ("GET", "/api/v1/projects/{project_id}/summary"): RoutePolicy(
+        _PROJ, id_param="project_id"
+    ),
+    ("GET", "/api/v1/projects/{project_id}/export"): RoutePolicy(
+        _PROJ, id_param="project_id"
+    ),
+    ("GET", "/api/v1/projects/{project_id}/attachments"): RoutePolicy(
+        _PROJ, id_param="project_id"
+    ),
+    ("GET", "/api/v1/projects/{project_id}/attachments/{attachment_id}"): RoutePolicy(
+        _PROJ, id_param="project_id"
+    ),
+    ("POST", "/api/v1/projects/membership"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    ("POST", "/api/v1/projects"): RoutePolicy(
+        _OWNER, justification="Create project; POST blocked for READ tokens; owner only"
+    ),
+    ("PUT", "/api/v1/projects/{project_id}"): RoutePolicy(
+        _OWNER, justification="Update project; PUT blocked for READ tokens; owner only"
+    ),
+    ("DELETE", "/api/v1/projects/{project_id}"): RoutePolicy(
+        _OWNER,
+        justification="Delete project; DELETE blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/projects/{project_id}/attachments"): RoutePolicy(
+        _OWNER,
+        justification="Upload attachment; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/projects/{project_id}/attachments/url"): RoutePolicy(
+        _OWNER,
+        justification="Add URL attachment; POST blocked for READ tokens; owner only",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{project_id}/attachments/{attachment_id}",
+    ): RoutePolicy(
+        _OWNER,
+        justification="Delete attachment; DELETE blocked for READ tokens; owner only",
+    ),
+    # ── guest_scores.py (share-token guest scoring; READ_SAFE) ──────────────
+    ("GET", "/api/v1/pictures/guest-scores"): RoutePolicy(_LIST),
+    ("DELETE", "/api/v1/pictures/guest-scores/session"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope + guest session
+    ("POST", "/api/v1/pictures/guest-scores"): RoutePolicy(
+        _LIST
+    ),  # READ_SAFE; scope-filters ids
+    # ── comfyui.py ──────────────────────────────────────────────────────────
+    ("GET", "/api/v1/comfyui/workflows"): RoutePolicy(_ANY),
+    ("DELETE", "/api/v1/comfyui/workflows/{workflow_name}"): RoutePolicy(
+        _OWNER,
+        justification="Delete workflow; DELETE blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
+        _OWNER,
+        justification="Abort generation; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/workflows/import"): RoutePolicy(
+        _OWNER,
+        justification="Import workflow; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/run_i2i"): RoutePolicy(
+        _PIC, body_ids="picture_ids"
+    ),  # loops enforce_picture_scope over body picture_ids
+    ("POST", "/api/v1/comfyui/run_t2i"): RoutePolicy(
+        _PIC, body_ids="source_picture_id"
+    ),  # NEEDS REVIEW: single optional body id, enforce_picture_scope only when present
+    ("GET", "/api/v1/comfyui/pictures/{picture_id}/workflow"): RoutePolicy(
+        _PIC, id_param="picture_id"
+    ),
+    # ── snapshots.py (all require_unscoped_owner) ───────────────────────────
+    ("GET", "/api/v1/snapshots"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("GET", "/api/v1/snapshots/status"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("POST", "/api/v1/snapshots"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("PATCH", "/api/v1/snapshots/{snapshot_id}"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("DELETE", "/api/v1/snapshots/{snapshot_id}"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("GET", "/api/v1/snapshots/{snapshot_id}/restore/preview"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    (
+        "GET",
+        "/api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview",
+    ): RoutePolicy(_OWNER, justification="require_unscoped_owner"),
+    ("POST", "/api/v1/snapshots/{snapshot_id}/restore/preview/batch"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("POST", "/api/v1/snapshots/{snapshot_id}/restore"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("POST", "/api/v1/snapshots/{snapshot_id}/restore/batch"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    ("POST", "/api/v1/snapshots/{snapshot_id}/hash-compare"): RoutePolicy(
+        _OWNER, justification="require_unscoped_owner"
+    ),
+    (
+        "POST",
+        "/api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}",
+    ): RoutePolicy(_OWNER, justification="require_unscoped_owner"),
+    # ── reviews.py (bespoke "reject resource-scoped" gate; owner surface) ────
+    # NEEDS REVIEW: the inline _token_scope_ids gate also admits an unscoped-READ
+    # token (owner-equivalent read-all); OWNER_ONLY would newly deny that at the
+    # Step-3 flip. Confirm no unscoped-READ token is minted/relied on before Step 3.
+    ("POST", "/api/v1/reviews"): RoutePolicy(
+        _OWNER,
+        justification="Owner-only review surface (inline rejects scoped tokens); write",
+    ),
+    ("GET", "/api/v1/reviews"): RoutePolicy(
+        _OWNER, justification="Owner-only review queue (inline rejects scoped tokens)"
+    ),
+    ("DELETE", "/api/v1/reviews"): RoutePolicy(
+        _OWNER, justification="Owner-only review surface; write"
+    ),
+    ("GET", "/api/v1/reviews/preview"): RoutePolicy(
+        _OWNER, justification="Owner-only review preview (inline rejects scoped tokens)"
+    ),
+    ("GET", "/api/v1/reviews/{review_id}"): RoutePolicy(
+        _OWNER, justification="Owner-only review read (inline rejects scoped tokens)"
+    ),
+    ("DELETE", "/api/v1/reviews/{review_id}"): RoutePolicy(
+        _OWNER, justification="Owner-only review surface; write"
+    ),
+    ("POST", "/api/v1/reviews/{review_id}/refresh"): RoutePolicy(
+        _OWNER, justification="Owner-only review surface; write"
+    ),
+    ("POST", "/api/v1/reviews/{review_id}/archive"): RoutePolicy(
+        _OWNER, justification="Owner-only review surface; write"
+    ),
+    ("POST", "/api/v1/reviews/{review_id}/abort"): RoutePolicy(
+        _OWNER, justification="Owner-only review surface; write"
+    ),
+    ("GET", "/api/v1/reviews/{review_id}/suggestions"): RoutePolicy(
+        _OWNER, justification="Owner-only review read (inline rejects scoped tokens)"
+    ),
+    # ── tag_health.py (bespoke "reject resource-scoped" gate; owner-only) ────
+    # Same unscoped-READ nuance as reviews (see NEEDS REVIEW above).
+    ("GET", "/api/v1/tag_health"): RoutePolicy(
+        _OWNER,
+        justification="Vault-wide aggregates; inline _reject_scoped_tokens; owner/full only",
+    ),
+    ("POST", "/api/v1/tag_health/rebuild"): RoutePolicy(
+        _OWNER,
+        justification="Vault-wide rebuild; inline _reject_scoped_tokens; owner/full only",
+    ),
+    # ── tag_suggestions.py ──────────────────────────────────────────────────
+    ("GET", "/api/v1/tag_suggestions"): RoutePolicy(_LIST),
+    ("POST", "/api/v1/tag_suggestions/bulk-accept"): RoutePolicy(
+        _LIST
+    ),  # _resolve_review_picture_ids scope-filters
+    ("POST", "/api/v1/tag_suggestions/scan"): RoutePolicy(
+        _OWNER,
+        justification="Rebuild suggestions for a tag; POST blocked for READ tokens; owner only",
+    ),
+    # Carry-forward (F2): single-item mutators shipped without enforce_picture_scope;
+    # plan mandates PICTURE_SCOPED. Today reachable only by owner (POST blocked for
+    # READ tokens). NEEDS REVIEW: id is a suggestion_id, Step-4 gate must resolve
+    # suggestion -> picture before the membership check.
+    ("POST", "/api/v1/tag_suggestions/{suggestion_id}/accept"): RoutePolicy(
+        _PIC, id_param="suggestion_id"
+    ),
+    ("POST", "/api/v1/tag_suggestions/{suggestion_id}/reopen"): RoutePolicy(
+        _PIC, id_param="suggestion_id"
+    ),
+    ("POST", "/api/v1/tag_suggestions/{suggestion_id}/fix-twin"): RoutePolicy(
+        _PIC, id_param="suggestion_id"
+    ),
+    ("POST", "/api/v1/tag_suggestions/{suggestion_id}/swap"): RoutePolicy(
+        _PIC, id_param="suggestion_id"
+    ),
+    ("POST", "/api/v1/tag_suggestions/{suggestion_id}/skip"): RoutePolicy(
+        _PIC, id_param="suggestion_id"
+    ),
+    ("POST", "/api/v1/tag_suggestions/{suggestion_id}/dismiss"): RoutePolicy(
+        _PIC, id_param="suggestion_id"
+    ),
+    # Highest-risk carry-forward: bulk-reopen takes a body id list and has no
+    # handler-level scope filter at all. body_ids names the list; NEEDS REVIEW:
+    # the ids are suggestion ids, resolved to pictures in Step 4.
+    ("POST", "/api/v1/tag_suggestions/bulk-reopen"): RoutePolicy(_PIC, body_ids="ids"),
+    # ── tagger_runs.py ──────────────────────────────────────────────────────
+    # NEEDS REVIEW: the plan carry-forward lists "tagger_runs -> PICTURE_SCOPED",
+    # but these endpoints carry NO picture id (global model-eval stats). Declared
+    # by actual behaviour: ingest is an owner write; list is reachable by READ
+    # tokens today (GET, not READ_BLOCKED) and exposes model-eval stats.
+    ("POST", "/api/v1/tagger-runs"): RoutePolicy(
+        _OWNER,
+        justification="Ingest tagger eval run; POST blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/tagger-runs"): RoutePolicy(_ANY),
+    # ── taggers.py ──────────────────────────────────────────────────────────
+    ("GET", "/api/v1/taggers"): RoutePolicy(_ANY),
+    ("POST", "/api/v1/taggers/{name}/download"): RoutePolicy(
+        _OWNER,
+        justification="Download tagger plugin; POST blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/taggers/{name}/artifacts/{artifact_id}"): RoutePolicy(
+        _OWNER,
+        justification="Delete tagger artifact; DELETE blocked for READ tokens; owner only",
+    ),
+}
+
+# WS routes: see authn/websocket.py — the HTTP authz gate does NOT cover
+# WebSockets; their chokepoint is authenticate_websocket (plan §6). The two WS
+# routes (/ws/comfyui, /api/v1/ws/updates) are acknowledged in the coverage
+# matrix (tests/test_architecture_guardrails.py::test_websocket_routes_are_acknowledged)
+# and are deliberately absent from ROUTE_POLICIES.
 
 __all__ = ["ROUTE_POLICIES"]
