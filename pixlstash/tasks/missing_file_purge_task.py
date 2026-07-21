@@ -96,8 +96,21 @@ class MissingFilePurgeTask(BaseTask):
                             path_sha=path_sha,
                             pixel_sha=pic.pixel_sha,
                             deleted_at=now,
+                            # The file is genuinely gone from disk (that is why
+                            # it is being purged), so this is a real permanent
+                            # deletion restore must never resurrect.
+                            file_removed=True,
                         )
                     )
+                elif not already_logged.file_removed:
+                    # The path was first logged as file_removed=False (removed
+                    # from the library but the file was deliberately kept). The
+                    # file has now genuinely vanished, so upgrade the stale flag
+                    # to True instead of skipping — the ledger must be truthful,
+                    # not merely rely on restore's separate missing-file net.
+                    # Only ever raise False -> True; never downgrade.
+                    already_logged.file_removed = True
+                    session.add(already_logged)
 
             db_pic = session.get(Picture, pic.id)
             if db_pic is not None:

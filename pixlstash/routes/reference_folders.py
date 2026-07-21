@@ -635,6 +635,14 @@ def create_router(server) -> APIRouter:
                 description_suffix=_normalize_suffix(payload.description_suffix),
                 tags_suffix=_normalize_suffix(payload.tags_suffix),
                 status=initial_status,
+                # This is the sole deliberate folder (re-)add path, so mark it
+                # for an explicit re-import: the first scan to complete will
+                # override the permanent-deletion ledger for files found on disk
+                # (re-importing removed-but-kept files and clearing their
+                # deleted_file_log rows) and then clear this flag. No routine
+                # path (update/rename/relocate/mount-recovery/periodic re-scan)
+                # sets it, so a routine scan can never trigger the override.
+                pending_reimport=True,
             )
             session.add(rf)
             session.commit()

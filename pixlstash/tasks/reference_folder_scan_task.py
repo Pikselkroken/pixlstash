@@ -133,6 +133,7 @@ class ReferenceFolderScanTask(BaseTask):
                 rf.description_suffix,
                 bool(rf.sync_tags),
                 bool(rf.sync_descriptions),
+                bool(rf.pending_reimport),
             )
 
         config = self._db.run_task(fetch_folder_config, priority=DBPriority.LOW)
@@ -141,7 +142,8 @@ class ReferenceFolderScanTask(BaseTask):
             self._description_suffix,
             sync_tags,
             sync_descriptions,
-        ) = config or (None, None, False, False)
+            pending_reimport,
+        ) = config or (None, None, False, False, False)
 
         # When a synced folder has no explicit suffix yet (a migrated folder or a
         # Docker folder added before its mount was reachable), detect the naming
@@ -218,15 +220,61 @@ class ReferenceFolderScanTask(BaseTask):
         )
 
         # Determine what is new and what has been removed.  A disk path is new
-        # only if it is not already indexed and not in the permanent-deletion
-        # ledger.
+        # only if it is not already indexed.
         candidate_new = disk_paths - set(existing_by_path.keys())
-        new_paths = {
-            p
-            for p in candidate_new
-            if DeletedFileLog.hash_path(p) not in deleted_path_shas
-        }
+
+        # An *explicit* (re-)import overrides the ledger; a routine background
+        # sync does not.  The signal is the dedicated ``pending_reimport`` flag,
+        # set only by the deliberate folder (re-)add endpoint and cleared by this
+        # scan once it completes (see the end of _run_task).  No routine path
+        # (sync-toggle, rename, relocate, mount-recovery, watcher, periodic
+        # re-scan) ever sets it, so a routine scan can never override the ledger
+        # — this closes the edge where an already-emptied folder whose
+        # last_scanned was reset would have resurfaced removed-but-kept files.
+        # On the explicit path we re-import ledger-listed files that are actually
+        # present on disk and clear their ledger entries so restore resurfaces
+        # them.  Because every cleared path is drawn from disk_paths,
+        # genuinely-gone content (absent on disk, never in disk_paths) is never
+        # resurfaced or restored.
+        is_explicit_import = pending_reimport
+        if is_explicit_import:
+            new_paths = set(candidate_new)
+            override_path_shas = {
+                DeletedFileLog.hash_path(p) for p in candidate_new
+            } & deleted_path_shas
+        else:
+            new_paths = {
+                p
+                for p in candidate_new
+                if DeletedFileLog.hash_path(p) not in deleted_path_shas
+            }
+            override_path_shas = set()
         removed_paths = set(existing_by_path.keys()) - disk_paths
+
+        # --- Override the ledger on an explicit re-import ---
+        # Clear the permanent-deletion ledger rows for the re-imported paths so a
+        # subsequent restore no longer treats them as deleted.  Safe by
+        # construction: every path_sha here belongs to a file found on disk in
+        # this scan, so the content is present — clearing cannot resurrect gone
+        # content.
+        if override_path_shas:
+
+            def clear_ledger(session: Session, shas: list[str]) -> int:
+                result = session.exec(
+                    delete(DeletedFileLog).where(DeletedFileLog.path_sha.in_(shas))
+                )
+                session.commit()
+                return int(result.rowcount or 0)
+
+            cleared = self._db.run_task(
+                clear_ledger, sorted(override_path_shas), priority=DBPriority.LOW
+            )
+            logger.info(
+                "Reference folder %s: explicit re-import cleared %d permanent-"
+                "deletion ledger entries for files present on disk.",
+                self._folder_path,
+                cleared,
+            )
 
         # --- Handle removed files ---
         if removed_paths:
@@ -366,7 +414,15 @@ class ReferenceFolderScanTask(BaseTask):
                 len(caption_updates),
             )
 
-        self._set_status(ReferenceFolderStatus.ACTIVE, update_last_scanned=True)
+        # Clear the one-shot explicit-re-import flag now that a scan has
+        # consumed it (same transaction as the status update). A mount_error
+        # exit above does NOT clear it, so the explicit intent survives until a
+        # real scan runs.
+        self._set_status(
+            ReferenceFolderStatus.ACTIVE,
+            update_last_scanned=True,
+            clear_pending_reimport=is_explicit_import,
+        )
         return {
             "status": "active",
             "folder_id": folder_id,
@@ -652,6 +708,7 @@ class ReferenceFolderScanTask(BaseTask):
         status: str,
         *,
         update_last_scanned: bool = False,
+        clear_pending_reimport: bool = False,
     ) -> None:
         def update(session: Session) -> None:
             rf = session.get(ReferenceFolder, self._folder_id)
@@ -660,6 +717,8 @@ class ReferenceFolderScanTask(BaseTask):
             rf.status = status
             if update_last_scanned:
                 rf.last_scanned = time.time()
+            if clear_pending_reimport:
+                rf.pending_reimport = False
             session.add(rf)
             session.commit()
 

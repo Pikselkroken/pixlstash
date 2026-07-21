@@ -2285,18 +2285,23 @@ def register_routes(router, server):
             if pic_id is not None:
                 picture_ids.append(pic_id)
             if file_path:
-                # Log every deleted picture so it can never be resurrected,
-                # regardless of whether the on-disk file is protected.
-                log_records.append(
-                    {
-                        "path_sha": DeletedFileLog.hash_path(file_path),
-                        "pixel_sha": pixel_sha,
-                    }
-                )
                 # Only enqueue the physical file for removal when its reference
                 # folder permits it; a protected file stays on disk.
                 file_protected = (
                     ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
+                )
+                # Log every deleted picture so the scanner never re-imports its
+                # path, but record whether the on-disk file was actually removed.
+                # ``file_removed=False`` (protected file kept on disk) means the
+                # content is NOT gone: restore must not treat it as a permanent
+                # deletion and drop the alive picture. ``file_removed=True`` is a
+                # genuine purge the restore drop must honour.
+                log_records.append(
+                    {
+                        "path_sha": DeletedFileLog.hash_path(file_path),
+                        "pixel_sha": pixel_sha,
+                        "file_removed": not file_protected,
+                    }
                 )
                 if not file_protected:
                     file_paths.append(file_path)
@@ -2345,14 +2350,25 @@ def register_routes(router, server):
                 already_logged = session.exec(
                     select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
                 ).first()
+                new_file_removed = record.get("file_removed", True)
                 if already_logged is None:
                     session.add(
                         DeletedFileLog(
                             path_sha=path_sha,
                             pixel_sha=record.get("pixel_sha"),
                             deleted_at=now,
+                            file_removed=new_file_removed,
                         )
                     )
+                elif new_file_removed and not already_logged.file_removed:
+                    # A path first logged file_removed=False (protected file kept
+                    # on disk) is now being genuinely hard-deleted. Upgrade the
+                    # stale flag to True so the ledger stays truthful rather than
+                    # leaving a False row that only restore's missing-file net
+                    # would catch. Only ever raise False -> True; never downgrade
+                    # a genuine permanent deletion back to "kept".
+                    already_logged.file_removed = True
+                    session.add(already_logged)
             session.exec(delete(Picture).where(Picture.id.in_(ids)))
             session.commit()
             return len(ids)
