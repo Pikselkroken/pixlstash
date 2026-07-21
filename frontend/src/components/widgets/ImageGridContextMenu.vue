@@ -47,6 +47,7 @@
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
+          :locked-set-ids="lockedSetIds"
           @added="onAction('added-to-set', $event)"
         />
         <div class="ctx-sep" />
@@ -101,8 +102,8 @@
       <template v-if="!isScrapheapView">
         <button
           class="ctx-item"
-          title="Tag selected (T)"
-          :disabled="!selectedImageIds.length || isReadOnly"
+          :title="lockReason || 'Tag selected (T)'"
+          :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
           @click="delegate('open-tag-panel')"
         >
           <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
@@ -116,7 +117,8 @@
         >
           <button
             class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly"
+            :title="lockReason || undefined"
+            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
           >
             <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
             Tag automatically
@@ -127,7 +129,8 @@
               v-for="plugin in taggerPlugins"
               :key="plugin.name"
               class="ctx-item"
-              :disabled="!selectedImageIds.length || isReadOnly"
+              :title="lockReason || undefined"
+              :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
               @click="onAction('auto-tag', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
@@ -146,7 +149,8 @@
         >
           <button
             class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly"
+            :title="lockReason || undefined"
+            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
           >
             <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
             Generate description
@@ -157,7 +161,8 @@
               v-for="plugin in captionerPlugins"
               :key="plugin.name"
               class="ctx-item"
-              :disabled="!selectedImageIds.length || isReadOnly"
+              :title="lockReason || undefined"
+              :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
               @click="onAction('generate-description', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
@@ -185,6 +190,15 @@
         >
           <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
           Edit with ComfyUI
+        </button>
+        <button
+          class="ctx-item"
+          title="Detect objects and store bounding boxes"
+          :disabled="!selectedImageIds.length || isReadOnly"
+          @click="onAction('segment')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+          Segment
         </button>
         <div class="ctx-sep" />
       </template>
@@ -333,8 +347,8 @@
       </button>
       <button
         class="ctx-item ctx-item--danger"
-        :disabled="!selectedImageIds.length || isReadOnly"
-        title="Delete selected items (DEL)"
+        :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+        :title="lockReason || 'Delete selected items (DEL)'"
         @click="onAction('delete-selected')"
       >
         <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
@@ -379,6 +393,12 @@ const props = defineProps({
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
   groupingLockReason: { type: String, default: null },
+  // Reason string when at least one selected picture is frozen by a locked set;
+  // gates the label-data actions (tag / auto-tag / description / delete) and is
+  // shown as their tooltip. Null when nothing in the selection is locked.
+  lockReason: { type: String, default: null },
+  // Ids of all locked sets, so the add-to-set control can grey them out.
+  lockedSetIds: { type: Object, default: () => new Set() },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
   captionerPlugins: { type: Array, default: () => [] },
@@ -402,6 +422,7 @@ const emit = defineEmits([
   "open-tag-panel",
   "open-plugin-panel",
   "open-comfyui-panel",
+  "segment",
   "auto-tag",
   "generate-description",
   "share-picture",
@@ -741,9 +762,9 @@ onBeforeUnmount(() => {
   z-index: 2000;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
-  padding: 4px 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-2) 0;
   min-width: 185px;
   max-width: 260px;
   user-select: none;
@@ -755,14 +776,14 @@ onBeforeUnmount(() => {
 }
 
 .ctx-face-item {
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
 }
 
 .ctx-face-thumb {
   flex-shrink: 0;
   border: 2px solid;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background-color: rgba(var(--v-theme-on-surface), 0.08);
   background-repeat: no-repeat;
 }

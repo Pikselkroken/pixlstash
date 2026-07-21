@@ -160,6 +160,14 @@
     "kind": "image"
   },
   {
+    "page": "demo-holiday.html",
+    "asset": "logo.png",
+    "label": "PixlStash logo",
+    "alt": "PixlStash logo",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "comfyui.html",
     "asset": "MultiLikenessSearch.jpg",
     "label": "Likeness Search read scope",
@@ -176,10 +184,10 @@
     "kind": "image"
   },
   {
-    "page": "index.html",
+    "page": "whatsnew.html",
     "asset": "ScreenshotApp.jpg",
-    "label": "PixlStash 1.6: desktop app and ComfyUI face search",
-    "alt": "PixlStash 1.6: desktop app and ComfyUI face search",
+    "label": "PixlStash 1.6 — the desktop app showing the library grid in a native window",
+    "alt": "PixlStash 1.6 — the desktop app showing the library grid in a native window",
     "caption": null,
     "kind": "image"
   },
@@ -336,6 +344,14 @@
     "kind": "image"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotLockSets.jpg",
+    "label": "Sidebar context menu locking a picture set in PixlStash",
+    "alt": "Sidebar context menu locking a picture set in PixlStash",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "index.html",
     "asset": "ScreenshotMain.jpg",
     "label": "PixlStash interface",
@@ -408,6 +424,22 @@
     "kind": "image"
   },
   {
+    "page": "features.html",
+    "asset": "ScreenshotReview1.jpg",
+    "label": "Tag review",
+    "alt": "PixlStash tag review card asking whether a picture should have a tag",
+    "caption": "A review queue finds the tags most likely to be wrong or missing and asks one question per picture. Answer with a click or a single key to clean up your tags.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotReview3.jpg",
+    "label": "Tag health table ranking tags by review priority with estimated wrong and missing counts",
+    "alt": "Tag health table ranking tags by review priority with estimated wrong and missing counts",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "comfyui.html",
     "asset": "ScreenshotSearchEdit.jpg",
     "label": "Search → image edit → save",
@@ -417,10 +449,26 @@
   },
   {
     "page": "features.html",
+    "asset": "ScreenshotSegmentation.jpg",
+    "label": "Object detection",
+    "alt": "PixlStash object detection drawing labelled bounding boxes in a picture",
+    "caption": "Detect the objects in a picture and draw labelled boxes over them. Export the boxes as COCO or Ideogram JSON for training and annotation pipelines.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
     "asset": "ScreenshotSelectiveRestore.jpg",
     "label": "Selective restore",
     "alt": "PixlStash selective restore of selected pictures from a snapshot",
     "caption": "Don't want to roll back everything? Restore just the pictures you select. Anything not selected is left untouched.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotSettings.jpg",
+    "label": "The refreshed PixlStash settings dialog in the new visual design",
+    "alt": "The refreshed PixlStash settings dialog in the new visual design",
+    "caption": null,
     "kind": "image"
   },
   {
@@ -452,7 +500,7 @@
     "asset": "ScreenshotSnapshots.jpg",
     "label": "Snapshots & restore",
     "alt": "PixlStash snapshots panel with daily, weekly, and monthly restore points",
-    "caption": "Automatic, compressed snapshots of your metadata on a daily, weekly, and monthly schedule. Roll back to any restore point; a safety snapshot is taken first.",
+    "caption": "Automatic, compressed snapshots of your metadata, on a daily, weekly, and monthly schedule. Roll back to any restore point in a few clicks; a safety snapshot is taken first.",
     "kind": "image"
   },
   {

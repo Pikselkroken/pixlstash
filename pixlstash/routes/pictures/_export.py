@@ -52,6 +52,7 @@ def register_routes(router, server):
         resolution: str = Query("original"),
         export_type: str = Query("full"),
         tag_format: str = Query("spaces"),
+        bbox_mode: str = Query("none"),
     ):
         task_id = str(uuid.uuid4())
         server.export_tasks[task_id] = {
@@ -77,6 +78,7 @@ def register_routes(router, server):
             "resolution": resolution,
             "export_type": export_type,
             "tag_format": tag_format,
+            "bbox_mode": bbox_mode,
         }
         background_tasks.add_task(
             PictureServiceUtils.generate_zip,

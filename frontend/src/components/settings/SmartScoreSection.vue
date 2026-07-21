@@ -1,10 +1,103 @@
 <script setup>
 import { onMounted, ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import { VSwitch } from "vuetify/components";
+import SettingsSection from "./SettingsSection.vue";
+import SettingsChipGrid from "./SettingsChipGrid.vue";
+import SettingsChip from "./SettingsChip.vue";
+import SettingsAddTagRow from "./SettingsAddTagRow.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
 });
+
+const emit = defineEmits(["update:hidden-tags", "update:apply-tag-filter"]);
+
+// ── Tag filter (hidden tags) — moved here from Behaviour ──────────────────────
+const hiddenTags = ref([]);
+const hiddenTagInput = ref("");
+const hiddenTagsLoading = ref(false);
+const hiddenTagsError = ref("");
+const hiddenTagsSuccess = ref("");
+const applyTagFilter = ref(false);
+const applyTagFilterLoading = ref(false);
+
+function normalizeHiddenTags(tags) {
+  const values = Array.isArray(tags)
+    ? tags
+    : tags && typeof tags === "object"
+      ? Object.keys(tags)
+      : [];
+  const seen = new Set();
+  const cleaned = [];
+  for (const tag of values) {
+    if (tag == null) continue;
+    const clean = String(tag).trim().toLowerCase();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    cleaned.push(clean);
+  }
+  return cleaned.sort((a, b) => a.localeCompare(b));
+}
+
+async function saveHiddenTags(nextTags) {
+  hiddenTagsLoading.value = true;
+  hiddenTagsError.value = "";
+  hiddenTagsSuccess.value = "";
+  try {
+    const normalized = normalizeHiddenTags(nextTags);
+    await apiClient.patch("/users/me/config", {
+      hidden_tags: normalized,
+    });
+    hiddenTags.value = normalized;
+    emit("update:hidden-tags", hiddenTags.value);
+    hiddenTagsSuccess.value = "Saved.";
+  } catch (e) {
+    hiddenTagsError.value =
+      e?.response?.data?.detail || "Failed to update hidden tags.";
+  } finally {
+    hiddenTagsLoading.value = false;
+    if (hiddenTagsSuccess.value) {
+      setTimeout(() => {
+        hiddenTagsSuccess.value = "";
+      }, 2000);
+    }
+  }
+}
+
+async function addHiddenTag() {
+  const trimmed = hiddenTagInput.value.trim().toLowerCase();
+  if (!trimmed) return;
+  const next = normalizeHiddenTags([...hiddenTags.value, trimmed]);
+  hiddenTagInput.value = "";
+  await saveHiddenTags(next);
+}
+
+async function removeHiddenTag(tag) {
+  const next = normalizeHiddenTags(
+    hiddenTags.value.filter((entry) => entry !== tag),
+  );
+  await saveHiddenTags(next);
+}
+
+async function setApplyTagFilter(value) {
+  applyTagFilterLoading.value = true;
+  hiddenTagsError.value = "";
+  try {
+    const nextValue = Boolean(value);
+    await apiClient.patch("/users/me/config", {
+      apply_tag_filter: nextValue,
+    });
+    applyTagFilter.value = nextValue;
+    emit("update:apply-tag-filter", applyTagFilter.value);
+  } catch (e) {
+    hiddenTagsError.value =
+      e?.response?.data?.detail || "Failed to update tag filter.";
+  } finally {
+    applyTagFilterLoading.value = false;
+  }
+}
 
 const smartScorePenalisedTags = ref([]);
 const smartScoreTagInput = ref("");
@@ -79,6 +172,10 @@ async function fetchData() {
     smartScorePenalisedTags.value = SmartScoreTags(
       res.data?.smart_score_penalised_tags,
     );
+    hiddenTags.value = normalizeHiddenTags(res.data?.hidden_tags);
+    emit("update:hidden-tags", hiddenTags.value);
+    applyTagFilter.value = Boolean(res.data?.apply_tag_filter);
+    emit("update:apply-tag-filter", applyTagFilter.value);
   } catch (_) {
     smartScoreTagsError.value = "Failed to load smart score settings.";
   } finally {
@@ -148,262 +245,121 @@ watch(
 </script>
 
 <template>
-  <v-divider class="settings-section-divider" />
-  <div class="settings-section">
-    <div class="settings-section-title">Penalised Tags</div>
-    <div class="settings-section-desc">
-      Tags listed here reduce Smart Score when present on a picture.
-      Adjust the importance to control how much they hurt the score.
-    </div>
-    <div class="settings-tag-list">
-      <div
-        v-for="entry in smartScorePenalisedTags"
-        :key="entry.tag"
-        class="settings-tag-chip settings-tag-chip--row"
-      >
-        <v-tooltip :text="entry.tag" location="top">
-          <template #activator="{ props: tooltipProps }">
-            <span class="settings-tag-label" v-bind="tooltipProps">{{
-              entry.tag
-            }}</span>
-          </template>
-        </v-tooltip>
-        <v-select
-          class="settings-tag-importance"
-          :items="smartScoreImportanceOptions"
-          item-title="label"
-          item-value="value"
-          density="compact"
-          variant="plain"
-          hide-details
-          :disabled="smartScoreTagsLoading"
-          :model-value="entry.weight"
-          @update:model-value="(value) => updateSmartScoreTagWeight(entry.tag, value)"
-        />
-        <v-btn
-          icon
-          variant="text"
-          class="settings-tag-delete"
-          :disabled="smartScoreTagsLoading"
-          @click="removeSmartScoreTag(entry.tag)"
+  <div>
+    <SettingsSection
+      title="Penalised Tags"
+      desc="Tags listed here reduce Smart Score when present on a picture. Adjust the importance to control how much they hurt the score."
+      first
+    >
+      <SettingsChipGrid empty="No penalised tags yet.">
+        <SettingsChip
+          v-for="entry in smartScorePenalisedTags"
+          :key="entry.tag"
+          :label="entry.tag"
+          @remove="removeSmartScoreTag(entry.tag)"
         >
-          <v-icon size="16">mdi-close</v-icon>
-        </v-btn>
-      </div>
+          <div class="smart-score-importance">
+            <AppSelect
+              compact
+              :model-value="entry.weight"
+              :options="smartScoreImportanceOptions"
+              :disabled="smartScoreTagsLoading"
+              @update:model-value="
+                (value) => updateSmartScoreTagWeight(entry.tag, value)
+              "
+            />
+          </div>
+        </SettingsChip>
+      </SettingsChipGrid>
+
+      <SettingsAddTagRow
+        v-model="smartScoreTagInput"
+        placeholder="Add penalised tag"
+        btn="Add tag"
+        @add="addSmartScoreTag"
+      />
+
       <div
-        v-if="!smartScoreTagsLoading && !smartScorePenalisedTags.length"
-        class="settings-token-empty"
+        v-if="smartScoreTagsError"
+        class="smart-score-status smart-score-status--error"
       >
-        No penalised tags yet.
-      </div>
-    </div>
-    <div class="settings-form">
-      <div class="settings-add-tag-row">
-        <v-text-field
-          v-model="smartScoreTagInput"
-          label="Add penalised tag"
-          density="compact"
-          variant="filled"
-          class="settings-add-tag-input"
-          :disabled="smartScoreTagsLoading"
-          @keydown.enter.prevent="addSmartScoreTag"
-        />
-        <v-btn
-          variant="outlined"
-          color="primary"
-          class="settings-action-btn"
-          :loading="smartScoreTagsLoading"
-          :disabled="smartScoreTagsLoading"
-          @click="addSmartScoreTag"
-        >
-          Add Tag
-        </v-btn>
-      </div>
-      <div v-if="smartScoreTagsError" class="settings-error">
         {{ smartScoreTagsError }}
       </div>
-      <div v-else-if="smartScoreTagsSuccess" class="settings-success">
+      <div
+        v-else-if="smartScoreTagsSuccess"
+        class="smart-score-status smart-score-status--success"
+      >
         {{ smartScoreTagsSuccess }}
       </div>
-      <div v-else class="settings-success">
-        {{ "&nbsp;" }}
+    </SettingsSection>
+
+    <SettingsSection
+      title="Tag Filter"
+      desc="Tags listed here are filtered from the GUI entirely."
+    >
+      <div class="smart-score-filter-toggle">
+        <v-switch
+          v-model="applyTagFilter"
+          color="accent"
+          density="compact"
+          hide-details
+          :disabled="applyTagFilterLoading"
+          label="Apply tag filter to all pictures and videos"
+          @update:model-value="setApplyTagFilter"
+        />
       </div>
-    </div>
+      <SettingsChipGrid empty="No hidden tags yet.">
+        <SettingsChip
+          v-for="tag in hiddenTags"
+          :key="tag"
+          :label="tag"
+          @remove="removeHiddenTag(tag)"
+        />
+      </SettingsChipGrid>
+      <SettingsAddTagRow
+        v-model="hiddenTagInput"
+        placeholder="Add tag filter"
+        btn="Add tag"
+        @add="addHiddenTag"
+      />
+      <div
+        v-if="hiddenTagsError"
+        class="smart-score-status smart-score-status--error"
+      >
+        {{ hiddenTagsError }}
+      </div>
+      <div
+        v-else-if="hiddenTagsSuccess"
+        class="smart-score-status smart-score-status--success"
+      >
+        {{ hiddenTagsSuccess }}
+      </div>
+    </SettingsSection>
   </div>
-  <v-divider class="settings-section-divider" />
 </template>
 
 <style scoped>
-.settings-section-divider {
-  margin: 4px 0 8px;
-}
-
-.settings-section {
-  display: flex;
-  line-height: 1;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.settings-section-title {
-  font-weight: 600;
-}
-
-.settings-section-desc {
-  font-size: 0.92em;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.settings-form {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.settings-add-tag-row {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-}
-
-.settings-add-tag-input {
-  flex: 1 1 auto;
-}
-
-.settings-error {
-  color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
-}
-
-.settings-success {
-  color: rgb(var(--v-theme-accent));
-  font-size: 0.9em;
-}
-
-.settings-tag-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.settings-tag-list .settings-token-empty {
-  grid-column: 1 / -1;
-}
-
-.settings-tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: rgba(var(--v-theme-on-surface), 0.9);
-}
-
-.settings-tag-chip--row {
-  width: 100%;
-  justify-content: space-between;
-  padding-right: 4px;
-}
-
-.settings-tag-importance {
-  flex: 0 1 90px;
-  min-width: 0;
-  max-width: 90px;
-  overflow: hidden;
-}
-
-:deep(.settings-tag-importance .v-field) {
-  min-height: 28px;
-  height: 28px;
-  padding-top: 0;
-  padding-bottom: 0;
-  font-size: 0.9em;
-  background: transparent;
-  box-shadow: none;
-  border: none;
-}
-
-:deep(.settings-tag-importance .v-field__input) {
-  min-height: 28px;
-  height: 28px;
-  padding-top: 0;
-  padding-bottom: 0;
-  padding-right: 4px;
-  font-size: 0.85rem;
-  min-width: 0;
-  overflow: hidden;
-}
-
-:deep(.settings-tag-importance .v-field__append-inner) {
-  align-self: center;
-  margin-left: 2px;
-  padding-top: 0;
-  padding-bottom: 0;
-  height: 28px;
-  display: flex;
-  align-items: center;
+/* Fixed-width wrapper for the inline importance select inside each chip,
+   matching the proposal's 96px slot. */
+.smart-score-importance {
+  width: 96px;
   flex-shrink: 0;
 }
 
-:deep(.settings-tag-importance .v-field__overlay),
-:deep(.settings-tag-importance .v-field__underlay),
-:deep(.settings-tag-importance .v-field__outline) {
-  opacity: 0;
+.smart-score-filter-toggle {
+  margin-bottom: var(--space-4);
 }
 
-:deep(.settings-tag-importance .v-select__selection-text) {
-  font-size: 0.85rem;
-  line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  display: block;
+.smart-score-status {
+  font-size: var(--text-xs);
+  margin-top: var(--space-2);
 }
 
-:deep(.settings-tag-importance .v-field__input input) {
-  font-size: 0.85rem;
+.smart-score-status--error {
+  color: rgb(var(--v-theme-error));
 }
 
-.settings-tag-label {
-  font-size: 1em;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: default;
-}
-
-.settings-tag-delete {
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  min-width: 0;
-  height: 12px;
-  width: 12px;
-  padding: 2;
-}
-
-.settings-tag-delete:hover {
-  color: rgba(var(--v-theme-error), 0.9);
-  min-width: 0;
-  padding: 2;
-}
-
-.settings-token-empty {
-  font-size: 0.9em;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-}
-
-.settings-action-btn {
-  align-self: flex-start;
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
-}
-
-.settings-action-btn:hover {
-  background-color: rgb(var(--v-theme-accent)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
+.smart-score-status--success {
+  color: rgb(var(--v-theme-accent));
 }
 </style>

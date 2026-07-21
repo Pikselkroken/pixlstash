@@ -100,6 +100,13 @@ def main() -> int:
             # 429 later navigations. Safe to disable on this hermetic backend.
             "disable_rate_limit": True,
             "disable_background_workers": True,
+            # Register the e2e-only WS test-hooks router so specs can inject
+            # grid events deterministically (the disabled background workers
+            # otherwise never fire the tag/face/score events the grid reacts
+            # to). Off by default everywhere else: production configs MUST
+            # NEVER set this flag — it exposes /api/v1/test-hooks/ws-event,
+            # which emits arbitrary owner-only WebSocket events.
+            "enable_test_hooks": True,
             "generate_thumbnails_on_startup": False,
             "default_device": "cpu",
             "daily_snapshots": False,

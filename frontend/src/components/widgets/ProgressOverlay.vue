@@ -76,10 +76,10 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
   z-index: 120;
   background: rgba(var(--v-theme-dark-surface), 0.85);
   color: rgb(var(--v-theme-on-dark-surface));
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
   min-width: 220px;
-  box-shadow: 0 4px 14px rgba(var(--v-theme-shadow), 0.28);
+  box-shadow: var(--elevation-3);
   backdrop-filter: blur(6px);
 }
 
@@ -96,8 +96,8 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
 }
 
 .progress-overlay__title {
-  font-size: 0.85em;
-  margin-bottom: 6px;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
   white-space: pre-line;
 }
 
@@ -105,7 +105,7 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
   width: 100%;
   height: 7px;
   background: rgba(var(--v-theme-on-dark-surface), 0.18);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   overflow: hidden;
 }
 
@@ -113,7 +113,7 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
   height: 100%;
   background: rgb(var(--v-theme-accent));
   width: 0;
-  transition: width 0.25s ease;
+  transition: width var(--dur-3) var(--ease-standard);
 }
 
 .progress-overlay__fill--indeterminate {
@@ -135,23 +135,23 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
 }
 
 .progress-overlay__meta {
-  margin-top: 6px;
-  font-size: 0.8em;
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
   opacity: 0.85;
 }
 
 .progress-overlay__abort {
-  margin-top: 10px;
+  margin-top: var(--space-3);
   width: 100%;
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
   border: none;
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 0.85em;
-  font-weight: 600;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: background var(--dur-2) var(--ease-standard);
 }
 
 .progress-overlay__abort:hover {

@@ -14,6 +14,7 @@ from pixlstash.db_models.deleted_file_log import DeletedFileLog
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL, is_tag_sentinel
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.utils.caption_file_utils import (
     DEFAULT_DESCRIPTION_SUFFIX,
@@ -22,6 +23,7 @@ from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_TAGS,
     detect_folder_suffixes,
     get_sidecar_mtime,
+    is_safe_sidecar_suffix,
     read_description_sidecar,
     read_tags_sidecar,
     resolve_typed_sidecar,
@@ -315,7 +317,19 @@ class ReferenceFolderScanTask(BaseTask):
                 session: Session,
                 updates: list[dict],
             ) -> None:
+                # A sidecar re-sync writes confirmed tags/description onto EXISTING
+                # pictures; a picture frozen by a locked set is read-only, so skip
+                # it (background task — skip-and-log rather than raising 423).
+                locked = locked_picture_ids(session, [u["pic_id"] for u in updates])
+                if locked:
+                    logger.info(
+                        "Reference-folder sync: skipping %d locked picture(s) %s",
+                        len(locked),
+                        sorted(locked),
+                    )
                 for u in updates:
+                    if u["pic_id"] in locked:
+                        continue
                     pic_db = session.get(Picture, u["pic_id"])
                     if pic_db is None:
                         continue
@@ -429,6 +443,8 @@ class ReferenceFolderScanTask(BaseTask):
         # Export: create the file from the database when there is content to write.
         if sync and export_content:
             target = writeback_path(file_path, sidecar_type, suffix, None)
+            if target is None:
+                return
             new_mtime = write_sidecar(target, export_content)
             if new_mtime is not None:
                 update[path_key] = target
@@ -589,16 +605,43 @@ class ReferenceFolderScanTask(BaseTask):
         return pic
 
     def _persist_suffixes(self, suffixes: dict[str, str]) -> None:
-        """Store auto-detected sidecar suffixes on the folder (only fills NULLs)."""
+        """Store auto-detected sidecar suffixes on the folder (only fills NULLs).
+
+        A detected suffix is written straight into the folder's configuration
+        and is thereafter appended to image stems to build sidecar paths, so it
+        must clear the same bar as a suffix supplied through the API. Validate
+        here too: this is the second door into that column, and skipping the
+        check would let the scan persist a value the API would have rejected.
+        """
+
+        def _accepted(key: str) -> str | None:
+            value = suffixes.get(key)
+            if not value:
+                return None
+            if not is_safe_sidecar_suffix(value):
+                logger.warning(
+                    "Refusing to persist unsafe detected %s %r for folder %s; "
+                    "leaving it unset so the module default is used.",
+                    key,
+                    value,
+                    self._folder_id,
+                )
+                return None
+            return value
+
+        tags_suffix = _accepted("tags_suffix")
+        description_suffix = _accepted("description_suffix")
+        if tags_suffix is None and description_suffix is None:
+            return
 
         def update(session: Session) -> None:
             rf = session.get(ReferenceFolder, self._folder_id)
             if rf is None:
                 return
-            if suffixes.get("tags_suffix") and rf.tags_suffix is None:
-                rf.tags_suffix = suffixes["tags_suffix"]
-            if suffixes.get("description_suffix") and rf.description_suffix is None:
-                rf.description_suffix = suffixes["description_suffix"]
+            if tags_suffix and rf.tags_suffix is None:
+                rf.tags_suffix = tags_suffix
+            if description_suffix and rf.description_suffix is None:
+                rf.description_suffix = description_suffix
             session.add(rf)
             session.commit()
 

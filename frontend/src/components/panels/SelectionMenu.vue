@@ -46,6 +46,7 @@
         :disabled="selectedCount === 0 || !!groupingLockReason"
         :title="groupingLockReason || undefined"
         :readonly="isReadOnly"
+        :locked-set-ids="lockedSetsStore.lockedSetIds"
         @added="$emit('added-to-set', $event)"
       />
       <div class="ctx-sep" />
@@ -308,6 +309,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
@@ -351,6 +353,7 @@ const emit = defineEmits([
 ]);
 
 const snapshotsStore = useSnapshotsStore();
+const lockedSetsStore = useLockedSetsStore();
 
 const selectionMenuPanelRef = ref(null);
 const selectionPanelFlipped = ref(false);
@@ -644,8 +647,8 @@ defineExpose({ focusFirst, containsFocus });
   background: rgba(var(--v-theme-surface), 0.98);
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  padding: 4px 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-2) 0;
 }
 </style>

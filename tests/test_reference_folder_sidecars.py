@@ -10,21 +10,27 @@ and the end-to-end scan/export/write-back behaviour through a real Server:
 """
 
 import os
+import shutil
 import tempfile
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import Picture, ReferenceFolder, Tag
 from pixlstash.routes.reference_folders import _validate_sidecar_suffix
 from pixlstash.server import Server
+from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
 from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_TAGS,
     classify_sidecar,
     detect_folder_suffixes,
+    is_safe_sidecar_suffix,
     resolve_typed_sidecar,
     sidecar_path,
+    writeback_path,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
@@ -151,6 +157,81 @@ def test_validate_sidecar_suffix_rejects_dangerous(evil_suffix):
     assert exc.value.status_code == 400
 
 
+def test_detect_folder_suffixes_ignores_cross_directory_match(tmp_path):
+    """A sidecar in a *subdirectory* must not be claimed by an image above it.
+
+    ``detect_folder_suffixes`` walks subdirectories, so matching an image stem
+    against a sidecar path by bare string prefix let ``/root/a.png`` claim
+    ``/root/ab/c.txt`` and derive the suffix ``"b/c.txt"`` — a separator-bearing
+    value that would then be persisted as the folder's convention and appended
+    to every image stem. Only same-directory stems may match.
+    """
+    root = str(tmp_path)
+    Image.new("RGB", (8, 8)).save(os.path.join(root, "a.png"), format="PNG")
+    os.makedirs(os.path.join(root, "ab"), exist_ok=True)
+    _write(os.path.join(root, "ab", "c.txt"), "cat, calm")
+
+    detected = detect_folder_suffixes(root)
+
+    for key in ("tags_suffix", "description_suffix"):
+        suffix = detected[key]
+        assert suffix is None or is_safe_sidecar_suffix(suffix), (key, suffix)
+
+
+def test_detect_folder_suffixes_still_finds_same_directory_convention(tmp_path):
+    """The dirname restriction must not break ordinary detection."""
+    root = str(tmp_path)
+    Image.new("RGB", (8, 8)).save(os.path.join(root, "a.png"), format="PNG")
+    _write(os.path.join(root, "a_tags.txt"), "cat, calm, sitting")
+
+    detected = detect_folder_suffixes(root)
+
+    assert detected["tags_suffix"] == "_tags.txt"
+    assert detected["found_tags"] is True
+
+
+@pytest.mark.parametrize(
+    "unsafe", ["b/c.txt", "../escape.txt", "a\\b.txt", "..", "x" * 65]
+)
+def test_is_safe_sidecar_suffix_rejects_unsafe(unsafe):
+    assert is_safe_sidecar_suffix(unsafe) is False
+
+
+@pytest.mark.parametrize(
+    "good", ["_tags.txt", "_description.txt", "_wd14.txt", ".caption", ".txt"]
+)
+def test_is_safe_sidecar_suffix_accepts_conventions(good):
+    assert is_safe_sidecar_suffix(good) is True
+
+
+def test_writeback_path_returns_none_for_unusable_configured_suffix():
+    """A folder configured before the rule was enforced everywhere must not
+    raise through the caller and wedge a scan — it reports 'no path'."""
+    assert (
+        writeback_path("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt", None)
+        is None
+    )
+    # An already-resolved existing path is still honoured.
+    assert (
+        writeback_path(
+            "/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt", "/refs/f/ok.txt"
+        )
+        == "/refs/f/ok.txt"
+    )
+    # And a clean suffix is unaffected.
+    assert (
+        writeback_path("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "_tags.txt", None)
+        == "/refs/f/photo_tags.txt"
+    )
+
+
+def test_resolve_typed_sidecar_returns_none_for_unusable_configured_suffix():
+    assert (
+        resolve_typed_sidecar("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt")
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # Server-backed scan / export / write-back tests
 # ---------------------------------------------------------------------------
@@ -247,9 +328,46 @@ def _picture(server, pic_id):
     return server.vault.db.run_task(lambda s: s.get(Picture, pic_id))
 
 
+def _set_picture_sidecars(server, pic_id, *, tags_file=None, description_file=None):
+    def _update(session: Session):
+        pic = session.get(Picture, pic_id)
+        if tags_file is not None:
+            pic.tags_file = tags_file
+            pic.tags_file_mtime = os.stat(tags_file).st_mtime
+        if description_file is not None:
+            pic.description_file = description_file
+            pic.description_file_mtime = os.stat(description_file).st_mtime
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(_update)
+
+
 def _read(path):
     with open(path, "r", encoding="utf-8") as fh:
         return fh.read()
+
+
+def _login_client(server):
+    client = TestClient(server.api)
+    resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
+    assert resp.status_code == 200
+    return client
+
+
+def _make_read_token(client, *, resource_type=None, resource_id=None):
+    payload = {"description": "read-only", "scope": "READ"}
+    if resource_type is not None:
+        payload["resource_type"] = resource_type
+        payload["resource_id"] = resource_id
+    resp = client.post(
+        "/users/me/token",
+        json=payload,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["token"]
 
 
 def test_scan_reads_separate_tags_and_description_sidecars(server, tmp_path):
@@ -343,3 +461,344 @@ def test_write_back_updates_tags_sidecar_only(server, tmp_path):
     assert _read(tags_path) == "bird"
     assert _read(desc_path) == "A blue bird."  # untouched
     assert os.stat(desc_path).st_mtime == desc_mtime
+
+
+def test_move_reference_picture_moves_file_sidecars_and_updates_row(server, tmp_path):
+    client = _login_client(server)
+    source_dir = str(tmp_path / "source")
+    dest_dir = str(tmp_path / "dest")
+    source_folder_id = _make_folder(
+        server, source_dir, sync_tags=True, sync_descriptions=True
+    )
+    dest_folder_id = _make_folder(server, dest_dir)
+    img = _make_image(source_dir, "cat.png")
+    tags_path = os.path.splitext(img)[0] + "_tags.txt"
+    desc_path = os.path.splitext(img)[0] + "_description.txt"
+    _write(tags_path, "cat, calm")
+    _write(desc_path, "A calm cat.")
+    pic_id = _index_picture(
+        server,
+        source_folder_id,
+        img,
+        tags=["cat", "calm"],
+        description="A calm cat.",
+    )
+    _set_picture_sidecars(
+        server,
+        pic_id,
+        tags_file=tags_path,
+        description_file=desc_path,
+    )
+
+    resp = client.post(
+        f"/reference-folders/{dest_folder_id}/move-pictures",
+        json={"picture_ids": [pic_id]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["moved_count"] == 1
+
+    moved_img = os.path.join(dest_dir, "cat.png")
+    assert os.path.isfile(moved_img)
+    assert os.path.isfile(os.path.join(dest_dir, "cat_tags.txt"))
+    assert os.path.isfile(os.path.join(dest_dir, "cat_description.txt"))
+    assert not os.path.exists(img)
+    pic = _picture(server, pic_id)
+    assert pic.reference_folder_id == dest_folder_id
+    assert pic.file_path == moved_img
+    assert pic.tags_file == os.path.join(dest_dir, "cat_tags.txt")
+    assert pic.description_file == os.path.join(dest_dir, "cat_description.txt")
+
+
+def test_move_reference_picture_auto_renames_on_collision(server, tmp_path):
+    client = _login_client(server)
+    source_dir = str(tmp_path / "source")
+    dest_dir = str(tmp_path / "dest")
+    source_folder_id = _make_folder(server, source_dir)
+    dest_folder_id = _make_folder(server, dest_dir)
+    img = _make_image(source_dir, "same.png")
+    _make_image(dest_dir, "same.png")
+    pic_id = _index_picture(server, source_folder_id, img)
+
+    resp = client.post(
+        f"/reference-folders/{dest_folder_id}/move-pictures",
+        json={"picture_ids": [pic_id]},
+    )
+    assert resp.status_code == 200
+    pic = _picture(server, pic_id)
+    assert pic.file_path == os.path.join(dest_dir, "same_1.png")
+    assert os.path.isfile(pic.file_path)
+
+
+def test_move_reference_picture_blocks_sidecar_escaping_destination(server, tmp_path):
+    """A sidecar suffix must not relocate the sidecar out of the destination.
+
+    ``_sidecar_suffix_for_move`` compares ``normpath(dirname(...))`` on both
+    sides, so a non-normalized ``tags_file`` yields a separator-bearing suffix
+    that still passes the source-side check. That suffix is net-zero traversal,
+    so it stays contained on a plain destination — but if the destination holds
+    a symlink named after the incoming image stem, concatenating the suffix
+    onto the stem resolves *through* the symlink and lands outside the folder.
+    Joining via ``resolve_path_within`` resolves the symlink first and refuses.
+    """
+    client = _login_client(server)
+    source_dir = str(tmp_path / "source")
+    dest_dir = str(tmp_path / "dest")
+    outside_dir = str(tmp_path / "outside")
+    source_folder_id = _make_folder(server, source_dir)
+    dest_folder_id = _make_folder(server, dest_dir)
+    os.makedirs(outside_dir, exist_ok=True)
+
+    img = _make_image(source_dir, "cat.png")
+    # The real sidecar sits beside the image, but is recorded by a path that
+    # detours through a directory named after the image stem.
+    _write(os.path.join(source_dir, "notes.txt"), "cat, calm")
+    os.makedirs(os.path.join(source_dir, "cat"), exist_ok=True)
+    detoured = os.path.join(source_dir, "cat", "..", "notes.txt")
+    pic_id = _index_picture(server, source_folder_id, img)
+    _set_picture_sidecars(server, pic_id, tags_file=detoured)
+
+    # The destination stem is a symlink out of the folder: this is what turns
+    # the net-zero suffix into an escape under plain concatenation.
+    os.symlink(outside_dir, os.path.join(dest_dir, "cat"))
+
+    resp = client.post(
+        f"/reference-folders/{dest_folder_id}/move-pictures",
+        json={"picture_ids": [pic_id]},
+    )
+    assert resp.status_code == 400, resp.text
+
+    # Nothing was written outside the destination folder.
+    assert os.listdir(outside_dir) == []
+    # And the image was rolled back to its source path, not left half-moved.
+    assert os.path.isfile(img)
+    assert not os.path.exists(os.path.join(dest_dir, "cat.png"))
+    assert _picture(server, pic_id).file_path == img
+
+
+def test_scan_refuses_to_persist_unsafe_detected_suffix(server, tmp_path):
+    """The scan is the second door into the folder's suffix columns.
+
+    A suffix the API would reject with a 400 must not reach the DB through
+    auto-detection either; the column stays NULL so the module default is used.
+    """
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
+
+    task._persist_suffixes(
+        {"tags_suffix": "b/c.txt", "description_suffix": "../escape.txt"}
+    )
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.tags_suffix, rf.description_suffix
+
+    assert server.vault.db.run_task(_read) == (None, None)
+
+
+def test_scan_persists_a_safe_detected_suffix(server, tmp_path):
+    """The guard must not block a legitimate detected convention."""
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
+
+    task._persist_suffixes(
+        {"tags_suffix": "_tags.txt", "description_suffix": "_description.txt"}
+    )
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.tags_suffix, rf.description_suffix
+
+    assert server.vault.db.run_task(_read) == ("_tags.txt", "_description.txt")
+
+
+def test_move_reference_picture_rejects_non_reference_picture(server, tmp_path):
+    client = _login_client(server)
+    dest_dir = str(tmp_path / "dest")
+    dest_folder_id = _make_folder(server, dest_dir)
+    standalone = _make_image(str(tmp_path), "loose.png")
+    pic_id = _index_picture(server, None, standalone)
+
+    resp = client.post(
+        f"/reference-folders/{dest_folder_id}/move-pictures",
+        json={"picture_ids": [pic_id]},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["failures"][0]["reason"] == "not_reference_picture"
+
+
+def test_relocate_reference_folder_moves_contents_and_updates_rows(
+    server, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server, "running_in_docker", lambda: False)
+    client = _login_client(server)
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    sub = old_root / "sub"
+    sub.mkdir(parents=True)
+    folder_id = _make_folder(server, str(old_root))
+    img = _make_image(str(sub), "bird.png")
+    tags_path = sub / "bird_tags.txt"
+    _write(str(tags_path), "bird, blue")
+    (old_root / "notes.md").write_text("keep me", encoding="utf-8")
+    pic_id = _index_picture(server, folder_id, img, tags=["bird", "blue"])
+    _set_picture_sidecars(server, pic_id, tags_file=str(tags_path))
+
+    resp = client.post(
+        f"/reference-folders/{folder_id}/relocate",
+        json={"destination_folder": str(new_root)},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["old_folder"] == str(old_root)
+    assert body["new_folder"] == str(new_root)
+    assert body["rewritten_count"] == 1
+    assert body["moved_picture_ids"] == [pic_id]
+
+    assert not os.path.exists(img)
+    assert (new_root / "sub" / "bird.png").is_file()
+    assert (new_root / "sub" / "bird_tags.txt").is_file()
+    assert (new_root / "notes.md").read_text(encoding="utf-8") == "keep me"
+
+    pic = _picture(server, pic_id)
+    assert pic.file_path == str(new_root / "sub" / "bird.png")
+    assert pic.tags_file == str(new_root / "sub" / "bird_tags.txt")
+    folder = server.vault.db.run_task(lambda s: s.get(ReferenceFolder, folder_id))
+    assert folder.folder == str(new_root)
+
+
+def test_relocate_reference_folder_rejects_non_empty_destination(
+    server, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server, "running_in_docker", lambda: False)
+    client = _login_client(server)
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    folder_id = _make_folder(server, str(old_root))
+    _make_image(str(old_root), "cat.png")
+    new_root.mkdir()
+    (new_root / "existing.txt").write_text("occupied", encoding="utf-8")
+
+    resp = client.post(
+        f"/reference-folders/{folder_id}/relocate",
+        json={"destination_folder": str(new_root)},
+    )
+    assert resp.status_code == 409
+    assert os.path.isfile(old_root / "cat.png")
+
+
+def test_reference_folder_file_operations_reject_read_tokens(server, tmp_path):
+    owner_client = _login_client(server)
+    token_client = TestClient(server.api)
+    source_dir = str(tmp_path / "source")
+    dest_dir = str(tmp_path / "dest")
+    folder_id = _make_folder(server, source_dir)
+    dest_id = _make_folder(server, dest_dir)
+    img = _make_image(source_dir, "cat.png")
+    pic_id = _index_picture(server, folder_id, img)
+    read_token = _make_read_token(
+        owner_client,
+        resource_type="picture",
+        resource_id=pic_id,
+    )
+    headers = {"Authorization": f"Bearer {read_token}"}
+
+    move_resp = token_client.post(
+        f"/reference-folders/{dest_id}/move-pictures",
+        json={"picture_ids": [pic_id]},
+        headers=headers,
+    )
+    assert move_resp.status_code == 403
+
+    relocate_resp = token_client.post(
+        f"/reference-folders/{folder_id}/relocate",
+        json={"destination_folder": str(tmp_path / "new-root")},
+        headers=headers,
+    )
+    assert relocate_resp.status_code == 403
+
+    mkdir_resp = token_client.post(
+        "/filesystem/folders",
+        json={"path": str(tmp_path / "new-folder")},
+        headers=headers,
+    )
+    assert mkdir_resp.status_code == 403
+
+
+def test_relocate_reference_folder_preserves_relative_paths_and_hash(server, tmp_path):
+    client = _login_client(server)
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    sub = old_root / "sub"
+    sub.mkdir(parents=True)
+    (new_root / "sub").mkdir(parents=True)
+    folder_id = _make_folder(server, str(old_root))
+    img = _make_image(str(sub), "bird.png")
+    _write(str(sub / "bird_tags.txt"), "bird, blue")
+    pic_id = _index_picture(server, folder_id, img, tags=["bird", "blue"])
+    _set_picture_sidecars(server, pic_id, tags_file=str(sub / "bird_tags.txt"))
+    shutil.move(img, str(new_root / "sub" / "bird.png"))
+    shutil.move(str(sub / "bird_tags.txt"), str(new_root / "sub" / "bird_tags.txt"))
+
+    resp = client.patch(
+        f"/reference-folders/{folder_id}",
+        json={"folder": str(new_root), "label": "moved"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["folder"] == str(new_root)
+    assert body["relocation"]["rewritten_count"] == 1
+    assert body["relocation"]["missing_count"] == 0
+    assert body["relocation"]["unmatched_count"] == 0
+    pic = _picture(server, pic_id)
+    assert pic.file_path == str(new_root / "sub" / "bird.png")
+    assert pic.tags_file == str(new_root / "sub" / "bird_tags.txt")
+
+
+def test_metadata_export_and_import_tags_and_descriptions_by_subfolder(
+    server, tmp_path
+):
+    client = _login_client(server)
+    folder_dir = str(tmp_path / "refs")
+    sub_dir = os.path.join(folder_dir, "sub")
+    os.makedirs(sub_dir, exist_ok=True)
+    folder_id = _make_folder(server, folder_dir)
+    in_scope_img = _make_image(sub_dir, "in.png")
+    out_scope_img = _make_image(folder_dir, "out.png")
+    in_pic_id = _index_picture(
+        server,
+        folder_id,
+        in_scope_img,
+        tags=["first", "tag"],
+        description="First description.",
+    )
+    out_pic_id = _index_picture(
+        server,
+        folder_id,
+        out_scope_img,
+        tags=["outside"],
+        description="Outside description.",
+    )
+
+    export_resp = client.post(
+        f"/reference-folders/{folder_id}/metadata/export",
+        json={"scope_path": sub_dir, "types": ["tags", "descriptions"]},
+    )
+    assert export_resp.status_code == 200
+    assert export_resp.json()["tags_count"] == 1
+    assert export_resp.json()["descriptions_count"] == 1
+    assert _read(os.path.join(sub_dir, "in_tags.txt")) == "first, tag"
+    assert _read(os.path.join(sub_dir, "in_description.txt")) == "First description."
+    assert not os.path.exists(os.path.join(folder_dir, "out_tags.txt"))
+
+    _write(os.path.join(sub_dir, "in_tags.txt"), "changed, tags")
+    _write(os.path.join(sub_dir, "in_description.txt"), "Changed description.")
+    import_resp = client.post(
+        f"/reference-folders/{folder_id}/metadata/import",
+        json={"scope_path": sub_dir, "types": ["tags", "descriptions"]},
+    )
+    assert import_resp.status_code == 200
+    assert _picture_tags(server, in_pic_id) == ["changed", "tags"]
+    assert _picture(server, in_pic_id).description == "Changed description."
+    assert _picture_tags(server, out_pic_id) == ["outside"]

@@ -1,7 +1,7 @@
 {
   "name": "pixlstash-frontend",
   "private": true,
-  "version": "1.6.12",
+  "version": "1.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
-    "axios": "^1.16.0",
+    "axios": "^1.18.0",
     "compromise": "^14.14.4",
     "lodash-es": "^4.18.1",
     "marked": "^16.4.1",

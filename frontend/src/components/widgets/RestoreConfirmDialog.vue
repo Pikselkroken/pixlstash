@@ -572,7 +572,7 @@ const canRestore = computed(
 .restore-dialog-card {
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   color-scheme: dark;
   max-height: 80dvh;
   display: flex;
@@ -580,41 +580,41 @@ const canRestore = computed(
 }
 
 .restore-dialog-title {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   display: flex;
   align-items: center;
-  padding: 14px 16px 8px;
+  padding: var(--space-5) var(--space-5) var(--space-3);
   flex-shrink: 0;
 }
 
 .restore-dialog-body {
   overflow-y: auto;
   flex: 1;
-  padding: 8px 16px 12px;
+  padding: var(--space-3) var(--space-5) var(--space-4);
 }
 
 .restore-dialog-actions {
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  padding: 8px 16px;
+  padding: var(--space-3) var(--space-5);
   flex-shrink: 0;
 }
 
 /* Picker step */
 .restore-picker-hint {
-  font-size: 0.82rem;
-  margin-bottom: 10px;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-3);
   opacity: 0.75;
 }
 
 .restore-picker-row {
   display: flex;
   align-items: center;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.08);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
   transition: background 0.1s;
 }
 
@@ -630,13 +630,13 @@ const canRestore = computed(
 
 .restore-picker-label {
   flex: 1;
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   font-style: italic;
-  margin-right: 8px;
+  margin-right: var(--space-3);
 }
 
 .restore-picker-date {
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   opacity: 0.6;
   white-space: nowrap;
 }
@@ -645,27 +645,27 @@ const canRestore = computed(
 .restore-preview-header {
   display: flex;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-4);
 }
 
 .restore-preview-cp-label {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-style: italic;
   flex: 1;
 }
 
 .restore-preview-cp-date {
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   opacity: 0.6;
-  margin-left: 8px;
+  margin-left: var(--space-3);
   white-space: nowrap;
 }
 
 .restore-summary-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 10px 0 14px;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-5);
 }
 
 .restore-summary-card {
@@ -673,8 +673,8 @@ const canRestore = computed(
   flex-direction: column;
   align-items: center;
   background: rgba(var(--v-theme-on-surface), 0.06);
-  border-radius: 6px;
-  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-5);
   min-width: 80px;
 }
 
@@ -684,34 +684,34 @@ const canRestore = computed(
 }
 
 .restore-summary-value {
-  font-size: 1.3rem;
+  font-size: var(--text-xl);
   font-weight: 700;
   line-height: 1.2;
 }
 
 .restore-summary-label {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   opacity: 0.7;
   text-align: center;
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 /* Diff table */
 .restore-diff-section {
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 
 .restore-diff-toggle {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   display: flex;
   align-items: center;
   opacity: 0.7;
   color: inherit;
   padding: 0;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
 }
 
 .restore-diff-toggle:hover {
@@ -720,9 +720,9 @@ const canRestore = computed(
 
 .restore-diff-table {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   max-height: 220px;
   overflow-y: auto;
 }
@@ -730,8 +730,8 @@ const canRestore = computed(
 .restore-diff-row {
   display: grid;
   grid-template-columns: 80px 60px 1fr auto;
-  gap: 6px;
-  padding: 5px 10px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
   align-items: center;
 }
@@ -749,7 +749,7 @@ const canRestore = computed(
 }
 
 .diff-type {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   text-transform: capitalize;
 }
 
@@ -765,7 +765,7 @@ const canRestore = computed(
 
 .diff-deps {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
   opacity: 0.55;
   flex-shrink: 0;
 }
@@ -774,60 +774,60 @@ const canRestore = computed(
 .restore-loading {
   display: flex;
   align-items: center;
-  padding: 16px 0;
-  font-size: 0.82rem;
+  padding: var(--space-5) 0;
+  font-size: var(--text-sm);
   opacity: 0.7;
 }
 
 .restore-empty {
-  padding: 16px 0;
-  font-size: 0.82rem;
+  padding: var(--space-5) 0;
+  font-size: var(--text-sm);
   opacity: 0.6;
   text-align: center;
 }
 
 .restore-inline-error {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-error));
 }
 
 .full-vault-ack {
-  padding: 8px 16px 0;
+  padding: var(--space-3) var(--space-5) 0;
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .full-vault-ack-label {
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   line-height: 1.35;
   color: rgb(var(--v-theme-on-surface));
 }
 
 .missing-deps-prompt {
-  padding: 12px 16px 4px;
+  padding: var(--space-4) var(--space-5) var(--space-2);
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .missing-deps-title {
   display: flex;
   align-items: center;
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-warning));
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
 }
 
 .missing-deps-body {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   line-height: 1.4;
   color: rgb(var(--v-theme-on-surface));
 }
 
 .missing-deps-list {
-  margin: 6px 0 8px;
-  padding-left: 20px;
+  margin: var(--space-2) 0 var(--space-3);
+  padding-left: var(--space-5);
 }
 
 .missing-deps-list li {
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
 }
 </style>

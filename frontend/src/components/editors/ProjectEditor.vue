@@ -1,6 +1,10 @@
 <script setup>
 import { ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
+import AppTextarea from "../widgets/AppTextarea.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -78,53 +82,72 @@ async function deleteProject() {
 </script>
 
 <template>
-  <v-dialog
-    :model-value="open"
-    max-width="480"
-    @update:model-value="(v) => !v && emit('close')"
+  <AppDialog
+    :open="open"
+    :title="project ? 'Edit project' : 'New project'"
+    :width="480"
+    @close="emit('close')"
   >
-    <v-card>
-      <v-card-title>{{
-        project ? "Edit Project" : "New Project"
-      }}</v-card-title>
-      <v-card-text>
-        <v-text-field
-          v-model="name"
-          label="Name"
-          autofocus
-          :disabled="saving"
-          @keydown.enter="save"
-        />
-        <v-textarea
-          v-model="description"
-          label="Description"
-          rows="3"
-          :disabled="saving"
-        />
-        <div v-if="error" class="text-error text-caption mt-1">{{ error }}</div>
-      </v-card-text>
-      <v-card-actions>
-        <v-btn
-          v-if="project?.id"
-          color="error"
-          variant="flat"
-          :loading="deleting"
-          :disabled="saving"
-          @click="deleteProject"
-          >Delete</v-btn
-        >
-        <v-spacer />
-        <v-btn :disabled="saving || deleting" @click="emit('close')"
-          >Cancel</v-btn
-        >
-        <v-btn
-          color="primary"
-          :loading="saving"
-          :disabled="deleting"
-          @click="save"
-          >Save</v-btn
-        >
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+    <div class="project-editor-body">
+      <AppInput
+        v-model="name"
+        label="Name *"
+        icon="briefcase-outline"
+        :disabled="saving"
+        @enter="save"
+      />
+      <AppTextarea
+        v-model="description"
+        label="Description"
+        placeholder="Optional description…"
+        :rows="3"
+        :disabled="saving"
+      />
+      <div v-if="error" class="project-editor-error">{{ error }}</div>
+    </div>
+    <template #footer>
+      <AppButton
+        v-if="project?.id"
+        variant="danger"
+        icon-left="delete-outline"
+        :disabled="saving || deleting"
+        @click="deleteProject"
+      >
+        Delete
+      </AppButton>
+      <span class="project-editor-spacer" />
+      <AppButton
+        variant="secondary"
+        :disabled="saving || deleting"
+        @click="emit('close')"
+      >
+        Cancel
+      </AppButton>
+      <AppButton
+        variant="primary"
+        icon-left="check"
+        :disabled="saving || deleting"
+        @click="save"
+      >
+        Save
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
+
+<style scoped>
+.project-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.project-editor-error {
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-error));
+}
+
+.project-editor-spacer {
+  flex: 1;
+}
+</style>

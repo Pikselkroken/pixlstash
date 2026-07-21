@@ -7,9 +7,20 @@
  * Gated behind `isReadOnly === false` at the tab level in UserSettingsDialog.
  */
 import { computed, ref, watch } from "vue";
+import {
+  VSwitch,
+  VProgressLinear,
+  VProgressCircular,
+  VIcon,
+  VTextField,
+} from "vuetify/components";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
-import { kindChipColor, relativeDate } from "../../utils/snapshots";
+import { relativeDate } from "../../utils/snapshots";
+import AppInput from "../widgets/AppInput.vue";
+import AppButton from "../widgets/AppButton.vue";
+import SettingsSection from "./SettingsSection.vue";
+import SettingsInfoCard from "./SettingsInfoCard.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -163,12 +174,12 @@ function handleRestore(cp) {
 </script>
 
 <template>
-  <div class="settings-section snapshots-section">
+  <div class="snapshots-section">
     <!-- ── Active job banner ─────────────────────────────────────────────── -->
     <div v-if="activeJob" class="snapshot-job-banner">
-      <v-progress-linear indeterminate color="primary" class="mb-2" />
+      <v-progress-linear indeterminate color="accent" />
       <span class="snapshot-job-label">
-        <v-icon size="16" class="mr-1">mdi-restore</v-icon>
+        <v-icon size="16">mdi-restore</v-icon>
         {{
           activeJob.kind === "RESTORE"
             ? "Restore in progress…"
@@ -177,112 +188,83 @@ function handleRestore(cp) {
       </span>
     </div>
 
-    <!-- ── Daily snapshot toggle ──────────────────────────────────────── -->
-    <div class="snapshot-settings-row">
-      <v-switch
-        :model-value="store.dailySnapshotsEnabled"
-        label="Automatic snapshots"
-        density="compact"
-        hide-details
-        color="primary"
-        @update:model-value="handleToggleDailySnapshots($event)"
-      />
+    <!-- ── Toggle + create ───────────────────────────────────────────────── -->
+    <SettingsSection first>
+      <div class="snapshot-toggle-row">
+        <v-switch
+          :model-value="store.dailySnapshotsEnabled"
+          label="Automatic snapshots"
+          density="compact"
+          hide-details
+          color="accent"
+          @update:model-value="handleToggleDailySnapshots($event)"
+        />
+      </div>
       <div v-if="dailyToggleError" class="snapshot-inline-error">
         {{ dailyToggleError }}
       </div>
-    </div>
 
-    <!-- ── Create snapshot ─────────────────────────────────────────────── -->
-    <div class="snapshot-create-row">
-      <v-text-field
-        v-model="createLabel"
-        label="Label (optional)"
-        density="compact"
-        variant="outlined"
-        hide-details
-        :disabled="!!activeJob || creating"
-        class="snapshot-label-field"
-        @keydown.enter="handleCreate"
-      />
-      <v-btn
-        color="primary"
-        density="compact"
-        :loading="creating"
-        :disabled="!!activeJob"
-        @click="handleCreate"
-      >
-        <v-icon size="15" class="mr-1">mdi-camera</v-icon>
-        Create now
-      </v-btn>
-    </div>
-    <div v-if="createError" class="snapshot-inline-error">
-      {{ createError }}
-    </div>
-    <div v-if="createSuccess" class="snapshot-inline-success">
-      {{ createSuccess }}
-    </div>
-
-    <!-- ── Retention info ────────────────────────────────────────────────── -->
-    <div class="snapshot-retention-card">
-      <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
-      <span>
-        GFS retention: 7 daily, 4 weekly, 12 monthly. Manual &amp; opportunistic
-        snapshots are kept until deleted.
-      </span>
-    </div>
-    <div class="snapshot-retention-card">
-      <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
-      <span>
-        Snapshots are not a backup solution. They store metadata only and on the
-        same storage as the live vault.<br />For true backups, regularly export
-        your full vault and store it separately.
-      </span>
-    </div>
+      <div class="snapshot-create-row">
+        <AppInput
+          v-model="createLabel"
+          placeholder="Label (optional)"
+          :disabled="!!activeJob || creating"
+          class="snapshot-label-field"
+          @enter="handleCreate"
+        />
+        <AppButton
+          variant="primary_green"
+          icon-left="camera"
+          :disabled="!!activeJob || creating"
+          @click="handleCreate"
+        >
+          Create now
+        </AppButton>
+      </div>
+      <div v-if="createError" class="snapshot-inline-error">
+        {{ createError }}
+      </div>
+      <div v-if="createSuccess" class="snapshot-inline-success">
+        {{ createSuccess }}
+      </div>
+    </SettingsSection>
 
     <!-- ── Error / Loading ───────────────────────────────────────────────── -->
-    <div v-if="store.error" class="snapshot-inline-error mt-2">
+    <div v-if="store.error" class="snapshot-inline-error">
       {{ store.error }}
     </div>
 
     <!-- ── Snapshot list ───────────────────────────────────────────────── -->
     <div v-if="isLoading && !snapshots.length" class="snapshot-loading">
-      <v-progress-circular indeterminate size="20" class="mr-2" />
+      <v-progress-circular indeterminate size="20" />
       Loading snapshots…
     </div>
 
     <div v-else-if="!snapshots.length && !isLoading" class="snapshot-empty">
-      <v-icon size="36" class="mb-2">mdi-camera-off</v-icon>
+      <v-icon size="36">mdi-camera-off</v-icon>
       <p>No snapshots yet.</p>
       <p class="snapshot-empty-hint">Create your first snapshot above.</p>
     </div>
 
-    <template v-else>
+    <div v-else class="snapshot-list">
       <div
         v-for="cp in snapshots"
         :key="cp.id"
         class="snapshot-row"
         :class="{ 'snapshot-row--incompatible': !cp.is_compatible }"
       >
-        <!-- Kind chip + created -->
+        <!-- Kind pill + created -->
         <div class="snapshot-row-meta">
-          <v-chip
-            :color="kindChipColor(cp.kind)"
-            size="x-small"
-            variant="tonal"
-            class="mr-2"
-          >
+          <span class="kind-pill" :class="`kind-pill--${cp.kind}`">
             {{ cp.kind }}
-          </v-chip>
-          <v-chip
+          </span>
+          <span
             v-if="!cp.is_compatible"
-            color="error"
-            size="x-small"
-            variant="tonal"
+            class="kind-pill kind-pill--incompatible"
             title="Schema version is newer than the live database; restore not supported."
-            class="mr-2"
           >
             incompatible
-          </v-chip>
+          </span>
           <span
             class="snapshot-created-at"
             :title="formatUserDate(cp.created_at, 'iso')"
@@ -310,7 +292,13 @@ function handleRestore(cp) {
               {{ saveLabelError[cp.id] }}
             </div>
           </template>
-          <span v-else class="snapshot-label-text">
+          <span
+            v-else
+            class="snapshot-label-text"
+            :class="{ 'snapshot-label-text--empty': !cp.label }"
+            title="Double-click to rename"
+            @dblclick="!activeJob && startEditing(cp)"
+          >
             {{ cp.label || "—" }}
           </span>
         </div>
@@ -318,19 +306,19 @@ function handleRestore(cp) {
         <!-- Stats -->
         <div class="snapshot-row-stats">
           <span title="Pictures">
-            <v-icon size="12">mdi-image-multiple-outline</v-icon>
+            <v-icon size="13">mdi-image-multiple-outline</v-icon>
             {{ cp.picture_count }}
           </span>
           <span v-if="cp.picture_set_count" title="Sets">
-            <v-icon size="12">mdi-folder-multiple-outline</v-icon>
+            <v-icon size="13">mdi-folder-multiple-outline</v-icon>
             {{ cp.picture_set_count }}
           </span>
           <span v-if="cp.project_count" title="Projects">
-            <v-icon size="12">mdi-briefcase-outline</v-icon>
+            <v-icon size="13">mdi-briefcase-outline</v-icon>
             {{ cp.project_count }}
           </span>
           <span v-if="cp.character_count" title="Characters">
-            <v-icon size="12">mdi-account-multiple-outline</v-icon>
+            <v-icon size="13">mdi-account-multiple-outline</v-icon>
             {{ cp.character_count }}
           </span>
           <span title="Size">{{ humanBytes(cp.byte_size) }}</span>
@@ -338,22 +326,11 @@ function handleRestore(cp) {
 
         <!-- Actions -->
         <div class="snapshot-row-actions">
-          <v-btn
-            size="x-small"
-            variant="text"
-            density="compact"
-            title="Rename label"
-            :disabled="!!activeJob || editingLabel[cp.id] !== undefined"
-            @click="startEditing(cp)"
-          >
-            <v-icon size="14">mdi-pencil-outline</v-icon>
-          </v-btn>
-
-          <v-btn
-            size="x-small"
-            variant="text"
-            density="compact"
-            color="primary"
+          <AppButton
+            variant="ghost"
+            size="sm"
+            icon-left="restore"
+            icon-only
             :disabled="!!activeJob || !cp.is_compatible"
             :title="
               !cp.is_compatible
@@ -361,79 +338,86 @@ function handleRestore(cp) {
                 : 'Restore everything from this snapshot'
             "
             @click="handleRestore(cp)"
-          >
-            <v-icon size="14">mdi-restore</v-icon>
-            Restore…
-          </v-btn>
-
-          <v-btn
-            size="x-small"
-            variant="text"
-            density="compact"
-            color="error"
+          />
+          <AppButton
+            variant="ghost"
+            size="sm"
+            icon-left="delete-outline"
+            icon-only
+            title="Delete"
             :disabled="!!activeJob || deletingId === cp.id"
-            :loading="deletingId === cp.id"
-            title="Delete this snapshot"
             @click="handleDelete(cp)"
-          >
-            <v-icon size="14">mdi-delete-outline</v-icon>
-          </v-btn>
+          />
         </div>
       </div>
-    </template>
+    </div>
 
-    <div v-if="deleteError" class="snapshot-inline-error mt-2">
+    <div v-if="deleteError" class="snapshot-inline-error">
       {{ deleteError }}
+    </div>
+
+    <!-- ── Retention info ────────────────────────────────────────────────── -->
+    <div class="snapshot-notes">
+      <SettingsInfoCard>
+        GFS retention: 7 daily, 4 weekly, 12 monthly. Manual &amp; opportunistic
+        snapshots are kept until deleted.
+      </SettingsInfoCard>
+      <SettingsInfoCard>
+        Snapshots are not a backup solution. They store metadata only, on the
+        same storage as the live vault. For true backups, regularly export your
+        full vault and store it separately.
+      </SettingsInfoCard>
     </div>
   </div>
 </template>
 
 <style scoped>
 .snapshots-section {
-  padding: 12px 0;
-  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
 }
 
+/* ── Active job banner ─────────────────────────────────────────────────── */
 .snapshot-job-banner {
-  background: rgba(var(--v-theme-primary), 0.1);
-  border: 1px solid rgba(var(--v-theme-primary), 0.3);
-  border-radius: 6px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
+  background: rgba(var(--v-theme-accent), 0.1);
+  border: 1px solid rgba(var(--v-theme-accent), 0.3);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .snapshot-job-label {
-  font-size: 0.8rem;
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
 }
 
-.snapshot-settings-row {
-  margin-bottom: 4px;
+/* ── Toggle + create ───────────────────────────────────────────────────── */
+.snapshot-toggle-row {
+  margin-bottom: var(--space-4);
 }
 
 .snapshot-create-row {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  margin-bottom: 8px;
+  gap: var(--space-3);
+  align-items: center;
 }
 
 .snapshot-label-field {
   flex: 1;
-  max-width: 280px;
+  min-width: 0;
 }
 
-.snapshot-retention-card {
-  display: flex;
-  align-items: center;
-  font-size: 0.73rem;
-  opacity: 0.65;
-  background: rgba(var(--v-theme-on-surface), 0.05);
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin-bottom: 2px;
-  line-height: 1.4;
+/* ── List ──────────────────────────────────────────────────────────────── */
+.snapshot-list {
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding-top: var(--space-2);
+  /* The list scrolls internally so the Snapshots tab itself doesn't scroll. */
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 .snapshot-loading,
@@ -442,24 +426,23 @@ function handleRestore(cp) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 32px 0;
-  opacity: 0.6;
-  font-size: 0.85rem;
+  gap: var(--space-2);
+  padding: var(--space-7) 0;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-size: var(--text-base);
   text-align: center;
 }
 
 .snapshot-empty-hint {
-  font-size: 0.75rem;
-  margin-top: 4px;
+  font-size: var(--text-xs);
 }
 
 .snapshot-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
-  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-1);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
 .snapshot-row:last-child {
@@ -467,31 +450,69 @@ function handleRestore(cp) {
 }
 
 .snapshot-row--incompatible {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
 .snapshot-row-meta {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   flex-shrink: 0;
-  min-width: 140px;
+  min-width: 120px;
+}
+
+/* ── Kind pill ─────────────────────────────────────────────────────────── */
+/* Compact: 11px is the type-ramp floor, so the pill is shrunk via tighter
+   padding rather than a smaller font, freeing row width for the label. */
+.kind-pill {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: color-mix(in oklab, currentColor 16%, transparent);
+}
+
+.kind-pill--DAILY {
+  color: rgb(var(--v-theme-tertiary));
+}
+.kind-pill--MANUAL {
+  color: rgb(var(--v-theme-accent));
+}
+.kind-pill--WEEKLY {
+  color: rgb(var(--v-theme-secondary));
+}
+.kind-pill--incompatible {
+  color: rgb(var(--v-theme-error));
 }
 
 .snapshot-created-at {
-  font-size: 0.73rem;
-  opacity: 0.7;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   white-space: nowrap;
 }
 
 .snapshot-row-label {
   flex: 1;
-  min-width: 80px;
-  font-size: 0.8rem;
+  min-width: 0;
+  font-size: var(--text-sm);
 }
 
 .snapshot-label-text {
-  opacity: 0.8;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-style: italic;
+  color: rgb(var(--v-theme-on-surface));
+  cursor: text;
+}
+
+.snapshot-label-text--empty {
+  font-style: normal;
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .snapshot-edit-field {
@@ -500,10 +521,10 @@ function handleRestore(cp) {
 
 .snapshot-row-stats {
   display: flex;
-  gap: 10px;
+  gap: var(--space-4);
   align-items: center;
-  font-size: 0.72rem;
-  opacity: 0.65;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -511,25 +532,32 @@ function handleRestore(cp) {
 .snapshot-row-stats span {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .snapshot-row-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-shrink: 0;
 }
 
+/* ── Inline status ─────────────────────────────────────────────────────── */
 .snapshot-inline-error {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-error));
-  margin-top: 2px;
+  margin-top: var(--space-2);
 }
 
 .snapshot-inline-success {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-success));
-  margin-top: 2px;
+  margin-top: var(--space-2);
+}
+
+/* ── Trailing notes ────────────────────────────────────────────────────── */
+.snapshot-notes {
+  margin-top: auto;
+  padding-top: var(--space-5);
 }
 </style>

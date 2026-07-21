@@ -396,6 +396,31 @@ docker run --rm -p 9537:9537 -v pixlstash_data:/home/pixlstash pixlstash:cpu
 docker run --rm --gpus all -p 9537:9537 -v pixlstash_data:/home/pixlstash pixlstash:gpu
 ```
 
+### First-run setup in Docker
+
+Claiming the owner account (choosing the first username/password) is normally
+restricted to loopback connections, and a Docker container never sees your
+traffic as loopback — so the in-browser first-run setup is blocked with a 403.
+Provision the owner account via environment variables on the **first** run
+instead:
+
+```bash
+docker run --rm -p 9537:9537 \
+  -e PIXLSTASH_INITIAL_USERNAME=owner \
+  -e PIXLSTASH_INITIAL_PASSWORD=change-me-now \
+  -v pixlstash_data:/home/pixlstash pixlstash:cpu
+```
+
+The account is claimed at startup and you can log in with those credentials
+right away. Afterwards, restart the container **without** the two variables:
+they are only used to claim a still-unclaimed account (a restart with stale
+values never changes an existing password — it just logs that they were
+ignored), but credentials should not linger in the container environment.
+`docker-compose.yml` ships the same two variables commented out.
+
+Alternative: log in over loopback from inside the container, e.g.
+`docker exec -it <container> curl -X POST http://127.0.0.1:9537/api/v1/login -H 'Content-Type: application/json' -d '{"username":"owner","password":"change-me-now"}'`.
+
 GitHub Actions uses the same split in `.github/workflows/docker-publish.yml`:
 
 - CPU publish job builds from `Dockerfile`

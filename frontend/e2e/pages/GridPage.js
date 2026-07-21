@@ -13,6 +13,7 @@ import { expect } from '@playwright/test'
 export class GridPage {
   constructor(page) {
     this.page = page
+    this.gridRoot = page.getByTestId('image-grid')
     this.grid = page.locator('.image-grid')
     this.scrollWrapper = page.locator('.grid-scroll-wrapper')
     this.cards = page.locator('.image-card')
@@ -20,20 +21,23 @@ export class GridPage {
     this.thumbnailImages = page.locator('.thumbnail-img')
     // Toolbar buttons (titles are stable, verified in Toolbar.vue).
     this.searchButton = page.locator('button[title="Search (F)"]').first()
+    // Sort is a split-button: .bar-split-menu opens the sort popover
+    // (.gb-sort-panel); the in-popover ghost button flips the direction.
     this.sortMenuButton = page.locator('.bar-split-menu').first()
-    this.sortDirectionButton = page.locator('.gb-sort-direction')
+    this.sortDirectionButton = page.locator('.gb-sort-panel .tbm-ghost').first()
     this.viewMenuButton = page.locator('button[title="View options"]').first()
     this.columnsSlider = page.locator('.gb-columns-slider')
+    // Expand/Collapse-all live in the View popover as .tbm-action buttons.
     this.expandAllStacksButton = page
-      .locator('.gb-stack-toggle-btn', { hasText: 'Expand all' })
+      .locator('.tbm-action', { hasText: 'Expand all' })
       .first()
     this.collapseAllStacksButton = page
-      .locator('.gb-stack-toggle-btn', { hasText: 'Collapse all' })
+      .locator('.tbm-action', { hasText: 'Collapse all' })
       .first()
-    // Search overlay.
-    this.searchOverlay = page.locator('.search-overlay')
-    this.searchInput = page.locator('.search-overlay input').first()
-    this.searchHistoryChips = page.locator('.search-history-chip')
+    // Search popover (.gb-search-panel) opened from the toolbar search icon.
+    this.searchOverlay = page.locator('.gb-search-panel')
+    this.searchInput = page.locator('.gb-search-panel input').first()
+    this.searchHistoryChips = page.locator('.gb-recent-row')
     // Right-click context menu (§3.5) — ImageGridContextMenu.vue.
     this.contextMenu = page.locator('.image-ctx-menu')
     // Statistics sidebar — toggled from the toolbar. Its title flips with state
@@ -69,6 +73,42 @@ export class GridPage {
     return this.thumbnailImages.first().getAttribute('src')
   }
 
+  // --- Grid-refresh pills (data-testid'd in ImageGrid.vue) ----------------
+  // Two distinct pills share the .pending-imports-pill class, so they are only
+  // distinguishable by testid:
+  //   - "New pictures" pill: raised on an external/foreign `added` event.
+  //   - "View changed externally" pill: raised on an external `updated` event
+  //     that affects the current sort/filter.
+
+  /** The "↑ N new pictures, click to load" pill. */
+  pendingImportsPill() {
+    return this.page.getByTestId('pending-imports-pill')
+  }
+
+  /** The "⟳ View changed externally, click to refresh" pill. */
+  sortChangedPill() {
+    return this.page.getByTestId('sort-changed-pill')
+  }
+
+  /** Either pill, for an "any pill appeared" assertion. */
+  anyPill() {
+    return this.page.locator(
+      '[data-testid="pending-imports-pill"], [data-testid="sort-changed-pill"]',
+    )
+  }
+
+  /**
+   * Assert that neither pill appears within `timeout` ms. Pills are raised
+   * synchronously when a foreign WS event is processed, so a short, bounded
+   * wait is enough: if the event has been delivered and the pill is going to
+   * appear, it will be present well before this resolves. Used by the
+   * own-change tests (own change must reconcile silently, never pill).
+   */
+  async expectNoPill(timeout = 2500) {
+    await expect(this.pendingImportsPill()).toHaveCount(0, { timeout })
+    await expect(this.sortChangedPill()).toHaveCount(0)
+  }
+
   /** Locate a grid card by picture id via its thumbnail URL. */
   card(pictureId) {
     return this.page
@@ -79,7 +119,9 @@ export class GridPage {
   /** Open the Sort dropdown (the split-button beside the sort label). */
   async openSortMenu() {
     await this.sortMenuButton.click()
-    await expect(this.page.locator('.gb-sort-grid-btn').first()).toBeVisible()
+    await expect(
+      this.page.locator('.gb-sort-panel .tbm-toggle').first(),
+    ).toBeVisible()
   }
 
   /** Open the View-options dropdown (columns slider, stack expand/collapse). */
@@ -89,7 +131,9 @@ export class GridPage {
   }
 
   sortOption(label) {
-    return this.page.locator('.gb-sort-grid-btn', { hasText: label }).first()
+    return this.page
+      .locator('.gb-sort-panel .tbm-toggle', { hasText: label })
+      .first()
   }
 
   /** Right-click a card (first by default) to open the context menu. */

@@ -157,10 +157,12 @@ def test_confirm_nonexistent_prediction_returns_404():
 def test_label_thresholds_uses_saved_offset_by_default(monkeypatch):
     temp_dir, client, server = _setup()
     try:
-        from pixlstash.services import tag_prediction_service
+        # The loader now lives in utils.service.anomaly_thresholds (a leaf module the
+        # scorer can import without a cycle); patch the name the route actually bound.
+        from pixlstash.routes import tag_predictions as tag_predictions_routes
 
         monkeypatch.setattr(
-            tag_prediction_service,
+            tag_predictions_routes,
             "load_raw_label_thresholds",
             lambda meta_path: {"cat": 0.4, "dog": 0.2},
         )
@@ -181,10 +183,12 @@ def test_label_thresholds_uses_saved_offset_by_default(monkeypatch):
 def test_label_thresholds_offset_query_overrides_saved(monkeypatch):
     temp_dir, client, server = _setup()
     try:
-        from pixlstash.services import tag_prediction_service
+        # The loader now lives in utils.service.anomaly_thresholds (a leaf module the
+        # scorer can import without a cycle); patch the name the route actually bound.
+        from pixlstash.routes import tag_predictions as tag_predictions_routes
 
         monkeypatch.setattr(
-            tag_prediction_service,
+            tag_predictions_routes,
             "load_raw_label_thresholds",
             lambda meta_path: {"cat": 0.4, "dog": 0.2},
         )

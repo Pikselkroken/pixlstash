@@ -10,6 +10,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
 from pixlstash.inference.workflows.description import DescriptionWorkflow
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 if TYPE_CHECKING:
@@ -116,8 +117,14 @@ class DescriptionTask(BaseTask):
             return {"changed_count": 0, "changed": []}
 
         def update_descriptions(session: Session, pics):
+            # Defense in depth: a picture frozen by a locked set has a read-only
+            # description (rule 3) — never persist a machine-regenerated caption
+            # onto it, even if one was generated for an in-flight task.
+            locked = locked_picture_ids(session, [pic.id for pic in pics])
             changed = []
             for pic in pics:
+                if pic.id in locked:
+                    continue
                 db_pic = session.get(Picture, pic.id)
                 if db_pic is not None:
                     db_pic.description = pic.description
@@ -139,6 +146,21 @@ class DescriptionTask(BaseTask):
 
     def _generate_descriptions_batch(self, pictures: list[Picture]) -> list[Picture]:
         picture_ids = [pic.id for pic in pictures]
+        # Drop pictures frozen by a locked set: their description is read-only
+        # (rule 3), so never machine-regenerate it. MissingDescriptionFinder also
+        # excludes them; this covers the interactive/detection dispatch path too.
+        locked = self._db.run_immediate_read_task(locked_picture_ids, picture_ids)
+        if locked:
+            logger.info(
+                "DescriptionTask: skipping %d locked picture(s) %s "
+                "(frozen description)",
+                len(locked),
+                sorted(locked),
+            )
+            pictures = [pic for pic in pictures if pic.id not in locked]
+            picture_ids = [pid for pid in picture_ids if pid not in locked]
+            if not pictures:
+                return []
         logger.debug(
             "DescriptionTask: Generating descriptions for batch_size=%s ids=%s",
             len(pictures),

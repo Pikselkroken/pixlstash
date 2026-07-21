@@ -186,7 +186,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | string | Wire type: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. |
+| `type` | string | Wire type. Picture/mutation events: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. Snapshot/restore events (carry snapshot/restore info rather than `picture_ids`): `snapshot_created` \| `snapshot_deleted` \| `restore_started` \| `restore_completed` \| `restore_failed`. |
 | `event` | string | Backend `EventType.name`; diagnostic only, not part of the behavioural contract. |
 | `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
@@ -202,7 +202,10 @@ Per-type payload specifics (all carry the envelope fields above):
 | `picture_imported` | New picture entered the vault (ComfyUI, watch folder, API) | — | Slick in-place insert for the initiating tab, targeted insert for a foreign owner tab, or the **"New pictures"** pill for external imports (§8.2). |
 | `characters_changed` | Character created/updated/deleted or face reassigned | — | Refresh sidebar (character list) |
 | `tags_changed` | Tags or tag predictions changed | `picture_ids: number[]` | Bump `wsTagUpdate` so affected grid cards re-render |
+| `descriptions_changed` | Picture descriptions/captions changed | `picture_ids: number[]` | Refresh affected descriptions |
 | `plugin_progress` | Image plugin run progress | `plugin`, `progress`, `total`, `picture_id` | Update `wsPluginProgress` for the plugin progress UI |
+| `snapshot_created` / `snapshot_deleted` | Vault snapshot created or deleted | snapshot info (id, kind, …) | Refresh the snapshots panel |
+| `restore_started` / `restore_completed` / `restore_failed` | Vault restore lifecycle | restore info | Drive the restore progress/result UI |
 
 > **`source` migration:** the import emit's legacy value `"user"` is migrated to `"ui"`. During the transition the frontend (`normaliseSource`) accepts **both** — the real signal is the `origin_client_id` match, so accepting the legacy value just over-notifies (safe). Drop the legacy acceptance once both ends have shipped.
 
@@ -256,9 +259,9 @@ Browser-native `<img>` tags **cannot** use the axios interceptor, so the integra
 
 | URL | Purpose |
 |-----|---------|
-| `GET /api/v1/pictures/{id}/thumbnail` | Cached WebP thumbnail. Backend uses an async lock + LRU memory cache + on-disk `.pixlstash/` cache. |
+| `GET /api/v1/pictures/thumbnails/{id}.webp` | Cached WebP thumbnail. Backend uses an async lock + LRU memory cache + on-disk `.pixlstash/` cache. |
 | `POST /api/v1/pictures/thumbnails` | Batch thumbnail metadata (JSON). |
-| `GET /api/v1/pictures/{id}/{ext}` | Original file (optionally watermarked). |
+| `GET /api/v1/pictures/{id}.{ext}` | Original file (optionally watermarked). |
 
 ### Watermarking
 
@@ -271,7 +274,7 @@ The decision to watermark is made server-side per request based on `User.embed_w
 - **Endpoint**: `POST /api/v1/pictures/import` (multipart/form-data).
 - **Content**: image files or `.zip` archives (extracted server-side).
 - **Deduplication**: server computes `pixel_sha` (SHA-256 of decoded pixels) and skips duplicates.
-- **Async**: the response includes a `task_id`. The frontend polls `GET /api/v1/pictures/import/{task_id}/status` for completion percentage.
+- **Async**: the response includes a `task_id`. The frontend polls `GET /api/v1/pictures/import/status?task_id=…` for completion percentage.
 - **Real-time**: as pictures are persisted, the backend also broadcasts `picture_imported` over the WebSocket carrying the uniform envelope (§8). The SPA distinguishes its **own** upload (drives a progress dialog) from a **foreign owner tab** (slick insert) and from **external** imports (the "New pictures" pill) via `source`/`origin_client_id`.
 
 **Contract**: the SPA sets `isUploadInProgress` for the duration of its own upload so that incoming `picture_imported` events don't double-count.
@@ -282,13 +285,40 @@ The decision to watermark is made server-side per request based on `User.embed_w
 
 Two complementary mechanisms; most workflows use both:
 
-1. **Task-id polling** — for client-initiated operations with a clear end state (import, export, bulk score apply, plugin run on many pictures): the endpoint returns `{task_id}`; the SPA polls `…/{task_id}/status` until completion, then fetches the result (e.g. download the ZIP).
+1. **Task-id polling** — for client-initiated operations with a clear end state (import, export, bulk score apply, plugin run on many pictures): the endpoint returns `{task_id}`; the SPA polls `…/status?task_id=…` until completion, then fetches the result (e.g. download the ZIP via `/pictures/export/download/{task_id}`).
 2. **WebSocket events** — for backend-initiated state changes (watch folder ingest, background quality/tag/embedding work, plugin progress): the SPA refreshes affected views from events without polling.
 
 **Rule of thumb**:
 - If the user triggered it and expects a result file → polling.
 - If it changes vault state that other clients also need to see → WebSocket event.
 - For UX (e.g. plugin progress bar), emit both: polling for the initiator and WS broadcasting for everyone else.
+
+### 11.1 Object detection (Segment) & bbox export
+
+The **Segment** action runs Florence-2 object detection over the selected pictures and stores labelled boxes per picture (see [backend_architecture.md §6/§7](backend_architecture.md)). It follows the WebSocket-event branch of the rule above — it is a backend task, not a downloadable result.
+
+- **Enqueue**: `POST /api/v1/pictures/detect` with body `{ "picture_ids": [int, …], "prompt": "optional phrase" }`. An empty/omitted `prompt` runs dense object detection; a non-empty phrase runs open-vocabulary grounding for that phrase. Scoped tokens have `picture_ids` filtered to their grant (deny-by-default; all-out-of-scope → 403). Returns `{ "status": "queued", "task_id", "picture_ids", "prompt" }`. Progress surfaces in the existing task-manager UI.
+- **Completion**: the task fires a `pictures_changed` event (`{picture_ids, change_kind:"updated"}`) over the WebSocket; the SPA refreshes affected views.
+- **Read**: `GET /api/v1/pictures/{id}/detections` returns a **bare JSON array** (object-scope enforced before any read):
+  ```json
+  [ { "id": 1, "picture_id": 42, "frame_index": 0, "detection_index": 0,
+      "label": "dog", "bbox": [x1, y1, x2, y2], "score": null,
+      "source": "florence2:od" } ]
+  ```
+  `bbox` is pixel `xyxy` in the **original** picture coordinate space (same convention as faces). `score` is `null` for Florence (it emits no per-box confidence). The overlay (`ImageOverlay.vue`) renders these as a toggleable layer next to the face-bbox layer.
+- **Export sidecar** (`GET /api/v1/pictures/export?bbox_mode=…`, FULL exports only): writes a per-image `{stem}.json` into the ZIP. `bbox_mode=none` (default) writes nothing. Two formats:
+  - `bbox_mode=coco-json` — a COCO-subset sidecar (pixel `xyxy`), written *alongside* the `.txt` caption. Boxes and `width`/`height` scale to match the exported image when a reduced `resolution` is selected.
+    ```json
+    {"image":"IMG_0001.jpg","width":1920,"height":1080,
+     "schema":"pixlstash.detections/v1","bbox_format":"xyxy_px",
+     "objects":[{"label":"dog","bbox":[x1,y1,x2,y2],"score":0.0}]}
+    ```
+  - `bbox_mode=ideogram-json` — an **Ideogram-4 structured-JSON caption** ([official schema](https://github.com/ideogram-oss/ideogram4/blob/main/docs/prompting.md)): this `{stem}.json` *is* the caption ai-toolkit consumes (set `caption_ext: json` in the dataset config). Boxes are **normalized `[y_min,x_min,y_max,x_max]` on a 0-1000 grid** (resolution-independent, so the `resolution` setting does not affect them). Each detection is a `type:"obj"` element with its label as `desc`; key order (`type, bbox, desc` / top-level order) is preserved because the model was trained on a fixed key order. The picture's caption becomes `high_level_description`; `style_description` is omitted (optional). The `.txt` caption is still written per `caption_mode`, so the user picks which one ai-toolkit reads via `caption_ext`.
+    ```json
+    {"high_level_description":"a dog on grass",
+     "compositional_deconstruction":{"background":"",
+       "elements":[{"type":"obj","bbox":[y_min,x_min,y_max,x_max],"desc":"dog"}]}}
+    ```
 
 ---
 
@@ -333,7 +363,7 @@ Backend rule: errors must use FastAPI's `HTTPException(status_code, detail=...)`
 
 ### Dev workflow
 
-- Backend: `python -m pixlstash.server` (default port `9537`).
+- Backend: `python -m pixlstash.app` (default port `9537`).
 - Frontend: `npm run dev` inside [frontend/](../frontend/) (Vite at `:5173`, HMR enabled).
 - CORS regex automatically permits `localhost:5173`.
 - Cookies cross ports only if both sides agree on credentials (`withCredentials: true` + `allow_credentials=True`).
@@ -341,7 +371,7 @@ Backend rule: errors must use FastAPI's `HTTPException(status_code, detail=...)`
 ### Production workflow
 
 - `npm run build` → `pixlstash/frontend/dist/`.
-- Run `python -m pixlstash.server`; the SPA is served from the same origin as the API. No proxy needed.
+- Run `python -m pixlstash.app`; the SPA is served from the same origin as the API. No proxy needed.
 
 **Pitfall**: forgetting to run `npm run build` before packaging leaves users with the JSON status fallback at `/`.
 
@@ -420,7 +450,7 @@ sequenceDiagram
     API-->>AX: { task_id }
     AX-->>SPA: task_id
     loop until done
-        SPA->>AX: GET /pictures/import/{task_id}/status
+        SPA->>AX: GET /pictures/import/status?task_id=…
         AX-->>SPA: { progress }
     end
 
@@ -433,7 +463,7 @@ sequenceDiagram
     end
 
     U->>SPA: open a picture
-    SPA->>SPA: build <img src=/api/v1/pictures/{id}/{ext}>
+    SPA->>SPA: build <img src=/api/v1/pictures/{id}.{ext}>
     Note over SPA,API: Browser sends cookie automatically;<br/>share token appended via appendShareToken()
     API-->>SPA: image bytes (watermarked if applicable)
 ```
@@ -493,4 +523,4 @@ flowchart TB
 
 ---
 
-*Last updated: 2026-05-20. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
+*Last updated: 2026-07-19. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*

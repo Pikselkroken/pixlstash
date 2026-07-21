@@ -1,3 +1,21 @@
+# [1.7.0] [Security:Moderate]
+
+Smart Scores are recomputed for your whole library the first time you open 1.7.0, so the grid may re-order compared to 1.6. This is expected, not a bug: scoring is now calibrated and precision-aware, so it judges image defects more accurately. Your originals and snapshots are untouched, and the recompute runs in the background.
+
+- New tag-fix review queue: a ranked queue for cleaning up your tags where you can review, bulk-confirm, or reject tagger suggestions, and teach the tagger from your decisions. Includes bulk clearing of impossible tags with source and object filters, plus review scope filters.
+- Lockable picture sets: lock a set to freeze its pictures' tags, descriptions, and scores as a read-only eval or training set. A lock badge and tooltip show wherever the pictures appear, editing is blocked until you unlock, and locked sets are greyed out and unselectable in tag review while their pictures can still serve as read-only reference images.
+- Smarter Smart Score: calibrated, precision-aware scoring that uses per-tag confidence instead of all-or-nothing weights, groups related defects so correlated flaws do not double-count, and adds three new full-image checks for compression blockiness, noise, and watermarks.
+- Expanded, recalibrated tagger model shipped with per-tag thresholds and precision weights, so high-confidence tags drive suggestions and scoring more strongly.
+- Object detection via a new Florence-2 backend: a Segment action that finds objects and draws bounding-box overlays in the grid and lightbox, with an option to export the boxes as COCO or Ideogram JSON.
+- Smoother grid updates: live changes now coalesce into a single "click to refresh" pill instead of a hard refresh, your own edits no longer trigger it, and tag-suggestion notifications are batched.
+- Refreshed visual design across the app with consistent type, colour, spacing, and iconography built on a new design-token system.
+- Reference folders can be relocated and reorganised by drag and drop, with metadata tools and sidecar sync.
+- ComfyUI generation progress now shows in the task manager; image-to-image and filter outputs can optionally stack onto the source, and the image-to-image dialog closes itself when a run starts.
+- Watch folders now retry on transient hash failures instead of skipping the file.
+- Harden object-scope enforcement on the tag-prediction endpoints: the confirm, reject, delete, and reset handlers now run the deny-by-default scope check, closing a defense-in-depth gap (issue #504).
+- Fix bug stopping the manually drawn face boxes from being stored
+- Update Axios [Security:Moderate]
+
 # [1.6.12]
 - Synced versions to frontend and ensure all builds succeed
 

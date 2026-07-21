@@ -34,6 +34,7 @@ from typing import Optional
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     DeletedFileLog,
+    Detection,
     Face,
     Picture,
     PictureProjectMember,
@@ -45,6 +46,11 @@ from pixlstash.db_models import (
 from pixlstash.db_models.user import User
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.set_lock_service import (
+    enforce_pictures_not_locked,
+    locked_by_sets_for_picture,
+    locked_picture_ids,
+)
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
@@ -61,6 +67,7 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_character_ids,
     fetch_scope_allowed_picture_ids,
+    fetch_scope_allowed_set_ids,
     VALID_COMBINE_MODES,
 )
 from pixlstash.utils.service.serialization_utils import safe_model_dict
@@ -80,6 +87,23 @@ logger = get_logger(__name__)
 # eligibility queries over the id set). Requests over this cap are rejected
 # rather than silently truncated.
 BATCH_CHARACTER_LIKENESS_MAX_IDS = 1000
+
+# Upper bound on picture_ids per detection request. Each id becomes a unit of
+# GPU work in a single HIGH-priority DetectionTask, so an unbounded list lets a
+# caller enqueue detection over an entire library in one request. Mirrors the
+# batch-likeness cap above (reject over the limit rather than truncate).
+DETECT_MAX_IDS = 1000
+
+# Upper bound on picture_ids per bulk soft-delete request. A scoped token runs one
+# per-id scope DB read, and the delete pass one row fetch per id, so an unbounded
+# list would serialise that much work on the DB queue from a single request.
+# Mirrors the caps above; the frontend chunks larger selections into multiple calls.
+BULK_DELETE_MAX_IDS = 1000
+
+# Picture PATCH fields that are label/curation data and therefore frozen when the
+# picture belongs to a locked set. Organisation fields (e.g. project_id) are not
+# listed — they stay editable per the lock semantics.
+_LOCK_SENSITIVE_PATCH_FIELDS = frozenset({"description", "score"})
 
 
 class _DetectedFace:
@@ -153,6 +177,27 @@ class PictureFullMetadataResponse(BaseModel):
     tags: Optional[list] = None
     smartScore: Optional[float] = None
     metadata: Optional[dict] = None
+    locked: bool = Field(
+        default=False,
+        description=(
+            "True when a locked picture set freezes this picture's label data "
+            "(directly, or through a stack sibling). This is the authoritative "
+            "'is it frozen' signal and is always accurate, even for a share token "
+            "that may not see the locking set — use it to disable editing "
+            "controls. ``locked_by_sets`` may be empty while this is true."
+        ),
+    )
+    locked_by_sets: list[dict] = Field(
+        default=[],
+        description=(
+            "The locked sets freezing this picture, as ``{id, name}``, restricted "
+            "to the sets the caller's token may see (owner/unscoped sees all). A "
+            "resource-scoped share token is not told the id or the user-authored "
+            "name of a locked set outside its grant, so this list can be empty "
+            "while ``locked`` is true — render the 'Locked by <names>' detail only "
+            "when it is non-empty, and never derive locked-ness from its length."
+        ),
+    )
 
 
 class PictureFaceResponse(BaseModel):
@@ -171,6 +216,28 @@ class FaceDeleteResponse(BaseModel):
 
     status: str
     message: str
+
+
+class PictureDetectionResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: Optional[int] = None
+    picture_id: Optional[int] = None
+    frame_index: Optional[int] = None
+    detection_index: Optional[int] = None
+    label: Optional[str] = None
+    bbox: Optional[list] = None
+    score: Optional[float] = None
+    source: Optional[str] = None
+
+
+class DetectPicturesResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    task_id: Optional[str] = None
+    picture_ids: list[int] = []
+    prompt: str = ""
 
 
 class PictureCharacterLikenessResponse(BaseModel):
@@ -356,6 +423,18 @@ class PictureDeleteResponse(BaseModel):
 
     status: str
     message: str
+
+
+class BulkPictureDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    # Number of pictures newly soft-deleted by this request (already-deleted or
+    # missing ids are skipped and not counted).
+    deleted_count: int
+    # Picture ids skipped because a locked set freezes them (not deleted); unlock
+    # the set to delete them.
+    skipped_locked: list[int] = []
 
 
 def register_routes(router, server):
@@ -727,6 +806,103 @@ def register_routes(router, server):
             "reset_triggered": bool(reset_triggered),
         }
 
+    @router.post(
+        "/pictures/detect",
+        summary="Detect objects in pictures",
+        description=(
+            "Queues a user-triggered Florence-2 object-detection pass over a "
+            "batch of pictures. With an empty `prompt` it runs dense `<OD>` "
+            "detection; with a non-empty `prompt` it runs open-vocabulary "
+            "phrase grounding for that phrase. Detected labelled boxes are "
+            "stored per picture (replacing any previous detections) and "
+            "progress surfaces in the task manager."
+        ),
+        response_model=DetectPicturesResponse,
+    )
+    def detect_pictures(request: Request, payload: dict = Body(...)):
+        # Capture the originating tab's client id so the detection-complete
+        # event is attributed to this user's own action — the SPA suppresses the
+        # "view changed externally" pill for its own origin.
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        raw_ids = payload.get("picture_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        if len(raw_ids) > DETECT_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"picture_ids exceeds the maximum of {DETECT_MAX_IDS} ids per request",
+            )
+        try:
+            picture_ids = sorted(
+                {int(pid) for pid in raw_ids if pid is not None and int(pid) > 0}
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="picture_ids must contain valid positive integers",
+            ) from exc
+        if not picture_ids:
+            raise HTTPException(
+                status_code=400, detail="At least one valid picture id is required"
+            )
+
+        prompt = payload.get("prompt") or ""
+        if not isinstance(prompt, str):
+            prompt = str(prompt)
+        prompt = prompt.strip()
+
+        # Scope guard (BOLA): a scoped token may only run detection on pictures
+        # within its granted resource. None == owner / unscoped == no filter; an
+        # empty/disjoint set denies all (mirrors set_project_for_pictures).
+        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+        if scope_allowed is not None:
+            picture_ids = [pid for pid in picture_ids if pid in scope_allowed]
+            if not picture_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to access these pictures",
+                )
+
+        engine = getattr(server.vault, "_engine", None)
+        if engine is None:
+            raise HTTPException(
+                status_code=503, detail="Inference engine not available."
+            )
+
+        def fetch_pictures(session: Session, ids: list[int]):
+            return session.exec(
+                select(Picture).where(
+                    Picture.id.in_(ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+
+        pics = server.vault.db.run_immediate_read_task(fetch_pictures, picture_ids)
+        if not pics:
+            raise HTTPException(status_code=404, detail="No pictures found")
+
+        from pixlstash.tasks.detection_task import DetectionTask
+
+        task = DetectionTask(
+            server.vault.db,
+            engine,
+            list(pics),
+            prompt=prompt or None,
+            origin_client_id=origin_client_id,
+        )
+        task_id = server.vault.submit_task(task)
+        if task_id is None:
+            raise HTTPException(status_code=503, detail="Task runner not available.")
+
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "picture_ids": [pic.id for pic in pics],
+            "prompt": prompt,
+        }
+
     @router.get(
         "/pictures/{id}.{ext}",
         summary="Get original picture file",
@@ -936,6 +1112,25 @@ def register_routes(router, server):
         )
         pic_dict = safe_model_dict(pic)
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
+        # Locked sets freezing this picture, so the overlay can show the reason
+        # without a second request.
+        #
+        # `enforce_picture_scope` above authorizes the *picture*; it says nothing
+        # about the related entities named in its payload. A set-scoped token may
+        # legitimately read a picture that is also a member of some other, private
+        # locked set, and that set's user-authored name (which routinely carries a
+        # client / project / subject identifier) is not obtainable from
+        # `GET /picture_sets`. So the *fact* of the freeze is disclosed —
+        # `locked` is what the UI needs to disable the right controls — while the
+        # names are filtered down to the sets this token may actually see.
+        locked_sets = server.vault.db.run_immediate_read_task(
+            locked_by_sets_for_picture, pic.id
+        )
+        pic_dict["locked"] = bool(locked_sets)
+        visible_set_ids = fetch_scope_allowed_set_ids(server, request)
+        if visible_set_ids is not None:
+            locked_sets = [s for s in locked_sets if s["id"] in visible_set_ids]
+        pic_dict["locked_by_sets"] = locked_sets
 
         if smart_score:
             pic_dict["smartScore"] = pic.smart_score  # already stored in DB
@@ -1740,6 +1935,46 @@ def register_routes(router, server):
         }
 
     @router.get(
+        "/pictures/{id}/detections",
+        summary="Get picture detections",
+        description=(
+            "Returns the stored object-detection bounding boxes for a picture, "
+            "as produced by the Segment action. Boxes are pixel `xyxy` in the "
+            "original picture's coordinate space."
+        ),
+        response_model=list[PictureDetectionResponse],
+    )
+    def get_picture_detections(request: Request, id: str):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid picture id") from exc
+
+        # Object-level access check before any DB read, so the single return
+        # path is uniformly gated. Owner/unscoped sessions have token_scope is
+        # None and pass straight through; a scoped token outside this picture's
+        # grant gets a 403 here (mirrors get_picture / get_picture_field).
+        enforce_picture_scope(server, request, pic_id)
+
+        def fetch_detections(session: Session):
+            return Detection.find(session, picture_id=pic_id)
+
+        rows = server.vault.db.run_immediate_read_task(fetch_detections)
+        return [
+            {
+                "id": det.id,
+                "picture_id": det.picture_id,
+                "frame_index": det.frame_index,
+                "detection_index": det.detection_index,
+                "label": det.label,
+                "bbox": det.bbox,
+                "score": det.score,
+                "source": det.source,
+            }
+            for det in rows
+        ]
+
+    @router.get(
         "/pictures/{id}/{field}",
         include_in_schema=False,
         summary="Get raw picture field",
@@ -1824,7 +2059,11 @@ def register_routes(router, server):
         updated = False
         updated_fields = {}
         for key, value in params.items():
-            if not hasattr(pic, key):
+            # Validate the key against the mapped CLASS, not the instance:
+            # hasattr(pic, "tags") lazy-loads the tags relationship, which raises
+            # DetachedInstanceError (a 500) when pic is detached from its session.
+            # The class exposes the same mapped attributes without a DB access.
+            if not hasattr(type(pic), key):
                 logger.warning(
                     f"Picture does not have key '{key}' in PATCH request. Ignoring."
                 )
@@ -1852,6 +2091,10 @@ def register_routes(router, server):
                         pid: int,
                         new_tags: list[str],
                     ) -> None:
+                        # Tag replacement is label data — frozen on a locked pic.
+                        enforce_pictures_not_locked(
+                            session, [pid], "replace tags on a locked picture"
+                        )
                         session.exec(delete(Tag).where(Tag.picture_id == pid))
                         session.add_all([Tag(picture_id=pid, tag=t) for t in new_tags])
                         session.commit()
@@ -1880,6 +2123,14 @@ def register_routes(router, server):
                 pic_db = session.get(Picture, picture_id)
                 if pic_db is None:
                     raise KeyError("Picture not found")
+                # description and score are label/curation data — frozen on a
+                # picture in a locked set. Project assignment and other org fields
+                # remain editable, so only guard when a locked-sensitive field is
+                # actually being written.
+                if any(f in _LOCK_SENSITIVE_PATCH_FIELDS for f in fields):
+                    enforce_pictures_not_locked(
+                        session, [picture_id], "edit a locked picture"
+                    )
                 for field_name, field_value in fields.items():
                     setattr(pic_db, field_name, field_value)
                 session.add(pic_db)
@@ -2195,6 +2446,8 @@ def register_routes(router, server):
             pic = session.get(Picture, id)
             if not pic:
                 return False
+            # Soft-deleting a member would silently mutate a frozen set — refuse.
+            enforce_pictures_not_locked(session, [pic.id], "delete a locked picture")
             if pic.deleted:
                 return True
             pic.deleted = True
@@ -2231,3 +2484,90 @@ def register_routes(router, server):
         return JSONResponse(
             content={"status": "success", "message": f"Picture id={id} deleted."}
         )
+
+    @router.delete(
+        "/pictures",
+        summary="Bulk move pictures to scrapheap",
+        description=(
+            "Soft-deletes multiple pictures in one request by marking them deleted "
+            '(they appear in scrapheap views). Body: {"picture_ids": [int, ...]}. '
+            "Single-round-trip replacement for issuing one DELETE /pictures/{id} per "
+            "id, which floods the client connection pool on large selections."
+        ),
+        response_model=BulkPictureDeleteResponse,
+    )
+    def delete_pictures_bulk(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        maybe_ids = payload.get("picture_ids") if isinstance(payload, dict) else None
+        if not isinstance(maybe_ids, list) or not maybe_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        # Cap the id count so one request can't serialise unbounded per-id scope
+        # reads + row fetches on the DB queue (mirrors DETECT_MAX_IDS et al.).
+        if len(maybe_ids) > BULK_DELETE_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"picture_ids exceeds the maximum of {BULK_DELETE_MAX_IDS} "
+                    "ids per request"
+                ),
+            )
+        try:
+            pic_ids = [int(pid) for pid in maybe_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="picture_ids must contain valid integers"
+            )
+
+        # Scope guard (BOLA): enforce per-picture scope on EVERY id BEFORE any write,
+        # mirroring the single-delete guard in delete_picture. enforce_picture_scope
+        # fails closed (returns only for unscoped/owner tokens; 403s anything a scoped
+        # token can't reach), so a single out-of-scope id aborts the whole request and
+        # no partial soft-delete leaks outside the token's resource.
+        for pic_id in pic_ids:
+            enforce_picture_scope(server, request, pic_id)
+
+        def delete_pics(session, ids):
+            # Pictures frozen by a locked set are read-only: skip them (reporting
+            # which) rather than failing the whole batch, so the rest still delete.
+            locked = locked_picture_ids(session, ids)
+            newly_deleted: list[int] = []
+            affected_stacks: set = set()
+            for pid in ids:
+                if pid in locked:
+                    continue
+                pic = session.get(Picture, pid)
+                if not pic or pic.deleted:
+                    continue
+                pic.deleted = True
+                session.add(pic)
+                # Soft-deleting a stack member must not strand stack_position 0 (the
+                # whole stack would vanish from the grid). Collect the affected stacks
+                # and normalise each once after every selected member is marked deleted,
+                # so a still-live member is promoted to leader.
+                if pic.stack_id is not None:
+                    affected_stacks.add(pic.stack_id)
+                newly_deleted.append(pid)
+            for stack_id in affected_stacks:
+                normalize_stack_positions(session, stack_id)
+            session.commit()
+            return newly_deleted, sorted(locked)
+
+        deleted_ids, skipped_locked = server.vault.db.run_task(delete_pics, pic_ids)
+        # Soft-delete removes the cards from active grid views. Broadcast a single
+        # ``removed`` event so other tabs drop the stale cards in one update.
+        if deleted_ids:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": deleted_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "removed",
+                },
+            )
+        return {
+            "status": "success",
+            "deleted_count": len(deleted_ids),
+            "skipped_locked": skipped_locked,
+        }

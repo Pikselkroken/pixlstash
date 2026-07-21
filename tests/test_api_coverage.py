@@ -14,6 +14,7 @@ from pixlstash.server import Server
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks import TaskType
 from pixlstash.vault import Vault
+from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreRegistry
 from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -198,6 +199,7 @@ def _fake_vault_for_smart_score_completion(remaining_after_batch: int):
             return remaining_after_batch
 
     vault.db = _DB()
+    vault.interactive_rescore_registry = InteractiveRescoreRegistry()
     vault._notify_worker_ids_processed = lambda worker_type, changed: (
         worker_notifications.append((worker_type, changed))
     )
@@ -372,6 +374,25 @@ def test_add_remove_tag_to_picture():
         assert resp.status_code == 200
         tags_after = resp.json().get("tags", [])
         assert not any(t["tag"] == "mytesttag" for t in tags_after)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_patch_picture_with_tags_key_does_not_500():
+    # Regression: PATCH /pictures/{id} carrying a `tags` key used to 500 for
+    # everyone — hasattr(pic, "tags") lazy-loaded the tags relationship on a
+    # session-detached Picture (DetachedInstanceError) before any handler ran.
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+
+        resp = client.patch(f"/pictures/{pic_id}", json={"tags": ["alpha", "beta"]})
+        assert resp.status_code == 200, resp.text
+
+        tags = client.get(f"/pictures/{pic_id}/tags").json().get("tags", [])
+        assert {t["tag"] for t in tags} == {"alpha", "beta"}
     finally:
         server.vault.close()
         temp_dir.cleanup()

@@ -20,8 +20,18 @@ Use the following architecture documents depending on the scope of the task:
 3. Full‑stack tasks (involving both frontend and backend):
    Read and follow both documents plus `/docs/integration_architecture.md` for guidance on how to integrate frontend and backend changes effectively.
 
+4. Any task that adds or changes UI (a new feature, a component, a screen, a control):
+   The **design manual in `/docs/design/` is mandatory, not advisory.** Read
+   `/docs/design/visual-language.md` and build against the tokens in
+   `/docs/design/design-tokens.css` and the color themes in `frontend/src/main.js`.
+   New UI must use the existing tokens (spacing, radius, type ramp, elevation, motion,
+   color) — never a hardcoded hex, off-grid spacing, ad-hoc radius, raw `rgba(0,0,0,…)`
+   shadow, or `em`/`px` font-size outside the ramp. A genuinely new value is a design
+   decision: route it to the `lead-designer` skill, do not inline a one-off. Anything
+   that changes a flow, a state, or what a control does also goes past the `ui-ux-expert`.
+
 Task classification rules:
-- If the task involves UI, components, state management, routing, or client-side logic → treat it as a frontend task.
+- If the task involves UI, components, state management, routing, or client-side logic → treat it as a frontend task **and apply the design manual (item 4)**.
 - If the task involves APIs, storage, indexing, ML pipelines, or server-side logic → treat it as a backend task.
 - If the task touches both (e.g., API changes that require UI updates) → treat it as a full‑stack task.
 
@@ -40,6 +50,8 @@ This repo ships role-specific **skills** — personas with their own expertise (
 | Routine backend work that copies an existing pattern (mirror a CRUD endpoint, add a field + migration, straightforward tests, obvious bugfix, type hints/docstrings) | `junior-backend-developer` |
 | Frontend code: Vue 3, JS, HTML, CSS, state/data flow, routing, browser/CORS/CSP issues, rendering | `senior-frontend-developer` |
 | Routine frontend work that mirrors an existing component (presentational component, props/emits, simple layout fix, basic route/computed, a11y attributes, copy) | `junior-frontend-developer` |
+| Visual language: the design manual in `/docs/design/`, tokens, type/color/spacing/iconography, making UI look sleek and consistently PixlStash, auditing visual drift | `lead-designer` |
+| Usability: flows, information hierarchy, discoverability, accessibility (WCAG), keyboard/power-user efficiency, anything that changes what a control does or how a screen behaves | `ui-ux-expert` |
 | ML: training/fine-tuning, model eval, embeddings, captioning, quality scoring, architecture/dataset choices | `machine-learning-expert` |
 | ComfyUI graphs, nodes, model selection, generation/upscale/inpaint pipelines | `comfyui-workflow-wizard` |
 | CI/CD, GitHub Actions, pipeline speed/flakiness, release automation, the `pixlstash-metrics` collector | `ci-expert` |
@@ -81,7 +93,7 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 ## Task System
 
 - The TaskRunner class manages asynchronous tasks, allowing for background processing of image quality calculations and other operations without blocking the main server thread.
-- Work is first found using the WorkPlanner which has multiple WorkFinders registered to find different types of work (e.g., quality calculation, metadata extraction).
+- Work is first found using the WorkPlanner (`pixlstash/work_planner.py`), whose `work_finders()` returns the registered finder instances that locate different types of work (e.g., quality calculation, metadata extraction). Each finder is a `Missing*Finder`/`*Finder` subclass of `BaseTaskFinder` in `pixlstash/tasks/`.
 - Once work is found a new Task for a batch of images is created and added to the TaskRunner's queue.
 - The TaskRunner continuously processes tasks from the queue, executing the associated work function, reporting progress and handling results.
 
@@ -99,7 +111,7 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
   - **Feature branch (schema still in flux):** it's fine to amend, squash, or merge migrations rather than stacking multiple migrations for the same change. Keep the migration history tidy before it lands.
   - **`main` branch:** strict patterns apply. A migration on `main` must never be modified; all subsequent schema changes go in new migration files. (Reason: anything on `main` may already have been deployed and run, so altering an existing migration would leave those databases divergent.)
 - Place schema upgrade steps in strictly increasing version order; never insert a migration out of sequence, so upgrades always apply in the correct order.
-- The Alembic revision identifier variables (`revision`, `down_revision`, `branch_labels`, `depends_on`) are read by Alembic at runtime via module import, not by explicit code references. Declare them as exported by including `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]` after the `depends_on` line. This prevents false "unused variable" warnings from static analysers (including CodeQL) without needing `# noqa` comments. The script template (`migrations/script.py.mako`) already includes this line, so new migrations will have it automatically.
+- The Alembic revision identifier variables (`revision`, `down_revision`, `branch_labels`, `depends_on`) are read by Alembic at runtime via module import, not by explicit code references. Declare them as exported by including `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]` after the `depends_on` line. This prevents false "unused variable" warnings from static analysers (including CodeQL) without needing `# noqa` comments. The script template (`pixlstash/migrations/script.py.mako`) already includes this line, so new migrations will have it automatically.
 - When a code change requires existing data to be regenerated (e.g. tags, embeddings, quality scores), trigger reprocessing by resetting the relevant column(s) to `NULL` in the Alembic migration script. The `Missing*Finder` classes in `pixlstash/tasks/` query for pictures with `NULL` values and will automatically pick up those rows for reprocessing when the server next runs. Alembic migrations should only contain schema changes and this kind of targeted `NULL`-reset; no application logic should be placed in migrations.
 - **All `op.add_column` calls must be conditional.** Always use `sa.inspect(op.get_bind())` to fetch existing columns and skip the `add_column` if the column already exists. The baseline migration (`0001_baseline`) uses `SQLModel.metadata.create_all()`, which creates tables with all current model columns; later migrations that blindly run `ALTER TABLE … ADD COLUMN` will therefore fail on a fresh database. The standard pattern is:
   ```python
@@ -112,7 +124,7 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 ## Developer Workflows
 
 - **Install dependencies:** `pip install -e .`
-- **Run server:** `python -m pixlstash.server`
+- **Run server:** `python -m pixlstash.app`
 - **Run tests:** `python -m pytest -s -vvv --fast-captions --force-cpu`
 - **Check formatting:** `ruff check pixlstash`
 - **Build frontend:** `npm run build` (in `frontend/`)

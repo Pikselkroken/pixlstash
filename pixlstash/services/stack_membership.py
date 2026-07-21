@@ -86,6 +86,22 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
     if len(member_ids) < 2:
         return False
 
+    # Defense in depth, evaluated before *any* mutation below so a refusal never
+    # leaves a half-reconciled stack: the union performed here would add members
+    # to every set any member belongs to, and a locked set's membership cannot
+    # change. The stack routes run the same guard up-front; this catches any
+    # caller that skips it.
+    #
+    # Imported locally because set_lock_service imports this module
+    # (expand_picture_ids_to_stacks), so a module-level import would be circular.
+    from pixlstash.services.set_lock_service import (
+        enforce_stack_membership_not_locked,
+    )
+
+    enforce_stack_membership_not_locked(
+        session, member_ids, stack_id, "stack pictures together"
+    )
+
     changed = False
 
     # --- Project membership: union of all members' projects ---

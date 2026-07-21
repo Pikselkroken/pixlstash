@@ -11,6 +11,7 @@ from pixlstash.db_models import (
     is_tag_sentinel,
     parse_tag_engine_from_sentinel,
 )
+from pixlstash.services.set_lock_service import locked_picture_id_subquery
 from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask
@@ -105,9 +106,22 @@ class MissingTagFinder(BaseTaskFinder):
         has_sentinel = Tag.tag.like(
             TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
         )
+        # A picture frozen by a locked set keeps its confirmed tags: never re-queue
+        # it for tagging (the write-side skip in TagTask is the belt; this is the
+        # braces, and it avoids re-queuing a locked picture that still carries a
+        # stray retag sentinel on every finder pass).
+        #
+        # Must be the shared set_lock_service predicate, not a local
+        # PictureSetMember join. The local join had no stack arm, while TagTask's
+        # write guard (`locked_picture_ids`) does: a picture merely *sharing a
+        # stack* with a locked-set member was therefore selected here, ran full
+        # GPU tagging, had its write skipped, kept its retag sentinel, and was
+        # selected again on the very next sweep — an unbounded inference loop.
+        # One definition on both sides is what closes it.
+        locked_member = ~Picture.id.in_(locked_picture_id_subquery())
         return session.exec(
             select(Picture)
-            .where(Picture.tags.any(has_sentinel))
+            .where(Picture.tags.any(has_sentinel), locked_member)
             .options(
                 selectinload(Picture.tags),
             )

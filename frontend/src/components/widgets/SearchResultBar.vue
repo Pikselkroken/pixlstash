@@ -70,14 +70,14 @@ const showSearchAll = computed(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 72px 8px 16px;
+  padding: var(--space-3) 72px var(--space-3) var(--space-5);
   box-shadow: 0 -2px 4px rgba(var(--v-theme-shadow), 0.1);
 }
 
 .search-result-status {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .search-result-spinner {
@@ -91,6 +91,6 @@ const showSearchAll = computed(
 .search-result-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 </style>

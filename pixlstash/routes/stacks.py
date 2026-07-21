@@ -8,6 +8,7 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
+from pixlstash.services.set_lock_service import enforce_stack_membership_not_locked
 from pixlstash.services.stack_membership import reconcile_stack_membership
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
@@ -102,11 +103,13 @@ def create_router(server) -> APIRouter:
             penalised_tags = get_smart_score_penalised_tags_from_request(
                 server, request
             )
-            good_anchors, bad_anchors, candidates = fetch_smart_score_data(
-                server,
-                None,
-                candidate_ids=picture_ids,
-                penalised_tags=penalised_tags,
+            good_anchors, bad_anchors, candidates, tag_precisions = (
+                fetch_smart_score_data(
+                    server,
+                    None,
+                    candidate_ids=picture_ids,
+                    penalised_tags=penalised_tags,
+                )
             )
             if candidates:
                 good_list, bad_list, cand_list, cand_ids = prepare_smart_score_inputs(
@@ -116,7 +119,10 @@ def create_router(server) -> APIRouter:
                 )
                 if cand_list:
                     scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
-                        cand_list, good_list, bad_list
+                        cand_list,
+                        good_list,
+                        bad_list,
+                        config={"tag_precisions": tag_precisions},
                     )
                     return {
                         int(pid): float(score)
@@ -372,6 +378,14 @@ def create_router(server) -> APIRouter:
                     detail=f"Pictures not found: {missing}",
                 )
 
+            # Stacks are set-membership-atomic, so stacking these pictures would
+            # add each of them to every set any of them belongs to. Refuse up
+            # front — before any row is written or committed below — if that
+            # would grow a locked set.
+            enforce_stack_membership_not_locked(
+                session, picture_ids, None, "create a stack"
+            )
+
             existing_stack_ids = {pic.stack_id for pic in pictures if pic.stack_id}
             if len(existing_stack_ids) > 1:
                 # Merge: keep the stack whose leader appears first in the incoming
@@ -585,6 +599,12 @@ def create_router(server) -> APIRouter:
                     status_code=409,
                     detail=f"Pictures already in another stack: {sorted(conflicts)}",
                 )
+
+            # Refuse before any mutation if joining this stack would add a member
+            # to a locked set (stacks are set-membership-atomic).
+            enforce_stack_membership_not_locked(
+                session, picture_ids, stack_id, "add pictures to a stack"
+            )
 
             existing_positions = []
             rows = session.exec(

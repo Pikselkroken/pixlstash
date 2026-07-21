@@ -39,6 +39,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -583,6 +584,7 @@ def create_router(server) -> APIRouter:
         response_model=CharacterMutationResponse,
     )
     async def patch_character(id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         data = await request.json()
         name = data.get("name")
         description = data.get("description")
@@ -722,13 +724,24 @@ def create_router(server) -> APIRouter:
                             session.add(pic)
                         local_project_membership_updated = bool(picture_ids)
 
-                    # Clear text embeddings for all pictures of this character
-                    for face in session.exec(
-                        select(Face).where(Face.character_id == id)
-                    ).all():
-                        pic = session.get(Picture, face.picture_id)
+                    # Invalidate machine-derived fields for this character's
+                    # pictures so they are re-derived after the change. The text
+                    # embedding is machine-derived (rule 4) and always cleared, but
+                    # the description is frozen on a locked picture (rule 3): skip
+                    # clearing it there. Character reassignment itself stays allowed.
+                    character_pic_ids = [
+                        face.picture_id
+                        for face in session.exec(
+                            select(Face).where(Face.character_id == id)
+                        ).all()
+                        if face.picture_id is not None
+                    ]
+                    locked_pics = locked_picture_ids(session, character_pic_ids)
+                    for pic_id in character_pic_ids:
+                        pic = session.get(Picture, pic_id)
                         if pic:
-                            pic.description = None
+                            if pic.id not in locked_pics:
+                                pic.description = None
                             pic.text_embedding = None
                             session.add(pic)
 
@@ -749,9 +762,19 @@ def create_router(server) -> APIRouter:
                 project_id,
                 priority=DBPriority.IMMEDIATE,
             )
-            server.vault.notify(EventType.CHANGED_CHARACTERS)
+            server.vault.notify(
+                EventType.CHANGED_CHARACTERS,
+                {"origin_client_id": origin_client_id},
+            )
             if project_membership_updated:
-                server.vault.notify(EventType.CHANGED_PICTURES)
+                server.vault.notify(
+                    EventType.CHANGED_PICTURES,
+                    {
+                        "source": "ui",
+                        "origin_client_id": origin_client_id,
+                        "change_kind": "updated",
+                    },
+                )
 
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
@@ -764,7 +787,8 @@ def create_router(server) -> APIRouter:
         description="Deletes a character, clears character assignment from faces, and removes its reference set when present.",
         response_model=CharacterDeleteResponse,
     )
-    def delete_character(id: int):
+    def delete_character(id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
 
             def clear_character_and_nullify_faces(session: Session, character_id: int):
@@ -803,7 +827,10 @@ def create_router(server) -> APIRouter:
                 id,
                 priority=DBPriority.IMMEDIATE,
             )
-            server.vault.notify(EventType.CHANGED_CHARACTERS)
+            server.vault.notify(
+                EventType.CHANGED_CHARACTERS,
+                {"origin_client_id": origin_client_id},
+            )
             return {"status": "success", "deleted_id": id}
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
@@ -1232,7 +1259,8 @@ def create_router(server) -> APIRouter:
         description="Creates a character and its linked reference picture set.",
         response_model=CharacterMutationResponse,
     )
-    def create_character(payload: dict = Body(...)):
+    def create_character(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
 
             def create_character_and_reference_set(session, payload):
@@ -1263,7 +1291,10 @@ def create_router(server) -> APIRouter:
                 priority=DBPriority.IMMEDIATE,
             )
             logger.debug("Created character: {}".format(char_dict))
-            server.vault.notify(EventType.CHANGED_CHARACTERS)
+            server.vault.notify(
+                EventType.CHANGED_CHARACTERS,
+                {"origin_client_id": origin_client_id},
+            )
             return {"status": "success", "character": char_dict}
         except Exception as e:
             logger.error(f"Error creating character: {e}")

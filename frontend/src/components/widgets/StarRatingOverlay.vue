@@ -104,7 +104,7 @@ function cycleRating() {
 .star-overlay--number {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   cursor: pointer;
   line-height: 1;
 }
@@ -124,7 +124,7 @@ function cycleRating() {
 
 .star-number-label {
   font-size: 0.9em;
-  font-weight: 700;
+  font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-accent));
   line-height: 1;
   display: flex;

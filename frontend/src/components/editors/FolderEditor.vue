@@ -285,7 +285,59 @@
             </div>
           </div>
 
-          <!-- Path display (edit mode) -->
+          <!-- Reference path input (edit mode, non-Docker) -->
+          <div
+            v-else-if="isEditMode && !isImport && !props.inDocker"
+            class="editor-path-display editor-path-display--with-action"
+          >
+            <v-icon size="16" class="editor-path-icon"
+              >mdi-folder-network-outline</v-icon
+            >
+            <span class="editor-path-text" :title="activeFolder?.folder">{{
+              activeFolder?.folder
+            }}</span>
+            <v-btn
+              variant="outlined"
+              size="small"
+              icon
+              class="editor-relocate-btn"
+              title="Relocate folder and move files"
+              @click="
+                emit('relocate', activeFolder);
+                emit('close');
+              "
+            >
+              <v-icon size="18">mdi-folder-move-outline</v-icon>
+            </v-btn>
+          </div>
+
+          <!-- Reference path inputs (edit mode, Docker) -->
+          <div
+            v-else-if="isEditMode && !isImport && props.inDocker"
+            class="editor-docker-helper"
+          >
+            <v-text-field
+              ref="pathInputRef"
+              v-model="localHostPath"
+              label="Local folder (host path)"
+              placeholder="/home/you/Pictures"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+            <v-text-field
+              v-model="localPath"
+              label="Container path"
+              placeholder="/data/ref/pictures-001"
+              density="comfortable"
+              variant="filled"
+              hide-details
+              @keydown.enter="save"
+            />
+          </div>
+
+          <!-- Path display (edit mode for import folders) -->
           <div v-else class="editor-path-display">
             <v-icon size="16" class="editor-path-icon">{{
               isImport ? "mdi-folder-import" : "mdi-folder-network-outline"
@@ -623,7 +675,7 @@ const props = defineProps({
   imageRoot: { type: String, default: null },
 });
 
-const emit = defineEmits(["close", "saved", "deleted"]);
+const emit = defineEmits(["close", "saved", "deleted", "relocate"]);
 
 // --- Type-derived helpers ---
 
@@ -676,7 +728,16 @@ const activeFolder = computed(() => props.folder ?? frozenEditFolder.value);
 const isEditMode = computed(() => Boolean(activeFolder.value));
 
 const isValid = computed(() => {
-  if (isEditMode.value) return true;
+  if (isEditMode.value) {
+    if (!isImport.value && props.inDocker) {
+      return (
+        localPath.value.trim().length > 0 &&
+        localHostPath.value.trim().length > 0
+      );
+    }
+    if (!isImport.value) return localPath.value.trim().length > 0;
+    return true;
+  }
   if (props.inDocker) return localHostPath.value.trim().length > 0;
   return localPath.value.trim().length > 0;
 });
@@ -958,6 +1019,7 @@ watch(
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       localLabel.value = editingFolder.label || "";
+      localPath.value = editingFolder.folder || "";
       localHostPath.value = String(editingFolder.host_path || "");
       localDeleteAfterImport.value = Boolean(editingFolder.delete_after_import);
       localSyncDescriptions.value = Boolean(editingFolder.sync_descriptions);
@@ -1111,12 +1173,20 @@ async function save() {
   saveLoading.value = true;
   saveError.value = "";
   try {
+    let savedResponse = null;
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       const patchData = { label: localLabel.value.trim() || null };
       if (isImport.value) {
         patchData.delete_after_import = localDeleteAfterImport.value;
       } else {
+        const editedPath = localPath.value.trim();
+        if (editedPath && editedPath !== editingFolder.folder) {
+          patchData.folder = editedPath;
+        }
+        if (props.inDocker) {
+          patchData.host_path = localHostPath.value.trim() || null;
+        }
         patchData.allow_delete_file = localAllowDelete.value;
         patchData.sync_descriptions = localSyncDescriptions.value;
         patchData.sync_tags = localSyncTags.value;
@@ -1128,7 +1198,10 @@ async function save() {
             DEFAULT_DESCRIPTION_SUFFIX,
           ) ?? null;
       }
-      await apiClient.patch(`${apiBase.value}/${editingFolder.id}`, patchData);
+      savedResponse = await apiClient.patch(
+        `${apiBase.value}/${editingFolder.id}`,
+        patchData,
+      );
     } else {
       const pathToSave = props.inDocker
         ? dockerSuggestedPath.value
@@ -1156,9 +1229,9 @@ async function save() {
           DEFAULT_DESCRIPTION_SUFFIX,
         );
       }
-      await apiClient.post(apiBase.value, createData);
+      savedResponse = await apiClient.post(apiBase.value, createData);
     }
-    emit("saved");
+    emit("saved", savedResponse?.data || null);
   } catch (error) {
     saveError.value =
       error?.response?.data?.detail || `Failed to save ${props.type} folder.`;
@@ -1224,22 +1297,22 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-header {
-  font-size: 1.1rem;
-  font-weight: 600;
-  padding: 20px 20px 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-6) var(--space-6) var(--space-3);
 }
 
 .editor-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px 20px 8px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6) var(--space-3);
 }
 
 .editor-path-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .editor-path-row .v-text-field {
@@ -1247,28 +1320,28 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-browse-btn {
-  margin-top: 4px;
+  margin-top: var(--space-2);
   flex-shrink: 0;
 }
 
 .editor-docker-helper {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 2px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
 }
 
 .editor-docker-path-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-surface-variant), 0.35);
 }
 
 .editor-docker-path-label {
-  font-size: 0.74rem;
+  font-size: var(--text-2xs);
   opacity: 0.7;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1280,39 +1353,39 @@ async function copyToClipboard(value, successMessage) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: monospace;
-  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
 }
 
 .editor-docker-instructions {
   border: 1px solid rgba(var(--v-theme-primary), 0.22);
   background: rgba(var(--v-theme-primary), 0.06);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 0.8rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
   line-height: 1.35;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .editor-docker-instructions ol {
   margin: 0;
-  padding-left: 16px;
+  padding-left: var(--space-5);
 }
 
 .editor-docker-title {
-  font-size: 0.82rem;
-  font-weight: 600;
-  margin-bottom: 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--space-2);
 }
 
 .editor-docker-format-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .editor-docker-format-row .editor-docker-title {
@@ -1324,7 +1397,7 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-docker-note {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   opacity: 0.75;
   line-height: 1.32;
 }
@@ -1336,17 +1409,17 @@ async function copyToClipboard(value, successMessage) {
 .editor-docker-snippet-wrap {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .editor-docker-snippet {
   flex: 1;
   display: block;
-  padding: 6px 8px;
-  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-dark-surface), 0.55);
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   white-space: nowrap;
   overflow: auto hidden;
 }
@@ -1359,24 +1432,28 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-copy-btn {
   flex-shrink: 0;
-  margin-top: 1px;
+  margin-top: var(--space-1);
 }
 
 .editor-copy-status {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-accent));
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .editor-path-display {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: rgba(var(--v-theme-surface-variant), 0.4);
-  border-radius: 6px;
-  font-size: 0.82rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
   opacity: 0.85;
+}
+
+.editor-path-display--with-action {
+  opacity: 1;
 }
 
 .editor-path-icon {
@@ -1385,22 +1462,27 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-path-text {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: monospace;
+  font-family: var(--font-mono);
+}
+
+.editor-relocate-btn {
+  flex-shrink: 0;
 }
 
 .editor-toggle-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .editor-toggle-desc {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   opacity: 0.65;
-  padding-left: 36px;
+  padding-left: var(--space-7);
 }
 
 .editor-toggle-desc--warning {
@@ -1410,19 +1492,19 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-sync-section {
   border: 1px solid rgba(var(--v-theme-primary), 0.18);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
 .editor-sync-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--space-3) var(--space-4);
   background: rgba(var(--v-theme-primary), 0.06);
-  font-size: 0.86rem;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   text-align: left;
   cursor: pointer;
   border: none;
@@ -1435,54 +1517,54 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-sync-summary {
   margin-left: auto;
-  font-size: 0.76rem;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   opacity: 0.7;
 }
 
 .editor-sync-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--space-4);
+  padding: var(--space-4);
 }
 
 .editor-sync-intro {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   opacity: 0.75;
   line-height: 1.4;
 }
 
 .editor-sync-suffix {
-  padding-left: 36px;
+  padding-left: var(--space-7);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .editor-sync-detected {
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-accent));
 }
 
 .editor-error {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-error));
   background: rgba(var(--v-theme-error), 0.08);
   border: 1px solid rgba(var(--v-theme-error), 0.22);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-3);
 }
 
 .editor-delete-confirm {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: rgba(var(--v-theme-error), 0.08);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-error), 0.25);
-  font-size: 0.86rem;
+  font-size: var(--text-sm);
 }
 
 .editor-delete-confirm-text {
@@ -1492,8 +1574,8 @@ async function copyToClipboard(value, successMessage) {
 .editor-footer {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px 16px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) var(--space-5);
 }
 
 .editor-delete-btn {

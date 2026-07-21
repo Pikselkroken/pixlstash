@@ -4,12 +4,13 @@ import os
 import re
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
+from pixlstash.utils.service.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
 
@@ -55,8 +56,59 @@ class FilesystemBrowseResponse(BaseModel):
     entries: list[FilesystemEntry]
 
 
+class FilesystemCreateFolderRequest(BaseModel):
+    path: str
+
+
+class FilesystemCreateFolderResponse(BaseModel):
+    status: str
+    path: str
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
+
+    def _require_owner_filesystem_request(request: Request) -> None:
+        server.auth.require_user_id(request)
+        if getattr(request.state, "token_scope", None) is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Filesystem browsing is not available for token-authenticated requests.",
+            )
+        if server.running_in_docker():
+            raise HTTPException(
+                status_code=403,
+                detail="Filesystem browsing is not available in Docker mode.",
+            )
+
+    def _allowed_roots() -> list[str]:
+        return [
+            os.path.realpath(r)
+            for r in (server._server_config.get("filesystem_roots") or [])
+            if isinstance(r, str) and r
+        ]
+
+    def _resolve_safe_directory_path(path: str) -> str:
+        validation_error = validate_reference_folder_path(path)
+        if validation_error:
+            raise HTTPException(status_code=400, detail=validation_error)
+
+        resolved = os.path.realpath(os.path.normpath(path))
+        allowed_roots = _allowed_roots()
+        if allowed_roots:
+            if not any(
+                resolved == root or resolved.startswith(root + os.sep)
+                for root in allowed_roots
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Path is not within any configured filesystem root.",
+                )
+
+        _m = _SAFE_RESOLVED_PATH_RE.fullmatch(resolved)
+        if not _m:
+            raise HTTPException(status_code=400, detail="Invalid path.")
+        return _m.group(0)
 
     @router.get(
         "/filesystem/browse",
@@ -78,55 +130,14 @@ def create_router(server) -> APIRouter:
             default=False, description="Include hidden (dot-prefixed) entries."
         ),
     ):
-        server.auth.require_user_id(request)
-
-        if getattr(request.state, "token_scope", None) is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Filesystem browsing is not available for token-authenticated requests.",
-            )
-
-        if server.running_in_docker():
-            raise HTTPException(
-                status_code=403,
-                detail="Filesystem browsing is not available in Docker mode.",
-            )
+        _require_owner_filesystem_request(request)
 
         browse_path = path or os.path.expanduser("~")
-
-        validation_error = validate_reference_folder_path(browse_path)
-        if validation_error:
-            raise HTTPException(status_code=400, detail=validation_error)
-
         # Canonicalize: os.path.realpath resolves all symlinks and '..' segments,
         # guaranteeing an absolute path with no traversal sequences.
-        resolved = os.path.realpath(os.path.normpath(browse_path))
-
-        # If filesystem_roots are configured, the resolved path must fall under
-        # one of them. The allowed roots come from server-config.json — not from
-        # the HTTP request — so they are not user-controlled.
-        allowed_roots: list[str] = [
-            os.path.realpath(r)
-            for r in (server._server_config.get("filesystem_roots") or [])
-            if isinstance(r, str) and r
-        ]
-        if allowed_roots:
-            if not any(
-                resolved == root or resolved.startswith(root + os.sep)
-                for root in allowed_roots
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Path is not within any configured filesystem root.",
-                )
-
         # re.fullmatch().group(0) is the CodeQL-recognised path-injection barrier
-        # for Python. We apply it to the canonical resolved string as a whole —
-        # no null bytes, no newlines — rather than splitting into components.
-        _m = _SAFE_RESOLVED_PATH_RE.fullmatch(resolved)
-        if not _m:
-            raise HTTPException(status_code=400, detail="Invalid path.")
-        safe_browse_path = _m.group(0)
+        # for Python. We apply it to the canonical resolved string as a whole.
+        safe_browse_path = _resolve_safe_directory_path(browse_path)
 
         if not os.path.isdir(safe_browse_path):
             raise HTTPException(status_code=404, detail="Directory not found.")
@@ -145,17 +156,10 @@ def create_router(server) -> APIRouter:
             # Keep results constrained to the browsed directory even if an
             # entry is a symlink that points somewhere else.
             try:
-                safe_entry_path = os.path.realpath(
-                    os.path.join(safe_browse_path, entry.name)
-                )
-                if (
-                    safe_entry_path != safe_browse_path
-                    and not safe_entry_path.startswith(
-                        safe_browse_path + os.sep,
-                    )
-                ):
+                safe_entry_path = resolve_path_within(safe_browse_path, entry.name)
+                if safe_entry_path == safe_browse_path:
                     continue
-            except OSError:
+            except (OSError, ValueError):
                 # Skip entries that cannot be resolved within the parent directory (e.g. broken symlinks or entries with permission issues).
                 continue
 
@@ -193,5 +197,40 @@ def create_router(server) -> APIRouter:
             image_count=image_count,
             entries=entries,
         )
+
+    @router.post(
+        "/filesystem/folders",
+        summary="Create a server filesystem folder",
+        description=(
+            "Creates a new directory for native owner installs. Used by the "
+            "folder picker when choosing relocation destinations."
+        ),
+        response_model=FilesystemCreateFolderResponse,
+    )
+    def create_filesystem_folder(
+        request: Request,
+        payload: FilesystemCreateFolderRequest = Body(...),
+    ):
+        _require_owner_filesystem_request(request)
+        target = _resolve_safe_directory_path(payload.path)
+        parent = os.path.dirname(target)
+        if not os.path.isdir(parent):
+            raise HTTPException(status_code=404, detail="Parent folder not found.")
+        try:
+            target = resolve_path_within(parent, os.path.basename(target))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid folder path.")
+        if os.path.exists(target):
+            raise HTTPException(status_code=409, detail="Folder already exists.")
+        try:
+            os.mkdir(target)
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied.")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not create folder: {exc}",
+            )
+        return FilesystemCreateFolderResponse(status="success", path=target)
 
     return router

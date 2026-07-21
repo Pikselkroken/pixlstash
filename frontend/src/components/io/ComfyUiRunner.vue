@@ -1,36 +1,22 @@
 <template>
+  <!-- In-progress and completing runs render in the Tasks tab (the task
+       manager). Only the failed state shows inline, so an error is always
+       visible even when the stats sidebar is collapsed. -->
   <div
-    v-if="progress.visible"
-    class="comfyui-progress"
-    :class="{ 'comfyui-progress-error': progress.status === 'failed' }"
+    v-if="progress.visible && progress.status === 'failed'"
+    class="comfyui-progress comfyui-progress-error"
   >
     <div class="comfyui-progress-header">
       <div class="comfyui-progress-title">
         {{ progress.message }}
       </div>
       <button
-        v-if="progress.status !== 'completed' && progress.status !== 'failed'"
-        class="comfyui-abort-btn"
-        :disabled="isAborting"
-        title="Abort ComfyUI workflow"
-        @click.stop="abortComfyui"
-      >
-        {{ isAborting ? "…" : "✕" }}
-      </button>
-      <button
-        v-else-if="progress.status === 'failed'"
         class="comfyui-abort-btn"
         title="Dismiss ComfyUI error"
         @click.stop="dismissComfyuiProgress"
       >
         ✕
       </button>
-    </div>
-    <div class="comfyui-progress-bar">
-      <div
-        class="comfyui-progress-fill"
-        :style="{ width: `${progressPercent}%` }"
-      ></div>
     </div>
   </div>
 </template>
@@ -66,6 +52,7 @@
 import { ref, reactive, computed, onUnmounted, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
   backendUrl: { type: String, default: "" },
@@ -97,6 +84,35 @@ const progress = reactive({
   percent: 0,
   message: "ComfyUI running...",
 });
+
+// Mirror this runner's progress into the tasks store so it shows up as a row in
+// the Tasks tab (the "task manager") and drives the app-wide activity light.
+// Each runner instance (one in the grid, one in the overlay) owns a stable id.
+// Only in-progress / completing runs go to the store; the failed state stays in
+// the inline banner below so an error is never buried in a collapsed sidebar.
+const tasksStore = useTasksStore();
+const tasksRunId = `comfyui-${Math.random().toString(36).slice(2, 10)}`;
+tasksStore.registerComfyuiAbort(tasksRunId, () => abortComfyui());
+watch(
+  () => ({
+    visible: progress.visible,
+    status: progress.status,
+    percent: progress.percent,
+    message: progress.message,
+  }),
+  ({ visible, status, percent, message }) => {
+    if (visible && status !== "failed") {
+      tasksStore.setComfyuiRun(tasksRunId, {
+        status,
+        percent,
+        message,
+        label: "ComfyUI",
+      });
+    } else {
+      tasksStore.clearComfyuiRun(tasksRunId);
+    }
+  },
+);
 
 const comfyuiActivePromptIds = ref(new Set());
 const comfyuiCompletedPromptIds = ref(new Set());
@@ -999,6 +1015,8 @@ onUnmounted(() => {
   stopComfyuiWatchdog();
   clearComfyuiHideTimer();
   clearComfyuiRefreshRetries();
+  tasksStore.clearComfyuiRun(tasksRunId);
+  tasksStore.unregisterComfyuiAbort(tasksRunId);
   if (comfyuiWs) {
     comfyuiWs.close();
     comfyuiWs = null;
@@ -1028,31 +1046,32 @@ defineExpose({
   z-index: 120;
   background: rgba(var(--v-theme-dark-surface), 0.75);
   color: rgb(var(--v-theme-on-dark-surface));
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-md);
   min-width: 180px;
-  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
+  box-shadow: var(--elevation-3);
   backdrop-filter: blur(6px);
   max-width: min(85vw, 560px);
 }
 
 .comfyui-progress.comfyui-progress-error {
-  background: rgba(120, 18, 18, 0.96);
+  background: rgba(var(--v-theme-error), 0.96);
   color: rgb(var(--v-theme-on-dark-surface));
-  border: 1px solid rgba(255, 130, 130, 0.72);
-  box-shadow: 0 10px 26px rgba(90, 10, 10, 0.45);
+  border: 1px solid rgba(var(--v-theme-error), 0.72);
+  box-shadow: var(--elevation-4);
 }
 
 .comfyui-progress-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: var(--space-3);
+  /* No body beneath it now (the banner is error-only), so no bottom gap. */
+  margin-bottom: 0;
 }
 
 .comfyui-progress-title {
-  font-size: 0.8em;
+  font-size: var(--text-sm);
   flex: 1;
   white-space: normal;
   line-height: 1.35;
@@ -1065,12 +1084,12 @@ defineExpose({
   flex-shrink: 0;
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-dark-surface));
   cursor: pointer;
-  font-size: 0.75em;
+  font-size: var(--text-xs);
   line-height: 1;
-  padding: 2px 5px;
+  padding: var(--space-1) var(--space-2);
   opacity: 0.7;
   transition:
     opacity 0.15s,
@@ -1079,34 +1098,11 @@ defineExpose({
 
 .comfyui-abort-btn:hover:not(:disabled) {
   opacity: 1;
-  background: rgba(220, 60, 60, 0.7);
+  background: rgba(var(--v-theme-error), 0.7);
 }
 
 .comfyui-abort-btn:disabled {
   cursor: default;
   opacity: 0.4;
-}
-
-.comfyui-progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.2);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.comfyui-progress-fill {
-  height: 100%;
-  background: rgb(var(--v-theme-accent));
-  width: 0;
-  transition: width 0.2s ease;
-}
-
-.comfyui-progress.comfyui-progress-error .comfyui-progress-bar {
-  background: rgba(255, 255, 255, 0.22);
-}
-
-.comfyui-progress.comfyui-progress-error .comfyui-progress-fill {
-  background: rgb(255, 128, 128);
 }
 </style>

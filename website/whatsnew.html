@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.6</title>
+    <title>What's New in PixlStash 1.7</title>
     <meta
       name="description"
-      content="What's new in PixlStash 1.6: the new PixlStash Desktop app for Windows, macOS, and Linux, runs offline out of the box, opens straight into your library, adds GPU acceleration on demand, lives in the system tray, and can share your library over the network."
+      content="What's new in PixlStash 1.7: a tag review queue that helps you fix wrong and missing tags, lockable picture sets, object detection with COCO export, a smarter Smart Score, and a refreshed design."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -534,7 +534,168 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- ── PixlStash 1.6 ──────────────────────────────────────────── -->
+      <!-- ── PixlStash 1.7 ──────────────────────────────────────────── -->
+      <section class="release-hero">
+        <div class="release-hero-inner">
+          <div class="release-copy">
+            <span class="release-kicker">PixlStash 1.7</span>
+            <h1>Fix your tags, one clear decision at a time</h1>
+            <p>
+              PixlStash 1.7 adds a <strong>tag review queue</strong>. It finds
+              the tags most likely to be wrong or missing in your library and
+              walks you through them picture by picture. Each card shows why
+              the picture was flagged and asks one question: should this
+              picture have the tag or not. Answer with a click or a single
+              key, and the tagger learns from your decisions.
+            </p>
+            <ul class="release-bullets">
+              <li>
+                A ranked queue of the tags most worth reviewing, with
+                estimated wrong and missing counts per tag
+              </li>
+              <li>
+                Lockable picture sets: freeze a set as a read-only eval or
+                training set
+              </li>
+              <li>
+                Object detection that draws labelled boxes and exports them as
+                COCO or Ideogram JSON
+              </li>
+              <li>
+                A smarter, calibrated Smart Score with new checks for
+                compression artifacts, noise, and watermarks
+              </li>
+              <li>A refreshed visual design across the whole app</li>
+            </ul>
+          </div>
+          <div class="release-hero-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotReview1.jpg"
+              alt="PixlStash 1.7 tag review card asking whether a picture should have a tag, with similar images shown for context"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card update-card--feature">
+          <div class="update-card-body">
+            <h2>See which tags need attention</h2>
+            <p>
+              The tag health view ranks every tag in your library by how much
+              a review is likely to fix. It estimates how many pictures have
+              the tag wrongly, how many are missing it, and where the tagger
+              disagrees with your past decisions. Start a review straight from
+              the row, and filter by project, set, or character to keep the
+              session focused.
+            </p>
+          </div>
+          <div class="update-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotReview3.jpg"
+              alt="Tag health table ranking tags by review priority with estimated wrong and missing counts"
+            />
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotLockSets.jpg"
+            alt="Sidebar context menu locking a picture set in PixlStash"
+          />
+          <div class="update-card-body">
+            <h2>Lock a set when it is done</h2>
+            <p>
+              Lock a picture set to freeze its pictures' tags, descriptions,
+              and scores. Locked sets are read-only until you unlock them, and
+              a lock badge shows wherever the pictures appear. Useful for eval
+              sets and training data that must not drift after you have
+              curated them.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotSegmentation.jpg"
+            alt="Object detection in PixlStash drawing labelled bounding boxes around a camera, a car, and starfish"
+          />
+          <div class="update-card-body">
+            <h2>Find the objects in your pictures</h2>
+            <p>
+              A new Segment action detects objects and draws labelled boxes in
+              the grid and the picture view. Export the boxes as COCO or
+              Ideogram JSON to use them in your own training and annotation
+              pipelines.
+            </p>
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card update-card--feature">
+          <div class="update-card-body">
+            <h2>A cleaner look across the app</h2>
+            <p>
+              The whole app has been restyled on a design token system, with
+              consistent type, colour, spacing, and icons. Dialogs, menus, and
+              settings follow one visual language, in both light and dark
+              themes.
+            </p>
+          </div>
+          <div class="update-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotSettings.jpg"
+              alt="The refreshed PixlStash settings dialog in the new visual design"
+            />
+          </div>
+        </article>
+      </section>
+
+      <article class="update-card" style="margin-top: 20px">
+        <div class="update-card-body">
+          <h2>A Smart Score you can trust more</h2>
+          <p>
+            Smart Score is now calibrated and precision aware. It weighs each
+            defect tag by how confident the tagger is, groups related defects
+            so correlated flaws do not count twice, and adds three new
+            full-image checks for compression blockiness, noise, and
+            watermarks. Your whole library is re-scored in the background the
+            first time you open 1.7, so the grid may re-order compared to 1.6.
+            That is expected. Your originals and snapshots are untouched.
+          </p>
+        </div>
+      </article>
+
+      <section class="release-cta">
+        <div>
+          <h3>Get PixlStash 1.7</h3>
+          <p>
+            Download the desktop app for Windows, macOS, or Linux. Or keep
+            using pip, Docker, or the source build.
+          </p>
+        </div>
+        <div class="release-cta-actions">
+          <a class="release-btn release-btn-primary" href="install.html"
+            >Download</a
+          >
+          <a class="release-btn release-btn-secondary" href="upgrade.html"
+            >Upgrade guide</a
+          >
+        </div>
+      </section>
+
+      <!-- ── PixlStash 1.6 (previous release) ────────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release — PixlStash 1.6</span>
+
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
@@ -632,23 +793,8 @@
         </div>
       </article>
 
-      <section class="release-cta">
-        <div>
-          <h3>Get the desktop app</h3>
-          <p>
-            Download PixlStash Desktop for Windows, macOS, or Linux. Or keep
-            using pip, Docker, or the source build.
-          </p>
-        </div>
-        <div class="release-cta-actions">
-          <a class="release-btn release-btn-primary" href="install.html"
-            >Download</a
-          >
-          <a class="release-btn release-btn-secondary" href="upgrade.html"
-            >Upgrade guide</a
-          >
-        </div>
-      </section>
+      </div>
+      <!-- end prev-release 1.6 -->
 
       <!-- ── PixlStash 1.5 (previous release) ────────────────────────── -->
       <div class="prev-release">

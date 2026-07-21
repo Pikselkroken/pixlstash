@@ -17,6 +17,9 @@ export const useFilterStore = defineStore("filter", () => {
   const comfyuiModelFilter = ref([]);
   const comfyuiLoraFilter = ref([]);
   const comfyuiConfigured = ref(false);
+  // Impossible-tag grid filter: array of source keys ("no_face" / "no_humans"),
+  // OR'd together. Empty array means the filter is off.
+  const impossibleSources = ref([]);
 
   function resetFilters() {
     mediaTypeFilter.value = "all";
@@ -33,6 +36,7 @@ export const useFilterStore = defineStore("filter", () => {
     unassignedOnlyFilter.value = false;
     comfyuiModelFilter.value = [];
     comfyuiLoraFilter.value = [];
+    impossibleSources.value = [];
   }
 
   const isActive = computed(
@@ -53,6 +57,8 @@ export const useFilterStore = defineStore("filter", () => {
         comfyuiModelFilter.value.length > 0) ||
       (Array.isArray(comfyuiLoraFilter.value) &&
         comfyuiLoraFilter.value.length > 0) ||
+      (Array.isArray(impossibleSources.value) &&
+        impossibleSources.value.length > 0) ||
       faceBboxFilter.value != null ||
       sharedOnlyFilter.value ||
       unassignedOnlyFilter.value,
@@ -76,6 +82,8 @@ export const useFilterStore = defineStore("filter", () => {
       count += comfyuiModelFilter.value.length;
     if (Array.isArray(comfyuiLoraFilter.value))
       count += comfyuiLoraFilter.value.length;
+    if (Array.isArray(impossibleSources.value))
+      count += impossibleSources.value.length;
     if (faceBboxFilter.value != null) count++;
     if (sharedOnlyFilter.value) count++;
     if (unassignedOnlyFilter.value) count++;
@@ -98,6 +106,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiModelFilter,
     comfyuiLoraFilter,
     comfyuiConfigured,
+    impossibleSources,
     resetFilters,
     isActive,
     activeCount,

@@ -170,9 +170,22 @@ const close = () => desktop?.windowClose?.();
 .titlebar {
   display: flex;
   align-items: center;
+  /* MUST stay in sync with --titlebar-h in style.css (the reserved strip every
+     full-screen overlay anchors its top at). If you change this, change that. */
   height: 34px;
   flex-shrink: 0;
   box-sizing: border-box;
+  /* Positioned + a z-index above every overlay in the app so the title bar (and
+     its drag region + window controls) is NEVER covered. The title bar is a
+     child of .app-viewport alongside the in-app overlays, so this wins over all
+     of them. z-index audit (highest overlays in the app): import-progress modal
+     99999, autocomplete dropdowns / ref-preview 9999, rf-zoom 4100, image
+     overlay 1000. 100000 must stay above all of them — bump it if any overlay
+     ever goes higher. (Vuetify dialogs/overlays teleport to <body> at ~2000 and
+     so live outside this stacking context; they are kept off the strip by
+     anchoring their top at var(--titlebar-h) instead, not by this z-index.) */
+  position: relative;
+  z-index: 100000;
   border-bottom: 1px solid rgba(var(--v-theme-on-background), 0.12);
   /* Paint from the `toolbar` token so the title bar and the toolbar strip below it
      read as one continuous piece. Both now track `toolbar`, which the theme can set
@@ -186,10 +199,10 @@ const close = () => desktop?.windowClose?.();
 .titlebar-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   min-width: 0;
-  padding: 0 12px;
-  font-size: 12px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-xs);
 }
 
 /* Leave room for the native traffic lights on macOS. */
@@ -201,7 +214,7 @@ const close = () => desktop?.windowClose?.();
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   outline: none;
   -webkit-app-region: no-drag;
 }
@@ -225,7 +238,7 @@ const close = () => desktop?.windowClose?.();
 
 .titlebar-name {
   /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. */
-  font-size: 16px;
+  font-size: var(--text-md);
   flex-shrink: 0;
   /* "Pixl" tracks the title-bar text colour; "Stash" is the subdued accent blend. */
   color: rgb(var(--v-theme-on-background));
@@ -241,25 +254,25 @@ const close = () => desktop?.windowClose?.();
   align-items: center;
   line-height: 1;
   opacity: 0.55;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   flex-shrink: 0;
-  padding: 0 12px;
+  padding: 0 var(--space-4);
 }
 
 /* Breadcrumb: current-view path, inline after the version. */
 .titlebar-breadcrumb {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   /* Sized so the sans cap-height lands close to the pixel wordmark's glyph
      height (the two fonts render very differently at the same px), and weight
      500 keeps it from out-shouting the brand. */
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   /* Match the wordmark's downward nudge (relative positioning, not transform, so
      the text isn't layerized and resampled) so the whole group sits on the icon's
      optical centre rather than above it. */
@@ -306,8 +319,8 @@ const close = () => desktop?.windowClose?.();
 .titlebar-update {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 10px;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
   white-space: nowrap;
   -webkit-app-region: no-drag;
 }
@@ -315,7 +328,7 @@ const close = () => desktop?.windowClose?.();
 .titlebar-update-link {
   display: inline-flex;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1;
   color: rgba(var(--v-theme-accent), 0.95);
   text-decoration: none;
@@ -327,7 +340,7 @@ const close = () => desktop?.windowClose?.();
 .titlebar-update-warn {
   display: inline-flex;
   align-items: center;
-  margin-left: 4px;
+  margin-left: var(--space-2);
   line-height: 1;
 }
 
@@ -336,19 +349,19 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-update-security {
-  color: #e57c00;
+  color: rgb(var(--v-theme-warning));
 }
 
 .titlebar-update-security:hover {
-  color: #c96000;
+  color: rgba(var(--v-theme-warning), 0.85);
 }
 
 .titlebar-update-security--high {
-  color: #e53935;
+  color: rgb(var(--v-theme-error));
 }
 
 .titlebar-update-security--high:hover {
-  color: #c62828;
+  color: rgba(var(--v-theme-error), 0.85);
 }
 
 .titlebar-update-dismiss {
@@ -358,7 +371,7 @@ const close = () => desktop?.windowClose?.();
   padding: 0;
   width: 12px;
   height: 12px;
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   line-height: 1;
   background: transparent;
   border: none;
@@ -394,8 +407,8 @@ const close = () => desktop?.windowClose?.();
 }
 
 .tb-close:hover {
-  background: #e81123;
-  color: #fff;
+  background: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-on-error));
   opacity: 1;
 }
 </style>

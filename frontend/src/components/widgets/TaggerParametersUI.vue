@@ -201,23 +201,23 @@ function setScaled(field, raw) {
 .tagger-params-root {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-4);
 }
 
 .tagger-params-empty {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.55);
 }
 
 .tagger-params-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .tagger-params-label {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-on-surface), 0.75);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -226,9 +226,9 @@ function setScaled(field, raw) {
 .tagger-params-input {
   background: rgba(var(--v-theme-surface-variant), 0.5);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.18);
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-surface));
   outline: none;
   width: 100%;
@@ -242,11 +242,11 @@ function setScaled(field, raw) {
 .tagger-params-scaled-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .tagger-params-unit {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
@@ -258,14 +258,14 @@ function setScaled(field, raw) {
 .tagger-params-checkbox-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 
 .tagger-params-help {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 </style>

@@ -259,39 +259,39 @@ watch(
 }
 
 .tagger-settings-title {
-  font-size: 15px;
-  font-weight: 600;
-  padding: 16px 20px 8px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-5) var(--space-5) var(--space-3);
 }
 
 .tagger-settings-body {
-  padding: 8px 20px 4px;
+  padding: var(--space-3) var(--space-5) var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-5);
 }
 
 .tagger-settings-desc {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
   margin: 0;
 }
 
 .tagger-settings-threshold-row {
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .tagger-settings-artifacts {
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  padding-top: 10px;
+  padding-top: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .tagger-settings-artifacts-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-on-surface), 0.6);
@@ -301,17 +301,17 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .tagger-settings-error {
   color: rgb(var(--v-theme-error));
-  font-size: 12px;
-  margin-top: 4px;
+  font-size: var(--text-xs);
+  margin-top: var(--space-2);
 }
 
 .tagger-settings-actions {
-  padding: 8px 16px 12px;
+  padding: var(--space-3) var(--space-5) var(--space-4);
 }
 
 /* Label thresholds sub-dialog (shared styles copied from BehaviourSection) */
@@ -320,33 +320,33 @@ watch(
 }
 
 .label-thresholds-dialog-title {
-  font-size: 14px;
-  font-weight: 600;
-  padding: 14px 18px 8px;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-5) var(--space-5) var(--space-3);
 }
 
 .label-thresholds-dialog-body {
-  padding: 4px 18px 14px;
+  padding: var(--space-2) var(--space-5) var(--space-5);
   max-height: 400px;
   overflow-y: auto;
 }
 
 .label-thresholds-loading,
 .label-thresholds-empty {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .label-thresholds-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .label-thresholds-table th,
 .label-thresholds-table td {
   text-align: left;
-  padding: 4px 8px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
 }
 

@@ -372,6 +372,11 @@ def select_pictures_for_listing(
             face_filter_param = request.query_params.get("face_filter")
             if face_filter_param in ("with_face", "without_face"):
                 query_params["face_filter"] = face_filter_param
+            impossible_sources_param = request.query_params.getlist(
+                "impossible_tag_source"
+            )
+            if impossible_sources_param:
+                query_params["impossible_sources"] = impossible_sources_param
             shared_only_param = request.query_params.get("shared_only")
             if shared_only_param == "true":
                 query_params["shared_only"] = True
@@ -431,6 +436,7 @@ def select_pictures_for_listing(
     project_id_raw = query_params.pop("project_id", None)
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
     face_filter = query_params.pop("face_filter", None)
+    impossible_sources = query_params.pop("impossible_sources", None)
     shared_only = bool(query_params.pop("shared_only", False))
     query_params.pop(
         "guest_session_id", None
@@ -508,7 +514,14 @@ def select_pictures_for_listing(
             )
             shared_id_set = set(shared_ids)
             existing_ids = query_params.get("id")
-            if existing_ids:
+            # `existing_ids` may already be `[]` -- a real "nothing matches"
+            # result from scope_picture_id's own narrowing above -- which is
+            # falsy but distinct from "no id filter was ever set" (None).
+            # Checking `is not None` preserves that distinction; a plain
+            # truthiness check would treat an already-narrowed-to-empty scope
+            # as unset and hand back every shared picture, discarding the
+            # narrowing.
+            if existing_ids is not None:
                 query_params["id"] = [
                     i for i in existing_ids if int(i) in shared_id_set
                 ]
@@ -582,6 +595,7 @@ def select_pictures_for_listing(
         comfyui_models_filter_value: list[str] | None = None,
         comfyui_loras_filter_value: list[str] | None = None,
         face_filter_value: str | None = None,
+        impossible_sources_value: list[str] | None = None,
     ):
         if deleted_only:
             query = select(Picture.id).where(
@@ -625,6 +639,7 @@ def select_pictures_for_listing(
                 and not comfyui_models_filter_value
                 and not comfyui_loras_filter_value
                 and not face_filter_value
+                and not impossible_sources_value
             ):
                 return None
             query = select(Picture.id).where(
@@ -672,6 +687,7 @@ def select_pictures_for_listing(
             comfyui_models_filter=comfyui_models_filter_value,
             comfyui_loras_filter=comfyui_loras_filter_value,
             face_filter=face_filter_value,
+            impossible_sources=impossible_sources_value,
             apply_deleted_filter=False,
         ).apply(query)
 
@@ -707,6 +723,7 @@ def select_pictures_for_listing(
             comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
             face_filter_value=face_filter,
+            impossible_sources_value=impossible_sources,
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
@@ -716,6 +733,19 @@ def select_pictures_for_listing(
                 set_candidate_ids
                 if candidate_ids is None
                 else set(candidate_ids) & set_candidate_ids
+            )
+        # Token scope enforcement: a single-picture share token may only ever
+        # resolve that one picture id. Unlike set_filter_ids/character_id
+        # above, this sort branch never reads query_params["id"] (see the
+        # scope_picture_id comment earlier in this function), so
+        # scope_picture_id's narrowing has to be intersected into the
+        # candidate set here explicitly or a picture-scoped token can widen
+        # the result to every picture with a detected face.
+        if scope_picture_id is not None:
+            candidate_ids = (
+                {scope_picture_id}
+                if candidate_ids is None
+                else set(candidate_ids) & {scope_picture_id}
             )
         if candidate_ids is not None and not candidate_ids:
             return _empty_result()
@@ -755,7 +785,12 @@ def select_pictures_for_listing(
         scope_allowed_ids = fetch_scope_allowed_picture_ids(server, request)
         if scope_allowed_ids is not None:
             requested = query_params.get("id")
-            if requested:
+            # `requested` may be `[]` -- already narrowed to "nothing matches"
+            # by scope_picture_id/shared_only/split above -- which is falsy
+            # but distinct from "no id filter was ever set" (None). Checking
+            # `is not None` preserves that distinction instead of treating an
+            # already-empty scope intersection as unset.
+            if requested is not None:
                 allowed = [
                     str(i)
                     for i in requested
@@ -790,6 +825,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                impossible_sources=impossible_sources,
                 tags_filter=query_params.get("tags_filter") or None,
                 tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
                 tags_confidence_above_filter=query_params.get(
@@ -833,6 +869,7 @@ def select_pictures_for_listing(
             or None,
             hidden_tags_filter=hidden_tags,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
                 if query_params.get("id")
@@ -856,6 +893,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 guest_session_id=guest_session_id,
                 guest_token_id=guest_token_id,
@@ -876,6 +914,7 @@ def select_pictures_for_listing(
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,
@@ -890,8 +929,23 @@ def select_pictures_for_listing(
             if not set_candidate_ids:
                 return _empty_result()
             existing_ids = query_params.get("id")
-            if existing_ids:
-                query_params["id"] = list(set(existing_ids) & set_candidate_ids)
+            # `existing_ids` may already be `[]` -- a real "nothing matches
+            # this token's scope" result computed by scope_picture_id/
+            # shared_only/split above -- which is falsy but distinct from "no
+            # id filter was ever set" (None). `is not None` preserves that
+            # distinction; a plain truthiness check would treat the
+            # already-empty scope intersection as unset and hand back every
+            # picture in the set, discarding the scope narrowing.
+            if existing_ids is not None:
+                # existing_ids may be a list of strings (query params, or ids
+                # populated by an earlier filter such as scope_picture_id,
+                # shared_only, or split -- all of which stringify their ids),
+                # while set_candidate_ids is always set[int]. Intersecting the
+                # two directly with mismatched types silently yields an empty
+                # set every time, which is why a scoped token's ?split= query
+                # came back empty instead of narrowed. Normalize to int first.
+                existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
+                query_params["id"] = list(existing_id_set & set_candidate_ids)
             else:
                 query_params["id"] = list(set_candidate_ids)
 
@@ -950,7 +1004,14 @@ def select_pictures_for_listing(
             if not picture_ids:
                 return _empty_result()
             existing_ids = query_params.get("id")
-            if existing_ids:
+            # `existing_ids` may already be `[]` -- a real "nothing matches
+            # this token's scope" result from scope_picture_id/shared_only/
+            # split above -- which is falsy but distinct from "no id filter
+            # was ever set" (None). `is not None` preserves that distinction;
+            # a plain truthiness check would treat the already-empty scope
+            # intersection as unset and hand back every picture for this
+            # character, discarding the scope narrowing.
+            if existing_ids is not None:
                 existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
                 picture_ids = [i for i in picture_ids if int(i) in existing_id_set]
                 if not picture_ids:
@@ -1039,7 +1100,11 @@ def select_pictures_for_listing(
             if not picture_ids:
                 return _empty_result()
             existing_ids = query_params.get("id")
-            if existing_ids:
+            # See the comment on the analogous check in the character_id
+            # branch above: `existing_ids` may already be `[]` (a real
+            # "nothing matches this token's scope" result), which is falsy
+            # but distinct from "no id filter was ever set" (None).
+            if existing_ids is not None:
                 existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
                 picture_ids = [i for i in picture_ids if int(i) in existing_id_set]
                 if not picture_ids:
@@ -1066,8 +1131,22 @@ def select_pictures_for_listing(
                 if not project_pic_ids:
                     return _empty_result()
                 existing_ids = query_params.get("id")
-                if existing_ids:
-                    query_params["id"] = list(set(existing_ids) & set(project_pic_ids))
+                # See the comment on the analogous check in the set_filter_ids
+                # branch above: `existing_ids` may already be `[]` (a real
+                # "nothing matches this token's scope" result), which is
+                # falsy but distinct from "no id filter was ever set" (None).
+                if existing_ids is not None:
+                    # existing_ids may be a list of strings (query params, or
+                    # ids populated by an earlier filter such as
+                    # scope_picture_id, shared_only, or split -- all of which
+                    # stringify their ids), while project_pic_ids is always
+                    # list[int] (from select(Pic.id)). Intersecting the two
+                    # directly with mismatched types silently yields an empty
+                    # set every time, so `?id=5&project_id=UNASSIGNED` returned
+                    # nothing instead of the matching picture. Normalize to int
+                    # first, mirroring the set_filter_ids / character branches.
+                    existing_id_set = {int(i) for i in existing_ids if str(i).isdigit()}
+                    query_params["id"] = list(existing_id_set & set(project_pic_ids))
                 else:
                     query_params["id"] = project_pic_ids
             else:
@@ -1093,6 +1172,7 @@ def select_pictures_for_listing(
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
                 face_filter=face_filter,
+                impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 **query_params,
             )
@@ -1111,6 +1191,7 @@ def select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
             guest_token_id=guest_token_id,

@@ -57,6 +57,7 @@
       @collapse-all-stacks="collapseAllStacks"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
+      @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
     />
     <!-- ── Visible range pill ── -->
@@ -111,6 +112,8 @@
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :grouping-lock-reason="partialStackGroupingReason"
+      :lock-reason="selectionLockReason"
+      :locked-set-ids="lockedSetsStore.lockedSetIds"
       :available-plugins="availablePlugins"
       :tagger-plugins="taggerPlugins"
       :captioner-plugins="captionerPlugins"
@@ -133,6 +136,7 @@
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+      @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
       @share-picture="sharePicture"
@@ -167,6 +171,39 @@
             @click="confirmRevokePictureShares"
           >
             Remove all shares
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ── Segment (object detection) dialog ─────────────────── -->
+    <v-dialog v-model="segmentDialogOpen" max-width="420">
+      <v-card>
+        <v-card-title style="font-size: 1rem; padding: 16px 20px 8px">
+          <v-icon size="16" style="margin-right: 6px; opacity: 0.7"
+            >mdi-shape-outline</v-icon
+          >
+          Detect objects
+        </v-card-title>
+        <v-card-text style="padding: 0 20px 4px">
+          <div style="font-size: 0.875rem; opacity: 0.85; margin-bottom: 10px">
+            Leave the label empty for dense object detection, or type a phrase to
+            detect only that (e.g. "dog").
+          </div>
+          <v-text-field
+            v-model="segmentPrompt"
+            label="Label (optional)"
+            density="comfortable"
+            hide-details
+            autofocus
+            @keydown.enter.stop.prevent="confirmSegment"
+          />
+        </v-card-text>
+        <v-card-actions style="padding: 8px 16px 16px">
+          <v-btn variant="text" @click="segmentDialogOpen = false">Cancel</v-btn>
+          <v-spacer />
+          <v-btn color="primary" variant="tonal" @click="confirmSegment">
+            Detect
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -330,6 +367,7 @@
         <button
           v-if="props.pendingExternalImportCount > 0"
           class="pending-imports-pill"
+          data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
           ↑ {{ props.pendingExternalImportCount }}
@@ -337,15 +375,15 @@
             props.pendingExternalImportCount === 1
               ? "new picture"
               : "new pictures"
-          }}
-          — click to load
+          }}, click to load
         </button>
         <button
           v-if="props.sortChangedExternalCount > 0"
           class="pending-imports-pill"
+          data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
         >
-          ⟳ Sort order changed externally — click to refresh
+          ⟳ View changed externally, click to refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
@@ -406,6 +444,7 @@
           ...badgeCssVars,
         }"
         ref="gridContainer"
+        data-testid="image-grid"
         @click="handleGridBackgroundClick"
       >
         <!-- Top spacer for virtual scroll alignment -->
@@ -467,13 +506,14 @@
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
             >
-              <!-- Top-left permanent badges (top→bottom): problem, reference folder, share -->
+              <!-- Top-left permanent badges (top→bottom): problem, reference folder, lock, share -->
               <div
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
                   ((props.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
+                    lockedSetsStore.isLocked(img.id) ||
                     (!isReadOnly && sharedPictureIds.has(img.id)))
                 "
                 class="thumbnail-top-left-badges"
@@ -502,6 +542,15 @@
                   @click.stop="openReferenceLocation(img.id)"
                 >
                   <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
+                </div>
+                <div
+                  v-if="lockedSetsStore.isLocked(img.id)"
+                  class="thumbnail-lock-badge thumbnail-badge"
+                  :title="lockedSetsStore.lockReason(img.id)"
+                >
+                  <v-icon :size="badgeIconSizes.penalised"
+                    >mdi-lock-outline</v-icon
+                  >
                 </div>
                 <div
                   v-if="!isReadOnly && sharedPictureIds.has(img.id)"
@@ -632,6 +681,22 @@
                       class="face-bbox-label"
                     >
                       {{ overlay.face.character_name }}
+                    </div>
+                  </div>
+                </template>
+                <!-- Object detection (segmentation) overlays -->
+                <template v-if="isThumbnailReady(img.id) && img.thumbnail">
+                  <div
+                    v-for="overlay in getDetectionBboxOverlays(img)"
+                    :key="'det-' + overlay.detId + '-' + img.id"
+                    class="face-bbox-overlay"
+                    :style="overlay.style"
+                  >
+                    <div
+                      :style="{ color: overlay.color }"
+                      class="face-bbox-label"
+                    >
+                      {{ overlay.det.label }}
                     </div>
                   </div>
                 </template>
@@ -784,6 +849,34 @@
       </template>
     </v-snackbar>
 
+    <!-- Clear impossible tags result + Undo -->
+    <v-snackbar
+      v-model="impossibleSnackbarVisible"
+      location="bottom"
+      :timeout="8000"
+      color="surface"
+      elevation="4"
+    >
+      <span>{{ impossibleSnackbarText }}</span>
+      <template #actions>
+        <v-btn
+          v-if="lastImpossibleRemoved.length"
+          color="primary"
+          variant="text"
+          @click="handleUndoImpossibleTags"
+        >
+          Undo
+        </v-btn>
+        <v-btn
+          color="default"
+          variant="text"
+          @click="impossibleSnackbarVisible = false"
+        >
+          Dismiss
+        </v-btn>
+      </template>
+    </v-snackbar>
+
     <SelectionBar
       ref="selectionBarRef"
       :selected-count="selectedImageIds.length"
@@ -807,6 +900,9 @@
       :all-grid-images="allGridImages"
       :selected-character="String(props.selectedCharacter)"
       :selected-set="String(props.selectedSet)"
+      :impossible-sources="props.impossibleSources"
+      :clearing-impossible="clearingImpossibleTags"
+      @clear-impossible-tags="handleClearImpossibleTags"
       @clear-selection="clearSelection"
       @added-to-set="handleOverlayAddedToSet"
       @remove-from-group="removeFromGroup"
@@ -841,6 +937,9 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useTasksStore } from "../../stores/useTasksStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   isSupportedImageFile,
@@ -917,10 +1016,13 @@ const emit = defineEmits([
   "update:set-difference-base-id",
   "update:embed-watermark",
   "update:visible-range-label",
+  "update:match-count",
   "load-pending-imports",
   "load-sort-changed",
+  "flag-sort-changed",
   "open-settings",
   "open-import",
+  "local-import",
   "confirm-export-zip",
 ]);
 
@@ -941,6 +1043,7 @@ const props = defineProps({
   stackThreshold: { type: [String, Number, null], default: null },
   showStars: Boolean,
   showFaceBboxes: Boolean,
+  showDetections: Boolean,
   showProblemIcon: Boolean,
   penalisedTagWeights: { type: Object, default: () => ({}) },
   showStacks: { type: Boolean, default: true },
@@ -977,6 +1080,7 @@ const props = defineProps({
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
+  impossibleSources: { type: Array, default: () => [] },
   sharedOnlyFilter: { type: Boolean, default: false },
   unassignedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
@@ -1101,6 +1205,9 @@ const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
 // Share picture dialog
 const sharePicDialogOpen = ref(false);
+// Segment (object detection) dialog
+const segmentDialogOpen = ref(false);
+const segmentPrompt = ref("");
 
 // ============================================================
 // GRID DATA STATE
@@ -1132,6 +1239,66 @@ const badgeIconSizes = computed(() => {
 });
 
 const allGridImages = ref([]);
+
+// ---- Clear impossible tags (bulk action) ----
+const clearingImpossibleTags = ref(false);
+const impossibleSnackbarVisible = ref(false);
+const impossibleSnackbarText = ref("");
+// Stash of the last clear's removed {picture_id, tag} pairs, for Undo.
+const lastImpossibleRemoved = ref([]);
+
+async function handleClearImpossibleTags() {
+  const pictureIds = selectedImageIds.value
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  const filters = Array.isArray(props.impossibleSources)
+    ? props.impossibleSources
+    : [];
+  if (!pictureIds.length || !filters.length || clearingImpossibleTags.value) {
+    return;
+  }
+  clearingImpossibleTags.value = true;
+  try {
+    const res = await apiClient.post(
+      `${props.backendUrl}/pictures/impossible-tags/clear`,
+      { picture_ids: pictureIds, filters },
+    );
+    const removed = Array.isArray(res.data?.removed) ? res.data.removed : [];
+    const count =
+      typeof res.data?.count === "number" ? res.data.count : removed.length;
+    lastImpossibleRemoved.value = removed;
+    impossibleSnackbarText.value =
+      count > 0
+        ? `Removed ${count} tag${count === 1 ? "" : "s"}`
+        : "No impossible tags found";
+    impossibleSnackbarVisible.value = true;
+    debouncedFetchAllGridImages({ force: true });
+  } catch (e) {
+    console.error("[ImageGrid.vue] Failed to clear impossible tags:", e);
+    lastImpossibleRemoved.value = [];
+    impossibleSnackbarText.value = "Failed to clear impossible tags";
+    impossibleSnackbarVisible.value = true;
+  } finally {
+    clearingImpossibleTags.value = false;
+  }
+}
+
+async function handleUndoImpossibleTags() {
+  const pairs = lastImpossibleRemoved.value;
+  if (!Array.isArray(pairs) || !pairs.length) return;
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/impossible-tags/restore`, {
+      pairs,
+    });
+    impossibleSnackbarVisible.value = false;
+    lastImpossibleRemoved.value = [];
+    debouncedFetchAllGridImages({ force: true });
+  } catch (e) {
+    console.error("[ImageGrid.vue] Failed to restore impossible tags:", e);
+    impossibleSnackbarText.value = "Failed to undo";
+    impossibleSnackbarVisible.value = true;
+  }
+}
 
 // ---- Guest scoring state (READ-token users) ----
 // null = not yet decided, 'accepted' = cookie consent given, 'rejected' = declined
@@ -1279,6 +1446,9 @@ function handlePluginRunRequest(payload) {
       ? payload.parameters
       : {};
   if (!pluginName || !pictureIds.length) return;
+  // Stack the derived outputs with their originals unless the caller opted out.
+  // Default true keeps the historical behaviour for any other run-plugin source.
+  const stack = payload?.stack !== false;
   // Build per-image captions from stored descriptions in the grid.
   const idSet = new Set(pictureIds);
   const idToDesc = new Map();
@@ -1287,7 +1457,7 @@ function handlePluginRunRequest(payload) {
     if (idSet.has(id)) idToDesc.set(id, img.description || "");
   }
   const captions = pictureIds.map((id) => idToDesc.get(id) ?? "");
-  runPluginWithParameters(pluginName, pictureIds, parameters, captions);
+  runPluginWithParameters(pluginName, pictureIds, parameters, captions, stack);
 }
 
 async function runPluginWithParameters(
@@ -1295,6 +1465,7 @@ async function runPluginWithParameters(
   pictureIds,
   parameters,
   captions,
+  stack = true,
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
@@ -1304,6 +1475,7 @@ async function runPluginWithParameters(
         picture_ids: pictureIds,
         parameters: parameters || {},
         captions: Array.isArray(captions) ? captions : undefined,
+        stack,
       },
     );
     const createdIds = Array.isArray(res.data?.created_picture_ids)
@@ -1871,6 +2043,14 @@ watch(
       pendingOverlayGridRefresh.value = true;
       return;
     }
+    if (payload.external) {
+      // The tag change came from outside this tab (background tagging, or
+      // another owner tab). Don't reshuffle the user's filtered view under them:
+      // raise the click-to-refresh pill, the same contract as external picture
+      // changes. Only this tab's own edits refresh the filtered grid in place.
+      if (pictureIds.length) emit("flag-sort-changed", pictureIds);
+      return;
+    }
     // Coalesce all task-driven tag updates into an infrequent full refresh to
     // avoid starving the tagger when a large grid is open.
     scheduleWsTagFullRefresh();
@@ -2139,6 +2319,43 @@ function getFaceBboxOverlays(img) {
     face: entry.face,
     colorIdx,
   }));
+}
+
+// Detection (object) bbox overlays — mirror getFaceBboxOverlays, but colour
+// each box by its label so boxes sharing a label share a colour.
+function getDetectionBboxOverlays(img) {
+  void faceOverlayRedrawKey.value; // depend on redraw key
+  void thumbnailReadyMap[img.id];
+  if (
+    !props.showDetections ||
+    !img.detections ||
+    !img.detections.length ||
+    !(img.thumbnail_width || img.width) ||
+    !(img.thumbnail_height || img.height)
+  ) {
+    return [];
+  }
+  const el = thumbnailRefs[img.id];
+  if (!el) return [];
+  const labelColorIndex = new Map();
+  const firstFrameDetections = img.detections
+    .map((det, detIdx) => ({ det, detIdx }))
+    .filter((entry) => (entry.det.frame_index ?? 0) === 0);
+  return firstFrameDetections.map((entry) => {
+    const label = entry.det.label ?? "";
+    if (!labelColorIndex.has(label)) {
+      labelColorIndex.set(label, labelColorIndex.size);
+    }
+    const colorIdx = labelColorIndex.get(label);
+    return {
+      style: getFaceBboxStyle(entry.det.bbox, colorIdx, img, el, false),
+      detIdx: entry.detIdx,
+      detId: entry.det.id,
+      det: entry.det,
+      colorIdx,
+      color: faceBoxColor(colorIdx),
+    };
+  });
 }
 
 // Track which image is currently hovered
@@ -2521,6 +2738,15 @@ const visibleRangeLabel = computed(() => {
 });
 
 const userPrefsStore = useUserPrefsStore();
+const tasksStore = useTasksStore();
+const reviewSessionsStore = useReviewSessionsStore();
+const lockedSetsStore = useLockedSetsStore();
+// Live "is the Review Sessions overlay up" signal. It stays mounted over the
+// grid as a modal review surface with its own keyboard/drag handling, so the
+// grid's keyboard shortcuts and native drag must go inert while it is open.
+// Authoritative source: the store ref the Toolbar sets true and App.vue's
+// close handler sets false (NOT the retired local reviewOverlayOpen ref).
+const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
 // The trail logic lives in useBreadcrumb, shared with the desktop title bar.
@@ -2534,6 +2760,17 @@ watch(
   visibleRangeLabel,
   (label) => {
     emit("update:visible-range-label", label);
+  },
+  { immediate: true },
+);
+
+// Publish the total number of pictures matching the active filter/sort so the
+// Filter menu header can show a live "N matches" count. allGridImages holds the
+// full fetched set, so its length is the match total.
+watch(
+  () => allGridImages.value.length,
+  (count) => {
+    emit("update:match-count", count);
   },
   { immediate: true },
 );
@@ -3015,13 +3252,18 @@ async function deleteSelected() {
         },
       );
     } else {
-      await Promise.all(
-        idsToRemove.map((id) =>
-          apiClient.delete(`${backendUrl}/pictures/${id}`).catch((err) => {
-            alert(`Error deleting image ${id}: ${err.message}`);
-          }),
-        ),
-      );
+      // Soft-delete via the bulk endpoint instead of one DELETE per id, which
+      // floods the browser/Electron per-host connection pool on large selections
+      // (excess sockets get reset and surface as axios "Network Error"). Chunk to
+      // the server's per-request id cap so a huge selection is a handful of
+      // requests, not thousands; each chunk broadcasts a single ``removed`` event.
+      const BULK_DELETE_CHUNK = 1000;
+      for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
+        const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
+        await apiClient.delete(`${backendUrl}/pictures`, {
+          data: { picture_ids: chunk },
+        });
+      }
     }
     removeImagesById(idsToRemove);
     selectedImageIds.value = [];
@@ -3261,6 +3503,31 @@ const partialStackGroupingReason = computed(() => {
     if (!allSelected) return PARTIAL_STACK_GROUPING_MESSAGE;
   }
   return null;
+});
+
+// Lock reason for the current selection: non-null when at least one selected
+// picture is frozen by a locked set. The label-data mutations in the context
+// menu (tag, auto-tag, description, delete) would 423 for the whole batch, so we
+// disable them and surface this as the tooltip. Naming the count + set(s) tells
+// the user exactly why and how to unlock. A single locked picture is enough.
+const selectionLockReason = computed(() => {
+  const ids = (selectedImageIds.value || [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return null;
+  const lockedIds = ids.filter((id) => lockedSetsStore.isLocked(id));
+  if (!lockedIds.length) return null;
+  const names = new Set();
+  for (const id of lockedIds) {
+    for (const name of lockedSetsStore.lockedSetNames(id)) names.add(name);
+  }
+  const joined = [...names].join(", ");
+  const noun = lockedIds.length === 1 ? "picture is" : "pictures are";
+  return (
+    `Locked — ${lockedIds.length} selected ${noun} in the locked set ` +
+    `'${joined}'. Unlock the set to edit: right-click it in the sidebar and ` +
+    `choose Unlock.`
+  );
 });
 
 const selectedExpandedCount = computed(() => {
@@ -3912,6 +4179,7 @@ const {
     thumbnailRefs,
     dragPreviewRefs,
     prefetchFullImage,
+    reviewOverlayOpen,
   },
   props,
 );
@@ -4134,6 +4402,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     rowHeight,
     visibleStart,
     overlayOpen,
+    reviewOverlayOpen,
     showSelectionBar,
     selectedImageIds,
     lastSelectedImageId,
@@ -4535,6 +4804,23 @@ function formatGridSmartScoreValue(img) {
   return value === null ? "" : value.toFixed(2);
 }
 
+// The ONE null-ordering rule shared by every client-side smart-score sort path
+// (fresh insert AND reposition). SQLite ranks NULL below every real value, and
+// the backend sorts the smart_score column with a plain .asc()/.desc() and no
+// NULLS clause (pixlstash/db_models/picture.py), so NULLs sort FIRST on ascending
+// and LAST on descending. Map a null/absent score to -Infinity so the shared
+// comparator (which flips on `descending`) lands a null-scored card exactly where
+// the server put it, in BOTH directions. A 0 sentinel is wrong: it collides with
+// a genuine zero and, now that smart scores can be negative and null (tag edits
+// invalidate them), it mis-orders nulls relative to real scores. Route EVERY path
+// through this helper — never an inline ternary or `?? 0` — so the insert and
+// reposition paths cannot drift (the failure the gridSortDescending comment warns
+// of). This is only an ordering key; it must never be written back as a card's
+// displayed smart score, or a null-scored card would render a fake 0.
+function smartScoreSortKey(smartScore) {
+  return Number.isFinite(smartScore) ? smartScore : -Infinity;
+}
+
 function invalidateVisibleThumbnailRanges() {
   const start = Math.max(0, visibleStart.value - renderBuffer.value);
   const end = Math.min(
@@ -4618,11 +4904,23 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
     const currentIndex = items.findIndex((item) => item.id === imageId);
     if (currentIndex === -1) return;
 
-    const targetScore = smartScore ?? 0;
+    // Keep the ordering key separate from the displayed value. The card must
+    // store the TRUE smart score (a real number or null → "no score"); only the
+    // sort key collapses null to the SQLite sentinel via smartScoreSortKey.
+    // Writing the sentinel onto `smartScore` would make a null-scored card render
+    // a fake 0.
+    const normalisedScore = Number.isFinite(smartScore) ? smartScore : null;
+    const targetKey = smartScoreSortKey(normalisedScore);
+    // Write the TRUE score to BOTH the camelCase and snake_case keys.
+    // getGridSmartScoreValue reads `smartScore` then falls back to `smart_score`
+    // (grid cards / metadata responses carry both), so setting only one key would
+    // let a stale value leak through the fallback and render a wrong (or fake 0)
+    // score. Both must hold the normalised value — null for "no score".
     const target = {
       ...items[currentIndex],
       ...(latestInfo && typeof latestInfo === "object" ? latestInfo : {}),
-      smartScore: targetScore,
+      smartScore: normalisedScore,
+      smart_score: normalisedScore,
       thumbnail:
         items[currentIndex]?.thumbnail ?? latestInfo?.thumbnail ?? null,
     };
@@ -4631,8 +4929,8 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
       items,
       currentIndex,
       target,
-      targetScore,
-      (item) => item.smartScore ?? 0,
+      targetKey,
+      (item) => smartScoreSortKey(getGridSmartScoreValue(item)),
       descending,
     );
   } finally {
@@ -4653,7 +4951,10 @@ function gridImageSortKey(img) {
     return Date.parse(img.created_at) || 0;
   }
   if (sort.includes("SMART_SCORE")) {
-    return getGridSmartScoreValue(img) ?? 0;
+    // Match the server's ORDER BY exactly via the shared null rule (see
+    // smartScoreSortKey). The reposition path uses the same helper, so the two
+    // ordering paths cannot drift.
+    return smartScoreSortKey(getGridSmartScoreValue(img));
   }
   if (
     sort.includes("CHARACTER_LIKENESS") &&
@@ -4784,7 +5085,11 @@ async function refreshSmartScoreForImage(imageId) {
     }
     await nextTick();
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    repositionImageBySmartScore(imageId, smartScore ?? 0, latestInfo);
+    // Pass the TRUE smart score (number or null). repositionImageBySmartScore
+    // derives its ordering key from the null rule and preserves null as the
+    // card's displayed value — collapsing to 0 here would both mis-order the
+    // card and show a fake 0.
+    repositionImageBySmartScore(imageId, smartScore, latestInfo);
   }
 }
 
@@ -5003,6 +5308,7 @@ watch(
     () => props.tagConfidenceAboveFilter,
     () => props.tagConfidenceBelowFilter,
     () => props.faceBboxFilter,
+    () => props.impossibleSources,
     () => props.sharedOnlyFilter,
     () => props.unassignedOnlyFilter,
   ],
@@ -5129,6 +5435,20 @@ watch(
     if (faceEnabled === prevFace && length === prevLength) {
       return;
     }
+    invalidateVisibleThumbnailRanges();
+  },
+);
+
+watch(
+  [() => props.showDetections, () => allGridImages.value.length],
+  ([detEnabled, length], [prevDet, prevLength]) => {
+    if (!detEnabled) return;
+    if (length <= 0) return;
+    if (detEnabled === prevDet && length === prevLength) {
+      return;
+    }
+    // Re-fetch visible thumbnails so detection boxes (carried in the batch
+    // thumbnail response) populate when the overlay is switched on.
     invalidateVisibleThumbnailRanges();
   },
 );
@@ -5326,6 +5646,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       idx: start + idx, // Ensure idx is global index
       thumbnail: img?.thumbnail ?? null,
       faces: Array.isArray(img?.faces) ? img.faces : [],
+      detections: Array.isArray(img?.detections) ? img.detections : [],
       penalised_tags: Array.isArray(img?.penalised_tags)
         ? img.penalised_tags
         : [],
@@ -5424,6 +5745,13 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
         if (props.showFaceBboxes && gridImg.faces.length) {
+          overlayNeedsRedraw = true;
+        }
+        gridImg.detections =
+          thumbObj && Array.isArray(thumbObj.detections)
+            ? thumbObj.detections
+            : [];
+        if (props.showDetections && gridImg.detections.length) {
           overlayNeedsRedraw = true;
         }
         gridImg.penalised_tags =
@@ -5636,6 +5964,34 @@ function handleContextMenuOpenPluginPanel() {
 
 function handleContextMenuOpenComfyuiPanel() {
   selectionBarRef.value?.openComfyuiPanel();
+}
+
+function openSegmentDialog() {
+  if (!selectedImageIds.value.length || isReadOnly.value) return;
+  segmentPrompt.value = "";
+  segmentDialogOpen.value = true;
+}
+
+async function confirmSegment() {
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  segmentDialogOpen.value = false;
+  if (!ids.length || !props.backendUrl) return;
+  // Detection runs as a background GPU task. The grid card refreshes in place
+  // on the resulting CHANGED_PICTURES event (detections is a card-content
+  // field), and the overlay reconciles too if open.
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/detect`, {
+      picture_ids: ids,
+      prompt: segmentPrompt.value.trim(),
+    });
+    // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
+    // within one poll RTT instead of up to the 5 s idle interval later.
+    tasksStore.nudge();
+  } catch (err) {
+    console.error("Object detection request failed:", err);
+  }
 }
 
 function sharePicture() {
@@ -5930,6 +6286,7 @@ async function exportCurrentViewToZip(options = {}) {
   const includeCharacterName = options.includeCharacterName !== false;
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
+  const bboxMode = options.bboxMode || "none";
   let url = `${props.backendUrl}/pictures/export`;
   let params;
   const selectedIds = selectedImageIds.value;
@@ -5960,6 +6317,9 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (resolution) {
     extraParams.append("resolution", resolution);
+  }
+  if (bboxMode && bboxMode !== "none") {
+    extraParams.append("bbox_mode", bboxMode);
   }
   const extraParamString = extraParams.toString();
   if (params) {
@@ -6239,6 +6599,11 @@ function handleEmptyStateReset() {
   color: rgb(var(--v-theme-accent)) !important;
 }
 
+/* Lock badge: styled as a sibling of the problem indicator — no scrim, zero
+   padding, same left edge and inset. See the shared
+   `.penalised-tag-indicator, .stack-indicator, .thumbnail-lock-badge` rules
+   below, which it joins rather than restating. */
+
 .thumbnail-share-badge {
   opacity: 1;
   display: flex;
@@ -6274,7 +6639,10 @@ function handleEmptyStateReset() {
 }
 
 .grid-content-area {
-  --selbar-height: 48px;
+  /* Offset for the absolutely-positioned 36px toolbar. Set 2px under the toolbar
+     height so the grid content tucks right beneath the toolbar's bottom border
+     with no dark seam (the toolbar overlays the 2px, so nothing is clipped). */
+  --selbar-height: 34px;
   /* Container context for the floating SelectionBar's `@container selbar`
      query. The bar itself is `width: max-content` and cannot host the
      container (inline-size containment collapses the pill — see the note in
@@ -6405,7 +6773,11 @@ function handleEmptyStateReset() {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding-top: 8px;
+  /* Offset the floating pill 8px from the top with a transform, not padding: a
+     sticky element reserves its box in normal flow, so padding-top here added
+     8px of height that pushed the grid down. transform doesn't affect layout,
+     so the grid stays flush while the pill still sits 8px below the top. */
+  transform: translateY(8px);
   pointer-events: none;
 }
 
@@ -6786,8 +7158,14 @@ function handleEmptyStateReset() {
   border-radius: 8px;
 }
 
+/* The lock badge joins these two so the three read as siblings in the top-left
+   column: same flex centring, same `padding: 0` (so their icons share one left
+   edge and inset), and — for the lock and problem indicators — no chrome at all.
+   Icon size is already shared: both bind `badgeIconSizes.penalised`, so they
+   track each other at every column count. */
 .penalised-tag-indicator,
-.stack-indicator {
+.stack-indicator,
+.thumbnail-lock-badge {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6796,7 +7174,8 @@ function handleEmptyStateReset() {
   padding: 0;
 }
 
-.penalised-tag-indicator {
+.penalised-tag-indicator,
+.thumbnail-lock-badge {
   background: none !important;
   border: none !important;
   box-shadow: none !important;

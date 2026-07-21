@@ -14,6 +14,8 @@ from .missing_description_finder import MissingDescriptionFinder
 from .missing_quality_finder import MissingQualityFinder
 from .missing_text_embedding_finder import MissingTextEmbeddingFinder
 from .missing_tag_finder import MissingTagFinder
+from .missing_tag_prediction_finder import MissingTagPredictionFinder
+from .tag_prediction_backfill_task import TagPredictionBackfillTask
 from .missing_watch_folder_import_finder import MissingWatchFolderImportFinder
 from .missing_comfyui_extraction_finder import MissingComfyUIExtractionFinder
 from .comfyui_extraction_task import ComfyUIExtractionTask
@@ -31,6 +33,8 @@ from .text_score_task import TextScoreTask
 from .missing_text_score_finder import MissingTextScoreFinder
 from .ensure_gfs_snapshot_finder import EnsureGfsSnapshotFinder
 from .ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
+from .tag_health_auto_rebuild_task import TagHealthAutoRebuildTask
+from .tag_health_auto_rebuild_finder import TagHealthAutoRebuildFinder
 
 __all__ = [
     "TaskType",
@@ -50,6 +54,8 @@ __all__ = [
     "MissingQualityFinder",
     "MissingTextEmbeddingFinder",
     "MissingTagFinder",
+    "MissingTagPredictionFinder",
+    "TagPredictionBackfillTask",
     "MissingWatchFolderImportFinder",
     "MissingComfyUIExtractionFinder",
     "ComfyUIExtractionTask",
@@ -65,4 +71,6 @@ __all__ = [
     "MissingTextScoreFinder",
     "EnsureGfsSnapshotFinder",
     "EnsureGfsSnapshotTask",
+    "TagHealthAutoRebuildTask",
+    "TagHealthAutoRebuildFinder",
 ]

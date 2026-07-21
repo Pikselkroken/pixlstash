@@ -13,7 +13,7 @@
       <span>Description</span>
       <span class="section-meta-group">
         <button
-          v-if="props.image && !isReadOnly"
+          v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
           title="Regenerate description — deletes the current description and requeues it for captioning"
@@ -25,7 +25,7 @@
           </v-icon>
         </button>
         <v-menu
-          v-if="props.image && !isReadOnly"
+          v-if="props.image && !readOnly"
           v-model="descPluginMenuOpen"
           :close-on-content-click="true"
           location="bottom end"
@@ -89,6 +89,10 @@
       </span>
     </div>
     <template v-if="!descriptionCollapsed">
+      <div v-if="locked && lockNote" class="overlay-lock-note" :title="lockNote">
+        <v-icon size="12">mdi-lock-outline</v-icon>
+        <span>Locked — read-only. Unlock the set to edit.</span>
+      </div>
       <div
         class="description-editor"
         :class="{ 'description-editor--sentinel': isSentinelDescription }"
@@ -96,9 +100,9 @@
         <textarea
           ref="descriptionEditorRef"
           v-model="descriptionDraft"
-          :readonly="!isEditingDescription || isReadOnly"
-          @focus="!isReadOnly && startEditDescription()"
-          @click="!isReadOnly && startEditDescription()"
+          :readonly="!isEditingDescription || readOnly"
+          @focus="!readOnly && startEditDescription()"
+          @click="!readOnly && startEditDescription()"
           @keydown.enter.prevent="
             isEditingDescription && !$event.shiftKey && saveDescription()
           "
@@ -146,7 +150,16 @@ import {
 const props = defineProps({
   image: { type: Object, default: null },
   backendUrl: { type: String, required: true },
+  // True when the picture is frozen by a locked set: render read-only.
+  locked: { type: Boolean, default: false },
+  // Lock-reason tooltip copy (single source from useLockedSetsStore).
+  lockNote: { type: String, default: "" },
 });
+
+// Compose the app-wide read-only (token capability) with the data-state lock.
+// The lock takes tooltip precedence, but for gating either one makes the panel
+// read-only.
+const readOnly = computed(() => isReadOnly.value || props.locked);
 
 const emit = defineEmits(["update-description"]);
 
@@ -339,26 +352,26 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  margin-bottom: 4px;
-  padding: 2px 0;
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) 0;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .section-meta-group {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .section-meta-btn {
   border: none;
   background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  padding: 2px;
+  padding: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -378,6 +391,15 @@ defineExpose({
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
+.overlay-lock-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+
 .description-editor {
   flex: 1;
   display: flex;
@@ -389,8 +411,8 @@ defineExpose({
   flex: 1;
   width: 100%;
   min-height: 56px;
-  border-radius: 8px;
-  font-size: 0.85rem;
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
   background: rgba(var(--v-theme-shadow), 0.35);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -401,7 +423,7 @@ defineExpose({
 .description-actions {
   margin-top: 6px;
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .overlay-icon-btn {
@@ -411,7 +433,7 @@ defineExpose({
   height: 32px;
   padding: 6px 14px;
   min-width: 32px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;

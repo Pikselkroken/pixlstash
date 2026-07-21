@@ -37,6 +37,37 @@ from sqlalchemy import or_, text
 from sqlalchemy.sql.elements import ColumnElement
 
 from pixlstash.db_models.picture import Picture
+from pixlstash.utils.service.person_tags import (
+    FACE_REQUIRING_TAGS,
+    OBJECT_META_TAGS,
+    PERSON_TAGS,
+)
+
+# Tag vocabularies for the live "Impossible tags" grid filters, lowercased once for
+# case-insensitive SQL membership.
+_FACE_REQUIRING_LOWER = sorted(FACE_REQUIRING_TAGS)
+_PERSON_LOWER = sorted(PERSON_TAGS)
+_OBJECT_META_LOWER = sorted(OBJECT_META_TAGS)
+
+# The shared no-real-face test (only sentinel faces, ``face_index == -1``).
+_NO_REAL_FACE_SQL = (
+    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id "
+    "AND face.face_index != -1)"
+)
+
+
+def _tag_in_exists(prefix: str, tags_lower: list[str]) -> tuple[str, dict]:
+    """Return an ``EXISTS (a tag in tags_lower)`` SQL fragment + its bind params.
+
+    ``prefix`` namespaces the bound params so several fragments can coexist in one
+    statement without collision.
+    """
+    placeholders = ", ".join(f":{prefix}_{i}" for i in range(len(tags_lower)))
+    sql = (
+        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id "
+        f"AND LOWER(tag.tag) IN ({placeholders}))"
+    )
+    return sql, {f"{prefix}_{i}": t for i, t in enumerate(tags_lower)}
 
 
 def comfyui_leaf_parts(
@@ -107,6 +138,11 @@ class PredicateFilter(BaseModel):
     tags_confidence_above_filter: Optional[List[str]] = None
     tags_confidence_below_filter: Optional[List[str]] = None
     face_filter: Optional[str] = None
+    # "Impossible tags" grid filters — live, computed from the picture's own tags/faces
+    # (no precomputed queue). Recognised kinds: ``"no_face"`` (no detected face yet a
+    # face-requiring tag) and ``"no_humans"`` (no face, tagged "no humans"/"scenery", yet
+    # a person-tag). Multiple kinds are OR'd. Only ever narrows a scope-enforced listing.
+    impossible_sources: Optional[List[str]] = None
     file_path_prefix: Optional[str] = None
     # ``find()`` browses a folder and shows direct children only (separator-aware,
     # LIKE-escaped).  The stats sidebar instead aggregates the whole sub-tree under a
@@ -322,6 +358,29 @@ class PredicateFilter(BaseModel):
                 )
             )
 
+        if self.impossible_sources:
+            # Each selected kind is a live "impossible combination" predicate over the
+            # picture's own tags/faces (no precomputed queue). Multiple selected kinds
+            # are OR'd, so the grid shows a picture matching ANY chosen filter.
+            clauses: list[ColumnElement] = []
+            if "no_face" in self.impossible_sources:
+                # No detected face, yet carries a face-requiring tag.
+                face_exists, fp = _tag_in_exists("imp_face", _FACE_REQUIRING_LOWER)
+                clauses.append(
+                    text(f"({_NO_REAL_FACE_SQL} AND {face_exists})").bindparams(**fp)
+                )
+            if "no_humans" in self.impossible_sources:
+                # No detected face, tagged "no humans"/"scenery", yet carries a person-tag.
+                meta_exists, mp = _tag_in_exists("imp_meta", _OBJECT_META_LOWER)
+                person_exists, pp = _tag_in_exists("imp_person", _PERSON_LOWER)
+                clauses.append(
+                    text(
+                        f"({_NO_REAL_FACE_SQL} AND {meta_exists} AND {person_exists})"
+                    ).bindparams(**mp, **pp)
+                )
+            if clauses:
+                preds.append(or_(*clauses))
+
         return preds
 
     def apply(self, stmt):
@@ -385,6 +444,7 @@ class PredicateFilter(BaseModel):
             tags_confidence_above_filter=qp.getlist("tag_confidence_above") or None,
             tags_confidence_below_filter=qp.getlist("tag_confidence_below") or None,
             face_filter=qp.get("face_filter") or None,
+            impossible_sources=qp.getlist("impossible_tag_source") or None,
             file_path_prefix=qp.get("file_path_prefix") or None,
             file_path_prefix_children_only=children_only,
             import_source_folder=qp.get("import_source_folder") or None,

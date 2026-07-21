@@ -9,6 +9,7 @@ export const useExportStore = defineStore("export", () => {
   const exportIncludeCharacterName = ref(true);
   const exportUseOriginalFileNames = ref(false);
   const exportResolution = ref("original");
+  const exportBboxMode = ref("none");
   const exportSelectedCount = ref(0);
   const exportTotalCount = ref(0);
 
@@ -38,6 +39,11 @@ export const useExportStore = defineStore("export", () => {
     { title: "Spaces", value: "spaces" },
     { title: "Underscores", value: "underscores" },
   ];
+  const exportBboxOptions = [
+    { title: "None", value: "none" },
+    { title: "COCO JSON", value: "coco-json" },
+    { title: "Ideogram 4 JSON", value: "ideogram-json" },
+  ];
 
   watch(
     exportType,
@@ -58,6 +64,7 @@ export const useExportStore = defineStore("export", () => {
     exportIncludeCharacterName,
     exportUseOriginalFileNames,
     exportResolution,
+    exportBboxMode,
     exportSelectedCount,
     exportTotalCount,
     exportCount,
@@ -66,5 +73,6 @@ export const useExportStore = defineStore("export", () => {
     exportTypeOptions,
     exportResolutionOptions,
     exportTagFormatOptions,
+    exportBboxOptions,
   };
 });

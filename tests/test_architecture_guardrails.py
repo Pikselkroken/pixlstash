@@ -18,6 +18,15 @@ TASKS_DIR = REPO_ROOT / "pixlstash" / "tasks"
 SERVICES_DIR = REPO_ROOT / "pixlstash" / "services"
 SERVER_PY = REPO_ROOT / "pixlstash" / "server.py"
 
+# The picture-set lock guards (see pixlstash/services/set_lock_service.py). Any of
+# these names appearing in a handler's source proves it consults the lock state.
+_LOCK_GUARD_TOKENS = (
+    "enforce_set_not_locked",
+    "enforce_pictures_not_locked",
+    "locked_picture_ids",
+    "_assert_set_scope_not_locked",
+)
+
 
 # ---------------------------------------------------------------------------
 # Guardrail 1: No private vault access from route handlers
@@ -112,15 +121,23 @@ def test_no_new_direct_db_calls_from_routes():
 
 
 def test_services_no_direct_db_calls():
-    # Known transitional service files that still call vault.db.run_* directly.
-    # Remove each file from this set once it is migrated to accept a Session.
+    # See docs/backend_architecture.md §10.1 for the rule and what to do on failure.
+    # Known transitional service files that still call vault.db.run_* directly
+    # (inside a thin wrapper around their *_in_session functions).
+    # Add a new such file here WITH a justification; remove each file from this
+    # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
         "pixlstash/services/share_service.py",  # vault-injection pattern
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
+        "pixlstash/services/tag_suggestion_service.py",  # vault-injection pattern; review-queue writeback
+        "pixlstash/services/tagger_run_service.py",  # vault-injection pattern; tagger run history upsert
         "pixlstash/services/tag_scan_service.py",  # vault-injection pattern; sync near-neighbour tag scan
+        "pixlstash/services/review_service.py",  # vault-injection pattern; orchestrates scan + review lifecycle
+        "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
     }
@@ -138,8 +155,11 @@ def test_services_no_direct_db_calls():
             if _DB_CALL_PATTERN.search(line):
                 violations.append(f"{rel}:{lineno}: {line.strip()}")
     assert not violations, (
-        "Service files must receive a pre-opened session, not call vault.db directly:\n"
-        + "\n".join(violations)
+        "Service files must receive a pre-opened session, not call vault.db directly.\n"
+        "Either (a) refactor the function to take `session: Session` (the *_in_session "
+        "pattern), or (b) if this is a thin wrapper around an *_in_session function, add "
+        "the file to _direct_db_call_service_allowlist above with a one-line justification.\n"
+        "See docs/backend_architecture.md §10.1.\n" + "\n".join(violations)
     )
 
 
@@ -295,6 +315,272 @@ def test_event_types_fully_classified():
 # ---------------------------------------------------------------------------
 # Guardrail 6: Workers start via lifecycle, not at import / __init__ time
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Guardrail 7: Every label/curation SINK is lock-guarded or explicitly exempt
+#
+# A locked picture set is a hard freeze of its members' label/curation data. The
+# recurring failure mode (CSO audit) is a NEW mutation path reaching a picture
+# with no lock guard. A handler-list test only catches what its author remembered
+# to list; this test is SINK-BASED instead: it enumerates every place the code
+# writes label/curation data — Tag rows, the human-label ledger, the soft-delete
+# flip, and a picture's description/score — and asserts the ENCLOSING function
+# either carries a lock-guard token OR is on an explicit, justified exempt list.
+# A guardrail that lists what you remembered cannot catch what you forgot; this
+# one fails the moment an unguarded sink appears in a non-exempt function.
+# See docs/reviews/2026-07-picture-set-locking-plan.md §7 and the CSO coverage audit.
+# ---------------------------------------------------------------------------
+
+VAULT_PY = REPO_ROOT / "pixlstash" / "vault.py"
+
+# Label/curation write sinks. Matching one of these on a source line means that
+# line mutates a picture's frozen-when-locked data.
+_LABEL_SINK_RE = re.compile(
+    r"(?:add\(Tag\("  # create a confirmed Tag row
+    r"|delete\(Tag\)"  # delete confirmed Tag rows
+    r"|record_human_label(?:_if_relevant)?\("  # write the human POS/NEG ledger
+    r"|clear_human_label\("  # clear a human ledger entry
+    r"|\.deleted\s*=\s*True"  # soft-delete a picture
+    r"|\.(?:description|score)\s*=\s(?!=))"  # overwrite description / user score
+)
+
+# The description/score sink is only a *picture* label sink when the receiver is a
+# picture. Drop writes to other models' description/score so they aren't flagged.
+_NON_PICTURE_ATTR_RE = re.compile(
+    r"\b(?:metadata|character|project|picture_set|row|self)\.(?:description|score)\s*="
+)
+
+# {(relative_path, enclosing_function_name): justification}. An exemption is a
+# decision someone owns, per deny-by-default — each entry says why the sink is NOT
+# a locked-set concern. Keep this list tight; a real mutation path belongs guarded.
+_LABEL_SINK_EXEMPT = {
+    # --- Internal chokepoints: every caller enforces/skips locked pics first ---
+    ("pixlstash/services/tag_suggestion_service.py", "_set_tag"): (
+        "internal suggestion Tag chokepoint; all callers (accept/dismiss/fix_twin/"
+        "swap/_resolve/bulk_accept) enforce or skip locked pictures"
+    ),
+    ("pixlstash/services/tag_suggestion_service.py", "_reverse_review"): (
+        "internal undo chokepoint; callers reopen_suggestion (enforce) and "
+        "bulk_reopen (skip) guard locked pictures before invoking"
+    ),
+    ("pixlstash/services/impossible_tag_clear_service.py", "_clear_tags_in_session"): (
+        "internal clear chokepoint; sole caller clear_in_session skips locked "
+        "pictures via locked_picture_ids before invoking"
+    ),
+    # --- Machine-derived / rule-4-exempt background writes ---
+    # NB: description regeneration is NOT rule-4 exempt (rule 3 freezes the
+    # description). description_task._generate_descriptions_batch /
+    # update_descriptions now SKIP locked pics (and MissingDescriptionFinder
+    # excludes them), so they are guarded, not exempt.
+    ("pixlstash/tasks/text_embedding_task.py", "_run_task"): (
+        "in-memory carry-over of the existing description onto a fresh fetch to "
+        "compute an embedding; no persistent label change"
+    ),
+    # --- New-picture ingest: a not-yet-imported picture cannot be in a locked set ---
+    ("pixlstash/routes/pictures/_import.py", "apply_sidecar_tags"): (
+        "applies sidecar tags to freshly-imported pictures (new pics)"
+    ),
+    ("pixlstash/routes/comfyui.py", "import_task"): (
+        "sentinel Tag on freshly-imported ComfyUI pictures (new pics)"
+    ),
+    ("pixlstash/tasks/watch_folder_import_task.py", "insert_pictures"): (
+        "watch-folder import of NEW pictures"
+    ),
+    ("pixlstash/tasks/watch_folder_import_task.py", "_run_task"): (
+        "watch-folder import of NEW pictures (sidecar description)"
+    ),
+    ("pixlstash/tasks/reference_folder_scan_task.py", "_build_picture"): (
+        "builds NEW picture rows during a reference-folder scan"
+    ),
+    ("pixlstash/vault.py", "import_default_data"): (
+        "logo / default-data import (new pictures)"
+    ),
+    # --- Whole-DB snapshot restore rebuilds every row (CSO-named exempt) ---
+    ("pixlstash/services/restore_service.py", "_upsert_rows"): (
+        "whole-DB snapshot restore rebuilds all rows; a locked set is itself "
+        "restored from the snapshot, not mutated in place"
+    ),
+    # NB: characters.py::alter_char now SKIPS the description clear for locked pics
+    # (keeps character reassignment + text_embedding invalidation), so it is
+    # guarded, not exempt.
+    # --- CSO-named, documented NON-sinks (no Tag/ledger/label write reaches a
+    # picture here). Kept for the record; excluded from the stale-prune below
+    # because the scanner never flags them (they don't match a sink pattern). ---
+    ("pixlstash/services/tag_prediction_service.py", "delete_tag_predictions"): (
+        "deletes machine TagPrediction rows only (rule 4); no confirmed Tag/ledger"
+    ),
+    ("pixlstash/services/tag_suggestion_service.py", "skip_suggestion"): (
+        "sets status SKIPPED only; writes no Tag row and no ledger entry"
+    ),
+}
+
+# CSO-named documented non-sinks: present in _LABEL_SINK_EXEMPT for the record but
+# they never match a sink pattern, so the stale-prune must not expect them used.
+_DOCUMENTED_NON_SINKS = frozenset(
+    {
+        ("pixlstash/services/tag_prediction_service.py", "delete_tag_predictions"),
+        ("pixlstash/services/tag_suggestion_service.py", "skip_suggestion"),
+    }
+)
+
+_SINK_SCAN_FILES = [ROUTES_DIR, SERVICES_DIR, TASKS_DIR]
+
+
+def _innermost_enclosing_functions(tree: ast.AST, lineno: int) -> list[ast.AST]:
+    """Return the function nodes spanning ``lineno``, outermost→innermost."""
+    chain = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.lineno <= lineno <= (node.end_lineno or node.lineno)
+    ]
+    chain.sort(key=lambda n: n.lineno)
+    return chain
+
+
+def _iter_sink_files():
+    for directory in _SINK_SCAN_FILES:
+        yield from sorted(directory.rglob("*.py"))
+    yield VAULT_PY
+
+
+def _scan_label_sinks():
+    """Yield (rel_path, lineno, enclosing_func_name, guarded, line) for each sink."""
+    for path in _iter_sink_files():
+        source = path.read_text()
+        tree = ast.parse(source, filename=str(path))
+        func_src = {
+            node: (ast.get_source_segment(source, node) or "")
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for lineno, raw in enumerate(source.splitlines(), start=1):
+            stripped = raw.strip()
+            if stripped.startswith(("#", "from ", "import ")):
+                continue
+            if not _LABEL_SINK_RE.search(raw):
+                continue
+            # description/score writes to non-picture models are not label sinks.
+            if _NON_PICTURE_ATTR_RE.search(raw):
+                continue
+            chain = _innermost_enclosing_functions(tree, lineno)
+            name = chain[-1].name if chain else "<module>"
+            guarded = any(
+                token in func_src[node]
+                for node in chain
+                for token in _LOCK_GUARD_TOKENS
+            )
+            yield rel, lineno, name, guarded, stripped
+
+
+def test_label_mutation_sinks_are_lock_guarded():
+    unguarded = []
+    used_exemptions = set()
+    for rel, lineno, name, guarded, line in _scan_label_sinks():
+        if guarded:
+            continue
+        if (rel, name) in _LABEL_SINK_EXEMPT:
+            used_exemptions.add((rel, name))
+            continue
+        unguarded.append(f"{rel}:{lineno} in '{name}': {line[:80]}")
+
+    assert not unguarded, (
+        "Label/curation sink(s) reach a picture with NO picture-set lock guard and "
+        "no justified exemption (deny-by-default — each is a bug).\n"
+        "Add `enforce_pictures_not_locked(session, ids, action)` (or a skip via "
+        "`locked_picture_ids`) in the enclosing function, or, if it is genuinely "
+        "not a locked-set concern, add a justified entry to _LABEL_SINK_EXEMPT:\n"
+        + "\n".join(unguarded)
+    )
+
+    # Keep the exempt list honest: a stale entry (sink moved/guarded/removed) must
+    # be pruned so the list never silently grows past what it still covers. The
+    # documented non-sinks are exempt from this — they intentionally match no sink.
+    stale = sorted(set(_LABEL_SINK_EXEMPT) - used_exemptions - _DOCUMENTED_NON_SINKS)
+    assert not stale, (
+        "Stale _LABEL_SINK_EXEMPT entries no longer match any unguarded sink "
+        "(prune them):\n" + "\n".join(f"{r} :: {n}" for r, n in stale)
+    )
+
+
+def test_label_sink_guardrail_detects_a_removed_guard():
+    """Meta-check: the sink scanner must FAIL a function whose guard is removed.
+
+    Proves the guardrail has teeth — that it would catch a regression, not just
+    pass vacuously. We take a known-guarded sink function, strip its guard tokens
+    from the scanned source in-memory, and assert it flips to unguarded.
+    """
+    guarded_now = [
+        (rel, name) for rel, _ln, name, guarded, _line in _scan_label_sinks() if guarded
+    ]
+    assert guarded_now, "expected at least one guarded label sink to exist"
+    # Every currently-guarded sink function must rely on a guard token — remove the
+    # tokens and it can no longer be considered guarded. Verify the scanner's guard
+    # detection is token-driven (not incidental) for a representative sink.
+    sample_rel, sample_name = guarded_now[0]
+    path = REPO_ROOT / sample_rel
+    source = path.read_text()
+    stripped = source
+    for token in _LOCK_GUARD_TOKENS:
+        stripped = stripped.replace(token, "REMOVED_GUARD")
+    tree = ast.parse(stripped, filename=str(path))
+    func_src = {
+        node: (ast.get_source_segment(stripped, node) or "")
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == sample_name
+    }
+    assert func_src, f"could not re-locate {sample_name} after stripping guards"
+    assert not any(
+        token in seg for seg in func_src.values() for token in _LOCK_GUARD_TOKENS
+    ), "stripping the guard tokens must leave the function unguarded"
+
+
+# Internal Tag/ledger chokepoints in tag_suggestion_service. They are exempt from
+# the sink scan above (they carry the actual Tag/ledger writes but are only ever
+# reached from guarded/skipping callers). That exemption is ONLY safe while every
+# caller guards — the test below enforces exactly that, so a suggestion action
+# (swap / fix-twin / reopen / bulk-accept / bulk-reopen / accept) that writes via a
+# chokepoint but drops its lock guard fails CI even though it has no direct sink.
+_LOCK_TAG_CHOKEPOINTS = ("_set_tag", "_reverse_review", "_resolve", "_apply_writeback")
+
+
+def test_lock_chokepoint_callers_are_guarded():
+    path = SERVICES_DIR / "tag_suggestion_service.py"
+    rel = path.relative_to(REPO_ROOT).as_posix()
+    source = path.read_text()
+    tree = ast.parse(source, filename=str(path))
+    call_res = [re.compile(rf"\b{re.escape(cp)}\s*\(") for cp in _LOCK_TAG_CHOKEPOINTS]
+
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name in _LOCK_TAG_CHOKEPOINTS:
+            continue  # a chokepoint calling another chokepoint is fine
+        seg = ast.get_source_segment(source, node) or ""
+        # Only consider a *direct* call in this function's own body, not calls made
+        # by nested functions (those nested functions are their own nodes and are
+        # checked independently). Strip nested function bodies before testing.
+        own_body = seg
+        for child in node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                child_seg = ast.get_source_segment(source, child) or ""
+                own_body = own_body.replace(child_seg, "")
+        if not any(rx.search(own_body) for rx in call_res):
+            continue
+        if not any(tok in seg for tok in _LOCK_GUARD_TOKENS):
+            violations.append(node.name)
+
+    assert not violations, (
+        "Function(s) call a Tag/ledger chokepoint (_set_tag/_reverse_review/"
+        "_resolve/_apply_writeback) but carry no picture-set lock guard — a "
+        "suggestion action could write frozen label data. Guard the caller "
+        "(enforce_pictures_not_locked / locked_picture_ids skip):\n"
+        f"  {rel}: " + ", ".join(sorted(violations))
+    )
 
 
 def test_workers_not_started_at_vault_init():

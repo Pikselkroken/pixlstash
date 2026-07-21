@@ -436,22 +436,78 @@ class FaceModelRefreshTask(BaseTask):
         unmatched_existing = [f for f in existing if id(f) not in matched_existing]
         return pairs, still_unmatched_new, unmatched_existing
 
+    @staticmethod
+    def _reindex_avoiding_reserved(
+        pairs: list, unmatched_new: list, reserved: dict
+    ) -> None:
+        """Assign detected faces collision-free ``face_index`` values per frame.
+
+        The pack-refresh sweep only manages *detected* faces (updated ``pairs`` +
+        inserted ``unmatched_new``). Manual annotations are held aside but still
+        occupy ``(frame_index, face_index)`` slots that the unique constraint
+        forbids reusing. Renumber the detected faces per frame — by sorted bbox
+        position, the extractor's ordering rule — to the sequence of indices that
+        skips those reserved slots, so an inserted detection can never collide
+        with a manually-drawn box (which would raise IntegrityError and leave the
+        picture stuck stale).
+        """
+        by_frame: dict[int, list[Face]] = {}
+        for _ef, nf in pairs:
+            by_frame.setdefault(nf.frame_index, []).append(nf)
+        for nf in unmatched_new:
+            by_frame.setdefault(nf.frame_index, []).append(nf)
+        for frame_index, faces in by_frame.items():
+            blocked = reserved.get(frame_index, set())
+            faces.sort(
+                key=lambda f: (
+                    (f.bbox[1], f.bbox[0], f.bbox[3], f.bbox[2])
+                    if f.bbox
+                    else (0, 0, 0, 0)
+                )
+            )
+            next_idx = 0
+            for f in faces:
+                while next_idx in blocked:
+                    next_idx += 1
+                f.face_index = next_idx
+                next_idx += 1
+
     @classmethod
     def _refresh_picture_faces(
         cls, session, picture_id: int, new_faces: list[Face], model_pack: str
     ) -> None:
-        """Update one picture's face rows in place, preserving character_id."""
+        """Update one picture's face rows in place, preserving character_id.
+
+        Manual annotations — a human-drawn bbox with no embedding
+        (``features IS NULL``) — are NOT managed by this pack-refresh sweep: there
+        is no embedding to recompute and the detector never produced the box, so
+        the refresh must never delete it, move it, or overwrite its bbox. Such
+        rows are held aside untouched and their ``(frame_index, face_index)`` slots
+        are reserved so re-indexed detections cannot collide with them.
+        """
         existing = session.exec(select(Face).where(Face.picture_id == picture_id)).all()
 
-        # Drop pre-existing sentinel rows (face_index == -1) from the match set —
-        # they carry no real detection. If the new run also found nothing, we
-        # re-insert a sentinel below.
-        real_existing = [f for f in existing if f.face_index != -1]
+        # Partition existing rows. Sentinels (index -1) carry no detection; manual
+        # rows (real index, no embedding) are human annotations to preserve; the
+        # rest are detected faces this sweep re-embeds.
         sentinels = [f for f in existing if f.face_index == -1]
+        manual_existing = [
+            f for f in existing if f.face_index != -1 and f.features is None
+        ]
+        real_existing = [
+            f for f in existing if f.face_index != -1 and f.features is not None
+        ]
+
+        # Slots occupied by manual annotations, per frame — detected faces must not
+        # be written into these (unique constraint on picture/frame/face_index).
+        reserved: dict[int, set[int]] = {}
+        for f in manual_existing:
+            reserved.setdefault(f.frame_index, set()).add(f.face_index)
 
         if not new_faces:
-            # No faces detected now. Refresh sentinel(s) so the picture is not
-            # re-selected forever; preserve nothing to preserve (no embeddings).
+            # No faces detected now. Remove the detected rows (their embeddings are
+            # stale and the current pack no longer finds them) but KEEP manual
+            # annotations — they were never detector output.
             if real_existing:
                 for f in real_existing:
                     logger.info(
@@ -462,7 +518,12 @@ class FaceModelRefreshTask(BaseTask):
                         model_pack,
                     )
                     session.delete(f)
-            if sentinels:
+            if manual_existing:
+                # Picture still holds real (manual) faces, so it is not empty:
+                # drop any stray sentinel rather than marking it as no-faces.
+                for s in sentinels:
+                    session.delete(s)
+            elif sentinels:
                 for s in sentinels:
                     s.model_pack = model_pack
                     session.add(s)
@@ -483,18 +544,11 @@ class FaceModelRefreshTask(BaseTask):
         for s in sentinels:
             session.delete(s)
 
+        # Match only against detected faces; manual rows are never matched, moved,
+        # or deleted by the refresh.
         pairs, unmatched_new, unmatched_existing = cls._match_existing(
             real_existing, new_faces
         )
-
-        for ef, nf in pairs:
-            # Update embedding + pack IN PLACE; preserve character_id and identity.
-            ef.features = nf.features
-            ef.model_pack = model_pack
-            ef.bbox = nf.bbox
-            ef.frame_index = nf.frame_index
-            ef.face_index = nf.face_index
-            session.add(ef)
 
         for f in unmatched_existing:
             logger.info(
@@ -506,6 +560,20 @@ class FaceModelRefreshTask(BaseTask):
                 model_pack,
             )
             session.delete(f)
+
+        # Renumber the detected faces that will remain (updated + inserted) to
+        # indices that skip the reserved manual slots, so a manually-drawn box is
+        # never overwritten by an inserted detection.
+        cls._reindex_avoiding_reserved(pairs, unmatched_new, reserved)
+
+        for ef, nf in pairs:
+            # Update embedding + pack IN PLACE; preserve character_id and identity.
+            ef.features = nf.features
+            ef.model_pack = model_pack
+            ef.bbox = nf.bbox
+            ef.frame_index = nf.frame_index
+            ef.face_index = nf.face_index
+            session.add(ef)
 
         # Flush deletes/updates before inserting new rows so the unique
         # constraint on (picture_id, frame_index, face_index) does not collide

@@ -87,14 +87,14 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
 .snap-del-title {
   display: flex;
   align-items: center;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 .snap-del-hint {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   line-height: 1.4;
   opacity: 0.85;
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
 }
 .snap-del-list {
   background: transparent;
@@ -102,18 +102,18 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
   overflow-y: auto;
 }
 .snap-del-item {
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 .snap-del-kind {
-  margin-right: 8px;
+  margin-right: var(--space-3);
   min-width: 64px;
   justify-content: center;
 }
 .snap-del-item-title {
-  font-size: 0.9rem;
+  font-size: var(--text-base);
 }
 .snap-del-dont-show :deep(.v-label) {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   opacity: 0.85;
 }
 </style>

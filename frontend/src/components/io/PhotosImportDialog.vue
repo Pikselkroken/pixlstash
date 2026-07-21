@@ -379,7 +379,7 @@ watch(dialogOpen, (isOpen) => {
 <style scoped>
 .google-photos-shell {
   position: relative;
-  padding: 16px;
+  padding: var(--space-5);
 }
 
 .google-photos-close {
@@ -392,15 +392,15 @@ watch(dialogOpen, (isOpen) => {
 .google-photos-card {
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   min-height: 560px;
 }
 
 .google-photos-title {
-  font-weight: 700;
+  font-weight: var(--weight-semibold);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -411,7 +411,7 @@ watch(dialogOpen, (isOpen) => {
 .import-project-select {
   min-width: 150px;
   max-width: 260px;
-  font-weight: 700;
+  font-weight: var(--weight-semibold);
 }
 
 .import-project-select :deep(.v-field__outline__start),
@@ -428,16 +428,16 @@ watch(dialogOpen, (isOpen) => {
 
 .import-project-select :deep(.v-field__input) {
   color: rgb(var(--v-theme-primary));
-  font-weight: 700;
-  font-size: 1rem;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
   min-height: unset;
-  padding-top: 4px;
-  padding-bottom: 4px;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
 }
 
 .import-project-select :deep(.v-field) {
   background: rgba(var(--v-theme-primary), 0.1);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .import-project-select :deep(.v-field:hover .v-field__outline__start),
@@ -448,7 +448,7 @@ watch(dialogOpen, (isOpen) => {
 
 .import-project-select :deep(.v-select__selection-text) {
   color: rgb(var(--v-theme-primary));
-  font-weight: 700;
+  font-weight: var(--weight-semibold);
 }
 
 .import-project-select :deep(.v-field__append-inner .v-icon) {
@@ -459,7 +459,7 @@ watch(dialogOpen, (isOpen) => {
 .google-photos-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-5);
 }
 
 .photo-import-tabs {
@@ -467,7 +467,7 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .photo-import-window {
-  margin-top: 8px;
+  margin-top: var(--space-3);
 }
 
 .google-photos-section-title {
@@ -476,30 +476,30 @@ watch(dialogOpen, (isOpen) => {
 
 .google-photos-instructions {
   background: rgba(var(--v-theme-on-surface), 0.04);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  padding: 12px 14px;
+  padding: var(--space-4) var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .google-photos-instructions ol {
   margin: 0;
-  padding-left: 18px;
+  padding-left: var(--space-5);
   display: grid;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .google-photos-note {
-  font-size: 0.92rem;
+  font-size: var(--text-base);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .local-import-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-4);
   flex-wrap: wrap;
 }
 
@@ -509,8 +509,8 @@ watch(dialogOpen, (isOpen) => {
 
 .local-import-dropzone {
   border: 2px dashed rgba(var(--v-theme-border), 0.6);
-  border-radius: 12px;
-  padding: 28px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-7);
   min-height: 140px;
   text-align: center;
   background: rgba(var(--v-theme-on-surface), 0.03);
@@ -532,22 +532,22 @@ watch(dialogOpen, (isOpen) => {
 .watch-folder-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .watch-folder-list {
   margin: 0;
-  padding-left: 18px;
+  padding-left: var(--space-5);
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
   color: rgba(var(--v-theme-on-surface), 0.8);
-  font-size: 0.92rem;
+  font-size: var(--text-base);
 }
 
 .watch-folder-list-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .watch-folder-list-label {
@@ -557,16 +557,16 @@ watch(dialogOpen, (isOpen) => {
 .watch-folder-list-path {
   font-family:
     "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
-  font-size: 0.84rem;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.66);
 }
 
 .watch-folder-list-badge {
   display: inline-block;
   width: fit-content;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 0.72rem;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   background: rgba(var(--v-theme-warning), 0.16);

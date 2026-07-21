@@ -20,12 +20,17 @@ from pixlstash.db_models import (
     PictureSetMember,
     Quality,
     Tag,
+    TagPrediction,
     User,
 )
+from pixlstash.services.tagger_run_service import get_latest_tag_precisions
+from pixlstash.utils.quality.anomaly_penalty import ANOMALY_PENALTY_TAGS
 from pixlstash.utils.quality.smart_score_utils import (
     SmartScoreUtils,
     smart_score_penalised_tags,
 )
+from pixlstash.utils.service.anomaly_thresholds import resolve_anomaly_apply_thresholds
+from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
 from pixlstash.utils.service.filter_helpers import combine_likeness_scores
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.pixl_logging import get_logger
@@ -698,6 +703,157 @@ def count_pictures_by_character_likeness(
     return server.vault.db.run_task(run_count, priority=DBPriority.IMMEDIATE)
 
 
+def fetch_anomaly_confidences(
+    session: Session, picture_ids, apply_thresholds: dict | None = None
+) -> tuple[dict, dict]:
+    """Return per-picture anomaly probabilities and human-verified tags.
+
+    Reads ``TagPrediction`` for the anomaly vocabulary only. A human decision in the
+    label ledger overrides the model: a human POS folds to probability 1.0 (and is
+    flagged so the penalty bypasses the precision floor), a human NEG folds to 0.0.
+
+    Args:
+        session: Active DB session.
+        picture_ids: Pictures to read predictions for.
+        apply_thresholds: ``{tag: minimum confidence}`` from
+            :func:`~pixlstash.utils.service.anomaly_thresholds.resolve_anomaly_apply_thresholds`.
+            A **model** prediction below its tag's threshold never became a visible
+            ``Tag``, so it is dropped rather than silently penalising the picture.
+            Human decisions are exempt in both directions: a human POS under threshold
+            still counts, a human NEG still suppresses — which is precisely why this
+            gate is applied here and not by reading the ``Tag`` table instead.
+            ``None`` disables gating (used for change-detection signatures, which want
+            the raw prediction state).
+
+    Returns:
+        ``(probs_map, human_map)`` where ``probs_map`` is
+        ``{picture_id: {tag: probability}}`` and ``human_map`` is
+        ``{picture_id: {tag, ...}}`` of human-verified present tags.
+    """
+    probs_map: dict = defaultdict(dict)
+    human_map: dict = defaultdict(set)
+    if not picture_ids:
+        return probs_map, human_map
+
+    rows = session.exec(
+        select(
+            TagPrediction.picture_id,
+            TagPrediction.tag,
+            TagPrediction.confidence,
+            TagPrediction.label_state,
+            TagPrediction.label_source,
+        ).where(
+            TagPrediction.picture_id.in_(picture_ids),
+            func.lower(TagPrediction.tag).in_(ANOMALY_PENALTY_TAGS),
+        )
+    ).all()
+
+    below_threshold = 0
+    for picture_id, tag, confidence, label_state, label_source in rows:
+        if not tag:
+            continue
+        key = tag.strip().lower()
+        if label_source == HUMAN and label_state == POS:
+            probs_map[picture_id][key] = 1.0
+            human_map[picture_id].add(key)
+        elif label_source == HUMAN and label_state == NEG:
+            probs_map[picture_id][key] = 0.0
+        else:
+            value = float(confidence) if confidence is not None else 0.0
+            if apply_thresholds is not None:
+                threshold = apply_thresholds.get(key)
+                if threshold is not None and value < threshold:
+                    below_threshold += 1
+                    continue
+            probs_map[picture_id][key] = value
+
+    if below_threshold:
+        logger.debug(
+            "Anomaly penalty inputs: dropped %d sub-threshold model prediction(s) "
+            "across %d picture(s); they never became applied tags.",
+            below_threshold,
+            len(picture_ids),
+        )
+
+    return probs_map, human_map
+
+
+def resolve_penalised_tag_weights(session: Session) -> dict:
+    """Return the owner's effective ``{tag: weight}`` penalised-tag table.
+
+    PixlStash is single-user, so "the owner" is the single row in ``user`` (the same
+    resolution :mod:`pixlstash.auth` uses). The user's table *replaces* the shipped
+    defaults rather than merging with them — that is the contract of
+    :func:`~pixlstash.utils.quality.smart_score_utils.smart_score_penalised_tags`, which
+    only returns the fallback when the stored value is absent or unparseable. A tag the
+    user deleted is therefore genuinely no longer penalised.
+
+    Resolving this inside the scoring session is what lets the background
+    :class:`~pixlstash.tasks.smart_score_task.SmartScoreTask` honour the user's config;
+    the request-scoped :func:`get_smart_score_penalised_tags_from_request` cannot, since
+    a background task has no request.
+
+    Args:
+        session: Active DB session.
+
+    Returns:
+        ``{tag: weight}`` with lowercase tags and weights clamped to 1-5.
+    """
+    user = session.exec(select(User)).first()
+    if user is None:
+        logger.warning(
+            "No user row found while resolving penalised-tag weights; falling back to "
+            "the shipped DEFAULT_SMART_SCORE_PENALIZED_TAGS seed."
+        )
+        return dict(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
+    return smart_score_penalised_tags(
+        user.smart_score_penalised_tags,
+        DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+        default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    )
+
+
+def attach_anomaly_inputs(
+    session: Session, candidates, apply_thresholds: dict | None = None
+) -> dict:
+    """Attach calibrated anomaly inputs to candidates; return the scorer's config block.
+
+    Adds ``anomaly_probs`` and ``anomaly_human`` to each candidate (see
+    :func:`fetch_anomaly_confidences`). Shared by both smart-score fetch paths so the
+    on-demand sort and the background task stay in lockstep.
+
+    Args:
+        session: Active DB session.
+        candidates: Candidate dicts to annotate in place.
+        apply_thresholds: Confidence gate per anomaly tag; see
+            :func:`fetch_anomaly_confidences`.
+
+    Returns:
+        Config overrides for
+        :meth:`~pixlstash.utils.quality.smart_score_utils.SmartScoreUtils.calculate_smart_score_batch_numpy`:
+        ``tag_precisions`` from the latest evaluated :class:`TaggerRun`,
+        ``penalised_tag_weights`` resolved from the owner's config, and ``tag_thresholds``
+        — the same gate applied here, forwarded so the penalty can grade each detection's
+        confidence relative to its own acceptance threshold rather than in absolute terms.
+    """
+    config = {
+        "tag_precisions": get_latest_tag_precisions(session),
+        "penalised_tag_weights": resolve_penalised_tag_weights(session),
+        "tag_thresholds": dict(apply_thresholds or {}),
+    }
+    ids = [c.get("id") for c in candidates if c.get("id") is not None]
+    if not ids:
+        return config
+    probs_map, human_map = fetch_anomaly_confidences(
+        session, ids, apply_thresholds=apply_thresholds
+    )
+    for candidate in candidates:
+        pid = candidate.get("id")
+        candidate["anomaly_probs"] = probs_map.get(pid, {})
+        candidate["anomaly_human"] = human_map.get(pid, frozenset())
+    return config
+
+
 def fetch_smart_score_data(
     server,
     format,
@@ -706,7 +862,16 @@ def fetch_smart_score_data(
     include_deleted: bool = False,
     only_deleted: bool = False,
 ):
-    """Fetch anchors, character references, and candidates for smart score calculation."""
+    """Fetch anchors, character references, and candidates for smart score calculation.
+
+    Returns ``(good_anchors, bad_anchors, candidates, scorer_config)``, where
+    ``scorer_config`` carries the per-tag precisions and the owner's penalised-tag
+    weights (see :func:`attach_anomaly_inputs`). ``penalised_tags`` is retained for
+    signature compatibility but is not used: the weights are resolved from the owner's
+    stored config inside the read session, so the request path and the background task
+    resolve them identically.
+    """
+    apply_thresholds = resolve_anomaly_apply_thresholds(server.vault)
 
     def fetch_data(session: Session):
         # Anchors
@@ -741,7 +906,7 @@ def fetch_smart_score_data(
 
         if candidate_ids is not None:
             if not candidate_ids:
-                return good, bad, []
+                return good, bad, [], {}
             query = query.where(Picture.id.in_(candidate_ids))
 
         if format:
@@ -751,14 +916,7 @@ def fetch_smart_score_data(
 
         candidate_rows = session.exec(query).all()
 
-        penalised_tag_weights = {
-            str(tag).strip().lower(): int(weight)
-            for tag, weight in (penalised_tags or {}).items()
-            if str(tag).strip()
-        }
-
         candidates = []
-        candidate_id_list = []
         for pic, quality in candidate_rows:
             aest = pic.aesthetic_score
             quality_score = None
@@ -785,34 +943,17 @@ def fetch_smart_score_data(
                     "luminance_entropy": (
                         quality.luminance_entropy if quality else None
                     ),
+                    "noise_level": quality.noise_level if quality else None,
+                    "colorfulness": quality.colorfulness if quality else None,
                     "text_score": pic.text_score,
                 }
             )
-            candidate_id_list.append(pic.id)
 
-        penalised_tag_map = defaultdict(int)
-        if penalised_tag_weights and candidate_id_list:
-            tag_rows = session.exec(
-                select(Tag.picture_id, Tag.tag).where(
-                    Tag.picture_id.in_(candidate_id_list),
-                )
-            ).all()
-            for pic_id, tag in tag_rows:
-                if not tag:
-                    continue
-                key = tag.strip().lower()
-                weight = penalised_tag_weights.get(key)
-                if weight is not None:
-                    penalised_tag_map[pic_id] += weight
-
-            if penalised_tag_map:
-                for candidate in candidates:
-                    candidate["penalised_tag_count"] = penalised_tag_map.get(
-                        candidate["id"], 0
-                    )
-
-        if candidate_id_list:
-            pass  # tag_count no longer used by smart score
+        # Calibrated anomaly inputs, per-tag precision, and the owner's penalised-tag
+        # weights.
+        scorer_config = attach_anomaly_inputs(
+            session, candidates, apply_thresholds=apply_thresholds
+        )
 
         # Supplement with built-in anchors when the user has few rated images.
         builtin_good, builtin_bad = _load_builtin_anchors()
@@ -821,7 +962,7 @@ def fetch_smart_score_data(
         if len(bad) < _BUILTIN_MIN_BAD:
             bad = list(bad) + builtin_bad
 
-        return good, bad, candidates
+        return good, bad, candidates, scorer_config
 
     return server.vault.db.run_immediate_read_task(fetch_data)
 
@@ -914,12 +1055,15 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
                     "id": pid,
                     "embedding": v,
                     "aesthetic_score": get_attr(p, "aesthetic_score"),
-                    "penalised_tag_count": get_attr(p, "penalised_tag_count") or 0,
+                    "anomaly_probs": get_attr(p, "anomaly_probs") or {},
+                    "anomaly_human": get_attr(p, "anomaly_human") or frozenset(),
                     "width": get_attr(p, "width"),
                     "height": get_attr(p, "height"),
                     "sharpness": get_attr(p, "sharpness"),
                     "edge_density": get_attr(p, "edge_density"),
                     "luminance_entropy": get_attr(p, "luminance_entropy"),
+                    "noise_level": get_attr(p, "noise_level"),
+                    "colorfulness": get_attr(p, "colorfulness"),
                     "text_score": get_attr(p, "text_score"),
                 }
             )
@@ -960,7 +1104,7 @@ def find_pictures_by_smart_score(
             logger.debug("Progress reporting failed during sort.", exc_info=True)
 
     # 1. Fetch data
-    good_anchors, bad_anchors, candidates = fetch_smart_score_data(
+    good_anchors, bad_anchors, candidates, scorer_config = fetch_smart_score_data(
         server,
         format,
         candidate_ids=candidate_ids,
@@ -1005,6 +1149,7 @@ def find_pictures_by_smart_score(
                     batch,
                     good_list,
                     bad_list,
+                    config=scorer_config,
                 )
                 score_chunks.append(np.asarray(batch_scores, dtype=np.float32))
                 processed = end

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildOverlayPipArgs } from '../src/backend/BackendManager';
-import { RuntimeInfo, TORCH_INDEX } from '../src/config';
+import { ORT_GPU_PIN, RuntimeInfo, TORCH_INDEX } from '../src/config';
 
 /** A bundled runtime whose torch matches what the rocm7.1 index publishes. */
 const ROCM_RUNTIME: RuntimeInfo = {
@@ -63,7 +63,7 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
     assert.ok(!args.includes('torchvision==0.25.0'), 'no exact torchvision pin in fallback');
   });
 
-  it('cu128 overlay adds the onnxruntime-gpu pin and the cu128 index', () => {
+  it('cu128 overlay pins onnxruntime-gpu to its CUDA generation, NOT the bundle version', () => {
     const { args } = buildOverlayPipArgs(
       'cu128',
       { accel: 'cpu', torch: '2.10.0+cpu', torchvision: '0.25.0+cpu', onnxruntime: '1.20.0' },
@@ -73,7 +73,17 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
       undefined,
     );
     assert.equal(flagValue(args, '--index-url'), TORCH_INDEX.cu128);
-    assert.ok(args.includes('onnxruntime-gpu==1.20.0'));
+    // Regression for the 2026-07-20 incident: inheriting the bundle's ORT version
+    // ignores the CUDA-flavor axis — PyPI's onnxruntime-gpu 1.27.0 is a CUDA 13
+    // build (libcudart.so.13), which ImportErrors on the cu12 overlay stack and
+    // kills the whole backend at startup. The cu128 overlay must pin the last
+    // CUDA-12 PyPI build from ORT_GPU_PIN instead.
+    assert.equal(ORT_GPU_PIN.cu128, '1.26.0', 'cu128 pin is the last CUDA-12 PyPI build');
+    assert.ok(args.includes(`onnxruntime-gpu==${ORT_GPU_PIN.cu128}`), 'uses the per-accel CUDA-generation pin');
+    assert.ok(
+      !args.includes('onnxruntime-gpu==1.20.0'),
+      "the bundle's onnxruntime version must NOT leak into the gpu package pin",
+    );
   });
 
   it('a corporate pip mirror becomes --extra-index-url, never the primary GPU index', () => {
@@ -88,5 +98,47 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
     // GPU index stays primary; the mirror is only an extra fallback index.
     assert.equal(flagValue(args, '--index-url'), TORCH_INDEX.rocm);
     assert.equal(flagValue(args, '--extra-index-url'), 'https://mirror.corp/simple');
+  });
+});
+
+describe('filterConstraintsFreeze', () => {
+  // Regression for the 2026-07-20 live failure: the bundled env froze
+  // setuptools==83.0.0 while the CUDA torch wheels declare `setuptools<82`,
+  // making every overlay install ResolutionImpossible. Build tooling must
+  // never appear in the constraints.
+  it('drops build tooling (setuptools/pip/wheel) so torch metadata cannot conflict', async () => {
+    const { filterConstraintsFreeze } = await import('../src/backend/BackendManager');
+    const frozen = [
+      'numpy==2.4.4',
+      'setuptools==83.0.0',
+      'pip==25.1',
+      'wheel==0.45.0',
+      'pillow==12.3.0',
+    ].join('\n');
+    assert.equal(filterConstraintsFreeze(frozen), 'numpy==2.4.4\npillow==12.3.0\n');
+  });
+
+  it('drops overlay-owned dists, direct references, and option/comment lines', async () => {
+    const { filterConstraintsFreeze } = await import('../src/backend/BackendManager');
+    const frozen = [
+      'torch==2.13.0+cpu',
+      'torchvision==0.28.0+cpu',
+      'onnxruntime==1.27.0',
+      'pixlstash @ file:///build/pixlstash-1.7.0-py3-none-any.whl',
+      '-e /some/editable',
+      '# a comment',
+      'jinja2==3.1.6',
+    ].join('\n');
+    assert.equal(filterConstraintsFreeze(frozen), 'jinja2==3.1.6\n');
+  });
+
+  it('does not over-drop packages that merely start with a dropped name', async () => {
+    const { filterConstraintsFreeze } = await import('../src/backend/BackendManager');
+    // e.g. "pipdeptree" / "wheel-filename" must survive the pip/wheel drop.
+    const frozen = ['pipdeptree==2.23.0', 'wheel-filename==1.4.0', 'setuptools-scm==8.1.0'].join('\n');
+    assert.equal(
+      filterConstraintsFreeze(frozen),
+      'pipdeptree==2.23.0\nwheel-filename==1.4.0\nsetuptools-scm==8.1.0\n',
+    );
   });
 });

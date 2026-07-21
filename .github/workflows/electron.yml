@@ -10,6 +10,12 @@ on:
   push:
     tags:
       - "v*"
+  # PRs run only the cheap `test` job below (the build jobs are gated to
+  # non-PR events), so desktop-shell logic regressions surface before release.
+  pull_request:
+    paths:
+      - "electron/**"
+      - ".github/workflows/electron.yml"
   workflow_dispatch:
 
 # Least privilege: the workflow defaults to read-only. Only build-electron, which
@@ -20,7 +26,36 @@ permissions:
   contents: read
 
 jobs:
+  # Fast desktop-shell logic gate: the node --test suite in electron/test/
+  # (GPU-overlay CPU fallback, per-accel onnxruntime pins, pip-constraints
+  # filtering, install-arg construction). Needs only Node — no Python runtime,
+  # no electron-builder, no display server — so it always runs on cheap ubuntu:
+  # standalone on pull requests, and as a fail-early gate ahead of the
+  # expensive multi-OS build matrix on tag/dispatch runs.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # CSO hardening: untrusted fork `npm ci` scripts run after checkout,
+          # and this job needs no git credentials once the tree is on disk.
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Run desktop tests
+        working-directory: electron
+        run: |
+          npm ci
+          npm test
+
   build-wheel:
+    # Builds run on tag pushes / manual dispatch only; PRs stop at `test`.
+    # (build-electron chains off this job, so it is skipped on PRs too.)
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}

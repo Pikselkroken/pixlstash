@@ -6,7 +6,9 @@ class TaskType(str, Enum):
 
     FACE_EXTRACTION = "FaceExtractionTask"
     FACE_MODEL_REFRESH = "FaceModelRefreshTask"
+    DETECTION = "DetectionTask"
     TAGGER = "TagTask"
+    TAG_PREDICTION_BACKFILL = "TagPredictionBackfillTask"
     QUALITY = "QualityTask"
     LIKENESS = "LikenessTask"
     LIKENESS_PARAMETERS = "LikenessParametersTask"
@@ -21,6 +23,7 @@ class TaskType(str, Enum):
     SMART_SCORE = "SmartScoreTask"
     TEXT_SCORE = "TextScoreTask"
     GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
+    TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
 
     @staticmethod
     def all():

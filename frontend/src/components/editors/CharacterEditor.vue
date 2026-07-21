@@ -1,96 +1,83 @@
 <template>
-  <v-dialog :model-value="open" max-width="640" @click:outside="emit('close')">
-    <div class="editor-shell">
-      <v-btn icon size="36px" class="close-icon" @click="emit('close')">
-        <v-icon size="24px">mdi-close</v-icon>
-      </v-btn>
-      <v-card class="editor-card">
-        <v-card-title class="editor-header">
-          {{ character?.id ? "Edit Person" : "New Person" }}
-        </v-card-title>
-        <v-card-text class="editor-body">
-          <v-text-field
-            ref="nameInputRef"
-            v-model="localCharacter.name"
-            label="Name *"
-            placeholder="Name"
-            density="comfortable"
-            variant="filled"
-            @keydown.enter="save"
-          />
-          <v-textarea
-            v-model="localCharacter.description"
-            label="Description"
-            placeholder="Description (used in embeddings)"
-            density="comfortable"
-            variant="filled"
-            rows="4"
-          />
-          <v-textarea
-            v-model="localCharacter.extra_metadata"
-            label="Metadata"
-            placeholder="Any other metadata associated with the person"
-            density="comfortable"
-            variant="filled"
-            rows="3"
-          />
-          <v-select
-            v-model="localCharacter.project_id"
-            :items="projectItems"
-            item-title="name"
-            item-value="id"
-            label="Project"
-            density="comfortable"
-            variant="filled"
-            clearable
-            clear-icon="mdi-close"
-          />
-          <div v-if="character?.id" class="ref-pictures-section">
-            <div class="ref-pictures-header">
-              <span class="ref-pictures-title">Reference Images</span>
-            </div>
-            <p class="ref-pictures-help">
-              Automatically selected from the highest-scoring images of this
-              person.
-            </p>
-            <div v-if="referencePictures.length > 0" class="ref-pictures-grid">
-              <div
-                v-for="pic in referencePictures"
-                :key="pic.id"
-                class="ref-picture-item"
-                @click="previewPic = pic"
-              >
-                <img
-                  :src="
-                    appendShareToken(
-                      `${props.backendUrl}/pictures/thumbnails/${pic.id}.webp`,
-                    )
-                  "
-                  class="ref-picture-thumb"
-                  loading="lazy"
-                />
-                <StarRatingOverlay
-                  :score="pic.score || 0"
-                  :max="5"
-                  :compact="true"
-                />
-              </div>
-            </div>
-            <p v-else-if="!referencePicturesLoading" class="ref-pictures-empty">
-              No reference images yet — add more scored pictures of this person.
-            </p>
+  <AppDialog
+    :open="open"
+    :title="character?.id ? 'Edit person' : 'New person'"
+    :width="480"
+    @close="emit('close')"
+  >
+    <div class="editor-body">
+      <AppInput
+        ref="nameInputRef"
+        v-model="localCharacter.name"
+        label="Name *"
+        placeholder="Name"
+        icon="account-outline"
+        @enter="save"
+      />
+      <AppTextarea
+        v-model="localCharacter.description"
+        label="Description"
+        placeholder="A short description of this person…"
+        :rows="3"
+      />
+      <AppTextarea
+        v-model="localCharacter.extra_metadata"
+        label="Metadata"
+        placeholder="Notes, source, tags…"
+        :rows="2"
+      />
+      <AppSelect
+        v-model="projectSelection"
+        label="Project"
+        :options="projectOptions"
+      />
+      <div v-if="character?.id" class="ref-pictures-section">
+        <div class="ref-pictures-header">
+          <span class="ref-pictures-title">Reference Images</span>
+        </div>
+        <p class="ref-pictures-help">
+          Automatically selected from the highest-scoring images of this person.
+        </p>
+        <div v-if="referencePictures.length > 0" class="ref-pictures-grid">
+          <div
+            v-for="pic in referencePictures"
+            :key="pic.id"
+            class="ref-picture-item"
+            @click="previewPic = pic"
+          >
+            <img
+              :src="
+                appendShareToken(
+                  `${props.backendUrl}/pictures/thumbnails/${pic.id}.webp`,
+                )
+              "
+              class="ref-picture-thumb"
+              loading="lazy"
+            />
+            <StarRatingOverlay
+              :score="pic.score || 0"
+              :max="5"
+              :compact="true"
+            />
           </div>
-        </v-card-text>
-        <v-card-actions class="editor-footer">
-          <v-spacer></v-spacer>
-          <v-btn class="btn-cancel" @click="emit('close')">Cancel</v-btn>
-          <v-btn class="btn-save" @click="save" :disabled="!isValid">
-            Save
-          </v-btn>
-        </v-card-actions>
-      </v-card>
+        </div>
+        <p v-else-if="!referencePicturesLoading" class="ref-pictures-empty">
+          No reference images yet — add more scored pictures of this person.
+        </p>
+      </div>
     </div>
-  </v-dialog>
+    <template #footer>
+      <AppButton variant="secondary" @click="emit('close')">Cancel</AppButton>
+      <AppButton
+        variant="primary"
+        icon-left="check"
+        :disabled="!isValid"
+        @click="save"
+      >
+        Save
+      </AppButton>
+    </template>
+  </AppDialog>
 
   <Teleport to="body">
     <div
@@ -113,20 +100,12 @@
 
 <script setup>
 import { computed, ref, watch, nextTick } from "vue";
-import {
-  VBtn,
-  VCard,
-  VCardActions,
-  VCardText,
-  VCardTitle,
-  VDialog,
-  VIcon,
-  VSelect,
-  VSpacer,
-  VTextField,
-  VTextarea,
-} from "vuetify/components";
 import { apiClient, appendShareToken } from "../../utils/apiClient";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
+import AppTextarea from "../widgets/AppTextarea.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 
 const props = defineProps({
@@ -136,10 +115,22 @@ const props = defineProps({
   projects: { type: Array, default: () => [] },
 });
 
-const projectItems = computed(() => [
-  { id: null, name: "— No project —" },
-  ...props.projects,
+// Native <select> carries string values, so map the "no project" sentinel to an
+// empty string and back to a null project_id.
+const projectOptions = computed(() => [
+  { value: "", label: "— No project —" },
+  ...props.projects.map((p) => ({ value: String(p.id), label: p.name })),
 ]);
+
+const projectSelection = computed({
+  get: () =>
+    localCharacter.value.project_id == null
+      ? ""
+      : String(localCharacter.value.project_id),
+  set: (v) => {
+    localCharacter.value.project_id = v === "" ? null : Number(v);
+  },
+});
 
 const emit = defineEmits(["close", "saved"]);
 
@@ -209,13 +200,8 @@ watch(
   async (isOpen) => {
     if (isOpen) {
       await nextTick();
-      if (nameInputRef.value?.focus) {
-        nameInputRef.value.focus();
-      }
-      const inputEl = nameInputRef.value?.$el?.querySelector("input");
-      if (inputEl) {
-        inputEl.select();
-      }
+      nameInputRef.value?.focus?.();
+      nameInputRef.value?.select?.();
     }
   },
 );
@@ -302,60 +288,36 @@ watch(
 </script>
 
 <style scoped>
-.editor-shell {
-  position: relative;
-  width: 100%;
-}
-
-.editor-card {
-  overflow: hidden;
-}
-
-.close-icon {
-  position: absolute;
-  top: -16px;
-  right: -16px;
-  background-color: rgb(var(--v-theme-primary));
-  border: none;
-  color: rgb(var(--v-theme-on-primary));
-  cursor: pointer;
-  z-index: 2;
-}
-
-.close-icon:hover {
-  background-color: rgb(var(--v-theme-accent));
-}
-
 .editor-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-5);
 }
 
 .ref-pictures-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
   border-top: 1px solid rgba(var(--v-theme-border, 127 127 127), 0.25);
 }
 
 .ref-pictures-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .ref-pictures-title {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .ref-pictures-help {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.5);
   margin: 0;
   font-style: italic;
@@ -363,7 +325,7 @@ watch(
 }
 
 .ref-pictures-empty {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.4);
   font-style: italic;
   margin: 0;
@@ -372,30 +334,32 @@ watch(
 .ref-pictures-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .ref-picture-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .ref-picture-thumb {
   width: 80px;
   height: 80px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-surface-variant, 127 127 127), 0.15);
   cursor: pointer;
 }
 
 .ref-preview-overlay {
   position: fixed;
-  inset: 0;
+  /* Below the desktop title bar (0px in a browser) so the window controls stay
+     usable; the preview image centres within the reduced box. */
+  inset: var(--titlebar-h) 0 0 0;
   z-index: 9999;
-  background: rgba(0, 0, 0, 0.82);
+  background: rgba(var(--v-theme-scrim), 0.82);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -406,53 +370,8 @@ watch(
   max-width: 90vw;
   max-height: 90vh;
   object-fit: contain;
-  border-radius: 6px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-4);
   cursor: default;
-}
-
-.editor-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 8px 16px 16px;
-}
-
-.btn {
-  padding: 10px 24px;
-  border: none;
-  border-radius: 4px;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-weight: 500;
-}
-.btn:hover {
-  filter: brightness(1.2);
-}
-
-.btn-cancel {
-  background: rgb(var(--v-theme-cancel-button));
-  color: rgb(var(--v-theme-cancel-button-text));
-  transition: filter 0.2s;
-}
-
-.btn-cancel:hover {
-  filter: brightness(1.2);
-}
-
-.btn-save {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  transition: filter 0.2s;
-}
-
-.btn-save:hover {
-  filter: brightness(1.2);
-}
-
-.btn-save:disabled {
-  background: rgb(var(--v-theme-disabled));
-  cursor: not-allowed;
 }
 </style>

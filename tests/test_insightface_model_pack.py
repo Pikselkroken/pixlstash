@@ -432,8 +432,10 @@ def test_finder_selects_only_stale_pack_pictures(tmp_path):
 
         fa = Face(picture_id=stale_id, frame_index=0, face_index=0, bbox=[0, 0, 4, 4])
         fa.model_pack = "buffalo_l"
+        fa.features = np.zeros(512, dtype="float32").tobytes()
         fb = Face(picture_id=current_id, frame_index=0, face_index=0, bbox=[0, 0, 4, 4])
         fb.model_pack = "auraface"
+        fb.features = np.zeros(512, dtype="float32").tobytes()
         session.add(fa)
         session.add(fb)
         session.commit()
@@ -531,10 +533,12 @@ def test_refresh_handles_new_detection_and_removal(tmp_path):
             picture_id=pic_id, frame_index=0, face_index=0, bbox=[10, 10, 30, 30]
         )
         keep.model_pack = "buffalo_l"
+        keep.features = np.zeros(512, dtype="float32").tobytes()
         gone = Face(
             picture_id=pic_id, frame_index=0, face_index=1, bbox=[100, 100, 130, 130]
         )
         gone.model_pack = "buffalo_l"
+        gone.features = np.zeros(512, dtype="float32").tobytes()
         session.add(keep)
         session.add(gone)
         session.commit()
@@ -571,6 +575,221 @@ def test_refresh_handles_new_detection_and_removal(tmp_path):
     boxes = sorted(f.bbox[0] for f in faces if f.bbox)
     assert boxes == [10, 200]
     assert all(f.model_pack == "auraface" for f in faces)
+
+
+# --------------------------------------------------------------------------- #
+# §5b — manually-drawn faces (no embedding) survive the refresh sweep
+# --------------------------------------------------------------------------- #
+
+
+def _add_manual_face(session, pic_id, bbox, face_index, character_id=None):
+    """Mirror create_picture_face(): a human-drawn bbox, no embedding, no pack."""
+    face = Face(picture_id=pic_id, frame_index=0, face_index=face_index, bbox=bbox)
+    face.character_id = character_id
+    # create_picture_face leaves features + model_pack unset; assert that premise.
+    assert face.features is None
+    assert face.model_pack is None
+    session.add(face)
+    return face
+
+
+def test_finder_ignores_manual_face_without_embedding(tmp_path):
+    """A picture whose only face is a manual box (no embedding) is never stale.
+
+    Regression: the manual row has model_pack NULL, which the finder previously
+    read as "stale pack" and scheduled a destructive re-detect that wiped the box.
+    """
+    engine = _make_sqlite(tmp_path)
+    with Session(engine) as session:
+        pic = Picture(file_path="manual.jpg")
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        pic_id = pic.id
+        _add_manual_face(session, pic_id, [10, 10, 40, 40], face_index=0)
+        session.commit()
+
+    finder = MissingFaceModelRefreshFinder(database=None, engine_getter=lambda: None)
+    with Session(engine) as session:
+        selected = finder._fetch_stale_pack_pictures(session, "buffalo_l")
+
+    assert pic_id not in {p.id for p in selected}
+
+
+def test_refresh_preserves_manual_face_alongside_stale_detection(tmp_path):
+    """A legitimately-scheduled refresh (stale *detected* face) must not delete or
+    move a manual annotation sharing the picture, and must preserve its bbox and
+    character_id.
+    """
+    engine = _make_sqlite(tmp_path)
+    with Session(engine) as session:
+        char = Character(name="Alice")
+        session.add(char)
+        session.commit()
+        session.refresh(char)
+
+        pic = Picture(file_path="p.jpg")
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        pic_id, char_id = pic.id, char.id
+
+        # A stale detected face (buffalo_l embedding) + a manual box the user drew
+        # elsewhere, tagged with a character.
+        detected = Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=0,
+            bbox=[10, 10, 30, 30],
+            features=np.zeros(512, dtype="float32").tobytes(),
+        )
+        detected.model_pack = "buffalo_l"
+        session.add(detected)
+        _add_manual_face(
+            session, pic_id, [200, 200, 240, 240], face_index=1, character_id=char_id
+        )
+        session.commit()
+
+    # New pack re-detects only the real face (at the same spot, new embedding).
+    new_faces = [
+        Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=0,
+            bbox=[10, 10, 30, 30],
+            features=np.ones(512, dtype="float32").tobytes(),
+            model_pack="auraface",
+        )
+    ]
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, new_faces, "auraface"
+        )
+
+    with Session(engine) as session:
+        faces = session.exec(select(Face).where(Face.picture_id == pic_id)).all()
+
+    manual = [f for f in faces if f.features is None]
+    detected_after = [f for f in faces if f.features is not None]
+    # The manual box survived untouched: same bbox, same character, still no pack.
+    assert len(manual) == 1
+    assert manual[0].bbox == [200, 200, 240, 240]
+    assert manual[0].character_id == char_id
+    assert manual[0].model_pack is None
+    # The detected face was refreshed to the new pack in place.
+    assert len(detected_after) == 1
+    assert detected_after[0].model_pack == "auraface"
+
+
+def test_refresh_new_detection_does_not_collide_with_manual_slot(tmp_path):
+    """A brand-new detection must not be written into a slot a manual face holds.
+
+    The manual box sits at face_index 1; the new run finds two faces (indices 0
+    and 1 by sorted bbox). Without the reserved-slot renumbering the second
+    insert would collide with the manual row on the unique constraint and the
+    whole refresh would roll back, leaving the picture stuck stale.
+    """
+    engine = _make_sqlite(tmp_path)
+    with Session(engine) as session:
+        pic = Picture(file_path="p.jpg")
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        pic_id = pic.id
+
+        detected = Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=0,
+            bbox=[10, 10, 30, 30],
+            features=np.zeros(512, dtype="float32").tobytes(),
+        )
+        detected.model_pack = "buffalo_l"
+        session.add(detected)
+        # Manual box occupies index 1.
+        _add_manual_face(session, pic_id, [300, 300, 340, 340], face_index=1)
+        session.commit()
+
+    # New run finds the original face plus a genuinely new one.
+    new_faces = [
+        Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=0,
+            bbox=[10, 10, 30, 30],
+            features=np.ones(512, dtype="float32").tobytes(),
+            model_pack="auraface",
+        ),
+        Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=1,
+            bbox=[500, 500, 530, 530],
+            features=np.full(512, 2, dtype="float32").tobytes(),
+            model_pack="auraface",
+        ),
+    ]
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, new_faces, "auraface"
+        )
+
+    with Session(engine) as session:
+        faces = session.exec(select(Face).where(Face.picture_id == pic_id)).all()
+
+    # All three faces coexist (2 detected refreshed + 1 manual preserved); the
+    # manual box is intact and no unique-constraint collision occurred.
+    manual = [f for f in faces if f.features is None]
+    detected_after = [f for f in faces if f.features is not None]
+    assert len(manual) == 1
+    assert manual[0].bbox == [300, 300, 340, 340]
+    assert len(detected_after) == 2
+    assert {tuple(f.bbox) for f in detected_after} == {
+        (10, 10, 30, 30),
+        (500, 500, 530, 530),
+    }
+    # Unique constraint held: no two faces share a (frame, index) slot.
+    keys = [(f.frame_index, f.face_index) for f in faces]
+    assert len(keys) == len(set(keys))
+
+
+def test_refresh_no_detection_preserves_manual_face(tmp_path):
+    """When the new pack detects nothing, stale detected rows are removed but a
+    manual annotation is kept (it was never detector output)."""
+    engine = _make_sqlite(tmp_path)
+    with Session(engine) as session:
+        pic = Picture(file_path="p.jpg")
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        pic_id = pic.id
+
+        detected = Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=0,
+            bbox=[10, 10, 30, 30],
+            features=np.zeros(512, dtype="float32").tobytes(),
+        )
+        detected.model_pack = "buffalo_l"
+        session.add(detected)
+        _add_manual_face(session, pic_id, [200, 200, 240, 240], face_index=1)
+        session.commit()
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(session, pic_id, [], "auraface")
+
+    with Session(engine) as session:
+        faces = session.exec(select(Face).where(Face.picture_id == pic_id)).all()
+
+    # Detected row gone; manual box preserved; no sentinel added (picture still
+    # holds a real face).
+    assert all(f.face_index != -1 for f in faces)
+    assert len(faces) == 1
+    assert faces[0].features is None
+    assert faces[0].bbox == [200, 200, 240, 240]
 
 
 def test_bbox_iou_basics():

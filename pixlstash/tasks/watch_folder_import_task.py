@@ -39,6 +39,7 @@ class WatchFolderImportTask(BaseTask):
         candidate_files: list[dict],
         total_candidates: int,
         last_checked_updates: Optional[dict[int, float]] = None,
+        finder=None,
     ):
         super().__init__(
             task_type="WatchFolderImportTask",
@@ -49,6 +50,10 @@ class WatchFolderImportTask(BaseTask):
         )
         self._db = database
         self._candidate_files = candidate_files or []
+        # The finder that produced this task. Used to report back candidate
+        # paths that failed to import so it can drop them from its seen-paths
+        # set and re-discover them on a later scan (transient-failure retry).
+        self._finder = finder
         self._last_checked_updates = {
             int(folder_id): float(last_checked)
             for folder_id, last_checked in (last_checked_updates or {}).items()
@@ -64,6 +69,11 @@ class WatchFolderImportTask(BaseTask):
         new_pictures = []
         stack_assignments = []
         delete_paths = []
+        # Candidate paths that failed to process this pass. They are reported to
+        # the finder at the end so it forgets them and retries on a later scan,
+        # which keeps a transient hash/import error (e.g. a momentary
+        # PermissionError on a just-copied file) from dropping the file forever.
+        failed_paths: list[str] = []
 
         for candidate in self._candidate_files:
             if self._stop_event.is_set():
@@ -79,7 +89,12 @@ class WatchFolderImportTask(BaseTask):
             try:
                 pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
             except Exception as exc:
-                logger.warning("Failed to hash watched file %s: %s", file_path, exc)
+                logger.warning(
+                    "Failed to hash watched file %s: %s (will retry on next scan)",
+                    file_path,
+                    exc,
+                )
+                failed_paths.append(file_path)
                 self._processed_count += 1
                 continue
 
@@ -133,7 +148,12 @@ class WatchFolderImportTask(BaseTask):
                 if bool(candidate.get("delete_after_import", False)):
                     delete_paths.append(file_path)
             except Exception as exc:
-                logger.warning("Failed to import watched file %s: %s", file_path, exc)
+                logger.warning(
+                    "Failed to import watched file %s: %s (will retry on next scan)",
+                    file_path,
+                    exc,
+                )
+                failed_paths.append(file_path)
             finally:
                 self._processed_count += 1
 
@@ -228,6 +248,9 @@ class WatchFolderImportTask(BaseTask):
                 self._last_checked_updates,
                 priority=DBPriority.IMMEDIATE,
             )
+
+        if failed_paths and self._finder is not None:
+            self._finder.discard_seen_paths(failed_paths)
 
         return {
             "changed_count": len(changed),

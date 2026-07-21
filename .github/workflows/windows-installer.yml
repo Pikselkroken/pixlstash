@@ -80,7 +80,7 @@ jobs:
 
       - name: Attach installer to GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           # Publish with a PAT, not the default GITHUB_TOKEN. Releases created by
           # GITHUB_TOKEN do not emit a `release: published` event that can trigger

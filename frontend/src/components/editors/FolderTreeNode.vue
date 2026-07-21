@@ -8,9 +8,17 @@ const props = defineProps({
   selectedFolderKey: { type: String, default: null },
   folderBrowseCache: { type: Object, required: true },
   expandedFolderIds: { type: Object, required: true }, // Set
+  dropTargetKey: { type: String, default: null },
 });
 
-const emit = defineEmits(["select", "toggle"]);
+const emit = defineEmits([
+  "select",
+  "toggle",
+  "drag-over",
+  "drag-leave",
+  "drop",
+  "context",
+]);
 
 function isExpanded() {
   return props.expandedFolderIds.has(props.entry.path);
@@ -42,8 +50,17 @@ function childImageCount() {
   <div>
     <div
       class="sidebar-folder-row sidebar-folder-child-row"
-      :class="{ active: selectedFolderKey === 'path-' + entry.path }"
-      :title="entry.path"
+      :class="{
+        active: selectedFolderKey === 'path-' + entry.path,
+        droppable: dropTargetKey === 'path-' + entry.path,
+      }"
+      :title="`${entry.path} - drop dragged reference images here to move them`"
+      @contextmenu.prevent="
+        emit('context', { rfId, path: entry.path, label: entry.name, event: $event })
+      "
+      @dragover="emit('drag-over', { rfId, path: entry.path, event: $event })"
+      @dragleave="emit('drag-leave', { rfId, path: entry.path, event: $event })"
+      @drop="emit('drop', { rfId, path: entry.path, event: $event })"
       @click="
         emit('select', 'path-' + entry.path, {
           referenceFolderId: rfId,
@@ -53,7 +70,7 @@ function childImageCount() {
       "
     >
       <v-icon
-        size="16"
+        size="12"
         class="sidebar-folder-chevron"
         :style="{ visibility: hasChildren() ? 'visible' : 'hidden' }"
         @click.stop="emit('toggle', entry.path)"
@@ -88,8 +105,13 @@ function childImageCount() {
           :selected-folder-key="selectedFolderKey"
           :folder-browse-cache="folderBrowseCache"
           :expanded-folder-ids="expandedFolderIds"
+          :drop-target-key="dropTargetKey"
           @select="(key, payload) => emit('select', key, payload)"
           @toggle="(path) => emit('toggle', path)"
+          @drag-over="(payload) => emit('drag-over', payload)"
+          @drag-leave="(payload) => emit('drag-leave', payload)"
+          @drop="(payload) => emit('drop', payload)"
+          @context="(payload) => emit('context', payload)"
         />
         <div
           v-if="folderBrowseCache[entry.path]?.error"
@@ -106,11 +128,11 @@ function childImageCount() {
 .sidebar-folder-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
-  font-size: 0.82rem;
-  color: rgba(var(--v-theme-sidebar-text), 0.85);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-sidebar-text));
   user-select: none;
 }
 
@@ -130,9 +152,9 @@ function childImageCount() {
 }
 
 .sidebar-folder-children {
-  padding-left: 4px;
+  padding-left: var(--space-2);
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: 11px;
+  margin-left: var(--space-1);
 }
 
 .sidebar-folder-label {
@@ -151,28 +173,34 @@ function childImageCount() {
 
 .sidebar-folder-status-badge {
   flex-shrink: 0;
-  margin-left: 2px;
+  margin-left: var(--space-1);
   opacity: 0.75;
 }
 
 .sidebar-folder-count-badge {
   flex-shrink: 0;
-  margin-left: 4px;
+  margin-left: var(--space-2);
   min-width: 22px;
   text-align: right;
-  font-size: 0.74rem;
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-folder-row.active .sidebar-folder-count-badge {
   color: rgba(var(--v-theme-on-primary), 0.9);
 }
 
+.sidebar-folder-row.droppable {
+  filter: brightness(1.2);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
 .sidebar-folder-status--active {
-  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   transition:
     color 0.15s,
     opacity 0.15s;
@@ -186,13 +214,13 @@ function childImageCount() {
 .sidebar-folder-loading-row {
   display: flex;
   justify-content: center;
-  padding: 8px;
+  padding: var(--space-3);
 }
 
 .sidebar-folder-empty-row {
-  padding: 4px 8px;
-  font-size: 0.78rem;
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-sidebar-text));
   font-style: italic;
 }
 

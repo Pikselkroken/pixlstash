@@ -224,7 +224,11 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
                 target = writeback_path(
                     image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix, existing
                 )
-                new_mtime = write_sidecar(target, ", ".join(current_tags))
+                new_mtime = (
+                    write_sidecar(target, ", ".join(current_tags))
+                    if target is not None
+                    else None
+                )
                 if new_mtime is not None:
                     pic_db.tags_file = target
                     pic_db.tags_file_mtime = new_mtime
@@ -248,7 +252,9 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
                     rf.description_suffix,
                     existing,
                 )
-                new_mtime = write_sidecar(target, description)
+                new_mtime = (
+                    write_sidecar(target, description) if target is not None else None
+                )
                 if new_mtime is not None:
                     pic_db.description_file = target
                     pic_db.description_file_mtime = new_mtime

@@ -667,10 +667,13 @@ defineExpose({ startImport });
 <style scoped>
 .import-progress-modal {
   position: fixed;
-  top: 0;
+  /* Anchor below the desktop title bar (0px in a browser) so the bar / window
+     controls stay visible while an import is in progress. Height shrinks to
+     match so the spinner stays centred in the area below the bar. */
+  top: var(--titlebar-h);
   left: 0;
   width: 100vw;
-  height: 100vh;
+  height: calc(100vh - var(--titlebar-h));
   background: rgba(var(--v-theme-scrim), 0.65);
   z-index: 99999;
   display: flex;
@@ -682,9 +685,9 @@ defineExpose({ startImport });
 .import-progress-content {
   background: rgb(var(--v-theme-dark-surface));
   color: rgb(var(--v-theme-on-dark-surface));
-  padding: 32px 48px;
-  border-radius: 16px;
-  box-shadow: 0 4px 32px rgba(var(--v-theme-shadow), 0.65);
+  padding: var(--space-7) var(--space-8);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-4);
   min-width: 380px;
   display: flex;
   flex-direction: column;
@@ -692,34 +695,34 @@ defineExpose({ startImport });
 }
 
 .import-progress-title {
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin-bottom: 24px;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--space-6);
 }
 
 .import-progress-bar-bg {
   width: 100%;
   height: 18px;
   background: rgba(var(--v-theme-on-surface), 0.2);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
 .import-progress-bar-section {
   width: 100%;
-  margin-bottom: 14px;
+  margin-bottom: var(--space-4);
 }
 
 .import-progress-bar-label {
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   color: rgba(var(--v-theme-on-dark-surface), 0.75);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
   min-height: 1.2em;
 }
 
 .import-progress-bar {
   height: 100%;
-  border-radius: 9px 0 0 9px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   transition: width 0.3s ease;
 }
 
@@ -740,25 +743,25 @@ defineExpose({ startImport });
 }
 
 .import-progress-label {
-  font-size: 1.1rem;
-  margin-top: 8px;
+  font-size: var(--text-lg);
+  margin-top: var(--space-3);
 }
 
 .import-progress-stage {
-  margin-top: 6px;
-  font-size: 0.9rem;
+  margin-top: var(--space-3);
+  font-size: var(--text-base);
   color: rgba(var(--v-theme-on-dark-surface), 0.72);
 }
 
 .import-progress-error {
   color: rgb(var(--v-theme-error));
-  margin-left: 12px;
+  margin-left: var(--space-4);
 }
 
 .cancel-button {
-  margin-top: 18px;
-  padding: 8px 18px;
-  border-radius: 999px;
+  margin-top: var(--space-5);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-pill);
   border: none;
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));

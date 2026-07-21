@@ -21,7 +21,11 @@ export class ImageOverlay {
     })
     this.faceBboxes = page.locator('.face-bbox-overlay')
     // Tags (§5) — chips, the "Add tag (T)" affordance, and the inline input.
-    this.tags = page.locator('.overlay-tag')
+    // Scoped to the applied-tag list (.tag-section). Removing a tag rejects its
+    // prediction, which re-renders the same label as a chip in the separate
+    // "Rejected Tags" section (.tag-drop-zone--predictions); that chip is not an
+    // applied tag and must not match here, or removeTag assertions go flaky.
+    this.tags = page.locator('.tag-section .overlay-tag')
     this.addTagButton = page.locator('.section-meta-btn[title="Add tag (T)"]').first()
     this.tagInput = page.locator('.tag-add-input')
     // Star rating (§6) — the overlay topbar widget. Scoped to .image-overlay so

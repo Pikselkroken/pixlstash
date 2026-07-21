@@ -107,10 +107,6 @@ export const useSidebarStore = defineStore("sidebar", () => {
     autoRevealed.value = !sidebarPinned.value;
   }
 
-  function toggleSidebarPinned() {
-    setSidebarPinned(!sidebarPinned.value);
-  }
-
   function revealSidebar() {
     if (sidebarOverlay.value) autoRevealed.value = true;
   }
@@ -124,10 +120,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     saveStatsOpen(statsOpen.value);
   }
 
-  // Back-compat helpers used elsewhere.
-  function toggleSidebar() {
-    toggleSidebarPinned();
-  }
+  // Back-compat helper used elsewhere.
   function persistSidebarDocked(val) {
     setSidebarDocked(val);
   }
@@ -144,11 +137,9 @@ export const useSidebarStore = defineStore("sidebar", () => {
     statsForcedHidden,
     setSidebarDocked,
     setSidebarPinned,
-    toggleSidebarPinned,
     revealSidebar,
     hideAutoSidebar,
     toggleStats,
-    toggleSidebar,
     persistSidebarDocked,
   };
 });

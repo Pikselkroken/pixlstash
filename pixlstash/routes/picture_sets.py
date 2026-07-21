@@ -24,6 +24,9 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.services.set_lock_service import (
+    enforce_set_not_locked,
+)
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
@@ -55,6 +58,7 @@ class PictureSetResponse(BaseModel):
     project_id: Optional[int] = None
     set_icon: Optional[str] = None
     set_color: Optional[str] = None
+    locked: bool = False
     picture_count: Optional[int] = None
     top_picture_ids: Optional[list[int]] = None
     thumbnail_url: Optional[str] = None
@@ -86,6 +90,7 @@ class PictureSetPicturesResponse(BaseModel):
     project_id: Optional[int] = None
     set_icon: Optional[str] = None
     set_color: Optional[str] = None
+    locked: bool = False
     picture_count: Optional[int] = None
 
 
@@ -132,6 +137,28 @@ class PictureSetBulkReplaceResponse(BaseModel):
 
     status: str
     members: int
+
+
+class LockedSetSummary(BaseModel):
+    """One locked set and the ids of the pictures it currently freezes."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    name: str
+    picture_ids: list[int] = []
+
+
+class LockedSetMembersResponse(BaseModel):
+    """All locked sets visible to the caller, with their frozen member ids.
+
+    Lets the frontend learn which pictures are read-only (and by which set) in one
+    round-trip, for grid badges, overlay reasons, and context-menu tooltips.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    sets: list[LockedSetSummary] = []
 
 
 def create_router(server) -> APIRouter:
@@ -410,6 +437,67 @@ def create_router(server) -> APIRouter:
         result = safe_model_dict(server.vault.db.run_immediate_read_task(fetch_sets))
         logger.debug(f"Fetched picture set {result}")
         return result
+
+    @router.get(
+        "/picture_sets/locked-members",
+        summary="List locked sets and their frozen pictures",
+        description=(
+            "Returns every locked picture set the caller may see, each with the ids "
+            "of its non-deleted member pictures. Read-only, cheap (touches only "
+            "locked sets), and the single source the frontend uses to badge locked "
+            "pictures. Registered before /picture_sets/{id} so the literal segment "
+            "is not captured by the numeric id path parameter."
+        ),
+        response_model=LockedSetMembersResponse,
+    )
+    def get_locked_set_members(request: Request):
+        # Scope: owner/unscoped sees all locked sets; a picture_set-scoped token
+        # sees only its own set; a project-scoped token only that project's sets;
+        # any other scoped token has no visibility into sets.
+        token_scope = getattr(request.state, "token_scope", None)
+        scope_set_id = None
+        scope_project_id = None
+        if token_scope is not None and token_scope.resource_type == "picture_set":
+            scope_set_id = token_scope.resource_id
+        elif token_scope is not None and token_scope.resource_type == "project":
+            scope_project_id = token_scope.resource_id
+        elif token_scope is not None and token_scope.resource_type is not None:
+            return {"sets": []}
+
+        def fetch_locked(session):
+            sets_query = select(PictureSet).where(PictureSet.locked.is_(True))
+            if scope_set_id is not None:
+                sets_query = sets_query.where(PictureSet.id == scope_set_id)
+            if scope_project_id is not None:
+                sets_query = sets_query.where(PictureSet.project_id == scope_project_id)
+            locked_sets = session.exec(
+                sets_query.order_by(func.lower(PictureSet.name))
+            ).all()
+            payload = []
+            for s in locked_sets:
+                member_ids = [
+                    int(m)
+                    for m in session.exec(
+                        select(PictureSetMember.picture_id)
+                        .join(Picture, Picture.id == PictureSetMember.picture_id)
+                        .where(
+                            PictureSetMember.set_id == s.id,
+                            Picture.deleted.is_(False),
+                        )
+                    ).all()
+                    if m is not None
+                ]
+                payload.append(
+                    {
+                        "id": int(s.id),
+                        "name": s.name,
+                        "picture_ids": sorted(set(member_ids)),
+                    }
+                )
+            return payload
+
+        sets = server.vault.db.run_immediate_read_task(fetch_locked)
+        return {"sets": sets}
 
     @router.get(
         "/projects/{project_name}/picture_sets/{picture_set_name}",
@@ -1089,12 +1177,16 @@ def create_router(server) -> APIRouter:
         description="Updates picture set name and/or description.",
         response_model=PictureSetUpdateResponse,
     )
-    def update_picture_set(id: int, payload: dict = Body(...)):
+    def update_picture_set(id: int, request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         name = payload.get("name")
         description = payload.get("description")
         raw_project_id = payload.get("project_id", _UNSET)
         set_icon = payload.get("set_icon", _UNSET)
         set_color = payload.get("set_color", _UNSET)
+        locked_param = payload.get("locked", _UNSET)
+        if locked_param is not _UNSET:
+            locked_param = bool(locked_param)
         project_id = raw_project_id
         if raw_project_id is not _UNSET:
             if raw_project_id is None:
@@ -1107,7 +1199,9 @@ def create_router(server) -> APIRouter:
                         status_code=400, detail="Invalid project_id"
                     ) from exc
 
-        def update_set(session, id, name, description, project_id, set_icon, set_color):
+        def update_set(
+            session, id, name, description, project_id, set_icon, set_color, locked
+        ):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
@@ -1115,6 +1209,35 @@ def create_router(server) -> APIRouter:
             # Capture the project the set is leaving before we mutate it, so we
             # can disassociate its member pictures from that old project.
             old_project_id = picture_set.project_id
+
+            # Lock rule: while a set is locked the only accepted PATCH is one that
+            # changes nothing but `locked` (i.e. an unlock). Compare each field to
+            # its CURRENT value — not mere key presence — so the frontend echoing
+            # unchanged fields back is a no-op, not a rejection.
+            description_changing = (
+                description is not None and description != picture_set.description
+            )
+            icon_changing = set_icon is not _UNSET and set_icon != picture_set.set_icon
+            color_changing = (
+                set_color is not _UNSET and set_color != picture_set.set_color
+            )
+            name_effective_change = name is not None and name != picture_set.name
+            project_effective_change = (
+                project_id is not _UNSET and project_id != picture_set.project_id
+            )
+            other_effective_change = (
+                name_effective_change
+                or description_changing
+                or project_effective_change
+                or icon_changing
+                or color_changing
+            )
+            if other_effective_change:
+                # Raises 423 iff the set is currently locked; passes through for an
+                # unlocked set. A pure unlock (only `locked` differs) is allowed.
+                enforce_set_not_locked(session, picture_set, "edit a locked set")
+
+            locked_changed = locked is not _UNSET and bool(locked) != picture_set.locked
 
             # Resolve the final (name, project_id) that would result from this
             # update and check uniqueness before touching anything.
@@ -1247,23 +1370,64 @@ def create_router(server) -> APIRouter:
                             session.add(pic)
                             pictures_changed = True
 
-            session.commit()
-            return True, project_id_changed or pictures_changed
+            # Apply the lock toggle last (after the read-only guard above) and
+            # collect the member ids so a lock/unlock can refresh their badges.
+            locked_member_ids: list[int] = []
+            if locked_changed:
+                picture_set.locked = bool(locked)
+                locked_member_ids = [
+                    int(m)
+                    for m in session.exec(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.set_id == id
+                        )
+                    ).all()
+                    if m is not None
+                ]
 
-        success, project_changed = server.vault.db.run_task(
-            update_set,
-            id,
-            name,
-            description,
-            project_id,
-            set_icon,
-            set_color,
-            priority=DBPriority.IMMEDIATE,
+            session.commit()
+            return (
+                True,
+                project_id_changed or pictures_changed,
+                locked_changed,
+                locked_member_ids,
+            )
+
+        success, project_changed, locked_changed, locked_member_ids = (
+            server.vault.db.run_task(
+                update_set,
+                id,
+                name,
+                description,
+                project_id,
+                set_icon,
+                set_color,
+                locked_param,
+                priority=DBPriority.IMMEDIATE,
+            )
         )
         if not success:
             raise HTTPException(status_code=404, detail="Picture set not found")
         if project_changed:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
+        if locked_changed:
+            # Refresh every member's card so lock badges appear/clear across tabs.
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": locked_member_ids,
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
         return {"status": "success"}
 
     @router.delete(
@@ -1277,6 +1441,9 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
+            # A locked set must be unlocked before it can be deleted (deliberate
+            # friction so a misclick can't destroy a frozen eval set).
+            enforce_set_not_locked(session, picture_set, "delete a locked set")
             session.delete(picture_set)
             session.commit()
             return True
@@ -1366,13 +1533,16 @@ def create_router(server) -> APIRouter:
         description="Adds one picture to a set when the set and picture are valid and membership does not already exist.",
         response_model=PictureSetAddPictureResponse,
     )
-    def add_picture_to_set(id: int, picture_id: str):
+    def add_picture_to_set(id: int, picture_id: str, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         reference_character_id = _find_reference_character_id_for_set(id)
 
         def add_member(session, id, picture_id, reference_character_id=None):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
+            # Membership of a locked set is frozen — no additions until unlocked.
+            enforce_set_not_locked(session, picture_set, "add pictures to a locked set")
             # Sets are atomic for stacks: adding any stacked picture adds every
             # member of its stack.
             target_ids = expand_picture_ids_to_stacks(session, [int(picture_id)])
@@ -1424,9 +1594,27 @@ def create_router(server) -> APIRouter:
             priority=DBPriority.IMMEDIATE,
         )
         if success:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            try:
+                changed_ids = [int(picture_id)]
+            except (TypeError, ValueError):
+                changed_ids = []
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": changed_ids,
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
             if reference_character_id is not None:
-                server.vault.notify(EventType.CHANGED_CHARACTERS)
+                server.vault.notify(
+                    EventType.CHANGED_CHARACTERS,
+                    {
+                        "source": "ui",
+                        "origin_client_id": origin_client_id,
+                    },
+                )
         else:
             raise HTTPException(
                 status_code=400,
@@ -1440,10 +1628,17 @@ def create_router(server) -> APIRouter:
         description="Removes one picture membership from a picture set.",
         response_model=PictureSetRemovePictureResponse,
     )
-    def remove_picture_from_set(id: int, picture_id: str):
+    def remove_picture_from_set(id: int, picture_id: str, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         reference_character_id = _find_reference_character_id_for_set(id)
 
         def remove_member(session, id, picture_id, reference_character_id=None):
+            # Membership of a locked set is frozen — no removals until unlocked.
+            picture_set = session.get(PictureSet, id)
+            if picture_set is not None:
+                enforce_set_not_locked(
+                    session, picture_set, "remove pictures from a locked set"
+                )
             # Sets are atomic for stacks: removing any stacked picture removes
             # every member of its stack from the set. This also covers the case
             # where the requested id is a collapsed-stack leader shown because a
@@ -1471,7 +1666,13 @@ def create_router(server) -> APIRouter:
         )
         if success:
             if reference_character_id is not None:
-                server.vault.notify(EventType.CHANGED_CHARACTERS)
+                server.vault.notify(
+                    EventType.CHANGED_CHARACTERS,
+                    {
+                        "source": "ui",
+                        "origin_client_id": origin_client_id,
+                    },
+                )
         else:
             raise HTTPException(status_code=404, detail="Picture not in set")
         return {"status": "success"}
@@ -1482,7 +1683,8 @@ def create_router(server) -> APIRouter:
         description="Adds a batch of pictures to a set (non-destructive). Skips pictures already in the set.",
         response_model=PictureSetBulkAddResponse,
     )
-    def bulk_add_pictures_to_set(id: int, payload: dict = Body(...)):
+    def bulk_add_pictures_to_set(id: int, request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         raw_ids = payload.get("picture_ids", [])
         if not isinstance(raw_ids, list):
             raise HTTPException(status_code=400, detail="picture_ids must be a list")
@@ -1499,6 +1701,8 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, set_id)
             if not picture_set:
                 return None
+            # Membership of a locked set is frozen — no additions until unlocked.
+            enforce_set_not_locked(session, picture_set, "add pictures to a locked set")
             # Sets are atomic for stacks: pull in every member of any stack.
             picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
             existing = set(
@@ -1543,7 +1747,15 @@ def create_router(server) -> APIRouter:
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
         if added > 0:
-            server.vault.notify(EventType.CHANGED_PICTURES)
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": picture_ids,
+                    "source": "ui",
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
         return {"status": "success", "added": added}
 
     @router.put(
@@ -1552,7 +1764,10 @@ def create_router(server) -> APIRouter:
         description="Atomically replaces the entire member list of a set. All existing members are removed and the provided picture ids become the new members.",
         response_model=PictureSetBulkReplaceResponse,
     )
-    def bulk_replace_pictures_in_set(id: int, payload: dict = Body(...)):
+    def bulk_replace_pictures_in_set(
+        id: int, request: Request, payload: dict = Body(...)
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         raw_ids = payload.get("picture_ids", [])
         if not isinstance(raw_ids, list):
             raise HTTPException(status_code=400, detail="picture_ids must be a list")
@@ -1567,6 +1782,10 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, set_id)
             if not picture_set:
                 return None
+            # Membership of a locked set is frozen — no replacement until unlocked.
+            enforce_set_not_locked(
+                session, picture_set, "replace the members of a locked set"
+            )
             # Sets are atomic for stacks: keep every member of any stack together.
             picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
             # Remove all existing members
@@ -1611,7 +1830,15 @@ def create_router(server) -> APIRouter:
         )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
-        server.vault.notify(EventType.CHANGED_PICTURES)
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": picture_ids,
+                "source": "ui",
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         return {"status": "success", "members": added}
 
     return router

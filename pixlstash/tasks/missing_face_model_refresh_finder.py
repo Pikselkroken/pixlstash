@@ -72,16 +72,23 @@ class MissingFaceModelRefreshFinder(BaseTaskFinder):
 
     @staticmethod
     def _fetch_stale_pack_pictures(session: Session, current_pack: str):
-        # A picture is stale if any of its faces was produced by a different pack
-        # (or has no recorded pack — defensive; the 0053 migration backfills
-        # pre-existing rows to buffalo_l so NULL should not normally occur).
+        # A picture is stale if any of its faces *carries an embedding* produced by
+        # a different pack (or has no recorded pack — defensive; the 0053 migration
+        # backfills pre-existing rows to buffalo_l so NULL should not normally
+        # occur on embedded rows). The ``features IS NOT NULL`` guard is essential:
+        # a manually-drawn face (a human bbox with no embedding) legitimately has
+        # ``model_pack IS NULL`` because there is no embedding to attribute to a
+        # pack. Without this guard the refresh sweep would select the picture and
+        # FaceModelRefreshTask would re-detect and delete the manual annotation as
+        # "no longer detected" — the box vanishes silently after being drawn.
         stale_face_subq = (
             select(Face.picture_id)
             .where(
+                Face.features.is_not(None),
                 or_(
                     Face.model_pack != current_pack,
                     Face.model_pack.is_(None),
-                )
+                ),
             )
             .distinct()
         )

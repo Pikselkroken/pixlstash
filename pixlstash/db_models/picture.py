@@ -35,6 +35,7 @@ from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
     from .character import Character
+    from .detection import Detection
     from .picture_likeness import PictureLikeness
     from .project import Project
     from .reference_folder import ReferenceFolder
@@ -303,6 +304,13 @@ class Picture(SQLModel, table=True):
         back_populates="picture",
         sa_relationship_kwargs={
             "overlaps": "characters",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
+    )
+    detections: List["Detection"] = Relationship(
+        back_populates="picture",
+        sa_relationship_kwargs={
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
         },
@@ -677,6 +685,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_below_filter: Optional[List[str]] = None,
         hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        impossible_sources: Optional[List[str]] = None,
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
         smart_score_bucket: Optional[str] = None,
@@ -774,6 +783,7 @@ class Picture(SQLModel, table=True):
             tags_confidence_above_filter=tags_confidence_above_filter,
             tags_confidence_below_filter=tags_confidence_below_filter,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
             only_deleted=only_deleted,
             include_deleted=include_deleted,
@@ -1016,6 +1026,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_below_filter: Optional[List[str]] = None,
         hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        impossible_sources: Optional[List[str]] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
         guest_token_id: Optional[int] = None,
@@ -1068,6 +1079,7 @@ class Picture(SQLModel, table=True):
             tags_confidence_above_filter=tags_confidence_above_filter,
             tags_confidence_below_filter=tags_confidence_below_filter,
             face_filter=face_filter,
+            impossible_sources=impossible_sources,
             apply_deleted_filter=False,
         ).apply(query)
 

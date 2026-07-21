@@ -11,7 +11,7 @@ wide grid is fast.
 The evaluation mirrors the production pipeline in tag_task.py:
   1. Full-image inference at the swept threshold.
   2. Face detection + expand-to-square crop inference using the custom tagger.
-  3. For images that have face crops: whitelist quality tags (e.g. "pixelated")
+  3. For images that have face crops: whitelist quality tags (e.g. "blocky")
      from the full-image pass are REPLACED by what the face crops confirmed.
      Images without face crops are left untouched.
 

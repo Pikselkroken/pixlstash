@@ -7,16 +7,25 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import update
 from sqlmodel import Session
 
 from PIL import Image
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, User
+from pixlstash.db_models import User
+from pixlstash.db_models.tag import (
+    DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+    DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import config_service
 from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
+from pixlstash.utils.service.smart_score_invalidation import (
+    changed_penalised_tags,
+    invalidate_all_anomaly_scores,
+    invalidate_for_penalised_tag_change,
+)
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
     serialize_user_config,
@@ -24,6 +33,19 @@ from pixlstash.utils.service.user_settings_utils import (
 from pixlstash.utils.watermark import get_default_watermark_bytes
 
 logger = get_logger(__name__)
+
+
+def _resolved_penalised_tags(raw) -> dict:
+    """Resolve a stored ``smart_score_penalised_tags`` value to ``{tag: weight}``.
+
+    Uses the same parser the scorer does, so the config-change diff is taken over the
+    weights that actually reach the penalty rather than over the raw JSON text.
+    """
+    return smart_score_penalised_tags(
+        raw,
+        DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+        default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    )
 
 
 def create_router(server) -> APIRouter:
@@ -86,6 +108,13 @@ def create_router(server) -> APIRouter:
         show_problem_icon: Optional[bool] = None
         compact_mode: Optional[bool] = None
         sidebar_docked: Optional[bool] = None
+        sidebar_pinned: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When true the sidebar stays pinned open and takes layout "
+                "space; when false it auto-hides and slides in on hover."
+            ),
+        )
         hide_purge_snapshot_warning: Optional[bool] = Field(
             default=None,
             description=(
@@ -277,31 +306,49 @@ def create_router(server) -> APIRouter:
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
 
-            old_penalised_tags = user.smart_score_penalised_tags
+            old_penalised_tags = _resolved_penalised_tags(
+                user.smart_score_penalised_tags
+            )
             try:
                 updated = apply_user_config_patch(user, patch_data)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+            changed_tags: set[str] = set()
             if updated:
                 session.add(user)
+                new_penalised_tags = _resolved_penalised_tags(
+                    user.smart_score_penalised_tags
+                )
+                # Diff the *resolved* weight tables, not the raw JSON strings: a reordered
+                # or reformatted payload with identical weights must not trigger a
+                # re-score.
+                changed_tags = changed_penalised_tags(
+                    old_penalised_tags, new_penalised_tags
+                )
+                if changed_tags:
+                    # Scoped, not library-wide: only pictures that actually carry one of
+                    # the re-weighted tags can have moved, and a blanket reset would
+                    # re-score the entire vault on every settings edit.
+                    #
+                    # Runs INSIDE this transaction, before the single commit:
+                    # invalidate_for_penalised_tag_change deliberately does not commit, so
+                    # the config write and the score invalidation land atomically. If the
+                    # process died between two separate tasks the config change would be
+                    # durable while the invalidation was lost, leaving scores stale
+                    # forever — the failure this path exists to eliminate.
+                    invalidate_for_penalised_tag_change(session, changed_tags)
                 session.commit()
                 session.refresh(user)
-            penalised_tags_changed = (
-                user.smart_score_penalised_tags != old_penalised_tags
-            )
-            return user, updated, penalised_tags_changed
+            return user, updated, changed_tags
 
-        user, updated, penalised_tags_changed = server.vault.db.run_task(
+        user, updated, changed_tags = server.vault.db.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
-        if penalised_tags_changed:
-
-            def _reset_smart_scores(session: Session) -> None:
-                session.exec(update(Picture).values(smart_score=None))
-                session.commit()
-
-            server.vault.db.run_task(_reset_smart_scores, priority=DBPriority.LOW)
+        if changed_tags:
+            # The NULL-reset already committed atomically above; just nudge the scheduler
+            # so MissingSmartScoreFinder promptly re-scores the cleared rows. wake() is a
+            # scheduler poke, not a DB write, so it need not be inside the transaction.
             server.vault.wake()
         if "keep_models_in_memory" in patch_data:
             server.vault.set_keep_models_in_memory(
@@ -316,7 +363,26 @@ def create_router(server) -> APIRouter:
             if raw:
                 try:
                     settings = _json.loads(raw)
+                    # The threshold offset moves both the anomaly apply gate and the
+                    # penalty's u = (p - t)/(1 - t) normalisation, so every cached score
+                    # with an anomaly component goes stale when it changes. Capture the
+                    # resolved offset either side of the apply and invalidate only on a
+                    # real move (an identical save must not re-score).
+                    old_offset = server.vault.get_pixlstash_tagger_threshold_offset()
                     server.vault.set_tagger_settings(settings)
+                    new_offset = server.vault.get_pixlstash_tagger_threshold_offset()
+                    if new_offset != old_offset:
+
+                        def _reset_anomaly_scores(session: Session) -> None:
+                            invalidate_all_anomaly_scores(
+                                session, context="tagger threshold offset config"
+                            )
+                            session.commit()
+
+                        server.vault.db.run_task(
+                            _reset_anomaly_scores, priority=DBPriority.LOW
+                        )
+                        server.vault.wake()
                 except (ValueError, TypeError) as exc:
                     logger.warning(
                         "Could not apply tagger_settings from patch: %s", exc

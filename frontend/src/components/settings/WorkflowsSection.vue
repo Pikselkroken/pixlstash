@@ -1,6 +1,12 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
+import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppInput from "../widgets/AppInput.vue";
+import SettingsSection from "./SettingsSection.vue";
+import SettingsChipGrid from "./SettingsChipGrid.vue";
+import SettingsChip from "./SettingsChip.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -657,86 +663,88 @@ watch(
 
 <template>
   <div>
-    <v-divider class="settings-section-divider" />
-    <div class="settings-section">
-      <div class="settings-section-title">ComfyUI Host</div>
-      <div class="settings-section-desc">
-        Configure the local ComfyUI server used for workflows.
-      </div>
-      <div class="settings-comfyui-display">
-        <div class="settings-comfyui-row">
-          <span class="settings-comfyui-label">Host</span>
-          <span class="settings-comfyui-value">{{
-            comfyuiHost || "Not configured"
-          }}</span>
+    <SettingsSection
+      title="ComfyUI Host"
+      desc="Configure the local ComfyUI server used for workflows."
+      first
+    >
+      <div class="wf-action-row">
+        <div class="wf-host-readout">
+          <div class="wf-host-pair">
+            <span class="wf-host-key">Host</span>
+            <span class="wf-host-value">{{
+              comfyuiHost || "Not configured"
+            }}</span>
+          </div>
+          <div class="wf-host-pair">
+            <span class="wf-host-key">Port</span>
+            <span class="wf-host-value">{{ comfyuiPort || "—" }}</span>
+          </div>
         </div>
-        <div class="settings-comfyui-row">
-          <span class="settings-comfyui-label">Port</span>
-          <span class="settings-comfyui-value">{{ comfyuiPort || "—" }}</span>
-        </div>
-        <v-btn
-          variant="outlined"
-          color="primary"
-          size="small"
-          class="settings-action-btn"
-          style="margin-top: 8px"
+        <AppButton
+          class="wf-action-btn"
+          variant="primary_green"
+          size="sm"
+          icon-left="cog-outline"
           @click="openComfyuiConfigDialog"
         >
-          Configure
-        </v-btn>
+          Configure Host
+        </AppButton>
       </div>
-    </div>
-    <v-divider class="settings-section-divider" />
-    <div class="settings-section">
-      <div class="settings-section-title">Import Workflow</div>
-      <div class="settings-section-desc">
-        Import a ComfyUI workflow JSON and map its image/caption inputs.
-      </div>
-      <div class="settings-form">
-        <v-btn
-          variant="outlined"
-          color="primary"
-          class="settings-action-btn"
+    </SettingsSection>
+
+    <SettingsSection title="Import Workflow">
+      <div class="wf-action-row">
+        <div class="wf-import-line">
+          Import a ComfyUI workflow JSON and map its image/caption inputs.
+        </div>
+        <AppButton
+          class="wf-action-btn"
+          variant="primary_green"
+          size="sm"
+          icon-left="tray-arrow-down"
           @click="openWorkflowImport"
         >
           Import Workflow
-        </v-btn>
-        <div v-if="workflowImportError" class="settings-error">
-          {{ workflowImportError }}
-        </div>
-        <div v-else class="settings-success">
-          {{ "\u00a0" }}
-        </div>
+        </AppButton>
       </div>
-    </div>
-    <v-divider class="settings-section-divider" />
-    <div class="settings-section">
-      <div class="settings-section-title">Saved Workflows</div>
-      <div class="settings-section-desc">
-        Manage your saved ComfyUI workflows.
+      <div v-if="workflowImportError" class="wf-error">
+        {{ workflowImportError }}
       </div>
-      <div class="settings-form">
-        <div v-if="workflowListLoading" class="settings-success">
-          Loading workflows...
-        </div>
-        <div v-else-if="workflowListError" class="settings-error">
-          {{ workflowListError }}
-        </div>
-        <div v-else-if="!workflowList.length" class="settings-success">
-          No workflows saved yet.
-        </div>
-        <div v-else class="settings-tag-list">
-          <div
-            v-for="workflow in workflowList"
-            :key="workflow.name"
-            class="settings-tag-chip settings-tag-chip--row"
-          >
-            <span class="settings-tag-label">
+    </SettingsSection>
+
+    <SettingsSection
+      title="Saved Workflows"
+      desc="Manage your saved ComfyUI workflows."
+    >
+      <div v-if="workflowListLoading" class="wf-status">
+        Loading workflows...
+      </div>
+      <div v-else-if="workflowListError" class="wf-error">
+        {{ workflowListError }}
+      </div>
+      <SettingsChipGrid v-else empty="No workflows saved yet.">
+        <template v-for="workflow in workflowList" :key="workflow.name">
+          <SettingsChip
+            v-if="workflow.source !== 'built-in'"
+            :label="workflow.display_name || workflow.name"
+            :meta="
+              workflow.valid
+                ? `valid ${workflow.workflow_type || 'i2i'}`
+                : 'invalid'
+            "
+            :meta-color="workflow.valid ? '' : 'rgb(var(--v-theme-error))'"
+            @remove="deleteWorkflow(workflow)"
+          />
+          <div v-else class="wf-chip wf-chip--readonly">
+            <span class="wf-chip__label">
               {{ workflow.display_name || workflow.name }}
             </span>
             <span
-              class="settings-tag-label"
-              :style="{ opacity: workflow.valid ? 0.65 : 1 }"
+              class="wf-chip__meta"
+              :style="
+                workflow.valid ? null : { color: 'rgb(var(--v-theme-error))' }
+              "
             >
               {{
                 workflow.valid
@@ -744,19 +752,10 @@ watch(
                   : "invalid"
               }}
             </span>
-            <v-btn
-              v-if="workflow.source !== 'built-in'"
-              icon
-              variant="text"
-              class="settings-tag-delete"
-              @click="deleteWorkflow(workflow)"
-            >
-              <v-icon size="16">mdi-delete</v-icon>
-            </v-btn>
           </div>
-        </div>
-      </div>
-    </div>
+        </template>
+      </SettingsChipGrid>
+    </SettingsSection>
 
     <input
       ref="workflowImportInputRef"
@@ -766,297 +765,232 @@ watch(
       @change="handleWorkflowFileChange"
     />
 
-    <v-dialog v-model="workflowImportDialogOpen" max-width="640">
-      <v-card class="settings-token-dialog">
-        <v-card-title class="settings-dialog-title">
-          Import Workflow
-        </v-card-title>
-        <v-card-text class="settings-dialog-body">
-          <v-text-field
-            v-model="workflowImportName"
-            label="Workflow name"
-            density="compact"
-            variant="filled"
-          />
-          <v-select
-            v-model="workflowImportImageTarget"
-            :items="workflowImageInputOptions"
-            item-title="title"
-            item-value="value"
-            label="Image input"
-            density="compact"
-            variant="filled"
-          />
-          <div v-if="workflowImportImagePreview" class="settings-token-warning">
-            Current value: {{ workflowImportImagePreview }}
-          </div>
-          <v-select
-            v-model="workflowImportCaptionTarget"
-            :items="workflowCaptionInputOptions"
-            item-title="title"
-            item-value="value"
-            label="Caption input"
-            density="compact"
-            variant="filled"
-          />
-          <div
-            v-if="workflowImportCaptionPreview"
-            class="settings-token-warning"
-          >
-            Current value: {{ workflowImportCaptionPreview }}
-          </div>
-          <v-select
-            v-model="workflowImportOutputTargets"
-            :items="workflowOutputNodeOptions"
-            item-title="title"
-            item-value="value"
-            label="SaveImage outputs"
-            multiple
-            density="compact"
-            variant="filled"
-            :disabled="!workflowOutputNodeOptions.length"
-          />
-          <div
-            v-if="!workflowOutputNodeOptions.length"
-            class="settings-token-warning"
-          >
-            No SaveImage nodes detected. Outputs will be auto-detected.
-          </div>
-          <div v-else class="settings-success">
-            Leave empty to use all SaveImage nodes.
-          </div>
-          <div v-if="workflowImportError" class="settings-error">
-            {{ workflowImportError }}
-          </div>
-        </v-card-text>
-        <v-card-actions class="settings-dialog-actions">
-          <v-spacer />
-          <v-btn variant="text" @click="workflowImportDialogOpen = false">
-            Cancel
-          </v-btn>
-          <v-btn
-            variant="outlined"
-            color="primary"
-            :loading="workflowImportSaving"
-            :disabled="workflowImportSaving"
-            @click="confirmWorkflowImport"
-          >
-            Import
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
-    <v-dialog v-model="comfyuiConfigDialogOpen" max-width="420">
-      <v-card class="settings-token-dialog">
-        <v-card-title class="settings-dialog-title"
-          >Configure ComfyUI</v-card-title
+    <AppDialog
+      :open="workflowImportDialogOpen"
+      title="Import Workflow"
+      :width="640"
+      @close="workflowImportDialogOpen = false"
+    >
+      <div class="wf-dialog-body">
+        <AppInput v-model="workflowImportName" label="Workflow name" />
+        <v-select
+          v-model="workflowImportImageTarget"
+          :items="workflowImageInputOptions"
+          item-title="title"
+          item-value="value"
+          label="Image input"
+          density="compact"
+          variant="outlined"
+          hide-details
+        />
+        <div v-if="workflowImportImagePreview" class="wf-dialog-note">
+          Current value: {{ workflowImportImagePreview }}
+        </div>
+        <v-select
+          v-model="workflowImportCaptionTarget"
+          :items="workflowCaptionInputOptions"
+          item-title="title"
+          item-value="value"
+          label="Caption input"
+          density="compact"
+          variant="outlined"
+          hide-details
+        />
+        <div v-if="workflowImportCaptionPreview" class="wf-dialog-note">
+          Current value: {{ workflowImportCaptionPreview }}
+        </div>
+        <v-select
+          v-model="workflowImportOutputTargets"
+          :items="workflowOutputNodeOptions"
+          item-title="title"
+          item-value="value"
+          label="SaveImage outputs"
+          multiple
+          density="compact"
+          variant="outlined"
+          hide-details
+          :disabled="!workflowOutputNodeOptions.length"
+        />
+        <div v-if="!workflowOutputNodeOptions.length" class="wf-dialog-note">
+          No SaveImage nodes detected. Outputs will be auto-detected.
+        </div>
+        <div v-else class="wf-status">
+          Leave empty to use all SaveImage nodes.
+        </div>
+        <div v-if="workflowImportError" class="wf-error">
+          {{ workflowImportError }}
+        </div>
+      </div>
+      <template #footer>
+        <AppButton
+          variant="secondary"
+          @click="workflowImportDialogOpen = false"
         >
-        <v-card-text class="settings-dialog-body">
-          <v-text-field
-            v-model="comfyuiEditHost"
-            label="Host"
-            density="compact"
-            variant="filled"
-            :disabled="comfyuiUrlLoading"
-            placeholder="e.g. 127.0.0.1"
-          />
-          <v-text-field
-            v-model="comfyuiEditPort"
-            label="Port"
-            density="compact"
-            variant="filled"
-            :disabled="comfyuiUrlLoading"
-            placeholder="e.g. 8188"
-            @keydown.enter.prevent="saveComfyuiUrl"
-          />
-          <div v-if="comfyuiUrlError" class="settings-error">
-            {{ comfyuiUrlError }}
-          </div>
-          <div v-else-if="comfyuiUrlSuccess" class="settings-success">
-            {{ comfyuiUrlSuccess }}
-          </div>
-        </v-card-text>
-        <v-card-actions class="settings-dialog-actions">
-          <v-btn
-            variant="outlined"
-            color="error"
-            :loading="comfyuiUrlLoading"
-            :disabled="comfyuiUrlLoading"
-            @click="clearComfyuiUrl"
-          >
-            Clear
-          </v-btn>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            :disabled="comfyuiUrlLoading"
-            @click="comfyuiConfigDialogOpen = false"
-          >
-            Cancel
-          </v-btn>
-          <v-btn
-            variant="outlined"
-            color="primary"
-            :loading="comfyuiUrlLoading"
-            :disabled="comfyuiUrlLoading"
-            @click="saveComfyuiUrl"
-          >
-            Save
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+          Cancel
+        </AppButton>
+        <AppButton
+          variant="primary_green"
+          :disabled="workflowImportSaving"
+          @click="confirmWorkflowImport"
+        >
+          Import
+        </AppButton>
+      </template>
+    </AppDialog>
+
+    <AppDialog
+      :open="comfyuiConfigDialogOpen"
+      title="Configure ComfyUI"
+      :width="420"
+      @close="comfyuiConfigDialogOpen = false"
+    >
+      <div class="wf-dialog-body">
+        <AppInput
+          v-model="comfyuiEditHost"
+          label="Host"
+          placeholder="e.g. 127.0.0.1"
+          :disabled="comfyuiUrlLoading"
+        />
+        <AppInput
+          v-model="comfyuiEditPort"
+          label="Port"
+          placeholder="e.g. 8188"
+          :disabled="comfyuiUrlLoading"
+          @enter="saveComfyuiUrl"
+        />
+        <div v-if="comfyuiUrlError" class="wf-error">
+          {{ comfyuiUrlError }}
+        </div>
+        <div v-else-if="comfyuiUrlSuccess" class="wf-status">
+          {{ comfyuiUrlSuccess }}
+        </div>
+      </div>
+      <template #footer>
+        <AppButton
+          variant="danger"
+          :disabled="comfyuiUrlLoading"
+          @click="clearComfyuiUrl"
+        >
+          Clear
+        </AppButton>
+        <span class="wf-footer-spacer" />
+        <AppButton
+          variant="secondary"
+          :disabled="comfyuiUrlLoading"
+          @click="comfyuiConfigDialogOpen = false"
+        >
+          Cancel
+        </AppButton>
+        <AppButton
+          variant="primary_green"
+          :disabled="comfyuiUrlLoading"
+          @click="saveComfyuiUrl"
+        >
+          Save
+        </AppButton>
+      </template>
+    </AppDialog>
   </div>
 </template>
 
 <style scoped>
-.settings-section-divider {
-  margin: 4px 0 8px;
-}
-
-.settings-section {
-  display: flex;
-  line-height: 1;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.settings-section-title {
-  font-weight: 600;
-}
-
-.settings-section-desc {
-  font-size: 0.92em;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.settings-form {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.settings-error {
-  color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
-}
-
-.settings-success {
-  color: rgb(var(--v-theme-accent));
-  font-size: 0.9em;
-}
-
-.settings-action-btn {
-  align-self: flex-start;
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
-}
-
-.settings-action-btn:hover {
-  background-color: rgb(var(--v-theme-accent)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
-}
-
-.settings-comfyui-display {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 8px;
-}
-
-.settings-comfyui-row {
+/* ── Action rows — readout/description on the left, a fixed-width action button
+   pinned right so the two section buttons line up vertically. ─────────────── */
+.wf-action-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.93em;
+  gap: var(--space-5);
 }
 
-.settings-comfyui-label {
-  font-weight: 500;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  min-width: 36px;
+.wf-action-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 168px;
+  justify-content: flex-start;
 }
 
-.settings-comfyui-value {
+/* ── ComfyUI Host readout — mono host/port pairs, design-system tokens ─────── */
+.wf-host-readout {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.wf-host-pair {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.wf-host-key {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-weight: var(--weight-medium);
+}
+
+.wf-host-value {
   color: rgb(var(--v-theme-on-surface));
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
-.settings-tag-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+/* ── Import Workflow descriptive line ─────────────────────────────────────── */
+.wf-import-line {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  line-height: var(--leading-snug);
 }
 
-.settings-tag-chip {
-  display: inline-flex;
+/* ── Status / error helper text ───────────────────────────────────────────── */
+.wf-status {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.wf-error {
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-error));
+  margin-top: var(--space-2);
+}
+
+/* ── Built-in workflow chip (no remove control) — matches SettingsChip look ── */
+.wf-chip {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: rgba(var(--v-theme-on-surface), 0.9);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
 }
 
-.settings-tag-chip--row {
-  width: 100%;
-  justify-content: space-between;
-  padding-right: 4px;
-}
-
-.settings-tag-label {
-  font-size: 1em;
+.wf-chip__label {
   flex: 1;
   min-width: 0;
+  font-size: var(--text-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: default;
 }
 
-.settings-tag-delete {
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  min-width: 0;
-  height: 12px;
-  width: 12px;
-  padding: 2;
+.wf-chip__meta {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  white-space: nowrap;
 }
 
-.settings-tag-delete:hover {
-  color: rgba(var(--v-theme-error), 0.9);
-  min-width: 0;
-  padding: 2;
-}
-
-.settings-token-dialog {
-  padding-bottom: 8px;
-}
-
-.settings-dialog-title {
-  font-weight: 700;
-  font-size: 1.2rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.settings-dialog-body {
+/* ── Dialog body (inside AppDialog) ───────────────────────────────────────── */
+.wf-dialog-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 8px;
+  gap: var(--space-4);
 }
 
-.settings-dialog-actions {
-  padding-top: 0;
-}
-
-.settings-token-warning {
-  font-size: 0.9em;
+.wf-dialog-note {
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-bottom: 6px;
+}
+
+.wf-footer-spacer {
+  flex: 1;
 }
 </style>

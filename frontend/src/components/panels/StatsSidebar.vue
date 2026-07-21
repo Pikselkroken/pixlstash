@@ -1,6 +1,7 @@
 <script setup>
-import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, watch, computed, onMounted, onUnmounted } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
@@ -95,11 +96,10 @@ watch(activeTab, (tab) => {
   if (tab === "pictures" && !picStatsLoaded.value && !picStatsLoading.value) {
     fetchPicStats();
   }
-  if (tab === "tasks") {
-    tmStartPolling();
-  } else {
-    tmStopPolling();
-  }
+  // Tell the store whether the Tasks tab is open so it can switch to the fast
+  // poll cadence. The store keeps polling globally either way (that's what
+  // drives the app-wide activity light); this only changes how often.
+  tasksStore.setTasksTabOpen(tab === "tasks");
 });
 
 // Tag confidence filter
@@ -405,24 +405,18 @@ watch(
 );
 onUnmounted(() => {
   clearTimeout(_wsTagUpdateTimer);
-  tmStopPolling();
+  tasksStore.setTasksTabOpen(false);
   for (const { observer } of tmCanvasRefs.values()) observer.disconnect();
   tmCanvasRefs.clear();
 });
 
 // ─── Tasks tab ────────────────────────────────────────────────────────────────
-const tmWorkerSnapshots = ref({});
-const tmSystemUsage = ref(null);
-const tmSeries = ref({});
-const tmLastSnapshot = new Map();
-const tmLastActiveAtByWorker = new Map();
-const tmLastProgressAtByWorker = new Map();
-let tmPollTimer = null;
-let tmFetchInFlight = false;
-const TM_WORKER_REMOVE_GRACE_SECONDS = 10;
-const TM_RATE_AVERAGE_WINDOW_SECONDS = 20;
-const TM_WINDOW_SECONDS = 120;
-const tmNowSeconds = ref(Date.now() / 1000);
+// The data (worker snapshots, rate series, active-state, ComfyUI runs) lives in
+// the shared tasks store, which is the single poller of /workers/progress. This
+// component owns only the Tasks-tab view: canvas sparkline drawing and the
+// label / number formatting.
+const tasksStore = useTasksStore();
+const TM_WINDOW_SECONDS = 120; // sparkline x-axis span, seconds
 const tmCanvasRefs = new Map(); // key → { el, observer }
 
 function tmRegisterCanvas(key, el) {
@@ -433,11 +427,11 @@ function tmRegisterCanvas(key, el) {
   }
   if (!el) return;
   const observer = new ResizeObserver(() => {
-    tmDrawSparkline(el, tmSeries.value[key] || []);
+    tmDrawSparkline(el, tasksStore.series[key] || []);
   });
   observer.observe(el);
   tmCanvasRefs.set(key, { el, observer });
-  requestAnimationFrame(() => tmDrawSparkline(el, tmSeries.value[key] || []));
+  requestAnimationFrame(() => tmDrawSparkline(el, tasksStore.series[key] || []));
 }
 
 function tmGetThemeRgb(name) {
@@ -454,11 +448,6 @@ function tmThemeRgba(name, alpha, fallback = "0,0,0") {
   return `rgba(${v}, ${alpha})`;
 }
 
-function tmGetMaxRate(key) {
-  const samples = tmSeries.value[key] || [];
-  return samples.length ? Math.max(...samples.map((s) => s.rate || 0)) : 0;
-}
-
 function tmFormatRate(value) {
   const rate = Number(value || 0);
   if (rate >= 10) return rate.toFixed(0);
@@ -468,9 +457,17 @@ function tmFormatRate(value) {
 
 function tmDrawAll() {
   for (const [key, { el }] of tmCanvasRefs.entries()) {
-    tmDrawSparkline(el, tmSeries.value[key] || []);
+    tmDrawSparkline(el, tasksStore.series[key] || []);
   }
 }
+
+// The store reassigns its `series` ref on every poll; redraw the sparklines
+// whenever it does. tmDrawAll is a no-op when no canvases are mounted (tab
+// closed), so this is cheap to leave always-on.
+watch(
+  () => tasksStore.series,
+  () => requestAnimationFrame(tmDrawAll),
+);
 
 function tmDrawSparkline(canvas, samples) {
   const ctx = canvas.getContext("2d");
@@ -538,6 +535,7 @@ const tmLabelMap = {
   missing_file_purge: "File cleanup",
   planner_managed: "Planner task",
   text_score: "Text score",
+  object_detection: "Object detection",
 };
 
 const tmWorkerLabelMap = {
@@ -601,42 +599,11 @@ function tmFormatUsage(used, total, percent) {
 }
 
 function tmGetLatestRate(key) {
-  const samples = tmSeries.value[key] || [];
-  if (!samples.length) return 0;
-  const latest = samples[samples.length - 1];
-  const latestTime = Number(latest?.t || 0);
-  if (!latestTime) return Number(latest?.rate || 0);
-  const cutoff = latestTime - TM_RATE_AVERAGE_WINDOW_SECONDS;
-  const windowSamples = samples.filter((s) => Number(s?.t || 0) >= cutoff);
-  if (!windowSamples.length) return Number(latest?.rate || 0);
-  // Use only non-zero samples for the average to avoid stall artifacts from
-  // batch transitions dragging down the displayed rate. Fall back to the full
-  // window (including zeros) only when all samples in the window are zero.
-  const nonZero = windowSamples.filter((s) => Number(s?.rate || 0) > 0);
-  const activeSamples = nonZero.length ? nonZero : windowSamples;
-  const sum = activeSamples.reduce((acc, s) => acc + Number(s?.rate || 0), 0);
-  return sum / activeSamples.length;
+  return tasksStore.getLatestRate(key);
 }
 
-const tmWorkerEntries = computed(() => {
-  const entries = Object.entries(tmWorkerSnapshots.value || {});
-  return entries
-    .filter(([key, snapshot]) => {
-      if (!snapshot) return false;
-      if (typeof snapshot.active === "boolean") return snapshot.active;
-      const lastActiveAt = Number(tmLastActiveAtByWorker.get(key) || 0);
-      const lastProgressAt = Number(tmLastProgressAtByWorker.get(key) || 0);
-      const latestActivityAt = Math.max(lastActiveAt, lastProgressAt);
-      return (
-        latestActivityAt > 0 &&
-        tmNowSeconds.value - latestActivityAt <= TM_WORKER_REMOVE_GRACE_SECONDS
-      );
-    })
-    .map(([key, snapshot]) => ({ key, snapshot }));
-});
-
 const tmSystemItems = computed(() => {
-  const usage = tmSystemUsage.value || {};
+  const usage = tasksStore.systemUsage || {};
   const items = [];
   const cpuAllCores = Number.isFinite(usage.cpu_percent_all_cores)
     ? usage.cpu_percent_all_cores
@@ -666,64 +633,6 @@ const tmSystemItems = computed(() => {
   });
   return items;
 });
-
-async function tmFetchProgress() {
-  if (tmFetchInFlight) return;
-  tmFetchInFlight = true;
-  try {
-    const res = await apiClient.get("/workers/progress");
-    const workers = res.data?.workers || {};
-    tmSystemUsage.value = res.data?.process || res.data?.system || null;
-    const now = Date.now() / 1000;
-    tmNowSeconds.value = now;
-    const nextSeries = { ...tmSeries.value };
-    tmWorkerSnapshots.value = workers;
-    for (const [key, snapshot] of Object.entries(workers)) {
-      const current = Number(snapshot.current || 0);
-      const prev = tmLastSnapshot.get(key);
-      let rate = 0;
-      if (prev && current > prev.current && now > prev.t) {
-        rate = (current - prev.current) / (now - prev.t);
-      }
-      if (rate > 0) tmLastProgressAtByWorker.set(key, now);
-      const hasExplicitActive = typeof snapshot?.active === "boolean";
-      const isActive = hasExplicitActive
-        ? snapshot.active
-        : Boolean(snapshot?.running) && rate > 0;
-      if (isActive) tmLastActiveAtByWorker.set(key, now);
-      tmLastSnapshot.set(key, { current, t: now });
-      const entry = { t: now, rate, current };
-      const existing = nextSeries[key] ? [...nextSeries[key]] : [];
-      existing.push(entry);
-      nextSeries[key] = existing.filter((e) => e.t >= now - 120);
-    }
-    for (const key of Array.from(tmLastActiveAtByWorker.keys())) {
-      if (!(key in workers)) tmLastActiveAtByWorker.delete(key);
-    }
-    for (const key of Array.from(tmLastProgressAtByWorker.keys())) {
-      if (!(key in workers)) tmLastProgressAtByWorker.delete(key);
-    }
-    tmSeries.value = nextSeries;
-    await nextTick();
-    requestAnimationFrame(tmDrawAll);
-  } catch {
-    // silent
-  } finally {
-    tmFetchInFlight = false;
-  }
-}
-
-function tmStartPolling() {
-  if (tmPollTimer) return;
-  tmFetchProgress();
-  tmPollTimer = setInterval(tmFetchProgress, 2000);
-}
-
-function tmStopPolling() {
-  if (!tmPollTimer) return;
-  clearInterval(tmPollTimer);
-  tmPollTimer = null;
-}
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;
@@ -1000,8 +909,17 @@ function handleResolutionBarClick(label) {
             type="button"
             @click="activeTab = 'tasks'"
           >
-            <v-icon size="12">mdi-timeline-clock-outline</v-icon>
+            <v-icon
+              size="12"
+              :class="{ 'tm-tab-icon--busy': tasksStore.hasActiveTasks }"
+              >mdi-timeline-clock-outline</v-icon
+            >
             Tasks
+            <span
+              v-if="tasksStore.hasActiveTasks"
+              class="tm-tab-pulse"
+              :title="`${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'}`"
+            ></span>
           </button>
         </div>
       </div>
@@ -1778,40 +1696,64 @@ function handleResolutionBarClick(label) {
 
       <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
       <template v-if="activeTab === 'tasks'">
-        <div v-if="tmWorkerEntries.length === 0" class="tm-idle-msg">
-          No active workers
+        <div v-if="tasksStore.activeEntries.length === 0" class="tm-idle-msg">
+          No active tasks
         </div>
         <div v-else class="tm-worker-list">
-          <div
-            v-for="entry in tmWorkerEntries"
-            :key="entry.key"
-            class="tm-worker-row"
-          >
-            <div class="tm-worker-row-top">
-              <span
-                class="tm-status-dot"
-                :class="{
-                  'tm-status-dot--running':
-                    entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
-                }"
-              ></span>
-              <span class="tm-worker-label">{{
-                tmFormatLabel(entry.key, entry.snapshot.label)
-              }}</span>
-              <span class="tm-worker-progress">{{
-                tmFormatProgress(entry.snapshot)
-              }}</span>
+          <template v-for="entry in tasksStore.activeEntries" :key="entry.key">
+            <!-- ComfyUI run: frontend-driven, shows a progress bar + abort -->
+            <div v-if="entry.kind === 'comfyui'" class="tm-worker-row">
+              <div class="tm-worker-row-top">
+                <span class="tm-status-dot tm-status-dot--running"></span>
+                <span class="tm-worker-label">{{ entry.run.label }}</span>
+                <button
+                  v-if="entry.run.status !== 'completed'"
+                  class="tm-comfy-abort"
+                  type="button"
+                  title="Abort ComfyUI run"
+                  @click="tasksStore.abortComfyuiRun(entry.key)"
+                >
+                  ✕
+                </button>
+              </div>
+              <div class="tm-comfy-bar">
+                <div
+                  class="tm-comfy-fill"
+                  :style="{
+                    width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
+                  }"
+                ></div>
+              </div>
+              <div class="tm-comfy-message">{{ entry.run.message }}</div>
             </div>
-            <div class="tm-worker-row-bottom">
-              <canvas
-                :ref="(el) => tmRegisterCanvas(entry.key, el)"
-                class="tm-sparkline"
-              ></canvas>
-              <span class="tm-worker-rate">
-                {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
-              </span>
+            <!-- Backend worker: throughput sparkline + rate -->
+            <div v-else class="tm-worker-row">
+              <div class="tm-worker-row-top">
+                <span
+                  class="tm-status-dot"
+                  :class="{
+                    'tm-status-dot--running':
+                      entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
+                  }"
+                ></span>
+                <span class="tm-worker-label">{{
+                  tmFormatLabel(entry.key, entry.snapshot.label)
+                }}</span>
+                <span class="tm-worker-progress">{{
+                  tmFormatProgress(entry.snapshot)
+                }}</span>
+              </div>
+              <div class="tm-worker-row-bottom">
+                <canvas
+                  :ref="(el) => tmRegisterCanvas(entry.key, el)"
+                  class="tm-sparkline"
+                ></canvas>
+                <span class="tm-worker-rate">
+                  {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
+                </span>
+              </div>
             </div>
-          </div>
+          </template>
         </div>
         <div v-if="tmSystemItems.length" class="tm-system-bar">
           <div
@@ -1855,7 +1797,7 @@ function handleResolutionBarClick(label) {
   .stats-sidebar {
     position: fixed;
     right: 0;
-    top: calc(var(--titlebar-h, 0px) + 48px);
+    top: calc(var(--titlebar-h, 0px) + 36px);
     bottom: 0;
     height: auto;
     z-index: 150;
@@ -1896,7 +1838,7 @@ function handleResolutionBarClick(label) {
   background: rgba(var(--v-theme-surface), 1);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   border-right: none;
-  border-radius: 6px 0 0 6px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.6);
   z-index: 1;
@@ -1913,7 +1855,7 @@ function handleResolutionBarClick(label) {
   justify-content: center;
   background: none;
   border: none;
-  padding: 0 8px;
+  padding: 0 var(--space-3);
   height: 100%;
   cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.4);
@@ -1928,19 +1870,22 @@ function handleResolutionBarClick(label) {
 .stats-sidebar-content {
   flex: 1;
   min-width: 0;
-  padding: 0 10px 12px 10px;
+  padding: 0 var(--space-3) var(--space-4) var(--space-3);
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .stats-sidebar-header {
   display: flex;
   flex-direction: column;
-  margin-bottom: 4px;
-  height: 48px;
+  margin-bottom: var(--space-2);
+  /* Match the toolbar height so the three column header bands (left tabs,
+     toolbar, stats) line up. The "Stats" title row is flex:1 and absorbs the
+     change; the tabs row keeps its natural height. */
+  height: 36px;
   flex-shrink: 0;
 }
 
@@ -1957,7 +1902,7 @@ function handleResolutionBarClick(label) {
   align-items: center;
   justify-content: space-between;
   flex: 1;
-  padding: 0 4px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-3);
 }
 
 @media (max-width: 1339px) {
@@ -1968,8 +1913,8 @@ function handleResolutionBarClick(label) {
 
 .stats-sidebar-title,
 .stats-sidebar-title-text {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.5);
@@ -1978,7 +1923,7 @@ function handleResolutionBarClick(label) {
 .stats-sidebar-title-text {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-2);
 }
 
 .stats-sidebar-title-icon {
@@ -1999,20 +1944,20 @@ function handleResolutionBarClick(label) {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 0;
+  padding: var(--space-6) 0;
 }
 
 .stats-error {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-error), 1);
-  padding: 8px 0;
+  padding: var(--space-3) 0;
 }
 
 .stats-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-bottom: 8px;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
 }
 
@@ -2021,8 +1966,8 @@ function handleResolutionBarClick(label) {
 }
 
 .stats-section-title {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.45);
@@ -2031,7 +1976,7 @@ function handleResolutionBarClick(label) {
 .stats-section-toggle {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   background: none;
   border: none;
   cursor: pointer;
@@ -2041,7 +1986,7 @@ function handleResolutionBarClick(label) {
 
 .stats-tiles {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .stats-tile {
@@ -2050,30 +1995,30 @@ function handleResolutionBarClick(label) {
   flex-direction: column;
   align-items: center;
   background: rgba(var(--v-theme-on-surface), 0.05);
-  border-radius: 6px;
-  padding: 6px 4px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-2);
 }
 
 .stats-tile-value {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
   line-height: 1.1;
   color: rgba(var(--v-theme-on-surface), 0.9);
 }
 
 .stats-tile-label {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.45);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .stats-donut-wrap {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .stats-donut {
@@ -2096,8 +2041,8 @@ function handleResolutionBarClick(label) {
 }
 
 .donut-label {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   fill: rgba(var(--v-theme-on-surface), 0.85);
 }
 
@@ -2105,7 +2050,7 @@ function handleResolutionBarClick(label) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  gap: var(--space-2) var(--space-3);
   justify-content: center;
 }
 
@@ -2126,7 +2071,7 @@ function handleResolutionBarClick(label) {
 }
 
 .legend-text {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
 }
 
@@ -2134,16 +2079,16 @@ function handleResolutionBarClick(label) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .penalised-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 10px;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
   border: 1px solid rgba(var(--v-theme-warning), 0.4);
   background: none;
   cursor: pointer;
@@ -2199,7 +2144,7 @@ function handleResolutionBarClick(label) {
 }
 
 .bar-label-fo {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.75);
   white-space: nowrap;
   overflow: hidden;
@@ -2211,16 +2156,16 @@ function handleResolutionBarClick(label) {
 }
 
 .bar-count-inner {
-  font-size: 9px;
-  font-weight: 600;
-  fill: rgba(255, 255, 255, 0.85);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  fill: rgba(var(--v-theme-on-primary), 0.85);
   dominant-baseline: central;
   pointer-events: none;
 }
 
 .bar-count-outer {
-  font-size: 9px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   fill: rgba(var(--v-theme-on-surface), 0.65);
   dominant-baseline: central;
   pointer-events: none;
@@ -2229,19 +2174,19 @@ function handleResolutionBarClick(label) {
 .stats-cooc-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  margin-top: 2px;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .cooc-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.7);
   cursor: pointer;
-  border-radius: 3px;
-  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-1);
   outline: none;
 }
 .cooc-item:hover {
@@ -2266,7 +2211,7 @@ function handleResolutionBarClick(label) {
 }
 
 .cooc-empty {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.35);
   font-style: italic;
 }
@@ -2277,13 +2222,13 @@ function handleResolutionBarClick(label) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-right: 6px;
+  padding-right: var(--space-3);
 }
 
 .cooc-count {
   color: rgba(var(--v-theme-on-surface), 0.4);
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--text-2xs);
 }
 
 .stats-hist {
@@ -2291,7 +2236,7 @@ function handleResolutionBarClick(label) {
 }
 
 .hist-label {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   fill: rgba(var(--v-theme-on-surface), 0.6);
   dominant-baseline: central;
 }
@@ -2327,7 +2272,7 @@ function handleResolutionBarClick(label) {
   background: none;
   border: none;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: rgba(var(--v-theme-on-surface), 0.45);
   flex-shrink: 0;
 }
@@ -2339,7 +2284,7 @@ function handleResolutionBarClick(label) {
 .conf-tag-selector {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   flex-shrink: 0;
 }
 
@@ -2348,12 +2293,12 @@ function handleResolutionBarClick(label) {
 }
 
 .conf-tag-select {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
   background: rgba(var(--v-theme-on-surface), 0.06);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.15);
-  border-radius: 4px;
-  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
   cursor: pointer;
   max-width: 108px;
   outline: none;
@@ -2371,10 +2316,10 @@ function handleResolutionBarClick(label) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
   font-weight: 500;
-  padding: 0 6px;
+  padding: 0 var(--space-3);
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -2442,25 +2387,25 @@ function handleResolutionBarClick(label) {
 
 /* ── Tasks tab ─────────────────────────────────────────────────────────────── */
 .tm-idle-msg {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.4);
   font-style: italic;
-  padding: 12px 0 4px;
+  padding: var(--space-4) 0 var(--space-2);
 }
 
 .tm-worker-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   width: 100%;
 }
 
 .tm-worker-row {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-surface), 0.04);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
   min-width: 0;
@@ -2469,14 +2414,14 @@ function handleResolutionBarClick(label) {
 .tm-worker-row-top {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .tm-worker-row-bottom {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -2485,11 +2430,11 @@ function handleResolutionBarClick(label) {
   height: 28px;
   min-width: 0;
   display: block;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .tm-worker-rate {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.45);
   white-space: nowrap;
   flex-shrink: 0;
@@ -2509,11 +2454,86 @@ function handleResolutionBarClick(label) {
 .tm-status-dot--running {
   background: rgb(var(--v-theme-primary));
   box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.55);
+  animation: tm-dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* ── ComfyUI run rows ──────────────────────────────────────────────────────── */
+.tm-comfy-bar {
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  overflow: hidden;
+}
+
+.tm-comfy-fill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-primary));
+  transition: width 0.25s ease;
+}
+
+.tm-comfy-message {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tm-comfy-abort {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.tm-comfy-abort:hover {
+  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-error), 0.12);
+}
+
+/* ── Tasks tab "busy" indicators ───────────────────────────────────────────── */
+.tm-tab-icon--busy {
+  animation: tm-dot-pulse 1.4s ease-in-out infinite;
+  color: rgb(var(--v-theme-primary));
+}
+
+.tm-tab-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.6);
+  animation: tm-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tm-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.78);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-status-dot--running,
+  .tm-tab-icon--busy,
+  .tm-tab-pulse {
+    animation: none;
+  }
 }
 
 .tm-worker-label {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -2522,7 +2542,7 @@ function handleResolutionBarClick(label) {
 }
 
 .tm-worker-progress {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
   white-space: nowrap;
   flex-shrink: 0;
@@ -2530,11 +2550,11 @@ function handleResolutionBarClick(label) {
 
 .tm-system-bar {
   margin-top: auto;
-  padding-top: 10px;
+  padding-top: var(--space-3);
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
   width: 100%;
 }
 
@@ -2542,16 +2562,16 @@ function handleResolutionBarClick(label) {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 6px;
-  font-size: 11px;
+  gap: var(--space-3);
+  font-size: var(--text-2xs);
 }
 
 .tm-system-label {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-on-surface), 0.5);
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   flex-shrink: 0;
 }
 

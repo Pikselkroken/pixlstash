@@ -2,8 +2,10 @@ import { test, expect } from '../fixtures/test.js'
 
 // Release plan §5 — Tags. Add a tag through the ImageOverlay's inline input and
 // confirm the chip appears immediately, then remove it via its ✕ button and
-// confirm it disappears. The test adds and then removes its own unique tag, so
-// the shared fixture DB is left exactly as it was found.
+// confirm it disappears from the applied-tag list. The tag is unique to this
+// test; removing it rejects the (synthetic) prediction, so the label lingers
+// only in the separate "Rejected Tags" section, which the overlay.tag() locator
+// deliberately excludes — the applied-tag list is restored to how it was found.
 
 const TEMP_TAG = 'zz-e2e-temp-tag'
 

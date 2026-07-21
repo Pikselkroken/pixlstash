@@ -6,6 +6,10 @@ from pydantic import BaseModel, ConfigDict
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_prediction_service
+from pixlstash.utils.service.anomaly_thresholds import (
+    load_label_thresholds,
+    load_raw_label_thresholds,
+)
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
 from pixlstash.routes.pictures._helpers import enforce_picture_scope
 
@@ -144,9 +148,7 @@ def create_router(server) -> APIRouter:
             "tag_predictions": payload,
             "meta": {
                 "acceptance_threshold": server.vault.get_pixlstash_acceptance_threshold(),
-                "label_thresholds": tag_prediction_service.load_label_thresholds(
-                    meta_path, offset
-                ),
+                "label_thresholds": load_label_thresholds(meta_path, offset),
             },
         }
 
@@ -159,11 +161,15 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ConfirmTagPredictionResponse,
     )
-    def confirm_tag_prediction(id: int, tag: str):
+    def confirm_tag_prediction(id: int, tag: str, request: Request):
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        # Scope guard (BOLA): a resource-scoped token may only mutate tag
+        # predictions for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
 
         try:
             tag_prediction_service.confirm_tag_prediction(server.vault, pic_id, tag)
@@ -182,16 +188,25 @@ def create_router(server) -> APIRouter:
         description="Marks the prediction as REJECTED.  Does not modify the Tag table.",
         response_model=RejectTagPredictionResponse,
     )
-    def reject_tag_prediction(id: int, tag: str):
+    def reject_tag_prediction(id: int, tag: str, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
+        # Scope guard (BOLA): a resource-scoped token may only mutate tag
+        # predictions for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
+
         tag_prediction_service.reject_tag_prediction(server.vault, pic_id, tag)
         server.handle_vault_event(
             EventType.CHANGED_PICTURES,
-            {"picture_ids": [pic_id]},
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
         )
         return {"status": "rejected", "tag": tag}
 
@@ -205,16 +220,25 @@ def create_router(server) -> APIRouter:
         ),
         response_model=DeleteTagPredictionsResponse,
     )
-    def delete_tag_predictions(id: int):
+    def delete_tag_predictions(id: int, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
+        # Scope guard (BOLA): a resource-scoped token may only mutate tag
+        # predictions for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
+
         count = tag_prediction_service.delete_tag_predictions(server.vault, pic_id)
         server.handle_vault_event(
             EventType.CHANGED_PICTURES,
-            {"picture_ids": [pic_id]},
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
         )
         return {"status": "deleted", "count": count}
 
@@ -231,17 +255,31 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ResetStatusResponse,
     )
-    def reset_picture_tags(id: int, payload: ResetTagsRequest | None = None):
+    def reset_picture_tags(
+        id: int, request: Request, payload: ResetTagsRequest | None = None
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
+        # Scope guard (BOLA): a resource-scoped token may only mutate tag
+        # predictions for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
+
         model = payload.model if payload else None
         tag_prediction_service.reset_picture_tags(
             server.vault, pic_id, engine_name=model
         )
-        server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
+        server.vault.notify(
+            EventType.CHANGED_TAGS,
+            {
+                "picture_ids": [pic_id],
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
         server.vault.retag_picture_interactive(pic_id, engine_name=model)
         return {"status": "reset"}
 
@@ -255,14 +293,23 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ResetStatusResponse,
     )
-    def reset_picture_description(id: int, payload: ResetTagsRequest | None = None):
+    def reset_picture_description(
+        id: int, request: Request, payload: ResetTagsRequest | None = None
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
+        # Scope guard (BOLA): a resource-scoped token may only mutate tag
+        # predictions for pictures within its granted resource.
+        enforce_picture_scope(server, request, pic_id)
+
         model = payload.model if payload else None
-        found = server.vault.reset_description_interactive(pic_id, engine_name=model)
+        found = server.vault.reset_description_interactive(
+            pic_id, engine_name=model, origin_client_id=origin_client_id
+        )
         if not found:
             raise HTTPException(status_code=404, detail="Picture not found")
         return {"status": "reset"}
@@ -284,7 +331,7 @@ def create_router(server) -> APIRouter:
         if offset is None:
             offset = server.vault.get_pixlstash_tagger_threshold_offset()
         meta_path = server.vault.get_pixlstash_tagger_meta_path()
-        raw = tag_prediction_service.load_raw_label_thresholds(meta_path)
+        raw = load_raw_label_thresholds(meta_path)
         sorted_labels = sorted(raw.items())
         return [
             {

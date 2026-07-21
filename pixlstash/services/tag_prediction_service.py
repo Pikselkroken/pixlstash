@@ -4,17 +4,25 @@ Extracted from pixlstash/routes/tag_predictions.py to keep route handlers thin.
 Provides vault-level functions so route handlers need not call vault.db directly.
 """
 
-import json
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, or_
+from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Tag
 from pixlstash.db_models.tag import make_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.caption_utils import sanitise_tag
+from pixlstash.services.set_lock_service import enforce_pictures_not_locked
+from pixlstash.utils.service.label_ledger import (
+    NEG,
+    POS,
+    not_human_labeled,
+    record_human_label,
+)
+from pixlstash.utils.service.smart_score_invalidation import (
+    invalidate_on_anomaly_change,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -23,55 +31,6 @@ if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
-
-
-def load_label_thresholds(meta_path: str | None, bias: float = 0.0) -> dict[str, float]:
-    """Load per-label acceptance thresholds from the PixlStash tagger meta JSON.
-
-    Keys are naturalized to match the values stored in TagPrediction.tag.
-    The bias is the user-configured offset added to each label's base threshold.
-    Returns an empty dict if the file is missing or lacks label_thresholds.
-
-    Args:
-        meta_path: Path to the tagger meta JSON file, or None.
-        bias: Offset to add to each label's base threshold.
-
-    Returns:
-        Dict mapping sanitised tag name → effective threshold.
-    """
-    if not meta_path:
-        return {}
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        raw = meta.get("label_thresholds", {})
-        if not raw:
-            return {}
-        return {
-            sanitise_tag(k) or k: max(0.01, float(v) + bias) for k, v in raw.items()
-        }
-    except Exception:
-        return {}
-
-
-def load_raw_label_thresholds(meta_path: str | None) -> dict[str, float]:
-    """Load per-label thresholds from meta JSON without any offset applied.
-
-    Args:
-        meta_path: Path to the tagger meta JSON file, or None.
-
-    Returns:
-        Dict mapping sanitised tag name → base threshold.
-    """
-    if not meta_path:
-        return {}
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        raw = meta.get("label_thresholds", {})
-        return {sanitise_tag(k) or k: float(v) for k, v in raw.items()}
-    except Exception:
-        return {}
 
 
 def get_predictions(
@@ -111,6 +70,11 @@ def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
     """
 
     def _confirm(session: Session) -> None:
+        # Confirming promotes a prediction to a Tag and writes a human POS — label
+        # data frozen when the picture is in a locked set.
+        enforce_pictures_not_locked(
+            session, [pic_id], "confirm a tag on a locked picture"
+        )
         prediction = session.exec(
             select(TagPrediction).where(
                 TagPrediction.picture_id == pic_id,
@@ -119,16 +83,24 @@ def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
         ).first()
         if prediction is None:
             raise KeyError(f"Prediction not found: picture_id={pic_id} tag={tag!r}")
-        prediction.status = "CONFIRMED"
 
-        existing_tag = session.exec(
-            select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
-        ).first()
-        if existing_tag is None:
-            session.add(Tag(picture_id=pic_id, tag=tag))
+        # Confirming an anomaly tag folds its probability to 1.0 in the scorer's
+        # inputs, so the cached smart score must be dropped for recompute.
+        with invalidate_on_anomaly_change(
+            session, [pic_id], context="confirm tag prediction"
+        ):
+            # Record the human acceptance, snapshotting the tagger version/confidence the
+            # reviewer agreed with (frozen in label_model_version/label_confidence).
+            record_human_label(session, pic_id, tag, POS)
 
-        session.flush()
-        recompute_anomaly_tag_uncertainty(session, pic_id)
+            existing_tag = session.exec(
+                select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
+            ).first()
+            if existing_tag is None:
+                session.add(Tag(picture_id=pic_id, tag=tag))
+
+            session.flush()
+            recompute_anomaly_tag_uncertainty(session, pic_id)
         session.commit()
 
     vault.db.run_task(_confirm)
@@ -144,27 +116,22 @@ def reject_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
     """
 
     def _reject(session: Session) -> None:
-        prediction = session.exec(
-            select(TagPrediction).where(
-                TagPrediction.picture_id == pic_id,
-                TagPrediction.tag == tag,
-            )
-        ).first()
-        if prediction is None:
-            # Tag was added manually — create a synthetic REJECTED prediction so it
-            # persists through fetches.
-            session.add(
-                TagPrediction(
-                    picture_id=pic_id,
-                    tag=tag,
-                    confidence=1.0,
-                    model_version="manual",
-                    status="REJECTED",
-                )
-            )
-        else:
-            prediction.status = "REJECTED"
-        recompute_anomaly_tag_uncertainty(session, pic_id)
+        # Rejecting writes a human NEG onto the picture — label data frozen when
+        # the picture is in a locked set.
+        enforce_pictures_not_locked(
+            session, [pic_id], "reject a tag on a locked picture"
+        )
+        # Rejecting an anomaly tag folds its probability to 0.0 in the scorer's
+        # inputs, so the cached smart score must be dropped for recompute.
+        with invalidate_on_anomaly_change(
+            session, [pic_id], context="reject tag prediction"
+        ):
+            # Record the human rejection as durable NEG supervision (snapshotting the
+            # tagger version/confidence overruled). Creates a synthetic 'manual' row if
+            # the tag was added manually, so the reject persists through fetches.
+            record_human_label(session, pic_id, tag, NEG)
+            session.flush()
+            recompute_anomaly_tag_uncertainty(session, pic_id)
         session.commit()
 
     vault.db.run_task(_reject)
@@ -187,12 +154,7 @@ def delete_tag_predictions(vault: "Vault", pic_id: int) -> int:
         stmt = (
             delete(TagPrediction)
             .where(TagPrediction.picture_id == pic_id)
-            .where(
-                or_(
-                    TagPrediction.model_version != "manual",
-                    TagPrediction.model_version.is_(None),
-                )
-            )
+            .where(not_human_labeled())
         )
         result = session.exec(stmt)
         session.commit()
@@ -215,18 +177,21 @@ def reset_picture_tags(
     """
 
     def _reset(session: Session) -> None:
-        session.exec(
-            delete(TagPrediction)
-            .where(TagPrediction.picture_id == pic_id)
-            .where(
-                or_(
-                    TagPrediction.model_version != "manual",
-                    TagPrediction.model_version.is_(None),
-                )
+        # Reset deletes ALL confirmed Tag rows and drops a retag sentinel — a
+        # destructive rewrite of frozen label data. Refuse on a locked picture.
+        enforce_pictures_not_locked(session, [pic_id], "reset tags on a locked picture")
+        # Dropping the model's prediction rows removes their anomaly probabilities
+        # from the scorer's inputs, so the cached smart score goes stale.
+        with invalidate_on_anomaly_change(
+            session, [pic_id], context="reset picture tags"
+        ):
+            session.exec(
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id == pic_id)
+                .where(not_human_labeled())
             )
-        )
-        session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-        session.add(Tag(tag=make_tag_sentinel(engine_name), picture_id=pic_id))
+            session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+            session.add(Tag(tag=make_tag_sentinel(engine_name), picture_id=pic_id))
         session.commit()
 
     vault.db.run_task(_reset)

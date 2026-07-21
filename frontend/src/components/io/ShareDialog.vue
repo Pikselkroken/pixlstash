@@ -241,46 +241,46 @@ async function copyUrl() {
 .share-dialog-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 1rem;
+  gap: var(--space-3);
+  font-size: var(--text-md);
   font-weight: 600;
-  padding: 16px 20px 8px;
+  padding: var(--space-5) var(--space-5) var(--space-3);
 }
 .share-dialog-title-icon {
   opacity: 0.8;
 }
 .share-dialog-body {
-  padding: 8px 20px 4px;
+  padding: var(--space-3) var(--space-5) var(--space-2);
 }
 .share-dialog-hint {
-  font-size: 0.85rem;
+  font-size: var(--text-base);
   opacity: 0.75;
-  margin-bottom: 14px;
+  margin-bottom: var(--space-4);
 }
 .share-dialog-date {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 .share-dialog-url-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   background: rgba(var(--v-theme-on-surface), 0.06);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-3);
 }
 .share-dialog-url {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   word-break: break-all;
   opacity: 0.9;
   font-family: monospace;
 }
 .share-dialog-actions {
-  padding: 8px 16px 16px;
+  padding: var(--space-3) var(--space-5) var(--space-5);
 }
 .share-dialog-error {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-error));
-  margin-top: 8px;
+  margin-top: var(--space-3);
 }
 </style>

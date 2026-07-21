@@ -14,6 +14,11 @@ export class SideBar {
     this.characterItems = page.locator('.sidebar-character-group .sidebar-list-item')
     this.projectsTab = page.locator('.sidebar-view-tab', { hasText: 'Projects' }).first()
     this.projectRows = page.locator('.sidebar-project-tree-row')
+    // Right-click context menu (teleported to <body>) and the trailing lock
+    // indicator that a set row renders when the set is locked (SideBar.vue:
+    // .sidebar-lock-icon on a .sidebar-set-item).
+    this.ctxMenu = page.locator('.sidebar-ctx-menu')
+    this.setLockIcons = page.locator('.sidebar-set-item .sidebar-lock-icon')
   }
 
   /** The count badge inside a set/character/project row. */
@@ -41,5 +46,33 @@ export class SideBar {
   async openProjectsTab() {
     await this.projectsTab.click()
     await expect(this.projectRows.first()).toBeVisible()
+  }
+
+  /** Right-click a set row to open the sidebar context menu. */
+  async openSetContextMenu(row) {
+    await row.click({ button: 'right' })
+    await expect(this.ctxMenu).toBeVisible()
+  }
+
+  /**
+   * A context-menu button by exact accessible name. Exact matching matters for
+   * the lock toggle: a substring "Lock set" would also match "Unlock set".
+   */
+  ctxButton(name) {
+    return this.ctxMenu.getByRole('button', { name, exact: true })
+  }
+
+  /** Lock a set via its context menu (Lock set → menu closes). */
+  async lockSet(row) {
+    await this.openSetContextMenu(row)
+    await this.ctxButton('Lock set').click()
+    await expect(this.ctxMenu).toBeHidden()
+  }
+
+  /** Unlock a set via its context menu (Unlock set → menu closes). */
+  async unlockSet(row) {
+    await this.openSetContextMenu(row)
+    await this.ctxButton('Unlock set').click()
+    await expect(this.ctxMenu).toBeHidden()
   }
 }
