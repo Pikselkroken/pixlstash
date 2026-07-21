@@ -2152,3 +2152,204 @@ def test_backfill_all_snapshot_hashes_repairs_intermediate_schema_snapshot(serve
     assert stored is not None, (
         "backfill must fill the NULL metadata_hash in the repaired snapshot"
     )
+
+
+# ---------------------------------------------------------------------------
+# Data-loss regression: restore must not resurrect a scrapheap "ghost" that
+# shadows a file re-added after the snapshot, or emptying the scrapheap would
+# hard-delete that live file.
+# ---------------------------------------------------------------------------
+
+
+def _add_scrapheap_picture(server, filename, pixel_sha=None):
+    """Insert a soft-deleted (scrapheap) picture and return its id."""
+
+    def _do(session):
+        pic = Picture(
+            file_path=filename,
+            filename=filename,
+            deleted=True,
+            pixel_sha=pixel_sha,
+        )
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        return pic.id
+
+    return server.vault.db.run_task(_do)
+
+
+def _drop_picture_row(server, pic_id):
+    def _do(session):
+        pic = session.get(Picture, pic_id)
+        if pic is not None:
+            session.delete(pic)
+            session.commit()
+
+    server.vault.db.run_task(_do)
+
+
+def _empty_scrapheap_via_http(server):
+    """Drive the real DELETE /pictures/scrapheap endpoint as the owner."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(server.api, raise_server_exceptions=True)
+    login = client.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    resp = client.request("DELETE", "/api/v1/pictures/scrapheap")
+    assert resp.status_code == 200, resp.text
+    # The endpoint deletes files in a FastAPI BackgroundTask; TestClient runs
+    # those synchronously before returning, so the filesystem is settled here.
+    return resp.json()
+
+
+def test_full_restore_does_not_hard_delete_file_readded_after_snapshot(server):
+    """A scrapheap row in the snapshot must not delete a live re-added file.
+
+    Reproduces the live-instance data loss: a picture is soft-deleted at
+    ``shared.jpg`` before the snapshot; after the snapshot the same path is
+    re-used by a NEW active picture (content added after the snapshot, and NOT
+    recorded in deleted_file_log). Restoring the snapshot must not resurrect the
+    stale scrapheap row on top of the live file, because emptying the scrapheap
+    would then hard-delete a file the user legitimately added after the
+    snapshot.
+    """
+    shared = _create_file(server, "shared.jpg")
+    with open(shared, "wb") as fh:
+        fh.write(b"OLD-DELETED-CONTENT")
+    # Snapshot captures the picture as a scrapheap (deleted=True) row.
+    _add_scrapheap_picture(server, "shared.jpg", pixel_sha="sha_old")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: the path is re-used by a new ACTIVE picture whose file
+    # content differs (added after the snapshot). The old scrapheap row is gone
+    # from the live DB.
+    with open(shared, "wb") as fh:
+        fh.write(b"NEW-LIVE-CONTENT-ADDED-AFTER-SNAPSHOT")
+    _add_picture(server, filename="shared.jpg")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    # The file must still exist immediately after restore (restore never
+    # touches image files) ...
+    assert os.path.isfile(shared), "restore itself must never delete image files"
+
+    # ... and the dangerous scrapheap ghost must NOT have been resurrected, so
+    # emptying the scrapheap cannot target the live file.
+    scrapheap_ids = server.vault.db.run_immediate_read_task(
+        lambda s: [
+            p.id for p in s.exec(select(Picture).where(Picture.deleted.is_(True))).all()
+        ]
+    )
+    assert scrapheap_ids == [], (
+        "restore resurrected a scrapheap ghost shadowing a live re-added file; "
+        "emptying the scrapheap would hard-delete that file"
+    )
+
+    result = _empty_scrapheap_via_http(server)
+    assert result["deleted_count"] == 0, result
+
+    assert os.path.isfile(shared), (
+        "FILE LOSS: a file added after the snapshot was hard-deleted by the "
+        "restore -> empty-scrapheap cycle"
+    )
+    # The live file must not have been recorded as permanently deleted.
+    assert _count_deleted_log(server, "shared.jpg") == 0, (
+        "the added-after file was logged in deleted_file_log — it was purged"
+    )
+
+
+def test_full_restore_preserves_genuine_scrapheap_picture(server):
+    """The fix must not over-drop: a real scrapheap entry still round-trips.
+
+    A picture soft-deleted before the snapshot whose file is NOT re-used by any
+    live active picture must still be resurrected by restore (so it remains
+    recoverable / purgeable as before).
+    """
+    trashed = _create_file(server, "trashed.jpg")
+    with open(trashed, "wb") as fh:
+        fh.write(b"TRASHED-CONTENT")
+    pic_id = _add_scrapheap_picture(server, "trashed.jpg", pixel_sha="sha_trash")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Mutate the live DB so the restore has something to revert, but do NOT
+    # re-use trashed.jpg for any active picture.
+    _drop_picture_row(server, pic_id)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(
+            select(Picture).where(Picture.file_path == "trashed.jpg")
+        ).first()
+    )
+    assert restored is not None and restored.deleted, (
+        "a genuine scrapheap picture (no live shadow) must survive restore"
+    )
+
+
+@pytest.mark.parametrize("ghost_path_kind", ["absolute", "dot_slash", "double_slash"])
+def test_full_restore_ghost_path_drift_does_not_delete_live_file(
+    server, ghost_path_kind
+):
+    """Ghost/live path-string drift must not defeat the guard.
+
+    The scrapheap deleter removes ``resolve_picture_path(image_root, file_path)``,
+    so the guard must match on the RESOLVED path too — otherwise a ghost whose
+    stored path differs as a STRING but resolves to the same on-disk file (the
+    reference-folder ABSOLUTE vs imported RELATIVE collision, plus ``./`` /
+    ``//`` drift) survives restore and is hard-deleted on the next empty of the
+    scrapheap. One file on disk is referenced by the snapshot ghost via a
+    drifted path and by the live active picture via the plain relative path;
+    after restore + empty-scrapheap the live file must still exist.
+    """
+    root = server.vault.image_root
+    rel = "drift.jpg"
+    abs_path = _create_file(server, rel)
+    with open(abs_path, "wb") as fh:
+        fh.write(b"OLD-DELETED-CONTENT")
+
+    if ghost_path_kind == "absolute":
+        ghost_path = os.path.join(root, rel)
+    elif ghost_path_kind == "dot_slash":
+        ghost_path = "./" + rel
+    else:  # double_slash: an absolute path with a doubled separator
+        ghost_path = os.path.join(root, "") + "/" + rel
+
+    # Snapshot captures the scrapheap ghost referencing the file via the drifted
+    # path string.
+    _add_scrapheap_picture(server, ghost_path, pixel_sha="sha_old")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: the same on-disk file is re-used by a NEW active
+    # picture stored under the plain RELATIVE path (imported/managed
+    # convention), with different content.
+    with open(abs_path, "wb") as fh:
+        fh.write(b"NEW-LIVE-CONTENT-ADDED-AFTER-SNAPSHOT")
+    _add_picture(server, filename=rel)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert os.path.isfile(abs_path), "restore itself must never delete image files"
+
+    scrapheap_ids = server.vault.db.run_immediate_read_task(
+        lambda s: [
+            p.id for p in s.exec(select(Picture).where(Picture.deleted.is_(True))).all()
+        ]
+    )
+    assert scrapheap_ids == [], (
+        f"ghost with {ghost_path_kind} path drift was resurrected and shadows "
+        "the live file; emptying the scrapheap would hard-delete it"
+    )
+
+    result = _empty_scrapheap_via_http(server)
+    assert result["deleted_count"] == 0, result
+    assert os.path.isfile(abs_path), (
+        f"FILE LOSS via {ghost_path_kind} path drift: a file added after the "
+        "snapshot was hard-deleted by the restore -> empty-scrapheap cycle"
+    )
+    assert _count_deleted_log(server, rel) == 0

@@ -710,6 +710,56 @@ class RestoreService:
                     cancelled,
                 )
 
+        # 3e. Capture the RESOLVED paths of every LIVE, non-deleted picture. These
+        #     are the files currently in active use — including content that was
+        #     (re-)added AFTER the target snapshot. If the snapshot holds a
+        #     scrapheap (``deleted=True``) row that resolves to one of these
+        #     files, the swap would RESURRECT that stale ghost on top of a file
+        #     the user is actively using: the row's real content was overwritten
+        #     after the snapshot, so the entry is unrestorable, but emptying the
+        #     scrapheap would then hard-delete the live file (data loss — the file
+        #     was legitimately added after the snapshot and is NOT in
+        #     deleted_file_log). ``_post_restore_cleanup`` drops such ghosts
+        #     (keeping the file). deleted_file_log only guards intentionally-
+        #     purged content; this closes the sibling gap for content re-added
+        #     after deletion.
+        #
+        #     The match is resolution-aware and mirrors EXACTLY what the scrapheap
+        #     deleter does (``routes/pictures/_crud.py`` →
+        #     ``resolve_picture_path(image_root, file_path)`` then ``os.remove``):
+        #     resolve against the SAME ``vault_root``, then ``realpath`` +
+        #     ``normcase`` so a stored path that differs as a STRING but names the
+        #     same on-disk file is still caught. This is a real scenario here —
+        #     reference-folder pictures store ABSOLUTE ``file_path`` while
+        #     imported/managed pictures store RELATIVE — and also covers ``./`` /
+        #     ``//`` prefixes, symlinks, and case differences. Raw file_paths are
+        #     read under the DB lock (cheap); the filesystem resolution runs here,
+        #     off the lock. Captured AFTER the planner/task-runner are stopped so a
+        #     background import in the capture→swap window can't add a live picture
+        #     the guard would miss.
+        from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+        def _resolved_key(fp: Optional[str]) -> Optional[str]:
+            resolved = ImageUtils.resolve_picture_path(vault_root, fp)
+            if not resolved:
+                return None
+            return os.path.normcase(os.path.realpath(resolved))
+
+        live_active_file_paths: list[str] = self._vault.db.run_immediate_read_task(
+            lambda s: [
+                fp
+                for fp in s.exec(
+                    select(Picture.file_path).where(Picture.deleted.is_(False))
+                ).all()
+                if fp
+            ]
+        )
+        live_active_resolved: set[str] = {
+            key
+            for fp in live_active_file_paths
+            if (key := _resolved_key(fp)) is not None
+        }
+
         logger.info(
             "RestoreService: swapping live DB with snapshot (snapshot id=%d)",
             snapshot_id,
@@ -723,14 +773,40 @@ class RestoreService:
             self._swap_database(live_db_path, upgraded_snapshot)
 
         def _post_restore_cleanup(session):
-            if drop_ids:
+            # Identify resurrected scrapheap ghosts: snapshot ``deleted=True``
+            # rows whose file_path RESOLVES to a LIVE, non-deleted file (a file
+            # re-added after the snapshot). Resurrecting these on top of an
+            # active file lets a later "empty scrapheap" hard-delete that live
+            # file — the exact data-loss vector for content added after the
+            # snapshot. Drop the ghost rows (the swap NEVER touches image files,
+            # so the live file is preserved and simply becomes an orphan, the
+            # same safe outcome as any other added-after picture). Both sides use
+            # the same ``_resolved_key`` (resolve → realpath → normcase) so the
+            # guard and the deleter can never disagree on which on-disk file a
+            # stored path refers to. We match in Python to sidestep SQLite's
+            # bound-variable limit and because the scrapheap is normally a small
+            # fraction of the library.
+            shadow_ids: set[int] = set()
+            if live_active_resolved:
+                for pid, fp in session.execute(
+                    sa_select(Picture.id, Picture.file_path).where(
+                        Picture.deleted.is_(True)
+                    )
+                ).all():
+                    key = _resolved_key(fp)
+                    if key is not None and key in live_active_resolved:
+                        shadow_ids.add(pid)
+
+            all_drop_ids = sorted(set(drop_ids) | shadow_ids)
+            if all_drop_ids:
                 # Drop dependents explicitly in FK-safe order, then the
                 # pictures. SQLite FK CASCADE would normally take care of
                 # this, but doing it explicitly keeps the cleanup robust to
                 # relationship-config drift and prevents one failing ORM
                 # cascade from rolling back the entire post-restore task and
-                # silently leaving the dropped rows behind. ``drop_ids``
-                # covers both missing-on-disk files and permanent deletions.
+                # silently leaving the dropped rows behind. ``all_drop_ids``
+                # covers missing-on-disk files, permanent deletions, and
+                # scrapheap ghosts that shadow a live added-after file.
                 for child_model in (
                     Tag,
                     Face,
@@ -739,18 +815,20 @@ class RestoreService:
                 ):
                     session.execute(
                         sa_delete(child_model).where(
-                            child_model.picture_id.in_(drop_ids)
+                            child_model.picture_id.in_(all_drop_ids)
                         )
                     )
                 result = session.execute(
-                    sa_delete(Picture).where(Picture.id.in_(drop_ids))
+                    sa_delete(Picture).where(Picture.id.in_(all_drop_ids))
                 )
                 logger.info(
                     "RestoreService: dropped %d picture row(s) after restore "
-                    "(%d missing-file, %d permanently deleted).",
+                    "(%d missing-file, %d permanently deleted, %d scrapheap "
+                    "ghost(s) shadowing a live added-after file — files kept).",
                     result.rowcount,
                     len(missing_ids),
                     len(deleted_ids),
+                    len(shadow_ids),
                 )
             # NOTE: derived columns (embeddings + scores) are NOT NULL-reset
             # here. Snapshots now carry these blobs, so the swapped-in DB
