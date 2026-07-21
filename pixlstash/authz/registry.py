@@ -50,6 +50,7 @@ _PUBLIC = AccessPolicy.PUBLIC
 _ANY = AccessPolicy.ANY_TOKEN
 _OWNER = AccessPolicy.OWNER_ONLY
 _LOCAL = AccessPolicy.LOCAL_OWNER_ONLY
+_LOOPBACK = AccessPolicy.LOOPBACK_OWNER_ONLY
 _PIC = AccessPolicy.PICTURE_SCOPED
 _SET = AccessPolicy.SET_SCOPED
 _CHAR = AccessPolicy.CHARACTER_SCOPED
@@ -193,16 +194,17 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER, justification="require_unscoped_owner"
     ),
     ("POST", "/api/v1/server-config/open"): RoutePolicy(
-        _OWNER, justification="require_unscoped_owner; opens config in host editor"
+        _LOOPBACK,
+        justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open — same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 host FS browse; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget; discharges CSO §16.3 accepted-risk)",
+        justification="§16.3 host FS browse; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true; discharges CSO §16.3 accepted-risk",
     ),
     ("POST", "/api/v1/filesystem/folders"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 host FS mkdir; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 host FS mkdir; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (
@@ -211,15 +213,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ): _LIST_AWARE,  # self-filters to empty for scoped tokens
     ("POST", "/api/v1/import-folders"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 import-folder create; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 import-folder create; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("PATCH", "/api/v1/import-folders/{folder_id}"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 import-folder update; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 import-folder update; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("DELETE", "/api/v1/import-folders/{folder_id}"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 import-folder delete; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 import-folder delete; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     # ── reference_folders.py (§16.3 host-capability) ────────────────────────
     (
@@ -228,43 +230,43 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ): _LIST_AWARE,  # self-filters to empty for scoped tokens
     ("GET", "/api/v1/reference-folders/detect-sidecars"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 walks host path; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 walks host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("POST", "/api/v1/reference-folders"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reference-folder create; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 reference-folder create; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("PATCH", "/api/v1/reference-folders/{folder_id}"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reference-folder update; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 reference-folder update; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/relocate"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reference-folder relocate; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 reference-folder relocate; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/move-pictures"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 move pictures on host FS; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 move pictures on host FS; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/metadata/export"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 write sidecars to host FS; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 write sidecars to host FS; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/metadata/import"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 read sidecars from host FS; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 read sidecars from host FS; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("DELETE", "/api/v1/reference-folders/{folder_id}"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reference-folder delete; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        justification="§16.3 reference-folder delete; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
     ("POST", "/api/v1/reference-folders/{folder_id}/open"): RoutePolicy(
-        _LOCAL,
-        justification="§16.3 open folder in host file manager; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        _LOOPBACK,
+        justification="§16.3 RED LINE: opens a folder in the host file manager (drives the server's host shell); loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
     ("POST", "/api/v1/server/restart"): RoutePolicy(
-        _LOCAL,
-        justification="§16.3 restart the server process; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        _LOOPBACK,
+        justification="§16.3 RED LINE: restarts the server process; loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
     # ── pictures: single-object reads (enforce_picture_scope) → PICTURE_SCOPED
     ("GET", "/api/v1/pictures/{id}.{ext}"): RoutePolicy(_PIC, id_param="id"),
@@ -337,8 +339,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER, justification="Owner scoring op; POST not in READ_SAFE; owner only"
     ),
     ("POST", "/api/v1/pictures/{id}/open-location"): RoutePolicy(
-        _LOCAL,
-        justification="§16.3 open file location in host file manager; owner + loopback/local-IP (Step-3 LOCAL_OWNER_ONLY retarget)",
+        _LOOPBACK,
+        justification="§16.3 RED LINE: opens the file location in the host file manager (drives the server's host shell); loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
     ("POST", "/api/v1/pictures/scrapheap/restore"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner"

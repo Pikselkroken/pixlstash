@@ -37,7 +37,7 @@ from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 from pixlstash.server import Server
 
 API = "/api/v1"
-_LOCALITY_403 = "local network"  # substring of the LOCAL_OWNER_ONLY 403 detail
+_LOCALITY_403 = "restricted to local"  # substring of the LOCAL_OWNER_ONLY 403 detail
 
 
 # ---------------------------------------------------------------------------

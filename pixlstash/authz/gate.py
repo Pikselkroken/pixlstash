@@ -28,8 +28,10 @@ fail-closed only at Step 6 under the adversarial sign-off.
 
 **Step-3 owner-class enforcement (behind the flag; principal ruling 2026-07-21).**
 The enforcement *code* for the non-id-resolution classes lands now:
-``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` delegate to the existing ``AuthService``
-helpers (``require_unscoped_owner`` + ``real_client_ip``/``is_local_ip``), and a
+``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` / ``LOOPBACK_OWNER_ONLY`` delegate to the
+existing ``AuthService`` helpers (``require_unscoped_owner`` + ``real_client_ip``
+with the scoped ``is_local_or_tailscale_ip`` / strict ``is_loopback_ip``
+predicates), and a
 startup ``PUBLIC``-consistency check reconciles ``PUBLIC`` declarations against
 the middleware's ``AUTH_EXCLUDED_*``. Per-policy-class staging is carried by
 *which branches are implemented* — there is deliberately no second toggle. It is
@@ -50,7 +52,11 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from pixlstash.auth import is_auth_excluded_path, is_local_ip
+from pixlstash.auth import (
+    is_auth_excluded_path,
+    is_local_or_tailscale_ip,
+    is_loopback_ip,
+)
 from pixlstash.authz.membership import (
     ID_RESOLVERS,
     enforce_character_scope,
@@ -110,7 +116,11 @@ def _is_resource_scoped(request: Request) -> bool:
 # service injected; a missing service while enforcing is a boot failure, never a
 # silently-skipped check.
 OWNER_CLASS_POLICIES = frozenset(
-    {AccessPolicy.OWNER_ONLY, AccessPolicy.LOCAL_OWNER_ONLY}
+    {
+        AccessPolicy.OWNER_ONLY,
+        AccessPolicy.LOCAL_OWNER_ONLY,
+        AccessPolicy.LOOPBACK_OWNER_ONLY,
+    }
 )
 
 # The SPA catch-all can never be a static ``AUTH_EXCLUDED_*`` entry (it is a
@@ -418,6 +428,10 @@ class AuthzGate:
             self._enforce_unscoped_owner(request)
             self._enforce_local(request)
             return
+        if policy is AccessPolicy.LOOPBACK_OWNER_ONLY:
+            self._enforce_unscoped_owner(request)
+            self._enforce_loopback(request)
+            return
         # *_SCOPED single / body_ids batch / SCOPED_LIST → Step 4 object scoping.
         await self._enforce_scoped_policy(request, route_policy)
 
@@ -578,22 +592,56 @@ class AuthzGate:
         self._auth.require_unscoped_owner(request)
 
     def _enforce_local(self, request: Request) -> None:
-        """Require the request to originate from a loopback / local-IP client.
+        """Require a loopback / LAN / Tailscale client, unless remote host-ops are
+        explicitly enabled (the ``LOCAL_OWNER_ONLY`` locality half, §16.3).
 
-        The ``LOCAL_OWNER_ONLY`` locality half (§16.3 host-capability class). Uses
-        ``AuthService.real_client_ip`` (trusted-proxy aware) + ``is_local_ip`` and
-        raises the same 403 detail as ``_require_local_for_write`` for wire
-        consistency. Assumes ``_enforce_unscoped_owner`` ran first (owner identity
-        established); ``auth`` is therefore non-None.
+        Locality uses ``AuthService.real_client_ip`` (trusted-proxy aware) +
+        :func:`is_local_or_tailscale_ip` — the scoped predicate that counts a
+        Tailscale-over-IPv4 owner (CGNAT ``100.64.0.0/10``) as local, fixing the
+        false-deny without widening the shared ``is_local_ip`` (and its unrelated
+        LAN callers). A genuinely remote owner is admitted ONLY when the dedicated
+        ``allow_remote_host_ops`` flag is set; otherwise the 403 names that flag so
+        the operator knows the exact setting that enables it. Assumes
+        ``_enforce_unscoped_owner`` ran first (owner identity established); ``auth``
+        is therefore non-None.
         """
         if self._auth is None:  # defensive; unreachable after _enforce_unscoped_owner
             raise HTTPException(status_code=403, detail="Authorization unavailable")
-        if not is_local_ip(self._auth.real_client_ip(request)):
+        client_ip = self._auth.real_client_ip(request)
+        if is_local_or_tailscale_ip(client_ip):
+            return
+        if self._auth.allow_remote_host_ops:
+            return
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This host-capability operation is restricted to local "
+                "(loopback / LAN / Tailscale) connections. To allow a remote "
+                "authenticated owner to use it, set allow_remote_host_ops=true in "
+                "the server config."
+            ),
+        )
+
+    def _enforce_loopback(self, request: Request) -> None:
+        """Require the request to originate from a strict loopback client.
+
+        The ``LOOPBACK_OWNER_ONLY`` red line (§16.3): the highest-privilege
+        host-shell routes (server restart, open-folder / open-file-location in the
+        host file manager) must be unreachable from any non-loopback host —
+        RFC1918 LAN and Tailscale are NOT accepted, and ``allow_remote_host_ops``
+        deliberately does NOT appear here, so the flag can never loosen this tier.
+        Assumes ``_enforce_unscoped_owner`` ran first; ``auth`` is non-None.
+        """
+        if self._auth is None:  # defensive; unreachable after _enforce_unscoped_owner
+            raise HTTPException(status_code=403, detail="Authorization unavailable")
+        if not is_loopback_ip(self._auth.real_client_ip(request)):
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "Full access is restricted to local network connections. "
-                    "Use a share token for remote access."
+                    "This operation drives the server's host shell and is "
+                    "restricted to loopback (127.0.0.0/8 / ::1) connections only. "
+                    "It is not reachable from the LAN, from Tailscale, or with "
+                    "allow_remote_host_ops enabled."
                 ),
             )
 

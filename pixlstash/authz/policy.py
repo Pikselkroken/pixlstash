@@ -56,8 +56,20 @@ class AccessPolicy(str, Enum):
     scoped share tokens never reach it."""
 
     LOCAL_OWNER_ONLY = "local_owner_only"
-    """``OWNER_ONLY`` plus a loopback / local-IP check (host-filesystem browse,
-    reference-folder writes — the §16.3 accepted-risk class)."""
+    """``OWNER_ONLY`` plus a loopback / local-IP / Tailscale-CGNAT check
+    (host-filesystem browse, reference-folder writes — the §16.3 accepted-risk
+    class). A remote owner is admitted only when the dedicated
+    ``allow_remote_host_ops`` server-config flag is ``True`` (default ``False``);
+    the deny path names that flag."""
+
+    LOOPBACK_OWNER_ONLY = "loopback_owner_only"
+    """``OWNER_ONLY`` plus a strict **loopback-only** check (127.0.0.0/8 + ::1) —
+    stricter than ``LOCAL_OWNER_ONLY``: RFC1918 LAN and Tailscale addresses are
+    NOT accepted, and ``allow_remote_host_ops`` can NEVER loosen it. The §16.3
+    hard red line for the highest-privilege host-shell routes (server restart,
+    open-folder / open-file-location in the host file manager) which drive the
+    server process's own shell and must be unreachable from any non-loopback host
+    (principal ruling 2026-07-21: closed-enum extension, Option A)."""
 
 
 # The object-scoped policies whose enforcement resolves a single resource id from
@@ -76,12 +88,14 @@ SCOPED_POLICIES = frozenset(
 # Policies whose declaration MUST carry a written justification. This is the
 # machine-checked replacement for the §16.1 "written justification + named
 # reviewer sign-off" prose rule (the reviewer sign-off still lives in the PR).
-# ``PUBLIC`` opens a route to the world; ``LOCAL_OWNER_ONLY`` grants host-
-# filesystem authority — both are decisions someone must own in writing.
+# ``PUBLIC`` opens a route to the world; ``LOCAL_OWNER_ONLY`` /
+# ``LOOPBACK_OWNER_ONLY`` grant host-filesystem / host-shell authority — all are
+# decisions someone must own in writing.
 JUSTIFICATION_REQUIRED = frozenset(
     {
         AccessPolicy.PUBLIC,
         AccessPolicy.LOCAL_OWNER_ONLY,
+        AccessPolicy.LOOPBACK_OWNER_ONLY,
     }
 )
 

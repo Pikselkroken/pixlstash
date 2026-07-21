@@ -23,7 +23,8 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | `set_scoped` / `character_scoped` / `project_scoped` | membership check on the object id | inline `_require_scope_allows_{picture_set,character,project}` |
 | `scoped_list` | list/search result filtered by the scope-allowed id set (handler logic; gate records only) | inline `fetch_scope_allowed_*` / `token_scope` filter / self-empty for scoped |
 | `owner_only` | `require_unscoped_owner` (rejects scoped tokens) | inline `require_unscoped_owner`, OR a write blocked for READ tokens by the middleware, OR a `READ_BLOCKED_GET_PATHS` GET, OR a bespoke inline "reject scoped" gate |
-| `local_owner_only` | `owner_only` + loopback/local IP | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
+| `local_owner_only` | `owner_only` + loopback/LAN/Tailscale IP, or a remote owner iff `allow_remote_host_ops=true` | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
+| `loopback_owner_only` | `owner_only` + strict loopback only (127.0.0.0/8 + ::1); `allow_remote_host_ops` can NOT loosen it | **none in Step 2** — §16.3.1 host-shell red line; a deliberate behaviour change (see below) |
 
 ## Policy distribution (207 total)
 
@@ -31,18 +32,35 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 |---|---|
 | `public` | 13 |
 | `any_token` | 15 |
-| `owner_only` | 76 |
+| `owner_only` | 75 |
 | `picture_scoped` | 33 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
 | `character_scoped` | 5 |
 | `project_scoped` | 6 |
-| `local_owner_only` | 16 |
+| `local_owner_only` | 13 |
+| `loopback_owner_only` | 4 |
 
 > **Updated for Step 3 (2026-07-21).** The §16.3 host-capability retarget moved 16
-> rows `owner_only` → `local_owner_only` (owner + loopback/local-IP), and the F-c
-> rider tightened `GET /users/me/auth` `any_token` → `owner_only`. Step-2 baseline
-> was `owner_only` 91 / `any_token` 16 / `local_owner_only` 0.
+> rows `owner_only` → the host-capability tiers, and the F-c rider tightened
+> `GET /users/me/auth` `any_token` → `owner_only`. Step-2 baseline was `owner_only`
+> 91 / `any_token` 16 / `local_owner_only` 0.
+>
+> **Updated for the §16.3.1 access design (2026-07-21, three-lens ruling + CSO
+> Condition 1).** Host-capability routes carrying a locality tier now total **17**:
+> **13 `local_owner_only`** (filesystem/folder authority; locality widened to
+> include Tailscale CGNAT `100.64.0.0/10`; a remote owner admitted only when the
+> dedicated `allow_remote_host_ops` flag is set, whose name the deny message
+> surfaces) + **4 `loopback_owner_only`** (host-shell red line — `POST
+> /server/restart`, `POST /reference-folders/{folder_id}/open`, `POST
+> /pictures/{id}/open-location`, and — added by CSO Condition 1 — `POST
+> /server-config/open`, all strict loopback only; the flag can never loosen them).
+> Corrected arithmetic: the original §16.3 set was 16 (= 13 + 3); `server-config/open`
+> was previously `owner_only` with no locality check (a byte-identical host-GUI-spawn
+> sibling that slipped the tier), so folding it in makes the host-capability locality
+> total **17 = 13 local + 4 loopback**, and drops `owner_only` 76 → 75.
+> `loopback_owner_only` is a new, deliberate member of the closed `AccessPolicy`
+> enum. See backend_architecture.md §16.3.1.
 
 ---
 
@@ -81,7 +99,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/server-config/filesystem-roots` | owner_only |  | require_unscoped_owner; also READ_BLOCKED; owner only |
-| POST | `/api/v1/server-config/open` | owner_only |  | require_unscoped_owner; opens config in host editor |
+| POST | `/api/v1/server-config/open` | **loopback_owner_only** |  | §16.3.1 RED LINE (CSO Condition 1): opens the config path in the host file browser via `_open_in_os` (os.startfile/open/xdg-open) — byte-identical host-GUI spawn as pictures/open-location & reference-folders/open; strict loopback only; `allow_remote_host_ops` can NOT loosen it |
 | GET | `/api/v1/server-config/snapshots` | owner_only |  | require_unscoped_owner |
 | PATCH | `/api/v1/server-config/snapshots` | owner_only |  | require_unscoped_owner |
 | GET | `/api/v1/server-config/watch-folders` | owner_only |  | require_unscoped_owner; also READ_BLOCKED; owner only |
@@ -107,33 +125,33 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
-| GET | `/api/v1/filesystem/browse` | local_owner_only |  | §16.3 host FS browse; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| POST | `/api/v1/filesystem/folders` | local_owner_only |  | §16.3 host FS mkdir; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| GET | `/api/v1/filesystem/browse` | local_owner_only |  | §16.3 host FS browse; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/filesystem/folders` | local_owner_only |  | §16.3 host FS mkdir; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
 
 ### import_folders.py (§16.3)
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/import-folders` | scoped_list |  |  |
-| POST | `/api/v1/import-folders` | local_owner_only |  | §16.3 import-folder create; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| PATCH | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder update; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| DELETE | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder delete; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/import-folders` | local_owner_only |  | §16.3 import-folder create; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| PATCH | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder update; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| DELETE | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder delete; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
 
 ### reference_folders.py (§16.3)
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/reference-folders` | scoped_list |  |  |
-| POST | `/api/v1/reference-folders` | local_owner_only |  | §16.3 reference-folder create; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| GET | `/api/v1/reference-folders/detect-sidecars` | local_owner_only |  | §16.3 walks host path; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| PATCH | `/api/v1/reference-folders/{folder_id}` | local_owner_only |  | §16.3 reference-folder update; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| DELETE | `/api/v1/reference-folders/{folder_id}` | local_owner_only |  | §16.3 reference-folder delete; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| POST | `/api/v1/reference-folders/{folder_id}/metadata/export` | local_owner_only |  | §16.3 write sidecars to host FS; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| POST | `/api/v1/reference-folders/{folder_id}/metadata/import` | local_owner_only |  | §16.3 read sidecars from host FS; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| POST | `/api/v1/reference-folders/{folder_id}/move-pictures` | local_owner_only |  | §16.3 move pictures on host FS; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| POST | `/api/v1/reference-folders/{folder_id}/open` | local_owner_only |  | §16.3 open folder in host file manager; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| POST | `/api/v1/reference-folders/{folder_id}/relocate` | local_owner_only |  | §16.3 reference-folder relocate; owner + loopback/local-IP (**Step-3 retarget applied**) |
-| POST | `/api/v1/server/restart` | local_owner_only |  | §16.3 restart the server process; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/reference-folders` | local_owner_only |  | §16.3 reference-folder create; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| GET | `/api/v1/reference-folders/detect-sidecars` | local_owner_only |  | §16.3 walks host path; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| PATCH | `/api/v1/reference-folders/{folder_id}` | local_owner_only |  | §16.3 reference-folder update; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| DELETE | `/api/v1/reference-folders/{folder_id}` | local_owner_only |  | §16.3 reference-folder delete; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/reference-folders/{folder_id}/metadata/export` | local_owner_only |  | §16.3 write sidecars to host FS; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/reference-folders/{folder_id}/metadata/import` | local_owner_only |  | §16.3 read sidecars from host FS; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/reference-folders/{folder_id}/move-pictures` | local_owner_only |  | §16.3 move pictures on host FS; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/reference-folders/{folder_id}/open` | **loopback_owner_only** |  | §16.3.1 RED LINE: opens a folder in the host file manager (host shell); strict loopback only; `allow_remote_host_ops` can NOT loosen it |
+| POST | `/api/v1/reference-folders/{folder_id}/relocate` | local_owner_only |  | §16.3 reference-folder relocate; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` |
+| POST | `/api/v1/server/restart` | **loopback_owner_only** |  | §16.3.1 RED LINE: restarts the server process (host shell); strict loopback only; `allow_remote_host_ops` can NOT loosen it |
 
 ### pictures/*
 
@@ -177,7 +195,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/{id}/face` | picture_scoped | id=id |  |
 | DELETE | `/api/v1/pictures/{id}/face/{index}` | picture_scoped | id=id |  |
 | GET | `/api/v1/pictures/{id}/metadata` | picture_scoped | id=id |  |
-| POST | `/api/v1/pictures/{id}/open-location` | local_owner_only |  | §16.3 open file location in host file manager; owner + loopback/local-IP (**Step-3 retarget applied**) |
+| POST | `/api/v1/pictures/{id}/open-location` | **loopback_owner_only** |  | §16.3.1 RED LINE: opens the file location in the host file manager (host shell); strict loopback only; `allow_remote_host_ops` can NOT loosen it |
 | GET | `/api/v1/pictures/{id}/{field}` | picture_scoped | id=id |  |
 
 ### tags.py
@@ -443,9 +461,16 @@ Per the task: where declaring current behaviour records an under-protected route
 
 **Disposition (decided 2026-07-21, founder/CSO-of-record):** F-b and F-c are accepted as pre-existing low-severity info-exposures on a single-owner product and tracked as **before-final hardening**, not Step-2 blockers. The one exception: `GET /users/me/auth` (owner username + `has_password`) is tightened as a rider on **Step 3**'s §16.3 behaviour change. All other F-b/F-c rows stand with the written justification above; the export capability-URL note (unguessable `uuid4`) is deferred to the central-chokepoint design. F-a was withdrawn (not a live leak; fixed as the M1/M2 declaration corrections C1/C2).
 
-## §16.3 host-capability endpoints — Step-2 `owner_only`, Step-3 retarget to `local_owner_only`
+## §16.3 host-capability endpoints — Step-2 `owner_only`, Step-3 retarget to `local_owner_only` / `loopback_owner_only`
 
-The filesystem / import-folder / reference-folder / `server/restart` / `pictures/{id}/open-location` capability endpoints are gated today by `require_user_id` + the middleware write/READ-block, i.e. **owner-only in effect** (a remote **cookie** session can still reach them — `require_local_for_write` only pins `ALL` **tokens**). I declared them `owner_only` to preserve exactly that (declaring `local_owner_only` now would make the Step-3 flip newly deny a remote cookie session — a behaviour change out of place in Step 2). The plan's Step-3 §16.3 opportunistic tightening (`require_user_id` → `LOCAL_OWNER_ONLY`) is the deliberate retarget of these specific rows; each such row's rationale is tagged `(Step-3 LOCAL_OWNER_ONLY)` in the matrix.
+The filesystem / import-folder / reference-folder / `server/restart` / `pictures/{id}/open-location` capability endpoints are gated today by `require_user_id` + the middleware write/READ-block, i.e. **owner-only in effect** (a remote **cookie** session can still reach them — `require_local_for_write` only pins `ALL` **tokens**, and only at `/login`, not per-request on these handlers). I declared them `owner_only` to preserve exactly that (declaring `local_owner_only` now would make the Step-3 flip newly deny a remote cookie session — a behaviour change out of place in Step 2). The plan's Step-3 §16.3 opportunistic tightening (`require_user_id` → the host-capability tiers) is the deliberate retarget of these specific rows.
+
+**§16.3.1 decided access design (three-lens CSO/Principal/CEO ruling, 2026-07-21).** The 16 rows split into two tiers, matching backend_architecture.md §16.3.1:
+
+- **13 `local_owner_only`** (filesystem / folder authority). Locality uses the scoped predicate `is_local_or_tailscale_ip` = loopback ∪ RFC1918 ∪ **Tailscale CGNAT `100.64.0.0/10`** ∪ Tailscale ULA `fd7a:115c:a1e0::/48`. The shared `is_local_ip` is deliberately **not** widened (it also backs `_require_local_for_write`, the middleware remote-`ALL`-token block, and the HTTPS-skip carve-out — coupling Tailscale into those is an unrelated remote-login decision the debate refused). A genuinely remote owner is admitted only when the dedicated `allow_remote_host_ops` server-config flag (default `false`) is set; the deny is a 403 whose message names that flag. `allow_remote_host_ops` is **not** `require_local_for_write` (remote-login risk ≠ remote-host-ops risk).
+- **4 `loopback_owner_only`** (host-shell RED LINE): `POST /server/restart`, `POST /reference-folders/{folder_id}/open`, `POST /pictures/{id}/open-location`, `POST /server-config/open`. All four spawn a host GUI process (`os.startfile`/`open`/`xdg-open`); `server-config/open` was folded in by **CSO Condition 1** (it shipped `owner_only` with no locality check despite the identical `_open_in_os` spawn — corrected arithmetic: host-capability locality total 17 = 13 local + 4 loopback, and `owner_only` 76 → 75). Strict loopback only (`is_loopback_ip` — 127.0.0.0/8 + ::1); **not** RFC1918, **not** Tailscale. `allow_remote_host_ops` never loosens them (the enforcement branch does not consult the flag). `loopback_owner_only` is a new, deliberate member of the closed `AccessPolicy` enum (principal ruling: closed-enum extension, added to `policy.py` + tests).
+
+Declared and armed behind the report-only gate (`AUTHZ_GATE_ENFORCING` stays `False`); no runtime change until the Step-6 flip. Both-direction tests: `tests/test_authz_host_capability_16_3.py`.
 
 ---
 

@@ -124,6 +124,30 @@ class StartupChecks:
                 "Set require_local_for_write=true to restrict full access to local network connections."
             )
 
+        # §16.3 host-capability / reverse-proxy hardening warnings.
+        trusted_proxies = self._server_config.get("trusted_proxies") or []
+        if host == "0.0.0.0" and not trusted_proxies:
+            outcome.warnings.append(
+                "host is 0.0.0.0 with trusted_proxies empty. If PixlStash is "
+                "behind a reverse proxy this makes the locality gate a silent "
+                "FALSE-ALLOW: every client appears to arrive from the proxy's "
+                "(private) IP, so host-capability and require_local_for_write "
+                "checks treat all remote callers as local. Add the proxy's IP to "
+                "trusted_proxies AND configure the proxy to strip inbound "
+                "X-Forwarded-For, so the owner's real client IP is used."
+            )
+
+        if self._server_config.get("allow_remote_host_ops", False):
+            outcome.warnings.append(
+                "allow_remote_host_ops is enabled: a remote authenticated OWNER "
+                "can drive host-filesystem capability endpoints (browse, "
+                "import/reference-folder writes, sidecar import/export). This "
+                "grants the server's host-filesystem authority to any caller who "
+                "can authenticate as the owner from off-box. The loopback-only "
+                "red-line routes (server restart, open-in-file-manager) are NOT "
+                "affected. Disable it unless remote host operations are required."
+            )
+
         if ort is None:
             outcome.hard_failures.append(
                 "onnxruntime is required but could not be imported."

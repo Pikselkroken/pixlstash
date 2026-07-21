@@ -163,6 +163,47 @@ def is_local_ip(ip: str) -> bool:
         return True
 
 
+# Tailscale addresses an owner's own devices out of the CGNAT / shared-address
+# range (RFC 6598 ``100.64.0.0/10``) over IPv4 and a ULA prefix
+# (``fd7a:115c:a1e0::/48``) over IPv6. Neither is loopback; the IPv4 CGNAT range
+# is NOT ``is_private`` either (RFC 6598 is "shared address space", not RFC 1918),
+# so a Tailscale-over-IPv4 owner is falsely rejected by ``is_local_ip``. The IPv6
+# prefix is a ULA and therefore already ``is_private``, but it is listed here too
+# so the scoped predicate stays correct even if ``is_local_ip`` ever changes.
+_TAILSCALE_NETS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
+
+def is_tailscale_ip(ip: str) -> bool:
+    """Return True if *ip* is in a Tailscale CGNAT (IPv4) or ULA (IPv6) range.
+
+    Non-parseable strings (e.g. ``"testclient"``) are NOT Tailscale — the caller's
+    ``is_local_ip`` already treats those as local, so returning False here avoids a
+    second, redundant "everything unparsable is local" widening.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in _TAILSCALE_NETS)
+
+
+def is_local_or_tailscale_ip(ip: str) -> bool:
+    """Return True for a loopback / RFC1918 / Tailscale address.
+
+    Scoped locality predicate for the §16.3 host-capability gate ONLY
+    (:mod:`pixlstash.authz.gate`). It deliberately does **not** replace the shared
+    :func:`is_local_ip`, which also backs ``_require_local_for_write``, the
+    middleware ALL-token remote block, and the HTTPS-skip carve-out — widening
+    those to Tailscale is an unrelated remote-login risk decision the §16.3 debate
+    refused to couple. This predicate widens only the host-ops locality check so a
+    Tailscale-over-IPv4 owner is no longer falsely denied.
+    """
+    return is_local_ip(ip) or is_tailscale_ip(ip)
+
+
 def is_loopback_ip(ip: str) -> bool:
     """Return True only if *ip* is a loopback address (127.0.0.0/8, ::1).
 
@@ -326,6 +367,19 @@ class AuthService:
         """
         trusted = self._server_config.get("trusted_proxies", [])
         return get_real_client_ip(request, trusted)
+
+    @property
+    def allow_remote_host_ops(self) -> bool:
+        """Whether a remote authenticated owner may reach the §16.3
+        ``LOCAL_OWNER_ONLY`` host-capability routes (default ``False``).
+
+        Dedicated flag for the host-ops locality gate. It is deliberately NOT
+        ``require_local_for_write`` (the §16.3 debate refused to couple
+        remote-login and remote-host-ops risk): enabling remote logins must not
+        implicitly hand a remote caller the server's host-filesystem authority.
+        It never loosens the ``LOOPBACK_OWNER_ONLY`` red-line routes.
+        """
+        return bool(self._server_config.get("allow_remote_host_ops", False))
 
     def _get_real_client_ip(self, request: Request) -> str:
         return self.real_client_ip(request)
