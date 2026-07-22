@@ -30,6 +30,7 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.services import scrapheap_service
 
 
 @pytest.fixture(scope="module")
@@ -3102,4 +3103,120 @@ def test_resource_restore_rearms_the_scrapheap_retention_clock(server):
             server.vault, datetime.now(timezone.utc), 30, None, 100
         )
         == []
+    )
+
+
+def test_restore_can_resurrect_a_picture_whose_file_removal_failed(server):
+    """F5 — a ledger corrected to file_removed=False must NOT block restore.
+
+    ``file_removed=True`` is written before the file is touched, so a failed
+    ``os.remove`` would otherwise leave the ledger permanently asserting a
+    deletion that never happened — and restore, which trusts the ledger, would
+    drop the picture forever even though its file is sitting right there.
+    """
+    _create_file(server, "kept_by_accident.jpg")
+    pic = _add_picture(server, filename="kept_by_accident.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # The purge ran, the row went away, but the file removal failed — so the
+    # ledger was corrected to "removed from library, file kept".
+    def _simulate_failed_purge(session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path("kept_by_accident.jpg"),
+                pixel_sha=None,
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=False,
+            )
+        )
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_simulate_failed_purge)
+    assert _get_picture(server, pic.id) is None
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic.id) is not None, (
+        "a file_removed=False ledger row means the file was KEPT, so restore "
+        "must be able to bring the picture back"
+    )
+
+
+def test_restore_still_refuses_a_genuinely_purged_picture(server):
+    """The other direction: the F5 correction must not weaken the real guard."""
+    _create_file(server, "genuinely_gone.jpg")
+    pic = _add_picture(server, filename="genuinely_gone.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _simulate_real_purge(session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path("genuinely_gone.jpg"),
+                pixel_sha=None,
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=True,
+            )
+        )
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_simulate_real_purge)
+    os.remove(os.path.join(server.vault.image_root, "genuinely_gone.jpg"))
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic.id) is None, (
+        "a genuine permanent deletion must never be resurrected"
+    )
+
+
+def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collision(
+    server,
+):
+    """The consequence the write-ownership bound protects.
+
+    Reviewer's variant 2: picture A's content was genuinely destroyed at path P
+    and logged file_removed=True. Different content is later written at P and
+    purged with a failing os.remove. If that second purge were allowed to
+    downgrade A's row to False, restore would resurrect A — bound to the WRONG
+    file. The purge now only corrects rows it wrote, so A's row stays True and
+    restore keeps refusing.
+    """
+    _create_file(server, "collision.jpg")
+    pic_a = _add_picture(server, filename="collision.jpg", pixel_sha="sha-C1")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Purge A: content C1 genuinely destroyed at this path.
+    def _purge_a(session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path("collision.jpg"),
+                pixel_sha="sha-C1",
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=True,
+            )
+        )
+        session.delete(session.get(Picture, pic_a.id))
+        session.commit()
+
+    server.vault.db.run_task(_purge_a)
+    os.remove(os.path.join(server.vault.image_root, "collision.jpg"))
+
+    # Different content C2 now occupies the same path (the file exists again).
+    _create_file(server, "collision.jpg")
+
+    # A second purge at that path fails its removal. With the ownership bound it
+    # does NOT own A's row, so the row stays True.
+    unconfirmed = [DeletedFileLog.hash_path("collision.jpg")]
+    corrected = server.vault.db.run_task(
+        scrapheap_service.mark_files_kept_in_session, unconfirmed, set()
+    )
+    assert corrected == 0, "a row this purge did not write must not be corrected"
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic_a.id) is None, (
+        "picture A's content was genuinely destroyed; restore must never "
+        "resurrect it and bind it to whatever now occupies that path"
     )

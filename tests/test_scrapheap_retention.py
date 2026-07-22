@@ -13,6 +13,7 @@ purge that ever runs is the one a test drives explicitly.
 import contextlib
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -1155,6 +1156,681 @@ def test_manual_delete_forever_is_not_subject_to_the_retention_guard(server, tmp
     assert resp.json()["deleted_count"] == 1
     assert _get_picture(server, pic_id) is None
     assert not os.path.isfile(path)
+
+
+# ── Item 2 (F5): the ledger must not claim a deletion that did not happen ─────
+
+
+def test_successful_removal_keeps_file_removed_true(server, tmp_path):
+    """The success path is unchanged: genuinely gone means file_removed=True."""
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "gone.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    assert not os.path.isfile(path)
+    assert _ledger_flags_for(server, path) == [True], (
+        "a genuinely destroyed file must stay file_removed=True so restore never "
+        "resurrects it"
+    )
+
+
+def test_failed_removal_corrects_the_ledger_to_file_kept(server, tmp_path, monkeypatch):
+    """If os.remove raises, the ledger must not keep asserting "genuinely gone".
+
+    The row is written before the file is touched (deliberately — writing it
+    afterwards would leave a window with no ledger entry, which is how the
+    reference-folder scan resurrects deleted content), so file_removed=True is a
+    PREDICTION. When the removal fails, the prediction is wrong and the row must
+    be corrected to False — the accurate "removed from library, file kept" —
+    or restore would drop the picture forever on the strength of a deletion that
+    never happened.
+    """
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "stubborn.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+
+    real_remove = os.remove
+
+    def _boom(target, *a, **kw):
+        if str(target) == path:
+            raise OSError(30, "Read-only file system")
+        return real_remove(target, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", _boom)
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    monkeypatch.undo()
+
+    assert os.path.isfile(path), "the file survived, which is the whole premise"
+    assert _ledger_flags_for(server, path) == [False], (
+        "a file that was NOT destroyed must be logged file_removed=False so "
+        "restore can bring the picture back"
+    )
+
+
+def test_failed_removal_never_downgrades_another_purges_ledger_row(
+    server, tmp_path, monkeypatch
+):
+    """A purge may only correct the ledger rows IT wrote.
+
+    The ledger is keyed by PATH, not by picture identity, so without a
+    write-ownership bound a later purge at the same path could reach back and
+    rewrite a row describing content some earlier purge genuinely destroyed:
+
+        purge A destroys content C1 at path P  -> ledger(P) = (True, C1)
+        different content C2 is written at P and indexed as picture B
+        purge B is denied by os.remove         -> unconfirmed
+        ...and would downgrade A's row to False, so restoring a snapshot
+        containing A resurrects it bound to C2's file.
+
+    No API route can currently build that collision (reference folders reject
+    overlapping roots with 409, the routine scan skips ledgered paths, explicit
+    re-import clears the row) — which is exactly why this asserts the structural
+    guarantee rather than relying on those surrounding guards holding forever.
+    """
+    client = _client(server)
+    folder = tmp_path / "shared_path"
+
+    # --- Purge A: content C1 at path P is genuinely destroyed. ---------------
+    pic_a, path_p = _make_reference_picture(
+        server, str(folder), "P.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_a}").status_code == 200
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    assert not os.path.isfile(path_p)
+    assert _ledger_flags_for(server, path_p) == [True], "purge A must log a real kill"
+
+    # --- Different content C2 is written at the SAME path and indexed. -------
+    pic_b, path_b = _make_reference_picture(
+        server, str(folder), "P.png", allow_delete=True
+    )
+    assert path_b == path_p, "the collision requires the same path"
+    assert client.delete(f"/pictures/{pic_b}").status_code == 200
+
+    # --- Purge B: removal is denied. ----------------------------------------
+    real_remove = os.remove
+
+    def _boom(target, *a, **kw):
+        if str(target) == path_p:
+            raise PermissionError(13, "Permission denied")
+        return real_remove(target, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", _boom)
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    monkeypatch.undo()
+
+    assert os.path.isfile(path_p), "C2's file survived, which is the premise"
+    assert _ledger_flags_for(server, path_p) == [True], (
+        "purge B did not write this row — it records purge A's genuinely "
+        "destroyed content C1 — so a failed removal in B must NOT downgrade it"
+    )
+
+
+def test_failed_removal_still_downgrades_the_row_this_purge_wrote(
+    server, tmp_path, monkeypatch
+):
+    """Over-blocking guard: the ownership bound must not disable the F5 fix.
+
+    A row this purge DID write is still corrected to False on a failed removal —
+    that correction is the whole point, and narrowing it to owned rows must not
+    quietly turn it off.
+    """
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "fresh"), "mine.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    assert _ledger_flags_for(server, path) == [], "no pre-existing row for this path"
+
+    real_remove = os.remove
+
+    def _boom(target, *a, **kw):
+        if str(target) == path:
+            raise OSError(30, "Read-only file system")
+        return real_remove(target, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", _boom)
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    monkeypatch.undo()
+
+    assert os.path.isfile(path)
+    assert _ledger_flags_for(server, path) == [False], (
+        "this purge created the row, so its failed removal MUST correct it"
+    )
+
+
+def test_failed_removal_downgrades_a_row_this_purge_raised_from_false(
+    server, tmp_path, monkeypatch
+):
+    """Ownership also covers a row this call RAISED False -> True.
+
+    Such a row previously meant "file kept on disk"; this purge claimed it as a
+    real deletion, so this purge owns the claim and must retract it when the
+    removal fails.
+    """
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "raised"), "kept_then_killed.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+
+    # Pre-existing "removed from library, file kept" row for this path.
+    def _seed(session: Session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path(path),
+                pixel_sha=None,
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=False,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_seed)
+    assert _ledger_flags_for(server, path) == [False]
+
+    real_remove = os.remove
+
+    def _boom(target, *a, **kw):
+        if str(target) == path:
+            raise OSError(30, "Read-only file system")
+        return real_remove(target, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", _boom)
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    monkeypatch.undo()
+
+    assert os.path.isfile(path)
+    assert _ledger_flags_for(server, path) == [False], (
+        "this purge raised the row to True, so it owns the claim and must "
+        "retract it when the removal fails"
+    )
+
+
+def test_unreachable_location_corrects_the_ledger_to_file_kept(server, tmp_path):
+    """An unmounted volume looks exactly like a deleted file to os.path.isfile.
+
+    Claiming file_removed=True there would permanently strand every picture on
+    the volume: the row is gone and restore is told never to resurrect it.
+    """
+    client = _client(server)
+    folder = tmp_path / "removable"
+    pic_id, path = _make_reference_picture(
+        server, str(folder), "on_a_usb_stick.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+
+    # Simulate the volume going away between the soft delete and the purge.
+    shutil.move(str(folder), str(tmp_path / "unmounted"))
+    assert not os.path.isdir(folder)
+
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    assert _ledger_flags_for(server, path) == [False], (
+        "an unreachable location must never be recorded as a confirmed deletion"
+    )
+    # The file really is still out there.
+    assert os.path.isfile(str(tmp_path / "unmounted" / "on_a_usb_stick.png"))
+
+
+def test_missing_file_purge_task_skips_unreachable_locations(server, tmp_path):
+    """The same trap in the orphan-row reaper: an unmounted folder is not a
+    deleted file, so its rows must not be purged at all."""
+    from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
+
+    folder = tmp_path / "removable"
+    pic_id, path = _make_reference_picture(
+        server, str(folder), "still_there.png", allow_delete=True
+    )
+    shutil.move(str(folder), str(tmp_path / "unmounted"))
+
+    pictures = server.vault.db.run_immediate_read_task(
+        lambda s: [s.get(Picture, pic_id)]
+    )
+    result = MissingFilePurgeTask(
+        database=server.vault.db, pictures=pictures
+    )._run_task()
+    assert result == {"purged": 0}, result
+    assert _get_picture(server, pic_id) is not None, (
+        "a picture on an unmounted volume must not be reaped as missing"
+    )
+    assert _ledger_flags_for(server, path) == []
+
+
+def test_missing_file_purge_task_still_reaps_a_genuinely_deleted_file(server, tmp_path):
+    """Over-blocking guard: a truly deleted file is still reaped and logged."""
+    from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
+
+    folder = tmp_path / "present"
+    pic_id, path = _make_reference_picture(
+        server, str(folder), "really_gone.png", allow_delete=True
+    )
+    os.remove(path)  # file gone, directory still there
+
+    pictures = server.vault.db.run_immediate_read_task(
+        lambda s: [s.get(Picture, pic_id)]
+    )
+    result = MissingFilePurgeTask(
+        database=server.vault.db, pictures=pictures
+    )._run_task()
+    assert result == {"purged": 1}, result
+    assert _get_picture(server, pic_id) is None
+    assert _ledger_flags_for(server, path) == [True]
+
+
+# ── Item 1: the retention impact endpoint ─────────────────────────────────────
+
+
+def _impact(client, days, expect=200):
+    resp = client.get(
+        "/server-config/scrapheap-retention/impact", params={"days": days}
+    )
+    assert resp.status_code == expect, resp.text
+    return resp.json()
+
+
+def test_impact_count_matches_what_a_sweep_actually_destroys(server, tmp_path):
+    """The number driving the confirmation must equal the real consequence.
+
+    Asserted against an ACTUAL purge, not just against the arithmetic: the count
+    exists to obtain informed consent, so a number that merely looks plausible
+    is not good enough.
+    """
+    client = _client(server)
+    old_ids = []
+    for i in range(3):
+        pid, _ = _make_reference_picture(
+            server, str(tmp_path / f"old{i}"), f"old{i}.png", allow_delete=True
+        )
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+        _set_deleted_at(
+            server,
+            pid,
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=100),
+        )
+        old_ids.append(pid)
+    # Inside a 30-day window, so not part of the impact.
+    young_id, young_path = _make_reference_picture(
+        server, str(tmp_path / "young"), "young.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{young_id}").status_code == 200
+    _set_deleted_at(
+        server,
+        young_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=5),
+    )
+
+    # Current window is the default 30; preview a drop to... nothing lower
+    # exists, so raise it first and preview the drop back down.
+    assert (
+        client.patch(
+            "/server-config/scrapheap-retention",
+            json={"scrapheap_retention_days": 120},
+        ).status_code
+        == 200
+    )
+    body = _impact(client, 30)
+    assert body["would_purge_count"] == 3, body
+    assert body["first_purge_at"] is not None
+
+    # Now apply it for real and let the sweep run past the grace floor.
+    assert (
+        client.patch(
+            "/server-config/scrapheap-retention",
+            json={"scrapheap_retention_days": 30},
+        ).status_code
+        == 200
+    )
+    server.vault.set_scrapheap_retention(
+        30, datetime.now(timezone.utc) - timedelta(days=2)
+    )
+    result = _run_purge_sweep(server)
+    assert result["purged"] == body["would_purge_count"], (
+        f"impact promised {body['would_purge_count']}, sweep destroyed "
+        f"{result['purged']}"
+    )
+    for pid in old_ids:
+        assert _get_picture(server, pid) is None
+    assert _get_picture(server, young_id) is not None
+    assert os.path.isfile(young_path)
+
+
+def test_impact_excludes_protected_and_locked(server, tmp_path):
+    """Neither is ever auto-purged, so counting them would overstate the harm."""
+    client = _client(server)
+    plain_id, _ = _make_reference_picture(
+        server, str(tmp_path / "plain"), "plain.png", allow_delete=True
+    )
+    prot_id, _ = _make_reference_picture(
+        server, str(tmp_path / "prot"), "prot.png", allow_delete=False
+    )
+    locked_id, _ = _make_reference_picture(
+        server, str(tmp_path / "lock"), "lock.png", allow_delete=True
+    )
+    for pid in (plain_id, prot_id, locked_id):
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+        _set_deleted_at(
+            server,
+            pid,
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+        )
+    _lock_picture_in_set(server, locked_id)
+
+    assert (
+        client.patch(
+            "/server-config/scrapheap-retention",
+            json={"scrapheap_retention_days": 120},
+        ).status_code
+        == 200
+    )
+    body = _impact(client, 30)
+    assert body["would_purge_count"] == 1, (
+        f"only the unprotected, unlocked picture is at risk: {body}"
+    )
+
+
+def test_impact_counts_pictures_expiring_during_the_grace_day(server, tmp_path):
+    """Evaluated at the grace floor, not at now — otherwise it understates.
+
+    A picture that crosses its deadline DURING the grace day is destroyed by the
+    first sweep after the floor elapses, so the confirmation must include it.
+    """
+    client = _client(server)
+    pic_id, _ = _make_reference_picture(
+        server, str(tmp_path / "edge"), "edge.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    # 29.5 days old: NOT past a 30-day window right now, but it will be within
+    # the one-day grace period.
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=29, hours=12),
+    )
+    assert (
+        client.patch(
+            "/server-config/scrapheap-retention",
+            json={"scrapheap_retention_days": 120},
+        ).status_code
+        == 200
+    )
+    assert _impact(client, 30)["would_purge_count"] == 1, (
+        "a picture that expires during the grace day must be counted"
+    )
+
+
+def test_impact_is_zero_when_not_a_reduction(server, tmp_path):
+    client = _client(server)
+    pic_id, _ = _make_reference_picture(
+        server, str(tmp_path / "refs"), "any.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+    # Current window is the default 30.
+    for candidate in (30, 60, 90, 120):
+        body = _impact(client, candidate)
+        assert body == {"would_purge_count": 0, "first_purge_at": None}, (
+            f"{candidate} is not lower than the current 30: {body}"
+        )
+
+
+def test_impact_rejects_an_unsupported_window(server):
+    client = _client(server)
+    for bad in (7, 0, -30, 365):
+        _impact(client, bad, expect=422)
+
+
+def test_impact_has_no_side_effects(server, tmp_path):
+    """A preview must not apply, stamp, or destroy anything."""
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "untouched.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+    assert (
+        client.patch(
+            "/server-config/scrapheap-retention",
+            json={"scrapheap_retention_days": 120},
+        ).status_code
+        == 200
+    )
+    before = client.get("/server-config/scrapheap-retention").json()
+
+    assert _impact(client, 30)["would_purge_count"] == 1
+
+    after = client.get("/server-config/scrapheap-retention").json()
+    assert after == before, f"impact mutated the config: {before} -> {after}"
+    assert server.vault.scrapheap_retention_days == 120
+    assert _get_picture(server, pic_id) is not None, "impact must destroy nothing"
+    assert os.path.isfile(path)
+    assert _ledger_flags_for(server, path) == []
+
+
+# ── Item 3: the SQL deadline push-down is equivalent ──────────────────────────
+
+
+def _reference_due_ids(server, now, retention_days, reduced_at, limit):
+    """The PREVIOUS implementation: load every scrapheap row, filter in Python.
+
+    Kept verbatim as the equivalence oracle for the SQL push-down. The safety
+    properties of the selection are certified, so the optimisation is only
+    allowed if it selects exactly the same pictures.
+    """
+
+    def _impl(session):
+        no_delete_folder_ids = scrapheap_service.fetch_no_delete_folder_ids_in_session(
+            session
+        )
+        rows = scrapheap_service.fetch_scrapheap_rows_in_session(session, None)
+        locked_ids = scrapheap_service.locked_scrapheap_picture_ids_in_session(
+            session, [r.id for r in rows if r.id is not None]
+        )
+        due = []
+        for row in rows:
+            if row.id is None:
+                continue
+            if row.is_protected(no_delete_folder_ids):
+                continue
+            if int(row.id) in locked_ids:
+                continue
+            purge_at = scrapheap_service.compute_purge_at(
+                row.deleted_at, retention_days, reduced_at, is_protected=False
+            )
+            if purge_at is None or purge_at > scrapheap_service._as_utc(now):
+                continue
+            due.append(int(row.id))
+            if len(due) >= limit:
+                break
+        return due
+
+    return server.vault.db.run_immediate_read_task(_impl)
+
+
+def test_sql_pushdown_selects_exactly_what_the_python_scan_did(server, tmp_path):
+    """Equivalence over a mixed population: protected, locked, stack-frozen,
+    in-window, due, and NULL deleted_at."""
+    client = _client(server)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    made = {}
+
+    def _mk(name, *, allow_delete=True, age_days=400):
+        pid, _ = _make_reference_picture(
+            server, str(tmp_path / name), f"{name}.png", allow_delete=allow_delete
+        )
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+        _set_deleted_at(server, pid, now - timedelta(days=age_days))
+        made[name] = pid
+        return pid
+
+    _mk("due_a")
+    _mk("due_b", age_days=31)
+    _mk("in_window", age_days=5)
+    _mk("protected", allow_delete=False)
+    locked = _mk("locked")
+    stack_member = _mk("stack_member")
+    stack_sibling = _mk("stack_sibling")
+    no_stamp = _mk("no_stamp")
+    _set_deleted_at(server, made["no_stamp"], None)
+
+    def _stack(session: Session):
+        stack = PictureStack()
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for pos, pid in enumerate((stack_member, stack_sibling)):
+            pic = session.get(Picture, pid)
+            pic.stack_id = stack.id
+            pic.stack_position = pos
+            session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(_stack)
+    _lock_picture_in_set(server, locked)
+    _lock_picture_in_set(server, stack_member)
+
+    check_now = datetime.now(timezone.utc)
+    for retention_days, reduced_at, limit in (
+        (30, None, 100),
+        (30, None, 1),
+        (60, None, 100),
+        (120, None, 100),
+        (30, check_now - timedelta(days=5), 100),
+        (30, check_now, 100),  # inside the grace floor: nothing is due
+    ):
+        expected = _reference_due_ids(
+            server, check_now, retention_days, reduced_at, limit
+        )
+        actual = scrapheap_service.find_due_retention_picture_ids(
+            server.vault, check_now, retention_days, reduced_at, limit
+        )
+        assert sorted(actual) == sorted(expected), (
+            f"push-down diverged for days={retention_days} reduced_at={reduced_at} "
+            f"limit={limit}: {actual} != {expected}"
+        )
+    # Sanity: the fixture really does exercise the interesting cases.
+    plain = scrapheap_service.find_due_retention_picture_ids(
+        server.vault, check_now, 30, None, 100
+    )
+    assert sorted(plain) == sorted([made["due_a"], made["due_b"]]), plain
+    assert no_stamp not in plain
+
+
+def test_paging_is_correct_when_many_rows_share_one_deleted_at(server, tmp_path):
+    """Keyset pagination must not skip or repeat inside a bulk-delete group.
+
+    The bulk soft-delete stamps ONE identical ``deleted_at`` across the whole
+    batch, so a keyset on the timestamp alone would advance the cursor past the
+    entire group after the first page and silently lose the rest.
+
+    Driven through the impact count, which scans with ``limit=None`` and so
+    honours ``_DUE_SCAN_PAGE`` directly; the sweep's own page size is
+    ``max(limit * 4, _DUE_SCAN_PAGE)`` and cannot be forced small without also
+    breaking the scanner's page-exhaustion check. Both use the same scanner.
+    """
+    client = _client(server)
+    ids = [
+        _make_reference_picture(
+            server, str(tmp_path / f"p{i}"), f"p{i}.png", allow_delete=True
+        )[0]
+        for i in range(12)
+    ]
+    resp = client.request("DELETE", "/api/v1/pictures", json={"picture_ids": ids})
+    assert resp.status_code == 200, resp.text
+    shared = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    for pid in ids:
+        _set_deleted_at(server, pid, shared)
+    assert len({_get_picture(server, pid).deleted_at for pid in ids}) == 1, (
+        "the fixture must really share one timestamp"
+    )
+    assert (
+        client.patch(
+            "/server-config/scrapheap-retention",
+            json={"scrapheap_retention_days": 120},
+        ).status_code
+        == 200
+    )
+
+    original_page = scrapheap_service._DUE_SCAN_PAGE
+    try:
+        # 12 rows, one shared stamp, 3 per page -> 4 pages inside one group.
+        scrapheap_service._DUE_SCAN_PAGE = 3
+        paged = _impact(client, 30)["would_purge_count"]
+    finally:
+        scrapheap_service._DUE_SCAN_PAGE = original_page
+    single_page = _impact(client, 30)["would_purge_count"]
+
+    assert paged == len(ids), (
+        f"paging across a shared-timestamp group lost rows: {paged} != {len(ids)}"
+    )
+    assert paged == single_page, (
+        f"page size changed the result: {paged} (paged) != {single_page} (one page)"
+    )
+
+
+def test_deadline_boundary_is_inclusive(server, tmp_path):
+    """A picture exactly AT its deadline is due (`<=`, not `<`).
+
+    Closes reviewer mutation W6: the suite otherwise never pins the boundary,
+    because a real-world sweep never lands on the exact microsecond. Both sides
+    of the comparison are supplied here, so it is deterministic rather than a
+    race.
+    """
+    client = _client(server)
+    pic_id, _ = _make_reference_picture(
+        server, str(tmp_path / "refs"), "exact.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    _set_deleted_at(server, pic_id, (now - timedelta(days=30)).replace(tzinfo=None))
+
+    assert scrapheap_service.find_due_retention_picture_ids(
+        server.vault, now, 30, None, 100
+    ) == [pic_id], "deleted_at exactly one window ago must be DUE"
+
+    # One microsecond short of the window: not yet.
+    assert (
+        scrapheap_service.find_due_retention_picture_ids(
+            server.vault, now - timedelta(microseconds=1), 30, None, 100
+        )
+        == []
+    ), "a microsecond before the deadline must not be due"
+
+
+def test_sweep_skips_the_scan_entirely_inside_the_grace_floor(server, tmp_path):
+    """The early return is a real short-circuit, not just a filter."""
+    client = _client(server)
+    pic_id, _ = _make_reference_picture(
+        server, str(tmp_path / "refs"), "graced.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+    assert (
+        scrapheap_service.find_due_retention_picture_ids(
+            server.vault,
+            datetime.now(timezone.utc),
+            30,
+            datetime.now(timezone.utc),
+            100,
+        )
+        == []
+    )
 
 
 # ── Config endpoint ───────────────────────────────────────────────────────────

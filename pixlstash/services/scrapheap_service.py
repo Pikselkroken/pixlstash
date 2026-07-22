@@ -36,6 +36,19 @@ Retention policy (settled with the maintainer, do not redesign):
   single most destructive transition available in the UI.
 * A soft-deleted picture with no ``deleted_at`` is **never** auto-purged
   (fail-closed: no timestamp, no deadline).
+* ``deleted_file_log.file_removed=True`` is written BEFORE the file is touched
+  (writing it after would leave a window where the picture row is gone with no
+  ledger entry — how the reference-folder scan resurrects deleted content), so
+  it is a PREDICTION until the removal succeeds. If ``os.remove`` fails, or the
+  location is unreachable and we cannot tell, the row is corrected to
+  ``file_removed=False`` — "removed from library, file kept" — so restore can
+  still resurrect the picture. That is the only True -> False transition in the
+  ledger; everywhere else the flag may only be raised. It is bounded to the rows
+  THAT purge created or raised (:func:`purge_rows_in_session` returns the set):
+  the ledger is keyed by path, not by picture, so an unbounded correction could
+  retract an *earlier* purge's genuine deletion of different content that once
+  lived at the same path, and restore would then resurrect it bound to the wrong
+  file.
 * The deadline is enforced **twice**, mirroring the two-layer protected-original
   defence: once when the finder selects candidates
   (:func:`find_due_retention_picture_ids_in_session`) and again inside
@@ -63,7 +76,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
-from sqlalchemy import delete
+from sqlalchemy import and_, delete, or_
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -92,6 +105,12 @@ REDUCTION_GRACE_DAYS: int = 1
 # SILENTLY disable auto-purge on those builds. Chunking keeps a big scrapheap
 # from turning the feature off by accident.
 LOCK_QUERY_CHUNK: int = 900
+
+# Rows per page when scanning past-deadline candidates. Also the floor for the
+# over-fetch: protected/locked rows are filtered out AFTER the SQL window, so a
+# page sized exactly to the caller's limit could yield fewer due ids than the
+# old full-table scan did.
+_DUE_SCAN_PAGE: int = 500
 
 # ``auto_purge_exempt_reason`` values. A picture can be frozen by both; the
 # reference-folder protection is the stronger, permanent one and wins.
@@ -211,6 +230,18 @@ def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _naive_utc(value: datetime) -> datetime:
+    """Drop the tzinfo from an aware UTC datetime for a SQL bind parameter.
+
+    SQLAlchemy's SQLite ``DateTime`` stores naive strings (the offset is dropped
+    on write), so every ``picture.deleted_at`` in the DB is naive UTC. Comparing
+    a column against an AWARE bind parameter would render a differently-shaped
+    literal and silently match nothing.
+    """
+    aware = _as_utc(value)
+    return aware.replace(tzinfo=None)
 
 
 def retention_rank(days: Optional[int]) -> float:
@@ -425,14 +456,23 @@ def fetch_no_delete_folder_ids_in_session(session: Session) -> set[int]:
 
 def purge_rows_in_session(
     session: Session, picture_ids: list[int], log_records: list[dict]
-) -> int:
+) -> tuple[int, set[str]]:
     """Write the permanent-deletion ledger and delete the picture rows.
 
     Logged and deleted in the same transaction so the two can never diverge.
+
+    Returns:
+        ``(deleted_count, owned_path_shas)`` where ``owned_path_shas`` is every
+        ``path_sha`` THIS call created or raised to ``file_removed=True``. It is
+        the write-ownership token for :func:`mark_files_kept_in_session`: only a
+        row this purge is responsible for may later be corrected back to
+        ``False``. Rows that were already ``True`` before this call are excluded
+        — see that function for the collision this prevents.
     """
     if not picture_ids:
-        return 0
+        return 0, set()
     now = datetime.now(timezone.utc)
+    owned_path_shas: set[str] = set()
     for record in log_records:
         path_sha = record.get("path_sha")
         if not path_sha:
@@ -450,6 +490,7 @@ def purge_rows_in_session(
                     file_removed=new_file_removed,
                 )
             )
+            owned_path_shas.add(path_sha)
         elif new_file_removed and not already_logged.file_removed:
             # A path first logged file_removed=False (protected file kept on
             # disk) is now being genuinely hard-deleted. Upgrade the stale flag
@@ -459,9 +500,14 @@ def purge_rows_in_session(
             # back to "kept".
             already_logged.file_removed = True
             session.add(already_logged)
+            owned_path_shas.add(path_sha)
+        # else: the row was ALREADY file_removed=True before this call — it
+        # records some earlier purge's permanently destroyed content, not ours.
+        # Deliberately NOT owned, so a failed removal here can never reach back
+        # and downgrade it.
     session.exec(delete(Picture).where(Picture.id.in_(picture_ids)))
     session.commit()
-    return len(picture_ids)
+    return len(picture_ids), owned_path_shas
 
 
 def locked_scrapheap_picture_ids_in_session(session: Session, picture_ids) -> set[int]:
@@ -486,6 +532,113 @@ def locked_scrapheap_picture_ids(vault, picture_ids) -> set[int]:
     )
 
 
+def _due_candidate_rows_in_session(
+    session: Session,
+    cutoff: datetime,
+    after: Optional[tuple[datetime, int]],
+    limit: int,
+) -> list[ScrapheapRow]:
+    """Scrapheap rows whose ``deleted_at`` is at or before ``cutoff``.
+
+    The deadline lives in SQL so ``ix_picture_deleted_at`` (added by migration
+    0079, and until now used by no query) actually earns its keep, instead of
+    loading the whole scrapheap into Python every sweep.
+
+    Ordering by ``(deleted_at, id)`` rather than ``id`` is what makes the index
+    usable: ordered by ``id``, SQLite instead walks ``ix_picture_deleted`` over
+    EVERY scrapheap row and filters the date. On a 200k-picture library with a
+    20k scrapheap of which 500 are due, that is 1.23 ms/page versus 0.08 ms/page
+    — and it degrades with scrapheap size rather than with the due count.
+
+    Keyset-paginated on the full ``(deleted_at, id)`` tuple, not on
+    ``deleted_at`` alone: a bulk soft-delete stamps one identical ``deleted_at``
+    across the whole batch, so paginating on the timestamp alone would skip or
+    repeat rows inside such a group.
+
+    ``cutoff`` must be NAIVE UTC: SQLAlchemy's SQLite ``DateTime`` drops the
+    offset on write, so every stored ``deleted_at`` is naive and an aware bind
+    parameter would compare against a differently-formatted string.
+    """
+    query = select(
+        Picture.id,
+        Picture.file_path,
+        Picture.reference_folder_id,
+        Picture.pixel_sha,
+        Picture.deleted_at,
+    ).where(
+        Picture.deleted.is_(True),
+        # A soft-deleted row with no stamp has no deadline and is never
+        # auto-purged (fail-closed), so it must not even be a candidate.
+        # (SQL already drops NULLs from the <= comparison; stated explicitly so
+        # the fail-closed rule is visible in the query itself.)
+        Picture.deleted_at.is_not(None),
+        Picture.deleted_at <= cutoff,
+    )
+    if after is not None:
+        after_at, after_id = after
+        query = query.where(
+            or_(
+                Picture.deleted_at > after_at,
+                and_(Picture.deleted_at == after_at, Picture.id > after_id),
+            )
+        )
+    query = query.order_by(Picture.deleted_at, Picture.id).limit(limit)
+    return [ScrapheapRow(*row) for row in session.exec(query).all()]
+
+
+def _scan_due_rows_in_session(
+    session: Session,
+    cutoff: datetime,
+    limit: Optional[int],
+    on_due: Callable[[ScrapheapRow], None],
+) -> None:
+    """Walk past-deadline rows, skipping protected and locked ones.
+
+    Shared by the sweep's candidate query and the retention-impact count so the
+    two cannot disagree about who is eligible. ``limit`` of ``None`` means "walk
+    every candidate" (the count); an int stops after that many due rows.
+
+    Pages are over-fetched relative to ``limit`` because protected/locked rows
+    are filtered out AFTER the SQL window, so a page of exactly ``limit`` rows
+    could return fewer due ids than the previous full-table scan did.
+    """
+    no_delete_folder_ids = fetch_no_delete_folder_ids_in_session(session)
+    page = _DUE_SCAN_PAGE if limit is None else max(int(limit) * 4, _DUE_SCAN_PAGE)
+    cursor: Optional[tuple[datetime, int]] = None
+    found = 0
+    while limit is None or found < limit:
+        rows = _due_candidate_rows_in_session(session, cutoff, cursor, page)
+        if not rows:
+            return
+        last = rows[-1]
+        cursor = (last.deleted_at, int(last.id))
+        locked_ids = locked_scrapheap_picture_ids_in_session(
+            session, [r.id for r in rows if r.id is not None]
+        )
+        for row in rows:
+            if row.id is None:
+                continue
+            if row.is_protected(no_delete_folder_ids):
+                continue
+            if int(row.id) in locked_ids:
+                # A locked picture-set is a hard whole-set freeze: DELETE
+                # /pictures/{id} refuses it with 423, so an unattended timer must
+                # not silently destroy it either. Unlock the set to let it expire.
+                logger.info(
+                    "Scrapheap auto-purge: SKIPPING picture id=%s — frozen by a "
+                    "locked picture-set; it will not be auto-purged until "
+                    "unlocked",
+                    row.id,
+                )
+                continue
+            on_due(row)
+            found += 1
+            if limit is not None and found >= limit:
+                return
+        if len(rows) < page:
+            return
+
+
 def find_due_retention_picture_ids_in_session(
     session: Session,
     now: datetime,
@@ -496,57 +649,98 @@ def find_due_retention_picture_ids_in_session(
     """Ids of UNPROTECTED, UNLOCKED soft-deleted pictures that are past deadline.
 
     Protected reference originals and locked-set members are filtered out here
-    AND re-checked by the :class:`RetentionGuard` in the purge plan; the timer
-    must never even select them.
+    AND (for the lock) re-checked unconditionally in the purge plan; the timer
+    must never even select them. Locked pictures are skipped and logged rather
+    than raising: this runs in a background sweep, so one frozen member must not
+    abort the batch (same convention as ``reference_folder_scan_task.py``).
 
-    Locked pictures are skipped and logged rather than raising: this runs in a
-    background sweep, so one frozen member must not abort the batch (same
-    convention as ``reference_folder_scan_task.py``'s locked-picture handling).
+    The deadline itself is evaluated in SQL. That is a pure performance change,
+    equivalent to the previous row-by-row :func:`compute_purge_at` filter:
+
+    * ``compute_purge_at`` is ``max(deleted_at + retention_days, floor)``, so
+      while ``now < floor`` NOTHING can be due — hence the early return, which
+      also skips the scan entirely during a reduction's grace period.
+    * Once ``now >= floor``, the floor term can never be the binding one, so
+      ``purge_at <= now`` reduces exactly to
+      ``deleted_at <= now - retention_days``.
+    * ``purge_at is None`` (for a non-None window) means ``deleted_at is None``,
+      which the query excludes.
     """
     if retention_days is None or limit <= 0:
         return []
-    no_delete_folder_ids = fetch_no_delete_folder_ids_in_session(session)
-    rows = fetch_scrapheap_rows_in_session(session, None)
-    locked_ids = locked_scrapheap_picture_ids_in_session(
-        session, [r.id for r in rows if r.id is not None]
-    )
     now_utc = _as_utc(now)
-    due: list[int] = []
-    for row in rows:
-        if row.id is None:
-            continue
-        if row.is_protected(no_delete_folder_ids):
-            continue
-        if int(row.id) in locked_ids:
-            # A locked picture-set is a hard whole-set freeze: DELETE
-            # /pictures/{id} refuses it with 423, so an unattended timer must
-            # not silently destroy it either. Unlock the set to let it expire.
-            logger.info(
-                "Scrapheap auto-purge: SKIPPING picture id=%s — frozen by a "
-                "locked picture-set; it will not be auto-purged until unlocked",
-                row.id,
-            )
-            continue
-        purge_at = compute_purge_at(
-            row.deleted_at, retention_days, reduced_at, is_protected=False
+    floor = reduction_grace_floor(reduced_at)
+    if floor is not None and now_utc < floor:
+        logger.debug(
+            "Scrapheap auto-purge: inside the reduction grace floor (now=%s < "
+            "%s); nothing can be due, skipping the scan",
+            now_utc,
+            floor,
         )
-        if purge_at is None or purge_at > now_utc:
-            continue
+        return []
+    cutoff = now_utc - timedelta(days=int(retention_days))
+    due: list[int] = []
+
+    def _record(row: ScrapheapRow) -> None:
         logger.info(
             "Scrapheap auto-purge: picture id=%s path=%s is due "
-            "(deleted_at=%s deadline=%s now=%s retention_days=%s reduced_at=%s)",
+            "(deleted_at=%s cutoff=%s now=%s retention_days=%s reduced_at=%s)",
             row.id,
             row.file_path,
             _as_utc(row.deleted_at),
-            purge_at,
+            cutoff,
             now_utc,
             retention_days,
             _as_utc(reduced_at),
         )
         due.append(int(row.id))
-        if len(due) >= limit:
-            break
+
+    _scan_due_rows_in_session(session, _naive_utc(cutoff), limit, _record)
     return due
+
+
+def retention_impact_in_session(
+    session: Session,
+    now: datetime,
+    candidate_days: Optional[int],
+    current_days: Optional[int],
+) -> dict:
+    """How much a retention change would destroy, WITHOUT applying it.
+
+    Pure read: nothing is written, no ``reduced_at`` is stamped, no purge is
+    scheduled. It exists so the settings UI can confirm before a lowering rather
+    than silently destroying a long-lived scrapheap on a dropdown change.
+
+    ``would_purge_count`` is evaluated at the instant the change would first
+    bite — ``now + REDUCTION_GRACE_DAYS``, the grace floor a reduction installs —
+    not at ``now``. Evaluating at ``now`` would EXCLUDE pictures that expire
+    during the grace day and so understate destruction, which is a consent bug
+    in a number whose only job is to inform consent.
+
+    Only a reduction is reported: raising the window, setting it for the first
+    time, or re-saving the same value destroys nothing NEW, so the count is 0 and
+    the UI shows no confirmation.
+    """
+    if not is_retention_reduction(current_days, candidate_days):
+        return {"would_purge_count": 0, "first_purge_at": None}
+    # candidate_days is finite here: None ("Never") ranks as infinite and can
+    # never be a reduction.
+    now_utc = _as_utc(now)
+    first_purge_at = now_utc + timedelta(days=REDUCTION_GRACE_DAYS)
+    # max(deleted_at + candidate_days, first_purge_at) <= first_purge_at
+    #   <=> deleted_at <= first_purge_at - candidate_days
+    cutoff = first_purge_at - timedelta(days=int(candidate_days))
+    count = 0
+
+    def _count(_row: ScrapheapRow) -> None:
+        nonlocal count
+        count += 1
+
+    _scan_due_rows_in_session(session, _naive_utc(cutoff), None, _count)
+    return {
+        "would_purge_count": count,
+        "first_purge_at": first_purge_at.isoformat() if count else None,
+    }
 
 
 # ── Purge planning + file removal ─────────────────────────────────────────────
@@ -694,11 +888,37 @@ def classify_delete_preview(
     }
 
 
+def file_location_is_unreachable(file_path: str) -> bool:
+    """Whether a path's absence is unexplained rather than genuine.
+
+    ``os.path.isfile`` is False both when a file was really deleted and when the
+    volume holding it is not currently mounted (an unplugged reference folder, a
+    dropped network share). Treating the second case as "genuinely gone" is what
+    lets the ledger assert ``file_removed=True`` for a file that still exists.
+    The parent directory tells them apart: if the directory is missing too, the
+    location is unreachable and we must not claim anything about the file.
+    """
+    parent = os.path.dirname(file_path) or os.curdir
+    return not os.path.isdir(parent)
+
+
 def remove_picture_files(
     image_root: str,
     targets: list[tuple[Optional[int], str, bool]],
-) -> None:
-    """Delete the on-disk originals (and thumbnails) for a purged selection."""
+) -> list[str]:
+    """Delete the on-disk originals (and thumbnails) for a purged selection.
+
+    Returns:
+        ``path_sha`` of every target whose file is NOT confirmed gone — the
+        removal raised, or the location is unreachable so we cannot tell. The
+        caller must correct those ledger rows to ``file_removed=False``; see
+        :func:`mark_files_kept_in_session`.
+    """
+    unconfirmed: list[str] = []
+
+    def _unconfirmed(rel_path: str) -> None:
+        unconfirmed.append(DeletedFileLog.hash_path(rel_path))
+
     for pic_id, rel_path, was_reference_protected in targets:
         file_path = ImageUtils.resolve_picture_path(image_root, rel_path)
         if file_path and os.path.isfile(file_path):
@@ -721,13 +941,29 @@ def remove_picture_files(
             except Exception as e:
                 logger.error(
                     "Delete-forever: failed to remove file for picture "
-                    "id=%s path=%s reference_protected=%s: %s",
+                    "id=%s path=%s reference_protected=%s: %s — the "
+                    "permanent-deletion ledger will be corrected to "
+                    "file_removed=False so restore can still resurrect it",
                     pic_id,
                     file_path,
                     was_reference_protected,
                     e,
                     exc_info=True,
                 )
+                _unconfirmed(rel_path)
+        elif file_path and file_location_is_unreachable(file_path):
+            # Absent because the location is gone, not because the file is.
+            logger.error(
+                "Delete-forever: cannot reach the location of picture id=%s "
+                "path=%s (parent directory missing — unmounted reference "
+                "folder or network vault?) reference_protected=%s; the file may "
+                "still exist, so the ledger will be corrected to "
+                "file_removed=False rather than claiming it is gone",
+                pic_id,
+                file_path,
+                was_reference_protected,
+            )
+            _unconfirmed(rel_path)
         else:
             logger.warning(
                 "Delete-forever: no on-disk file to remove for picture "
@@ -749,6 +985,99 @@ def remove_picture_files(
                     pic_id,
                     e,
                 )
+    return unconfirmed
+
+
+def mark_files_kept_in_session(
+    session: Session, path_shas: list[str], owned_path_shas: set[str]
+) -> int:
+    """Correct ledger rows to ``file_removed=False`` after a failed removal.
+
+    The ledger row is written BEFORE the file is touched, and deliberately so:
+    writing it afterwards would leave a window in which the picture row is gone
+    with no ledger entry, which is exactly how the reference-folder scan
+    resurrects deleted content. The cost is that ``file_removed=True`` is a
+    PREDICTION until the removal succeeds. This is the correction when it does
+    not: ``False`` is the accurate state — "removed from the library, file kept
+    on disk" — and it lets restore resurrect the picture instead of dropping it
+    forever on the strength of a deletion that never happened.
+
+    This is the ONLY True -> False transition in the ledger; everywhere else the
+    flag may only be raised. Two things make it safe:
+
+    1. It is conditioned on having OBSERVED that the file was not destroyed.
+    2. ``owned_path_shas`` — the rows this same purge created or raised (see
+       :func:`purge_rows_in_session`) — bounds it. The ledger is keyed by PATH,
+       not by picture identity, so without this a purge could reach back and
+       rewrite a row describing somebody else's already-destroyed content:
+
+           purge A destroys content C1 at path P   -> ledger(P) = (True, C1)
+           different content C2 is later written at P and indexed as picture B
+           purge B is denied by os.remove          -> unconfirmed
+           ...and would downgrade A's row to False, so restoring a snapshot
+           containing A resurrects it bound to C2's file.
+
+       That row was already ``True`` on entry, so this call does not own it and
+       leaves it alone. Today no API route can build that collision (reference
+       folders reject overlapping roots with 409, the routine scan skips
+       ledgered paths, explicit re-import clears the row) — the intersection
+       makes it impossible by construction rather than by the accident of those
+       surrounding guards.
+    """
+    if not path_shas:
+        return 0
+    corrected = 0
+    for path_sha in path_shas:
+        if path_sha not in owned_path_shas:
+            # Not written by this purge: it records an earlier permanent
+            # deletion of some other content that happened to share this path.
+            logger.warning(
+                "Delete-forever: NOT downgrading permanent-deletion ledger row "
+                "%s — it predates this purge, so it describes content this call "
+                "did not destroy and must keep asserting file_removed=True",
+                path_sha,
+            )
+            continue
+        row = session.exec(
+            select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
+        ).first()
+        if row is None or not row.file_removed:
+            continue
+        row.file_removed = False
+        session.add(row)
+        corrected += 1
+    session.commit()
+    if corrected:
+        logger.error(
+            "Delete-forever: CORRECTED %d permanent-deletion ledger row(s) to "
+            "file_removed=False — their files were not confirmed destroyed, so "
+            "the ledger must not claim they are gone (restore may resurrect "
+            "them).",
+            corrected,
+        )
+    return corrected
+
+
+def remove_picture_files_and_reconcile_ledger(
+    vault, targets, owned_path_shas: set[str]
+) -> None:
+    """Remove the files, then correct the ledger for anything not confirmed gone.
+
+    This pairing is the unit that must always run together — never schedule
+    :func:`remove_picture_files` on its own, or a failed removal will leave the
+    ledger permanently asserting a deletion that did not happen.
+
+    ``owned_path_shas`` comes from the :func:`purge_rows_in_session` call that
+    wrote those rows, and bounds the correction to them.
+    """
+    unconfirmed = remove_picture_files(vault.image_root, targets)
+    if unconfirmed:
+        vault.db.run_task(
+            mark_files_kept_in_session,
+            unconfirmed,
+            owned_path_shas,
+            priority=DBPriority.IMMEDIATE,
+        )
 
 
 # ── Vault wrappers (the thin bridge to the DB work-queue) ─────────────────────
@@ -785,6 +1114,15 @@ def find_due_retention_picture_ids(
     )
 
 
+def retention_impact(
+    vault, now: datetime, candidate_days: Optional[int], current_days: Optional[int]
+) -> dict:
+    """Vault wrapper for :func:`retention_impact_in_session`. Read-only."""
+    return vault.db.run_immediate_read_task(
+        retention_impact_in_session, now, candidate_days, current_days
+    )
+
+
 def purge_scrapheap_pictures(
     vault,
     ids: Optional[list[int]],
@@ -801,11 +1139,13 @@ def purge_scrapheap_pictures(
             protected reference originals in the selection are skipped entirely
             — row kept, file untouched, no ledger row. When ``True`` they are
             destroyed too; only an explicit human confirmation sets this.
-        schedule_file_removal: Optional deferral hook called as
-            ``schedule_file_removal(remove_picture_files, image_root, targets)``
-            — the HTTP handler passes ``BackgroundTasks.add_task`` so files are
-            removed after the response is sent. ``None`` removes them inline
-            (the background task path, which is already off the event loop).
+        schedule_file_removal: Optional deferral hook, called as
+            ``schedule_file_removal(remove_picture_files_and_reconcile_ledger,
+            vault, targets, owned_path_shas)`` — the HTTP handler passes
+            ``BackgroundTasks.add_task`` so files are removed after the response
+            is sent. ``None`` removes them inline (the background-task path,
+            which is already off the event loop). Either way it is the
+            removal+reconcile pair, never the bare removal.
         retention_guard: The automatic path's independent re-check of the
             retention DEADLINE, evaluated against each row's CURRENT
             ``deleted_at``. Supplied by the auto-purge task; ``None`` on the
@@ -833,18 +1173,27 @@ def purge_scrapheap_pictures(
     # Rows + ledger first, files second: a crash between the two leaves orphaned
     # files that MissingFilePurgeFinder/the reference scan already handle, while
     # the reverse order would leave rows pointing at destroyed files.
-    deleted_count = vault.db.run_task(
+    deleted_count, owned_path_shas = vault.db.run_task(
         purge_rows_in_session,
         plan.picture_ids,
         plan.log_records,
         priority=DBPriority.IMMEDIATE,
     )
+    # Always the removal+reconcile pair, never the bare removal: the ledger rows
+    # were committed above and assert file_removed=True, which stays a PREDICTION
+    # until the files are actually gone. ``owned_path_shas`` scopes any later
+    # correction to the rows THIS call wrote.
     if schedule_file_removal is not None:
         schedule_file_removal(
-            remove_picture_files, vault.image_root, plan.removal_targets
+            remove_picture_files_and_reconcile_ledger,
+            vault,
+            plan.removal_targets,
+            owned_path_shas,
         )
     else:
-        remove_picture_files(vault.image_root, plan.removal_targets)
+        remove_picture_files_and_reconcile_ledger(
+            vault, plan.removal_targets, owned_path_shas
+        )
     logger.info(
         "Delete-forever: purged %d, skipped %d protected, skipped %d locked, "
         "retained %d (include_protected=%s, guarded=%s)",
