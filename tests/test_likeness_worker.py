@@ -196,3 +196,63 @@ def test_likeness_worker():
                 desc_a = (pic_a.description or "") if pic_a else "?"
                 desc_b = (pic_b.description or "") if pic_b else "?"
                 logger.info(f"{desc_a:<30} | {desc_b:<30} | {r.likeness:<10.4f}")
+
+
+def test_write_blob_updates_skips_hard_deleted_pictures():
+    """Regression: a likeness batch containing a picture hard-deleted mid-flight
+    (e.g. scrapheap 'delete forever' racing a queued LikenessParametersTask)
+    must skip the missing id and still persist the survivors, not raise
+    StaleDataError and lose the whole batch."""
+    from pixlstash.utils.likeness.likeness_parameter_utils import (
+        LikenessParameterUtils,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(server_config_path) as server:
+
+            def _seed(session):
+                rows = [
+                    Picture(file_path=f"lk_{i}.jpg", filename=f"lk_{i}.jpg")
+                    for i in range(3)
+                ]
+                session.add_all(rows)
+                session.commit()
+                for r in rows:
+                    session.refresh(r)
+                return [r.id for r in rows]
+
+            ids = server.vault.db.run_task(_seed)
+            assert len(ids) == 3
+            live_ids, deleted_id = ids[:2], ids[2]
+
+            def _hard_delete(session):
+                session.delete(session.get(Picture, deleted_id))
+                session.commit()
+
+            server.vault.db.run_task(_hard_delete)
+
+            # The batch still carries the now-deleted id, as a task computed
+            # before the delete would.
+            updates = [
+                {
+                    "id": pid,
+                    "likeness_parameters": b"\x00\x00\x00\x00",
+                    "size_bin_index": 2,
+                }
+                for pid in ids
+            ]
+
+            # Must NOT raise even though one id no longer matches a live row.
+            server.vault.db.run_task(
+                lambda s: LikenessParameterUtils.write_blob_updates(s, updates)
+            )
+
+            # Survivors persisted; the deleted picture stays gone.
+            written = server.vault.db.run_task(
+                lambda s: {pid: s.get(Picture, pid).size_bin_index for pid in live_ids}
+            )
+            assert written == {pid: 2 for pid in live_ids}, written
+            assert (
+                server.vault.db.run_task(lambda s: s.get(Picture, deleted_id)) is None
+            )

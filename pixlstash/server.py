@@ -492,6 +492,11 @@ class Server(
 
         # Temporary storage for import tasks
         self.import_tasks = {}
+        # Temporary storage for async streaming-import staging sessions (#459).
+        # Keyed by staging_id; each records the on-disk staging dir, the streamed
+        # files, the declared file count, and (after the safe handoff) the
+        # background PictureImportTask id.
+        self.staging_sessions = {}
         self._shutdown_on_lifespan = False
 
     def __enter__(self):

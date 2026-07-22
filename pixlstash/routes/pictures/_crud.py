@@ -179,10 +179,91 @@ class ScrapheapDeleteResponse(BaseModel):
 
     status: str
     deleted_count: int
+    # Protected reference-folder originals left intact this call because
+    # ``include_protected`` was false (rows kept, files untouched, still in the
+    # scrapheap). 0 when ``include_protected`` is true or nothing was protected.
+    skipped_count: int = 0
+    # Echoes the effective ``include_protected`` flag for this call.
+    include_protected: bool = False
     # Snapshots that still contain metadata for the just-purged pictures, each
     # ``{id, kind, label, created_at, matched_count}``. The archives are not
     # scrubbed; the user can delete these snapshots to erase that metadata.
     snapshots_with_deleted: Optional[list] = None
+
+
+class ScrapheapProtectedItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    # Absolute on-disk path of the protected reference-folder original that an
+    # ``include_protected`` delete-forever would ``os.remove``.
+    file_path: str
+
+
+class ScrapheapDeletePreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    # Authoritative counts over the FULL delete set (never a virtualized/grid
+    # subset), so the confirmation names every protected original at risk.
+    total_count: int
+    protected_count: int
+    unprotected_count: int
+    protected: list[ScrapheapProtectedItem]
+
+
+def _parse_scrapheap_ids(payload: dict | None) -> list[int] | None:
+    """Parse the scrapheap id selection from a request body.
+
+    Accepts either ``ids`` (the delete-preview field) or ``picture_ids`` (the
+    delete field); ``None``/absent means "the entire scrapheap". A present but
+    empty or non-integer list is a 400.
+    """
+    if not isinstance(payload, dict):
+        return None
+    maybe_ids = payload.get("ids")
+    if maybe_ids is None:
+        maybe_ids = payload.get("picture_ids")
+    if maybe_ids is None:
+        return None
+    if not isinstance(maybe_ids, list) or not maybe_ids:
+        raise HTTPException(status_code=400, detail="ids must be a non-empty list")
+    try:
+        return [int(pid) for pid in maybe_ids]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="ids must contain valid integers")
+
+
+def _fetch_scrapheap_rows(server, ids: list[int] | None):
+    """Return ``(id, file_path, reference_folder_id, pixel_sha)`` for the
+    scrapheap selection (all soft-deleted pictures when ``ids`` is None)."""
+
+    def fetch_deleted(session: Session, ids: list[int] | None):
+        query = select(
+            Picture.id,
+            Picture.file_path,
+            Picture.reference_folder_id,
+            Picture.pixel_sha,
+        ).where(Picture.deleted.is_(True))
+        if ids is not None:
+            query = query.where(Picture.id.in_(ids))
+        return session.exec(query).all()
+
+    return server.vault.db.run_task(fetch_deleted, ids, priority=DBPriority.IMMEDIATE)
+
+
+def _fetch_no_delete_folder_ids(server) -> set[int]:
+    """Ids of reference folders whose original files are protected on disk
+    (``allow_delete_file=False``)."""
+
+    def fetch(session: Session) -> set[int]:
+        result = session.exec(
+            select(ReferenceFolder.id).where(
+                ReferenceFolder.allow_delete_file.is_(False),
+            )
+        ).all()
+        return {r for r in result if r is not None}
+
+    return server.vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
 
 
 class PictureDeleteResponse(BaseModel):
@@ -1038,10 +1119,64 @@ def register_routes(router, server):
         )
         return {"status": "success", "restored_count": restored_count}
 
+    @router.post(
+        "/pictures/scrapheap/delete-preview",
+        summary="Preview a scrapheap delete-forever",
+        description=(
+            "Authoritative preview of a scrapheap delete-forever. Reports the "
+            "full delete set and every protected reference-folder original "
+            "(allow_delete_file=False) that a delete-forever would remove from "
+            "disk, computed over ALL matching scrapheap rows — never a "
+            "virtualized/grid subset — so the confirmation can name each file at "
+            "risk. Body {ids: int[] | null}; null/omitted = the entire scrapheap."
+        ),
+        response_model=ScrapheapDeletePreviewResponse,
+    )
+    def preview_scrapheap_delete(payload: dict | None = Body(None)):
+        ids = _parse_scrapheap_ids(payload)
+        rows = _fetch_scrapheap_rows(server, ids)
+        if not rows:
+            return {
+                "total_count": 0,
+                "protected_count": 0,
+                "unprotected_count": 0,
+                "protected": [],
+            }
+        no_delete_folder_ids = _fetch_no_delete_folder_ids(server)
+        image_root = server.vault.image_root
+        protected_items: list[dict] = []
+        unprotected_count = 0
+        for row in rows:
+            pic_id, file_path, ref_folder_id = row[0], row[1], row[2]
+            is_protected = (
+                ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
+            )
+            if is_protected:
+                abs_path = ImageUtils.resolve_picture_path(image_root, file_path)
+                protected_items.append(
+                    {"id": pic_id, "file_path": abs_path or file_path or ""}
+                )
+            else:
+                unprotected_count += 1
+        return {
+            "total_count": len(rows),
+            "protected_count": len(protected_items),
+            "unprotected_count": unprotected_count,
+            "protected": protected_items,
+        }
+
     @router.delete(
         "/pictures/scrapheap",
         summary="Permanently delete scrapheap pictures",
-        description="Permanently removes deleted pictures from database and disk for provided ids or for all scrapheap items when omitted.",
+        description=(
+            "Permanently removes deleted pictures from database and disk for the "
+            "provided ids (or all scrapheap items when omitted). Body may carry "
+            "include_protected (default false): when false, protected "
+            "reference-folder originals in the selection are SKIPPED ENTIRELY "
+            "(row kept, file untouched, still in the scrapheap) and only "
+            "unprotected pictures are purged; when true, protected originals are "
+            "destroyed too."
+        ),
         response_model=ScrapheapDeleteResponse,
     )
     def delete_scrapheap_selection(
@@ -1050,64 +1185,39 @@ def register_routes(router, server):
         payload: dict | None = Body(None),
     ):
         origin_client_id = getattr(request.state, "origin_client_id", None)
-        ids = None
-        if payload is not None:
-            maybe_ids = (
-                payload.get("picture_ids") if isinstance(payload, dict) else None
-            )
-            if maybe_ids is not None:
-                if not isinstance(maybe_ids, list) or not maybe_ids:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="picture_ids must be a non-empty list",
-                    )
-                try:
-                    ids = [int(pid) for pid in maybe_ids]
-                except (TypeError, ValueError):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="picture_ids must contain valid integers",
-                    )
-
-        def fetch_deleted(session: Session, ids: list[int] | None):
-            query = select(
-                Picture.id,
-                Picture.file_path,
-                Picture.reference_folder_id,
-                Picture.pixel_sha,
-            ).where(
-                Picture.deleted.is_(True),
-            )
-            if ids is not None:
-                query = query.where(Picture.id.in_(ids))
-            return session.exec(query).all()
-
-        rows = server.vault.db.run_task(
-            fetch_deleted, ids, priority=DBPriority.IMMEDIATE
+        ids = _parse_scrapheap_ids(payload)
+        # Default false: absent body (delete-all) never destroys protected
+        # originals — that requires an explicit include_protected=true.
+        include_protected = bool(
+            payload.get("include_protected", False)
+            if isinstance(payload, dict)
+            else False
         )
+
+        rows = _fetch_scrapheap_rows(server, ids)
         if not rows:
-            return {"status": "success", "deleted_count": 0}
+            return {
+                "status": "success",
+                "deleted_count": 0,
+                "skipped_count": 0,
+                "include_protected": include_protected,
+            }
 
-        # allow_delete_file=False on a reference folder protects only the source
-        # file on disk — never the DB row or the deletion ledger.  Every deleted
-        # picture loses its row and gains a DeletedFileLog entry (so the file is
-        # never re-imported / resurrected); these folder ids only decide whether
-        # the physical file is also removed.
-        def fetch_no_delete_folder_ids(session: Session) -> set[int]:
-            result = session.exec(
-                select(ReferenceFolder.id).where(
-                    ReferenceFolder.allow_delete_file.is_(False),
-                )
-            ).all()
-            return {r for r in result if r is not None}
-
-        no_delete_folder_ids: set[int] = server.vault.db.run_task(
-            fetch_no_delete_folder_ids, priority=DBPriority.IMMEDIATE
-        )
+        # Protected = a reference-folder original whose folder forbids file
+        # deletion. include_protected decides its fate:
+        #   false → skip it entirely (row kept, file kept, no ledger row);
+        #   true  → destroy it like any other (os.remove + file_removed=True).
+        # Either way the reference-folder protection is a ROUTINE safeguard that
+        # still governs soft-delete-to-scrapheap and the background scan; only an
+        # explicit include_protected=true delete-forever overrides it.
+        no_delete_folder_ids = _fetch_no_delete_folder_ids(server)
 
         picture_ids: list[int] = []
-        file_paths: list[str] = []
+        # (picture_id, file_path, was_reference_protected) — only for pictures
+        # actually being purged; the flag is carried for the audit log.
+        removal_targets: list[tuple[Optional[int], str, bool]] = []
         log_records: list[dict] = []
+        skipped_count = 0
 
         for row in rows:
             pic_id, file_path, ref_folder_id, pixel_sha = (
@@ -1116,57 +1226,96 @@ def register_routes(router, server):
                 row[2],
                 row[3],
             )
+            was_reference_protected = (
+                ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
+            )
+            if was_reference_protected and not include_protected:
+                # Escape hatch: leave the protected original completely intact —
+                # DB row kept, file on disk untouched, no permanent-deletion
+                # ledger row. It stays soft-deleted in the scrapheap.
+                skipped_count += 1
+                logger.info(
+                    "Delete-forever: SKIPPING protected reference original "
+                    "picture id=%s (include_protected=false); row and file kept",
+                    pic_id,
+                )
+                continue
             if pic_id is not None:
                 picture_ids.append(pic_id)
             if file_path:
-                # Only enqueue the physical file for removal when its reference
-                # folder permits it; a protected file stays on disk.
-                file_protected = (
-                    ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
-                )
-                # Log every deleted picture so the scanner never re-imports its
-                # path, but record whether the on-disk file was actually removed.
-                # ``file_removed=False`` (protected file kept on disk) means the
-                # content is NOT gone: restore must not treat it as a permanent
-                # deletion and drop the alive picture. ``file_removed=True`` is a
-                # genuine purge the restore drop must honour.
+                # This picture is being purged, so its file is genuinely removed
+                # and file_removed is True: restore MUST drop the row and never
+                # resurrect it. (A file_removed=False row means "removed from
+                # library, file kept" and is only ever produced by routine paths,
+                # never here — a skipped protected picture writes NO ledger row.)
                 log_records.append(
                     {
                         "path_sha": DeletedFileLog.hash_path(file_path),
                         "pixel_sha": pixel_sha,
-                        "file_removed": not file_protected,
+                        "file_removed": True,
                     }
                 )
-                if not file_protected:
-                    file_paths.append(file_path)
+                removal_targets.append((pic_id, file_path, was_reference_protected))
 
-        def delete_files(image_root: str, paths: list[str]):
-            for rel_path in paths:
+        def delete_files(
+            image_root: str,
+            targets: list[tuple[Optional[int], str, bool]],
+        ):
+            for pic_id, rel_path, was_reference_protected in targets:
                 file_path = ImageUtils.resolve_picture_path(image_root, rel_path)
                 if file_path and os.path.isfile(file_path):
+                    logger.info(
+                        "Delete-forever: destroying file for picture id=%s "
+                        "path=%s reference_protected=%s op=os.remove",
+                        pic_id,
+                        file_path,
+                        was_reference_protected,
+                    )
                     try:
                         os.remove(file_path)
+                        logger.info(
+                            "Delete-forever: removed file for picture id=%s "
+                            "path=%s reference_protected=%s",
+                            pic_id,
+                            file_path,
+                            was_reference_protected,
+                        )
                     except Exception as e:
                         logger.error(
-                            "Failed to delete picture file %s: %s",
+                            "Delete-forever: failed to remove file for picture "
+                            "id=%s path=%s reference_protected=%s: %s",
+                            pic_id,
                             file_path,
+                            was_reference_protected,
                             e,
+                            exc_info=True,
                         )
+                else:
+                    logger.warning(
+                        "Delete-forever: no on-disk file to remove for picture "
+                        "id=%s rel_path=%s (resolved=%s) reference_protected=%s",
+                        pic_id,
+                        rel_path,
+                        file_path,
+                        was_reference_protected,
+                    )
                 thumb_path = ImageUtils.get_thumbnail_path(image_root, rel_path)
                 if thumb_path and os.path.isfile(thumb_path):
                     try:
                         os.remove(thumb_path)
                     except Exception as e:
                         logger.warning(
-                            "Failed to delete thumbnail %s: %s",
+                            "Delete-forever: failed to delete thumbnail %s for "
+                            "picture id=%s: %s",
                             thumb_path,
+                            pic_id,
                             e,
                         )
 
         background_tasks.add_task(
             delete_files,
             server.vault.image_root,
-            file_paths,
+            removal_targets,
         )
 
         def delete_rows(session: Session, ids: list[int], log_records: list[dict]):
@@ -1213,26 +1362,37 @@ def register_routes(router, server):
             log_records,
             priority=DBPriority.IMMEDIATE,
         )
-        server.vault.notify(
-            EventType.CHANGED_PICTURES,
-            {
-                "picture_ids": list(picture_ids),
-                "origin_client_id": origin_client_id,
-                "change_kind": "removed",
-            },
-        )
+        if picture_ids:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": list(picture_ids),
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "removed",
+                },
+            )
 
         # Tell the caller which snapshots still hold metadata for the pictures
         # just purged. Snapshot archives are not scrubbed, so the user may want
         # to delete those snapshots if the deletion was for privacy. Discovery
         # reads only the JSON manifests (no snapshot DB is opened).
-        snapshots_with_deleted = server.vault.snapshot_service.snapshots_containing(
-            picture_ids
+        snapshots_with_deleted = (
+            server.vault.snapshot_service.snapshots_containing(picture_ids)
+            if picture_ids
+            else []
         )
 
+        logger.info(
+            "Delete-forever: purged %d, skipped %d protected (include_protected=%s)",
+            deleted_count,
+            skipped_count,
+            include_protected,
+        )
         return {
             "status": "success",
             "deleted_count": deleted_count,
+            "skipped_count": skipped_count,
+            "include_protected": include_protected,
             "snapshots_with_deleted": snapshots_with_deleted,
         }
 

@@ -300,8 +300,13 @@ Key endpoints (see the auto-generated index below for the full set):
 | GET | `/pictures` | Filtered/paginated picture listing |
 | GET | `/pictures/search` | Keyword + semantic search |
 | GET | `/pictures/stats` | Aggregate stats |
-| POST | `/pictures/import` | Upload images → create Pictures |
+| POST | `/pictures/import` | Upload images → create Pictures (one-shot) |
 | GET | `/pictures/import/status?task_id=…` | Import progress |
+| POST | `/pictures/import/staging` | Open an async streaming-import session (#459) |
+| POST | `/pictures/import/staging/{staging_id}/files` | Stream files into a staging session (unsafe window) |
+| POST | `/pictures/import/staging/{staging_id}/commit` | Safe handoff → background `PictureImportTask` |
+| DELETE | `/pictures/import/staging/{staging_id}` | Cancel an uncommitted staging session |
+| GET | `/pictures/import/staging/{staging_id}/status` | Staging + background-import progress |
 | GET | `/pictures/export` | Start async ZIP export |
 | GET | `/pictures/export/status?task_id=…` | Export progress |
 | GET | `/pictures/export/download/{task_id}` | Download finished ZIP |
@@ -411,6 +416,11 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                      |
 | POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                    |
 | POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                         |
+| POST   | /api/v1/pictures/import/staging                                               | pictures        | Open an async import staging session                       |
+| DELETE | /api/v1/pictures/import/staging/{staging_id}                                  | pictures        | Cancel a staging session                                   |
+| POST   | /api/v1/pictures/import/staging/{staging_id}/commit                           | pictures        | Hand off a staging session to the background import        |
+| POST   | /api/v1/pictures/import/staging/{staging_id}/files                            | pictures        | Stream files into a staging session                        |
+| GET    | /api/v1/pictures/import/staging/{staging_id}/status                           | pictures        | Get async import staging status                            |
 | GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                      |
 | POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                                 |
 | POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                          |
@@ -418,6 +428,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                   |
 | POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                |
 | DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                      |
+| POST   | /api/v1/pictures/scrapheap/delete-preview                                     | pictures        | Preview a scrapheap delete-forever                         |
 | POST   | /api/v1/pictures/scrapheap/restore                                            | pictures        | Restore deleted pictures                                   |
 | GET    | /api/v1/pictures/search                                                       | pictures        | Search pictures by text                                    |
 | GET    | /api/v1/pictures/stream                                                       | pictures        | Stream pictures in batches                                 |
@@ -643,6 +654,7 @@ Snapshot: id, kind, created_at, relative_path,
 | `MISSING_FILE_PURGE` | CPU | `MissingFilePurgeFinder` | Remove records for vanished files |
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
 | `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
+| `PICTURE_IMPORT` | CPU | _(none — user-triggered)_ | Async streaming-staging import (#459). Finishes a committed staging session server-side (the *safe* window): hashes, de-dupes by `pixel_sha` (incl. intra-batch), ingests each staged file, inserts `Picture` rows with a pending-tag sentinel, then removes the staging dir. Enqueued by `POST /pictures/import/staging/{id}/commit`; HIGH priority, no WorkFinder. Live progress via the worker-progress snapshot (`_total_count`/`_processed_count`), completion emits `CHANGED_PICTURES` + `PICTURE_IMPORTED`. |
 | `GFS_SNAPSHOT` | CPU | `EnsureGfsSnapshotFinder` | Drives the Grandfather-Father-Son automatic snapshot schedule: at most one snapshot per check (every 5 minutes), of the highest tier that is due (`MONTHLY` / `WEEKLY` / `DAILY`). Retention prunes each tier independently (7 daily / 4 weekly / 12 monthly). Registered in `vault.py`. |
 | `TAG_HEALTH_AUTO_REBUILD` | CPU | `TagHealthAutoRebuildFinder` | Checks `tag_health_service.is_stale` at most every 5 minutes (`AUTO_REBUILD_CHECK_INTERVAL_S`); when stale and no rebuild is running, dispatches through the same idempotent `start_rebuild` path `POST /tag_health/rebuild` uses. Closes the loop so `GET /tag_health`'s `stale` flag (new pictures / `TaggerRun`s / reviewed `TagSuggestion`s since the cache's `computed_at`) self-heals without a manual click. |
 

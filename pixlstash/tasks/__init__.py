@@ -19,6 +19,7 @@ from .tag_prediction_backfill_task import TagPredictionBackfillTask
 from .missing_watch_folder_import_finder import MissingWatchFolderImportFinder
 from .missing_comfyui_extraction_finder import MissingComfyUIExtractionFinder
 from .comfyui_extraction_task import ComfyUIExtractionTask
+from .picture_import_task import PictureImportTask
 from .tag_task import TagTask
 from .text_embedding_task import TextEmbeddingTask
 from .likeness_parameters_task import LikenessParametersTask
@@ -59,6 +60,7 @@ __all__ = [
     "MissingWatchFolderImportFinder",
     "MissingComfyUIExtractionFinder",
     "ComfyUIExtractionTask",
+    "PictureImportTask",
     "TagTask",
     "TextEmbeddingTask",
     "LikenessParametersTask",

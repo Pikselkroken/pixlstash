@@ -1726,6 +1726,35 @@ function handleResolutionBarClick(label) {
               </div>
               <div class="tm-comfy-message">{{ entry.run.message }}</div>
             </div>
+            <!-- Async import (#459): the two-phase dialog auto-hides at the safe
+                 transition and the import lands here as a determinate task row.
+                 data-import-task-row is the FLIP flight target the import dialog
+                 flies its count chip into. -->
+            <div
+              v-else-if="entry.kind === 'import'"
+              class="tm-worker-row tm-import-row"
+              :data-import-task-row="entry.key"
+            >
+              <div class="tm-worker-row-top">
+                <span
+                  class="tm-status-dot"
+                  :class="{ 'tm-status-dot--running': entry.run.status === 'running' }"
+                ></span>
+                <span class="tm-worker-label">{{ entry.run.label }}</span>
+                <span v-if="entry.run.total > 0" class="tm-worker-progress">
+                  {{ entry.run.current }} / {{ entry.run.total }}
+                </span>
+              </div>
+              <div class="tm-comfy-bar">
+                <div
+                  class="tm-comfy-fill"
+                  :style="{
+                    width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
+                  }"
+                ></div>
+              </div>
+              <div class="tm-comfy-message">{{ entry.run.message }}</div>
+            </div>
             <!-- Backend worker: throughput sparkline + rate -->
             <div v-else class="tm-worker-row">
               <div class="tm-worker-row-top">
@@ -2527,6 +2556,46 @@ function handleResolutionBarClick(label) {
   .tm-status-dot--running,
   .tm-tab-icon--busy,
   .tm-tab-pulse {
+    animation: none;
+  }
+}
+
+/* Landing punctuation for the async import (#459): a one-shot spring-pop + accent
+   glow-and-settle when the FLIP flight from the import dialog lands the chip on
+   this row (mirrors the gridNewPulse landing-pulse pattern, visual-language §10).
+   One-shot `both` so it plays once on the row's first render, then rests. */
+.tm-import-row {
+  animation:
+    tm-import-pop var(--dur-4) var(--ease-spring) both,
+    tm-import-glow 2.2s ease-out both;
+}
+
+@keyframes tm-import-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes tm-import-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0.5);
+    border-color: rgba(var(--v-theme-primary), 0.6);
+  }
+  35% {
+    box-shadow: 0 0 0 4px rgba(var(--v-theme-primary), 0.18);
+    border-color: rgba(var(--v-theme-primary), 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0);
+    border-color: rgba(var(--v-theme-on-surface), 0.07);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-import-row {
     animation: none;
   }
 }
