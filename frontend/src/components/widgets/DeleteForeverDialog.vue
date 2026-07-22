@@ -19,6 +19,10 @@
  *  - false → DELETE with include_protected:false (purges only the unprotected subset)
  */
 import { computed, ref, watch } from "vue";
+import {
+  buildLockedPurgeNote,
+  deleteForeverDestroyCounts,
+} from "../../utils/lockedDelete.js";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -28,6 +32,13 @@ const props = defineProps({
   protectedCount: { type: Number, default: 0 },
   /** Non-protected (managed) pictures in the set. */
   unprotectedCount: { type: Number, default: 0 },
+  /**
+   * Pictures a locked picture set freezes. NEITHER action destroys these, so
+   * the dialog states it up front instead of letting the user discover it from
+   * a count that does not add up. Defaults to 0, so a server that has not
+   * shipped `locked_count` yet renders exactly the previous copy.
+   */
+  lockedCount: { type: Number, default: 0 },
   /**
    * Absolute on-disk file paths of the protected originals. May be the full list
    * or a capped subset — `protectedCount` is authoritative for the "+N more".
@@ -54,21 +65,45 @@ watch(
 const hasProtected = computed(() => props.protectedCount > 0);
 const typedOk = computed(() => confirmInput.value.trim() === CONFIRM_WORD);
 
+// ── Locked-set pictures ─────────────────────────────────────────────────────
+// A locked set freezes its pictures against every mutation, purge included, so
+// they survive both actions below.
+const hasLocked = computed(() => props.lockedCount > 0);
+const lockedNote = computed(() => buildLockedPurgeNote(props.lockedCount));
+
+// What each action ACTUALLY destroys. The preview's locked / protected /
+// unprotected buckets are disjoint and sum to `totalCount`, so these are sums of
+// the server's own classification — never `totalCount` minus something. See
+// `deleteForeverDestroyCounts`.
+const destroyCounts = computed(() =>
+  deleteForeverDestroyCounts({
+    protectedCount: props.protectedCount,
+    unprotectedCount: props.unprotectedCount,
+    lockedCount: props.lockedCount,
+  }),
+);
+
 // ── Copy ────────────────────────────────────────────────────────────────────
 const standardBody = computed(() => {
-  const many = props.totalCount !== 1;
+  // No protected originals in this branch, so "delete all" and "delete
+  // unprotected only" are the same act on the same pictures.
+  const count = destroyCounts.value.deleteAll;
+  const many = count !== 1;
   const noun = many ? "pictures" : "picture";
   const file = many ? "their files" : "its file";
-  return `This permanently deletes ${props.totalCount} ${noun}, including ${file} on disk. This cannot be undone.`;
+  return `This permanently deletes ${count} ${noun}, including ${file} on disk. This cannot be undone.`;
 });
 
 const protectedBody = computed(() => {
   const p = props.protectedCount;
+  // The headline count is what "Delete all" destroys (protected + unprotected),
+  // NOT `totalCount` — locked pictures are counted in the total but survive.
+  const count = destroyCounts.value.deleteAll;
   const isAre =
     p === 1 ? "is a reference-folder original" : "are reference-folder originals";
   const itThem = p === 1 ? "it" : "them";
   const fileFiles = p === 1 ? "file" : "files";
-  return `This permanently deletes ${props.totalCount} pictures. ${p} of ${itThem} ${isAre} — deleting ${itThem} also destroys the original ${fileFiles} on disk. This cannot be undone.`;
+  return `This permanently deletes ${count} pictures. ${p} of ${itThem} ${isAre} — deleting ${itThem} also destroys the original ${fileFiles} on disk. This cannot be undone.`;
 });
 
 const refWarnTitle = computed(() =>
@@ -95,8 +130,12 @@ const typeHint = computed(
 const deleteAllLabel = computed(
   () => `Delete all — incl. ${props.protectedCount} protected`,
 );
+// `unprotectedCount` is already the exact destroyable figure: the preview's
+// buckets are disjoint (locked-first), so a locked picture is never counted as
+// unprotected and no subtraction is needed.
 const deleteUnprotectedLabel = computed(
-  () => `Delete unprotected only (${props.unprotectedCount})`,
+  () =>
+    `Delete unprotected only (${destroyCounts.value.deleteUnprotectedOnly})`,
 );
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -133,6 +172,12 @@ function confirmDeleteUnprotected() {
   >
     <div class="confirm" role="alertdialog" aria-label="Delete forever">
       <h4>Delete forever?</h4>
+
+      <!-- Pictures a locked set freezes: destroyed by neither action below. -->
+      <div v-if="hasLocked" class="lock-note">
+        <v-icon size="18">mdi-lock-outline</v-icon>
+        <span>{{ lockedNote }}</span>
+      </div>
 
       <!-- ── Standard case: no protected originals ─────────────────────────── -->
       <template v-if="!hasProtected">
@@ -250,6 +295,22 @@ function confirmDeleteUnprotected() {
 
 .confirm .row--wrap {
   flex-wrap: wrap;
+}
+
+/* Locked-set note. Deliberately `info`-tinted, NOT `error`: nothing is at risk
+   here — these pictures survive. Same panel shape as `.ref-warn` below. */
+.lock-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+  border: 1px solid rgba(var(--v-theme-info), 0.5);
+  background: rgba(var(--v-theme-info), 0.08);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 /* Reference-folder original warning — strong, specific: this is your photo on

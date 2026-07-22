@@ -43,9 +43,13 @@ Retention policy (settled with the maintainer, do not redesign):
   restore/re-delete that resets ``deleted_at`` between planning and the
   LOW-priority task actually running — cannot destroy an in-window picture.
 * Pictures frozen by a locked picture-set — directly, or via a live stack
-  sibling — are excluded from the AUTOMATIC path entirely (skip-and-log).
-  Soft-delete already refuses them with 423; a timer must not do what the
-  interactive path forbids.
+  sibling — are excluded from **every** destruction path, the manual
+  ``include_protected=true`` delete-forever included. A locked set is a hard
+  whole-set freeze: ``DELETE /pictures/{id}`` refuses with 423 and the bulk
+  soft-delete skips, so neither a timer nor the one IRREVERSIBLE path may do what
+  the reversible interactive paths forbid. Enforced unconditionally in
+  :func:`build_purge_plan` (skip-and-report, never raise, so one frozen member
+  cannot fail a batch) and reported as ``skipped_locked``.
 * The scrapheap listing applies **both** exemptions through the same helpers the
   sweep uses (:func:`fetch_no_delete_folder_ids` and
   :func:`locked_scrapheap_picture_ids`), so the ``purge_at`` countdown the UI
@@ -130,8 +134,11 @@ class ScrapheapPurgePlan:
     log_records: list[dict] = field(default_factory=list)
     # Protected originals left completely intact (row + file kept, no ledger row).
     skipped_count: int = 0
-    # Pictures the RetentionGuard held back — not yet past their deadline, or
-    # frozen by a locked set. Always 0 on the manual (unguarded) path.
+    # Ids frozen by a locked picture-set, left completely intact. Applies to
+    # EVERY path — a lock outranks even an explicit include_protected=true.
+    skipped_locked: list[int] = field(default_factory=list)
+    # Pictures the RetentionGuard held back — not yet past their deadline.
+    # Always 0 on the manual (unguarded) path.
     retained_count: int = 0
 
 
@@ -141,6 +148,7 @@ class ScrapheapPurgeOutcome:
 
     deleted_count: int = 0
     skipped_count: int = 0
+    skipped_locked: list[int] = field(default_factory=list)
     retained_count: int = 0
     purged_ids: list[int] = field(default_factory=list)
 
@@ -162,22 +170,22 @@ class RetentionGuard:
     passes ``None`` — a human asking for immediate deletion is not subject to a
     retention timer.
 
+    This guard covers the DEADLINE only. The locked-set freeze is enforced
+    unconditionally by :func:`build_purge_plan` instead, because it binds on
+    every path (manual and automatic) rather than only on the timer.
+
     Attributes:
         now: The instant the sweep is evaluating against.
         retention_days: Configured window, or None for "Never".
         reduced_at: When the window was last lowered, or None.
-        locked_picture_ids: Ids frozen by a locked picture-set; never purged.
     """
 
     now: datetime
     retention_days: Optional[int]
     reduced_at: Optional[datetime]
-    locked_picture_ids: frozenset[int] = frozenset()
 
     def permits(self, row: "ScrapheapRow") -> tuple[bool, str]:
-        """Whether ``row`` may be destroyed now; also returns the reason if not."""
-        if row.id is not None and int(row.id) in self.locked_picture_ids:
-            return False, "frozen by a locked picture-set"
+        """Whether ``row``'s deadline has passed; also the reason if not."""
         purge_at = compute_purge_at(
             row.deleted_at, self.retention_days, self.reduced_at, is_protected=False
         )
@@ -547,30 +555,50 @@ def find_due_retention_picture_ids_in_session(
 def build_purge_plan(
     rows: list[ScrapheapRow],
     no_delete_folder_ids: set[int],
+    locked_ids: set[int],
     include_protected: bool,
     retention_guard: Optional[RetentionGuard] = None,
 ) -> ScrapheapPurgePlan:
     """Decide what a purge destroys.
 
-    Protected = a reference-folder original whose folder forbids file deletion.
-    ``include_protected`` decides its fate:
+    Three independent reasons to keep a row, checked in this order:
 
-    * ``False`` -> skip it entirely (row kept, file kept, no ledger row);
-    * ``True``  -> destroy it like any other (``os.remove`` + ``file_removed=True``).
+    1. **Locked** — frozen by a locked picture-set (directly or via a live stack
+       sibling). This binds on EVERY path, including an explicit
+       ``include_protected=true`` delete-forever, and is checked FIRST because it
+       is the one blocker no request flag can override. A locked set is a hard
+       whole-set freeze: ``DELETE /pictures/{id}`` refuses it with 423 and the
+       bulk soft-delete skips it, so the single IRREVERSIBLE path must not be the
+       one that ignores it. Skip-and-report, never raise, so one frozen member
+       cannot fail a whole batch.
+    2. **Retention deadline** — the automatic path's SECOND deadline check,
+       recomputed from the row's current ``deleted_at``. The manual
+       delete-forever passes ``retention_guard=None``: a human's explicit
+       confirmation is not gated on a timer.
+    3. **Protected** — a reference-folder original whose folder forbids file
+       deletion (``allow_delete_file=False``). ``include_protected`` decides its
+       fate: ``False`` -> skip it entirely (row kept, file kept, no ledger row);
+       ``True`` -> destroy it like any other. The protection is a ROUTINE
+       safeguard that still governs soft-delete and the background scan; only an
+       explicit ``include_protected=true`` delete-forever overrides it. The
+       retention auto-purge always passes ``False``.
 
-    Either way the reference-folder protection is a ROUTINE safeguard that still
-    governs soft-delete-to-scrapheap and the background scan; only an explicit
-    ``include_protected=true`` delete-forever overrides it. The retention
-    auto-purge always calls with ``include_protected=False``.
-
-    ``retention_guard`` is the automatic path's SECOND deadline check. When
-    supplied, every row must independently still be past its deadline (recomputed
-    from its current ``deleted_at``) and not locked, or it is retained. The
-    manual delete-forever passes ``None``: a human's explicit confirmation is not
-    gated on a timer.
+    The deadline is checked before protection, so on the automatic path a row
+    that is BOTH protected and still in-window is counted as ``retained_count``
+    (deadline) rather than ``skipped_count`` (protected). Both keep the row, and
+    the auto path always passes ``include_protected=False``, so this only
+    affects which counter reports it.
     """
     plan = ScrapheapPurgePlan()
     for row in rows:
+        if row.id is not None and int(row.id) in locked_ids:
+            plan.skipped_locked.append(int(row.id))
+            logger.info(
+                "Delete-forever: SKIPPING picture id=%s — frozen by a locked "
+                "picture-set; row and file kept (unlock the set to delete it)",
+                row.id,
+            )
+            continue
         if retention_guard is not None:
             permitted, reason = retention_guard.permits(row)
             if not permitted:
@@ -610,6 +638,60 @@ def build_purge_plan(
                 (row.id, row.file_path, was_reference_protected)
             )
     return plan
+
+
+def classify_delete_preview(
+    rows: list[ScrapheapRow],
+    no_delete_folder_ids: set[int],
+    locked_ids: set[int],
+) -> dict:
+    """Partition a delete-forever selection into three DISJOINT buckets.
+
+    The confirm dialog has to state exactly what each button will destroy, and
+    **no count may overstate destruction**. So the buckets are keyed on which
+    action destroys the row, not on which properties it happens to have:
+
+    * ``locked_count``   — frozen by a locked picture-set, whether or not it is
+      ALSO protected. Destroyed by neither button.
+    * ``protected_count``— protected and NOT locked. Destroyed only by
+      "Delete all" (``include_protected=true``).
+    * ``unprotected_count`` — neither. Destroyed by both buttons.
+
+    They are disjoint and sum to ``total_count``, so "Delete unprotected only
+    (``unprotected_count``)" and "Delete all — incl. ``protected_count``
+    protected" are each literally true.
+
+    **Locked is classified FIRST here, which is deliberately the opposite of
+    ``auto_purge_exempt_reason`` (where protected wins).** The two answer
+    different questions. The badge answers "why is this being kept?" and leads
+    with the permanent, intrinsic reason. The preview answers "what will this
+    button destroy?" and must lead with the BINDING blocker — for a
+    locked+protected row under ``include_protected=true``, protection is
+    overridden but the lock still holds, so counting it as protected would tell
+    the user "Delete all" destroys it when it does not.
+
+    ``protected`` lists the locked-free protected originals with their resolved
+    on-disk paths (the files genuinely at risk from "Delete all"); ``locked``
+    lists the frozen ids so the dialog can name them.
+    """
+    protected_items: list[dict] = []
+    locked_items: list[int] = []
+    unprotected_count = 0
+    for row in rows:
+        if row.id is not None and int(row.id) in locked_ids:
+            locked_items.append(int(row.id))
+        elif row.is_protected(no_delete_folder_ids):
+            protected_items.append({"id": row.id, "file_path": row.file_path or ""})
+        else:
+            unprotected_count += 1
+    return {
+        "total_count": len(rows),
+        "protected_count": len(protected_items),
+        "locked_count": len(locked_items),
+        "unprotected_count": unprotected_count,
+        "protected": protected_items,
+        "locked": sorted(locked_items),
+    }
 
 
 def remove_picture_files(
@@ -703,37 +785,6 @@ def find_due_retention_picture_ids(
     )
 
 
-def build_retention_guard_in_session(
-    session: Session,
-    now: datetime,
-    retention_days: Optional[int],
-    reduced_at: Optional[datetime],
-    ids: list[int],
-) -> RetentionGuard:
-    """Build the automatic path's second-layer guard for ``ids``."""
-    return RetentionGuard(
-        now=now,
-        retention_days=retention_days,
-        reduced_at=reduced_at,
-        locked_picture_ids=frozenset(
-            locked_scrapheap_picture_ids_in_session(session, ids)
-        ),
-    )
-
-
-def build_retention_guard(
-    vault,
-    now: datetime,
-    retention_days: Optional[int],
-    reduced_at: Optional[datetime],
-    ids: list[int],
-) -> RetentionGuard:
-    """Vault wrapper for :func:`build_retention_guard_in_session`."""
-    return vault.db.run_immediate_read_task(
-        build_retention_guard_in_session, now, retention_days, reduced_at, ids
-    )
-
-
 def purge_scrapheap_pictures(
     vault,
     ids: Optional[list[int]],
@@ -756,9 +807,10 @@ def purge_scrapheap_pictures(
             removed after the response is sent. ``None`` removes them inline
             (the background task path, which is already off the event loop).
         retention_guard: The automatic path's independent re-check of the
-            deadline and the locked-set freeze, evaluated against each row's
-            CURRENT ``deleted_at``. Supplied by the auto-purge task; ``None`` on
-            the manual, consent-gated path.
+            retention DEADLINE, evaluated against each row's CURRENT
+            ``deleted_at``. Supplied by the auto-purge task; ``None`` on the
+            manual, consent-gated path. (The locked-set freeze is NOT part of
+            this — it binds on every path and is enforced unconditionally below.)
 
     Returns:
         A :class:`ScrapheapPurgeOutcome`.
@@ -768,8 +820,14 @@ def purge_scrapheap_pictures(
         return ScrapheapPurgeOutcome()
 
     no_delete_folder_ids = fetch_no_delete_folder_ids(vault)
+    # Unconditional: a locked picture-set freezes its members against EVERY
+    # destruction path, manual delete-forever included. Looked up through the one
+    # shared helper so this can never disagree with the sweep or the listing.
+    locked_ids = locked_scrapheap_picture_ids(
+        vault, [row.id for row in rows if row.id is not None]
+    )
     plan = build_purge_plan(
-        rows, no_delete_folder_ids, include_protected, retention_guard
+        rows, no_delete_folder_ids, locked_ids, include_protected, retention_guard
     )
 
     # Rows + ledger first, files second: a crash between the two leaves orphaned
@@ -788,10 +846,11 @@ def purge_scrapheap_pictures(
     else:
         remove_picture_files(vault.image_root, plan.removal_targets)
     logger.info(
-        "Delete-forever: purged %d, skipped %d protected, retained %d "
-        "(include_protected=%s, guarded=%s)",
+        "Delete-forever: purged %d, skipped %d protected, skipped %d locked, "
+        "retained %d (include_protected=%s, guarded=%s)",
         deleted_count,
         plan.skipped_count,
+        len(plan.skipped_locked),
         plan.retained_count,
         include_protected,
         retention_guard is not None,
@@ -799,6 +858,7 @@ def purge_scrapheap_pictures(
     return ScrapheapPurgeOutcome(
         deleted_count=deleted_count,
         skipped_count=plan.skipped_count,
+        skipped_locked=sorted(plan.skipped_locked),
         retained_count=plan.retained_count,
         purged_ids=list(plan.picture_ids),
     )
