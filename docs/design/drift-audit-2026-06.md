@@ -8,15 +8,23 @@
 >   (retired in favour of Tiny5).
 > - **Step 2 (adopt `design-tokens.css`):** done. It is imported globally via
 >   `frontend/src/main.js`.
-> - **Step 3 (hardcoded hex):** largely done. The audited count of 38 distinct hex
->   values is down to ~9 in the scanned scope.
+> - **Step 3 (hardcoded hex):** largely done. The audited 38 distinct hex values are
+>   down to a handful of live chrome offenders (as of 2026-07): a `#888`
+>   set-color-dot fallback and `#c96000` / `#c62828` hover states in `SideBar.vue`,
+>   plus scattered `#fff` glyph fills. The review-celebration confetti palette in
+>   `ReviewCelebration.vue` is now a **named decorative exemption** (see
+>   `visual-language.md` §4), not counted as drift.
 > - Steps 4–7 (shadows, radius, spacing, type) are in progress; treat the specifics
 >   below as historical, not a live tally.
 >
-> **Still literally true:** one `9999px` radius lingers in
-> `frontend/src/components/views/ImageGrid.vue` (the pill-typo from the radius table
-> below); it should snap to `--radius-pill`. (Note: the other `-9999px` values in the
-> codebase are off-screen drag-ghost offsets, not radii, and are fine.)
+> **Still literally true (2026-07):**
+> - One `9999px` radius lingers in `frontend/src/components/views/ImageGrid.vue:6792`
+>   (the pill-typo from the radius table below); it should snap to `--radius-pill`.
+>   (The other `-9999px` values are off-screen drag-ghost offsets, not radii — fine.)
+> - Radius still spans ~13 distinct values (2/3/5/6/10/14/16/18 alongside the
+>   4/8/12/999 set); `em` font-sizes still recur (`0.7–1.2em` in `ImageGrid`,
+>   `SelectionBar`, overlay panels); action-bar heights still drift (34/40/48/56px —
+>   now have a home in `--bar-height`, see §13). Component migration continues.
 
 Why this exists: the sleekness slipped after v1.6.0. This is the evidence, measured
 not eyeballed, plus the order to fix it in. Numbers are from a scan of

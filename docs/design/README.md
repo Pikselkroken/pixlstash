@@ -16,6 +16,7 @@ control does) are agreed with the **UI/UX expert** first, then made beautiful.
 | `visual-language.md` | The full spec, with the reason behind every rule. **Read this.** |
 | `design-tokens.css` | The machine-readable tokens: spacing, radius, type ramp, elevation, motion. Copy-pasteable, the single source of truth for non-color scales. |
 | `drift-audit-2026-06.md` | The measured gap between the spec and the codebase as of the v1.6.0+ slip, and the order to close it. |
+| `design-system-handoff.md` | Self-contained, paste-able snapshot of the whole system (token values, both themes, component patterns, v1.8.0 feature context) for designing in Claude Design without the repo open. |
 | `assets/logo/` | Logo, horizontal watermark lockup, favicon. The brand kit. |
 | `assets/fonts/` | Tiny5, the brand pixel face (wordmark and brand moments only). |
 
