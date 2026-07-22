@@ -1,6 +1,8 @@
 <script setup>
 import { ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import { useConfirm } from "../../composables/useConfirm";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -13,6 +15,13 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "saved", "deleted"]);
+
+// First adoption of the Phase 2 scaffolds. `useConfirm().confirm()` falls back
+// to the native window.confirm until the design pass mounts a ConfirmDialog
+// host, so behaviour is identical today; a delete failure now also raises a
+// central notice (a no-op on screen until the notice host lands).
+const { confirm } = useConfirm();
+const noticeStore = useNoticeStore();
 
 const name = ref("");
 const description = ref("");
@@ -62,12 +71,13 @@ async function save() {
 
 async function deleteProject() {
   if (!props.project?.id) return;
-  if (
-    !window.confirm(
-      `Delete project "${props.project.name}"? This cannot be undone.`,
-    )
-  )
-    return;
+  const confirmed = await confirm({
+    title: "Delete project",
+    message: `Delete project "${props.project.name}"? This cannot be undone.`,
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!confirmed) return;
   deleting.value = true;
   error.value = null;
   try {
@@ -75,6 +85,7 @@ async function deleteProject() {
     emit("deleted", props.project.id);
   } catch (e) {
     error.value = e?.response?.data?.detail || e.message || "Delete failed.";
+    noticeStore.error(error.value);
   } finally {
     deleting.value = false;
   }

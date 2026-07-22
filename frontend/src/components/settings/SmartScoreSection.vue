@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { getUserConfig, patchUserConfig } from "../../api/config";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { VSwitch } from "vuetify/components";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsChipGrid from "./SettingsChipGrid.vue";
@@ -13,6 +14,11 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:hidden-tags", "update:apply-tag-filter"]);
+
+// First adoption of the central notice store (Phase 2 scaffold): a smart-score
+// save failure raises a notice as well as the inline error. The notice is a
+// no-op on screen until the maintainer's design pass mounts the notice host.
+const noticeStore = useNoticeStore();
 
 // ── Tag filter (hidden tags) — moved here from Behaviour ──────────────────────
 const hiddenTags = ref([]);
@@ -47,9 +53,7 @@ async function saveHiddenTags(nextTags) {
   hiddenTagsSuccess.value = "";
   try {
     const normalized = normalizeHiddenTags(nextTags);
-    await apiClient.patch("/users/me/config", {
-      hidden_tags: normalized,
-    });
+    await patchUserConfig({ hidden_tags: normalized });
     hiddenTags.value = normalized;
     emit("update:hidden-tags", hiddenTags.value);
     hiddenTagsSuccess.value = "Saved.";
@@ -86,9 +90,7 @@ async function setApplyTagFilter(value) {
   hiddenTagsError.value = "";
   try {
     const nextValue = Boolean(value);
-    await apiClient.patch("/users/me/config", {
-      apply_tag_filter: nextValue,
-    });
+    await patchUserConfig({ apply_tag_filter: nextValue });
     applyTagFilter.value = nextValue;
     emit("update:apply-tag-filter", applyTagFilter.value);
   } catch (e) {
@@ -168,13 +170,13 @@ async function fetchData() {
   smartScoreTagInput.value = "";
   smartScoreTagsSuccess.value = "";
   try {
-    const res = await apiClient.get("/users/me/config");
+    const config = await getUserConfig();
     smartScorePenalisedTags.value = SmartScoreTags(
-      res.data?.smart_score_penalised_tags,
+      config?.smart_score_penalised_tags,
     );
-    hiddenTags.value = normalizeHiddenTags(res.data?.hidden_tags);
+    hiddenTags.value = normalizeHiddenTags(config?.hidden_tags);
     emit("update:hidden-tags", hiddenTags.value);
-    applyTagFilter.value = Boolean(res.data?.apply_tag_filter);
+    applyTagFilter.value = Boolean(config?.apply_tag_filter);
     emit("update:apply-tag-filter", applyTagFilter.value);
   } catch (_) {
     smartScoreTagsError.value = "Failed to load smart score settings.";
@@ -189,14 +191,13 @@ async function saveSmartScoreTags(nextTags) {
   smartScoreTagsSuccess.value = "";
   try {
     const { d, payload } = serializeSmartScoreTags(nextTags);
-    await apiClient.patch("/users/me/config", {
-      smart_score_penalised_tags: payload,
-    });
+    await patchUserConfig({ smart_score_penalised_tags: payload });
     smartScorePenalisedTags.value = d;
     smartScoreTagsSuccess.value = "Saved.";
   } catch (e) {
     smartScoreTagsError.value =
       e?.response?.data?.detail || "Failed to update smart score tags.";
+    noticeStore.error(smartScoreTagsError.value);
   } finally {
     smartScoreTagsLoading.value = false;
     if (smartScoreTagsSuccess.value) {

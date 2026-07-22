@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { VSwitch } from "vuetify/components";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { listCharacters } from "../../api/characters";
 import { copyText } from "../../utils/clipboard";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -230,8 +231,8 @@ async function loadShareResourceOptions(type) {
       const res = await apiClient.get("/picture_sets");
       items = (res.data || []).map((s) => ({ id: s.id, label: s.name }));
     } else if (type === "character") {
-      const res = await apiClient.get("/characters");
-      items = (res.data || []).map((c) => ({ id: c.id, label: c.name }));
+      const chars = await listCharacters();
+      items = (chars || []).map((c) => ({ id: c.id, label: c.name }));
     } else if (type === "project") {
       const res = await apiClient.get("/projects");
       items = (res.data || []).map((p) => ({ id: p.id, label: p.name }));
