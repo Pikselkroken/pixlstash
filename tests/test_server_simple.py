@@ -328,11 +328,16 @@ def test_scrapheap_purge_logs_deleted_files(server):
 
     def _fetch_logs(session: Session):
         rows = session.exec(select(DeletedFileLog)).all()
-        return [(r.path_sha, r.pixel_sha) for r in rows]
+        return [(r.path_sha, r.pixel_sha, r.file_removed) for r in rows]
 
     logs = server.vault.db.run_task(_fetch_logs)
     assert len(logs) == 1, f"Expected exactly one log row, got {logs}"
-    assert logs[0] == (expected_path_sha, pixel_sha)
+    assert logs[0][:2] == (expected_path_sha, pixel_sha)
+    # A managed (vault) picture delete-forever genuinely removes the file, so the
+    # ledger records a permanent deletion restore must never resurrect.
+    assert logs[0][2] is True, (
+        f"Managed delete-forever must log file_removed=True, got {logs[0][2]!r}"
+    )
     # The cleartext path must not appear in any column of the log row.
     assert file_path not in (logs[0][0] or ""), "Raw path leaked into path_sha."
 
@@ -418,14 +423,20 @@ def _run_reference_folder_scan(server, folder_id, folder_dir):
     return task._run_task()
 
 
-def test_scrapheap_purge_protected_folder_keeps_file_and_blocks_reimport(
+def test_scrapheap_delete_forever_destroys_protected_reference_original(
     server, tmp_path
 ):
-    """allow_delete_file=False protects only the on-disk file, never the DB row.
+    """Explicit "Delete forever" genuinely destroys a reference-folder original
+    even when allow_delete_file=False.
 
-    Emptying the scrapheap must: delete the Picture row, write a DeletedFileLog
-    entry, leave the source file on disk, and a subsequent reference-folder scan
-    must NOT re-import the still-present file (the ledger blocks it).
+    Rev-4 maintainer decision + Round-3 escape hatch: the "delete all" confirm
+    sends include_protected=true, which removes the on-disk source file for EVERY
+    selected picture — deliberately overriding the routine reference-folder file
+    protection for a protected original — deletes the Picture row, and logs
+    file_removed=True so a subsequent restore drops the row and never resurrects
+    it. (The routine protection still applies to soft-delete-to-scrapheap and the
+    reference-folder scan; and include_protected=false skips protected originals
+    entirely — see the routine-protection and escape-hatch tests below.)
     """
     client = TestClient(server.api)
     assert (
@@ -437,18 +448,23 @@ def test_scrapheap_purge_protected_folder_keeps_file_and_blocks_reimport(
 
     folder_dir = str(tmp_path / "protected_refs")
     folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
-        server, folder_dir, "keep_me.png", allow_delete=False
+        server, folder_dir, "destroy_me.png", allow_delete=False
     )
     expected_path_sha = DeletedFileLog.hash_path(abs_file_path)
 
     assert client.delete(f"/pictures/{pic_id}").status_code == 200
-    purge_resp = client.delete("/pictures/scrapheap")
+    # include_protected=true is the type-to-confirm "delete all" action.
+    purge_resp = client.request(
+        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": True}
+    )
     assert purge_resp.status_code == 200
     assert purge_resp.json()["deleted_count"] == 1
 
-    # Row gone, ledger written, file still on disk (protected).
+    # Row gone AND the protected source file is genuinely destroyed on disk.
     assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
-    assert os.path.isfile(abs_file_path), "Protected source file must stay on disk"
+    assert not os.path.isfile(abs_file_path), (
+        "Explicit delete-forever must destroy even a protected reference original"
+    )
 
     def _fetch_logs(session: Session):
         return [
@@ -457,22 +473,21 @@ def test_scrapheap_purge_protected_folder_keeps_file_and_blocks_reimport(
         ]
 
     logs = server.vault.db.run_task(_fetch_logs)
-    protected_entries = [
+    ledger_entries = [
         removed for path_sha, _, removed in logs if path_sha == expected_path_sha
     ]
-    assert protected_entries, f"Expected ledger entry for protected file, got {logs}"
-    # The file was KEPT on disk, so the ledger must record file_removed=False so
-    # restore does not treat it as a permanent deletion and drop the alive
-    # picture. The row still blocks scanner re-import.
-    assert protected_entries[0] is False, (
-        "Protected (kept-on-disk) purge must log file_removed=False, got "
-        f"{protected_entries[0]!r}"
+    assert ledger_entries, f"Expected ledger entry for destroyed file, got {logs}"
+    # The file is genuinely gone, so restore must never resurrect it:
+    # file_removed=True.
+    assert ledger_entries[0] is True, (
+        "Explicit delete-forever of a protected original must log "
+        f"file_removed=True, got {ledger_entries[0]!r}"
     )
 
-    # A scan of the folder must NOT re-import the still-present file.
+    # A scan of the folder finds nothing to re-import — the file no longer exists.
     result = _run_reference_folder_scan(server, folder_id, folder_dir)
     assert result["new_count"] == 0, (
-        f"Protected, purged file was re-imported by scan: {result}"
+        f"Destroyed file must not be re-imported by scan: {result}"
     )
     reimported = server.vault.db.run_task(
         lambda s: s.exec(
@@ -480,6 +495,162 @@ def test_scrapheap_purge_protected_folder_keeps_file_and_blocks_reimport(
         ).all()
     )
     assert reimported == [], f"Scan re-created picture rows: {reimported}"
+
+
+def test_soft_delete_to_scrapheap_keeps_reference_original_on_disk(server, tmp_path):
+    """Routine scrapheap handling still protects reference originals.
+
+    Moving a protected (allow_delete_file=False) reference-folder picture to the
+    scrapheap is a soft delete: the Picture row stays (deleted=True), the on-disk
+    source file is never touched, and no permanent-deletion ledger row is written.
+    Only the explicit "Delete forever" destroys the file (test above).
+    """
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+
+    folder_dir = str(tmp_path / "routine_protected_refs")
+    _folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
+        server, folder_dir, "routine_keep.png", allow_delete=False
+    )
+
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+
+    # Soft-deleted: still in DB, marked deleted, and the file is untouched.
+    pic = server.vault.db.run_task(lambda s: s.get(Picture, pic_id))
+    assert pic is not None, "Soft delete must keep the row (scrapheap)"
+    assert pic.deleted is True
+    assert os.path.isfile(abs_file_path), (
+        "Routine soft-delete must never remove the reference original"
+    )
+    # Nothing was permanently deleted, so no ledger row exists yet.
+    assert _ledger_flags_for(server, abs_file_path) == [], (
+        "Routine soft-delete must not write a permanent-deletion ledger row"
+    )
+
+
+def _seed_scrapheap_mixed(server, client, tmp_path):
+    """Create 2 protected + 1 unprotected reference pictures and soft-delete all.
+
+    Returns (protected_ids, protected_paths, unprotected_id, unprotected_path).
+    """
+    prot_dir = str(tmp_path / "prot")
+    _f1, p1, path1 = _make_reference_folder_picture(
+        server, prot_dir, "keep_a.png", allow_delete=False
+    )
+    _f2, p2, path2 = _make_reference_folder_picture(
+        server, prot_dir, "keep_b.png", allow_delete=False
+    )
+    unprot_dir = str(tmp_path / "unprot")
+    _f3, p3, path3 = _make_reference_folder_picture(
+        server, unprot_dir, "gone.png", allow_delete=True
+    )
+    for pid in (p1, p2, p3):
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+    return [p1, p2], {path1, path2}, p3, path3
+
+
+def test_scrapheap_delete_preview_reports_full_protected_set(server, tmp_path):
+    """The authoritative preview names EVERY protected reference original in the
+    full scrapheap set (queried from the DB, never a virtualized/grid window)."""
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+    prot_ids, prot_paths, unprot_id, _unprot_path = _seed_scrapheap_mixed(
+        server, client, tmp_path
+    )
+
+    # ids omitted => the entire scrapheap.
+    resp = client.post("/pictures/scrapheap/delete-preview", json={})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_count"] == 3
+    assert body["protected_count"] == 2
+    assert body["unprotected_count"] == 1
+    assert {item["id"] for item in body["protected"]} == set(prot_ids)
+    # Absolute on-disk paths of the protected originals at risk.
+    assert {item["file_path"] for item in body["protected"]} == prot_paths
+
+
+def test_scrapheap_delete_include_protected_false_skips_protected(server, tmp_path):
+    """include_protected=false purges only unprotected pictures; protected
+    originals are left completely intact (row kept + deleted, file kept, no
+    ledger row)."""
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+    prot_ids, prot_paths, unprot_id, unprot_path = _seed_scrapheap_mixed(
+        server, client, tmp_path
+    )
+
+    resp = client.request(
+        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": False}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["deleted_count"] == 1, body
+    assert body["skipped_count"] == 2, body
+    assert body["include_protected"] is False
+
+    # Unprotected: purged (row gone, file removed, ledger file_removed=True).
+    assert server.vault.db.run_task(lambda s: s.get(Picture, unprot_id)) is None
+    assert not os.path.isfile(unprot_path)
+    assert _ledger_flags_for(server, unprot_path) == [True]
+
+    # Protected: fully intact — row kept & still deleted, file on disk, no ledger.
+    for pid, path in zip(prot_ids, sorted(prot_paths)):
+        pic = server.vault.db.run_task(lambda s, i=pid: s.get(Picture, i))
+        assert pic is not None and pic.deleted is True, (
+            "Protected picture must stay soft-deleted in the scrapheap"
+        )
+    for path in prot_paths:
+        assert os.path.isfile(path), "Protected original file must be kept on disk"
+        assert _ledger_flags_for(server, path) == [], (
+            "A skipped protected picture must write no permanent-deletion ledger row"
+        )
+
+
+def test_scrapheap_delete_include_protected_true_destroys_all(server, tmp_path):
+    """include_protected=true purges everything, destroying protected originals
+    too (files removed, file_removed=True)."""
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+    prot_ids, prot_paths, unprot_id, unprot_path = _seed_scrapheap_mixed(
+        server, client, tmp_path
+    )
+
+    resp = client.request(
+        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": True}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["deleted_count"] == 3, body
+    assert body["skipped_count"] == 0, body
+    assert body["include_protected"] is True
+
+    # Everything purged: all rows gone, all files removed, all ledger True.
+    for pid in [*prot_ids, unprot_id]:
+        assert server.vault.db.run_task(lambda s, i=pid: s.get(Picture, i)) is None
+    for path in [*prot_paths, unprot_path]:
+        assert not os.path.isfile(path), "Delete-all must destroy the file"
+        assert _ledger_flags_for(server, path) == [True]
 
 
 def test_scrapheap_purge_unprotected_folder_removes_file_and_logs(server, tmp_path):
@@ -608,10 +779,17 @@ def test_missing_file_purge_upgrades_kept_flag_to_removed(server, tmp_path):
     assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
 
 
-def test_scrapheap_purge_upgrades_kept_flag_on_genuine_delete(server, tmp_path):
-    """Change 1 via the scrapheap writer: a protected purge logs
-    file_removed=False; a later genuine (unprotected) hard delete of the same
-    path upgrades that row to True instead of skipping — still one row."""
+def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
+    """The scrapheap delete-forever writer upgrades a stale kept row.
+
+    A legacy file_removed=False ledger row (a removed-but-kept picture recorded
+    before the rev-4 delete-forever behaviour change, or a missing-file-kept
+    state) that is later hit by an explicit delete-forever of the SAME path must
+    have its existing row UPGRADED to file_removed=True instead of a duplicate
+    being inserted — still exactly one row. (Under rev-4 the scrapheap writer
+    itself only ever writes True, so the False row is seeded to represent a
+    pre-existing kept entry.)
+    """
     client = TestClient(server.api)
     assert (
         client.post(
@@ -620,24 +798,19 @@ def test_scrapheap_purge_upgrades_kept_flag_on_genuine_delete(server, tmp_path):
         == 200
     )
 
-    folder_dir = str(tmp_path / "refs_scrapheap_upgrade")
-    _folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
-        server, folder_dir, "kept_then_gone.png", allow_delete=False
-    )
+    abs_file_path = str(tmp_path / "kept_then_forever.png")
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(abs_file_path, format="PNG")
 
-    # Protected purge -> ledger row file_removed=False, file kept on disk.
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
-    assert client.delete("/pictures/scrapheap").json()["deleted_count"] == 1
+    # Seed a stale kept (file_removed=False) ledger row for this path.
+    _seed_deleted_log(server, abs_file_path, file_removed=False, pixel_sha="sha_keep")
     assert _ledger_flags_for(server, abs_file_path) == [False]
-    assert os.path.isfile(abs_file_path)
 
-    # A second picture now points at the SAME path but is NOT protected
-    # (no reference folder), and is genuinely hard-deleted.
+    # A picture points at the SAME path and is soft-deleted then delete-forever.
     def _insert_plain(session: Session):
         pic = Picture(
             file_path=abs_file_path,
             pixel_sha="sha_gone",
-            original_file_name="kept_then_gone.png",
+            original_file_name="kept_then_forever.png",
             deleted=True,
         )
         session.add(pic)
@@ -650,8 +823,10 @@ def test_scrapheap_purge_upgrades_kept_flag_on_genuine_delete(server, tmp_path):
 
     flags = _ledger_flags_for(server, abs_file_path)
     assert flags == [True], (
-        f"Genuine hard delete must upgrade the kept row to True (one row): {flags}"
+        f"Delete-forever must upgrade the stale kept row to True (one row): {flags}"
     )
+    # And the on-disk file is genuinely destroyed by the explicit delete-forever.
+    assert not os.path.isfile(abs_file_path)
 
 
 def test_scrapheap_count_matches_grid(server):

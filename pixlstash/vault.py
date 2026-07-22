@@ -812,6 +812,36 @@ class Vault:
                     )
             return
 
+        if task.type == "PictureImportTask":
+            imported_ids = result.get("imported_picture_ids") or []
+            origin_client_id = result.get("origin_client_id") or task.params.get(
+                "origin_client_id"
+            )
+            # Mirror the streaming-upload import: a genuine PixlStash tab carries
+            # an origin_client_id (slick in-place insert); an external caller does
+            # not (raise the New-pictures pill instead).
+            import_source = "ui" if origin_client_id else "external"
+            self.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": imported_ids,
+                    "source": import_source,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "added",
+                },
+            )
+            if imported_ids:
+                self.notify(
+                    EventType.PICTURE_IMPORTED,
+                    {
+                        "ids": imported_ids,
+                        "source": import_source,
+                        "origin_client_id": origin_client_id,
+                        "change_kind": "added",
+                    },
+                )
+            return
+
         if task.type == "DetectionTask":
             picture_ids = result.get("picture_ids") or []
             if picture_ids:
@@ -1143,6 +1173,31 @@ class Vault:
                 else:
                     total = 0
                     missing = 0
+            elif worker_type == TaskType.PICTURE_IMPORT:
+                # User-triggered (no finder): surface live progress straight from
+                # the running task(s), mirroring the WATCH_FOLDERS / DETECTION
+                # handling so an async streaming import (#459) renders as a task
+                # row in the frontend task manager.
+                label = "picture_import"
+                active_import_tasks = (
+                    self._task_runner.get_active_tasks_of_type("PictureImportTask")
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_import_tasks:
+                    total = sum(
+                        int(getattr(t, "_total_count", 0)) for t in active_import_tasks
+                    )
+                    processed = sum(
+                        int(getattr(t, "_processed_count", 0))
+                        for t in active_import_tasks
+                    )
+                    missing = max(0, total - processed)
+                    worker_active_override = True
+                else:
+                    total = 0
+                    missing = 0
+                    worker_active_override = False
             elif worker_type == TaskType.COMFYUI_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(

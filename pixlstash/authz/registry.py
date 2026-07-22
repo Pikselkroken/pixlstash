@@ -329,11 +329,32 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
     ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
     ("GET", "/api/v1/pictures/import/status"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/pictures/import/staging/{staging_id}/status"): RoutePolicy(_ANY),
     ("GET", "/api/v1/pictures/export/status"): RoutePolicy(_ANY),
     ("GET", "/api/v1/pictures/export/download/{task_id}"): RoutePolicy(_ANY),
     ("POST", "/api/v1/pictures/import"): RoutePolicy(
         _OWNER,
         justification="Import pictures; POST blocked for READ tokens; owner only",
+    ),
+    # Async streaming-staging import (#459). These stream client-provided upload
+    # bytes into the vault and hand off to a background import task — they do NOT
+    # read the host filesystem, so OWNER_ONLY is correct (mirrors POST
+    # /pictures/import), NOT the §16.3 LOCAL_OWNER_ONLY host-capability tier.
+    ("POST", "/api/v1/pictures/import/staging"): RoutePolicy(
+        _OWNER,
+        justification="Open async import staging session; upload path; owner only",
+    ),
+    ("POST", "/api/v1/pictures/import/staging/{staging_id}/files"): RoutePolicy(
+        _OWNER,
+        justification="Stream upload bytes into a staging session; owner only",
+    ),
+    ("POST", "/api/v1/pictures/import/staging/{staging_id}/commit"): RoutePolicy(
+        _OWNER,
+        justification="Hand staging off to the background import task; owner only",
+    ),
+    ("DELETE", "/api/v1/pictures/import/staging/{staging_id}"): RoutePolicy(
+        _OWNER,
+        justification="Cancel an uncommitted staging session; owner only",
     ),
     ("POST", "/api/v1/pictures/score_character_likeness"): RoutePolicy(
         _OWNER, justification="Owner scoring op; POST not in READ_SAFE; owner only"
@@ -347,6 +368,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("DELETE", "/api/v1/pictures/scrapheap"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner"
+    ),
+    ("POST", "/api/v1/pictures/scrapheap/delete-preview"): RoutePolicy(
+        _OWNER,
+        justification="Returns protected reference-original file paths; owner only",
     ),
     # ── tags.py: single-picture tag mutations (enforce_picture_scope) ────────
     ("POST", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),

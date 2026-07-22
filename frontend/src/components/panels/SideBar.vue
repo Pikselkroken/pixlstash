@@ -2124,86 +2124,13 @@ function createCharacter() {
   });
 }
 
-const pendingImportTarget = ref(null);
-
-function getImportedPictureIds(payload) {
-  const results = Array.isArray(payload?.results) ? payload.results : [];
-  return Array.from(
-    new Set(
-      results
-        .map((entry) => entry?.picture_id)
-        .filter((id) => id !== null && id !== undefined),
-    ),
-  );
-}
-
-function getRequestErrorDetail(errorLike) {
-  return (
-    errorLike?.response?.data?.detail ||
-    errorLike?.message ||
-    String(errorLike || "")
-  );
-}
-
-function isAlreadyInSetError(errorLike) {
-  const detail = String(getRequestErrorDetail(errorLike)).toLowerCase();
-  return detail.includes("already in set") || detail.includes("already");
-}
-
-async function associateImportedPictures(pictureIds, target) {
-  if (!target || !pictureIds.length) return;
-  if (target.type === "set") {
-    const outcomes = await Promise.allSettled(
-      pictureIds.map((id) =>
-        apiClient.post(
-          `${props.backendUrl}/picture_sets/${target.id}/members/${id}`,
-        ),
-      ),
-    );
-    await fetchPictureSets();
-    const hardFailures = outcomes.filter(
-      (result) =>
-        result.status === "rejected" && !isAlreadyInSetError(result.reason),
-    );
-    if (hardFailures.length) {
-      throw new Error(getRequestErrorDetail(hardFailures[0].reason));
-    }
-    return;
-  }
-  if (target.type === "character") {
-    await apiClient.post(`${props.backendUrl}/characters/${target.id}/faces`, {
-      picture_ids: pictureIds,
-    });
-    await fetchSidebarData();
-    await fetchCharacterThumbnail(target.id);
-  }
-}
-
-async function handleImportFinished(payload) {
+// Drop-to-set / drop-to-character association is now done server-side: the drop
+// target (set_id / character_id) is threaded into the import staging session
+// (openStagingSession), and PictureImportTask associates every imported picture
+// on commit. The async streaming-staging contract returns no per-file
+// results[], so there is nothing to associate client-side here — just re-emit.
+function handleImportFinished(payload) {
   emit("import-finished", payload);
-  const target = pendingImportTarget.value;
-  if (!target) return;
-  pendingImportTarget.value = null;
-  const pictureIds = getImportedPictureIds(payload);
-  if (!pictureIds.length) return;
-  try {
-    await associateImportedPictures(pictureIds, target);
-  } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
-    let targetName = "";
-    if (target.type === "character") {
-      targetName =
-        characters.value.find((c) => c.id === target.id)?.name || "Character";
-    } else if (target.type === "set") {
-      targetName =
-        pictureSets.value.find((s) => s.id === target.id)?.name || "Set";
-    }
-    const normalizedDetail = String(detail || "").toLowerCase();
-    const prefix = normalizedDetail.includes("already")
-      ? `Already associated with ${targetName}`
-      : `Failed to associate imported pictures with ${targetName}`;
-    setError(`${prefix}: ${detail}`, target.id, target.type);
-  }
 }
 
 function openImportDialog() {
@@ -2725,10 +2652,11 @@ async function handleDropOnSet(setId, event) {
       event.dataTransfer,
     );
     if (!files.length) return;
-    pendingImportTarget.value = { type: "set", id: setId };
+    // Thread the drop target into the staging session so the backend associates
+    // every imported picture with this set on commit (no client-side results[]).
     const targetSet = pictureSets.value.find((s) => s.id === setId);
-    const options =
-      targetSet?.project_id != null ? { projectId: targetSet.project_id } : {};
+    const options = { setId };
+    if (targetSet?.project_id != null) options.projectId = targetSet.project_id;
     imageImporterRef.value?.startImport(files, options);
     return;
   }
@@ -2929,11 +2857,11 @@ async function onCharacterDrop(characterId, event) {
       event.dataTransfer,
     );
     if (!files.length) return;
-    pendingImportTarget.value = { type: "character", id: characterId };
-    const options =
-      selectedProjectId.value != null
-        ? { projectId: selectedProjectId.value }
-        : {};
+    // Thread the drop target into the staging session so the backend associates
+    // every imported picture with this character on commit (no client results[]).
+    const options = { characterId };
+    if (selectedProjectId.value != null)
+      options.projectId = selectedProjectId.value;
     imageImporterRef.value?.startImport(files, options);
     return;
   }

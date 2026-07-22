@@ -235,6 +235,16 @@
       :dont-show-again="userPrefsStore.hidePurgeSnapshotWarning"
       @update:dont-show-again="userPrefsStore.setHidePurgeSnapshotWarning($event)"
     />
+    <DeleteForeverDialog
+      v-model:open="deleteForeverOpen"
+      :total-count="deleteForeverTotalCount"
+      :protected-count="deleteForeverProtectedCount"
+      :unprotected-count="deleteForeverUnprotectedCount"
+      :protected-paths="deleteForeverProtectedPaths"
+      :busy="deleteForeverBusy"
+      @confirm="confirmDeleteForever"
+      @cancel="cancelDeleteForever"
+    />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
       class="multi-select-toolbar"
@@ -960,6 +970,7 @@ import ComfyUiRunner from "../io/ComfyUiRunner.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
+import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   arraysEqualByString,
@@ -3232,45 +3243,30 @@ async function deleteSelected() {
   }
 
   if (isScrapheapSelection) {
-    if (
-      !confirm(`Permanently delete ${idsToRemove.length} selected image(s)?`)
-    ) {
-      return;
-    }
+    // Destructive & irreversible: route through the tokenized Delete-forever
+    // confirm, which names any reference-folder ORIGINALS being destroyed. The
+    // scrapheap purge runs on @confirm (runScrapheapSelectionPurge).
+    openDeleteForeverForSelection(idsToRemove);
+    return;
   }
 
   const backendUrl = props.backendUrl;
-  let scrapheapPurgeResp = null;
   try {
-    if (isScrapheapSelection) {
-      scrapheapPurgeResp = await apiClient.delete(
-        `${backendUrl}/pictures/scrapheap`,
-        {
-          data: {
-            picture_ids: idsToRemove,
-          },
-        },
-      );
-    } else {
-      // Soft-delete via the bulk endpoint instead of one DELETE per id, which
-      // floods the browser/Electron per-host connection pool on large selections
-      // (excess sockets get reset and surface as axios "Network Error"). Chunk to
-      // the server's per-request id cap so a huge selection is a handful of
-      // requests, not thousands; each chunk broadcasts a single ``removed`` event.
-      const BULK_DELETE_CHUNK = 1000;
-      for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
-        const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
-        await apiClient.delete(`${backendUrl}/pictures`, {
-          data: { picture_ids: chunk },
-        });
-      }
+    // Soft-delete via the bulk endpoint instead of one DELETE per id, which
+    // floods the browser/Electron per-host connection pool on large selections
+    // (excess sockets get reset and surface as axios "Network Error"). Chunk to
+    // the server's per-request id cap so a huge selection is a handful of
+    // requests, not thousands; each chunk broadcasts a single ``removed`` event.
+    const BULK_DELETE_CHUNK = 1000;
+    for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
+      const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
+      await apiClient.delete(`${backendUrl}/pictures`, {
+        data: { picture_ids: chunk },
+      });
     }
     removeImagesById(idsToRemove);
     selectedImageIds.value = [];
     lastSelectedImageId.value = null;
-    if (isScrapheapSelection) {
-      updateVisibleThumbnails();
-    }
     if (deletedExpandedStackLeader) {
       // Repopulate so the promoted stack leader and remaining members reappear
       // (same pattern as create/dissolve/remove-from-stack).
@@ -3278,9 +3274,6 @@ async function deleteSelected() {
       debouncedFetchAllGridImages();
     }
     emit("refresh-sidebar");
-    if (isScrapheapSelection) {
-      showSnapshotsWithDeleted(scrapheapPurgeResp);
-    }
   } catch (err) {
     alert(`Error deleting images: ${err?.message || err}`);
   }
@@ -3635,6 +3628,119 @@ const scrapheapRestoreDisabled = computed(() => {
 const snapshotsWithDeleted = ref([]);
 const snapshotsWithDeletedOpen = ref(false);
 
+// ── Delete-forever confirm (Scrapheap DAM 1.1) ────────────────────────────────
+// The tokenized destructive confirm that replaces the native window.confirm on
+// the two scrapheap purge paths. Its counts and the exact on-disk paths of the
+// protected reference-folder ORIGINALS come from an AUTHORITATIVE server preview
+// (POST /pictures/scrapheap/delete-preview) — NOT from the virtualized grid /
+// grid_lite payload, which could omit protected originals outside the loaded
+// window and undercount. When protected originals are present the dialog runs a
+// three-way, type-to-confirm flow (delete all incl. protected / delete
+// unprotected only / cancel). Data-safety critical: if the preview can't be
+// loaded we fail SAFE and never open the destructive confirm.
+const deleteForeverOpen = ref(false);
+const deleteForeverBusy = ref(false); // DELETE request in flight
+const deleteForeverLoading = ref(false); // preview request in flight
+const deleteForeverTotalCount = ref(0);
+const deleteForeverProtectedCount = ref(0);
+const deleteForeverUnprotectedCount = ref(0);
+const deleteForeverProtectedPaths = ref([]);
+const deleteForeverMode = ref("selection"); // "selection" | "all"
+const deleteForeverIds = ref([]);
+
+function openDeleteForeverForSelection(ids) {
+  deleteForeverMode.value = "selection";
+  deleteForeverIds.value = ids.slice();
+  loadDeletePreview(ids.slice());
+}
+
+function openDeleteForeverForAll() {
+  deleteForeverMode.value = "all";
+  deleteForeverIds.value = [];
+  loadDeletePreview(null);
+}
+
+/**
+ * Fetch the authoritative deletion preview (counts + the FULL protected-original
+ * path list) and open the confirm. `ids` = selected ids, or null for empty-all.
+ * Fails SAFE: on any error the destructive confirm is NOT opened.
+ */
+async function loadDeletePreview(ids) {
+  if (deleteForeverLoading.value) return;
+  deleteForeverLoading.value = true;
+  try {
+    const resp = await apiClient.post(
+      `${props.backendUrl}/pictures/scrapheap/delete-preview`,
+      { ids: ids ?? null },
+    );
+    const d = resp?.data ?? {};
+    deleteForeverTotalCount.value = Number(d.total_count) || 0;
+    deleteForeverProtectedCount.value = Number(d.protected_count) || 0;
+    deleteForeverUnprotectedCount.value = Number(d.unprotected_count) || 0;
+    deleteForeverProtectedPaths.value = Array.isArray(d.protected)
+      ? d.protected.map((p) => p?.file_path).filter(Boolean)
+      : [];
+    if (deleteForeverTotalCount.value === 0) {
+      // Nothing to delete (e.g. the scrapheap was emptied concurrently).
+      return;
+    }
+    deleteForeverOpen.value = true;
+  } catch (err) {
+    console.error("Failed to load scrapheap delete preview", err);
+    alert(
+      "Couldn't verify which files would be destroyed, so nothing was deleted. Please try again.",
+    );
+  } finally {
+    deleteForeverLoading.value = false;
+  }
+}
+
+function cancelDeleteForever() {
+  deleteForeverOpen.value = false;
+}
+
+// payload: { includeProtected: boolean } from DeleteForeverDialog.
+async function confirmDeleteForever(payload) {
+  const includeProtected = Boolean(payload?.includeProtected);
+  if (deleteForeverMode.value === "all") {
+    await runEmptyScrapheap(includeProtected);
+  } else {
+    await runScrapheapSelectionPurge(deleteForeverIds.value, includeProtected);
+  }
+}
+
+async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
+  if (!idsToRemove || !idsToRemove.length) {
+    deleteForeverOpen.value = false;
+    return;
+  }
+  const backendUrl = props.backendUrl;
+  deleteForeverBusy.value = true;
+  try {
+    const resp = await apiClient.delete(`${backendUrl}/pictures/scrapheap`, {
+      data: { picture_ids: idsToRemove, include_protected: includeProtected },
+    });
+    if (includeProtected) {
+      removeImagesById(idsToRemove);
+    } else {
+      // The protected originals in the selection are intentionally kept — refetch
+      // so the grid reflects exactly what the server removed.
+      preserveScrollOnNextFetch.value = true;
+      debouncedFetchAllGridImages();
+    }
+    selectedImageIds.value = [];
+    lastSelectedImageId.value = null;
+    updateVisibleThumbnails();
+    emit("refresh-sidebar");
+    showSnapshotsWithDeleted(resp);
+  } catch (err) {
+    alert(`Error deleting images: ${err?.message || err}`);
+  } finally {
+    deleteForeverBusy.value = false;
+    deleteForeverOpen.value = false;
+  }
+}
+
 function showSnapshotsWithDeleted(response) {
   if (userPrefsStore.hidePurgeSnapshotWarning) return;
   const snaps = response?.data?.snapshots_with_deleted;
@@ -3644,17 +3750,27 @@ function showSnapshotsWithDeleted(response) {
   }
 }
 
-async function confirmEmptyScrapheap() {
+function confirmEmptyScrapheap() {
   if (scrapheapEmptyDisabled.value) return;
-  const confirmed = confirm(
-    "Empty scrapheap? This will permanently delete all pictures inside.",
-  );
-  if (!confirmed) return;
+  // Route through the tokenized Delete-forever confirm (names any reference-folder
+  // originals being destroyed); the purge runs on @confirm.
+  openDeleteForeverForAll();
+}
+
+async function runEmptyScrapheap(includeProtected) {
+  if (scrapheapEmptyDisabled.value) {
+    deleteForeverOpen.value = false;
+    return;
+  }
   scrapheapEmptying.value = true;
+  deleteForeverBusy.value = true;
   try {
     const resp = await apiClient.delete(
       `${props.backendUrl}/pictures/scrapheap`,
+      { data: { include_protected: includeProtected } },
     );
+    // Clear + refetch reconciles either case: when only the unprotected subset
+    // was purged, the refetch brings the kept protected originals back.
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
@@ -3669,6 +3785,8 @@ async function confirmEmptyScrapheap() {
     alert("Failed to empty scrapheap.");
   } finally {
     scrapheapEmptying.value = false;
+    deleteForeverBusy.value = false;
+    deleteForeverOpen.value = false;
   }
 }
 

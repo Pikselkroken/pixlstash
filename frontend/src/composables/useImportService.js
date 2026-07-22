@@ -1,0 +1,240 @@
+import { apiClient } from "../utils/apiClient";
+
+/**
+ * Async streaming-staging import adapter (#459).
+ *
+ * This module is the SINGLE seam between the async-import UI and the backend.
+ * Every network call the import flow makes lives here, so the UI (the two-phase
+ * dialog, the task-store run, the StatsSidebar row) never talks to `apiClient`
+ * directly.
+ *
+ * TWO PHASES (mirrors the v1.8.0 design, docs/design/v1.8.0-preview.html) mapped
+ * onto the finalised streaming-staging session contract:
+ *
+ *   Phase A "staging / unsafe":  open a staging session, then STREAM the files
+ *     into it batch by batch while the tab stays open. Closing/refreshing the
+ *     tab mid-stream aborts the upload — this is the window the beforeunload
+ *     guard protects. `openStagingSession()` starts it; `stageFiles()` streams a
+ *     batch; `cancelStaging()` discards a not-yet-committed session.
+ *
+ *   Safe transition:  once every byte is staged, `commitStaging()` hands off to a
+ *     background `PictureImportTask` on the server's task runner and returns the
+ *     task id. From here the tab is free — refreshing is harmless.
+ *
+ *   Phase B "importing / safe":  poll `fetchStagingStatus()` BY `stagingId`
+ *     (NOT task id) until `stage` is `completed`/`failed`/`cancelled`, driving
+ *     the task row from `processed`/`total` and summarising with
+ *     `imported_count`/`duplicate_count`/`failed_count`.
+ *
+ * GRID REFRESH — there is deliberately NO per-file `results[]` payload. On
+ * completion the backend broadcasts `CHANGED_PICTURES` + `PICTURE_IMPORTED` over
+ * the WebSocket (uniform origin-aware envelope, integration_architecture.md §8),
+ * which the grid already consumes (`useGridRealtimeSync`) to insert the new
+ * pictures. The import UI relies on that broadcast, not a results array.
+ *
+ * ENDPOINTS (final, all under /api/v1, mutating routes OWNER_ONLY):
+ *   POST   {backendUrl}/pictures/import/staging                   → { staging_id, safe_threshold }
+ *   POST   {backendUrl}/pictures/import/staging/{id}/files         multipart `file` (repeatable)
+ *                                                                 → { staging_id, staged, received[], skipped[] }
+ *   POST   {backendUrl}/pictures/import/staging/{id}/commit        → { staging_id, task_id, staged_count }
+ *                                                                   400 empty/face-worker-down, 409 committed, 507 disk
+ *   DELETE {backendUrl}/pictures/import/staging/{id}               (pre-commit only) → { stage:"cancelled", … }
+ *   GET    {backendUrl}/pictures/import/staging/{id}/status        → { stage, staged, total, processed, task_id,
+ *                                                                       imported_count, duplicate_count, failed_count, error }
+ *
+ * NOTE: the staging file endpoint accepts media, `.zip` archives (extracted
+ * server-side) and `.txt` caption sidecars — the client streams whatever the
+ * import file-collection allows (`isSupportedImportFile`) and lets the backend
+ * decide. Truly unsupported files come back in `skipped[]`; a session that
+ * stages nothing 400s on commit.
+ */
+
+export const IMPORT_ENDPOINTS = {
+  openStaging: (backendUrl) => `${backendUrl}/pictures/import/staging`,
+  stageFiles: (backendUrl, stagingId) =>
+    `${backendUrl}/pictures/import/staging/${stagingId}/files`,
+  commit: (backendUrl, stagingId) =>
+    `${backendUrl}/pictures/import/staging/${stagingId}/commit`,
+  cancel: (backendUrl, stagingId) =>
+    `${backendUrl}/pictures/import/staging/${stagingId}`,
+  status: (backendUrl, stagingId) =>
+    `${backendUrl}/pictures/import/staging/${stagingId}/status`,
+};
+
+/**
+ * @typedef {Object} StagingSession
+ * @property {string} stagingId    Opaque session id used on every later call.
+ * @property {number} safeThreshold Declared file count for the safe-window hint (0 if none).
+ * @property {Object} raw
+ */
+
+/**
+ * Phase A start — open a staging session (start of the unsafe window).
+ *
+ * `projectId` / `setId` / `characterId` are the drop-target association: when
+ * files are dropped onto a project / set / character row, the backend associates
+ * every imported picture with that target server-side on commit (there is no
+ * per-file results[] to associate client-side). They are independent — a drop
+ * targets one, but the session accepts each optionally.
+ *
+ * @param {Object} args
+ * @param {string} args.backendUrl
+ * @param {number|null} [args.projectId]    Project every imported picture joins on commit.
+ * @param {number|null} [args.setId]        Picture set to add every imported picture to.
+ * @param {number|null} [args.characterId]  Character to associate every imported picture with.
+ * @param {number} [args.totalFiles]        Declared total (progress/safe-threshold hint).
+ * @returns {Promise<StagingSession>}
+ */
+export async function openStagingSession({
+  backendUrl,
+  projectId = null,
+  setId = null,
+  characterId = null,
+  totalFiles,
+}) {
+  const res = await apiClient.post(IMPORT_ENDPOINTS.openStaging(backendUrl), {
+    project_id: projectId ?? null,
+    set_id: setId ?? null,
+    character_id: characterId ?? null,
+    total_files: totalFiles ?? null,
+  });
+  const d = res?.data ?? {};
+  return {
+    stagingId: d.staging_id ?? null,
+    safeThreshold: d.safe_threshold ?? 0,
+    raw: d,
+  };
+}
+
+/**
+ * @typedef {Object} StagedBatch
+ * @property {number} staged     Total files staged in this session so far.
+ * @property {string[]} received Original filenames accepted in this request.
+ * @property {string[]} skipped  Filenames rejected (unsupported/empty) in this request.
+ * @property {Object} raw
+ */
+
+/**
+ * Phase A — stream one batch of files into the session. Throws on network/HTTP
+ * failure so the caller's retry/abort logic can react.
+ *
+ * @param {Object} args
+ * @param {string} args.backendUrl
+ * @param {string} args.stagingId
+ * @param {File[]} args.files
+ * @param {AbortSignal} [args.signal]
+ * @param {number} [args.timeoutMs]
+ * @param {(e: ProgressEvent) => void} [args.onUploadProgress]
+ * @returns {Promise<StagedBatch>}
+ */
+export async function stageFiles({
+  backendUrl,
+  stagingId,
+  files,
+  signal,
+  timeoutMs,
+  onUploadProgress,
+}) {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("file", file));
+  const res = await apiClient.post(
+    IMPORT_ENDPOINTS.stageFiles(backendUrl, stagingId),
+    formData,
+    {
+      signal,
+      timeout: timeoutMs,
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress,
+    },
+  );
+  const d = res?.data ?? {};
+  return {
+    staged: d.staged ?? 0,
+    received: Array.isArray(d.received) ? d.received : [],
+    skipped: Array.isArray(d.skipped) ? d.skipped : [],
+    raw: d,
+  };
+}
+
+/**
+ * @typedef {Object} CommitResult
+ * @property {string|null} taskId     Background PictureImportTask id.
+ * @property {number} stagedCount     Files handed off to the import.
+ * @property {Object} raw
+ */
+
+/**
+ * Safe handoff — commit the session, enqueuing the background import.
+ * Throws on 400 (empty / face worker down), 409 (already committed), 507 (disk).
+ *
+ * @param {Object} args
+ * @param {string} args.backendUrl
+ * @param {string} args.stagingId
+ * @returns {Promise<CommitResult>}
+ */
+export async function commitStaging({ backendUrl, stagingId }) {
+  const res = await apiClient.post(
+    IMPORT_ENDPOINTS.commit(backendUrl, stagingId),
+  );
+  const d = res?.data ?? {};
+  return {
+    taskId: d.task_id ?? null,
+    stagedCount: d.staged_count ?? 0,
+    raw: d,
+  };
+}
+
+/**
+ * Cancel a not-yet-committed session (Phase A only), discarding its files.
+ *
+ * @param {Object} args
+ * @param {string} args.backendUrl
+ * @param {string} args.stagingId
+ * @returns {Promise<{stage: string, raw: Object}>}
+ */
+export async function cancelStaging({ backendUrl, stagingId }) {
+  const res = await apiClient.delete(
+    IMPORT_ENDPOINTS.cancel(backendUrl, stagingId),
+  );
+  const d = res?.data ?? {};
+  return { stage: d.stage ?? "cancelled", raw: d };
+}
+
+/**
+ * @typedef {Object} StagingStatus
+ * @property {string} stage           staging | importing | completed | failed | cancelled.
+ * @property {number} staged          Files staged into the session.
+ * @property {number} total           Total the import is working through.
+ * @property {number} processed       Files processed so far (Phase B).
+ * @property {string|null} taskId
+ * @property {number|null} importedCount   New pictures imported (on completion).
+ * @property {number|null} duplicateCount  Skipped as duplicates (on completion).
+ * @property {number|null} failedCount     Failed files (on completion).
+ * @property {string|null} error
+ * @property {Object} raw
+ */
+
+/**
+ * Phase B — poll a session's stage/progress by staging id.
+ *
+ * @param {Object} args
+ * @param {string} args.backendUrl
+ * @param {string} args.stagingId
+ * @returns {Promise<StagingStatus>}
+ */
+export async function fetchStagingStatus({ backendUrl, stagingId }) {
+  const res = await apiClient.get(IMPORT_ENDPOINTS.status(backendUrl, stagingId));
+  const d = res?.data ?? {};
+  return {
+    stage: d.stage || "staging",
+    staged: d.staged ?? 0,
+    total: d.total ?? 0,
+    processed: d.processed ?? 0,
+    taskId: d.task_id ?? null,
+    importedCount: d.imported_count ?? null,
+    duplicateCount: d.duplicate_count ?? null,
+    failedCount: d.failed_count ?? null,
+    error: d.error ?? null,
+    raw: d,
+  };
+}

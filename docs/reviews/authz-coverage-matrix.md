@@ -171,6 +171,11 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/face-search` | scoped_list |  |  |
 | POST | `/api/v1/pictures/import` | owner_only |  | Import pictures; POST blocked for READ tokens; owner only |
 | GET | `/api/v1/pictures/import/status` | any_token |  |  |
+| POST | `/api/v1/pictures/import/staging` | owner_only |  | (#459, v1.8.0) Open async streaming-staging session; upload path, streams client bytes into vault — NOT a §16.3 host-FS read; mirrors `POST /pictures/import`; POST blocked for READ tokens; gate-enforced owner_only |
+| POST | `/api/v1/pictures/import/staging/{staging_id}/files` | owner_only |  | (#459, v1.8.0) Stream upload bytes into a staging session; owner only |
+| POST | `/api/v1/pictures/import/staging/{staging_id}/commit` | owner_only |  | (#459, v1.8.0) Hand staging off to the background `PictureImportTask`; owner only |
+| DELETE | `/api/v1/pictures/import/staging/{staging_id}` | owner_only |  | (#459, v1.8.0) Cancel an uncommitted staging session, discard streamed files; owner only |
+| GET | `/api/v1/pictures/import/staging/{staging_id}/status` | any_token |  | (#459, v1.8.0) Progress/stage/counts only (no per-object data); mirrors `GET /pictures/import/status`; staging_id is an unguessable server-minted uuid4 |
 | POST | `/api/v1/pictures/impossible-tags/clear` | scoped_list |  |  |
 | POST | `/api/v1/pictures/impossible-tags/restore` | scoped_list |  |  |
 | GET | `/api/v1/pictures/likeness-groups` | scoped_list |  |  |
@@ -180,6 +185,8 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | PATCH | `/api/v1/pictures/project` | scoped_list |  |  |
 | POST | `/api/v1/pictures/score_character_likeness` | owner_only |  | Owner scoring op; POST not in READ_SAFE; owner only |
 | DELETE | `/api/v1/pictures/scrapheap` | owner_only |  | require_unscoped_owner |
+| POST | `/api/v1/pictures/scrapheap/delete-preview` | owner_only |  | (v1.8.0) Authoritative delete-forever preview; returns protected reference-original absolute file paths (per-object data) → owner_only, not any_token |
+| POST | `/api/v1/pictures/scrapheap/delete-preview` | owner_only |  | (v1.8.0) Returns absolute on-disk paths of protected reference-folder originals; per-object data → owner_only (POST not in READ_SAFE; gate-enforced). Rows constrained to `Picture.deleted.is_(True)` — cannot leak paths of live/non-scrapheap ids |
 | POST | `/api/v1/pictures/scrapheap/restore` | owner_only |  | require_unscoped_owner |
 | GET | `/api/v1/pictures/search` | scoped_list |  |  |
 | GET | `/api/v1/pictures/stats` | scoped_list |  |  |
@@ -473,6 +480,36 @@ The filesystem / import-folder / reference-folder / `server/restart` / `pictures
 Declared and armed behind the report-only gate (`AUTHZ_GATE_ENFORCING` stays `False`); no runtime change until the Step-6 flip. Both-direction tests: `tests/test_authz_host_capability_16_3.py`.
 
 ---
+
+## Async streaming-staging import (#459, v1.8.0) — independent adversarial sign-off
+
+**Reviewer:** CSO adversarial review (independent of the author). **Branch:** `v1.8.0-foundations` (uncommitted working tree). **Verdict: CERTIFY.** No release blocker found; the two hardening items below are owner-only resource-hygiene, not authz holes.
+
+**Scope:** the 5 new routes in `pixlstash/routes/pictures/_import.py` (4 mutating OWNER_ONLY + 1 ANY_TOKEN status), plus `PictureImportTask` and the unchanged `DELETE /pictures/scrapheap`.
+
+1. **Coverage / gate resolution — COMPLETE.** All 5 routes are declared in `ROUTE_POLICIES`; `test_all_routes_declare_access_policy` passes with `_CURRENT_ROUTE_ALLOWLIST = frozenset()` (0 undeclared). The gate (`AUTHZ_GATE_ENFORCING = True`) keys by route-object identity, so the nested prefixed paths resolve correctly — proven live: `test_staging_files_and_commit_denied_for_read_token` gets **403** on files/commit/delete with a READ token, and `test_staging_open_denied_for_read_token_allowed_for_owner` confirms owner **200** (no over-block). A hypothetical undeclared sub-route would hard-deny (403), not fail open.
+2. **OWNER_ONLY vs §16.3 LOCAL_OWNER_ONLY — author's choice UPHELD.** These stream client-provided upload bytes into `image_root/.staging/`; they never read/walk the host FS. Verified no path-escape: every on-disk destination is `os.path.join(staging_dir, f"{uuid4()}{ext}")` where `ext` comes from `os.path.splitext` (cannot contain a separator), and the vault write in `ImageUtils.create_picture_from_bytes` uses `file_name = os.path.basename(uuid4())` — **no client-controlled component reaches any write path.** Zip entries are staged under fresh uuids (`base_name`/`inner_ext` used only for the sidecar stem + extension), so **zip-slip is structurally impossible**. `original_file_name` is a pure DB string, never a path. Decompression-bomb guards (≤50k entries, ≤50 GB decompressed, ≤20 GB/file) mirror the one-shot import.
+3. **Input space — no BOLA.** Single-owner model: the mutating routes are gate-enforced OWNER_ONLY, so only the unscoped owner reaches them; `set_id`/`character_id` are validated fail-closed at both open and commit (404 missing / 409 locked-set — `test_open_with_nonexistent_{set,character}_errors`). No cross-tenant surface exists. Status (ANY_TOKEN) returns only counts/stage/task_id (no picture data) and requires the unguessable uuid4 `staging_id`; consistent with the existing `import/status` sibling. Cancel/commit state machine is guarded (`stage != "staging"` → 409), so a committed import cannot be cancelled or double-committed cross-session.
+4. **`DELETE /pictures/scrapheap` — unchanged, correctly `owner_only`** (`require_unscoped_owner`; POST/DELETE blocked for READ tokens). Confirmed still declared and gate-enforced.
+5. **Tests assert both directions and are not hollow** — 16/16 pass (`test_async_import_staging.py`): READ-token 403 on open/files/commit/delete AND owner 200/works, plus happy-path, dedupe, zip, sidecar, cancel, and association coverage.
+
+**Hardening that can wait (owner-only; not blockers):**
+- **H1 — orphaned staging leak.** A session opened but never committed/cancelled (tab closed mid-stream) leaves files under `.staging/` and a record in the in-memory `server.staging_sessions` dict with no TTL/reaper; completed sessions are also never popped. Owner-triggered disk/memory growth. Add a reaper or bound the dict.
+- **H2 — `project_id` not validated on the drop.** `_validate_association_targets` checks `set_id`/`character_id` but not `project_id`; a nonexistent `project_id` is caught only downstream in `PictureImportTask._apply_project` (after pictures are already imported), an inconsistency with the fail-fast 404 the set/character path gives. Data-integrity, not authz. Consider validating `project_id` alongside the others.
+
+## Round-3 delta: `POST /pictures/scrapheap/delete-preview` (v1.8.0) — CSO sign-off
+
+**Reviewer:** CSO adversarial review (independent). **Verdict: CERTIFY-WITH-CONDITIONS** — one missing regression test (C1 below); the enforcement itself is correct and reproduced.
+
+**Location:** `pixlstash/routes/pictures/_crud.py::preview_scrapheap_delete` (NOT `_import.py`). Declared `OWNER_ONLY` in `ROUTE_POLICIES`.
+
+1. **Tier is right (UPHELD).** The response returns per-object absolute on-disk `file_path`s of protected reference-folder originals, so `OWNER_ONLY` is correct — not `ANY_TOKEN`/`PUBLIC`. Reproduced both directions: owner → **200**; READ token → **403** (`{"detail":"Token is read-only"}` — middleware POST-block is the first gate, OWNER_ONLY the second). POST is not in `READ_SAFE_POST_PATHS`, so no scoped token reaches it.
+2. **Gate resolves it.** `test_all_routes_declare_access_policy` passes with the route declared and `_CURRENT_ROUTE_ALLOWLIST = frozenset()` (0 undeclared). Route-identity keying resolves the new path; matrix row added above.
+3. **Input space — fail-closed, no leak.** `_fetch_scrapheap_rows` unconditionally constrains `Picture.deleted.is_(True)` and only ANDs `Picture.id.in_(ids)` when ids are supplied. Reproduced: a non-scrapheap id (`{"ids":[999999]}`) returns `{total_count:0, protected:[]}` — the endpoint **cannot** be used to enumerate or return `file_path`s for live/non-scrapheap pictures. Single-owner + OWNER_ONLY ⇒ no cross-tenant surface. `ids` parsing rejects empty/non-integer lists (400).
+4. **`DELETE /pictures/scrapheap` scope unchanged.** Still `owner_only`; the new `include_protected` body flag only chooses whether protected originals are skipped vs. destroyed — it does not alter enforcement (POST/DELETE blocked for READ tokens; gate OWNER_ONLY). The 3 scrapheap tests pass in file order.
+
+**Condition to clear before merge:**
+- **C1 — missing negative-direction regression test.** `test_scrapheap_delete_preview_reports_full_protected_set` asserts only the owner-200 / correctness direction. Per the authz discipline ("tests assert both directions"), add a READ-token → 403 case for `POST /pictures/scrapheap/delete-preview` (the 403 is reproduced here but not pinned by a test, so a future policy regression would go uncaught). Small, mechanical; not a runtime hole.
 
 ## Readiness
 

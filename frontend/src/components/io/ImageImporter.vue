@@ -1,6 +1,38 @@
 <script setup>
-import { computed, nextTick, ref } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { computed, nextTick, onBeforeUnmount, ref } from "vue";
+import { VIcon } from "vuetify/components";
+import { isReadOnly } from "../../utils/apiClient";
+import { useTasksStore } from "../../stores/useTasksStore";
+import {
+  cancelStaging,
+  commitStaging,
+  fetchStagingStatus,
+  openStagingSession,
+  stageFiles,
+} from "../../composables/useImportService";
+
+// ── Async streaming-staging import (#459) ────────────────────────────────────
+// This component owns the two-phase import experience over the finalised
+// streaming-staging session contract:
+//   Phase A "staging / unsafe":  open a staging session, then STREAM the files
+//     into it batch by batch. A calm dialog shows the upload, a beforeunload
+//     guard is armed (leaving now aborts the upload), and the ONLY action is
+//     Cancel (which discards the not-yet-committed session). No close/minimize.
+//   Safe transition:  once every byte is staged, commit hands off to a
+//     background PictureImportTask; the guard drops and the dialog auto-hides
+//     itself while its count chip flies (FLIP) into the StatsSidebar Tasks-tab
+//     task manager, landing as a task row.
+//   Phase B "importing / safe":  the dialog is gone; the import is just another
+//     task row (useTasksStore import run) counting server-side progress polled
+//     BY staging id. Refresh is harmless. The grid refreshes off the backend's
+//     CHANGED_PICTURES / PICTURE_IMPORTED WS broadcast (no results payload).
+// ALL backend calls are isolated behind ../../composables/useImportService.js.
+// The public API (startImport + the four emits) is unchanged so existing call
+// sites keep working. Drop-target association (project / set / character) is
+// passed through startImport options into openStagingSession and applied
+// server-side on commit. There is no per-file results[] array — the grid
+// refreshes off the WS broadcast, so import-finished carries counts but an
+// empty results list. Media, .zip archives and .txt sidecars all stream.
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
@@ -16,22 +48,62 @@ const emit = defineEmits([
   "import-error",
 ]);
 
-const importInProgress = ref(false);
+const tasksStore = useTasksStore();
+
+// Dialog visibility is the Phase-A staging surface only; Phase B lives in the
+// task manager, not here.
+const dialogVisible = ref(false);
+const dialogLeaving = ref(false);
+// Whole-flow gate (Phase A + Phase B) used for re-entrancy; distinct from dialog
+// visibility because Phase B keeps running after the dialog auto-hides.
+const importActive = ref(false);
+
 const importProgress = ref(0);
 const importTotal = ref(0);
 const uploadBytesUploaded = ref(0);
 const uploadBytesTotal = ref(0);
 const importError = ref(null);
-const importPhase = ref("");
+const importPhase = ref(""); // uploading | processing | done | duplicates | cancelled | error
 const importServerStage = ref("");
 const cancelImport = ref(false);
 const currentImportController = ref(null);
-const uploadStallSeconds = ref(0); // seconds elapsed with no byte progress
+const uploadStallSeconds = ref(0);
 const isZipImport = ref(false);
+
+// The count chip is the FLIP flight source.
+const countChipEl = ref(null);
+// Unique id for the current import's task-manager row (the flight destination).
+let importRunId = null;
+// The current staging session id (Phase A/B backend handle), or null when idle.
+let currentStagingId = null;
+// True once we have crossed the safe transition (dialog hidden, Phase B in the
+// task manager). Errors after this point surface on the task row, not the dialog.
+let transitioned = false;
 
 let hideTimerId = null;
 let _stallTimerId = null;
 let _stallLastBytes = -1;
+
+// ── beforeunload guard (the hard backstop for the unsafe upload window) ───────
+let guardArmed = false;
+function beforeUnloadGuard(e) {
+  // Standard pattern: preventDefault + assign returnValue makes the browser show
+  // its native "leave site?" prompt. We only arm this WHILE uploading (Phase A).
+  e.preventDefault();
+  e.returnValue = "";
+  return "";
+}
+function armGuard() {
+  if (guardArmed || typeof window === "undefined") return;
+  window.addEventListener("beforeunload", beforeUnloadGuard);
+  guardArmed = true;
+}
+function disarmGuard() {
+  if (!guardArmed || typeof window === "undefined") return;
+  window.removeEventListener("beforeunload", beforeUnloadGuard);
+  guardArmed = false;
+}
+
 function _startStallTimer() {
   _stopStallTimer();
   uploadStallSeconds.value = 0;
@@ -53,6 +125,7 @@ function _stopStallTimer() {
   }
   uploadStallSeconds.value = 0;
 }
+
 const TERMINAL_IMPORT_PHASES = new Set([
   "done",
   "duplicates",
@@ -60,31 +133,29 @@ const TERMINAL_IMPORT_PHASES = new Set([
   "error",
 ]);
 
-const importPhaseMessage = computed(() => {
-  switch (importPhase.value) {
-    case "uploading":
-      return "Uploading...";
-    case "processing":
-      return "Importing...";
-    case "done":
-      return "Import complete!";
-    case "duplicates":
-      return "All files are duplicates.";
-    case "cancelled":
-      return "Import cancelled.";
-    case "error":
-      return "Import failed.";
-    default:
-      return "";
-  }
+const dialogTitle = computed(() =>
+  importPhase.value === "error" ? "Import failed" : "Uploading pictures",
+);
+
+const chipLabel = computed(() => {
+  if (isZipImport.value) return "1 archive";
+  const n = importTotal.value;
+  return `${n} file${n === 1 ? "" : "s"}`;
 });
 
-const importServerStageMessage = computed(() => {
-  if (!importServerStage.value) return "";
-  return importServerStage.value
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-});
+const uploadPct = computed(() =>
+  uploadBytesTotal.value
+    ? Math.min(100, (uploadBytesUploaded.value / uploadBytesTotal.value) * 100)
+    : 0,
+);
+
+const uploadLabel = computed(() =>
+  uploadPct.value >= 100 ? "Upload complete" : "Uploading pictures",
+);
+
+const showCancelButton = computed(
+  () => dialogVisible.value && importPhase.value !== "error",
+);
 
 function formatBytes(bytes) {
   if (!bytes) return "0 B";
@@ -94,12 +165,6 @@ function formatBytes(bytes) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
-
-const showCancelButton = computed(
-  () =>
-    importInProgress.value &&
-    !["done", "duplicates", "cancelled", "error"].includes(importPhase.value),
-);
 
 function clearHideTimer() {
   if (hideTimerId !== null) {
@@ -111,27 +176,61 @@ function clearHideTimer() {
 function finalizeCancelled() {
   clearHideTimer();
   _stopStallTimer();
+  disarmGuard();
   importPhase.value = "cancelled";
   importServerStage.value = "cancelled";
-  importInProgress.value = false;
+  dialogVisible.value = false;
+  dialogLeaving.value = false;
+  importActive.value = false;
   importError.value = null;
   cancelImport.value = false;
   currentImportController.value = null;
+  if (importRunId) tasksStore.clearImportRun(importRunId);
+  // Discard the not-yet-committed staging session (best-effort) so its streamed
+  // files are cleaned up server-side.
+  if (currentStagingId) {
+    const stagingId = currentStagingId;
+    currentStagingId = null;
+    cancelStaging({ backendUrl: props.backendUrl, stagingId }).catch((err) => {
+      console.warn("Failed to cancel staging session", stagingId, err);
+    });
+  }
   emit("import-cancelled");
 }
 
 function finalizeError(message) {
   clearHideTimer();
   _stopStallTimer();
+  disarmGuard();
   importPhase.value = "error";
   importServerStage.value = "failed";
-  // Keep the modal open so the user can read the error; auto-dismiss after 30 s.
-  // If the user starts a new import before then, the stale-state guard in
-  // startImport() will reset importInProgress and clear this timer.
-  hideTimerId = setTimeout(() => {
-    importInProgress.value = false;
-    hideTimerId = null;
-  }, 30000);
+  importActive.value = false;
+  if (transitioned && importRunId) {
+    // Phase B failure: the dialog is already gone. Surface it on the task row,
+    // which the toolbar activity dot / Tasks-tab pulse point the user to.
+    tasksStore.setImportRun(importRunId, {
+      status: "failed",
+      percent: 0,
+      current: importProgress.value,
+      total: importTotal.value,
+      message: `Import failed: ${message}`,
+      label: "Import failed",
+    });
+    const runId = importRunId;
+    hideTimerId = setTimeout(() => {
+      tasksStore.clearImportRun(runId);
+      hideTimerId = null;
+    }, 8000);
+  } else {
+    // Phase A failure: keep the dialog open so the user can read the error;
+    // auto-dismiss after 30 s (a new import cancels this via the stale guard).
+    dialogVisible.value = true;
+    dialogLeaving.value = false;
+    hideTimerId = setTimeout(() => {
+      dialogVisible.value = false;
+      hideTimerId = null;
+    }, 30000);
+  }
   importError.value = message;
   cancelImport.value = false;
   currentImportController.value = null;
@@ -139,7 +238,7 @@ function finalizeError(message) {
 }
 
 function handleCancelImport() {
-  if (!importInProgress.value) return;
+  if (!importActive.value) return;
   cancelImport.value = true;
   if (currentImportController.value) {
     try {
@@ -148,6 +247,12 @@ function handleCancelImport() {
       console.warn("Failed to abort current import", err);
     }
   }
+}
+
+function dismissError() {
+  clearHideTimer();
+  dialogVisible.value = false;
+  importPhase.value = "";
 }
 
 function sleep(ms) {
@@ -162,13 +267,117 @@ function logImportTrace(message, details = null) {
   console.info(`[IMPORT TRACE] ${message}`);
 }
 
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/**
+ * FLIP the count chip into the Tasks-tab import row. Resolves when the flight
+ * finishes (or immediately when reduced motion is on, or the destination row
+ * isn't rendered — e.g. the stats sidebar is collapsed — so the dialog just
+ * fades and the toolbar activity light signals the backgrounded work).
+ */
+function flyChipToTaskRow(runId) {
+  return new Promise((resolve) => {
+    if (prefersReducedMotion()) {
+      resolve();
+      return;
+    }
+    const chip = countChipEl.value;
+    const target =
+      typeof document !== "undefined"
+        ? document.querySelector(`[data-import-task-row="${runId}"]`)
+        : null;
+    if (!chip || !target || typeof chip.animate !== "function") {
+      resolve();
+      return;
+    }
+    const from = chip.getBoundingClientRect();
+    const to = target.getBoundingClientRect();
+    const clone = chip.cloneNode(true);
+    clone.classList.add("import-fly-chip");
+    clone.style.left = `${from.left}px`;
+    clone.style.top = `${from.top}px`;
+    clone.style.width = `${from.width}px`;
+    clone.style.height = `${from.height}px`;
+    document.body.appendChild(clone);
+    const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+    const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+    const lift = Math.max(40, Math.abs(dx) * 0.12); // a slight arc
+    const css = getComputedStyle(document.documentElement);
+    const dur = parseFloat(css.getPropertyValue("--dur-4")) || 420;
+    const ease = (
+      css.getPropertyValue("--ease-standard") || "cubic-bezier(0.4,0,0.2,1)"
+    ).trim();
+    let anim;
+    try {
+      anim = clone.animate(
+        [
+          { transform: "translate(0px, 0px) scale(1)", opacity: 1, offset: 0 },
+          {
+            transform: `translate(${dx * 0.55}px, ${dy * 0.45 - lift}px) scale(0.8)`,
+            opacity: 0.95,
+            offset: 0.55,
+          },
+          {
+            transform: `translate(${dx}px, ${dy}px) scale(0.3)`,
+            opacity: 0,
+            offset: 1,
+          },
+        ],
+        { duration: dur, easing: ease, fill: "forwards" },
+      );
+    } catch (err) {
+      console.warn("Import flight animation failed", err);
+      clone.remove();
+      resolve();
+      return;
+    }
+    const cleanup = () => {
+      clone.remove();
+      resolve();
+    };
+    anim.onfinish = cleanup;
+    anim.oncancel = cleanup;
+  });
+}
+
+/**
+ * The safe transition: register the import as a task-manager row, drop the
+ * upload guard, and auto-hide the dialog while the chip flies into the row.
+ * The flight IS the dismissal — there is no manual "continue in background".
+ */
+async function transitionToBackground(runId, total) {
+  transitioned = true;
+  disarmGuard();
+  importPhase.value = "processing";
+  tasksStore.setImportRun(runId, {
+    status: "running",
+    percent: 0,
+    current: 0,
+    total,
+    message: "Queued on the server…",
+    label: "Importing pictures",
+  });
+  // Render the destination row before measuring the flight target.
+  await nextTick();
+  dialogLeaving.value = true;
+  await flyChipToTaskRow(runId);
+  dialogVisible.value = false;
+  dialogLeaving.value = false;
+}
+
 async function startImport(files, options = {}) {
   if (!files || !files.length) return;
-  if (importInProgress.value) {
-    // Recover from stale terminal state where the modal has not hidden yet.
+  if (importActive.value) {
+    // Recover from stale terminal state where the dialog hasn't hidden yet.
     if (TERMINAL_IMPORT_PHASES.has(importPhase.value)) {
       clearHideTimer();
-      importInProgress.value = false;
+      importActive.value = false;
     } else {
       console.info(
         "Import request ignored because another import is in progress.",
@@ -178,14 +387,21 @@ async function startImport(files, options = {}) {
   }
 
   if (isReadOnly.value) {
-    importInProgress.value = true;
+    importActive.value = true;
+    dialogVisible.value = true;
+    transitioned = false;
     finalizeError("Importing is not available with a read-only token.");
     return;
   }
 
   clearHideTimer();
   cancelImport.value = false;
-  importInProgress.value = true;
+  transitioned = false;
+  currentStagingId = null;
+  importRunId = `import-${(crypto?.randomUUID?.() ?? Date.now().toString(36))}`;
+  importActive.value = true;
+  dialogVisible.value = true;
+  dialogLeaving.value = false;
   importProgress.value = 0;
   importTotal.value = files.length;
   isZipImport.value =
@@ -196,6 +412,8 @@ async function startImport(files, options = {}) {
   importPhase.value = "uploading";
   importServerStage.value = "uploading";
   currentImportController.value = null;
+  // Arm the unsafe-window guard: leaving/refreshing now aborts the upload.
+  armGuard();
   emit("import-started", {
     fileCount: files.length,
     projectId: options.projectId ?? null,
@@ -211,8 +429,6 @@ async function startImport(files, options = {}) {
   const MAX_RETRIES = 3;
   const MIN_TIMEOUT_MS = 60000;
   const TIMEOUT_PER_FILE_MS = 4000;
-  // 100 ms per MB = ~10 MB/s minimum upload speed assumption.
-  // This ensures a 16 GB zip gets ~27 minutes instead of the 60-second default.
   const TIMEOUT_PER_MB_MS = 100;
   const NO_PROGRESS_ABORT_MS = 15000;
   const overrideTimeout =
@@ -221,15 +437,22 @@ async function startImport(files, options = {}) {
       : null;
 
   let uploadedBytesAccum = 0;
-  let importedCount = 0;
-  const allResults = [];
 
   try {
-    // ── Phase 1: Upload all batches without waiting for processing ──
-    // Each POST immediately returns a task_id; backend processing runs in
-    // parallel for batches already uploaded while the next batch is uploading.
-    const taskIds = [];
-    const batchFileCounts = [];
+    // ── Phase A: open a staging session, then STREAM every batch into it. The
+    // bytes are unsafe until commit — the beforeunload guard is armed. ──
+    const session = await openStagingSession({
+      backendUrl: props.backendUrl,
+      projectId: options.projectId ?? null,
+      setId: options.setId ?? null,
+      characterId: options.characterId ?? null,
+      totalFiles: files.length,
+    });
+    if (!session.stagingId) {
+      finalizeError("Could not open an import staging session.");
+      return;
+    }
+    currentStagingId = session.stagingId;
 
     for (let i = 0; i < files.length; i += BATCH_SIZE) {
       if (cancelImport.value) {
@@ -248,23 +471,7 @@ async function startImport(files, options = {}) {
         );
       const batchIndex = Math.floor(i / BATCH_SIZE) + 1;
 
-      logImportTrace("Uploading batch", {
-        batchIndex,
-        batchSize: batch.length,
-        batchBytes,
-        timeoutMs: batchTimeoutMs,
-        noProgressAbortMs: NO_PROGRESS_ABORT_MS,
-      });
-
-      const formData = new FormData();
-      batch.forEach((file) => {
-        formData.append("file", file);
-      });
-      if (options.projectId != null) {
-        formData.append("project_id", String(options.projectId));
-      }
-
-      let res = null;
+      let ok = false;
       let lastError = null;
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -284,8 +491,7 @@ async function startImport(files, options = {}) {
           if (elapsed < NO_PROGRESS_ABORT_MS) return;
           noProgressAbortFired = true;
           console.warn(
-            `[IMPORT] Aborting batch ${batchIndex} attempt ${attempt} due to no upload progress for ${elapsed}ms. ` +
-              `firstProgress=${firstProgressLogged}`,
+            `[IMPORT] Aborting batch ${batchIndex} attempt ${attempt} due to no upload progress for ${elapsed}ms.`,
           );
           try {
             controller.abort("no-upload-progress");
@@ -295,70 +501,36 @@ async function startImport(files, options = {}) {
         }, 1000);
         const timeout = setTimeout(() => {
           console.warn(
-            `[IMPORT] Aborting batch ${batchIndex} after ${batchTimeoutMs}ms timeout (attempt ${attempt}). ` +
-              `Bytes uploaded so far: ${uploadBytesUploaded.value} / ${uploadBytesTotal.value}. ` +
-              `Stall duration: ${uploadStallSeconds.value}s.`,
+            `[IMPORT] Aborting batch ${batchIndex} after ${batchTimeoutMs}ms timeout (attempt ${attempt}).`,
           );
           controller.abort();
         }, batchTimeoutMs);
         _startStallTimer();
-        logImportTrace("POST /pictures/import starting", {
-          attempt,
-          batchIndex,
-          batchSize: batch.length,
-          batchBytes,
-          timeoutMs: batchTimeoutMs,
-          noProgressAbortMs: NO_PROGRESS_ABORT_MS,
-          url: `${props.backendUrl}/pictures/import`,
-        });
 
         try {
-          res = await apiClient.post(
-            `${props.backendUrl}/pictures/import`,
-            formData,
-            {
-              signal: controller.signal,
-              timeout: batchTimeoutMs,
-              headers: { "Content-Type": "multipart/form-data" },
-              onUploadProgress: (progressEvent) => {
-                const loaded = progressEvent.loaded ?? 0;
-                lastProgressAt = Date.now();
-                if (!firstProgressLogged) {
-                  firstProgressLogged = true;
-                  logImportTrace("First onUploadProgress event received", {
-                    loaded,
-                    total: progressEvent.total,
-                    batchIndex,
-                  });
-                }
-                uploadBytesUploaded.value = Math.min(
-                  uploadBytesTotal.value,
-                  uploadedBytesAccum + loaded,
-                );
-              },
+          await stageFiles({
+            backendUrl: props.backendUrl,
+            stagingId: currentStagingId,
+            files: batch,
+            signal: controller.signal,
+            timeoutMs: batchTimeoutMs,
+            onUploadProgress: (progressEvent) => {
+              const loaded = progressEvent.loaded ?? 0;
+              lastProgressAt = Date.now();
+              if (!firstProgressLogged) firstProgressLogged = true;
+              uploadBytesUploaded.value = Math.min(
+                uploadBytesTotal.value,
+                uploadedBytesAccum + loaded,
+              );
             },
-          );
+          });
           _stopStallTimer();
           clearInterval(noProgressTimer);
           clearTimeout(timeout);
-          if (!firstProgressLogged) {
-            logImportTrace(
-              "WARNING: onUploadProgress never fired for this batch",
-              {
-                batchIndex,
-                responseStatus: res?.status,
-              },
-            );
-          }
-          logImportTrace("POST /pictures/import completed", {
-            attempt,
-            batchIndex,
-            status: res?.status,
-            firstProgressLogged,
-          });
           if (controller === currentImportController.value) {
             currentImportController.value = null;
           }
+          ok = true;
           break;
         } catch (err) {
           _stopStallTimer();
@@ -381,36 +553,24 @@ async function startImport(files, options = {}) {
                 : "Upload timed out",
             );
             console.warn(
-              `[IMPORT] Batch ${batchIndex} aborted (attempt ${attempt}). ` +
-                `firstProgressLogged=${firstProgressLogged}, stallSeconds=${uploadStallSeconds.value}, ` +
-                `bytesUploaded=${uploadBytesUploaded.value}/${uploadBytesTotal.value}, ` +
-                `reason=${noProgressAbortFired ? "no-progress" : isTimeout ? "timeout" : "abort"}`,
+              `[IMPORT] Batch ${batchIndex} aborted (attempt ${attempt}). reason=${
+                noProgressAbortFired ? "no-progress" : isTimeout ? "timeout" : "abort"
+              }`,
             );
           } else {
             lastError = err;
             console.warn(
               `[IMPORT] Batch ${batchIndex} failed (attempt ${attempt}):`,
               err,
-              `name=${err.name}, message=${err.message}, code=${err.code}, ` +
-                `firstProgressLogged=${firstProgressLogged}, stallSeconds=${uploadStallSeconds.value}`,
             );
           }
-        }
-
-        if (res && res.status >= 200 && res.status < 300) {
-          break;
-        }
-        lastError = new Error(
-          res
-            ? `Upload failed with status ${res.status}`
-            : "No response received",
-        );
-        if (attempt < MAX_RETRIES) {
-          await sleep(1000);
+          if (attempt < MAX_RETRIES) {
+            await sleep(1000);
+          }
         }
       }
 
-      if (!res || res.status < 200 || res.status >= 300) {
+      if (!ok) {
         finalizeError(lastError ? lastError.message : "Upload failed.");
         return;
       }
@@ -418,369 +578,469 @@ async function startImport(files, options = {}) {
       uploadedBytesAccum += batchBytes;
       uploadBytesUploaded.value = uploadedBytesAccum;
       await nextTick();
-
-      const taskId = res?.data?.task_id;
-      if (!taskId) {
-        finalizeError("Missing task id from import response.");
-        return;
-      }
-
-      logImportTrace("Upload accepted by backend", {
-        taskId,
-        batchIndex: Math.floor(i / BATCH_SIZE) + 1,
-      });
-
-      taskIds.push(taskId);
-      // Use the server-reported file count (e.g. files inside a zip) so the
-      // progress counter shows the real total instead of "1 archive".
-      batchFileCounts.push(res?.data?.file_count ?? batch.length);
     }
 
-    // All bytes are now in flight on the server; mark upload complete.
+    if (cancelImport.value) {
+      finalizeCancelled();
+      return;
+    }
+
+    // All bytes are staged — commit the SAFE HANDOFF to the background import.
     uploadBytesUploaded.value = uploadBytesTotal.value;
     _stopStallTimer();
 
-    // ── Phase 2: Poll all task IDs in parallel until every batch is done ──
-    importPhase.value = "processing";
-    // Use the server-reported file counts (already set in batchFileCounts above
-    // from file_count in the upload response) rather than files.length, so a
-    // zip import shows the real image count instead of "1".
-    importTotal.value =
-      batchFileCounts.reduce((s, n) => s + n, 0) || files.length;
+    let commit;
+    try {
+      commit = await commitStaging({
+        backendUrl: props.backendUrl,
+        stagingId: currentStagingId,
+      });
+    } catch (err) {
+      // Commit is still inside the unsafe window (dialog open). Surface the
+      // reason (400 empty / face-worker-down, 409 committed, 507 disk) and
+      // discard the session. A 409 means it is already handed off, so leave it.
+      const detail =
+        err?.response?.data?.detail || err?.message || "Import commit failed.";
+      const status = err?.response?.status;
+      if (status !== 409 && currentStagingId) {
+        const stagingId = currentStagingId;
+        cancelStaging({ backendUrl: props.backendUrl, stagingId }).catch((e) =>
+          console.warn("Failed to cancel staging after commit error", e),
+        );
+      }
+      currentStagingId = null;
+      finalizeError(detail);
+      return;
+    }
+
+    // The session is committed; it can no longer be cancelled from the client.
+    const stagingId = currentStagingId;
+    currentStagingId = null;
+    importTotal.value = commit.stagedCount || files.length;
     importProgress.value = 0;
 
-    // Per-task tracking state
-    const taskStatuses = taskIds.map((_, idx) => ({
-      processed: 0,
-      total: batchFileCounts[idx],
-      stage: "queued",
-      done: false,
-      result: null,
-    }));
+    // Auto-hide the dialog and fly the chip into the task manager. Phase B (the
+    // server-side import) now lives entirely in the Tasks-tab row.
+    await transitionToBackground(importRunId, importTotal.value);
 
+    // ── Phase B: poll the staging session by id until the import is done. ──
     const maxAttempts = 600;
     const intervalMs = 1000;
     let attempts = 0;
+    let finalStatus = null;
 
     while (attempts < maxAttempts) {
-      if (cancelImport.value) {
+      const st = await fetchStagingStatus({
+        backendUrl: props.backendUrl,
+        stagingId,
+      });
+
+      const total = st.total || importTotal.value || files.length;
+      const processed = Math.min(st.processed, total);
+      importProgress.value = processed;
+      importTotal.value = Math.max(importTotal.value, total);
+      importServerStage.value = st.stage;
+
+      const pct = importTotal.value
+        ? Math.min(100, (processed / importTotal.value) * 100)
+        : 0;
+      tasksStore.setImportRun(importRunId, {
+        status: "running",
+        percent: pct,
+        current: processed,
+        total: importTotal.value,
+        message:
+          st.stage === "importing"
+            ? "Importing on the server…"
+            : "Queued on the server…",
+        label: "Importing pictures",
+      });
+
+      if (st.stage === "completed") {
+        finalStatus = st;
+        break;
+      }
+      if (st.stage === "failed") {
+        throw new Error(st.error || "Import failed");
+      }
+      if (st.stage === "cancelled") {
+        // Committed imports don't cancel client-side; treat an external cancel
+        // as a terminal, non-error exit.
         finalizeCancelled();
         return;
       }
-
-      // Fire one status request per incomplete task, all concurrently.
-      await Promise.all(
-        taskIds.map(async (taskId, idx) => {
-          if (taskStatuses[idx].done) return;
-          const statusRes = await apiClient.get(
-            `${props.backendUrl}/pictures/import/status`,
-            { params: { task_id: taskId } },
-          );
-          const status = statusRes?.data?.status || "in_progress";
-          const stage = statusRes?.data?.stage || "unknown";
-          const processed = statusRes?.data?.processed ?? 0;
-          const serverTotal = statusRes?.data?.total ?? taskStatuses[idx].total;
-          taskStatuses[idx].processed = processed;
-          taskStatuses[idx].total = serverTotal;
-          taskStatuses[idx].stage = stage;
-          if (status === "completed") {
-            taskStatuses[idx].done = true;
-            taskStatuses[idx].result = statusRes.data;
-          } else if (status === "failed") {
-            throw new Error(statusRes?.data?.error || "Import failed");
-          }
-        }),
-      );
-
-      // Aggregate progress across all tasks.
-      const totalProcessed = taskStatuses.reduce((s, t) => s + t.processed, 0);
-      const totalFiles = taskStatuses.reduce((s, t) => s + t.total, 0);
-      importProgress.value = totalProcessed;
-      importTotal.value = Math.max(importTotal.value, totalFiles);
-
-      // Show the stage of the first task that isn't finished yet.
-      const firstIncomplete = taskStatuses.find((t) => !t.done);
-      if (firstIncomplete) {
-        importServerStage.value = firstIncomplete.stage;
-      }
-
-      if (taskStatuses.every((t) => t.done)) break;
 
       await sleep(intervalMs);
       attempts++;
     }
 
-    if (attempts >= maxAttempts) {
+    if (!finalStatus) {
       throw new Error("Import timed out");
     }
 
-    logImportTrace("All batches complete", { taskCount: taskIds.length });
+    // Summarise from the terminal status. There is no per-file results[] — the
+    // grid reconciles the new pictures off the backend's CHANGED_PICTURES /
+    // PICTURE_IMPORTED WebSocket broadcast, which the grid already consumes.
+    const importedCount = finalStatus.importedCount ?? 0;
+    const duplicateCount = finalStatus.duplicateCount ?? 0;
 
-    // Collect results from every completed task.
-    for (const ts of taskStatuses) {
-      if (!ts.result) continue;
-      const batchResults = Array.isArray(ts.result.results)
-        ? ts.result.results
-        : [];
-      allResults.push(...batchResults);
-      importedCount += batchResults.filter(
-        (r) => r.status === "success",
-      ).length;
-    }
-
-    if (importedCount === 0) {
-      importPhase.value = "duplicates";
-      importServerStage.value = "completed";
-      importError.value = "All files are duplicates.";
-    } else {
-      importPhase.value = "done";
-      importServerStage.value = "completed";
-      importError.value = `Imported ${importedCount} image${importedCount !== 1 ? "s" : ""}.`;
-    }
-
+    importPhase.value = importedCount === 0 ? "duplicates" : "done";
+    importServerStage.value = "completed";
     importTotal.value = Math.max(importTotal.value, files.length);
     importProgress.value = importTotal.value;
-    uploadBytesUploaded.value = uploadBytesTotal.value;
     currentImportController.value = null;
     cancelImport.value = false;
-    hideTimerId = setTimeout(() => {
-      importInProgress.value = false;
-      hideTimerId = null;
-    }, 1500);
+    importActive.value = false;
 
+    // Punctuate completion on the task row, then let it leave the list.
+    tasksStore.setImportRun(importRunId, {
+      status: "completed",
+      percent: 100,
+      current: importTotal.value,
+      total: importTotal.value,
+      message:
+        importedCount === 0
+          ? duplicateCount > 0
+            ? "All files were duplicates"
+            : "Nothing to import"
+          : `Imported ${importedCount} image${importedCount !== 1 ? "s" : ""}`,
+      label: "Importing pictures",
+    });
+    const finishedRunId = importRunId;
+    setTimeout(() => tasksStore.clearImportRun(finishedRunId), 2600);
+
+    // The public emit contract is unchanged, but the streaming-staging contract
+    // returns no per-file results — the grid refreshes off the WS broadcast, so
+    // `results` is empty. (Consumers that relied on results[].picture_id, e.g.
+    // SideBar drop-to-set/character association, no longer receive ids here.)
     emit("import-finished", {
       importedCount,
-      total: allResults.length,
+      total: importTotal.value,
       phase: importPhase.value,
-      results: allResults,
+      results: [],
     });
     logImportTrace("Import finished", {
       importedCount,
-      totalResults: allResults.length,
+      duplicateCount,
       phase: importPhase.value,
     });
   } catch (error) {
     const message = error?.message || String(error);
     finalizeError(message);
     logImportTrace("Import failed", { message });
-    window.alert("All uploads failed: " + message);
   }
 }
+
+onBeforeUnmount(() => {
+  disarmGuard();
+  clearHideTimer();
+  _stopStallTimer();
+});
 
 defineExpose({ startImport });
 </script>
 
 <template>
-  <div v-if="importInProgress" class="import-progress-modal">
-    <div class="import-progress-content">
-      <div class="import-progress-title">{{ importPhaseMessage }}</div>
-      <!-- Upload progress bar -->
-      <div class="import-progress-bar-section">
-        <div class="import-progress-bar-label">
-          Upload
-          {{ formatBytes(uploadBytesUploaded) }} /
-          {{ formatBytes(uploadBytesTotal) }}
-          <span
-            v-if="importPhase === 'uploading' && uploadStallSeconds >= 3"
-            style="margin-left: 6px; opacity: 0.65; font-size: 0.9em"
-            >(stalled {{ uploadStallSeconds }}s)</span
-          >
-        </div>
-        <div class="import-progress-bar-bg">
-          <div
-            class="import-progress-bar upload-bar"
-            :style="{
-              width:
-                (uploadBytesTotal
-                  ? (uploadBytesUploaded / uploadBytesTotal) * 100
-                  : 0) + '%',
-            }"
-          ></div>
-        </div>
-      </div>
-      <!-- Import progress bar -->
-      <div class="import-progress-bar-section">
-        <div class="import-progress-bar-label">
-          <template v-if="importTotal > 0">
-            Import {{ importProgress }} / {{ importTotal }}
-            {{
-              importTotal === 1 && isZipImport && importPhase === "uploading"
-                ? "archive"
-                : importTotal === 1
-                  ? "image"
-                  : "images"
-            }}
-          </template>
-          <template v-else-if="importPhase === 'processing'">
-            Waiting for server...
-          </template>
-          <template v-else> Pending... </template>
-        </div>
-        <div class="import-progress-bar-bg">
-          <div
-            class="import-progress-bar import-bar"
-            :style="{
-              width:
-                (importTotal ? (importProgress / importTotal) * 100 : 0) + '%',
-            }"
-          ></div>
-        </div>
-      </div>
-      <div class="import-progress-label">
-        <template v-if="importPhase === 'done'"> Import complete! </template>
-        <template v-else-if="importPhase === 'duplicates'">
-          All files are duplicates.
-        </template>
-        <template v-else-if="importPhase === 'cancelled'">
-          Import cancelled.
-        </template>
-        <template v-else-if="importPhase === 'error'">
-          Import failed.
-        </template>
-        <span v-if="importError" class="import-progress-error">
-          {{ importError }}
+  <div
+    v-if="dialogVisible"
+    class="dlg-scrim"
+    :class="{ leaving: dialogLeaving }"
+  >
+    <div class="dialog" role="dialog" aria-label="Import pictures">
+      <div class="dlg-head">
+        <h3 class="dlg-title">{{ dialogTitle }}</h3>
+        <div class="grow"></div>
+        <span ref="countChipEl" class="chip">
+          <VIcon class="chip-icon" size="16">
+            {{ isZipImport ? "mdi-folder-zip" : "mdi-image-multiple" }}
+          </VIcon>
+          <span>{{ chipLabel }}</span>
         </span>
       </div>
-      <div v-if="importServerStageMessage" class="import-progress-stage">
-        Backend stage: {{ importServerStageMessage }}
+
+      <!-- The unsafe-window guard, said calmly. On error it becomes the error note. -->
+      <div v-if="importPhase !== 'error'" class="note-row">
+        <VIcon class="note-icon" size="18">mdi-tray-arrow-up</VIcon>
+        <div>
+          <div class="note-title">Keep this tab open while files upload</div>
+          <div class="note-sub">
+            Your pictures aren't on the server yet — leaving now would stop the
+            upload.
+          </div>
+        </div>
       </div>
-      <button
-        v-if="showCancelButton"
-        class="cancel-button"
-        type="button"
-        @click="handleCancelImport"
-      >
-        Cancel
-      </button>
-      <button
-        v-if="importPhase === 'error'"
-        class="cancel-button"
-        type="button"
-        @click="importInProgress = false"
-      >
-        Dismiss
-      </button>
+      <div v-else class="note-row note-row--error">
+        <VIcon class="note-icon note-icon--error" size="18">mdi-alert</VIcon>
+        <div>
+          <div class="note-title">Import failed</div>
+          <div class="note-sub">{{ importError }}</div>
+        </div>
+      </div>
+
+      <!-- Upload bar (amber accent = attention, this tab is busy) -->
+      <div class="bar-section">
+        <div class="bar-label">
+          <span>{{ uploadLabel }}</span>
+          <span>
+            {{ formatBytes(uploadBytesUploaded) }} of
+            {{ formatBytes(uploadBytesTotal) }}
+            <span
+              v-if="importPhase === 'uploading' && uploadStallSeconds >= 3"
+              class="stall"
+              >(stalled {{ uploadStallSeconds }}s)</span
+            >
+          </span>
+        </div>
+        <div class="bar-track">
+          <div
+            class="bar-fill bar-fill--upload"
+            :style="{ width: uploadPct + '%' }"
+          ></div>
+        </div>
+      </div>
+
+      <!-- Import bar (olive primary = safe). A pending preview here — Phase B
+           fills in the task manager after the dialog auto-hides. -->
+      <div class="bar-section">
+        <div class="bar-label">
+          <span>Import pending…</span>
+          <span>&nbsp;</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill bar-fill--import" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Phase A holds exactly one action: Cancel. No close/minimize control
+           exists; the safe path auto-hides. -->
+      <div class="dlg-foot">
+        <button
+          v-if="showCancelButton"
+          class="dlg-btn dlg-btn--danger"
+          type="button"
+          @click="handleCancelImport"
+        >
+          Cancel import
+        </button>
+        <button
+          v-if="importPhase === 'error'"
+          class="dlg-btn dlg-btn--quiet"
+          type="button"
+          @click="dismissError"
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.import-progress-modal {
+/* Standard surface dialog (not the old full-screen dark-surface modal): the
+   non-blocking import should not read as "the app is busy". Anchored below the
+   desktop title bar; sits above the grid. */
+.dlg-scrim {
   position: fixed;
-  /* Anchor below the desktop title bar (0px in a browser) so the bar / window
-     controls stay visible while an import is in progress. Height shrinks to
-     match so the spinner stays centred in the area below the bar. */
   top: var(--titlebar-h);
   left: 0;
   width: 100vw;
   height: calc(100vh - var(--titlebar-h));
-  background: rgba(var(--v-theme-scrim), 0.65);
   z-index: 99999;
+  background: rgba(var(--v-theme-scrim), 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: all;
+  transition: opacity var(--dur-3) var(--ease-accelerate);
 }
 
-.import-progress-content {
-  background: rgb(var(--v-theme-dark-surface));
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: var(--space-7) var(--space-8);
+.dlg-scrim.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dialog {
+  width: min(440px, calc(100% - var(--space-7)));
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
   border-radius: var(--radius-lg);
   box-shadow: var(--elevation-4);
-  min-width: 380px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  padding: var(--space-7);
+  transition:
+    transform var(--dur-3) var(--ease-accelerate),
+    opacity var(--dur-3) var(--ease-accelerate);
 }
 
-.import-progress-title {
-  font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
+.dlg-scrim.leaving .dialog {
+  transform: scale(0.96);
+  opacity: 0;
+}
+
+.dlg-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   margin-bottom: var(--space-6);
 }
 
-.import-progress-bar-bg {
-  width: 100%;
-  height: 18px;
-  background: rgba(var(--v-theme-on-surface), 0.2);
+.dlg-head .grow {
+  flex: 1;
+}
+
+.dlg-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  margin: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-accent), 0.12);
+  border: 1px solid rgba(var(--v-theme-accent), 0.4);
+  color: rgb(var(--v-theme-on-surface));
+  font-variant-numeric: tabular-nums;
+}
+
+.chip-icon {
+  color: rgb(var(--v-theme-accent));
+}
+
+.note-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-accent), 0.08);
+  margin-bottom: var(--space-5);
+}
+
+.note-row--error {
+  background: rgba(var(--v-theme-error), 0.08);
+}
+
+.note-icon {
+  margin-top: var(--space-1);
+  color: rgb(var(--v-theme-accent));
+}
+
+.note-icon--error {
+  color: rgb(var(--v-theme-error));
+}
+
+.note-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+
+.note-sub {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  margin-top: var(--space-1);
+}
+
+.bar-section {
+  margin-bottom: var(--space-5);
+}
+
+.bar-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  margin-bottom: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.stall {
+  color: rgb(var(--v-theme-warning));
+}
+
+.bar-track {
+  height: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.1);
   overflow: hidden;
 }
 
-.import-progress-bar-section {
-  width: 100%;
-  margin-bottom: var(--space-4);
-}
-
-.import-progress-bar-label {
-  font-size: var(--text-base);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-  margin-bottom: var(--space-3);
-  min-height: 1.2em;
-}
-
-.import-progress-bar {
+.bar-fill {
   height: 100%;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-  transition: width 0.3s ease;
-}
-
-.upload-bar {
-  background: linear-gradient(
-    90deg,
-    rgb(var(--v-theme-primary)) 0%,
-    rgb(var(--v-theme-secondary)) 100%
-  );
-}
-
-.import-bar {
-  background: linear-gradient(
-    90deg,
-    rgb(var(--v-theme-warning)) 0%,
-    rgb(var(--v-theme-accent)) 100%
-  );
-}
-
-.import-progress-label {
-  font-size: var(--text-lg);
-  margin-top: var(--space-3);
-}
-
-.import-progress-stage {
-  margin-top: var(--space-3);
-  font-size: var(--text-base);
-  color: rgba(var(--v-theme-on-dark-surface), 0.72);
-}
-
-.import-progress-error {
-  color: rgb(var(--v-theme-error));
-  margin-left: var(--space-4);
-}
-
-.cancel-button {
-  margin-top: var(--space-5);
-  padding: var(--space-3) var(--space-5);
+  width: 0%;
   border-radius: var(--radius-pill);
-  border: none;
-  background: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-  font-weight: 600;
+  transition: width var(--dur-2) var(--ease-standard);
+}
+
+.bar-fill--upload {
+  background: rgb(var(--v-theme-accent));
+}
+
+.bar-fill--import {
+  background: rgb(var(--v-theme-primary));
+}
+
+.dlg-foot {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+.dlg-btn {
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   cursor: pointer;
-  transition: background 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  transition: filter var(--dur-1) var(--ease-standard);
 }
 
-.cancel-button:hover {
-  background: rgba(var(--v-theme-error), 0.85);
+.dlg-btn:hover {
+  filter: brightness(1.05);
 }
 
-.cancel-button:focus {
-  outline: 2px solid rgba(var(--v-theme-on-error), 0.5);
-  outline-offset: 2px;
+.dlg-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-.cancel-button:disabled {
-  background: rgba(var(--v-theme-on-surface), 0.4);
-  cursor: not-allowed;
+.dlg-btn--danger {
+  background: rgba(var(--v-theme-error), 0.1);
+  border-color: rgba(var(--v-theme-error), 0.55);
+  color: rgb(var(--v-theme-error));
+}
+
+.dlg-btn--quiet {
+  background: rgb(var(--v-theme-cancel-button));
+  color: rgb(var(--v-theme-cancel-button-text));
+}
+</style>
+
+<!-- The FLIP flight clone is appended to <body>, so its style is global (not
+     scoped to this component's rendered tree). -->
+<style>
+.import-fly-chip {
+  position: fixed;
+  /* Same ceiling as the import dialog (99999); the desktop title bar stays above
+     at 100000 (frontend_architecture.md §7). Appended to <body> after the dialog,
+     so it paints over the fading dialog at equal z-index. */
+  z-index: 99999;
+  margin: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
 }
 </style>
