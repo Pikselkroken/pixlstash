@@ -154,7 +154,18 @@ below.
 
 Status meaning never rides on color alone — pair it with an icon or text. The many
 ad-hoc greens (`#1e7d44`, `#258a4d`, `#81c995`…) and reds (`#e53935`, `#c62828`,
-`#c5362d`…) in components collapse to the single `success` / `error` tokens.
+`#c5362d`…) in components collapse to the single `success` / `error` tokens. As of
+2026-07 the live chrome offenders are down to a handful — a `#888` set-color-dot
+fallback and `#c96000` / `#c62828` hover states in `SideBar.vue`, plus scattered
+`#fff` glyph fills that should read `onAccent` / `on-dark-surface` / `currentColor`.
+
+**Named decorative exemptions.** One multi-hue palette is *deliberately* off-token:
+the review-celebration confetti in `ReviewCelebration.vue` (`#ffd166 #06d6a0 #ef476f
+#4cc9f0 #f78c6b`). A burst of party colour is the point; forcing it onto the amber
+accent would make it sad. It is exempt the same way brand/source marks are (§8) —
+**named, scoped to one decorative component, and rare.** Do not "fix" it into tokens,
+and do not treat it as licence for a second off-token palette without a new named
+exemption here.
 
 ### Contrast (proven, not eyeballed)
 WCAG floors: body text **≥ 4.5:1**, large text and meaningful UI **≥ 3:1**.
@@ -194,9 +205,15 @@ eye somewhere to rest. Cramped chrome reads as cheap. Density is earned: the *im
 grid* can be tight (it is the user's work), the *controls around it* stay calm.
 
 **Alignment is most of what reads as polished.** Things that belong to the same row
-share a baseline; columns of controls share a left edge. The desktop shell already
-lines the sidebar header, toolbar, and stats header to a 48px band — respect that kind
-of intentional alignment everywhere.
+share a baseline; columns of controls share a left edge. The shell lines the sidebar
+header, toolbar, and stats header to one horizontal band and you respect that band
+everywhere. The band height is `--bar-height` (48px) in the browser; the desktop
+Electron shell compresses the top strip (title bar `--titlebar-h` 34px, sidebar
+header 36px) so the custom title bar and controls fit — see the overrides in
+`style.css`. (Heads-up: the per-component action-bar heights still drift — 34 / 40 /
+48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. Unifying them
+onto `--bar-height` is an open reconciliation item; it moves pixels, so it needs
+UI/UX sign-off — see §13.)
 
 ---
 
@@ -285,16 +302,41 @@ The photos are the hero. The chrome frames them; it does not compete.
 
 ## 10. Motion
 
-Motion is feedback. Three durations, one easing, from `design-tokens.css`:
+Motion is feedback. Durations and easings live in `design-tokens.css`:
 
 - `--dur-1` (150ms): hover, press, micro-feedback.
 - `--dur-2` (200ms): panels, expand/collapse — the default.
-- `--dur-3` (250ms): overlays, dialog enter/leave.
-- `--ease-standard` for most; `--ease-decelerate` for elements entering the screen.
+- `--dur-3` (250ms): overlays, dialog enter/leave. **The routine ceiling.**
+- `--dur-4` (420ms): the one exception — an expressive **one-shot** for a delight
+  moment (a chip flying into the sidebar, a badge landing, a sticker drop). Never
+  for a routine interaction; a bulk action that animates this slow feels sluggish.
+- `--ease-standard` for most; `--ease-decelerate` for elements entering the screen;
+  `--ease-accelerate` for elements leaving it; `--ease-spring` for a physical
+  **landing with a slight overshoot** — the punctuation at the end of a flight, not
+  its travel.
 
-Nothing on a routine bulk action should animate slower than `--dur-3`. **Respect
+Nothing on a routine bulk action animates slower than `--dur-3`. **Respect
 `prefers-reduced-motion`** — the token file already enforces it globally; do not
-override it.
+override it. And every expressive one-shot needs a reduced-motion fallback (a plain
+fade, no travel) — the sticker land already models this (`rs-sticker-land` →
+`rs-sticker-fade`).
+
+### Named motion patterns (build the new ones on these)
+
+These already exist hand-rolled; the tokens above consolidate them. Reuse the
+pattern, don't re-roll the numbers.
+
+- **Attention pulse** — a soft, looping "look here" on a live indicator. Reference:
+  `tb-stats-pulse` (Toolbar activity dot), `tm-dot-pulse` (stats). ~1.4s
+  `ease-in-out infinite`, scale + opacity. Looping cadence is contextual, so it
+  lives with the pattern, not as a raw duration token.
+- **Landing pulse (one-shot)** — a single glow-and-settle when something new
+  arrives. Reference: `gridNewPulse` — a one-shot `--v-theme-accent` glow ring, no
+  layout shift. This is the model for the sidebar badge's *pulse-on-landing*.
+- **Flight / FLIP** — an element travels from A to B along an arc and lands.
+  Reference: `rs-sticker-fly` / `rs-sticker-land`. Travel on `--ease-standard`
+  (or `--ease-decelerate` into rest) over `--dur-4`; land on `--ease-spring` for
+  the overshoot. This is the model for the async-import chip-into-sidebar flight.
 
 ---
 
@@ -312,7 +354,60 @@ These get skipped and that is exactly why a UI looks cheap.
 
 ---
 
-## 12. Using this system
+## 12. Badges
+
+A badge is a count pill or an attention dot pinned to a control (a folder's picture
+count, the filter-count on the toolbar icon, the sidebar's task/upload indicator).
+It is small, it overlays without shifting layout, and it recurs — so it is a pattern,
+not a per-component invention. Today every badge is hand-rolled; these are the shared
+rules and tokens they collapse onto.
+
+**Two shapes, and the color split is a contrast decision, not taste:**
+
+| Shape | When | Fill / text | Size |
+|---|---|---|---|
+| **Count pill** | a number matters (`3`, `12`, `99+`) | `primary` / `onPrimary` | `--badge-size` (16px) min, `--radius-pill` |
+| **Attention dot** | just "something here / live / just landed", no number | `accent` (no text on it) | `--badge-size-dot` (8px), `--radius-pill` |
+
+- **Why the split.** The count pill carries small text, so it must clear the 4.5:1
+  body floor. `primary` olive on white is **4.84:1** (passes); the amber `accent`
+  behind small white text is **3.94:1** (**fails** — the exact §4 trap). So the
+  numeral badge is `primary`, and `accent` — the brand attention colour — is spent
+  on the *dot and the glow*, where it is a ≥3:1 UI mark with no small text on it.
+  This matches the shipped convention: the toolbar filter-count badge is already
+  `primary`/`onPrimary`; the activity dot is already accent/primary glow.
+- **Type:** count text is `--text-2xs` (11px, the ramp's reserved badge size) at
+  `--weight-semibold`, `font-variant-numeric: tabular-nums` so counts don't jitter.
+- **Overlay, don't reflow:** absolutely position it on its host (see
+  `.bar-icon-badge-wrap` in `Toolbar.vue`); it must never resize or shift the control.
+- **Landing:** when a badge appears or its count ticks up because work *just landed*,
+  play the one-shot **landing pulse** (§10, `gridNewPulse` model, accent glow) — this
+  is the sidebar task/upload badge's pulse-on-landing. Loop the **attention pulse**
+  only while work is genuinely live; stop it when idle.
+
+## 13. Contextual action bar (toolbars over content)
+
+The full-width bar that appears above the grid to act on a context — the bulk
+**selection bar**, the image-overlay top bar, and the new **Trash restore/purge
+bar** — is one pattern. It reuses the grid; only the bar changes.
+
+- **Anatomy:** a left cluster (a count or title: "12 selected", "Trash") and a right
+  cluster of actions, on a chrome surface (`toolbar` / `panel`), `--elevation-2`,
+  full width, at height **`--bar-height`** (48px). Reference: `SelectionBar.vue`.
+- **Action weight:** the primary/affirmative action (Restore) is a `primary` button;
+  a destructive action (Purge / Delete forever) is `error`, kept visually distinct,
+  and **always behind a confirm** — deletion is irreversible and must never be a
+  single mis-click. Secondary actions are quiet (text/`cancel-button`).
+- **One band.** Action bars share `--bar-height` so they line up with the shell's
+  top strip (§5). The current per-component heights (34 / 40 / 48 / 56px) are drift
+  to migrate onto this token; because it moves pixels it is UI/UX-gated.
+- **Empty & the Trash view.** Trash is the picture grid reused with the restore/purge
+  bar. Its empty state uses the existing `EmptyTrash.png` art (§9) with a
+  `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.
+
+---
+
+## 14. Using this system
 
 1. Reach for a token before you type a value. Spacing, radius, type, elevation, motion
    are in `design-tokens.css`; color is `rgb(var(--v-theme-*))` from `main.js`.
