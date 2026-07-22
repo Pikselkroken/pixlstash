@@ -42,6 +42,7 @@ from pixlstash.openapi_custom import (
 from pixlstash.ssl_setup import SslSetupMixin
 from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
+from pixlstash.services import scrapheap_service
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
@@ -380,6 +381,12 @@ class Server(
             daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
             insightface_model_pack=self._server_config.get(
                 "insightface_model_pack", "buffalo_l"
+            ),
+            scrapheap_retention_days=scrapheap_service.read_retention_days(
+                self._server_config
+            ),
+            scrapheap_retention_reduced_at=scrapheap_service.read_retention_reduced_at(
+                self._server_config
             ),
         )
 

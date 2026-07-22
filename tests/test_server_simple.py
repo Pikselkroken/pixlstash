@@ -536,14 +536,24 @@ def test_soft_delete_to_scrapheap_keeps_reference_original_on_disk(server, tmp_p
 def _seed_scrapheap_mixed(server, client, tmp_path):
     """Create 2 protected + 1 unprotected reference pictures and soft-delete all.
 
+    Each picture gets its OWN directory. ``_make_reference_folder_picture``
+    creates a fresh ``ReferenceFolder`` row per call, so pointing two calls at
+    one directory registered that directory TWICE — a state the API rejects with
+    409, and one that made the background reference-folder scanner treat each
+    folder's file as an unindexed file of the other and re-import it. The
+    re-imported row then recycled the rowid SQLite had just freed by purging,
+    so the post-purge assertions intermittently read a different picture. That
+    is the root cause of this module's historical scrapheap flake; keeping the
+    directories disjoint fixes it at the source rather than by suppressing the
+    scanner.
+
     Returns (protected_ids, protected_paths, unprotected_id, unprotected_path).
     """
-    prot_dir = str(tmp_path / "prot")
     _f1, p1, path1 = _make_reference_folder_picture(
-        server, prot_dir, "keep_a.png", allow_delete=False
+        server, str(tmp_path / "prot_a"), "keep_a.png", allow_delete=False
     )
     _f2, p2, path2 = _make_reference_folder_picture(
-        server, prot_dir, "keep_b.png", allow_delete=False
+        server, str(tmp_path / "prot_b"), "keep_b.png", allow_delete=False
     )
     unprot_dir = str(tmp_path / "unprot")
     _f3, p3, path3 = _make_reference_folder_picture(

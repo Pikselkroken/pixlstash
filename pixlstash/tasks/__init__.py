@@ -36,6 +36,8 @@ from .ensure_gfs_snapshot_finder import EnsureGfsSnapshotFinder
 from .ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
 from .tag_health_auto_rebuild_task import TagHealthAutoRebuildTask
 from .tag_health_auto_rebuild_finder import TagHealthAutoRebuildFinder
+from .scrapheap_retention_purge_task import ScrapheapRetentionPurgeTask
+from .scrapheap_retention_purge_finder import ScrapheapRetentionPurgeFinder
 
 __all__ = [
     "TaskType",
@@ -75,4 +77,6 @@ __all__ = [
     "EnsureGfsSnapshotTask",
     "TagHealthAutoRebuildTask",
     "TagHealthAutoRebuildFinder",
+    "ScrapheapRetentionPurgeTask",
+    "ScrapheapRetentionPurgeFinder",
 ]

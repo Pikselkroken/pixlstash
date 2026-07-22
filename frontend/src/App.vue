@@ -493,8 +493,13 @@ function refreshSidebarPicturesDebounced(flash) {
   }, SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS);
 }
 
-function openSettingsDialog() {
-  sidebarRef.value?.openSettingsDialog?.();
+/**
+ * Open the settings dialog. `tab` deep-links to a nav entry (e.g. "scrapheap"
+ * from the scrapheap header's "change" link); omitted callers land on Appearance.
+ * @param {string} [tab]
+ */
+function openSettingsDialog(tab = "") {
+  sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
 function openImportDialog() {

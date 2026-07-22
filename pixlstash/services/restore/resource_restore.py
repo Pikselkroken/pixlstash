@@ -9,6 +9,7 @@ transaction (restoring missing parents first when the caller confirms).
 
 import os
 import shutil
+from datetime import datetime, timezone
 
 from sqlmodel import Session, create_engine, select
 from sqlalchemy import (
@@ -748,8 +749,21 @@ class ResourceRestoreMixin:
         if snap_rows.get("character"):
             _merge(snap_rows["character"])
 
+        # Scrapheap rows carry the snapshot's ORIGINAL ``deleted_at``. Merging
+        # that verbatim hands the retention auto-purge an already-expired
+        # deadline, so restoring a snapshot older than the window would let the
+        # next 15-minute sweep permanently destroy the very scrapheap the user
+        # just restored (and write ``file_removed=True``, making a re-restore
+        # unable to bring it back). Re-stamp to now, for the same reason
+        # migration 0079 backfills to the migration time: a restore is a fresh
+        # start for the retention clock, never a resumed one.
+        restore_stamp = datetime.now(timezone.utc)
         for pic in snap_rows.get("pictures", []):
-            _merge(pic)
+            merged = session.merge(pic)
+            count += 1
+            if getattr(merged, "deleted", False):
+                merged.deleted_at = restore_stamp
+                session.add(merged)
 
         # Picture-scoped dependents (Face, Tag, PictureSetMember,
         # PictureProjectMember): replace, don't merge. Merging by the snapshot

@@ -193,6 +193,26 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("PATCH", "/api/v1/server-config/snapshots"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner"
     ),
+    ("GET", "/api/v1/server-config/scrapheap-retention"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner server-config read; returns no per-object data. Sibling of "
+            "GET /server-config/snapshots (same owner-settings tier). Not a "
+            "host-capability route (§16.3): it neither touches the host "
+            "filesystem browser nor spawns a host GUI/shell, so no locality "
+            "tier applies."
+        ),
+    ),
+    ("PATCH", "/api/v1/server-config/scrapheap-retention"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner server-config write; PATCH is blocked for READ tokens, so "
+            "only an unscoped owner reaches it. Sibling of PATCH "
+            "/server-config/snapshots. It sets the auto-purge window but "
+            "performs NO destruction itself (the scheduled task is the only "
+            "deleter), so the §16.3 host-capability tiers do not apply."
+        ),
+    ),
     ("POST", "/api/v1/server-config/open"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open — same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",

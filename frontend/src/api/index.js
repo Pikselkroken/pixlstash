@@ -21,4 +21,5 @@
 export { apiClient } from "../utils/apiClient";
 
 export * as config from "./config";
+export * as serverConfig from "./serverConfig";
 export * as characters from "./characters";

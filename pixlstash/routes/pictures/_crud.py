@@ -1,5 +1,4 @@
 import base64
-import os
 from datetime import datetime, timezone
 
 from fastapi import (
@@ -22,16 +21,15 @@ from typing import Optional
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
-    DeletedFileLog,
     Detection,
     Picture,
     PictureProjectMember,
     Project,
-    ReferenceFolder,
     Tag,
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import scrapheap_service
 from pixlstash.services.set_lock_service import (
     enforce_pictures_not_locked,
     locked_by_sets_for_picture,
@@ -231,39 +229,6 @@ def _parse_scrapheap_ids(payload: dict | None) -> list[int] | None:
         return [int(pid) for pid in maybe_ids]
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="ids must contain valid integers")
-
-
-def _fetch_scrapheap_rows(server, ids: list[int] | None):
-    """Return ``(id, file_path, reference_folder_id, pixel_sha)`` for the
-    scrapheap selection (all soft-deleted pictures when ``ids`` is None)."""
-
-    def fetch_deleted(session: Session, ids: list[int] | None):
-        query = select(
-            Picture.id,
-            Picture.file_path,
-            Picture.reference_folder_id,
-            Picture.pixel_sha,
-        ).where(Picture.deleted.is_(True))
-        if ids is not None:
-            query = query.where(Picture.id.in_(ids))
-        return session.exec(query).all()
-
-    return server.vault.db.run_task(fetch_deleted, ids, priority=DBPriority.IMMEDIATE)
-
-
-def _fetch_no_delete_folder_ids(server) -> set[int]:
-    """Ids of reference folders whose original files are protected on disk
-    (``allow_delete_file=False``)."""
-
-    def fetch(session: Session) -> set[int]:
-        result = session.exec(
-            select(ReferenceFolder.id).where(
-                ReferenceFolder.allow_delete_file.is_(False),
-            )
-        ).all()
-        return {r for r in result if r is not None}
-
-    return server.vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
 
 
 class PictureDeleteResponse(BaseModel):
@@ -1090,6 +1055,11 @@ def register_routes(router, server):
             affected_stack_ids: set[int] = set()
             for pic in pics:
                 pic.deleted = False
+                # Leaving a stale deleted_at on a live picture would let any
+                # future reader mistake it for a scrapheap deadline. The stamp
+                # describes the CURRENT stay in the scrapheap only; a re-delete
+                # writes a fresh one.
+                pic.deleted_at = None
                 session.add(pic)
                 if pic.stack_id is not None:
                     affected_stack_ids.add(pic.stack_id)
@@ -1134,7 +1104,7 @@ def register_routes(router, server):
     )
     def preview_scrapheap_delete(payload: dict | None = Body(None)):
         ids = _parse_scrapheap_ids(payload)
-        rows = _fetch_scrapheap_rows(server, ids)
+        rows = scrapheap_service.fetch_scrapheap_rows(server.vault, ids)
         if not rows:
             return {
                 "total_count": 0,
@@ -1142,19 +1112,17 @@ def register_routes(router, server):
                 "unprotected_count": 0,
                 "protected": [],
             }
-        no_delete_folder_ids = _fetch_no_delete_folder_ids(server)
+        no_delete_folder_ids = scrapheap_service.fetch_no_delete_folder_ids(
+            server.vault
+        )
         image_root = server.vault.image_root
         protected_items: list[dict] = []
         unprotected_count = 0
         for row in rows:
-            pic_id, file_path, ref_folder_id = row[0], row[1], row[2]
-            is_protected = (
-                ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
-            )
-            if is_protected:
-                abs_path = ImageUtils.resolve_picture_path(image_root, file_path)
+            if row.is_protected(no_delete_folder_ids):
+                abs_path = ImageUtils.resolve_picture_path(image_root, row.file_path)
                 protected_items.append(
-                    {"id": pic_id, "file_path": abs_path or file_path or ""}
+                    {"id": row.id, "file_path": abs_path or row.file_path or ""}
                 )
             else:
                 unprotected_count += 1
@@ -1194,174 +1162,15 @@ def register_routes(router, server):
             else False
         )
 
-        rows = _fetch_scrapheap_rows(server, ids)
-        if not rows:
-            return {
-                "status": "success",
-                "deleted_count": 0,
-                "skipped_count": 0,
-                "include_protected": include_protected,
-            }
-
-        # Protected = a reference-folder original whose folder forbids file
-        # deletion. include_protected decides its fate:
-        #   false → skip it entirely (row kept, file kept, no ledger row);
-        #   true  → destroy it like any other (os.remove + file_removed=True).
-        # Either way the reference-folder protection is a ROUTINE safeguard that
-        # still governs soft-delete-to-scrapheap and the background scan; only an
-        # explicit include_protected=true delete-forever overrides it.
-        no_delete_folder_ids = _fetch_no_delete_folder_ids(server)
-
-        picture_ids: list[int] = []
-        # (picture_id, file_path, was_reference_protected) — only for pictures
-        # actually being purged; the flag is carried for the audit log.
-        removal_targets: list[tuple[Optional[int], str, bool]] = []
-        log_records: list[dict] = []
-        skipped_count = 0
-
-        for row in rows:
-            pic_id, file_path, ref_folder_id, pixel_sha = (
-                row[0],
-                row[1],
-                row[2],
-                row[3],
-            )
-            was_reference_protected = (
-                ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
-            )
-            if was_reference_protected and not include_protected:
-                # Escape hatch: leave the protected original completely intact —
-                # DB row kept, file on disk untouched, no permanent-deletion
-                # ledger row. It stays soft-deleted in the scrapheap.
-                skipped_count += 1
-                logger.info(
-                    "Delete-forever: SKIPPING protected reference original "
-                    "picture id=%s (include_protected=false); row and file kept",
-                    pic_id,
-                )
-                continue
-            if pic_id is not None:
-                picture_ids.append(pic_id)
-            if file_path:
-                # This picture is being purged, so its file is genuinely removed
-                # and file_removed is True: restore MUST drop the row and never
-                # resurrect it. (A file_removed=False row means "removed from
-                # library, file kept" and is only ever produced by routine paths,
-                # never here — a skipped protected picture writes NO ledger row.)
-                log_records.append(
-                    {
-                        "path_sha": DeletedFileLog.hash_path(file_path),
-                        "pixel_sha": pixel_sha,
-                        "file_removed": True,
-                    }
-                )
-                removal_targets.append((pic_id, file_path, was_reference_protected))
-
-        def delete_files(
-            image_root: str,
-            targets: list[tuple[Optional[int], str, bool]],
-        ):
-            for pic_id, rel_path, was_reference_protected in targets:
-                file_path = ImageUtils.resolve_picture_path(image_root, rel_path)
-                if file_path and os.path.isfile(file_path):
-                    logger.info(
-                        "Delete-forever: destroying file for picture id=%s "
-                        "path=%s reference_protected=%s op=os.remove",
-                        pic_id,
-                        file_path,
-                        was_reference_protected,
-                    )
-                    try:
-                        os.remove(file_path)
-                        logger.info(
-                            "Delete-forever: removed file for picture id=%s "
-                            "path=%s reference_protected=%s",
-                            pic_id,
-                            file_path,
-                            was_reference_protected,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            "Delete-forever: failed to remove file for picture "
-                            "id=%s path=%s reference_protected=%s: %s",
-                            pic_id,
-                            file_path,
-                            was_reference_protected,
-                            e,
-                            exc_info=True,
-                        )
-                else:
-                    logger.warning(
-                        "Delete-forever: no on-disk file to remove for picture "
-                        "id=%s rel_path=%s (resolved=%s) reference_protected=%s",
-                        pic_id,
-                        rel_path,
-                        file_path,
-                        was_reference_protected,
-                    )
-                thumb_path = ImageUtils.get_thumbnail_path(image_root, rel_path)
-                if thumb_path and os.path.isfile(thumb_path):
-                    try:
-                        os.remove(thumb_path)
-                    except Exception as e:
-                        logger.warning(
-                            "Delete-forever: failed to delete thumbnail %s for "
-                            "picture id=%s: %s",
-                            thumb_path,
-                            pic_id,
-                            e,
-                        )
-
-        background_tasks.add_task(
-            delete_files,
-            server.vault.image_root,
-            removal_targets,
+        outcome = scrapheap_service.purge_scrapheap_pictures(
+            server.vault,
+            ids,
+            include_protected,
+            # Files are removed after the response is sent so a large purge never
+            # blocks the request; the DB rows + ledger are already committed.
+            schedule_file_removal=background_tasks.add_task,
         )
-
-        def delete_rows(session: Session, ids: list[int], log_records: list[dict]):
-            if not ids:
-                return 0
-            # Record each permanently deleted file in deleted_file_log so we
-            # retain a durable record of what can no longer be restored (e.g.
-            # when rolling a vault back to an older snapshot). Logged and
-            # deleted in the same transaction so the two never diverge.
-            now = datetime.now(timezone.utc)
-            for record in log_records:
-                path_sha = record.get("path_sha")
-                if not path_sha:
-                    continue
-                already_logged = session.exec(
-                    select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
-                ).first()
-                new_file_removed = record.get("file_removed", True)
-                if already_logged is None:
-                    session.add(
-                        DeletedFileLog(
-                            path_sha=path_sha,
-                            pixel_sha=record.get("pixel_sha"),
-                            deleted_at=now,
-                            file_removed=new_file_removed,
-                        )
-                    )
-                elif new_file_removed and not already_logged.file_removed:
-                    # A path first logged file_removed=False (protected file kept
-                    # on disk) is now being genuinely hard-deleted. Upgrade the
-                    # stale flag to True so the ledger stays truthful rather than
-                    # leaving a False row that only restore's missing-file net
-                    # would catch. Only ever raise False -> True; never downgrade
-                    # a genuine permanent deletion back to "kept".
-                    already_logged.file_removed = True
-                    session.add(already_logged)
-            session.exec(delete(Picture).where(Picture.id.in_(ids)))
-            session.commit()
-            return len(ids)
-
-        deleted_count = server.vault.db.run_task(
-            delete_rows,
-            picture_ids,
-            log_records,
-            priority=DBPriority.IMMEDIATE,
-        )
+        picture_ids = outcome.purged_ids
         if picture_ids:
             server.vault.notify(
                 EventType.CHANGED_PICTURES,
@@ -1381,17 +1190,10 @@ def register_routes(router, server):
             if picture_ids
             else []
         )
-
-        logger.info(
-            "Delete-forever: purged %d, skipped %d protected (include_protected=%s)",
-            deleted_count,
-            skipped_count,
-            include_protected,
-        )
         return {
             "status": "success",
-            "deleted_count": deleted_count,
-            "skipped_count": skipped_count,
+            "deleted_count": outcome.deleted_count,
+            "skipped_count": outcome.skipped_count,
             "include_protected": include_protected,
             "snapshots_with_deleted": snapshots_with_deleted,
         }
@@ -1420,6 +1222,10 @@ def register_routes(router, server):
             if pic.deleted:
                 return True
             pic.deleted = True
+            # Start (or restart) the scrapheap retention clock on the
+            # False -> True transition only, so re-issuing DELETE on an
+            # already-scrapheaped picture cannot silently extend its window.
+            pic.deleted_at = datetime.now(timezone.utc)
             session.add(pic)
             # Promote a live member to the leader slot: a soft-deleted picture
             # must not keep stack_position 0, or the whole stack disappears from
@@ -1495,6 +1301,7 @@ def register_routes(router, server):
             locked = locked_picture_ids(session, ids)
             newly_deleted: list[int] = []
             affected_stacks: set = set()
+            deleted_at = datetime.now(timezone.utc)
             for pid in ids:
                 if pid in locked:
                     continue
@@ -1502,6 +1309,10 @@ def register_routes(router, server):
                 if not pic or pic.deleted:
                     continue
                 pic.deleted = True
+                # Same retention clock as the single-picture soft delete; stamped
+                # only on the False -> True transition (already-deleted rows are
+                # skipped by the guard above).
+                pic.deleted_at = deleted_at
                 session.add(pic)
                 # Soft-deleting a stack member must not strand stack_position 0 (the
                 # whole stack would vanish from the grid). Collect the affected stacks

@@ -10,12 +10,14 @@ load-bearing and preserved verbatim.
 
 import os
 import shutil
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Session, create_engine, select
 from sqlalchemy import (
     delete as sa_delete,
     select as sa_select,
+    update as sa_update,
 )
 
 from pixlstash.db_models import (
@@ -101,8 +103,6 @@ class FullRestoreMixin:
                 snapshot_id=snapshot_id,
                 resource_type="full",
             )
-
-            from datetime import datetime, timezone
 
             self._active_job = {
                 "kind": "RESTORE",
@@ -561,6 +561,32 @@ class FullRestoreMixin:
                     len(shadow_ids),
                     len(rescued_ids),
                 )
+            # Re-arm the scrapheap retention clock. The swapped-in snapshot DB
+            # carries each scrapheap row's ORIGINAL ``deleted_at``, which for any
+            # snapshot older than the retention window is already expired — the
+            # first 15-minute sweep after the restore would then permanently
+            # destroy the very scrapheap the user just restored AND write
+            # ``file_removed=True``, so a second restore could not bring it back.
+            # That is the same failure family as the logged restore data-loss
+            # incident. Re-stamping to now gives every restored scrapheap picture
+            # a FULL fresh window, exactly as migration 0079 does for pre-existing
+            # rows at upgrade. This only ever moves a deadline LATER, so it cannot
+            # weaken any existing restore/ledger invariant: rows the ledger or the
+            # ghost/missing-file guards decided to drop were already deleted
+            # above, and ``deleted`` itself is untouched.
+            rearmed = session.execute(
+                sa_update(Picture)
+                .where(Picture.deleted.is_(True))
+                .values(deleted_at=datetime.now(timezone.utc))
+            )
+            if rearmed.rowcount:
+                logger.info(
+                    "RestoreService: re-armed the scrapheap retention clock on "
+                    "%d restored scrapheap picture(s) — each gets a full "
+                    "retention window from the restore, never a resumed one.",
+                    rearmed.rowcount,
+                )
+
             # NOTE: derived columns (embeddings + scores) are NOT NULL-reset
             # here. Snapshots now carry these blobs, so the swapped-in DB
             # already holds the real values and the WorkPlanner has nothing to

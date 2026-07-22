@@ -1,0 +1,280 @@
+// Scrapheap auto-purge retention helpers.
+//
+// Pure functions and constants only (no Vue, no network), so the settings
+// control, the scrapheap header, and the grid tiles all speak one vocabulary.
+//
+// IMPORTANT — the grace math lives on the server. The backend stamps every
+// scrapheap picture with an absolute `purge_at` timestamp that already accounts
+// for the grace period applied when the retention window is shortened (a FLOOR
+// measured from the reduction itself: after a lowering nothing is purgeable for
+// one more day, however old it is),
+// and leaves it `null` for pictures that will never be auto-purged (retention
+// "Never", or a protected reference-folder original). The frontend therefore
+// only ever formats the distance to that timestamp; it must never derive a
+// purge date from the retention window itself.
+
+/** Retention windows the UI offers, in days. `null` ("Never") is not in here. */
+export const RETENTION_DAY_OPTIONS = [30, 60, 90, 120];
+
+/** Backend default when the server has never been configured. */
+export const DEFAULT_RETENTION_DAYS = 30;
+
+/** The `<select>` value that stands for the `null` ("Never") retention. */
+export const NEVER_SELECT_VALUE = "never";
+
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Coerce a server-supplied retention value into `number | null`.
+ *
+ * `null` means "Never" and is preserved. A missing/blank/unparseable value is
+ * treated as "the server did not tell us" and falls back to `fallback`.
+ *
+ * @param {number|string|null|undefined} value - raw `scrapheap_retention_days`.
+ * @param {number|null} [fallback] - value to use when `value` is unusable.
+ * @returns {number|null} a positive whole number of days, or `null` for Never.
+ */
+export function normalizeRetentionDays(
+  value,
+  fallback = DEFAULT_RETENTION_DAYS,
+) {
+  if (value === null) return null;
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.round(parsed);
+}
+
+/**
+ * Human label for a retention window.
+ * @param {number|null} days - retention in days, or `null` for Never.
+ * @returns {string} e.g. `"30 days"`, `"1 day"`, `"Never"`.
+ */
+export function retentionLabel(days) {
+  if (days === null || days === undefined) return "Never";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+/**
+ * Map a retention value to the string a native `<select>` carries.
+ * @param {number|null} days
+ * @returns {string}
+ */
+export function retentionToSelectValue(days) {
+  return days === null || days === undefined
+    ? NEVER_SELECT_VALUE
+    : String(days);
+}
+
+/**
+ * Map a native `<select>` string back to a retention value.
+ * @param {string} value
+ * @returns {number|null} `null` for Never.
+ */
+export function selectValueToRetention(value) {
+  if (value === NEVER_SELECT_VALUE || value === null || value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
+}
+
+/**
+ * Build the `{ label, value }` option list for the retention select.
+ *
+ * The server declares which windows it accepts (`scrapheap_retention_choices`),
+ * so that list wins over the local default when present. A server configured
+ * out-of-band to some other positive value must still display truthfully rather
+ * than silently snapping to a neighbour — so an unrecognised current value is
+ * inserted in sorted order.
+ *
+ * @param {number|null} current - the currently configured retention.
+ * @param {number[]} [choices] - day values the server accepts, ascending.
+ * @returns {{label: string, value: string}[]}
+ */
+export function retentionSelectOptions(
+  current,
+  choices = RETENTION_DAY_OPTIONS,
+) {
+  const offered = (Array.isArray(choices) ? choices : [])
+    .map((d) => Number(d))
+    .filter((d) => Number.isFinite(d) && d > 0);
+  const days = offered.length
+    ? [...new Set(offered)]
+    : [...RETENTION_DAY_OPTIONS];
+  days.sort((a, b) => a - b);
+  if (
+    typeof current === "number" &&
+    Number.isFinite(current) &&
+    current > 0 &&
+    !days.includes(current)
+  ) {
+    days.push(current);
+    days.sort((a, b) => a - b);
+  }
+  return [
+    ...days.map((d) => ({ label: retentionLabel(d), value: String(d) })),
+    { label: "Never", value: NEVER_SELECT_VALUE },
+  ];
+}
+
+/**
+ * Parse a backend timestamp, treating a naive ISO string as UTC.
+ *
+ * Mirrors the quirk handled in `utils/snapshots.js`: the backend emits either a
+ * naive ISO string (UTC, no suffix) or one that already carries `Z` / a numeric
+ * offset. Blindly appending `Z` to the latter yields `+00:00Z`, which `Date`
+ * rejects.
+ *
+ * @param {string|null|undefined} isoStr
+ * @returns {number|null} epoch milliseconds, or `null` when unparseable.
+ */
+export function parseServerTimestamp(isoStr) {
+  if (!isoStr || typeof isoStr !== "string") return null;
+  const normalized =
+    isoStr.includes("T") &&
+    !isoStr.endsWith("Z") &&
+    !/[+-]\d{2}:\d{2}$/.test(isoStr)
+      ? `${isoStr}Z`
+      : isoStr;
+  const ms = new Date(normalized).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Whole days remaining until the server's `purge_at` timestamp.
+ *
+ * Rounds up, so a picture purging in six hours still reads "1 day left" rather
+ * than "0" — and clamps at zero for a timestamp that has already passed but
+ * whose sweep has not run yet.
+ *
+ * @param {string|null|undefined} purgeAt - the server's `purge_at` (ISO 8601).
+ * @param {number} [now] - epoch ms; injectable for tests.
+ * @returns {number|null} whole days remaining, or `null` when there is no
+ *   scheduled purge (Never / protected / unparseable).
+ */
+export function daysUntilPurge(purgeAt, now = Date.now()) {
+  const ms = parseServerTimestamp(purgeAt);
+  if (ms === null) return null;
+  return Math.max(0, Math.ceil((ms - now) / MS_PER_DAY));
+}
+
+/**
+ * Countdown label for a scrapheap tile.
+ * @param {number|null} days - output of {@link daysUntilPurge}.
+ * @returns {string} `""` when there is nothing to count down to.
+ */
+export function purgeCountdownLabel(days) {
+  if (days === null || days === undefined) return "";
+  if (days === 0) return "Purges today";
+  return days === 1 ? "1 day left" : `${days} days left`;
+}
+
+// ── Exemption reasons ───────────────────────────────────────────────────────
+// A scrapheap picture can be off the auto-purge clock for two different
+// reasons, and they are not interchangeable to the user: one is permanent and
+// intrinsic (it is their original file on disk), the other is a state they
+// control (the set is locked, and unlocking it puts the picture back on the
+// clock). Labelling both "Protected" tells the second user nothing actionable.
+
+/** Reference-folder original: the auto-purge never destroys the user's file. */
+export const EXEMPT_REASON_PROTECTED = "protected";
+
+/** Frozen by a locked picture set (including via a live stack sibling). */
+export const EXEMPT_REASON_LOCKED = "locked";
+
+/** Badge copy for a reference-folder original. */
+export const PROTECTED_BADGE_LABEL = "Protected";
+
+/** Full explanation, used as the protected badge's accessible label/tooltip. */
+export const PROTECTED_BADGE_TITLE = "Protected — won't auto-delete";
+
+/** Badge copy for a picture frozen by a locked set. */
+export const LOCKED_BADGE_LABEL = "Locked set";
+
+/**
+ * Full explanation for the locked badge. Names the *cause* (the set lock) and
+ * the lever (unlocking it), so the state does not read as unexplained.
+ */
+export const LOCKED_BADGE_TITLE =
+  "In a locked set — won't auto-delete. Unlock the set to put it back on the auto-empty clock.";
+
+/**
+ * Resolve why a scrapheap picture is exempt from the auto-purge, if it is.
+ *
+ * DEFENSIVE ORDERING: `auto_purge_exempt_reason` is newer than
+ * `auto_purge_exempt`. A server that sends the boolean but not the reason (or
+ * sends a reason this build does not know) falls back to "protected" — the
+ * pre-existing behaviour — so a version skew degrades to the old labelling
+ * rather than dropping the badge or mislabelling an exempt picture as expiring.
+ *
+ * @param {Object|null|undefined} picture - a scrapheap grid picture.
+ * @returns {"protected"|"locked"|null} the reason, or `null` when not exempt.
+ */
+export function resolveExemptReason(picture) {
+  if (!picture) return null;
+  const reason = picture.auto_purge_exempt_reason;
+  if (reason === EXEMPT_REASON_LOCKED) return EXEMPT_REASON_LOCKED;
+  if (reason === EXEMPT_REASON_PROTECTED) return EXEMPT_REASON_PROTECTED;
+  // Explicitly not exempt: trust the reason over a stale/absent boolean.
+  if (reason === null && !picture.auto_purge_exempt) return null;
+  return picture.auto_purge_exempt ? EXEMPT_REASON_PROTECTED : null;
+}
+
+/**
+ * Build the auto-purge badge descriptor for one scrapheap picture.
+ *
+ * Three mutually exclusive states, each carried by an icon AND text (never
+ * colour alone):
+ *   - exempt/protected → shield + "Protected"
+ *   - exempt/locked    → lock + "Locked set"
+ *   - otherwise        → countdown to the server's `purge_at`
+ *
+ * The purge date is never derived here: `purge_at` is authoritative and already
+ * carries the server's grace period.
+ *
+ * @param {Object} picture - a scrapheap grid picture.
+ * @param {Object} [options]
+ * @param {number} [options.now] - epoch ms; injectable for tests.
+ * @param {(iso: string) => string} [options.formatDate] - renders the exact
+ *   purge date for the countdown title. Defaults to the raw ISO string.
+ * @returns {{kind: string, icon: string, label: string, title: string}|null}
+ *   `null` when the picture has no auto-purge state to show.
+ */
+export function buildPurgeBadge(picture, options = {}) {
+  if (!picture) return null;
+  const { now = Date.now(), formatDate = (iso) => iso } = options;
+
+  const reason = resolveExemptReason(picture);
+  if (reason === EXEMPT_REASON_LOCKED) {
+    return {
+      kind: "locked",
+      icon: "mdi-lock-outline",
+      label: LOCKED_BADGE_LABEL,
+      title: LOCKED_BADGE_TITLE,
+    };
+  }
+  if (reason === EXEMPT_REASON_PROTECTED) {
+    return {
+      kind: "protected",
+      icon: "mdi-shield-check-outline",
+      label: PROTECTED_BADGE_LABEL,
+      title: PROTECTED_BADGE_TITLE,
+    };
+  }
+
+  const days = daysUntilPurge(picture.purge_at, now);
+  // No `purge_at` means nothing is scheduled (retention "Never") — no badge.
+  if (days === null) return null;
+  return {
+    // The last day gets an emphasised variant; the label carries the meaning
+    // either way (see the badge styles in ImageGrid.vue).
+    kind: days <= 1 ? "countdown-urgent" : "countdown",
+    icon: "mdi-delete-clock-outline",
+    label: purgeCountdownLabel(days),
+    title:
+      days === 0
+        ? "Auto-deletes today"
+        : `Auto-deletes ${formatDate(picture.purge_at)}`,
+  };
+}

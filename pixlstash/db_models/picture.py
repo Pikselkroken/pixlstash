@@ -199,6 +199,15 @@ class Picture(SQLModel, table=True):
     text_score: Optional[float] = Field(default=None, index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
+    # When the picture was soft-deleted to the scrapheap (UTC). Stamped on the
+    # False -> True transition and cleared on restore, so it always describes the
+    # CURRENT stay in the scrapheap. It is the clock the retention auto-purge
+    # runs on (see pixlstash/services/scrapheap_service.py); a soft-deleted row
+    # with deleted_at IS NULL is never auto-purged (fail-closed).
+    deleted_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column("deleted_at", type_=DateTime, nullable=True, index=True),
+    )
     stack_id: Optional[int] = Field(
         default=None, foreign_key="picturestack.id", index=True
     )

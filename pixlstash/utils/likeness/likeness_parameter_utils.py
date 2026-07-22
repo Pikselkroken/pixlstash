@@ -277,7 +277,9 @@ class LikenessParameterUtils:
         # serialised DB task worker, so no delete can interleave mid-call:
         # restrict the write to ids that still exist and skip the rest.
         ids = [u["id"] for u in updates]
-        existing = set(session.exec(select(Picture.id).where(Picture.id.in_(ids))).all())
+        existing = set(
+            session.exec(select(Picture.id).where(Picture.id.in_(ids))).all()
+        )
         live_updates = [u for u in updates if u["id"] in existing]
         missing = [pid for pid in ids if pid not in existing]
         if missing:
