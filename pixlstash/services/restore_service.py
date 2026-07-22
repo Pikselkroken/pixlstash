@@ -681,6 +681,7 @@ class RestoreService:
                     "path_sha": r.path_sha,
                     "pixel_sha": r.pixel_sha,
                     "deleted_at": r.deleted_at,
+                    "file_removed": r.file_removed,
                 }
                 for r in s.exec(select(DeletedFileLog)).all()
             ]
@@ -1954,14 +1955,26 @@ class RestoreService:
         check does not mistake an intentional purge for a transient mount
         failure.
 
+        Only rows with ``file_removed=True`` are returned. A ``file_removed=
+        False`` row records a picture removed from the library whose on-disk
+        file was deliberately KEPT (a protected reference-folder picture): its
+        content is NOT gone, so restore must never treat it as a permanent
+        deletion and drop the alive, file-present picture. The scanner reads the
+        ledger separately (all rows) to avoid auto re-importing those kept paths.
+        Existing pre-migration rows default to ``file_removed=True`` — they
+        predate the distinction and are treated as genuinely deleted so the
+        never-resurrect guarantee holds for them.
+
         Returns:
             ``(path_shas, pixel_shas)`` — path and content hashes recorded as
-            permanently deleted.
+            permanently deleted (file actually removed from disk).
         """
 
         def _load(session: Session) -> tuple[set[str], set[str]]:
             rows = session.execute(
-                sa_select(DeletedFileLog.path_sha, DeletedFileLog.pixel_sha)
+                sa_select(DeletedFileLog.path_sha, DeletedFileLog.pixel_sha).where(
+                    DeletedFileLog.file_removed.is_(True)
+                )
             ).all()
             path_shas = {ps for ps, _ in rows if ps}
             pixel_shas = {sha for _, sha in rows if sha}

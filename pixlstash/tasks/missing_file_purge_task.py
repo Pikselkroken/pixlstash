@@ -96,6 +96,10 @@ class MissingFilePurgeTask(BaseTask):
                             path_sha=path_sha,
                             pixel_sha=pic.pixel_sha,
                             deleted_at=now,
+                            # The file is genuinely gone from disk (that is why
+                            # it is being purged), so this is a real permanent
+                            # deletion restore must never resurrect.
+                            file_removed=True,
                         )
                     )
 
