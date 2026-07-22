@@ -58,7 +58,7 @@ class ScrapheapRetentionPurgeTask(BaseTask):
 
     def _run_task(self):
         if not self._picture_ids:
-            return {"purged": 0, "skipped": 0, "retained": 0}
+            return {"purged": 0, "skipped": 0, "skipped_locked": 0, "retained": 0}
 
         logger.info(
             "ScrapheapRetentionPurgeTask: auto-purging %d retention-expired "
@@ -66,18 +66,17 @@ class ScrapheapRetentionPurgeTask(BaseTask):
             len(self._picture_ids),
             self._picture_ids,
         )
-        # Second-layer guard, re-evaluated HERE rather than reusing the finder's
-        # verdict. This task runs at LOW priority and may sit queued behind other
-        # work, so a picture restored and re-deleted in the meantime would carry a
-        # brand-new deleted_at; recomputing the deadline (and the locked-set
-        # freeze) against current state is what stops that TOCTOU from destroying
-        # an in-window picture.
-        guard = scrapheap_service.build_retention_guard(
-            self._vault,
-            datetime.now(timezone.utc),
-            self._vault.scrapheap_retention_days,
-            self._vault.scrapheap_retention_reduced_at,
-            self._picture_ids,
+        # Second-layer deadline guard, re-evaluated HERE rather than reusing the
+        # finder's verdict. This task runs at LOW priority and may sit queued
+        # behind other work, so a picture restored and re-deleted in the meantime
+        # would carry a brand-new deleted_at; recomputing the deadline against
+        # current state is what stops that TOCTOU from destroying an in-window
+        # picture. (The locked-set freeze is enforced unconditionally inside the
+        # purge plan, on every path, so it is not part of this guard.)
+        guard = scrapheap_service.RetentionGuard(
+            now=datetime.now(timezone.utc),
+            retention_days=self._vault.scrapheap_retention_days,
+            reduced_at=self._vault.scrapheap_retention_reduced_at,
         )
         outcome = scrapheap_service.purge_scrapheap_pictures(
             self._vault,
@@ -88,6 +87,13 @@ class ScrapheapRetentionPurgeTask(BaseTask):
             include_protected=False,
             retention_guard=guard,
         )
+        if outcome.skipped_locked:
+            logger.info(
+                "ScrapheapRetentionPurgeTask: skipped %d picture(s) frozen by a "
+                "locked picture-set: %s",
+                len(outcome.skipped_locked),
+                outcome.skipped_locked,
+            )
         if outcome.retained_count:
             logger.info(
                 "ScrapheapRetentionPurgeTask: retained %d picture(s) that no "
@@ -120,5 +126,6 @@ class ScrapheapRetentionPurgeTask(BaseTask):
         return {
             "purged": outcome.deleted_count,
             "skipped": outcome.skipped_count,
+            "skipped_locked": len(outcome.skipped_locked),
             "retained": outcome.retained_count,
         }

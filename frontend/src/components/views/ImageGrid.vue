@@ -243,9 +243,16 @@
       :protected-count="deleteForeverProtectedCount"
       :unprotected-count="deleteForeverUnprotectedCount"
       :protected-paths="deleteForeverProtectedPaths"
+      :locked-count="deleteForeverLockedCount"
       :busy="deleteForeverBusy"
       @confirm="confirmDeleteForever"
       @cancel="cancelDeleteForever"
+    />
+    <LockedDeleteNoticeDialog
+      v-model:open="lockedDeleteNoticeOpen"
+      :title="lockedDeleteNotice.title"
+      :body="lockedDeleteNotice.body"
+      :hint="lockedDeleteNotice.hint"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -981,6 +988,7 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import { buildPurgeBadge } from "../../utils/retention.js";
+import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -1001,6 +1009,7 @@ import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
+import LockedDeleteNoticeDialog from "../widgets/LockedDeleteNoticeDialog.vue";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   arraysEqualByString,
@@ -3207,6 +3216,26 @@ function handleRemoveFromCharacter(payload) {
   emit("refresh-sidebar");
 }
 
+// ── "Frozen by a locked set" outcome notice ──────────────────────────────────
+// The bulk delete skips locked pictures and reports them in `skipped_locked`.
+// Surfacing that is the whole point: a 200 that deleted nothing must never look
+// like success. `useNoticeStore` is still a headless scaffold (no mounted host),
+// so a toast would be swallowed — this uses the shipped confirm-dialog pattern
+// instead. Migrate to the notice rail once a visible host exists.
+const lockedDeleteNoticeOpen = ref(false);
+const lockedDeleteNotice = ref({ title: "", body: "", hint: "" });
+
+/**
+ * Show the locked-set outcome, if there is one to show.
+ * @param {{title: string, body: string, hint: string}|null} message - from
+ *   `buildLockedDeleteMessage`; `null` means nothing was skipped, so stay quiet.
+ */
+function showLockedDeleteNotice(message) {
+  if (!message) return;
+  lockedDeleteNotice.value = message;
+  lockedDeleteNoticeOpen.value = true;
+}
+
 async function deleteSelected() {
   if (!selectedImageIds.value.length) return;
   const isScrapheapSelection = isScrapheapView.value;
@@ -3281,6 +3310,25 @@ async function deleteSelected() {
     return;
   }
 
+  // Pictures frozen by a locked set are SKIPPED by the bulk delete — the server
+  // returns 200 with `skipped_locked`. If every id in the batch is one of those,
+  // the request provably cannot delete anything, so don't send it: explain
+  // instead. (Attempting and silently no-op'ing is what produced the reported
+  // bug.) The client-side lock map is the same source the grid already gates its
+  // context menu on; the server stays authoritative for every mixed batch below.
+  const lockedInBatch = idsToRemove.filter((id) =>
+    lockedSetsStore.isLocked(id),
+  );
+  if (idsToRemove.length && lockedInBatch.length === idsToRemove.length) {
+    showLockedDeleteNotice(
+      buildLockedDeleteMessage({
+        lockedCount: lockedInBatch.length,
+        deletedCount: 0,
+      }),
+    );
+    return;
+  }
+
   const backendUrl = props.backendUrl;
   try {
     // Soft-delete via the bulk endpoint instead of one DELETE per id, which
@@ -3289,15 +3337,38 @@ async function deleteSelected() {
     // the server's per-request id cap so a huge selection is a handful of
     // requests, not thousands; each chunk broadcasts a single ``removed`` event.
     const BULK_DELETE_CHUNK = 1000;
+    // Ids the server refused because a locked set freezes them. Collected across
+    // every chunk so the outcome message counts the whole operation.
+    const skippedLocked = new Set();
     for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
       const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
-      await apiClient.delete(`${backendUrl}/pictures`, {
+      const resp = await apiClient.delete(`${backendUrl}/pictures`, {
         data: { picture_ids: chunk },
       });
+      const skipped = resp?.data?.skipped_locked;
+      if (Array.isArray(skipped)) {
+        for (const id of skipped) skippedLocked.add(String(id));
+      }
     }
-    removeImagesById(idsToRemove);
-    selectedImageIds.value = [];
-    lastSelectedImageId.value = null;
+
+    // Only drop the tiles the server actually deleted. Removing the skipped ones
+    // too would hide pictures that are still in the library until the next
+    // refetch — a second, quieter version of the same lie.
+    const removedIds = idsToRemove.filter(
+      (id) => !skippedLocked.has(String(id)),
+    );
+    removeImagesById(removedIds);
+    // Keep the frozen pictures selected: they are still there, and the user's
+    // next move (after unlocking the set) is to delete exactly them.
+    selectedImageIds.value = selectedImageIds.value.filter((id) =>
+      skippedLocked.has(String(id)),
+    );
+    // Drop the range-selection anchor unless it is one of the survivors —
+    // otherwise a later shift-click would anchor on a deleted picture.
+    const stillSelected = new Set(selectedImageIds.value.map(String));
+    if (!stillSelected.has(String(lastSelectedImageId.value))) {
+      lastSelectedImageId.value = null;
+    }
     if (deletedExpandedStackLeader) {
       // Repopulate so the promoted stack leader and remaining members reappear
       // (same pattern as create/dissolve/remove-from-stack).
@@ -3305,6 +3376,12 @@ async function deleteSelected() {
       debouncedFetchAllGridImages();
     }
     emit("refresh-sidebar");
+    showLockedDeleteNotice(
+      buildLockedDeleteMessage({
+        lockedCount: skippedLocked.size,
+        deletedCount: removedIds.length,
+      }),
+    );
   } catch (err) {
     alert(`Error deleting images: ${err?.message || err}`);
   }
@@ -3749,6 +3826,10 @@ const deleteForeverTotalCount = ref(0);
 const deleteForeverProtectedCount = ref(0);
 const deleteForeverUnprotectedCount = ref(0);
 const deleteForeverProtectedPaths = ref([]);
+// Pictures a locked set freezes. Destroyed by NEITHER delete-forever action, so
+// the dialog states it up front. Defensive: a server that has not shipped
+// `locked_count` yet yields 0, i.e. the pre-existing copy, unchanged.
+const deleteForeverLockedCount = ref(0);
 const deleteForeverMode = ref("selection"); // "selection" | "all"
 const deleteForeverIds = ref([]);
 
@@ -3784,8 +3865,27 @@ async function loadDeletePreview(ids) {
     deleteForeverProtectedPaths.value = Array.isArray(d.protected)
       ? d.protected.map((p) => p?.file_path).filter(Boolean)
       : [];
+    deleteForeverLockedCount.value = Number(d.locked_count) || 0;
     if (deleteForeverTotalCount.value === 0) {
       // Nothing to delete (e.g. the scrapheap was emptied concurrently).
+      return;
+    }
+    if (
+      deleteForeverLockedCount.value > 0 &&
+      deleteForeverProtectedCount.value === 0 &&
+      deleteForeverUnprotectedCount.value === 0
+    ) {
+      // Nothing in either destroyable bucket: every targeted picture is frozen
+      // by a lock, so both actions would be no-ops. Read straight off the
+      // server's disjoint classification rather than inferring it from
+      // `total_count`, so the UI can't disagree with the sweep about what
+      // survives. Explain instead of opening a destructive confirm.
+      showLockedDeleteNotice(
+        buildLockedDeleteMessage({
+          lockedCount: deleteForeverLockedCount.value,
+          deletedCount: 0,
+        }),
+      );
       return;
     }
     deleteForeverOpen.value = true;
@@ -3824,19 +3924,43 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     const resp = await apiClient.delete(`${backendUrl}/pictures/scrapheap`, {
       data: { picture_ids: idsToRemove, include_protected: includeProtected },
     });
+    // Locked pictures survive a purge too, and this endpoint reports them under
+    // the same `skipped_locked` name as the bulk soft-delete. Same rule as
+    // there: never drop a tile the server kept.
+    const skippedLocked = new Set(
+      (Array.isArray(resp?.data?.skipped_locked)
+        ? resp.data.skipped_locked
+        : []
+      ).map(String),
+    );
     if (includeProtected) {
-      removeImagesById(idsToRemove);
+      removeImagesById(
+        idsToRemove.filter((id) => !skippedLocked.has(String(id))),
+      );
     } else {
       // The protected originals in the selection are intentionally kept — refetch
       // so the grid reflects exactly what the server removed.
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
     }
-    selectedImageIds.value = [];
-    lastSelectedImageId.value = null;
+    // Keep the frozen pictures selected so the user can retry after unlocking.
+    selectedImageIds.value = selectedImageIds.value.filter((id) =>
+      skippedLocked.has(String(id)),
+    );
+    const stillSelected = new Set(selectedImageIds.value.map(String));
+    if (!stillSelected.has(String(lastSelectedImageId.value))) {
+      lastSelectedImageId.value = null;
+    }
     updateVisibleThumbnails();
     emit("refresh-sidebar");
     showSnapshotsWithDeleted(resp);
+    showLockedDeleteNotice(
+      buildLockedDeleteMessage({
+        lockedCount: skippedLocked.size,
+        // Counted from the server's own report, not from what we asked for.
+        deletedCount: idsToRemove.length - skippedLocked.size,
+      }),
+    );
   } catch (err) {
     alert(`Error deleting images: ${err?.message || err}`);
   } finally {

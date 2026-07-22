@@ -181,6 +181,10 @@ class ScrapheapDeleteResponse(BaseModel):
     # ``include_protected`` was false (rows kept, files untouched, still in the
     # scrapheap). 0 when ``include_protected`` is true or nothing was protected.
     skipped_count: int = 0
+    # Ids left intact because a locked picture-set freezes them. A lock binds on
+    # EVERY path — including ``include_protected=true`` — so these are never
+    # destroyed by this endpoint at any flag value. Unlock the set to delete them.
+    skipped_locked: list[int] = []
     # Echoes the effective ``include_protected`` flag for this call.
     include_protected: bool = False
     # Snapshots that still contain metadata for the just-purged pictures, each
@@ -203,10 +207,22 @@ class ScrapheapDeletePreviewResponse(BaseModel):
 
     # Authoritative counts over the FULL delete set (never a virtualized/grid
     # subset), so the confirmation names every protected original at risk.
+    #
+    # The three counts are DISJOINT and sum to total_count, keyed on which action
+    # destroys the row rather than on which properties it has, so no count can
+    # overstate destruction:
+    #   locked_count      -> destroyed by NEITHER button (a lock overrides
+    #                        include_protected, so a locked+protected row counts
+    #                        here, not under protected_count);
+    #   protected_count   -> destroyed only by "Delete all" (include_protected=true);
+    #   unprotected_count -> destroyed by both buttons.
     total_count: int
     protected_count: int
+    locked_count: int = 0
     unprotected_count: int
     protected: list[ScrapheapProtectedItem]
+    # Ids frozen by a locked picture-set, so the dialog can name them.
+    locked: list[int] = []
 
 
 def _parse_scrapheap_ids(payload: dict | None) -> list[int] | None:
@@ -1093,12 +1109,24 @@ def register_routes(router, server):
         "/pictures/scrapheap/delete-preview",
         summary="Preview a scrapheap delete-forever",
         description=(
-            "Authoritative preview of a scrapheap delete-forever. Reports the "
-            "full delete set and every protected reference-folder original "
-            "(allow_delete_file=False) that a delete-forever would remove from "
-            "disk, computed over ALL matching scrapheap rows — never a "
-            "virtualized/grid subset — so the confirmation can name each file at "
-            "risk. Body {ids: int[] | null}; null/omitted = the entire scrapheap."
+            "Authoritative preview of a scrapheap delete-forever, computed over "
+            "ALL matching scrapheap rows — never a virtualized/grid subset — so "
+            "the confirmation can name each file at risk. Body "
+            "{ids: int[] | null}; null/omitted = the entire scrapheap.\n\n"
+            "`total_count` splits into three DISJOINT counts that sum to it, "
+            "keyed on which action destroys the row so no count overstates "
+            "destruction:\n\n"
+            "- `locked_count` — frozen by a locked picture set; destroyed by "
+            "NEITHER option. A lock overrides `include_protected`, so a row that "
+            "is locked AND protected counts here, not under `protected_count`.\n"
+            "- `protected_count` — protected reference-folder originals "
+            "(`allow_delete_file=false`) that are not locked; destroyed only by "
+            "`include_protected=true`. `protected` lists each one's absolute "
+            "on-disk path.\n"
+            "- `unprotected_count` — neither; destroyed by both options.\n\n"
+            'So "Delete unprotected only" destroys exactly `unprotected_count` '
+            'and "Delete all" destroys exactly '
+            "`unprotected_count + protected_count`."
         ),
         response_model=ScrapheapDeletePreviewResponse,
     )
@@ -1109,29 +1137,31 @@ def register_routes(router, server):
             return {
                 "total_count": 0,
                 "protected_count": 0,
+                "locked_count": 0,
                 "unprotected_count": 0,
                 "protected": [],
+                "locked": [],
             }
         no_delete_folder_ids = scrapheap_service.fetch_no_delete_folder_ids(
             server.vault
         )
+        # Same shared lock lookup the purge and the listing use, so the preview
+        # cannot promise a deletion the delete endpoint will then refuse.
+        locked_ids = scrapheap_service.locked_scrapheap_picture_ids(
+            server.vault, [row.id for row in rows if row.id is not None]
+        )
+        preview = scrapheap_service.classify_delete_preview(
+            rows, no_delete_folder_ids, locked_ids
+        )
+        # Resolve the at-risk originals to absolute on-disk paths so the confirm
+        # dialog can name each file "Delete all" would os.remove.
         image_root = server.vault.image_root
-        protected_items: list[dict] = []
-        unprotected_count = 0
-        for row in rows:
-            if row.is_protected(no_delete_folder_ids):
-                abs_path = ImageUtils.resolve_picture_path(image_root, row.file_path)
-                protected_items.append(
-                    {"id": row.id, "file_path": abs_path or row.file_path or ""}
-                )
-            else:
-                unprotected_count += 1
-        return {
-            "total_count": len(rows),
-            "protected_count": len(protected_items),
-            "unprotected_count": unprotected_count,
-            "protected": protected_items,
-        }
+        for item in preview["protected"]:
+            item["file_path"] = (
+                ImageUtils.resolve_picture_path(image_root, item["file_path"])
+                or item["file_path"]
+            )
+        return preview
 
     @router.delete(
         "/pictures/scrapheap",
@@ -1143,7 +1173,15 @@ def register_routes(router, server):
             "reference-folder originals in the selection are SKIPPED ENTIRELY "
             "(row kept, file untouched, still in the scrapheap) and only "
             "unprotected pictures are purged; when true, protected originals are "
-            "destroyed too."
+            "destroyed too.\n\n"
+            "Pictures frozen by a LOCKED picture set (directly or via a stack "
+            "sibling) are never destroyed here, at EITHER include_protected "
+            "value — a locked set is a hard whole-set freeze, and this is the "
+            "one irreversible path, so it must not be the one that ignores it. "
+            "They are skipped and returned in `skipped_locked` rather than "
+            "failing the request; unlock the set to delete them. Call "
+            "`POST /pictures/scrapheap/delete-preview` first to show the user "
+            "exactly what each option will destroy."
         ),
         response_model=ScrapheapDeleteResponse,
     )
@@ -1194,6 +1232,7 @@ def register_routes(router, server):
             "status": "success",
             "deleted_count": outcome.deleted_count,
             "skipped_count": outcome.skipped_count,
+            "skipped_locked": outcome.skipped_locked,
             "include_protected": include_protected,
             "snapshots_with_deleted": snapshots_with_deleted,
         }

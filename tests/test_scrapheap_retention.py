@@ -452,7 +452,9 @@ def test_purge_removes_expired_unprotected_and_skips_protected(server, tmp_path)
     _set_deleted_at(server, prot_id, long_ago)
 
     result = _run_purge_sweep(server)
-    assert result == {"purged": 1, "skipped": 0, "retained": 0}, result
+    assert result == {"purged": 1, "skipped": 0, "skipped_locked": 0, "retained": 0}, (
+        result
+    )
 
     # Unprotected: row gone, file destroyed, ledger says permanently removed.
     assert _get_picture(server, unprot_id) is None
@@ -494,7 +496,12 @@ def test_purge_task_refuses_a_protected_id_handed_to_it_directly(server, tmp_pat
     )
 
     task = ScrapheapRetentionPurgeTask(server.vault, [prot_id])
-    assert task.run() == {"purged": 0, "skipped": 1, "retained": 0}
+    assert task.run() == {
+        "purged": 0,
+        "skipped": 1,
+        "skipped_locked": 0,
+        "retained": 0,
+    }
 
     prot = _get_picture(server, prot_id)
     assert prot is not None and prot.deleted is True
@@ -612,7 +619,9 @@ def test_a_fresh_reduction_spares_every_age_then_expires(server, tmp_path):
         30, datetime.now(timezone.utc) - timedelta(days=2)
     )
     result = _run_purge_sweep(server)
-    assert result == {"purged": 2, "skipped": 0, "retained": 0}, result
+    assert result == {"purged": 2, "skipped": 0, "skipped_locked": 0, "retained": 0}, (
+        result
+    )
     for pid, path in ((young_id, young_path), (old_id, old_path)):
         assert _get_picture(server, pid) is None
         assert not os.path.isfile(path)
@@ -663,7 +672,9 @@ def test_lowering_the_window_spares_an_ancient_scrapheap(server, tmp_path):
         30, datetime.now(timezone.utc) - timedelta(days=2)
     )
     result = _run_purge_sweep(server)
-    assert result == {"purged": 1, "skipped": 0, "retained": 0}, result
+    assert result == {"purged": 1, "skipped": 0, "skipped_locked": 0, "retained": 0}, (
+        result
+    )
     assert _get_picture(server, pic_id) is None
 
 
@@ -683,7 +694,9 @@ def test_no_grace_for_pictures_deleted_after_the_reduction(server, tmp_path):
     server.vault.set_scrapheap_retention(30, now - timedelta(days=90))
 
     result = _run_purge_sweep(server)
-    assert result == {"purged": 1, "skipped": 0, "retained": 0}, result
+    assert result == {"purged": 1, "skipped": 0, "skipped_locked": 0, "retained": 0}, (
+        result
+    )
     assert _get_picture(server, pic_id) is None
     assert not os.path.isfile(path)
 
@@ -744,11 +757,14 @@ def test_auto_purge_never_destroys_a_locked_set_member(server, tmp_path):
     )
     assert _run_purge_sweep(server) is None
 
-    # Layer 2: refused even when handed to the task directly.
+    # Layer 2: refused even when handed to the task directly. The lock is
+    # reported as its own outcome, not folded into the retention "retained"
+    # bucket — it is a different, path-independent reason to keep the row.
     assert ScrapheapRetentionPurgeTask(server.vault, [pic_id]).run() == {
         "purged": 0,
         "skipped": 0,
-        "retained": 1,
+        "skipped_locked": 1,
+        "retained": 0,
     }
     assert _get_picture(server, pic_id) is not None
     assert os.path.isfile(path)
@@ -779,7 +795,9 @@ def test_auto_purge_resumes_once_the_set_is_unlocked(server, tmp_path):
     server.vault.db.run_task(_unlock)
 
     result = _run_purge_sweep(server)
-    assert result == {"purged": 1, "skipped": 0, "retained": 0}, result
+    assert result == {"purged": 1, "skipped": 0, "skipped_locked": 0, "retained": 0}, (
+        result
+    )
     assert _get_picture(server, pic_id) is None
     assert not os.path.isfile(path)
 
@@ -807,6 +825,7 @@ def test_task_re_checks_the_deadline_and_refuses_an_in_window_picture(server, tm
     assert ScrapheapRetentionPurgeTask(server.vault, [pic_id]).run() == {
         "purged": 0,
         "skipped": 0,
+        "skipped_locked": 0,
         "retained": 1,
     }
     assert _get_picture(server, pic_id) is not None
@@ -845,13 +864,278 @@ def test_restore_then_redelete_between_planning_and_purge_is_safe(server, tmp_pa
     )
     assert client.delete(f"/pictures/{pic_id}").status_code == 200
 
-    assert task.run() == {"purged": 0, "skipped": 0, "retained": 1}
+    assert task.run() == {
+        "purged": 0,
+        "skipped": 0,
+        "skipped_locked": 0,
+        "retained": 1,
+    }
     assert _get_picture(server, pic_id) is not None, (
         "A picture re-deleted between planning and purge is inside a fresh "
         "window and must survive"
     )
     assert os.path.isfile(path)
     assert _ledger_flags_for(server, path) == []
+
+
+# ── The manual delete-forever must respect a locked set too ───────────────────
+
+
+def _delete_forever(client, include_protected, ids=None):
+    body = {"include_protected": include_protected}
+    if ids is not None:
+        body["picture_ids"] = ids
+    resp = client.request("DELETE", "/api/v1/pictures/scrapheap", json=body)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+@pytest.mark.parametrize("include_protected", [False, True])
+def test_delete_forever_never_destroys_a_locked_member(
+    server, tmp_path, include_protected
+):
+    """The IRREVERSIBLE path must honour the lock at BOTH flag values.
+
+    ``DELETE /pictures/{id}`` refuses a locked member with 423, the bulk
+    soft-delete skips it, and the auto-purge sweep skips it — so this endpoint
+    destroying it outright had the safety ordering exactly backwards.
+    ``include_protected=true`` overrides the reference-folder protection; it does
+    NOT override a locked set.
+    """
+    client = _client(server)
+    locked_id, locked_path = _make_reference_picture(
+        server, str(tmp_path / "locked"), "frozen.png", allow_delete=True
+    )
+    free_id, free_path = _make_reference_picture(
+        server, str(tmp_path / "free"), "free.png", allow_delete=True
+    )
+    for pid in (locked_id, free_id):
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+    _lock_picture_in_set(server, locked_id)
+
+    body = _delete_forever(client, include_protected)
+    assert body["skipped_locked"] == [locked_id], body
+    assert body["deleted_count"] == 1, body
+
+    # Locked: row kept AND still soft-deleted, file kept, NO ledger row.
+    locked_pic = _get_picture(server, locked_id)
+    assert locked_pic is not None and locked_pic.deleted is True
+    assert os.path.isfile(locked_path), (
+        "A locked member's file must survive delete-forever at any flag value"
+    )
+    assert _ledger_flags_for(server, locked_path) == [], (
+        "A skipped locked picture must write no permanent-deletion ledger row"
+    )
+
+    # Over-blocking is its own regression: the unlocked sibling still dies.
+    assert _get_picture(server, free_id) is None
+    assert not os.path.isfile(free_path)
+
+
+@pytest.mark.parametrize("include_protected", [False, True])
+def test_delete_forever_of_a_locked_protected_picture_keeps_it(
+    server, tmp_path, include_protected
+):
+    """Locked AND protected: the lock is the binding blocker either way."""
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "both"), "both.png", allow_delete=False
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    _lock_picture_in_set(server, pic_id)
+
+    body = _delete_forever(client, include_protected)
+    assert body["skipped_locked"] == [pic_id], body
+    assert body["deleted_count"] == 0, body
+    assert body["skipped_count"] == 0, (
+        "A locked row is reported as locked, not double-counted as protected"
+    )
+    assert _get_picture(server, pic_id) is not None
+    assert os.path.isfile(path)
+    assert _ledger_flags_for(server, path) == []
+
+
+def test_delete_forever_destroys_the_member_once_the_set_is_unlocked(server, tmp_path):
+    """The other direction: the lock defers destruction, it does not forbid it."""
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "later.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    set_id = _lock_picture_in_set(server, pic_id)
+
+    body = _delete_forever(client, False)
+    assert body["skipped_locked"] == [pic_id]
+    assert _get_picture(server, pic_id) is not None
+
+    def _unlock(session: Session):
+        pset = session.get(PictureSet, set_id)
+        pset.locked = False
+        session.add(pset)
+        session.commit()
+
+    server.vault.db.run_task(_unlock)
+
+    body = _delete_forever(client, False)
+    assert body["skipped_locked"] == [], body
+    assert body["deleted_count"] == 1, body
+    assert _get_picture(server, pic_id) is None
+    assert not os.path.isfile(path)
+
+
+def test_delete_forever_skips_a_locked_stack_sibling(server, tmp_path):
+    """A stack sibling of a locked-set member is frozen transitively — the
+    manual path uses the same shared lookup, so it inherits that."""
+    client = _client(server)
+    member_id, _ = _make_reference_picture(
+        server, str(tmp_path / "m"), "m.png", allow_delete=True
+    )
+    sibling_id, sibling_path = _make_reference_picture(
+        server, str(tmp_path / "s"), "s.png", allow_delete=True
+    )
+
+    def _stack(session: Session):
+        stack = PictureStack()
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for pos, pid in enumerate((member_id, sibling_id)):
+            pic = session.get(Picture, pid)
+            pic.stack_id = stack.id
+            pic.stack_position = pos
+            session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(_stack)
+    for pid in (member_id, sibling_id):
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+    _lock_picture_in_set(server, member_id)
+
+    body = _delete_forever(client, True)
+    assert sorted(body["skipped_locked"]) == sorted([member_id, sibling_id]), body
+    assert body["deleted_count"] == 0
+    assert os.path.isfile(sibling_path)
+
+
+def test_delete_forever_still_destroys_everything_it_should(server, tmp_path):
+    """Over-blocking regression guard: with nothing locked, behaviour is
+    unchanged from before the lock check existed."""
+    client = _client(server)
+    prot_id, prot_path = _make_reference_picture(
+        server, str(tmp_path / "prot"), "p.png", allow_delete=False
+    )
+    unprot_id, unprot_path = _make_reference_picture(
+        server, str(tmp_path / "unprot"), "u.png", allow_delete=True
+    )
+    for pid in (prot_id, unprot_id):
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+
+    body = _delete_forever(client, False)
+    assert body == {
+        **body,
+        "deleted_count": 1,
+        "skipped_count": 1,
+        "skipped_locked": [],
+    }, body
+    assert _get_picture(server, unprot_id) is None
+    assert not os.path.isfile(unprot_path)
+    assert _get_picture(server, prot_id) is not None
+    assert os.path.isfile(prot_path)
+
+    body = _delete_forever(client, True)
+    assert body["deleted_count"] == 1, body
+    assert body["skipped_locked"] == []
+    assert _get_picture(server, prot_id) is None
+    assert not os.path.isfile(prot_path)
+    assert _ledger_flags_for(server, prot_path) == [True]
+
+
+# ── Delete preview counts ─────────────────────────────────────────────────────
+
+
+def _preview(client, ids=None):
+    resp = client.post("/pictures/scrapheap/delete-preview", json={"ids": ids})
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_delete_preview_counts_are_disjoint_and_honest(server, tmp_path):
+    """The three counts must partition the set, keyed on what each button kills.
+
+    A locked+protected row counts as LOCKED, never as protected: counting it
+    under ``protected_count`` would tell the user "Delete all" destroys it when
+    the lock in fact stops that.
+    """
+    client = _client(server)
+    locked_only, _ = _make_reference_picture(
+        server, str(tmp_path / "l"), "l.png", allow_delete=True
+    )
+    protected_only, prot_path = _make_reference_picture(
+        server, str(tmp_path / "p"), "p.png", allow_delete=False
+    )
+    both, _ = _make_reference_picture(
+        server, str(tmp_path / "b"), "b.png", allow_delete=False
+    )
+    neither, _ = _make_reference_picture(
+        server, str(tmp_path / "n"), "n.png", allow_delete=True
+    )
+    for pid in (locked_only, protected_only, both, neither):
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+    _lock_picture_in_set(server, locked_only)
+    _lock_picture_in_set(server, both)
+
+    body = _preview(client)
+    assert body["total_count"] == 4, body
+    assert body["locked_count"] == 2, body
+    assert body["protected_count"] == 1, "locked+protected counts as locked only"
+    assert body["unprotected_count"] == 1, body
+    assert (
+        body["locked_count"] + body["protected_count"] + body["unprotected_count"]
+        == body["total_count"]
+    ), "the three buckets must partition the delete set"
+    assert sorted(body["locked"]) == sorted([locked_only, both])
+    assert [item["id"] for item in body["protected"]] == [protected_only]
+    assert [item["file_path"] for item in body["protected"]] == [prot_path], (
+        "the at-risk original must be named by absolute on-disk path"
+    )
+
+
+def test_delete_preview_counts_match_what_each_action_destroys(server, tmp_path):
+    """The dialog's promise, verified against the endpoint that fulfils it."""
+    client = _client(server)
+    locked_id, _ = _make_reference_picture(
+        server, str(tmp_path / "l"), "l.png", allow_delete=True
+    )
+    prot_id, _ = _make_reference_picture(
+        server, str(tmp_path / "p"), "p.png", allow_delete=False
+    )
+    plain_id, _ = _make_reference_picture(
+        server, str(tmp_path / "n"), "n.png", allow_delete=True
+    )
+    for pid in (locked_id, prot_id, plain_id):
+        assert client.delete(f"/pictures/{pid}").status_code == 200
+    _lock_picture_in_set(server, locked_id)
+
+    body = _preview(client)
+    unprotected_count = body["unprotected_count"]
+    protected_count = body["protected_count"]
+
+    # "Delete unprotected only" destroys exactly unprotected_count.
+    assert _delete_forever(client, False)["deleted_count"] == unprotected_count
+    # "Delete all" then destroys exactly the protected remainder.
+    assert _delete_forever(client, True)["deleted_count"] == protected_count
+    # ...and the locked one survived both, as the preview implied.
+    assert _get_picture(server, locked_id) is not None
+
+
+def test_delete_preview_empty_scrapheap(server):
+    body = _preview(_client(server))
+    assert body["total_count"] == 0
+    assert body["locked_count"] == 0
+    assert body["protected_count"] == 0
+    assert body["unprotected_count"] == 0
+    assert body["locked"] == []
+    assert body["protected"] == []
 
 
 def test_manual_delete_forever_is_not_subject_to_the_retention_guard(server, tmp_path):
@@ -1107,7 +1391,9 @@ def test_listing_agrees_with_the_sweep_about_a_locked_picture(server, tmp_path):
         "...and it is genuinely overdue"
     )
     result = _run_purge_sweep(server)
-    assert result == {"purged": 1, "skipped": 0, "retained": 0}, result
+    assert result == {"purged": 1, "skipped": 0, "skipped_locked": 0, "retained": 0}, (
+        result
+    )
     assert _get_picture(server, pic_id) is None
     assert not os.path.isfile(path)
 
