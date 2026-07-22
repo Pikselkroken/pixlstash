@@ -82,6 +82,7 @@ _DB_CALL_PATTERN = re.compile(r"vault\.db\.run_(task|immediate_read_task)")
 # Remove each file from this set once it is migrated to a service function.
 _DIRECT_DB_CALL_ALLOWLIST = {
     "pixlstash/routes/characters.py",
+    "pixlstash/routes/characters_faces.py",
     "pixlstash/routes/comfyui.py",
     "pixlstash/routes/config.py",
     "pixlstash/routes/guest_scores.py",
@@ -661,6 +662,7 @@ _CURRENT_ROUTE_ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
 _EXPECTED_ROUTE_MODULES = frozenset(
     {
         "pixlstash.routes.characters",
+        "pixlstash.routes.characters_faces",
         "pixlstash.routes.comfyui",
         "pixlstash.routes.config",
         "pixlstash.routes.filesystem",
